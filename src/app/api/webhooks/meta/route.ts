@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
 import { prisma } from "@/lib/db";
 import { getSetting } from "@/lib/settings";
 import { createIntakeLead } from "@/lib/leadIntake";
@@ -40,9 +41,26 @@ async function fetchLeadDetails(leadgenId: string, accessToken: string) {
 
 /** Receives leadgen events from Facebook/Instagram Lead Ads. */
 export async function POST(req: NextRequest) {
+  const rawBody = await req.text();
+
+  // Verify Meta's payload signature when an app secret is configured
+  const appSecret = await getSetting("META_APP_SECRET");
+  if (appSecret) {
+    const signature = req.headers.get("x-hub-signature-256") ?? "";
+    const expected =
+      "sha256=" +
+      crypto.createHmac("sha256", appSecret).update(rawBody, "utf8").digest("hex");
+    const valid =
+      signature.length === expected.length &&
+      crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+    if (!valid) {
+      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+    }
+  }
+
   let body: unknown;
   try {
-    body = await req.json();
+    body = JSON.parse(rawBody);
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }

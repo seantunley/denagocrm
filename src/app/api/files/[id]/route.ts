@@ -17,15 +17,21 @@ export async function GET(
   const doc = await prisma.document.findUnique({ where: { id } });
   if (!doc) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+  // Only render safe types inline; everything else downloads as a plain
+  // attachment so an uploaded HTML/SVG file can never run scripts in the CRM's origin.
+  const SAFE_INLINE = /^(image\/(png|jpe?g|gif|webp|avif)|application\/pdf)$/i;
+  const inline = SAFE_INLINE.test(doc.mimeType);
+
   try {
     const buffer = await fs.readFile(path.join(UPLOAD_DIR, doc.storedName));
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
-        "Content-Type": doc.mimeType,
-        "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(
+        "Content-Type": inline ? doc.mimeType : "application/octet-stream",
+        "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(
           doc.fileName
         )}`,
         "Content-Length": String(doc.sizeBytes),
+        "X-Content-Type-Options": "nosniff",
       },
     });
   } catch {

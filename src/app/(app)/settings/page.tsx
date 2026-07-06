@@ -301,6 +301,20 @@ export default async function SettingsPage({
                 </div>
                 <button className="btn-primary">Save</button>
               </form>
+              <form action={saveSetting} className="flex gap-2 items-end">
+                <input type="hidden" name="key" value="META_APP_SECRET" />
+                <div className="flex-1">
+                  <label className="label">App secret (recommended — verifies webhook signatures)</label>
+                  <input
+                    name="value"
+                    type="password"
+                    className="input"
+                    defaultValue={setting("META_APP_SECRET")}
+                    placeholder="From Meta app → Settings → Basic"
+                  />
+                </div>
+                <button className="btn-primary">Save</button>
+              </form>
             </div>
           </div>
 
