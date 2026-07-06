@@ -42,36 +42,26 @@ export default async function JobCardPrintPage({
   return (
     <>
       <PrintActions backHref={`/jobcards/${jobCard.id}`} />
+      <style>{`@media print { * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; } }`}</style>
 
       <div className="max-w-3xl mx-auto p-8 print:p-0 text-sm">
-        {/* Header */}
-        <div className="flex items-start justify-between border-b-2 border-slate-900 pb-4">
-          <div className="flex items-center gap-4">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/branding/denago-mark.png"
-              alt="Denago"
-              className="h-14 w-auto object-contain"
-            />
-            <div>
-              <p className="text-xl font-bold tracking-tight">
-                DENAGO <span className="text-orange-600">CAPE TOWN</span>
-              </p>
-              <p className="text-xs text-slate-600">
-                Unit 55, M5 Freeway Business Park, Maitland, Cape Town, 7405
-              </p>
-              <p className="text-xs text-slate-600">
-                081 515 8319 · sales@denagocpt.co.za · denagocpt.co.za
-              </p>
-            </div>
-          </div>
+        {/* Brand banner */}
+        <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/branding/denago-logo-email.png"
+            alt="Denago Cape Town EV"
+            className="h-11 w-auto object-contain"
+          />
           <div className="text-right">
-            <p className="text-2xl font-bold">JOB CARD</p>
-            <p className="text-lg font-semibold text-orange-600">#{jobCard.number}</p>
-            <p className="text-xs text-slate-600 capitalize">
-              {jobCard.status.replace("_", " ")}
-            </p>
+            <p className="text-2xl font-bold tracking-widest text-white">JOB CARD</p>
+            <p className="text-lg font-bold text-orange-500">#{jobCard.number}</p>
+            <p className="text-xs text-slate-400 capitalize">{jobCard.status.replace("_", " ")}</p>
           </div>
+        </div>
+        <div className="flex justify-between items-center px-1 py-3 text-xs text-slate-500">
+          <span>Unit 55, M5 Freeway Business Park, Maitland, Cape Town</span>
+          <span>081 515 8319 · sales@denagocpt.co.za</span>
         </div>
 
         {/* Meta */}

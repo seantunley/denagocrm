@@ -19,6 +19,8 @@ export default async function QuotePrintPage({
   const total = quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
 
   const customerName = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
+  const phone = quote.contact?.phone ?? quote.lead?.phone;
+  const email = quote.contact?.email ?? quote.lead?.email;
   const address = quote.contact
     ? [quote.contact.address, quote.contact.suburb, quote.contact.city, quote.contact.province, quote.contact.postalCode]
         .filter(Boolean)
@@ -28,111 +30,129 @@ export default async function QuotePrintPage({
   return (
     <>
       <PrintActions backHref={`/quotes/${quote.id}`} />
+      <style>{`@media print { * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; } }`}</style>
 
-      <div className="max-w-3xl mx-auto p-8 print:p-0 text-sm">
-        <div className="flex items-start justify-between border-b-2 border-slate-900 pb-4">
-          <div className="flex items-center gap-4">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/branding/denago-mark.png" alt="Denago" className="h-14 w-auto object-contain" />
-            <div>
-              <p className="text-xl font-bold tracking-tight">
-                DENAGO <span className="text-orange-600">CAPE TOWN</span>
-              </p>
-              <p className="text-xs text-slate-600">
-                Unit 55, M5 Freeway Business Park, Maitland, Cape Town, 7405
-              </p>
-              <p className="text-xs text-slate-600">
-                081 515 8319 · sales@denagocpt.co.za · denagocpt.co.za
-              </p>
-            </div>
-          </div>
+      <div className="max-w-3xl mx-auto p-8 print:p-0 text-sm text-slate-800">
+        {/* Brand banner */}
+        <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/branding/denago-logo-email.png"
+            alt="Denago Cape Town EV"
+            className="h-11 w-auto object-contain"
+          />
           <div className="text-right">
-            <p className="text-2xl font-bold">QUOTATION</p>
-            <p className="text-lg font-semibold text-orange-600">Q-{quote.number}</p>
-            <p className="text-xs text-slate-600">{formatDate(quote.createdAt)}</p>
+            <p className="text-2xl font-bold tracking-widest text-white">QUOTATION</p>
+            <p className="text-lg font-bold text-orange-500">Q-{quote.number}</p>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-6 py-5">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">
+        {/* Meta strip */}
+        <div className="flex justify-between items-center px-1 py-3 text-xs text-slate-500">
+          <span>Date: {formatDate(quote.createdAt)}</span>
+          {quote.validUntil && <span>Valid until: {formatDate(quote.validUntil)}</span>}
+          {quote.createdBy && <span>Prepared by: {quote.createdBy.name}</span>}
+        </div>
+
+        {/* Customer / vehicle blocks */}
+        <div className="grid grid-cols-2 gap-4 mb-6">
+          <div className="rounded-lg bg-slate-50 border-l-4 border-orange-600 px-4 py-3">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-orange-600 mb-1.5">
               Prepared for
             </p>
-            <p className="font-semibold">{customerName}</p>
-            {(quote.contact?.phone ?? quote.lead?.phone) && (
-              <p>{quote.contact?.phone ?? quote.lead?.phone}</p>
-            )}
-            {(quote.contact?.email ?? quote.lead?.email) && (
-              <p>{quote.contact?.email ?? quote.lead?.email}</p>
-            )}
-            {address && <p className="text-slate-600">{address}</p>}
+            <p className="font-bold text-slate-900">{customerName}</p>
+            {phone && <p className="text-slate-600">{phone}</p>}
+            {email && <p className="text-slate-600">{email}</p>}
+            {address && <p className="text-slate-600 text-xs mt-1">{address}</p>}
           </div>
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">
-              Quote details
+          <div className="rounded-lg bg-slate-50 border-l-4 border-slate-900 px-4 py-3">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1.5">
+              Vehicle of interest
             </p>
-            {quote.validUntil && <p>Valid until: {formatDate(quote.validUntil)}</p>}
-            {quote.createdBy && <p>Prepared by: {quote.createdBy.name}</p>}
-            {quote.lead?.product && <p className="text-slate-600">{quote.lead.product.name}</p>}
+            <p className="font-bold text-slate-900">
+              {quote.lead?.product?.name ?? quote.items[0]?.description ?? "—"}
+            </p>
+            {quote.lead?.color && <p className="text-slate-600">Colour: {quote.lead.color}</p>}
+            <p className="text-slate-600 text-xs mt-1">
+              Demo drives available at your estate or our Maitland showroom.
+            </p>
           </div>
         </div>
 
-        <table className="w-full border-collapse mb-5">
+        {/* Items */}
+        <table className="w-full border-collapse mb-2 overflow-hidden rounded-lg">
           <thead>
-            <tr className="border-b-2 border-slate-900 text-left">
-              <th className="py-1.5 pr-2 text-xs uppercase tracking-wide">Description</th>
-              <th className="py-1.5 pr-2 text-xs uppercase tracking-wide text-right">Qty</th>
-              <th className="py-1.5 pr-2 text-xs uppercase tracking-wide text-right">Unit price</th>
-              <th className="py-1.5 text-xs uppercase tracking-wide text-right">Total</th>
+            <tr className="bg-[#020617] text-left">
+              <th className="py-2.5 px-3 text-[10px] font-bold uppercase tracking-widest text-white rounded-tl-lg">
+                Description
+              </th>
+              <th className="py-2.5 px-3 text-[10px] font-bold uppercase tracking-widest text-white text-right">Qty</th>
+              <th className="py-2.5 px-3 text-[10px] font-bold uppercase tracking-widest text-white text-right">Unit price</th>
+              <th className="py-2.5 px-3 text-[10px] font-bold uppercase tracking-widest text-white text-right rounded-tr-lg">Total</th>
             </tr>
           </thead>
           <tbody>
-            {quote.items.map((i) => (
-              <tr key={i.id} className="border-b border-slate-200">
-                <td className="py-2 pr-2">{i.description}</td>
-                <td className="py-2 pr-2 text-right">{i.qty}</td>
-                <td className="py-2 pr-2 text-right">{formatZAR(i.unitPriceCents)}</td>
-                <td className="py-2 text-right">{formatZAR(Math.round(i.qty * i.unitPriceCents))}</td>
+            {quote.items.map((i, idx) => (
+              <tr key={i.id} className={idx % 2 === 1 ? "bg-slate-50" : ""}>
+                <td className="py-2.5 px-3 border-b border-slate-200 font-medium text-slate-900">
+                  {i.description}
+                </td>
+                <td className="py-2.5 px-3 border-b border-slate-200 text-right">{i.qty}</td>
+                <td className="py-2.5 px-3 border-b border-slate-200 text-right">
+                  {formatZAR(i.unitPriceCents)}
+                </td>
+                <td className="py-2.5 px-3 border-b border-slate-200 text-right font-medium">
+                  {formatZAR(Math.round(i.qty * i.unitPriceCents))}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
 
+        {/* Total band */}
         <div className="flex justify-end mb-8">
-          <div className="w-64">
-            <div className="flex justify-between border-t-2 border-slate-900 pt-2">
-              <span className="font-bold">Total (incl. VAT)</span>
-              <span className="font-bold text-lg">{formatZAR(Math.round(total))}</span>
-            </div>
+          <div className="rounded-lg bg-orange-600 text-white px-6 py-3 flex items-baseline gap-6">
+            <span className="text-[11px] font-bold uppercase tracking-widest">
+              Total incl. VAT
+            </span>
+            <span className="text-2xl font-bold">{formatZAR(Math.round(total))}</span>
           </div>
         </div>
 
         {quote.terms && (
-          <div className="mb-10">
-            <p className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">
+          <div className="rounded-lg bg-slate-50 px-4 py-3 mb-8">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
               Terms
             </p>
-            <p className="text-slate-600 whitespace-pre-wrap text-xs">{quote.terms}</p>
+            <p className="text-xs text-slate-600 whitespace-pre-wrap">{quote.terms}</p>
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-10 pt-6">
-          <div>
-            <div className="border-t border-slate-900 pt-1.5">
-              <p className="text-xs text-slate-600">Accepted — signature · Date</p>
-            </div>
+        {/* Signatures */}
+        <div className="grid grid-cols-2 gap-10 mb-10">
+          <div className="border-t-2 border-slate-900 pt-1.5">
+            <p className="text-xs text-slate-500">Accepted — signature · Date</p>
           </div>
-          <div>
-            <div className="border-t border-slate-900 pt-1.5">
-              <p className="text-xs text-slate-600">Denago Cape Town · Date</p>
-            </div>
+          <div className="border-t-2 border-slate-900 pt-1.5">
+            <p className="text-xs text-slate-500">Denago Cape Town · Date</p>
           </div>
         </div>
 
-        <p className="text-[10px] text-slate-400 mt-10 text-center">
-          Denago Cape Town · Authorized Denago EV Dealer · Quotation Q-{quote.number} · Generated{" "}
-          {formatDate(new Date())}
-        </p>
+        {/* Branded footer */}
+        <div className="border-t-2 border-orange-600 pt-4 flex items-center justify-between">
+          <div className="text-[11px] text-slate-500 leading-5">
+            <p className="font-bold text-slate-700">Denago Cape Town — Authorized Denago EV Dealer</p>
+            <p>Unit 55, M5 Freeway Business Park, Maitland, Cape Town · 081 515 8319</p>
+            <p>sales@denagocpt.co.za · denagocpt.co.za</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/branding/social-facebook.png" alt="Facebook" className="h-6 w-6" />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/branding/social-instagram.png" alt="Instagram" className="h-6 w-6" />
+            <span className="text-[11px] text-slate-500">@denago_capetown</span>
+          </div>
+        </div>
       </div>
     </>
   );
