@@ -11,34 +11,51 @@ export function buildSignature(user: {
   if (user.signatureHtml?.trim()) return user.signatureHtml;
 
   const waDigits = (user.mobile ?? "").replace(/\D/g, "").replace(/^0/, "27");
-  const mobileRow = user.mobile
-    ? `<tr><td style="padding:1px 0;color:#475569;font-size:13px;">Mobile: <a href="tel:${user.mobile.replace(/\s/g, "")}" style="color:#475569;text-decoration:none;">${user.mobile}</a></td></tr>`
-    : "";
-  const waButton =
+  const contactBits = [
+    user.mobile
+      ? `<a href="tel:${user.mobile.replace(/\s/g, "")}" style="color:#475569;text-decoration:none;">${user.mobile}</a>`
+      : null,
+    `<a href="tel:+27815158319" style="color:#475569;text-decoration:none;">081 515 8319</a>`,
+    `<a href="mailto:${user.email}" style="color:#ea580c;text-decoration:none;">${user.email}</a>`,
+  ]
+    .filter(Boolean)
+    .join(`<span style="color:#cbd5e1;">&nbsp;&nbsp;|&nbsp;&nbsp;</span>`);
+
+  const waIcon =
     waDigits.length >= 10
-      ? `<a href="https://wa.me/${waDigits}" style="display:inline-block;background:#25D366;color:#ffffff;font-size:12px;font-weight:bold;text-decoration:none;padding:6px 14px;border-radius:16px;margin-right:8px;">WhatsApp me</a>`
+      ? `<a href="https://wa.me/${waDigits}" style="text-decoration:none;"><img src="${SITE}/branding/social-whatsapp.png" alt="WhatsApp" width="26" height="26" style="display:block;border:0;" /></a>`
       : "";
 
   return `
-<table cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,Helvetica,sans-serif;margin-top:24px;border-top:2px solid #ea580c;padding-top:12px;">
+<table cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,Helvetica,sans-serif;margin-top:24px;">
   <tr>
-    <td style="padding-right:16px;vertical-align:top;">
-      <img src="${SITE}/branding/denago-mark.png" alt="Denago" width="56" height="56" style="display:block;" />
+    <td style="background-color:#020617;border-radius:10px;padding:12px 18px;">
+      <a href="https://denagocpt.co.za" style="text-decoration:none;">
+        <img src="${SITE}/branding/denago-logo-email.png" alt="Denago Cape Town EV" width="260" style="display:block;border:0;" />
+      </a>
     </td>
-    <td style="vertical-align:top;">
-      <table cellpadding="0" cellspacing="0" border="0">
-        <tr><td style="font-size:15px;font-weight:bold;color:#0f172a;padding-bottom:1px;">${user.name}</td></tr>
-        <tr><td style="font-size:13px;font-weight:bold;color:#ea580c;padding-bottom:6px;">DENAGO CAPE TOWN</td></tr>
-        ${mobileRow}
-        <tr><td style="padding:1px 0;color:#475569;font-size:13px;">Office: <a href="tel:+27815158319" style="color:#475569;text-decoration:none;">081 515 8319</a></td></tr>
-        <tr><td style="padding:1px 0;color:#475569;font-size:13px;"><a href="mailto:${user.email}" style="color:#475569;text-decoration:none;">${user.email}</a></td></tr>
-        <tr><td style="padding:1px 0 8px;color:#475569;font-size:13px;">Unit 55, M5 Freeway Business Park, Maitland, Cape Town</td></tr>
-        <tr><td>
-          ${waButton}<a href="https://denagocpt.co.za" style="display:inline-block;background:#ea580c;color:#ffffff;font-size:12px;font-weight:bold;text-decoration:none;padding:6px 14px;border-radius:16px;">denagocpt.co.za</a>
-        </td></tr>
-        <tr><td style="padding-top:8px;color:#94a3b8;font-size:11px;">Authorized Denago EV Dealer — Cape Town &amp; Winelands</td></tr>
-      </table>
+  </tr>
+  <tr>
+    <td style="padding:10px 2px 2px;">
+      <span style="font-size:15px;font-weight:bold;color:#0f172a;">${user.name}</span>
+      <span style="font-size:12px;color:#94a3b8;">&nbsp;·&nbsp;Denago Cape Town</span>
     </td>
+  </tr>
+  <tr>
+    <td style="padding:2px 2px;color:#475569;font-size:13px;">${contactBits}</td>
+  </tr>
+  <tr>
+    <td style="padding:10px 2px 0;">
+      <table cellpadding="0" cellspacing="0" border="0"><tr>
+        <td style="padding-right:8px;"><a href="https://www.facebook.com/profile.php?id=61585077836921" style="text-decoration:none;"><img src="${SITE}/branding/social-facebook.png" alt="Facebook" width="26" height="26" style="display:block;border:0;" /></a></td>
+        <td style="padding-right:8px;"><a href="https://www.instagram.com/denago_capetown/" style="text-decoration:none;"><img src="${SITE}/branding/social-instagram.png" alt="Instagram" width="26" height="26" style="display:block;border:0;" /></a></td>
+        ${waIcon ? `<td style="padding-right:8px;">${waIcon}</td>` : ""}
+        <td style="vertical-align:middle;"><a href="https://denagocpt.co.za" style="color:#ea580c;font-size:13px;font-weight:bold;text-decoration:none;">denagocpt.co.za</a></td>
+      </tr></table>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding-top:8px;color:#94a3b8;font-size:11px;">Authorized Denago EV Dealer — Cape Town &amp; Winelands · Unit 55, M5 Freeway Business Park, Maitland</td>
   </tr>
 </table>`;
 }
