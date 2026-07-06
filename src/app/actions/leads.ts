@@ -53,6 +53,43 @@ export async function createLead(formData: FormData) {
     data.stageId = first.id;
   }
   const title = String(formData.get("title") ?? "").trim() || (await buildTitle(data));
+
+  // Ensure every lead has a contact: link an existing one (matched by
+  // email/phone) or create it on the spot.
+  if (!data.contactId) {
+    const matchers = [
+      ...(data.email ? [{ email: data.email }] : []),
+      ...(data.phone ? [{ phone: data.phone }] : []),
+    ];
+    const existing =
+      matchers.length > 0
+        ? await prisma.contact.findFirst({ where: { OR: matchers } })
+        : null;
+    if (existing) {
+      data.contactId = existing.id;
+    } else {
+      const [firstName, ...rest] = data.name.split(/\s+/);
+      const contact = await prisma.contact.create({
+        data: {
+          firstName: firstName || data.name,
+          lastName: rest.join(" ") || null,
+          email: data.email,
+          phone: data.phone,
+          source: data.source,
+          createdById: user.id,
+          ownerId: data.assignedToId ?? user.id,
+        },
+      });
+      data.contactId = contact.id;
+      await logAudit({
+        action: "contact.created",
+        summary: `Created contact ${data.name} (with new lead)`,
+        contactId: contact.id,
+        user,
+      });
+    }
+  }
+
   const lead = await prisma.lead.create({
     data: { ...data, title, createdById: user.id, position: await nextPosition(data.stageId) },
   });
