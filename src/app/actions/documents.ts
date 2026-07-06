@@ -1,13 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { promises as fs } from "fs";
-import path from "path";
-import crypto from "crypto";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { saveFile, deleteFile } from "@/lib/storage";
 
-const UPLOAD_DIR = path.join(process.cwd(), "storage", "uploads");
 const MAX_SIZE = 25 * 1024 * 1024; // 25 MB
 
 export async function uploadDocument(formData: FormData) {
@@ -21,17 +18,15 @@ export async function uploadDocument(formData: FormData) {
     return v === "" ? null : v;
   };
 
-  const ext = path.extname(file.name).slice(0, 12);
-  const storedName = crypto.randomUUID() + ext;
-  await fs.mkdir(UPLOAD_DIR, { recursive: true });
   const buffer = Buffer.from(await file.arrayBuffer());
-  await fs.writeFile(path.join(UPLOAD_DIR, storedName), buffer);
+  const mimeType = file.type || "application/octet-stream";
+  const storedName = await saveFile(buffer, file.name, mimeType);
 
   await prisma.document.create({
     data: {
       fileName: file.name,
       storedName,
-      mimeType: file.type || "application/octet-stream",
+      mimeType,
       sizeBytes: file.size,
       contactId: str("contactId"),
       vehicleId: str("vehicleId"),
@@ -45,6 +40,6 @@ export async function uploadDocument(formData: FormData) {
 export async function deleteDocument(id: string, revalidate: string) {
   await requireUser();
   const doc = await prisma.document.delete({ where: { id } });
-  await fs.unlink(path.join(UPLOAD_DIR, doc.storedName)).catch(() => {});
+  await deleteFile(doc.storedName);
   revalidatePath(revalidate);
 }

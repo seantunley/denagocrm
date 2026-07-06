@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
-
-const UPLOAD_DIR = path.join(process.cwd(), "storage", "uploads");
+import { readFile } from "@/lib/storage";
 
 export async function GET(
   _req: NextRequest,
@@ -23,7 +20,7 @@ export async function GET(
   const inline = SAFE_INLINE.test(doc.mimeType);
 
   try {
-    const buffer = await fs.readFile(path.join(UPLOAD_DIR, doc.storedName));
+    const buffer = await readFile(doc.storedName);
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
         "Content-Type": inline ? doc.mimeType : "application/octet-stream",
@@ -35,6 +32,6 @@ export async function GET(
       },
     });
   } catch {
-    return NextResponse.json({ error: "File missing on disk" }, { status: 404 });
+    return NextResponse.json({ error: "File missing in storage" }, { status: 404 });
   }
 }
