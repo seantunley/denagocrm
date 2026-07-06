@@ -43,12 +43,18 @@ export default function ActivityPanel({
 
   return (
     <div className="card">
-      <h2 className="font-semibold mb-4">Planned activities</h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="font-semibold">Planned activities</h2>
+      </div>
 
-      <form
-        action={scheduleActivity}
-        className="mb-5 rounded-lg bg-slate-800/40 p-4 border border-slate-800 grid grid-cols-2 md:grid-cols-4 gap-3 items-end"
-      >
+      <details className="mb-4 group">
+        <summary className="btn-secondary btn-sm inline-flex cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+          + Schedule activity
+        </summary>
+        <form
+          action={scheduleActivity}
+          className="mt-3 rounded-lg bg-slate-800/40 p-4 border border-slate-800 grid grid-cols-2 md:grid-cols-4 gap-3 items-end"
+        >
         {leadId && <input type="hidden" name="leadId" value={leadId} />}
         {contactId && <input type="hidden" name="contactId" value={contactId} />}
         <input type="hidden" name="revalidate" value={revalidate} />
@@ -85,7 +91,8 @@ export default function ActivityPanel({
           🔧 Workshop
         </label>
         <button className="btn-primary">Schedule</button>
-      </form>
+        </form>
+      </details>
 
       {planned.length === 0 ? (
         <p className="text-sm text-slate-500">

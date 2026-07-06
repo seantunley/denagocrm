@@ -35,7 +35,11 @@ export default function CommsTimeline({
     <div className="card">
       <h2 className="font-semibold mb-4">Communications</h2>
 
-      <form action={addCommunication} className="mb-5 space-y-3 rounded-lg bg-slate-800/40 p-4 border border-slate-800">
+      <details className="mb-4">
+        <summary className="btn-secondary btn-sm inline-flex cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+          + Log a call / email / note
+        </summary>
+        <form action={addCommunication} className="mt-3 mb-2 space-y-3 rounded-lg bg-slate-800/40 p-4 border border-slate-800">
         {contactId && <input type="hidden" name="contactId" value={contactId} />}
         {leadId && <input type="hidden" name="leadId" value={leadId} />}
         <input type="hidden" name="revalidate" value={revalidate} />
@@ -80,7 +84,8 @@ export default function CommsTimeline({
           </div>
           <button className="btn-primary">Log communication</button>
         </div>
-      </form>
+        </form>
+      </details>
 
       {communications.length === 0 ? (
         <p className="text-sm text-slate-400">No communications logged yet.</p>

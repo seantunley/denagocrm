@@ -8,7 +8,7 @@ import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { getSetting } from "@/lib/settings";
-import { parseRands, formatZAR } from "@/lib/format";
+import { parseRands, formatZAR, contactName } from "@/lib/format";
 
 /** Creates a draft quote from a lead, pre-filled with its product line. */
 export async function createQuoteFromLead(leadId: string) {
@@ -46,9 +46,52 @@ export async function createQuoteFromLead(leadId: string) {
   });
   await logAudit({
     action: "quote.created",
-    summary: `Created quote #${quote.number} for lead “${lead.title}”`,
+    summary: `Created quote Q-${quote.number} for lead “${lead.title}”`,
     leadId,
     contactId: lead.contactId,
+    user,
+  });
+  revalidatePath("/quotes");
+  redirect(`/quotes/${quote.id}`);
+}
+
+/** Creates a quote directly for an existing customer (no lead needed). */
+export async function createQuoteForContact(formData: FormData) {
+  const user = await requireUser();
+  const contactId = String(formData.get("contactId") ?? "").trim();
+  const productId = String(formData.get("productId") ?? "").trim() || null;
+  if (!contactId) throw new Error("Customer is required");
+
+  const product = productId
+    ? await prisma.product.findUnique({ where: { id: productId } })
+    : null;
+  const max = await prisma.quote.aggregate({ _max: { number: true } });
+  const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
+  const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
+  const terms =
+    (await getSetting("QUOTE_TERMS")) ||
+    "Prices include VAT. Delivery arranged on acceptance. E&OE.";
+  const quote = await prisma.quote.create({
+    data: {
+      number: (max._max.number ?? 1000) + 1,
+      contactId,
+      createdById: user.id,
+      validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
+      terms,
+      items: product
+        ? {
+            create: [
+              { description: product.name, qty: 1, unitPriceCents: product.basePriceCents },
+            ],
+          }
+        : undefined,
+    },
+    include: { contact: true },
+  });
+  await logAudit({
+    action: "quote.created",
+    summary: `Created quote Q-${quote.number} for ${quote.contact ? contactName(quote.contact) : "customer"}`,
+    contactId,
     user,
   });
   revalidatePath("/quotes");
@@ -98,9 +141,17 @@ export async function setQuoteStatus(quoteId: string, status: string) {
     include: { items: true, lead: true },
   });
   const total = quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+  const verb =
+    status === "sent"
+      ? "sent to the customer"
+      : status === "accepted"
+      ? "accepted 🎉"
+      : status === "declined"
+      ? "declined"
+      : "moved back to draft";
   await logAudit({
     action: `quote.${status}`,
-    summary: `Quote #${quote.number} (${formatZAR(Math.round(total))}) marked ${status}`,
+    summary: `Quote Q-${quote.number} (${formatZAR(Math.round(total))}) ${verb}`,
     leadId: quote.leadId,
     contactId: quote.contactId,
     user,

@@ -124,12 +124,14 @@ export default async function ContactDetailPage({
                 ],
                 ["Source", contact.source],
                 ["Added", formatDate(contact.createdAt)],
-              ].map(([label, value]) => (
-                <div key={label as string} className="flex justify-between gap-4">
-                  <dt className="text-slate-400">{label}</dt>
-                  <dd className="text-right font-medium">{(value as string) ?? "—"}</dd>
-                </div>
-              ))}
+              ]
+                .filter(([, value]) => value)
+                .map(([label, value]) => (
+                  <div key={label as string} className="flex justify-between gap-4">
+                    <dt className="text-slate-400 shrink-0">{label}</dt>
+                    <dd className="text-right font-medium">{value as string}</dd>
+                  </div>
+                ))}
             </dl>
             {contact.notes && (
               <p className="text-sm text-slate-400 mt-3 pt-3 border-t border-slate-800 whitespace-pre-wrap">
