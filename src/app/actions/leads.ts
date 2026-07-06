@@ -191,14 +191,15 @@ export async function markWon(leadId: string) {
 
 export async function markLost(leadId: string, formData: FormData) {
   const user = await requireUser();
-  const reason = String(formData.get("lostReason") ?? "").trim() || null;
+  const reason = String(formData.get("lostReason") ?? "").trim();
+  if (!reason) return; // a lost reason is mandatory
   const lead = await prisma.lead.update({
     where: { id: leadId },
     data: { status: "lost", lostReason: reason },
   });
   await logAudit({
     action: "lead.lost",
-    summary: `Marked lead “${lead.title}” as lost${reason ? ` — ${reason}` : ""}`,
+    summary: `Marked lead “${lead.title}” as lost — ${reason}`,
     leadId,
     contactId: lead.contactId,
     user,

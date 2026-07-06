@@ -16,6 +16,7 @@ import LeadTimeline from "@/components/LeadTimeline";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
 import Tabs from "@/components/Tabs";
+import ModalTrigger from "@/components/Modal";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { requireUser } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
@@ -102,9 +103,25 @@ export default async function LeadDetailPage({
                   ✓ Mark won
                 </button>
               </form>
-              <Link href={`/leads/${lead.id}/edit`} className="btn-secondary">
-                Edit
-              </Link>
+              <ModalTrigger
+                label="✗ Mark lost"
+                title={`Why was “${lead.title}” lost?`}
+                buttonClass="btn-danger"
+              >
+                <form action={markLost.bind(null, lead.id)} className="card space-y-4">
+                  <div>
+                    <label className="label">Reason lost *</label>
+                    <input
+                      name="lostReason"
+                      className="input"
+                      required
+                      autoFocus
+                      placeholder="e.g. Bought elsewhere · too expensive · no response"
+                    />
+                  </div>
+                  <button className="btn-danger">Mark lost</button>
+                </form>
+              </ModalTrigger>
             </>
           )}
           {lead.status !== "open" && (
@@ -147,7 +164,12 @@ export default async function LeadDetailPage({
                 content: (
                   <>
                     <div className="card">
-                      <h2 className="font-semibold mb-3">Details</h2>
+                      <div className="flex items-center justify-between mb-3">
+                        <h2 className="font-semibold">Details</h2>
+                        <Link href={`/leads/${lead.id}/edit`} className="btn-secondary btn-sm">
+                          ✎ Edit details
+                        </Link>
+                      </div>
                       <dl className="space-y-2 text-sm max-w-xl">
                         {[
                           ["Customer", lead.name],
@@ -170,52 +192,6 @@ export default async function LeadDetailPage({
                       </dl>
                     </div>
 
-                    <div className="grid md:grid-cols-2 gap-6">
-                      <div className="card">
-                        <h2 className="font-semibold mb-3">Contact</h2>
-                        {lead.contact && (
-                          <Link
-                            href={`/contacts/${lead.contact.id}`}
-                            className="text-sm font-medium text-orange-400 hover:underline block mb-3"
-                          >
-                            {contactName(lead.contact)} →
-                          </Link>
-                        )}
-                        <form action={linkLeadToContact.bind(null, lead.id)} className="space-y-2">
-                          <label className="label">
-                            {lead.contact ? "Change linked contact" : "Link to contact"}
-                          </label>
-                          <select
-                            name="contactId"
-                            className="input"
-                            defaultValue={lead.contactId ?? ""}
-                          >
-                            <option value="">Select contact…</option>
-                            {contacts.map((c) => (
-                              <option key={c.id} value={c.id}>
-                                {contactName(c)}
-                              </option>
-                            ))}
-                          </select>
-                          <button className="btn-secondary btn-sm w-full">Save contact link</button>
-                        </form>
-                      </div>
-
-                      {lead.status === "open" && (
-                        <div className="card self-start">
-                          <h2 className="font-semibold mb-3">Mark as lost</h2>
-                          <form action={markLost.bind(null, lead.id)} className="space-y-2">
-                            <input
-                              name="lostReason"
-                              className="input"
-                              placeholder="Reason (optional)"
-                            />
-                            <button className="btn-danger btn-sm w-full">Mark lost</button>
-                          </form>
-                        </div>
-                      )}
-                    </div>
-
                     {lead.raw && (
                       <details className="card">
                         <summary className="font-semibold cursor-pointer text-sm">
@@ -227,6 +203,41 @@ export default async function LeadDetailPage({
                       </details>
                     )}
                   </>
+                ),
+              },
+              {
+                key: "customer",
+                label: "Customer",
+                content: (
+                  <div className="card max-w-xl">
+                    <h2 className="font-semibold mb-3">Customer</h2>
+                    {lead.contact && (
+                      <Link
+                        href={`/contacts/${lead.contact.id}`}
+                        className="text-sm font-medium text-orange-400 hover:underline block mb-3"
+                      >
+                        {contactName(lead.contact)} →
+                      </Link>
+                    )}
+                    <form action={linkLeadToContact.bind(null, lead.id)} className="space-y-2">
+                      <label className="label">
+                        {lead.contact ? "Change linked customer" : "Link to customer"}
+                      </label>
+                      <select
+                        name="contactId"
+                        className="input"
+                        defaultValue={lead.contactId ?? ""}
+                      >
+                        <option value="">Select customer…</option>
+                        {contacts.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {contactName(c)}
+                          </option>
+                        ))}
+                      </select>
+                      <button className="btn-secondary btn-sm w-full">Save customer link</button>
+                    </form>
+                  </div>
                 ),
               },
               {
