@@ -14,7 +14,7 @@ export default async function SearchPage({
 
   if (!term) {
     return (
-      <div className="space-y-5 max-w-3xl">
+      <div className="space-y-5">
         <h1 className="text-2xl font-bold">Search</h1>
         <p className="text-sm text-slate-400">
           Type in the search box in the sidebar — contacts, leads, quotes, vehicles and job
@@ -79,7 +79,7 @@ export default async function SearchPage({
     );
 
   return (
-    <div className="space-y-5 max-w-3xl">
+    <div className="space-y-5">
       <h1 className="text-2xl font-bold">
         Results for “{term}” <span className="text-slate-500 text-base font-normal">({total})</span>
       </h1>

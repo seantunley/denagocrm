@@ -51,7 +51,7 @@ export default async function SettingsPage({
   const setting = (key: string) => settings.find((s) => s.key === key)?.value ?? "";
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <div className="space-y-6">
       <h1 className="text-2xl font-bold">Settings</h1>
 
       <div className="flex gap-1 border-b border-slate-800 overflow-x-auto">

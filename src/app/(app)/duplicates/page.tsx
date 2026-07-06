@@ -33,7 +33,7 @@ export default async function DuplicatesPage() {
     .map(([key, g]) => ({ key, contacts: g }));
 
   return (
-    <div className="space-y-5 max-w-4xl">
+    <div className="space-y-5">
       <div>
         <h1 className="text-2xl font-bold">Duplicate contacts</h1>
         <p className="text-sm text-slate-400 mt-1">

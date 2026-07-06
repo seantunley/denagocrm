@@ -122,7 +122,7 @@ export default async function LibraryPage({
       }));
 
   return (
-    <div className="space-y-5 max-w-6xl">
+    <div className="space-y-5">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold">Document library</h1>

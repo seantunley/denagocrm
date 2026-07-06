@@ -35,7 +35,7 @@ export default async function QuoteDetailPage({
   const editable = quote.status === "draft" || quote.status === "sent";
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-3">

@@ -19,7 +19,7 @@ export default async function QuotesPage() {
   });
 
   return (
-    <div className="space-y-5 max-w-6xl">
+    <div className="space-y-5">
       <div>
         <h1 className="text-2xl font-bold">Quotes</h1>
         <p className="text-sm text-slate-400 mt-1">
