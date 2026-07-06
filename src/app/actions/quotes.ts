@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addDays } from "date-fns";
-import { prisma } from "@/lib/db";
+import { prisma, basePrisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
@@ -17,7 +17,8 @@ export async function createQuoteFromLead(leadId: string) {
     where: { id: leadId },
     include: { product: true },
   });
-  const max = await prisma.quote.aggregate({ _max: { number: true } });
+  // basePrisma: trashed quotes keep their number, so they must count here
+  const max = await basePrisma.quote.aggregate({ _max: { number: true } });
   const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
   const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
   const terms =
@@ -65,7 +66,8 @@ export async function createQuoteForContact(formData: FormData) {
   const product = productId
     ? await prisma.product.findUnique({ where: { id: productId } })
     : null;
-  const max = await prisma.quote.aggregate({ _max: { number: true } });
+  // basePrisma: trashed quotes keep their number, so they must count here
+  const max = await basePrisma.quote.aggregate({ _max: { number: true } });
   const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
   const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
   const terms =

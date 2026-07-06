@@ -7,7 +7,9 @@ import {
   reopenLead,
   deleteLead,
   linkLeadToContact,
+  updateLead,
 } from "@/app/actions/leads";
+import LeadForm from "@/components/LeadForm";
 import { createQuoteFromLead } from "@/app/actions/quotes";
 import CommsTimeline from "@/components/CommsTimeline";
 import ActivityPanel from "@/components/ActivityPanel";
@@ -43,7 +45,7 @@ export default async function LeadDetailPage({
     },
   });
   if (!lead) notFound();
-  const [contacts, users, templates, smtpConfigured, audit, waConfigured, libraryDocuments] = await Promise.all([
+  const [contacts, users, templates, smtpConfigured, audit, waConfigured, libraryDocuments, products, stages] = await Promise.all([
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
     prisma.user.findMany({ orderBy: { name: "asc" } }),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
@@ -58,6 +60,12 @@ export default async function LeadDetailPage({
       orderBy: { name: "asc" },
       include: { versions: { orderBy: { version: "desc" }, take: 1 } },
     }),
+    prisma.product.findMany({
+      where: { active: true },
+      include: { colors: true },
+      orderBy: { name: "asc" },
+    }),
+    prisma.pipelineStage.findMany({ orderBy: { order: "asc" } }),
   ]);
   const libraryDocs = libraryDocuments
     .filter((d) => d.versions[0])
@@ -166,9 +174,26 @@ export default async function LeadDetailPage({
                     <div className="card">
                       <div className="flex items-center justify-between mb-3">
                         <h2 className="font-semibold">Details</h2>
-                        <Link href={`/leads/${lead.id}/edit`} className="btn-secondary btn-sm">
-                          ✎ Edit details
-                        </Link>
+                        <ModalTrigger
+                          label="✎ Edit details"
+                          title={`Edit “${lead.title}”`}
+                          buttonClass="btn-secondary btn-sm"
+                        >
+                          <LeadForm
+                            action={updateLead.bind(null, lead.id)}
+                            products={products.map((p) => ({
+                              id: p.id,
+                              name: p.name,
+                              basePriceCents: p.basePriceCents,
+                              colors: p.colors.map((c) => c.name),
+                            }))}
+                            stages={stages.map((s) => ({ id: s.id, name: s.name }))}
+                            contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
+                            users={users.map((u) => ({ id: u.id, name: u.name }))}
+                            defaults={lead}
+                            submitLabel="Save changes"
+                          />
+                        </ModalTrigger>
                       </div>
                       <dl className="space-y-2 text-sm max-w-xl">
                         {[
