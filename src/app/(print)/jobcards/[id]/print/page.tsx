@@ -42,7 +42,10 @@ export default async function JobCardPrintPage({
   return (
     <>
       <PrintActions backHref={`/jobcards/${jobCard.id}`} />
-      <style>{`@media print { * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; } }`}</style>
+      <style>{`
+        @page { margin: 15mm; }
+        @media print { * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; } }
+      `}</style>
 
       <div className="max-w-3xl mx-auto p-8 print:p-0 text-sm">
         {/* Brand banner */}

@@ -30,9 +30,17 @@ export default async function QuotePrintPage({
   return (
     <>
       <PrintActions backHref={`/quotes/${quote.id}`} />
-      <style>{`@media print { * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; } }`}</style>
+      <style>{`
+        @page { margin: 15mm; }
+        @media print {
+          * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+          .no-break { break-inside: avoid; }
+          .print-page { display: flex; flex-direction: column; min-height: 260mm; }
+          .print-bottom { margin-top: auto; }
+        }
+      `}</style>
 
-      <div className="max-w-3xl mx-auto p-8 print:p-0 text-sm text-slate-800">
+      <div className="print-page max-w-3xl mx-auto p-8 print:p-0 text-sm text-slate-800">
         {/* Brand banner */}
         <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -80,15 +88,15 @@ export default async function QuotePrintPage({
         </div>
 
         {/* Items */}
-        <table className="w-full border-collapse mb-2 overflow-hidden rounded-lg">
+        <table className="w-full border-collapse mb-2">
           <thead>
             <tr className="bg-[#020617] text-left">
-              <th className="py-2.5 px-3 text-[10px] font-bold uppercase tracking-widest text-white rounded-tl-lg">
+              <th className="py-2.5 px-3 text-[10px] font-bold uppercase tracking-widest text-white">
                 Description
               </th>
               <th className="py-2.5 px-3 text-[10px] font-bold uppercase tracking-widest text-white text-right">Qty</th>
               <th className="py-2.5 px-3 text-[10px] font-bold uppercase tracking-widest text-white text-right">Unit price</th>
-              <th className="py-2.5 px-3 text-[10px] font-bold uppercase tracking-widest text-white text-right rounded-tr-lg">Total</th>
+              <th className="py-2.5 px-3 text-[10px] font-bold uppercase tracking-widest text-white text-right">Total</th>
             </tr>
           </thead>
           <tbody>
@@ -110,7 +118,7 @@ export default async function QuotePrintPage({
         </table>
 
         {/* Total band */}
-        <div className="flex justify-end mb-8">
+        <div className="flex justify-end mt-4 mb-10 no-break">
           <div className="rounded-lg bg-orange-600 text-white px-6 py-3 flex items-baseline gap-6">
             <span className="text-[11px] font-bold uppercase tracking-widest">
               Total incl. VAT
@@ -119,8 +127,9 @@ export default async function QuotePrintPage({
           </div>
         </div>
 
+        <div className="print-bottom">
         {quote.terms && (
-          <div className="rounded-lg bg-slate-50 px-4 py-3 mb-8">
+          <div className="rounded-lg bg-slate-50 px-4 py-3 mb-12 no-break">
             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
               Terms
             </p>
@@ -129,29 +138,36 @@ export default async function QuotePrintPage({
         )}
 
         {/* Signatures */}
-        <div className="grid grid-cols-2 gap-10 mb-10">
-          <div className="border-t-2 border-slate-900 pt-1.5">
-            <p className="text-xs text-slate-500">Accepted — signature · Date</p>
+        <div className="grid grid-cols-2 gap-12 mt-16 mb-12 no-break">
+          <div>
+            <div className="border-t-2 border-slate-900 pt-2">
+              <p className="text-xs text-slate-500">Accepted — customer signature &amp; date</p>
+            </div>
           </div>
-          <div className="border-t-2 border-slate-900 pt-1.5">
-            <p className="text-xs text-slate-500">Denago Cape Town · Date</p>
+          <div>
+            <div className="border-t-2 border-slate-900 pt-2">
+              <p className="text-xs text-slate-500">Denago Cape Town &amp; date</p>
+            </div>
           </div>
         </div>
 
         {/* Branded footer */}
-        <div className="border-t-2 border-orange-600 pt-4 flex items-center justify-between">
-          <div className="text-[11px] text-slate-500 leading-5">
-            <p className="font-bold text-slate-700">Denago Cape Town — Authorized Denago EV Dealer</p>
+        <div className="border-t-2 border-orange-600 pt-4 flex items-start justify-between gap-6 flex-wrap no-break">
+          <div className="text-[10px] text-slate-500 leading-4">
+            <p className="font-bold text-slate-700 text-[11px]">
+              Denago Cape Town — Authorized Denago EV Dealer
+            </p>
             <p>Unit 55, M5 Freeway Business Park, Maitland, Cape Town · 081 515 8319</p>
             <p>sales@denagocpt.co.za · denagocpt.co.za</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/branding/social-facebook.png" alt="Facebook" className="h-6 w-6" />
+            <img src="/branding/social-facebook.png" alt="Facebook" className="h-5 w-5" />
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/branding/social-instagram.png" alt="Instagram" className="h-6 w-6" />
-            <span className="text-[11px] text-slate-500">@denago_capetown</span>
+            <img src="/branding/social-instagram.png" alt="Instagram" className="h-5 w-5" />
+            <span className="text-[10px] text-slate-500">@denago_capetown</span>
           </div>
+        </div>
         </div>
       </div>
     </>
