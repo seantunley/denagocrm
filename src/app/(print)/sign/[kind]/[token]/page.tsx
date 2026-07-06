@@ -1,7 +1,10 @@
 import { notFound } from "next/navigation";
-import { prisma } from "@/lib/db";
+import { prisma, basePrisma } from "@/lib/db";
+import { logAudit } from "@/lib/audit";
+import { sendPushToAll } from "@/lib/push";
 import SignPanel from "@/components/SignPanel";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { quoteExpired } from "@/lib/quoteExpiry";
 
 export const metadata = { title: "Denago Cape Town — Sign document", robots: { index: false } };
 
@@ -24,6 +27,8 @@ export default async function SignPage({
     signedAt: Date | null;
     signedByName: string | null;
     dealerSignedByName?: string | null;
+    declinedAt?: Date | null;
+    expired?: boolean;
   } | null = null;
 
   if (kind === "quote") {
@@ -32,6 +37,27 @@ export default async function SignPage({
       include: { items: true, contact: true, lead: { include: { product: true } } },
     });
     if (!quote) notFound();
+    // First-open tracking: tell the team the customer is looking at it
+    if (!quote.viewedAt && !quote.signedAt) {
+      try {
+        await basePrisma.quote.update({
+          where: { id: quote.id },
+          data: { viewedAt: new Date() },
+        });
+        await logAudit({
+          action: "quote.viewed",
+          summary: `Quote Q-${quote.number} signing link opened for the first time`,
+          contactId: quote.contactId,
+          leadId: quote.leadId,
+          userName: "Customer",
+        });
+        await sendPushToAll({
+          title: "👀 Quote opened",
+          body: `Q-${quote.number} — the signing link was just viewed`,
+          url: `/quotes/${quote.id}`,
+        });
+      } catch {}
+    }
     doc = {
       refNumber: `Q-${quote.number}`,
       customerName: quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "",
@@ -45,6 +71,8 @@ export default async function SignPage({
       signedAt: quote.signedAt,
       signedByName: quote.signedByName,
       dealerSignedByName: quote.dealerSignedByName,
+      declinedAt: quote.declinedAt,
+      expired: quoteExpired(quote.validUntil) && !quote.signedAt,
     };
   } else {
     const jobCard = await prisma.jobCard.findFirst({
@@ -52,6 +80,20 @@ export default async function SignPage({
       include: { items: true, contact: true, vehicle: true },
     });
     if (!jobCard) notFound();
+    if (!jobCard.viewedAt && !jobCard.signedAt) {
+      try {
+        await basePrisma.jobCard.update({
+          where: { id: jobCard.id },
+          data: { viewedAt: new Date() },
+        });
+        await logAudit({
+          action: "jobcard.viewed",
+          summary: `Job card #${jobCard.number} signing link opened for the first time`,
+          contactId: jobCard.contactId,
+          userName: "Customer",
+        });
+      } catch {}
+    }
     doc = {
       refNumber: `#${jobCard.number}`,
       customerName: contactName(jobCard.contact),
@@ -158,8 +200,30 @@ export default async function SignPage({
           </p>
           <p className="text-sm text-emerald-700 mt-1">Nothing more to do — thank you!</p>
         </div>
+      ) : doc.expired ? (
+        <div className="rounded-xl border-2 border-amber-500 bg-amber-50 p-6 text-center">
+          <p className="text-3xl mb-2">⏳</p>
+          <p className="text-lg font-bold text-amber-800">This quote has expired</p>
+          <p className="text-sm text-amber-700 mt-1">
+            It was valid until {doc.validUntil ? formatDate(doc.validUntil) : "recently"}. Give us
+            a call on 081 515 8319 or reply to our email and we&apos;ll send you an updated one.
+          </p>
+        </div>
+      ) : doc.declinedAt ? (
+        <div className="rounded-xl border-2 border-slate-400 bg-slate-100 p-6 text-center">
+          <p className="text-3xl mb-2">🙏</p>
+          <p className="text-lg font-bold text-slate-700">
+            You declined this quote on {formatDate(doc.declinedAt)}
+          </p>
+          <p className="text-sm text-slate-600 mt-1">
+            Changed your mind? You can still sign below — or call us on 081 515 8319.
+          </p>
+          <div className="mt-5 text-left">
+            <SignPanel token={token} kind={kind as "quote" | "jobcard"} />
+          </div>
+        </div>
       ) : (
-        <SignPanel token={token} kind={kind as "quote" | "jobcard"} />
+        <SignPanel token={token} kind={kind as "quote" | "jobcard"} allowDecline={kind === "quote"} />
       )}
 
       <p className="text-[11px] text-slate-400 mt-8 text-center">

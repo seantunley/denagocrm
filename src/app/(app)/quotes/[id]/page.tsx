@@ -33,7 +33,11 @@ export default async function QuoteDetailPage({
   });
   if (!quote) notFound();
   const total = quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
-  const editable = quote.status === "draft" || quote.status === "sent";
+  const lockedBySigning = Boolean(quote.signToken) && !quote.signedAt;
+  const editable =
+    (quote.status === "draft" || quote.status === "sent") &&
+    !lockedBySigning &&
+    !quote.signedAt;
 
   return (
     <div className="space-y-6">
@@ -120,6 +124,10 @@ export default async function QuoteDetailPage({
         dealerSignedAt={quote.dealerSignedAt}
         dealerSignedByName={quote.dealerSignedByName}
         hasSavedSignature={Boolean(currentUser.drawnSignatureRef)}
+        viewedAt={quote.viewedAt}
+        declinedAt={quote.declinedAt}
+        declineReason={quote.declineReason}
+        signedPdfHash={quote.signedPdfHash}
       />
 
       <div className="grid lg:grid-cols-3 gap-6 items-start">
@@ -200,23 +208,47 @@ export default async function QuoteDetailPage({
           </div>
         </div>
 
-        <form action={updateQuoteMeta.bind(null, quote.id)} className="card space-y-4">
-          <h2 className="font-semibold">Quote details</h2>
-          <div>
-            <label className="label">Valid until</label>
-            <input
-              type="date"
-              name="validUntil"
-              className="input"
-              defaultValue={quote.validUntil ? quote.validUntil.toISOString().slice(0, 10) : ""}
-            />
+        {editable ? (
+          <form action={updateQuoteMeta.bind(null, quote.id)} className="card space-y-4">
+            <h2 className="font-semibold">Quote details</h2>
+            <div>
+              <label className="label">Valid until</label>
+              <input
+                type="date"
+                name="validUntil"
+                className="input"
+                defaultValue={quote.validUntil ? quote.validUntil.toISOString().slice(0, 10) : ""}
+              />
+            </div>
+            <div>
+              <label className="label">Terms</label>
+              <textarea name="terms" className="input" rows={5} defaultValue={quote.terms ?? ""} />
+            </div>
+            <button className="btn-secondary w-full">Save details</button>
+          </form>
+        ) : (
+          <div className="card space-y-3">
+            <h2 className="font-semibold">Quote details</h2>
+            {lockedBySigning && (
+              <p className="text-xs text-slate-400">
+                🔒 Locked while the signing link is active. Revoke the link in the signature card
+                to edit this quote.
+              </p>
+            )}
+            <div className="text-sm space-y-1.5">
+              <p>
+                <span className="text-slate-400">Valid until:</span>{" "}
+                {quote.validUntil ? formatDate(quote.validUntil) : "—"}
+              </p>
+              {quote.terms && (
+                <div>
+                  <p className="text-slate-400 mb-1">Terms:</p>
+                  <p className="text-xs text-slate-300 whitespace-pre-wrap">{quote.terms}</p>
+                </div>
+              )}
+            </div>
           </div>
-          <div>
-            <label className="label">Terms</label>
-            <textarea name="terms" className="input" rows={5} defaultValue={quote.terms ?? ""} />
-          </div>
-          <button className="btn-secondary w-full">Save details</button>
-        </form>
+        )}
       </div>
     </div>
   );

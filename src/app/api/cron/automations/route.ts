@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runIdleAutomations } from "@/lib/automations";
 import { runServiceReminders } from "@/lib/serviceReminders";
+import { runQuoteSigningReminders } from "@/lib/signingReminders";
 import { getSetting } from "@/lib/settings";
 
 /**
@@ -25,5 +26,6 @@ export async function GET(req: NextRequest) {
   }
   const fired = await runIdleAutomations();
   const remindersSent = await runServiceReminders().catch(() => -1);
-  return NextResponse.json({ ok: true, fired, remindersSent });
+  const quoteReminders = await runQuoteSigningReminders().catch(() => -1);
+  return NextResponse.json({ ok: true, fired, remindersSent, quoteReminders });
 }

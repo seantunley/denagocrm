@@ -256,6 +256,13 @@ model Quote {
   signedByName       String?
   signatureRef       String?
   signerIp           String?
+  signerUserAgent    String?
+  signedPdfHash      String? // SHA-256 of the filed signed PDF (tamper evidence)
+  signLinkCreatedAt  DateTime?
+  viewedAt           DateTime? // first time the customer opened the signing link
+  declinedAt         DateTime?
+  declineReason      String?
+  reminderSentAt     DateTime? // unsigned-quote nudge already sent
   dealerSignedAt     DateTime?
   dealerSignedByName String?
   dealerSignatureRef String?
@@ -435,11 +442,14 @@ model JobCard {
   deletedByName String?
   deleteReason  String?
 
-  signToken    String?   @unique
-  signedAt     DateTime?
-  signedByName String?
-  signatureRef String?
-  signerIp     String?
+  signToken       String?   @unique
+  signedAt        DateTime?
+  signedByName    String?
+  signatureRef    String?
+  signerIp        String?
+  signerUserAgent String?
+  signedPdfHash   String?
+  viewedAt        DateTime?
 
   vehicleId String
   vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)

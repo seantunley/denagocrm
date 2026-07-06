@@ -3,13 +3,24 @@
 import { useRef, useState } from "react";
 
 /** Signature pad + name field on the public signing page. */
-export default function SignPanel({ token, kind }: { token: string; kind: "quote" | "jobcard" }) {
+export default function SignPanel({
+  token,
+  kind,
+  allowDecline = false,
+}: {
+  token: string;
+  kind: "quote" | "jobcard";
+  allowDecline?: boolean;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
   const hasInk = useRef(false);
   const [name, setName] = useState("");
-  const [status, setStatus] = useState<"idle" | "sending" | "done">("idle");
+  const [status, setStatus] = useState<"idle" | "sending" | "done" | "declined">("idle");
   const [error, setError] = useState("");
+  const [declineOpen, setDeclineOpen] = useState(false);
+  const [declineReason, setDeclineReason] = useState("");
+  const [declining, setDeclining] = useState(false);
 
   function pos(e: React.PointerEvent<HTMLCanvasElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -92,6 +103,45 @@ export default function SignPanel({ token, kind }: { token: string; kind: "quote
     }
   }
 
+  async function submitDecline() {
+    setError("");
+    if (declineReason.trim().length < 2) {
+      setError("Please tell us briefly why — it helps us do better.");
+      return;
+    }
+    setDeclining(true);
+    try {
+      const res = await fetch(`/api/sign/${token}/decline`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "quote", reason: declineReason.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setError(json.error ?? "Something went wrong — please try again.");
+        setDeclining(false);
+        return;
+      }
+      setStatus("declined");
+    } catch {
+      setError("Connection problem — please try again.");
+      setDeclining(false);
+    }
+  }
+
+  if (status === "declined") {
+    return (
+      <div className="rounded-xl border-2 border-slate-400 bg-slate-100 p-6 text-center">
+        <p className="text-3xl mb-2">🙏</p>
+        <p className="text-lg font-bold text-slate-700">Thanks for letting us know</p>
+        <p className="text-sm text-slate-600 mt-1">
+          We&apos;ve recorded that you declined this quote. If anything changes, this link stays
+          available — or call us on 081 515 8319.
+        </p>
+      </div>
+    );
+  }
+
   if (status === "done") {
     return (
       <div className="rounded-xl border-2 border-emerald-600 bg-emerald-50 p-6 text-center">
@@ -158,6 +208,50 @@ export default function SignPanel({ token, kind }: { token: string; kind: "quote
         By signing you agree to the terms above. Your name, signature, date/time and IP address
         are recorded as your electronic signature (ECT Act, 2002).
       </p>
+
+      {allowDecline && (
+        <div className="mt-4 pt-4 border-t border-orange-200">
+          {!declineOpen ? (
+            <button
+              type="button"
+              onClick={() => setDeclineOpen(true)}
+              className="text-sm text-slate-500 hover:text-slate-700 underline cursor-pointer"
+            >
+              Not going ahead? Decline this quote
+            </button>
+          ) : (
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Sorry to hear that — mind telling us why? *
+              </label>
+              <textarea
+                value={declineReason}
+                onChange={(e) => setDeclineReason(e.target.value)}
+                rows={2}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-orange-500"
+                placeholder="e.g. Went with another option · budget · timing"
+              />
+              <div className="flex gap-3 mt-2">
+                <button
+                  type="button"
+                  onClick={submitDecline}
+                  disabled={declining}
+                  className="rounded-lg bg-slate-700 hover:bg-slate-600 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 cursor-pointer"
+                >
+                  {declining ? "Sending…" : "Decline quote"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeclineOpen(false)}
+                  className="text-sm text-slate-500 underline cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

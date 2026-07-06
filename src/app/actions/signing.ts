@@ -55,7 +55,10 @@ export async function enableSigning(kind: "quote" | "jobcard", id: string) {
     const quote = await prisma.quote.findUniqueOrThrow({ where: { id } });
     if (!quote.dealerSignedAt) return; // must be countersigned by Denago first
     if (!quote.signToken) {
-      await prisma.quote.update({ where: { id }, data: { signToken: token } });
+      await prisma.quote.update({
+        where: { id },
+        data: { signToken: token, signLinkCreatedAt: new Date() },
+      });
       await logAudit({
         action: "quote.sign_link",
         summary: `Signing link created for quote Q-${quote.number}`,
@@ -76,6 +79,41 @@ export async function enableSigning(kind: "quote" | "jobcard", id: string) {
         user,
       });
     }
+    revalidatePath(`/jobcards/${id}`);
+  }
+}
+
+/** Kills an active signing link (wrong recipient, changed quote, etc.). */
+export async function revokeSigning(kind: "quote" | "jobcard", id: string) {
+  const user = await requireUser();
+  if (kind === "quote") {
+    const quote = await prisma.quote.findUniqueOrThrow({ where: { id } });
+    if (!quote.signToken || quote.signedAt) return; // nothing to revoke / already signed
+    await prisma.quote.update({
+      where: { id },
+      data: { signToken: null, signLinkCreatedAt: null, viewedAt: null, reminderSentAt: null },
+    });
+    await logAudit({
+      action: "quote.sign_link_revoked",
+      summary: `Signing link for quote Q-${quote.number} revoked — the old link no longer works`,
+      leadId: quote.leadId,
+      contactId: quote.contactId,
+      user,
+    });
+    revalidatePath(`/quotes/${id}`);
+  } else {
+    const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id } });
+    if (!jobCard.signToken || jobCard.signedAt) return;
+    await prisma.jobCard.update({
+      where: { id },
+      data: { signToken: null, viewedAt: null },
+    });
+    await logAudit({
+      action: "jobcard.sign_link_revoked",
+      summary: `Signing link for job card #${jobCard.number} revoked`,
+      contactId: jobCard.contactId,
+      user,
+    });
     revalidatePath(`/jobcards/${id}`);
   }
 }

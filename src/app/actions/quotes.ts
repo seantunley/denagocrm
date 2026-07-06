@@ -100,8 +100,15 @@ export async function createQuoteForContact(formData: FormData) {
   redirect(`/quotes/${quote.id}`);
 }
 
+/** A quote is frozen once a signing link exists or it has been signed. */
+async function quoteLocked(quoteId: string): Promise<boolean> {
+  const quote = await prisma.quote.findUnique({ where: { id: quoteId } });
+  return !quote || Boolean(quote.signToken) || Boolean(quote.signedAt);
+}
+
 export async function addQuoteItem(quoteId: string, formData: FormData) {
   await requireUser();
+  if (await quoteLocked(quoteId)) return;
   const description = String(formData.get("description") ?? "").trim();
   if (!description) return;
   await prisma.quoteItem.create({
@@ -118,12 +125,14 @@ export async function addQuoteItem(quoteId: string, formData: FormData) {
 export async function deleteQuoteItem(id: string, quoteId: string, formData: FormData) {
   await requireUser();
   void formData;
+  if (await quoteLocked(quoteId)) return;
   await prisma.quoteItem.delete({ where: { id } });
   revalidatePath(`/quotes/${quoteId}`);
 }
 
 export async function updateQuoteMeta(quoteId: string, formData: FormData) {
   await requireUser();
+  if (await quoteLocked(quoteId)) return;
   const validUntilRaw = String(formData.get("validUntil") ?? "").trim();
   await prisma.quote.update({
     where: { id: quoteId },
