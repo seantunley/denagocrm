@@ -1,5 +1,8 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
+import ModalTrigger from "@/components/Modal";
+import ContactForm from "@/components/ContactForm";
+import { createContact } from "@/app/actions/contacts";
 import { contactName, formatDate } from "@/lib/format";
 
 function initials(name: string) {
@@ -42,15 +45,19 @@ export default async function ContactsPage({
       }
     : {};
 
-  const contacts = await prisma.contact.findMany({
-    where,
-    orderBy: { createdAt: "desc" },
-    include: {
-      tags: true,
-      _count: { select: { vehicles: true, leads: { where: { status: "open" } } } },
-    },
-    take: 200,
-  });
+  const [contacts, users] = await Promise.all([
+    prisma.contact.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      include: {
+        tags: true,
+        owner: true,
+        _count: { select: { vehicles: true, leads: { where: { status: "open" } } } },
+      },
+      take: 200,
+    }),
+    prisma.user.findMany({ orderBy: { name: "asc" } }),
+  ]);
 
   const viewToggle = (target: string, label: string, active: boolean) => (
     <Link
@@ -82,9 +89,13 @@ export default async function ContactsPage({
             />
             <button className="btn-secondary">Search</button>
           </form>
-          <Link href="/contacts/new" className="btn-primary">
-            + New contact
-          </Link>
+          <ModalTrigger label="+ New contact" title="New contact">
+            <ContactForm
+              action={createContact}
+              submitLabel="Create contact"
+              users={users.map((u) => ({ id: u.id, name: u.name }))}
+            />
+          </ModalTrigger>
         </div>
       </div>
 
@@ -118,6 +129,7 @@ export default async function ContactsPage({
                     <p className="font-semibold truncate">{name}</p>
                     <p className="text-xs text-slate-400 truncate">
                       {c.isCompany ? "Company" : c.company || c.city || "—"}
+                      {c.owner ? ` · ${c.owner.name}` : ""}
                     </p>
                   </div>
                 </div>

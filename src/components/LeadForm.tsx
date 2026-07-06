@@ -21,6 +21,7 @@ type LeadDefaults = {
   stageId?: string;
   contactId?: string | null;
   notes?: string | null;
+  assignedToId?: string | null;
 };
 
 export default function LeadForm({
@@ -30,6 +31,7 @@ export default function LeadForm({
   contacts,
   defaults = {},
   submitLabel,
+  users = [],
 }: {
   action: (formData: FormData) => Promise<void>;
   products: LeadFormProduct[];
@@ -37,6 +39,7 @@ export default function LeadForm({
   contacts: { id: string; label: string }[];
   defaults?: LeadDefaults;
   submitLabel: string;
+  users?: { id: string; name: string }[];
 }) {
   const [productId, setProductId] = useState(defaults.productId ?? "");
   const [value, setValue] = useState(
@@ -133,6 +136,19 @@ export default function LeadForm({
             ))}
           </select>
         </div>
+        {users.length > 0 && (
+          <div>
+            <label className="label">Assigned to</label>
+            <select name="assignedToId" className="input" defaultValue={defaults.assignedToId ?? ""}>
+              <option value="">— unassigned —</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="md:col-span-2">
           <label className="label">Link to existing contact</label>
           <select name="contactId" className="input" defaultValue={defaults.contactId ?? ""}>

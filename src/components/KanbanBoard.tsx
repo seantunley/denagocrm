@@ -24,7 +24,18 @@ export type KanbanLead = {
   source: string;
   color: string | null;
   productName: string | null;
+  assignee: string | null;
 };
+
+function initials(name: string) {
+  return name
+    .split(/\s+/)
+    .map((w) => w[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+}
 
 export type KanbanStage = {
   id: string;
@@ -63,11 +74,23 @@ function LeadCard({ lead, dragging }: { lead: KanbanLead; dragging?: boolean }) 
           {lead.color ? ` · ${lead.color}` : ""}
         </p>
       )}
-      {lead.valueCents > 0 && (
-        <p className="text-xs font-semibold text-emerald-400 mt-1.5">
-          {formatZAR(lead.valueCents)}
-        </p>
-      )}
+      <div className="flex items-center justify-between mt-1.5">
+        {lead.valueCents > 0 ? (
+          <p className="text-xs font-semibold text-emerald-400">
+            {formatZAR(lead.valueCents)}
+          </p>
+        ) : (
+          <span />
+        )}
+        {lead.assignee && (
+          <span
+            className="h-5 w-5 rounded-full bg-orange-600/80 text-white text-[9px] font-bold flex items-center justify-center"
+            title={`Assigned to ${lead.assignee}`}
+          >
+            {initials(lead.assignee)}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

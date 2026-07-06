@@ -18,6 +18,9 @@ model User {
   documents          Document[]
   serviceRecords     ServiceRecord[]
   leadsAssigned      Lead[]
+  leadsCreated       Lead[]          @relation("LeadCreator")
+  contactsOwned      Contact[]       @relation("ContactOwner")
+  contactsCreated    Contact[]       @relation("ContactCreator")
   activitiesAssigned Activity[]      @relation("ActivityAssignee")
   activitiesCreated  Activity[]      @relation("ActivityCreator")
 }
@@ -64,9 +67,14 @@ model Contact {
   province   String?
   postalCode String?
   source     String?
-  notes     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  ownerId     String?
+  owner       User?   @relation("ContactOwner", fields: [ownerId], references: [id])
+  createdById String?
+  createdBy   User?   @relation("ContactCreator", fields: [createdById], references: [id])
 
   leads          Lead[]
   communications Communication[]
@@ -117,6 +125,8 @@ model Lead {
   contact      Contact?      @relation(fields: [contactId], references: [id], onDelete: SetNull)
   assignedToId String?
   assignedTo   User?         @relation(fields: [assignedToId], references: [id])
+  createdById  String?
+  createdBy    User?         @relation("LeadCreator", fields: [createdById], references: [id])
 
   communications Communication[]
   activities     Activity[]
@@ -172,6 +182,20 @@ model AutomationRule {
   assignToId      String?
 
   createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  action    String // e.g. contact.created, lead.stage_changed, jobcard.completed
+  summary   String // human-readable: what was done
+  contactId String? // the customer this relates to
+  leadId    String?
+  userId    String?
+  userName  String // denormalized so history survives user changes
+  createdAt DateTime @default(now())
+
+  @@index([contactId, createdAt])
+  @@index([leadId, createdAt])
 }
 
 model AutomationLog {

@@ -1,5 +1,8 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
+import ModalTrigger from "@/components/Modal";
+import VehicleForm from "@/components/VehicleForm";
+import { createVehicle } from "@/app/actions/vehicles";
 import { contactName, formatDate } from "@/lib/format";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
 
@@ -9,10 +12,14 @@ export default async function VehiclesPage({
   searchParams: Promise<{ filter?: string }>;
 }) {
   const { filter } = await searchParams;
-  const vehicles = await prisma.vehicle.findMany({
-    orderBy: { createdAt: "desc" },
-    include: { contact: true, serviceRecords: true, mileageLogs: true },
-  });
+  const [vehicles, contacts, products] = await Promise.all([
+    prisma.vehicle.findMany({
+      orderBy: { createdAt: "desc" },
+      include: { contact: true, serviceRecords: true, mileageLogs: true },
+    }),
+    prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
+    prisma.product.findMany({ include: { colors: true }, orderBy: { name: "asc" } }),
+  ]);
 
   const rows = vehicles
     .map((v) => ({ vehicle: v, due: computeDue(v) }))
@@ -31,9 +38,19 @@ export default async function VehiclesPage({
           >
             {filter === "due" ? "Showing due only" : "Show due for service"}
           </Link>
-          <Link href="/vehicles/new" className="btn-primary">
-            + Register vehicle
-          </Link>
+          <ModalTrigger label="+ Register vehicle" title="Register vehicle">
+            <VehicleForm
+              action={createVehicle}
+              contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
+              products={products.map((p) => ({
+                id: p.id,
+                name: p.name,
+                colors: p.colors.map((c) => c.name),
+              }))}
+              submitLabel="Register vehicle"
+              showInitialKm
+            />
+          </ModalTrigger>
         </div>
       </div>
 

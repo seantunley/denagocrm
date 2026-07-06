@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 
 function vehicleData(formData: FormData) {
   const str = (k: string) => {
@@ -32,7 +33,7 @@ function vehicleData(formData: FormData) {
 }
 
 export async function createVehicle(formData: FormData) {
-  await requireUser();
+  const user = await requireUser();
   const data = vehicleData(formData);
   if (!data.contactId) throw new Error("Customer is required");
   if (!data.model && data.productId) {
@@ -42,6 +43,12 @@ export async function createVehicle(formData: FormData) {
   if (!data.model) throw new Error("Model is required");
 
   const vehicle = await prisma.vehicle.create({ data });
+  await logAudit({
+    action: "vehicle.registered",
+    summary: `Registered vehicle ${vehicle.model}${vehicle.color ? ` (${vehicle.color})` : ""}`,
+    contactId: vehicle.contactId,
+    user,
+  });
 
   const initialKm = String(formData.get("initialKm") ?? "").trim();
   if (initialKm !== "" && !isNaN(parseInt(initialKm, 10))) {
@@ -106,6 +113,13 @@ export async function addServiceRecord(vehicleId: string, formData: FormData) {
   if (!summary) return;
 
   const km = int("km");
+  const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
+  await logAudit({
+    action: "service.recorded",
+    summary: `Recorded service on ${vehicle.model}: ${summary}`,
+    contactId: vehicle.contactId,
+    user,
+  });
   await prisma.serviceRecord.create({
     data: {
       vehicleId,

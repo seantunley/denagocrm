@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 import { saveFile, deleteFile } from "@/lib/storage";
 
 const MAX_SIZE = 25 * 1024 * 1024; // 25 MB
@@ -22,7 +23,7 @@ export async function uploadDocument(formData: FormData) {
   const mimeType = file.type || "application/octet-stream";
   const storedName = await saveFile(buffer, file.name, mimeType);
 
-  await prisma.document.create({
+  const doc = await prisma.document.create({
     data: {
       fileName: file.name,
       storedName,
@@ -33,6 +34,13 @@ export async function uploadDocument(formData: FormData) {
       jobCardId: str("jobCardId"),
       uploadedById: user.id,
     },
+    include: { vehicle: true, jobCard: true },
+  });
+  await logAudit({
+    action: "document.uploaded",
+    summary: `Uploaded document “${file.name}”`,
+    contactId: doc.contactId ?? doc.vehicle?.contactId ?? doc.jobCard?.contactId,
+    user,
   });
   revalidatePath(String(formData.get("revalidate") ?? "/"));
 }

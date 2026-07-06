@@ -1,18 +1,31 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import KanbanBoard, { type KanbanStage } from "@/components/KanbanBoard";
+import ModalTrigger from "@/components/Modal";
+import LeadForm from "@/components/LeadForm";
+import { createLead } from "@/app/actions/leads";
+import { contactName } from "@/lib/format";
 
 export default async function LeadsPage() {
-  const stages = await prisma.pipelineStage.findMany({
-    orderBy: { order: "asc" },
-    include: {
-      leads: {
-        where: { status: "open" },
-        orderBy: { position: "asc" },
-        include: { product: true },
+  const [stages, products, contacts, users] = await Promise.all([
+    prisma.pipelineStage.findMany({
+      orderBy: { order: "asc" },
+      include: {
+        leads: {
+          where: { status: "open" },
+          orderBy: { position: "asc" },
+          include: { product: true, assignedTo: true },
+        },
       },
-    },
-  });
+    }),
+    prisma.product.findMany({
+      where: { active: true },
+      include: { colors: true },
+      orderBy: { name: "asc" },
+    }),
+    prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
+    prisma.user.findMany({ orderBy: { name: "asc" } }),
+  ]);
 
   const boardStages: KanbanStage[] = stages.map((s) => ({
     id: s.id,
@@ -26,6 +39,7 @@ export default async function LeadsPage() {
       source: l.source,
       color: l.color,
       productName: l.product?.name ?? null,
+      assignee: l.assignedTo?.name ?? null,
     })),
   }));
 
@@ -37,9 +51,21 @@ export default async function LeadsPage() {
           <Link href="/leads/closed" className="btn-secondary">
             Won / Lost
           </Link>
-          <Link href="/leads/new" className="btn-primary">
-            + New lead
-          </Link>
+          <ModalTrigger label="+ New lead" title="New lead">
+            <LeadForm
+              action={createLead}
+              products={products.map((p) => ({
+                id: p.id,
+                name: p.name,
+                basePriceCents: p.basePriceCents,
+                colors: p.colors.map((c) => c.name),
+              }))}
+              stages={stages.map((s) => ({ id: s.id, name: s.name }))}
+              contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
+              users={users.map((u) => ({ id: u.id, name: u.name }))}
+              submitLabel="Create lead"
+            />
+          </ModalTrigger>
         </div>
       </div>
       <KanbanBoard stages={boardStages} />

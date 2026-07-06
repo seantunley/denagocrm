@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
+import { contactName } from "@/lib/format";
 
 function contactData(formData: FormData) {
   const str = (k: string) => {
@@ -25,6 +27,7 @@ function contactData(formData: FormData) {
     postalCode: str("postalCode"),
     source: str("source"),
     notes: str("notes"),
+    ownerId: str("ownerId"),
   };
 }
 
@@ -51,13 +54,14 @@ function parseTags(formData: FormData) {
 }
 
 export async function createContact(formData: FormData) {
-  await requireUser();
+  const user = await requireUser();
   const data = contactData(formData);
   if (!data.firstName) throw new Error("Name is required");
   const tags = parseTags(formData);
   const contact = await prisma.contact.create({
     data: {
       ...data,
+      createdById: user.id,
       tags: {
         connectOrCreate: tags.map((name) => ({
           where: { name },
@@ -66,16 +70,22 @@ export async function createContact(formData: FormData) {
       },
     },
   });
+  await logAudit({
+    action: "contact.created",
+    summary: `Created contact ${contactName(contact)}`,
+    contactId: contact.id,
+    user,
+  });
   revalidatePath("/contacts");
   redirect(`/contacts/${contact.id}`);
 }
 
 export async function updateContact(id: string, formData: FormData) {
-  await requireUser();
+  const user = await requireUser();
   const data = contactData(formData);
   if (!data.firstName) throw new Error("Name is required");
   const tags = parseTags(formData);
-  await prisma.contact.update({
+  const contact = await prisma.contact.update({
     where: { id },
     data: {
       ...data,
@@ -87,6 +97,12 @@ export async function updateContact(id: string, formData: FormData) {
         })),
       },
     },
+  });
+  await logAudit({
+    action: "contact.updated",
+    summary: `Updated details for ${contactName(contact)}`,
+    contactId: id,
+    user,
   });
   revalidatePath("/contacts");
   revalidatePath(`/contacts/${id}`);

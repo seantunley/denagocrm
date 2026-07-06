@@ -4,7 +4,7 @@ import LeadForm from "@/components/LeadForm";
 import { contactName } from "@/lib/format";
 
 export default async function NewLeadPage() {
-  const [products, stages, contacts] = await Promise.all([
+  const [products, stages, contacts, users] = await Promise.all([
     prisma.product.findMany({
       where: { active: true },
       include: { colors: true },
@@ -12,6 +12,7 @@ export default async function NewLeadPage() {
     }),
     prisma.pipelineStage.findMany({ orderBy: { order: "asc" } }),
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
+    prisma.user.findMany({ orderBy: { name: "asc" } }),
   ]);
 
   return (
@@ -27,6 +28,7 @@ export default async function NewLeadPage() {
         }))}
         stages={stages.map((s) => ({ id: s.id, name: s.name }))}
         contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
+        users={users.map((u) => ({ id: u.id, name: u.name }))}
         submitLabel="Create lead"
       />
     </div>

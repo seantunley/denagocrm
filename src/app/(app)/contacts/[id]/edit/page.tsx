@@ -10,10 +10,13 @@ export default async function EditContactPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const contact = await prisma.contact.findUnique({
-    where: { id },
-    include: { tags: true },
-  });
+  const [contact, users] = await Promise.all([
+    prisma.contact.findUnique({
+      where: { id },
+      include: { tags: true },
+    }),
+    prisma.user.findMany({ orderBy: { name: "asc" } }),
+  ]);
   if (!contact) notFound();
 
   return (
@@ -23,6 +26,7 @@ export default async function EditContactPage({
         action={updateContact.bind(null, contact.id)}
         defaults={{ ...contact, tags: contact.tags.map((t) => t.name).join(", ") }}
         submitLabel="Save changes"
+        users={users.map((u) => ({ id: u.id, name: u.name }))}
       />
     </div>
   );

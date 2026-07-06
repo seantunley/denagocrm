@@ -5,10 +5,11 @@ import { revalidatePath } from "next/cache";
 import { addMonths } from "date-fns";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 import { parseRands } from "@/lib/format";
 
 export async function createJobCard(formData: FormData) {
-  await requireUser();
+  const user = await requireUser();
   const vehicleId = String(formData.get("vehicleId") ?? "");
   const description = String(formData.get("description") ?? "").trim();
   if (!vehicleId || !description) throw new Error("Vehicle and description are required");
@@ -32,6 +33,12 @@ export async function createJobCard(formData: FormData) {
       data: { vehicleId, km: jobCard.kmIn, note: `Job card #${jobCard.number} check-in` },
     });
   }
+  await logAudit({
+    action: "jobcard.opened",
+    summary: `Opened job card #${jobCard.number} on ${vehicle.model}: ${description}`,
+    contactId: vehicle.contactId,
+    user,
+  });
   revalidatePath("/jobcards");
   redirect(`/jobcards/${jobCard.id}`);
 }
@@ -120,6 +127,12 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
       data: { vehicleId: jobCard.vehicleId, km, note: `Job card #${jobCard.number} completed` },
     });
   }
+  await logAudit({
+    action: "jobcard.completed",
+    summary: `Completed job card #${jobCard.number} on ${jobCard.vehicle.model}: ${summary}`,
+    contactId: jobCard.contactId,
+    user,
+  });
   revalidatePath("/jobcards");
   revalidatePath(`/jobcards/${jobCardId}`);
   revalidatePath(`/vehicles/${jobCard.vehicleId}`);

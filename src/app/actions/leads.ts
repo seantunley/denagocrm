@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { parseRands } from "@/lib/format";
 import { runLeadAutomations } from "@/lib/automations";
+import { logAudit } from "@/lib/audit";
 
 function leadData(formData: FormData) {
   const str = (k: string) => {
@@ -23,6 +24,7 @@ function leadData(formData: FormData) {
     valueCents: parseRands(str("value")),
     stageId: String(formData.get("stageId") ?? ""),
     contactId: str("contactId"),
+    assignedToId: str("assignedToId"),
   };
 }
 
@@ -42,7 +44,7 @@ async function buildTitle(data: { name: string; productId: string | null; color:
 }
 
 export async function createLead(formData: FormData) {
-  await requireUser();
+  const user = await requireUser();
   const data = leadData(formData);
   if (!data.name) throw new Error("Name is required");
   if (!data.stageId) {
@@ -52,7 +54,14 @@ export async function createLead(formData: FormData) {
   }
   const title = String(formData.get("title") ?? "").trim() || (await buildTitle(data));
   const lead = await prisma.lead.create({
-    data: { ...data, title, position: await nextPosition(data.stageId) },
+    data: { ...data, title, createdById: user.id, position: await nextPosition(data.stageId) },
+  });
+  await logAudit({
+    action: "lead.created",
+    summary: `Created lead “${lead.title}”`,
+    leadId: lead.id,
+    contactId: lead.contactId,
+    user,
   });
   await runLeadAutomations("lead_created", lead.id);
   revalidatePath("/leads");
@@ -60,12 +69,19 @@ export async function createLead(formData: FormData) {
 }
 
 export async function updateLead(id: string, formData: FormData) {
-  await requireUser();
+  const user = await requireUser();
   const data = leadData(formData);
   if (!data.name) throw new Error("Name is required");
   const title = String(formData.get("title") ?? "").trim() || (await buildTitle(data));
   const before = await prisma.lead.findUniqueOrThrow({ where: { id } });
-  await prisma.lead.update({ where: { id }, data: { ...data, title } });
+  const lead = await prisma.lead.update({ where: { id }, data: { ...data, title } });
+  await logAudit({
+    action: "lead.updated",
+    summary: `Updated lead “${lead.title}”`,
+    leadId: id,
+    contactId: lead.contactId,
+    user,
+  });
   if (before.stageId !== data.stageId) {
     await runLeadAutomations("stage_entered", id);
   }
@@ -75,10 +91,18 @@ export async function updateLead(id: string, formData: FormData) {
 }
 
 export async function moveLead(leadId: string, stageId: string) {
-  await requireUser();
-  await prisma.lead.update({
+  const user = await requireUser();
+  const lead = await prisma.lead.update({
     where: { id: leadId },
     data: { stageId, position: await nextPosition(stageId) },
+    include: { stage: true },
+  });
+  await logAudit({
+    action: "lead.stage_changed",
+    summary: `Moved “${lead.title}” to ${lead.stage.name}`,
+    leadId,
+    contactId: lead.contactId,
+    user,
   });
   await runLeadAutomations("stage_entered", leadId);
   revalidatePath("/leads");
@@ -86,7 +110,7 @@ export async function moveLead(leadId: string, stageId: string) {
 
 /** Marks a lead won and ensures it is linked to a contact (creating one if needed). */
 export async function markWon(leadId: string) {
-  await requireUser();
+  const user = await requireUser();
   const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
   let contactId = lead.contactId;
   if (!contactId) {
@@ -98,13 +122,29 @@ export async function markWon(leadId: string) {
         email: lead.email,
         phone: lead.phone,
         source: lead.source,
+        createdById: user.id,
+        ownerId: lead.assignedToId ?? user.id,
       },
     });
     contactId = contact.id;
+    await logAudit({
+      action: "contact.created",
+      summary: `Created contact ${lead.name} from won lead`,
+      contactId,
+      leadId,
+      user,
+    });
   }
   await prisma.lead.update({
     where: { id: leadId },
     data: { status: "won", contactId },
+  });
+  await logAudit({
+    action: "lead.won",
+    summary: `Marked lead “${lead.title}” as WON 🎉`,
+    leadId,
+    contactId,
+    user,
   });
   revalidatePath("/leads");
   revalidatePath(`/leads/${leadId}`);
@@ -112,21 +152,35 @@ export async function markWon(leadId: string) {
 }
 
 export async function markLost(leadId: string, formData: FormData) {
-  await requireUser();
+  const user = await requireUser();
   const reason = String(formData.get("lostReason") ?? "").trim() || null;
-  await prisma.lead.update({
+  const lead = await prisma.lead.update({
     where: { id: leadId },
     data: { status: "lost", lostReason: reason },
+  });
+  await logAudit({
+    action: "lead.lost",
+    summary: `Marked lead “${lead.title}” as lost${reason ? ` — ${reason}` : ""}`,
+    leadId,
+    contactId: lead.contactId,
+    user,
   });
   revalidatePath("/leads");
   revalidatePath(`/leads/${leadId}`);
 }
 
 export async function reopenLead(leadId: string) {
-  await requireUser();
-  await prisma.lead.update({
+  const user = await requireUser();
+  const lead = await prisma.lead.update({
     where: { id: leadId },
     data: { status: "open", lostReason: null },
+  });
+  await logAudit({
+    action: "lead.reopened",
+    summary: `Reopened lead “${lead.title}”`,
+    leadId,
+    contactId: lead.contactId,
+    user,
   });
   revalidatePath("/leads");
   revalidatePath(`/leads/${leadId}`);

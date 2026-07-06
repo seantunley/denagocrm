@@ -1,4 +1,5 @@
 import { prisma } from "./db";
+import { logAudit } from "./audit";
 import { runLeadAutomations } from "./automations";
 
 export type IntakeLead = {
@@ -62,6 +63,12 @@ export async function createIntakeLead(input: IntakeLead) {
       externalId: input.externalId ?? null,
       raw: input.raw != null ? JSON.stringify(input.raw) : null,
     },
+  });
+  await logAudit({
+    action: "lead.received",
+    summary: `Lead “${lead.title}” received via ${input.source}`,
+    leadId: lead.id,
+    userName: "System",
   });
   await runLeadAutomations("lead_created", lead.id);
   return lead;

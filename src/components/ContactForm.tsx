@@ -14,16 +14,19 @@ type ContactDefaults = {
   source?: string | null;
   notes?: string | null;
   tags?: string;
+  ownerId?: string | null;
 };
 
 export default function ContactForm({
   action,
   defaults = {},
   submitLabel,
+  users = [],
 }: {
   action: (formData: FormData) => Promise<void>;
   defaults?: ContactDefaults;
   submitLabel: string;
+  users?: { id: string; name: string }[];
 }) {
   return (
     <form action={action} className="card space-y-4 max-w-2xl">
@@ -64,6 +67,19 @@ export default function ContactForm({
           <label className="label">WhatsApp</label>
           <input name="whatsapp" className="input" defaultValue={defaults.whatsapp ?? ""} />
         </div>
+        {users.length > 0 && (
+          <div>
+            <label className="label">Responsible / owner</label>
+            <select name="ownerId" className="input" defaultValue={defaults.ownerId ?? ""}>
+              <option value="">— unassigned —</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div>
           <label className="label">Source</label>
           <select name="source" className="input" defaultValue={defaults.source ?? ""}>

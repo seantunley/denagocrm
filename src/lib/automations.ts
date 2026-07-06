@@ -1,5 +1,6 @@
 import { addDays, subDays } from "date-fns";
 import { prisma } from "./db";
+import { logAudit } from "./audit";
 import { sendEmail, renderTemplate, leadVars } from "./email";
 
 type LeadForRules = NonNullable<Awaited<ReturnType<typeof loadLead>>>;
@@ -103,10 +104,25 @@ async function applyRule(
   }
 }
 
-async function logRule(ruleId: string, leadId: string, note: string) {
+async function logRule(
+  ruleId: string,
+  leadId: string,
+  note: string,
+  ruleName?: string,
+  contactId?: string | null
+) {
   await prisma.automationLog
     .create({ data: { ruleId, leadId, note } })
     .catch(() => {});
+  if (ruleName && !note.startsWith("skipped")) {
+    await logAudit({
+      action: "automation.ran",
+      summary: `Automation “${ruleName}”: ${note}`,
+      leadId,
+      contactId,
+      userName: "Automation",
+    });
+  }
 }
 
 /** Fires event-based rules (lead_created / stage_entered) for a lead. */
@@ -125,7 +141,7 @@ export async function runLeadAutomations(
       if (trigger === "stage_entered" && rule.triggerStageId !== lead.stageId) continue;
       try {
         const note = await applyRule(rule, lead, depth);
-        await logRule(rule.id, lead.id, note);
+        await logRule(rule.id, lead.id, note, rule.name, lead.contactId);
       } catch (err) {
         await logRule(rule.id, lead.id, `error: ${err instanceof Error ? err.message : "unknown"}`);
       }
@@ -157,7 +173,7 @@ export async function runIdleAutomations(): Promise<number> {
       if (already) continue;
       try {
         const note = await applyRule(rule, lead, 0);
-        await logRule(rule.id, lead.id, note);
+        await logRule(rule.id, lead.id, note, rule.name, lead.contactId);
         fired++;
       } catch (err) {
         await logRule(rule.id, lead.id, `error: ${err instanceof Error ? err.message : "unknown"}`);

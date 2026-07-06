@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
 
 export type SendEmailState = { ok?: string; error?: string };
@@ -36,6 +37,13 @@ export async function sendEmailAction(
       contactId,
       userId: user.id,
     },
+  });
+  await logAudit({
+    action: "email.sent",
+    summary: `Sent email to ${to}: “${subject}”`,
+    contactId,
+    leadId,
+    user,
   });
   revalidatePath(String(formData.get("revalidate") ?? "/"));
   return { ok: `Email sent to ${to}.` };

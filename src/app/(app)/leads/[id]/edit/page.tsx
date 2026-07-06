@@ -10,7 +10,7 @@ export default async function EditLeadPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [lead, products, stages, contacts] = await Promise.all([
+  const [lead, products, stages, contacts, users] = await Promise.all([
     prisma.lead.findUnique({ where: { id } }),
     prisma.product.findMany({
       where: { active: true },
@@ -19,6 +19,7 @@ export default async function EditLeadPage({
     }),
     prisma.pipelineStage.findMany({ orderBy: { order: "asc" } }),
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
+    prisma.user.findMany({ orderBy: { name: "asc" } }),
   ]);
   if (!lead) notFound();
 
@@ -35,6 +36,7 @@ export default async function EditLeadPage({
         }))}
         stages={stages.map((s) => ({ id: s.id, name: s.name }))}
         contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
+        users={users.map((u) => ({ id: u.id, name: u.name }))}
         defaults={lead}
         submitLabel="Save changes"
       />

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 
 export async function scheduleActivity(formData: FormData) {
   const user = await requireUser();
@@ -36,6 +37,14 @@ export async function completeActivity(id: string, formData: FormData) {
   const activity = await prisma.activity.update({
     where: { id },
     data: { status: "done", doneAt: new Date() },
+    include: { lead: true },
+  });
+  await logAudit({
+    action: "activity.done",
+    summary: `Completed ${activity.type}: ${activity.summary}`,
+    contactId: activity.contactId ?? activity.lead?.contactId,
+    leadId: activity.leadId,
+    user,
   });
   const note = String(formData.get("note") ?? "").trim();
   if (note) {

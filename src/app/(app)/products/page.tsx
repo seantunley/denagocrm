@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
+import ModalTrigger from "@/components/Modal";
+import ProductForm from "@/components/ProductForm";
 import { formatZAR } from "@/lib/format";
 
 export default async function ProductsPage() {
@@ -12,9 +14,9 @@ export default async function ProductsPage() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Products</h1>
-        <Link href="/products/new" className="btn-primary">
-          + New product
-        </Link>
+        <ModalTrigger label="+ New product" title="New product">
+          <ProductForm />
+        </ModalTrigger>
       </div>
 
       <div className="card p-0 overflow-x-auto">

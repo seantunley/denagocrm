@@ -6,6 +6,9 @@ import CommsTimeline from "@/components/CommsTimeline";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
+import SlideOver from "@/components/SlideOver";
+import HistoryTimeline from "@/components/HistoryTimeline";
+import { formatDateTime } from "@/lib/format";
 import { requireUser } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, contactVars } from "@/lib/email";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
@@ -27,13 +30,25 @@ export default async function ContactDetailPage({
       documents: { include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
       activities: { include: { assignedTo: true }, orderBy: { dueDate: "asc" } },
       tags: true,
+      owner: true,
+      createdBy: true,
     },
   });
   if (!contact) notFound();
-  const [users, templates, smtpConfigured] = await Promise.all([
+  const [users, templates, smtpConfigured, history] = await Promise.all([
     prisma.user.findMany({ orderBy: { name: "asc" } }),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
     isSmtpConfigured(),
+    prisma.auditLog.findMany({
+      where: {
+        OR: [
+          { contactId: contact.id },
+          { leadId: { in: (await prisma.lead.findMany({ where: { contactId: contact.id }, select: { id: true } })).map((l) => l.id) } },
+        ],
+      },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    }),
   ]);
   const vars = contactVars(contact);
   const renderedTemplates = templates.map((t) => ({
@@ -63,8 +78,17 @@ export default async function ContactDetailPage({
           <p className="text-sm text-slate-400 mt-0.5">
             {[contact.email, contact.phone, contact.city].filter(Boolean).join(" · ") || "No details"}
           </p>
+          <p className="text-xs text-slate-500 mt-0.5">
+            {contact.owner ? `Owner: ${contact.owner.name}` : "No owner assigned"}
+            {" · added"}
+            {contact.createdBy ? ` by ${contact.createdBy.name}` : ""} at{" "}
+            {formatDateTime(contact.createdAt)}
+          </p>
         </div>
         <div className="flex gap-2">
+          <SlideOver label="🕘 History" title={`History — ${contactName(contact)}`}>
+            <HistoryTimeline entries={history} />
+          </SlideOver>
           <Link href={`/contacts/${contact.id}/edit`} className="btn-secondary">
             Edit
           </Link>

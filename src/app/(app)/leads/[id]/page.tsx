@@ -125,6 +125,7 @@ export default async function LeadDetailPage({
                 ["Product", lead.product?.name],
                 ["Colour", lead.color],
                 ["Value", lead.valueCents ? formatZAR(lead.valueCents) : null],
+                ["Assigned to", lead.assignedTo?.name],
                 ["Source", lead.source],
                 ["Lost reason", lead.lostReason],
               ].map(([label, value]) =>

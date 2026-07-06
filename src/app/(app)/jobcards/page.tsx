@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
+import ModalTrigger from "@/components/Modal";
+import JobCardForm from "@/components/JobCardForm";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 
 const statusBadge: Record<string, string> = {
@@ -9,19 +11,31 @@ const statusBadge: Record<string, string> = {
 };
 
 export default async function JobCardsPage() {
-  const jobCards = await prisma.jobCard.findMany({
-    orderBy: [{ status: "asc" }, { openedAt: "desc" }],
-    include: { vehicle: true, contact: true, items: true },
-    take: 200,
-  });
+  const [jobCards, vehicles] = await Promise.all([
+    prisma.jobCard.findMany({
+      orderBy: [{ status: "asc" }, { openedAt: "desc" }],
+      include: { vehicle: true, contact: true, items: true },
+      take: 200,
+    }),
+    prisma.vehicle.findMany({
+      include: { contact: true },
+      orderBy: { createdAt: "desc" },
+      take: 500,
+    }),
+  ]);
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Job cards</h1>
-        <Link href="/jobcards/new" className="btn-primary">
-          + New job card
-        </Link>
+        <ModalTrigger label="+ New job card" title="New job card">
+          <JobCardForm
+            vehicles={vehicles.map((v) => ({
+              id: v.id,
+              label: `${v.model}${v.vin ? ` (${v.vin})` : ""} — ${contactName(v.contact)}`,
+            }))}
+          />
+        </ModalTrigger>
       </div>
 
       <div className="card p-0 overflow-x-auto">
