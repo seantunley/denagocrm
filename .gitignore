@@ -50,3 +50,4 @@ prisma/dev.db-journal
 .vercel
 .env*
 data-export.json
+backups/
