@@ -35,9 +35,7 @@ export default async function LeadDetailPage({
   });
   if (!lead) notFound();
   const [contacts, users, templates, smtpConfigured] = await Promise.all([
-    lead.contactId == null
-      ? prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 })
-      : Promise.resolve([]),
+    prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
     prisma.user.findMany({ orderBy: { name: "asc" } }),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
     isSmtpConfigured(),
@@ -146,29 +144,32 @@ export default async function LeadDetailPage({
 
           <div className="card">
             <h2 className="font-semibold mb-3">Contact</h2>
-            {lead.contact ? (
+            {lead.contact && (
               <Link
                 href={`/contacts/${lead.contact.id}`}
-                className="text-sm font-medium text-orange-400 hover:underline"
+                className="text-sm font-medium text-orange-400 hover:underline block mb-3"
               >
                 {contactName(lead.contact)} →
               </Link>
-            ) : (
-              <form action={linkLeadToContact.bind(null, lead.id)} className="space-y-2">
-                <select name="contactId" className="input">
-                  <option value="">Select existing contact…</option>
-                  {contacts.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {contactName(c)}
-                    </option>
-                  ))}
-                </select>
-                <button className="btn-secondary btn-sm w-full">Link contact</button>
-                <p className="text-xs text-slate-400">
-                  Marking the lead as won creates a contact automatically.
-                </p>
-              </form>
             )}
+            <form action={linkLeadToContact.bind(null, lead.id)} className="space-y-2">
+              <label className="label">
+                {lead.contact ? "Change linked contact" : "Link to contact"}
+              </label>
+              <select
+                name="contactId"
+                className="input"
+                defaultValue={lead.contactId ?? ""}
+              >
+                <option value="">Select contact…</option>
+                {contacts.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {contactName(c)}
+                  </option>
+                ))}
+              </select>
+              <button className="btn-secondary btn-sm w-full">Save contact link</button>
+            </form>
           </div>
 
           {lead.status === "open" && (

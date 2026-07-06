@@ -224,11 +224,23 @@ export async function reopenLead(leadId: string) {
 }
 
 export async function linkLeadToContact(leadId: string, formData: FormData) {
-  await requireUser();
+  const user = await requireUser();
   const contactId = String(formData.get("contactId") ?? "");
   if (!contactId) return;
-  await prisma.lead.update({ where: { id: leadId }, data: { contactId } });
+  const lead = await prisma.lead.update({
+    where: { id: leadId },
+    data: { contactId },
+    include: { contact: true },
+  });
+  await logAudit({
+    action: "lead.contact_linked",
+    summary: `Linked lead “${lead.title}” to contact ${lead.contact ? `${lead.contact.firstName} ${lead.contact.lastName ?? ""}`.trim() : ""}`,
+    leadId,
+    contactId,
+    user,
+  });
   revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/leads");
 }
 
 export async function deleteLead(leadId: string) {
