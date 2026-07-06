@@ -56,7 +56,7 @@ export default async function TrashPage() {
   ].sort((a, b) => b.deletedAt.getTime() - a.deletedAt.getTime());
 
   return (
-    <div className="space-y-5 max-w-4xl">
+    <div className="space-y-5 max-w-6xl">
       <div>
         <h1 className="text-2xl font-bold">🗑 Trash</h1>
         <p className="text-sm text-slate-400 mt-1">

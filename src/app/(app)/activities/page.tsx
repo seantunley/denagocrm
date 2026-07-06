@@ -43,7 +43,7 @@ export default async function ActivitiesPage({
   ];
 
   return (
-    <div className="space-y-5 max-w-4xl">
+    <div className="space-y-5 max-w-6xl">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <h1 className="text-2xl font-bold">Activities</h1>
         <div className="flex gap-2">

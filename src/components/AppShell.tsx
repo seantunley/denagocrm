@@ -52,7 +52,7 @@ export default function AppShell({
         {sidebar}
       </aside>
 
-      <main className="lg:ml-56 p-4 pt-[4.5rem] lg:p-8 lg:pt-8 max-w-[1400px]">
+      <main className="lg:ml-56 p-4 pt-[4.5rem] lg:p-8 lg:pt-8">
         {children}
       </main>
     </div>
