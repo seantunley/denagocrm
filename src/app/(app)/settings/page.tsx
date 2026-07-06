@@ -8,6 +8,7 @@ import {
   deleteStage,
   saveSetting,
   saveMyProfile,
+  saveQuoteDefaults,
   regenerateSetting,
 } from "@/app/actions/settings";
 import { buildSignature } from "@/lib/signature";
@@ -29,6 +30,7 @@ const TABS = [
   { key: "pipeline", label: "Pipeline" },
   { key: "team", label: "Team" },
   { key: "email", label: "Email" },
+  { key: "quotes", label: "Quotes" },
   { key: "integrations", label: "Integrations" },
   { key: "import", label: "Import" },
 ] as const;
@@ -349,6 +351,39 @@ export default async function SettingsPage({
           </p>
           <ImportContactsForm />
         </div>
+      )}
+
+      {tab === "quotes" && (
+        <form action={saveQuoteDefaults} className="card space-y-4 max-w-xl">
+          <h2 className="font-semibold">Quote defaults</h2>
+          <p className="text-xs text-slate-400">
+            Applied to new quotes. You can still change the validity date and terms on any
+            individual quote.
+          </p>
+          <div>
+            <label className="label">Valid for (days)</label>
+            <input
+              name="validDays"
+              type="number"
+              min={1}
+              className="input w-32"
+              defaultValue={setting("QUOTE_VALID_DAYS") || "7"}
+            />
+          </div>
+          <div>
+            <label className="label">Default terms</label>
+            <textarea
+              name="terms"
+              className="input"
+              rows={3}
+              defaultValue={
+                setting("QUOTE_TERMS") ||
+                "Prices include VAT. Delivery arranged on acceptance. E&OE."
+              }
+            />
+          </div>
+          <button className="btn-primary">Save quote defaults</button>
+        </form>
       )}
 
       {tab === "integrations" && (

@@ -7,6 +7,7 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
+import { getSetting } from "@/lib/settings";
 import { parseRands, formatZAR } from "@/lib/format";
 
 /** Creates a draft quote from a lead, pre-filled with its product line. */
@@ -17,14 +18,19 @@ export async function createQuoteFromLead(leadId: string) {
     include: { product: true },
   });
   const max = await prisma.quote.aggregate({ _max: { number: true } });
+  const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
+  const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
+  const terms =
+    (await getSetting("QUOTE_TERMS")) ||
+    "Prices include VAT. Delivery arranged on acceptance. E&OE.";
   const quote = await prisma.quote.create({
     data: {
       number: (max._max.number ?? 1000) + 1,
       leadId,
       contactId: lead.contactId,
       createdById: user.id,
-      validUntil: addDays(new Date(), 14),
-      terms: "Prices include VAT. Delivery arranged on acceptance. E&OE.",
+      validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
+      terms,
       items: lead.product
         ? {
             create: [

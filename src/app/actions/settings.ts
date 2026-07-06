@@ -109,6 +109,23 @@ export async function changeOwnPassword(
   return { ok: "Password updated." };
 }
 
+export async function saveQuoteDefaults(formData: FormData) {
+  await requireUser();
+  const days = String(formData.get("validDays") ?? "").trim();
+  const terms = String(formData.get("terms") ?? "").trim();
+  await prisma.appSetting.upsert({
+    where: { key: "QUOTE_VALID_DAYS" },
+    update: { value: days || "7" },
+    create: { key: "QUOTE_VALID_DAYS", value: days || "7" },
+  });
+  await prisma.appSetting.upsert({
+    where: { key: "QUOTE_TERMS" },
+    update: { value: terms },
+    create: { key: "QUOTE_TERMS", value: terms },
+  });
+  revalidatePath("/settings");
+}
+
 export async function saveMyProfile(formData: FormData) {
   const user = await requireUser();
   const mobile = String(formData.get("mobile") ?? "").trim() || null;
