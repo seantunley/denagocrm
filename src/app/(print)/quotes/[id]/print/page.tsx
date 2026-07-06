@@ -31,16 +31,16 @@ export default async function QuotePrintPage({
     <>
       <PrintActions backHref={`/quotes/${quote.id}`} />
       <style>{`
-        @page { margin: 20mm; }
+        @page { margin: 12mm; }
         @media print {
           * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
           .no-break { break-inside: avoid; }
-          .print-page { display: flex; flex-direction: column; min-height: 245mm; }
+          .print-page { display: flex; flex-direction: column; min-height: 262mm; }
           .print-bottom { margin-top: auto; }
         }
       `}</style>
 
-      <div className="print-page max-w-3xl mx-auto px-10 py-12 print:p-0 text-sm text-slate-800">
+      <div className="print-page max-w-3xl mx-auto px-6 py-8 print:p-0 text-sm text-slate-800">
         {/* Brand banner */}
         <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
