@@ -46,3 +46,7 @@ prisma/dev.db-journal
 
 # uploaded documents
 /storage/
+
+.vercel
+.env*
+data-export.json
