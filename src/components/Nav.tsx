@@ -7,7 +7,10 @@ import { usePathname } from "next/navigation";
 type NavLink = { href: string; label: string; icon: string };
 type NavGroup = { key: string; label: string; links: NavLink[] };
 
-const topLinks: NavLink[] = [{ href: "/", label: "Dashboard", icon: "▦" }];
+const topLinks: NavLink[] = [
+  { href: "/", label: "Dashboard", icon: "▦" },
+  { href: "/reports", label: "Reports", icon: "📊" },
+];
 
 const groups: NavGroup[] = [
   {

@@ -94,6 +94,9 @@ export default async function ContactsPage({
             />
             <button className="btn-secondary">Search</button>
           </form>
+          <Link href="/duplicates" className="btn-secondary">
+            ⧉ Duplicates
+          </Link>
           <ModalTrigger label="+ New contact" title="New contact">
             <ContactForm
               action={createContact}

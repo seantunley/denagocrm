@@ -19,6 +19,7 @@ import {
 } from "@/app/actions/emails";
 import TestEmailButton from "@/components/TestEmailButton";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import ImportContactsForm from "@/components/ImportContactsForm";
 import { formatDate } from "@/lib/format";
 
 const TABS = [
@@ -26,6 +27,7 @@ const TABS = [
   { key: "team", label: "Team" },
   { key: "email", label: "Email" },
   { key: "integrations", label: "Integrations" },
+  { key: "import", label: "Import" },
 ] as const;
 
 export default async function SettingsPage({
@@ -280,6 +282,19 @@ export default async function SettingsPage({
             </form>
           </div>
         </>
+      )}
+
+      {tab === "import" && (
+        <div className="card max-w-xl">
+          <h2 className="font-semibold mb-1">Import contacts from CSV</h2>
+          <p className="text-xs text-slate-400 mb-4">
+            Upload a CSV with a header row. Recognised columns: Name (or First Name / Last
+            Name), Email, Phone, WhatsApp, Company, Address, Suburb, City, Province, Postal
+            Code, Notes, Source. Contacts matching an existing email or phone are skipped —
+            safe to re-run.
+          </p>
+          <ImportContactsForm />
+        </div>
       )}
 
       {tab === "integrations" && (

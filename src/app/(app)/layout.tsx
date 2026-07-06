@@ -18,6 +18,15 @@ export default async function AppLayout({
           className="h-8 w-auto object-contain"
         />
       </div>
+      <div className="px-3 pb-2">
+        <form action="/search">
+          <input
+            name="q"
+            className="input py-1.5 text-xs"
+            placeholder="🔍 Search everything…"
+          />
+        </form>
+      </div>
       <div className="flex-1 px-3 overflow-y-auto">
         <Nav />
       </div>
