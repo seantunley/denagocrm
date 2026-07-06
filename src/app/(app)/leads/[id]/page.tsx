@@ -15,6 +15,7 @@ import EmailComposer from "@/components/EmailComposer";
 import LeadTimeline from "@/components/LeadTimeline";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
+import Tabs from "@/components/Tabs";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { requireUser } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
@@ -137,157 +138,199 @@ export default async function LeadDetailPage({
       )}
 
       <div className="grid lg:grid-cols-3 gap-6">
-        <div className="space-y-6">
-          <div className="card">
-            <h2 className="font-semibold mb-3">Details</h2>
-            <dl className="space-y-2 text-sm">
-              {[
-                ["Customer", lead.name],
-                ["Email", lead.email],
-                ["Phone", lead.phone],
-                ["Product", lead.product?.name],
-                ["Colour", lead.color],
-                ["Value", lead.valueCents ? formatZAR(lead.valueCents) : null],
-                ["Assigned to", lead.assignedTo?.name],
-                ["Source", lead.source],
-                ["Lost reason", lead.lostReason],
-              ].map(([label, value]) =>
-                value ? (
-                  <div key={label as string} className="flex justify-between gap-4">
-                    <dt className="text-slate-400">{label}</dt>
-                    <dd className="text-right font-medium">{value as string}</dd>
+        <div className="lg:col-span-2">
+          <Tabs
+            tabs={[
+              {
+                key: "details",
+                label: "Details",
+                content: (
+                  <>
+                    <div className="card">
+                      <h2 className="font-semibold mb-3">Details</h2>
+                      <dl className="space-y-2 text-sm max-w-xl">
+                        {[
+                          ["Customer", lead.name],
+                          ["Email", lead.email],
+                          ["Phone", lead.phone],
+                          ["Product", lead.product?.name],
+                          ["Colour", lead.color],
+                          ["Value", lead.valueCents ? formatZAR(lead.valueCents) : null],
+                          ["Assigned to", lead.assignedTo?.name],
+                          ["Source", lead.source],
+                          ["Lost reason", lead.lostReason],
+                        ].map(([label, value]) =>
+                          value ? (
+                            <div key={label as string} className="flex justify-between gap-4">
+                              <dt className="text-slate-400 shrink-0">{label}</dt>
+                              <dd className="text-right font-medium">{value as string}</dd>
+                            </div>
+                          ) : null
+                        )}
+                      </dl>
+                    </div>
+
+                    <div className="grid md:grid-cols-2 gap-6">
+                      <div className="card">
+                        <h2 className="font-semibold mb-3">Contact</h2>
+                        {lead.contact && (
+                          <Link
+                            href={`/contacts/${lead.contact.id}`}
+                            className="text-sm font-medium text-orange-400 hover:underline block mb-3"
+                          >
+                            {contactName(lead.contact)} →
+                          </Link>
+                        )}
+                        <form action={linkLeadToContact.bind(null, lead.id)} className="space-y-2">
+                          <label className="label">
+                            {lead.contact ? "Change linked contact" : "Link to contact"}
+                          </label>
+                          <select
+                            name="contactId"
+                            className="input"
+                            defaultValue={lead.contactId ?? ""}
+                          >
+                            <option value="">Select contact…</option>
+                            {contacts.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {contactName(c)}
+                              </option>
+                            ))}
+                          </select>
+                          <button className="btn-secondary btn-sm w-full">Save contact link</button>
+                        </form>
+                      </div>
+
+                      {lead.status === "open" && (
+                        <div className="card self-start">
+                          <h2 className="font-semibold mb-3">Mark as lost</h2>
+                          <form action={markLost.bind(null, lead.id)} className="space-y-2">
+                            <input
+                              name="lostReason"
+                              className="input"
+                              placeholder="Reason (optional)"
+                            />
+                            <button className="btn-danger btn-sm w-full">Mark lost</button>
+                          </form>
+                        </div>
+                      )}
+                    </div>
+
+                    {lead.raw && (
+                      <details className="card">
+                        <summary className="font-semibold cursor-pointer text-sm">
+                          Raw intake payload
+                        </summary>
+                        <pre className="text-xs text-slate-400 mt-3 overflow-x-auto whitespace-pre-wrap">
+                          {JSON.stringify(JSON.parse(lead.raw), null, 2)}
+                        </pre>
+                      </details>
+                    )}
+                  </>
+                ),
+              },
+              {
+                key: "activities",
+                label: "Activities",
+                count: lead.activities.filter((a) => a.status === "planned").length,
+                content: (
+                  <ActivityPanel
+                    activities={lead.activities}
+                    users={users}
+                    currentUserId={user.id}
+                    leadId={lead.id}
+                    revalidate={path}
+                  />
+                ),
+              },
+              {
+                key: "quotes",
+                label: "Quotes",
+                count: lead.quotes.length,
+                content: (
+                  <div className="card">
+                    <div className="flex items-center justify-between mb-3">
+                      <h2 className="font-semibold">Quotes</h2>
+                      {lead.status === "open" && (
+                        <form action={createQuoteFromLead.bind(null, lead.id)}>
+                          <button className="btn-secondary btn-sm">+ Create quote</button>
+                        </form>
+                      )}
+                    </div>
+                    {lead.quotes.length === 0 ? (
+                      <p className="text-sm text-slate-400">No quotes yet.</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {lead.quotes.map((q) => {
+                          const total = q.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+                          return (
+                            <li key={q.id} className="flex items-center gap-2 text-sm">
+                              <Link href={`/quotes/${q.id}`} className="text-orange-400 hover:underline font-medium">
+                                Q-{q.number}
+                              </Link>
+                              <span className="flex-1 text-slate-400">{formatZAR(Math.round(total))}</span>
+                              <span
+                                className={`badge ${
+                                  q.status === "accepted"
+                                    ? "bg-emerald-500/15 text-emerald-300"
+                                    : q.status === "declined"
+                                    ? "bg-red-500/15 text-red-300"
+                                    : q.status === "sent"
+                                    ? "bg-blue-500/15 text-blue-300"
+                                    : "bg-slate-800 text-slate-300"
+                                }`}
+                              >
+                                {q.status}
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
                   </div>
-                ) : null
-              )}
-            </dl>
-          </div>
-
-          {lead.quotes.length > 0 && (
-            <div className="card">
-              <h2 className="font-semibold mb-3">Quotes</h2>
-              <ul className="space-y-2">
-                {lead.quotes.map((q) => {
-                  const total = q.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
-                  return (
-                    <li key={q.id} className="flex items-center gap-2 text-sm">
-                      <Link href={`/quotes/${q.id}`} className="text-orange-400 hover:underline font-medium">
-                        Q-{q.number}
-                      </Link>
-                      <span className="flex-1 text-slate-400">{formatZAR(Math.round(total))}</span>
-                      <span
-                        className={`badge ${
-                          q.status === "accepted"
-                            ? "bg-emerald-500/15 text-emerald-300"
-                            : q.status === "declined"
-                            ? "bg-red-500/15 text-red-300"
-                            : q.status === "sent"
-                            ? "bg-blue-500/15 text-blue-300"
-                            : "bg-slate-800 text-slate-300"
-                        }`}
-                      >
-                        {q.status}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          )}
-
-          <div className="card">
-            <h2 className="font-semibold mb-3">Contact</h2>
-            {lead.contact && (
-              <Link
-                href={`/contacts/${lead.contact.id}`}
-                className="text-sm font-medium text-orange-400 hover:underline block mb-3"
-              >
-                {contactName(lead.contact)} →
-              </Link>
-            )}
-            <form action={linkLeadToContact.bind(null, lead.id)} className="space-y-2">
-              <label className="label">
-                {lead.contact ? "Change linked contact" : "Link to contact"}
-              </label>
-              <select
-                name="contactId"
-                className="input"
-                defaultValue={lead.contactId ?? ""}
-              >
-                <option value="">Select contact…</option>
-                {contacts.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {contactName(c)}
-                  </option>
-                ))}
-              </select>
-              <button className="btn-secondary btn-sm w-full">Save contact link</button>
-            </form>
-          </div>
-
-          {lead.status === "open" && (
-            <div className="card">
-              <h2 className="font-semibold mb-3">Mark as lost</h2>
-              <form action={markLost.bind(null, lead.id)} className="space-y-2">
-                <input
-                  name="lostReason"
-                  className="input"
-                  placeholder="Reason (optional)"
-                />
-                <button className="btn-danger btn-sm w-full">Mark lost</button>
-              </form>
-            </div>
-          )}
-
-          {lead.raw && (
-            <details className="card">
-              <summary className="font-semibold cursor-pointer text-sm">
-                Raw intake payload
-              </summary>
-              <pre className="text-xs text-slate-400 mt-3 overflow-x-auto whitespace-pre-wrap">
-                {JSON.stringify(JSON.parse(lead.raw), null, 2)}
-              </pre>
-            </details>
-          )}
-        </div>
-
-        <div className="space-y-6">
-          <ActivityPanel
-            activities={lead.activities}
-            users={users}
-            currentUserId={user.id}
-            leadId={lead.id}
-            revalidate={path}
-          />
-          <EmailComposer
-            defaultTo={lead.email ?? ""}
-            templates={renderedTemplates}
-            smtpConfigured={smtpConfigured}
-            leadId={lead.id}
-            revalidate={path}
-            libraryDocs={libraryDocs}
-          />
-          <WhatsAppPanel
-            phone={lead.phone ?? lead.contact?.whatsapp ?? lead.contact?.phone ?? null}
-            leadId={lead.id}
-            contactId={lead.contactId ?? undefined}
-            configured={waConfigured}
-            revalidate={path}
-            messages={lead.communications
-              .filter((c) => c.type === "whatsapp")
-              .slice()
-              .reverse()
-              .map((c) => ({
-                id: c.id,
-                direction: c.direction,
-                body: c.body,
-                occurredAt: c.occurredAt.toISOString(),
-                userName: c.user.name,
-              }))}
-          />
-          <CommsTimeline
-            communications={lead.communications}
-            leadId={lead.id}
-            revalidate={path}
+                ),
+              },
+              {
+                key: "comms",
+                label: "Communications",
+                count: lead.communications.length,
+                content: (
+                  <>
+                    <EmailComposer
+                      defaultTo={lead.email ?? ""}
+                      templates={renderedTemplates}
+                      smtpConfigured={smtpConfigured}
+                      leadId={lead.id}
+                      revalidate={path}
+                      libraryDocs={libraryDocs}
+                    />
+                    <WhatsAppPanel
+                      phone={lead.phone ?? lead.contact?.whatsapp ?? lead.contact?.phone ?? null}
+                      leadId={lead.id}
+                      contactId={lead.contactId ?? undefined}
+                      configured={waConfigured}
+                      revalidate={path}
+                      messages={lead.communications
+                        .filter((c) => c.type === "whatsapp")
+                        .slice()
+                        .reverse()
+                        .map((c) => ({
+                          id: c.id,
+                          direction: c.direction,
+                          body: c.body,
+                          occurredAt: c.occurredAt.toISOString(),
+                          userName: c.user.name,
+                        }))}
+                    />
+                    <CommsTimeline
+                      communications={lead.communications}
+                      leadId={lead.id}
+                      revalidate={path}
+                    />
+                  </>
+                ),
+              },
+            ]}
           />
         </div>
 

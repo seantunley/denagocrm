@@ -133,8 +133,38 @@ export async function updateQuoteMeta(quoteId: string, formData: FormData) {
   revalidatePath(`/quotes/${quoteId}`);
 }
 
+/**
+ * A lead only stays "won" while a live accepted quote backs it up. If the
+ * accepted quote is deleted or reverted, the sale never happened — reopen the
+ * lead so reports don't count it.
+ */
+async function reopenLeadIfNoAcceptedQuote(
+  leadId: string,
+  quoteNumber: number,
+  user: Awaited<ReturnType<typeof requireUser>>
+) {
+  const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+  if (!lead || lead.status !== "won") return;
+  const stillAccepted = await prisma.quote.count({
+    where: { leadId, status: "accepted" },
+  });
+  if (stillAccepted > 0) return;
+  await prisma.lead.update({ where: { id: leadId }, data: { status: "open" } });
+  await logAudit({
+    action: "lead.reopened",
+    summary: `Lead “${lead.title}” reopened — quote Q-${quoteNumber} is no longer accepted, so it doesn't count as a sale`,
+    leadId,
+    contactId: lead.contactId,
+    user,
+  });
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/leads");
+  revalidatePath("/reports");
+}
+
 export async function setQuoteStatus(quoteId: string, status: string) {
   const user = await requireUser();
+  const before = await prisma.quote.findUniqueOrThrow({ where: { id: quoteId } });
   const quote = await prisma.quote.update({
     where: { id: quoteId },
     data: { status },
@@ -161,11 +191,15 @@ export async function setQuoteStatus(quoteId: string, status: string) {
     await prisma.lead.update({ where: { id: quote.leadId }, data: { status: "won" } });
     await logAudit({
       action: "lead.won",
-      summary: `Lead “${quote.lead.title}” won via accepted quote #${quote.number} 🎉`,
+      summary: `Lead “${quote.lead.title}” won via accepted quote Q-${quote.number} 🎉`,
       leadId: quote.leadId,
       contactId: quote.contactId,
       user,
     });
+  }
+  // Reverting an accepted quote un-wins the lead (unless another accepted quote backs it)
+  if (before.status === "accepted" && status !== "accepted" && quote.leadId) {
+    await reopenLeadIfNoAcceptedQuote(quote.leadId, quote.number, user);
   }
   revalidatePath("/quotes");
   revalidatePath(`/quotes/${quoteId}`);
@@ -178,11 +212,15 @@ export async function deleteQuote(id: string, formData: FormData) {
   const quote = await softDeleteRecord("quote", id, reason, user.name);
   await logAudit({
     action: "trash.deleted",
-    summary: `Moved quote #${quote.number} to trash — ${reason}`,
+    summary: `Moved quote Q-${quote.number} to trash — ${reason}`,
     leadId: quote.leadId,
     contactId: quote.contactId,
     user,
   });
+  // Deleting an accepted quote means the sale is off — un-win the lead
+  if (quote.status === "accepted" && quote.leadId) {
+    await reopenLeadIfNoAcceptedQuote(quote.leadId, quote.number, user);
+  }
   revalidatePath("/quotes");
   redirect("/quotes");
 }
