@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useActionState } from "react";
+import { useState, useEffect, useActionState } from "react";
 import Link from "next/link";
 import { sendEmailAction, type SendEmailState } from "@/app/actions/emails";
 import RichTextEditor from "@/components/RichTextEditor";
@@ -41,12 +41,27 @@ export default function EmailComposer({
   revalidate: string;
   libraryDocs?: { id: string; label: string }[];
 }) {
+  const [open, setOpen] = useState(false);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [attached, setAttached] = useState<string[]>([]);
+  const [attachFilter, setAttachFilter] = useState("");
   const [state, formAction, pending] = useActionState<SendEmailState | undefined, FormData>(
     sendEmailAction,
     undefined
   );
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+    };
+  }, [open]);
 
   function applyTemplate(id: string) {
     const t = templates.find((x) => x.id === id);
@@ -57,21 +72,44 @@ export default function EmailComposer({
   }
 
   return (
-    <details className="card group">
-      <summary className="font-semibold cursor-pointer select-none">
-        ✉️ Send email
-      </summary>
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="card w-full text-left font-semibold hover:border-orange-600/60 transition-colors cursor-pointer flex items-center justify-between"
+      >
+        <span>✉️ Send email</span>
+        <span className="text-xs text-slate-500 font-normal">opens composer</span>
+      </button>
 
-      {!smtpConfigured ? (
-        <p className="text-sm text-slate-400 mt-3">
-          Email sending isn&apos;t configured yet — add your SMTP details in{" "}
-          <Link href="/settings" className="text-orange-400 hover:underline">
-            Settings → Email
-          </Link>
-          .
-        </p>
-      ) : (
-        <form action={formAction} className="mt-4 space-y-3">
+      {open && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 p-4 pt-8 overflow-y-auto"
+          onClick={(e) => e.target === e.currentTarget && setOpen(false)}
+        >
+          <div className="card w-full max-w-3xl pb-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-white">✉️ Send email</h2>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="text-slate-400 hover:text-white text-2xl leading-none cursor-pointer"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            {!smtpConfigured ? (
+              <p className="text-sm text-slate-400">
+                Email sending isn&apos;t configured yet — add your SMTP details in{" "}
+                <Link href="/settings?tab=email" className="text-orange-400 hover:underline">
+                  Settings → Email
+                </Link>
+                .
+              </p>
+            ) : (
+              <form action={formAction} className="space-y-3">
           {leadId && <input type="hidden" name="leadId" value={leadId} />}
           {contactId && <input type="hidden" name="contactId" value={contactId} />}
           <input type="hidden" name="revalidate" value={revalidate} />
@@ -118,29 +156,121 @@ export default function EmailComposer({
               .
             </p>
           </div>
-          {libraryDocs.length > 0 && (
-            <div>
-              <label className="label">Attach from library</label>
-              <div className="grid sm:grid-cols-2 gap-1.5">
-                {libraryDocs.map((d) => (
-                  <label
-                    key={d.id}
-                    className="flex items-center gap-2 text-sm text-slate-300 rounded-lg border border-slate-800 px-3 py-1.5 cursor-pointer hover:border-slate-600"
+          <div>
+            <label className="label">Attachments</label>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {attached.map((id) => {
+                const d = libraryDocs.find((x) => x.id === id);
+                return (
+                  <span
+                    key={id}
+                    className="badge bg-slate-800 text-slate-200 gap-1.5 py-1"
                   >
-                    <input type="checkbox" name="attach" value={d.id} className="h-4 w-4" />
-                    📄 {d.label}
-                  </label>
-                ))}
+                    📄 {d?.label ?? "Document"}
+                    <button
+                      type="button"
+                      onClick={() => setAttached((a) => a.filter((x) => x !== id))}
+                      className="text-slate-500 hover:text-red-400 cursor-pointer"
+                      aria-label="Remove attachment"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => setAttachOpen(true)}
+                className="btn-secondary btn-sm"
+                disabled={libraryDocs.length === 0}
+              >
+                📎 Attach from library
+              </button>
+              {libraryDocs.length === 0 && (
+                <span className="text-xs text-slate-500">Library is empty.</span>
+              )}
+            </div>
+            {attached.map((id) => (
+              <input key={id} type="hidden" name="attach" value={id} />
+            ))}
+          </div>
+
+          {attachOpen && (
+            <div
+              className="fixed inset-0 z-[60] flex items-start justify-center bg-black/70 p-4 pt-16"
+              onClick={(e) => e.target === e.currentTarget && setAttachOpen(false)}
+            >
+              <div className="card w-full max-w-lg">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-bold text-white">Attach documents</h3>
+                  <button
+                    type="button"
+                    onClick={() => setAttachOpen(false)}
+                    className="text-slate-400 hover:text-white text-2xl leading-none cursor-pointer"
+                  >
+                    ×
+                  </button>
+                </div>
+                <input
+                  className="input mb-3"
+                  placeholder="Filter documents…"
+                  value={attachFilter}
+                  onChange={(e) => setAttachFilter(e.target.value)}
+                />
+                <div className="max-h-72 overflow-y-auto space-y-1">
+                  {libraryDocs
+                    .filter((d) =>
+                      d.label.toLowerCase().includes(attachFilter.toLowerCase())
+                    )
+                    .map((d) => {
+                      const checked = attached.includes(d.id);
+                      return (
+                        <button
+                          key={d.id}
+                          type="button"
+                          onClick={() =>
+                            setAttached((a) =>
+                              checked ? a.filter((x) => x !== d.id) : [...a, d.id]
+                            )
+                          }
+                          className={`w-full text-left flex items-center gap-2 rounded-lg border px-3 py-2 text-sm cursor-pointer ${
+                            checked
+                              ? "border-orange-500 bg-orange-500/10 text-orange-200"
+                              : "border-slate-800 text-slate-300 hover:border-slate-600"
+                          }`}
+                        >
+                          <span>{checked ? "☑" : "☐"}</span> 📄 {d.label}
+                        </button>
+                      );
+                    })}
+                </div>
+                <div className="flex justify-end mt-4">
+                  <button
+                    type="button"
+                    onClick={() => setAttachOpen(false)}
+                    className="btn-primary"
+                  >
+                    Done{attached.length > 0 ? ` (${attached.length})` : ""}
+                  </button>
+                </div>
               </div>
             </div>
           )}
           {state?.error && <p className="text-sm text-red-400">{state.error}</p>}
           {state?.ok && <p className="text-sm text-emerald-400">{state.ok}</p>}
-          <button className="btn-primary" disabled={pending}>
-            {pending ? "Sending…" : "Send email"}
-          </button>
+          <div className="flex gap-2">
+            <button className="btn-primary" disabled={pending}>
+              {pending ? "Sending…" : "Send email"}
+            </button>
+            <button type="button" onClick={() => setOpen(false)} className="btn-secondary">
+              {state?.ok ? "Close" : "Cancel"}
+            </button>
+          </div>
         </form>
+            )}
+          </div>
+        </div>
       )}
-    </details>
+    </>
   );
 }
