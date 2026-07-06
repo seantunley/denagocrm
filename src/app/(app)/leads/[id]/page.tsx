@@ -11,6 +11,7 @@ import {
 import CommsTimeline from "@/components/CommsTimeline";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
+import LeadTimeline from "@/components/LeadTimeline";
 import { requireUser } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
@@ -29,16 +30,22 @@ export default async function LeadDetailPage({
       product: true,
       contact: true,
       assignedTo: true,
+      createdBy: true,
       communications: { include: { user: true }, orderBy: { occurredAt: "desc" } },
       activities: { include: { assignedTo: true }, orderBy: { dueDate: "asc" } },
     },
   });
   if (!lead) notFound();
-  const [contacts, users, templates, smtpConfigured] = await Promise.all([
+  const [contacts, users, templates, smtpConfigured, audit] = await Promise.all([
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
     prisma.user.findMany({ orderBy: { name: "asc" } }),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
     isSmtpConfigured(),
+    prisma.auditLog.findMany({
+      where: { leadId: lead.id },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    }),
   ]);
   const vars = leadVars(lead);
   const renderedTemplates = templates.map((t) => ({
@@ -135,11 +142,6 @@ export default async function LeadDetailPage({
                 ) : null
               )}
             </dl>
-            {lead.notes && (
-              <p className="text-sm text-slate-400 mt-3 pt-3 border-t border-slate-800 whitespace-pre-wrap">
-                {lead.notes}
-              </p>
-            )}
           </div>
 
           <div className="card">
@@ -198,7 +200,7 @@ export default async function LeadDetailPage({
           )}
         </div>
 
-        <div className="lg:col-span-2 space-y-6">
+        <div className="space-y-6">
           <ActivityPanel
             activities={lead.activities}
             users={users}
@@ -219,6 +221,22 @@ export default async function LeadDetailPage({
             revalidate={path}
           />
         </div>
+
+        <LeadTimeline
+          leadId={lead.id}
+          revalidate={path}
+          audit={audit}
+          communications={lead.communications}
+          creationNote={
+            lead.notes
+              ? {
+                  text: lead.notes,
+                  when: lead.createdAt,
+                  who: lead.createdBy?.name ?? `via ${lead.source}`,
+                }
+              : null
+          }
+        />
       </div>
     </div>
   );
