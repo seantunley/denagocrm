@@ -23,6 +23,7 @@ export default async function SignPage({
     validUntil: Date | null;
     signedAt: Date | null;
     signedByName: string | null;
+    dealerSignedByName?: string | null;
   } | null = null;
 
   if (kind === "quote") {
@@ -43,6 +44,7 @@ export default async function SignPage({
       validUntil: quote.validUntil,
       signedAt: quote.signedAt,
       signedByName: quote.signedByName,
+      dealerSignedByName: quote.dealerSignedByName,
     };
   } else {
     const jobCard = await prisma.jobCard.findFirst({
@@ -88,6 +90,11 @@ export default async function SignPage({
         {doc.vehicleLine && <p className="text-slate-600">{doc.vehicleLine}</p>}
         {doc.validUntil && (
           <p className="text-xs text-slate-500 mt-1">Valid until {formatDate(doc.validUntil)}</p>
+        )}
+        {doc.dealerSignedByName && (
+          <p className="text-xs text-slate-500 mt-1">
+            ✓ Countersigned for Denago Cape Town by {doc.dealerSignedByName}
+          </p>
         )}
       </div>
 

@@ -1,5 +1,6 @@
 import { enableSigning, emailSigningLink } from "@/app/actions/signing";
 import CopyButton from "@/components/CopyButton";
+import DealerSignPad from "@/components/DealerSignPad";
 import { formatDateTime } from "@/lib/format";
 
 const BASE = "https://crm.denagocpt.co.za";
@@ -14,6 +15,9 @@ export default function SigningBlock({
   signedByName,
   customerEmail,
   customerPhone,
+  dealerSignedAt,
+  dealerSignedByName,
+  hasSavedSignature,
 }: {
   kind: "quote" | "jobcard";
   id: string;
@@ -23,6 +27,9 @@ export default function SigningBlock({
   signedByName: string | null;
   customerEmail?: string | null;
   customerPhone?: string | null;
+  dealerSignedAt?: Date | null;
+  dealerSignedByName?: string | null;
+  hasSavedSignature?: boolean;
 }) {
   if (signedAt) {
     return (
@@ -37,15 +44,26 @@ export default function SigningBlock({
 
   const link = signToken ? `${BASE}/sign/${kind}/${signToken}` : null;
   const waDigits = (customerPhone ?? "").replace(/\D/g, "").replace(/^0/, "27");
+  const needsDealerSignature = kind === "quote" && !dealerSignedAt;
 
   return (
     <div className="card">
       <h2 className="font-semibold mb-1">✍ Online signature</h2>
       <p className="text-xs text-slate-400 mb-4">
-        The customer opens a secure link, reviews {refLabel}, and signs on their phone —
-        {kind === "quote" ? " signing accepts the quote and wins the lead automatically." : " no printing needed."}
+        {kind === "quote"
+          ? "Step 1: Denago signs. Step 2: send the secure link — the customer signs on their phone, which accepts the quote and wins the lead."
+          : `The customer opens a secure link, reviews ${refLabel}, and signs on their phone — no printing needed.`}
       </p>
-      {!link ? (
+
+      {kind === "quote" && dealerSignedAt && (
+        <p className="text-xs text-emerald-400 mb-3">
+          ✓ Countersigned for Denago by {dealerSignedByName} · {formatDateTime(dealerSignedAt)}
+        </p>
+      )}
+
+      {needsDealerSignature ? (
+        <DealerSignPad quoteId={id} hasSaved={Boolean(hasSavedSignature)} />
+      ) : !link ? (
         <form action={enableSigning.bind(null, kind, id)}>
           <button className="btn-primary">Create signing link</button>
         </form>

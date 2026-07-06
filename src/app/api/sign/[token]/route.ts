@@ -5,7 +5,12 @@ import { logAudit } from "@/lib/audit";
 import { sendPushToAll } from "@/lib/push";
 import { saveFile } from "@/lib/storage";
 import { buildSignedPdf } from "@/lib/signedPdf";
+import { renderUrlToPdf } from "@/lib/htmlPdf";
 import { contactName, formatZAR } from "@/lib/format";
+
+export const maxDuration = 60; // PDF rendering can take a few seconds
+
+const BASE = "https://crm.denagocpt.co.za";
 
 const signSchema = z.object({
   kind: z.enum(["quote", "jobcard"]),
@@ -50,25 +55,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     }
 
     const sigRef = await saveFile(signaturePng, `signature-Q${quote.number}.png`, "image/png");
-    const pdf = await buildSignedPdf({
-      kind: "quote",
-      refNumber: `Q-${quote.number}`,
-      customerName: quote.contact ? contactName(quote.contact) : quote.lead?.name ?? name,
-      customerEmail: quote.contact?.email ?? quote.lead?.email,
-      customerPhone: quote.contact?.phone ?? quote.lead?.phone,
-      vehicleLine: quote.lead?.product
-        ? `${quote.lead.product.name}${quote.lead.color ? ` — ${quote.lead.color}` : ""}`
-        : null,
-      items: quote.items,
-      termsLines: (quote.terms ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean),
-      signedByName: name,
-      signedAt,
-      signerIp,
-      signaturePng,
-    });
-    const pdfRef = await saveFile(pdf, `Quote-Q${quote.number}-signed.pdf`, "application/pdf");
 
     const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+    // Record the signature FIRST so the print page renders with it embedded
     await basePrisma.quote.update({
       where: { id: quote.id },
       data: { signedAt, signedByName: name, signatureRef: sigRef, signerIp, status: "accepted" },
@@ -76,6 +65,27 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     if (quote.leadId && quote.lead?.status === "open") {
       await prisma.lead.update({ where: { id: quote.leadId }, data: { status: "won" } });
     }
+
+    // True-to-design PDF from the actual print page; pdf-lib as fallback
+    const pdf =
+      (await renderUrlToPdf(`${BASE}/sign/quote/${token}/print`)) ??
+      (await buildSignedPdf({
+        kind: "quote",
+        refNumber: `Q-${quote.number}`,
+        customerName: quote.contact ? contactName(quote.contact) : quote.lead?.name ?? name,
+        customerEmail: quote.contact?.email ?? quote.lead?.email,
+        customerPhone: quote.contact?.phone ?? quote.lead?.phone,
+        vehicleLine: quote.lead?.product
+          ? `${quote.lead.product.name}${quote.lead.color ? ` — ${quote.lead.color}` : ""}`
+          : null,
+        items: quote.items,
+        termsLines: (quote.terms ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean),
+        signedByName: name,
+        signedAt,
+        signerIp,
+        signaturePng,
+      }));
+    const pdfRef = await saveFile(pdf, `Quote-Q${quote.number}-signed.pdf`, "application/pdf");
     if (quote.contactId && firstUser) {
       await prisma.document.create({
         data: {

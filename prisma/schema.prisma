@@ -9,13 +9,14 @@ datasource db {
 }
 
 model User {
-  id            String   @id @default(cuid())
-  name          String
-  email         String   @unique
-  passwordHash  String
-  mobile        String?
-  signatureHtml String? // custom override; blank = branded template
-  createdAt     DateTime @default(now())
+  id                String   @id @default(cuid())
+  name              String
+  email             String   @unique
+  passwordHash      String
+  mobile            String?
+  signatureHtml     String? // custom override; blank = branded template
+  drawnSignatureRef String? // saved handwritten signature for countersigning documents
+  createdAt         DateTime @default(now())
 
   communications     Communication[]
   documents          Document[]
@@ -250,11 +251,14 @@ model Quote {
   deletedByName String?
   deleteReason  String?
 
-  signToken    String?   @unique
-  signedAt     DateTime?
-  signedByName String?
-  signatureRef String?
-  signerIp     String?
+  signToken          String?   @unique
+  signedAt           DateTime?
+  signedByName       String?
+  signatureRef       String?
+  signerIp           String?
+  dealerSignedAt     DateTime?
+  dealerSignedByName String?
+  dealerSignatureRef String?
 
   leadId      String?
   lead        Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)

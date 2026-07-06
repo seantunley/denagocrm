@@ -25,7 +25,7 @@ export default async function QuoteDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requireUser();
+  const currentUser = await requireUser();
   const { id } = await params;
   const quote = await prisma.quote.findUnique({
     where: { id },
@@ -117,6 +117,9 @@ export default async function QuoteDetailPage({
         signedByName={quote.signedByName}
         customerEmail={quote.contact?.email ?? quote.lead?.email}
         customerPhone={quote.contact?.whatsapp ?? quote.contact?.phone ?? quote.lead?.phone}
+        dealerSignedAt={quote.dealerSignedAt}
+        dealerSignedByName={quote.dealerSignedByName}
+        hasSavedSignature={Boolean(currentUser.drawnSignatureRef)}
       />
 
       <div className="grid lg:grid-cols-3 gap-6 items-start">

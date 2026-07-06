@@ -6,7 +6,44 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
+import { saveFile } from "@/lib/storage";
 import { contactName } from "@/lib/format";
+
+/** Denago countersigns a quote (required before it can go to the customer). */
+export async function signAsDealer(
+  quoteId: string,
+  signatureDataUrl: string | null,
+  saveForReuse: boolean
+): Promise<{ ok?: boolean; error?: string }> {
+  const user = await requireUser();
+  let ref: string | null;
+  if (signatureDataUrl) {
+    if (!signatureDataUrl.startsWith("data:image/png;base64,") || signatureDataUrl.length > 400_000) {
+      return { error: "Invalid signature image." };
+    }
+    const buf = Buffer.from(signatureDataUrl.split(",")[1], "base64");
+    ref = await saveFile(buf, `dealer-signature-${user.id}.png`, "image/png");
+    if (saveForReuse) {
+      await prisma.user.update({ where: { id: user.id }, data: { drawnSignatureRef: ref } });
+    }
+  } else {
+    ref = user.drawnSignatureRef;
+    if (!ref) return { error: "No saved signature yet — draw one first." };
+  }
+  const quote = await prisma.quote.update({
+    where: { id: quoteId },
+    data: { dealerSignedAt: new Date(), dealerSignedByName: user.name, dealerSignatureRef: ref },
+  });
+  await logAudit({
+    action: "quote.dealer_signed",
+    summary: `Quote Q-${quote.number} countersigned for Denago by ${user.name}`,
+    leadId: quote.leadId,
+    contactId: quote.contactId,
+    user,
+  });
+  revalidatePath(`/quotes/${quoteId}`);
+  return { ok: true };
+}
 
 const BASE = "https://crm.denagocpt.co.za";
 
@@ -16,6 +53,7 @@ export async function enableSigning(kind: "quote" | "jobcard", id: string) {
   const token = crypto.randomBytes(28).toString("hex");
   if (kind === "quote") {
     const quote = await prisma.quote.findUniqueOrThrow({ where: { id } });
+    if (!quote.dealerSignedAt) return; // must be countersigned by Denago first
     if (!quote.signToken) {
       await prisma.quote.update({ where: { id }, data: { signToken: token } });
       await logAudit({
