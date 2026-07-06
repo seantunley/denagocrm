@@ -7,6 +7,7 @@ const PUBLIC_PATHS = [
   "/api/webhooks",
   "/api/intake",
   "/api/cron",
+  "/api/bookings",
   "/manifest.webmanifest",
   "/icons",
   "/sw.js",

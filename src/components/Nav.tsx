@@ -33,6 +33,7 @@ const groups: NavGroup[] = [
     links: [
       { href: "/vehicles", label: "Vehicles", icon: "⚡" },
       { href: "/jobcards", label: "Job Cards", icon: "🔧" },
+      { href: "/workshop-calendar", label: "Workshop Cal", icon: "📅" },
     ],
   },
 ];

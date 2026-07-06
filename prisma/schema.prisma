@@ -188,13 +188,14 @@ model Lead {
 }
 
 model Activity {
-  id      String    @id @default(cuid())
-  type    String    @default("todo") // call | email | meeting | whatsapp | todo
-  summary String
-  note    String?
-  dueDate DateTime
-  status  String    @default("planned") // planned | done | canceled
-  doneAt  DateTime?
+  id       String    @id @default(cuid())
+  type     String    @default("todo") // call | email | meeting | whatsapp | todo
+  category String? // null/sales = sales calendar, "workshop" = workshop calendar
+  summary  String
+  note     String?
+  dueDate  DateTime
+  status   String    @default("planned") // planned | done | canceled
+  doneAt   DateTime?
 
   leadId       String?
   lead         Lead?    @relation(fields: [leadId], references: [id], onDelete: Cascade)

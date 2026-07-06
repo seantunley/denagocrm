@@ -17,6 +17,7 @@ export async function scheduleActivity(formData: FormData) {
   await prisma.activity.create({
     data: {
       type: str("type") ?? "todo",
+      category: formData.get("workshop") === "on" ? "workshop" : null,
       summary,
       note: str("note"),
       dueDate: str("dueDate") ? new Date(String(formData.get("dueDate"))) : new Date(),

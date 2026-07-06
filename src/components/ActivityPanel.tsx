@@ -70,7 +70,7 @@ export default function ActivityPanel({
           <label className="label">Due</label>
           <input type="date" name="dueDate" className="input" required />
         </div>
-        <div className="col-span-2 md:col-span-3">
+        <div className="col-span-2 md:col-span-2">
           <label className="label">Assign to</label>
           <select name="assignedToId" className="input" defaultValue={currentUserId}>
             {users.map((u) => (
@@ -80,6 +80,10 @@ export default function ActivityPanel({
             ))}
           </select>
         </div>
+        <label className="flex items-center gap-2 text-sm text-slate-300 pb-2 cursor-pointer">
+          <input type="checkbox" name="workshop" className="h-4 w-4" />
+          🔧 Workshop
+        </label>
         <button className="btn-primary">Schedule</button>
       </form>
 
