@@ -1,0 +1,79 @@
+import Link from "next/link";
+import { prisma } from "@/lib/db";
+import { contactName, formatDate, formatZAR } from "@/lib/format";
+
+const statusBadge: Record<string, string> = {
+  open: "bg-slate-800 text-slate-400",
+  in_progress: "bg-amber-500/15 text-amber-300",
+  completed: "bg-emerald-500/15 text-emerald-300",
+};
+
+export default async function JobCardsPage() {
+  const jobCards = await prisma.jobCard.findMany({
+    orderBy: [{ status: "asc" }, { openedAt: "desc" }],
+    include: { vehicle: true, contact: true, items: true },
+    take: 200,
+  });
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Job cards</h1>
+        <Link href="/jobcards/new" className="btn-primary">
+          + New job card
+        </Link>
+      </div>
+
+      <div className="card p-0 overflow-x-auto">
+        <table className="table-base">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Vehicle</th>
+              <th>Customer</th>
+              <th>Description</th>
+              <th>Total</th>
+              <th>Status</th>
+              <th>Opened</th>
+            </tr>
+          </thead>
+          <tbody>
+            {jobCards.length === 0 && (
+              <tr>
+                <td colSpan={7} className="text-center text-slate-400 py-8">
+                  No job cards yet.
+                </td>
+              </tr>
+            )}
+            {jobCards.map((j) => {
+              const total = j.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+              return (
+                <tr key={j.id}>
+                  <td>
+                    <Link href={`/jobcards/${j.id}`} className="font-medium text-orange-400 hover:underline">
+                      #{j.number}
+                    </Link>
+                  </td>
+                  <td>
+                    <Link href={`/vehicles/${j.vehicleId}`} className="text-orange-400 hover:underline">
+                      {j.vehicle.model}
+                    </Link>
+                  </td>
+                  <td>{contactName(j.contact)}</td>
+                  <td className="max-w-64 truncate">{j.description}</td>
+                  <td>{formatZAR(Math.round(total))}</td>
+                  <td>
+                    <span className={`badge ${statusBadge[j.status] ?? statusBadge.open}`}>
+                      {j.status.replace("_", " ")}
+                    </span>
+                  </td>
+                  <td className="text-slate-400">{formatDate(j.openedAt)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

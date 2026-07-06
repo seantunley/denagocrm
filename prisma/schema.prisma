@@ -1,0 +1,305 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  communications     Communication[]
+  documents          Document[]
+  serviceRecords     ServiceRecord[]
+  leadsAssigned      Lead[]
+  activitiesAssigned Activity[]      @relation("ActivityAssignee")
+  activitiesCreated  Activity[]      @relation("ActivityCreator")
+}
+
+model AppSetting {
+  key   String @id
+  value String
+}
+
+model Product {
+  id             String         @id @default(cuid())
+  name           String
+  sku            String?
+  category       String?
+  basePriceCents Int            @default(0)
+  description    String?
+  active         Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+
+  colors   ProductColor[]
+  leads    Lead[]
+  vehicles Vehicle[]
+}
+
+model ProductColor {
+  id        String  @id @default(cuid())
+  name      String
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model Contact {
+  id        String   @id @default(cuid())
+  isCompany Boolean  @default(false)
+  firstName String
+  lastName  String?
+  company   String?
+  email     String?
+  phone     String?
+  whatsapp   String?
+  address    String? // street address / estate + unit
+  suburb     String?
+  city       String?
+  province   String?
+  postalCode String?
+  source     String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  leads          Lead[]
+  communications Communication[]
+  documents      Document[]
+  vehicles       Vehicle[]
+  jobCards       JobCard[]
+  activities     Activity[]
+  tags           Tag[]
+}
+
+model Tag {
+  id       String    @id @default(cuid())
+  name     String    @unique
+  color    String    @default("#64748b")
+  contacts Contact[]
+}
+
+model PipelineStage {
+  id    String @id @default(cuid())
+  name  String
+  order Int
+  color String @default("#64748b")
+
+  leads Lead[]
+}
+
+model Lead {
+  id         String  @id @default(cuid())
+  title      String
+  name       String
+  email      String?
+  phone      String?
+  source     String  @default("manual") // manual | facebook | instagram | website
+  color      String? // colour of interest for the product
+  notes      String?
+  valueCents Int     @default(0)
+  status     String  @default("open") // open | won | lost
+  lostReason String?
+  position   Int     @default(0)
+  externalId String? @unique // e.g. Facebook leadgen_id
+  raw        String? // raw intake payload (JSON string)
+
+  stageId      String
+  stage        PipelineStage @relation(fields: [stageId], references: [id])
+  productId    String?
+  product      Product?      @relation(fields: [productId], references: [id])
+  contactId    String?
+  contact      Contact?      @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  assignedToId String?
+  assignedTo   User?         @relation(fields: [assignedToId], references: [id])
+
+  communications Communication[]
+  activities     Activity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Activity {
+  id      String    @id @default(cuid())
+  type    String    @default("todo") // call | email | meeting | whatsapp | todo
+  summary String
+  note    String?
+  dueDate DateTime
+  status  String    @default("planned") // planned | done | canceled
+  doneAt  DateTime?
+
+  leadId       String?
+  lead         Lead?    @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  contactId    String?
+  contact      Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  assignedToId String
+  assignedTo   User     @relation("ActivityAssignee", fields: [assignedToId], references: [id])
+  createdById  String
+  createdBy    User     @relation("ActivityCreator", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+}
+
+model EmailTemplate {
+  id        String   @id @default(cuid())
+  name      String
+  subject   String
+  body      String
+  createdAt DateTime @default(now())
+}
+
+model AutomationRule {
+  id     String  @id @default(cuid())
+  name   String
+  active Boolean @default(true)
+
+  trigger        String // lead_created | stage_entered | lead_idle
+  triggerStageId String? // for stage_entered
+  idleDays       Int? // for lead_idle
+
+  action          String // create_activity | send_email | move_stage | assign_user
+  activityType    String?
+  activitySummary String?
+  activityDueDays Int?
+  emailTemplateId String?
+  targetStageId   String?
+  assignToId      String?
+
+  createdAt DateTime @default(now())
+}
+
+model AutomationLog {
+  id        String   @id @default(cuid())
+  ruleId    String
+  leadId    String
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([ruleId, leadId])
+}
+
+model Communication {
+  id         String   @id @default(cuid())
+  type       String // call | email | whatsapp | meeting | note
+  direction  String? // inbound | outbound
+  subject    String?
+  body       String
+  occurredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  leadId    String?
+  lead      Lead?    @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model Document {
+  id         String   @id @default(cuid())
+  fileName   String
+  storedName String   @unique
+  mimeType   String
+  sizeBytes  Int
+  createdAt  DateTime @default(now())
+
+  contactId    String?
+  contact      Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  vehicleId    String?
+  vehicle      Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  jobCardId    String?
+  jobCard      JobCard? @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  uploadedById String
+  uploadedBy   User     @relation(fields: [uploadedById], references: [id])
+}
+
+model Vehicle {
+  id                    String    @id @default(cuid())
+  model                 String
+  vin                   String?   @unique
+  regNumber             String?
+  color                 String?
+  purchaseDate          DateTime?
+  warrantyMonths        Int?
+  serviceIntervalKm     Int?      @default(1000)
+  serviceIntervalMonths Int?      @default(6)
+  notes                 String?
+  createdAt             DateTime  @default(now())
+
+  contactId String
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id])
+
+  mileageLogs    MileageLog[]
+  serviceRecords ServiceRecord[]
+  jobCards       JobCard[]
+  documents      Document[]
+}
+
+model MileageLog {
+  id         String   @id @default(cuid())
+  km         Int
+  recordedAt DateTime @default(now())
+  note       String?
+
+  vehicleId String
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+}
+
+model ServiceRecord {
+  id          String    @id @default(cuid())
+  serviceDate DateTime  @default(now())
+  km          Int?
+  summary     String
+  details     String?
+  nextDueKm   Int?
+  nextDueDate DateTime?
+  createdAt   DateTime  @default(now())
+
+  vehicleId     String
+  vehicle       Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  jobCardId     String?  @unique
+  jobCard       JobCard? @relation(fields: [jobCardId], references: [id])
+  performedById String?
+  performedBy   User?    @relation(fields: [performedById], references: [id])
+}
+
+model JobCard {
+  id          String    @id @default(cuid())
+  number      Int       @unique
+  status      String    @default("open") // open | in_progress | completed
+  description String
+  kmIn        Int?
+  openedAt    DateTime  @default(now())
+  completedAt DateTime?
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  vehicleId String
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  items         JobCardItem[]
+  serviceRecord ServiceRecord?
+  documents     Document[]
+}
+
+model JobCardItem {
+  id             String @id @default(cuid())
+  kind           String @default("part") // part | labour
+  description    String
+  qty            Float  @default(1)
+  unitPriceCents Int    @default(0)
+
+  jobCardId String
+  jobCard   JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+}

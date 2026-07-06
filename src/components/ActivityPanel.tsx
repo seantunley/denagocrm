@@ -1,0 +1,162 @@
+import { scheduleActivity, completeActivity, cancelActivity } from "@/app/actions/activities";
+import { formatDate } from "@/lib/format";
+
+export const activityIcons: Record<string, string> = {
+  call: "📞",
+  email: "✉️",
+  meeting: "🤝",
+  whatsapp: "💬",
+  todo: "☑️",
+};
+
+type ActivityItem = {
+  id: string;
+  type: string;
+  summary: string;
+  note: string | null;
+  dueDate: Date;
+  status: string;
+  assignedTo: { id: string; name: string };
+};
+
+export default function ActivityPanel({
+  activities,
+  users,
+  currentUserId,
+  leadId,
+  contactId,
+  revalidate,
+}: {
+  activities: ActivityItem[];
+  users: { id: string; name: string }[];
+  currentUserId: string;
+  leadId?: string;
+  contactId?: string;
+  revalidate: string;
+}) {
+  const planned = activities
+    .filter((a) => a.status === "planned")
+    .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
+  const recent = activities.filter((a) => a.status === "done").slice(0, 3);
+  const today = new Date();
+  today.setHours(23, 59, 59, 999);
+
+  return (
+    <div className="card">
+      <h2 className="font-semibold mb-4">Planned activities</h2>
+
+      <form
+        action={scheduleActivity}
+        className="mb-5 rounded-lg bg-slate-800/40 p-4 border border-slate-800 grid grid-cols-2 md:grid-cols-4 gap-3 items-end"
+      >
+        {leadId && <input type="hidden" name="leadId" value={leadId} />}
+        {contactId && <input type="hidden" name="contactId" value={contactId} />}
+        <input type="hidden" name="revalidate" value={revalidate} />
+        <div>
+          <label className="label">Type</label>
+          <select name="type" className="input" defaultValue="call">
+            <option value="call">Call</option>
+            <option value="email">Email</option>
+            <option value="meeting">Meeting</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="todo">To-do</option>
+          </select>
+        </div>
+        <div className="col-span-1 md:col-span-2">
+          <label className="label">What needs doing?</label>
+          <input name="summary" className="input" required placeholder="e.g. Follow up on quote" />
+        </div>
+        <div>
+          <label className="label">Due</label>
+          <input type="date" name="dueDate" className="input" required />
+        </div>
+        <div className="col-span-2 md:col-span-3">
+          <label className="label">Assign to</label>
+          <select name="assignedToId" className="input" defaultValue={currentUserId}>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button className="btn-primary">Schedule</button>
+      </form>
+
+      {planned.length === 0 ? (
+        <p className="text-sm text-slate-500">
+          Nothing planned. Schedule the next step so this doesn&apos;t go cold.
+        </p>
+      ) : (
+        <ul className="space-y-3">
+          {planned.map((a) => {
+            const overdue = a.dueDate < new Date(new Date().toDateString());
+            const dueToday = !overdue && a.dueDate <= today;
+            return (
+              <li key={a.id} className="flex items-start gap-3">
+                <span className="text-lg leading-6 w-7 text-center shrink-0">
+                  {activityIcons[a.type] ?? "☑️"}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium">{a.summary}</p>
+                  <p className="text-xs text-slate-400">
+                    <span
+                      className={
+                        overdue
+                          ? "text-red-400 font-semibold"
+                          : dueToday
+                          ? "text-amber-300 font-semibold"
+                          : ""
+                      }
+                    >
+                      {overdue ? "Overdue — " : dueToday ? "Today — " : ""}
+                      {formatDate(a.dueDate)}
+                    </span>{" "}
+                    · {a.assignedTo.name}
+                  </p>
+                </div>
+                <form
+                  action={completeActivity.bind(null, a.id)}
+                  className="flex items-center gap-1.5"
+                >
+                  <input type="hidden" name="revalidate" value={revalidate} />
+                  <input
+                    name="note"
+                    className="input btn-sm w-36 hidden md:block"
+                    placeholder="Outcome note…"
+                  />
+                  <button className="btn-secondary btn-sm" title="Mark done">
+                    ✓ Done
+                  </button>
+                </form>
+                <form action={cancelActivity.bind(null, a.id, revalidate)}>
+                  <button
+                    className="text-xs text-slate-600 hover:text-red-500 cursor-pointer mt-1.5"
+                    title="Cancel"
+                  >
+                    ✕
+                  </button>
+                </form>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {recent.length > 0 && (
+        <div className="mt-4 pt-3 border-t border-slate-800">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+            Recently completed
+          </p>
+          <ul className="space-y-1">
+            {recent.map((a) => (
+              <li key={a.id} className="text-xs text-slate-500 line-through">
+                {activityIcons[a.type]} {a.summary}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}

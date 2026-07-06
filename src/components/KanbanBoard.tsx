@@ -1,0 +1,172 @@
+"use client";
+
+import { useEffect, useState, useTransition } from "react";
+import Link from "next/link";
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import { moveLead } from "@/app/actions/leads";
+import { formatZAR } from "@/lib/format";
+
+export type KanbanLead = {
+  id: string;
+  title: string;
+  name: string;
+  valueCents: number;
+  source: string;
+  color: string | null;
+  productName: string | null;
+};
+
+export type KanbanStage = {
+  id: string;
+  name: string;
+  color: string;
+  leads: KanbanLead[];
+};
+
+const sourceIcons: Record<string, string> = {
+  facebook: "📘",
+  instagram: "📸",
+  website: "🌐",
+  manual: "✍️",
+};
+
+function LeadCard({ lead, dragging }: { lead: KanbanLead; dragging?: boolean }) {
+  return (
+    <div
+      className={`rounded-lg border border-slate-700 bg-slate-800 p-3 shadow-sm ${
+        dragging ? "opacity-90 rotate-1 shadow-lg" : ""
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <Link
+          href={`/leads/${lead.id}`}
+          className="text-sm font-semibold text-slate-200 hover:text-orange-400 leading-snug"
+        >
+          {lead.title}
+        </Link>
+        <span title={lead.source}>{sourceIcons[lead.source] ?? "•"}</span>
+      </div>
+      <p className="text-xs text-slate-400 mt-1">{lead.name}</p>
+      {lead.productName && (
+        <p className="text-xs text-slate-400">
+          {lead.productName}
+          {lead.color ? ` · ${lead.color}` : ""}
+        </p>
+      )}
+      {lead.valueCents > 0 && (
+        <p className="text-xs font-semibold text-emerald-400 mt-1.5">
+          {formatZAR(lead.valueCents)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function DraggableCard({ lead }: { lead: KanbanLead }) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: lead.id,
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
+      className={`touch-none ${isDragging ? "opacity-30" : ""}`}
+    >
+      <LeadCard lead={lead} />
+    </div>
+  );
+}
+
+function Column({ stage }: { stage: KanbanStage }) {
+  const { setNodeRef, isOver } = useDroppable({ id: stage.id });
+  const total = stage.leads.reduce((s, l) => s + l.valueCents, 0);
+
+  return (
+    <div className="w-full md:w-auto md:flex-1 md:min-w-0 flex flex-col">
+      <div className="flex items-center gap-2 px-1 mb-2">
+        <span
+          className="h-2.5 w-2.5 rounded-full"
+          style={{ backgroundColor: stage.color }}
+        />
+        <h3 className="text-sm font-semibold text-slate-300 truncate">{stage.name}</h3>
+        <span className="text-xs text-slate-400">{stage.leads.length}</span>
+        {total > 0 && (
+          <span className="text-xs text-slate-400 ml-auto">{formatZAR(total)}</span>
+        )}
+      </div>
+      <div
+        ref={setNodeRef}
+        className={`flex-1 min-h-32 space-y-2 rounded-xl p-2 transition-colors ${
+          isOver ? "bg-orange-500/10 ring-2 ring-orange-500/40" : "bg-slate-900/50"
+        }`}
+      >
+        {stage.leads.map((lead) => (
+          <DraggableCard key={lead.id} lead={lead} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function KanbanBoard({ stages: initial }: { stages: KanbanStage[] }) {
+  const [stages, setStages] = useState(initial);
+  const [activeLead, setActiveLead] = useState<KanbanLead | null>(null);
+  const [, startTransition] = useTransition();
+
+  useEffect(() => setStages(initial), [initial]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+  );
+
+  function onDragStart(e: DragStartEvent) {
+    const lead = stages.flatMap((s) => s.leads).find((l) => l.id === e.active.id);
+    setActiveLead(lead ?? null);
+  }
+
+  function onDragEnd(e: DragEndEvent) {
+    setActiveLead(null);
+    const leadId = String(e.active.id);
+    const targetStageId = e.over ? String(e.over.id) : null;
+    if (!targetStageId) return;
+    const fromStage = stages.find((s) => s.leads.some((l) => l.id === leadId));
+    if (!fromStage || fromStage.id === targetStageId) return;
+
+    setStages((prev) => {
+      const lead = prev
+        .flatMap((s) => s.leads)
+        .find((l) => l.id === leadId)!;
+      return prev.map((s) => {
+        if (s.id === fromStage.id)
+          return { ...s, leads: s.leads.filter((l) => l.id !== leadId) };
+        if (s.id === targetStageId) return { ...s, leads: [...s.leads, lead] };
+        return s;
+      });
+    });
+    startTransition(() => {
+      void moveLead(leadId, targetStageId);
+    });
+  }
+
+  return (
+    <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+      <div className="flex flex-col md:flex-row gap-4 pb-4 md:items-stretch select-none">
+        {stages.map((stage) => (
+          <Column key={stage.id} stage={stage} />
+        ))}
+      </div>
+      <DragOverlay>{activeLead && <LeadCard lead={activeLead} dragging />}</DragOverlay>
+    </DndContext>
+  );
+}
