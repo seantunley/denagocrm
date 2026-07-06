@@ -11,7 +11,8 @@ export type TrashModel =
   | "jobCard"
   | "document"
   | "product"
-  | "libraryDocument";
+  | "libraryDocument"
+  | "quote";
 
 export const TRASH_MODELS: TrashModel[] = [
   "contact",
@@ -21,6 +22,7 @@ export const TRASH_MODELS: TrashModel[] = [
   "document",
   "product",
   "libraryDocument",
+  "quote",
 ];
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -75,7 +77,7 @@ export async function purgeTrash(): Promise<number> {
   }
 
   // children before parents so FK cascades behave predictably
-  for (const model of ["jobCard", "vehicle", "lead", "contact", "product"] as TrashModel[]) {
+  for (const model of ["quote", "jobCard", "vehicle", "lead", "contact", "product"] as TrashModel[]) {
     const res = await delegate(model)
       .deleteMany({ where: { deletedAt: { lt: cutoff } } })
       .catch(() => ({ count: 0 }));

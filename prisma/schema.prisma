@@ -25,6 +25,7 @@ model User {
   activitiesAssigned Activity[]       @relation("ActivityAssignee")
   activitiesCreated  Activity[]       @relation("ActivityCreator")
   libraryVersions    LibraryVersion[]
+  quotesCreated      Quote[]          @relation("QuoteCreator")
 }
 
 model AppSetting {
@@ -126,6 +127,7 @@ model Contact {
   jobCards       JobCard[]
   activities     Activity[]
   tags           Tag[]
+  quotes         Quote[]
 }
 
 model Tag {
@@ -177,6 +179,7 @@ model Lead {
 
   communications Communication[]
   activities     Activity[]
+  quotes         Quote[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -229,6 +232,39 @@ model AutomationRule {
   assignToId      String?
 
   createdAt DateTime @default(now())
+}
+
+model Quote {
+  id         String    @id @default(cuid())
+  number     Int       @unique
+  status     String    @default("draft") // draft | sent | accepted | declined
+  validUntil DateTime?
+  terms      String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  deletedAt     DateTime?
+  deletedByName String?
+  deleteReason  String?
+
+  leadId      String?
+  lead        Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  contactId   String?
+  contact     Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  createdById String?
+  createdBy   User?    @relation("QuoteCreator", fields: [createdById], references: [id])
+
+  items QuoteItem[]
+}
+
+model QuoteItem {
+  id             String @id @default(cuid())
+  description    String
+  qty            Float  @default(1)
+  unitPriceCents Int    @default(0)
+
+  quoteId String
+  quote   Quote  @relation(fields: [quoteId], references: [id], onDelete: Cascade)
 }
 
 model AuditLog {

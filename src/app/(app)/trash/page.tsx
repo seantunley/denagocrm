@@ -19,7 +19,7 @@ export default async function TrashPage() {
   await requireUser();
   const notNull = { deletedAt: { not: null } } as const;
 
-  const [contacts, leads, vehicles, jobCards, documents, products, libraryDocs] =
+  const [contacts, leads, vehicles, jobCards, documents, products, libraryDocs, quotes] =
     await Promise.all([
       basePrisma.contact.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
       basePrisma.lead.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
@@ -28,6 +28,7 @@ export default async function TrashPage() {
       basePrisma.document.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
       basePrisma.product.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
       basePrisma.libraryDocument.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
+      basePrisma.quote.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
     ]);
 
   const rows: Row[] = [
@@ -58,6 +59,10 @@ export default async function TrashPage() {
     ...libraryDocs.map((d) => ({
       model: "libraryDocument" as const, id: d.id, label: d.name,
       detail: "Library document", deletedAt: d.deletedAt!, deletedByName: d.deletedByName, deleteReason: d.deleteReason,
+    })),
+    ...quotes.map((q) => ({
+      model: "quote" as const, id: q.id, label: `Quote Q-${q.number}`,
+      detail: "Quote", deletedAt: q.deletedAt!, deletedByName: q.deletedByName, deleteReason: q.deleteReason,
     })),
   ].sort((a, b) => b.deletedAt.getTime() - a.deletedAt.getTime());
 

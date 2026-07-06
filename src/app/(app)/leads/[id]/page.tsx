@@ -8,6 +8,7 @@ import {
   deleteLead,
   linkLeadToContact,
 } from "@/app/actions/leads";
+import { createQuoteFromLead } from "@/app/actions/quotes";
 import CommsTimeline from "@/components/CommsTimeline";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
@@ -34,6 +35,7 @@ export default async function LeadDetailPage({
       createdBy: true,
       communications: { include: { user: true }, orderBy: { occurredAt: "desc" } },
       activities: { include: { assignedTo: true }, orderBy: { dueDate: "asc" } },
+      quotes: { where: { deletedAt: null }, include: { items: true }, orderBy: { createdAt: "desc" } },
     },
   });
   if (!lead) notFound();
@@ -88,6 +90,9 @@ export default async function LeadDetailPage({
         <div className="flex gap-2 flex-wrap">
           {lead.status === "open" && (
             <>
+              <form action={createQuoteFromLead.bind(null, lead.id)}>
+                <button className="btn-primary">📄 Create quote</button>
+              </form>
               <form action={markWon.bind(null, lead.id)}>
                 <button className="btn bg-emerald-700 text-white hover:bg-emerald-600">
                   ✓ Mark won
@@ -153,6 +158,38 @@ export default async function LeadDetailPage({
               )}
             </dl>
           </div>
+
+          {lead.quotes.length > 0 && (
+            <div className="card">
+              <h2 className="font-semibold mb-3">Quotes</h2>
+              <ul className="space-y-2">
+                {lead.quotes.map((q) => {
+                  const total = q.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+                  return (
+                    <li key={q.id} className="flex items-center gap-2 text-sm">
+                      <Link href={`/quotes/${q.id}`} className="text-orange-400 hover:underline font-medium">
+                        Q-{q.number}
+                      </Link>
+                      <span className="flex-1 text-slate-400">{formatZAR(Math.round(total))}</span>
+                      <span
+                        className={`badge ${
+                          q.status === "accepted"
+                            ? "bg-emerald-500/15 text-emerald-300"
+                            : q.status === "declined"
+                            ? "bg-red-500/15 text-red-300"
+                            : q.status === "sent"
+                            ? "bg-blue-500/15 text-blue-300"
+                            : "bg-slate-800 text-slate-300"
+                        }`}
+                      >
+                        {q.status}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
 
           <div className="card">
             <h2 className="font-semibold mb-3">Contact</h2>
