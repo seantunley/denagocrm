@@ -126,6 +126,25 @@ export async function saveQuoteDefaults(formData: FormData) {
   revalidatePath("/settings");
 }
 
+export async function saveWorkshopSettings(formData: FormData) {
+  await requireUser();
+  const days = formData.getAll("days").map(String).join(",");
+  const entries: Record<string, string> = {
+    BOOKING_SLOT_TIMES: String(formData.get("times") ?? "").trim() || "08:00,10:00,12:00,14:00",
+    BOOKING_DAYS: days || "1,2,3,4,5",
+    BOOKING_CAPACITY: String(formData.get("capacity") ?? "1").trim() || "1",
+    BOOKING_HORIZON_DAYS: String(formData.get("horizon") ?? "30").trim() || "30",
+  };
+  for (const [key, value] of Object.entries(entries)) {
+    await prisma.appSetting.upsert({
+      where: { key },
+      update: { value },
+      create: { key, value },
+    });
+  }
+  revalidatePath("/settings");
+}
+
 export async function saveMyProfile(formData: FormData) {
   const user = await requireUser();
   const mobile = String(formData.get("mobile") ?? "").trim() || null;

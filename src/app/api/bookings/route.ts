@@ -5,6 +5,7 @@ import { getSetting } from "@/lib/settings";
 import { createIntakeLead } from "@/lib/leadIntake";
 import { logAudit } from "@/lib/audit";
 import { sendPushToAll } from "@/lib/push";
+import { reserveSlot } from "@/lib/bookingSlots";
 import { contactName, formatDate } from "@/lib/format";
 
 const corsHeaders = {
@@ -21,7 +22,7 @@ const bookingSchema = z.object({
     .refine((v) => v.replace(/\D/g, "").length >= 9, "Phone number looks too short"),
   model: z.string().max(200).optional().nullable(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  timePreference: z.enum(["morning", "afternoon", "any"]).optional(),
+  time: z.string().regex(/^\d{2}:\d{2}$/),
   message: z.string().max(3000).optional().nullable(),
 });
 
@@ -29,7 +30,10 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: corsHeaders });
 }
 
-/** Service booking intake from denagocpt.co.za — lands on the Workshop calendar. */
+/**
+ * Service booking from denagocpt.co.za. Hard slots: the requested time is
+ * reserved atomically — if it's taken, the request fails with 409.
+ */
 export async function POST(req: NextRequest) {
   const apiKey = await getSetting("INTAKE_API_KEY");
   if (!apiKey || req.headers.get("x-api-key") !== apiKey) {
@@ -50,13 +54,6 @@ export async function POST(req: NextRequest) {
     );
   }
   const b = parsed.data;
-  const bookingDate = new Date(`${b.date}T08:00:00`);
-  if (isNaN(bookingDate.getTime()) || bookingDate < new Date(new Date().toDateString())) {
-    return NextResponse.json(
-      { error: "Booking date must be today or later" },
-      { status: 422, headers: corsHeaders }
-    );
-  }
 
   const digits = b.phone.replace(/\D/g, "").slice(-9);
   const contact = await prisma.contact.findFirst({
@@ -79,9 +76,7 @@ export async function POST(req: NextRequest) {
       email: b.email,
       phone: b.phone,
       model: b.model,
-      message: `Service booking request for ${b.date}${
-        b.timePreference && b.timePreference !== "any" ? ` (${b.timePreference})` : ""
-      }.${b.message ? `\n\n${b.message}` : ""}`,
+      message: `Service booking for ${b.date} at ${b.time}.${b.message ? `\n\n${b.message}` : ""}`,
       source: "website",
       raw: json,
     });
@@ -96,36 +91,43 @@ export async function POST(req: NextRequest) {
 
   const vehicleHint =
     b.model ?? (contact && contact.vehicles.length === 1 ? contact.vehicles[0].model : null);
-  const summary = `Service booking — ${b.name}${vehicleHint ? ` (${vehicleHint})` : ""}${
-    b.timePreference && b.timePreference !== "any" ? ` · ${b.timePreference}` : ""
-  }`;
+  const summary = `Service ${b.time} — ${b.name}${vehicleHint ? ` (${vehicleHint})` : ""}`;
 
-  const activity = await prisma.activity.create({
-    data: {
-      type: "meeting",
-      category: "workshop",
+  let activity;
+  try {
+    activity = await reserveSlot({
+      date: b.date,
+      time: b.time,
       summary,
       note: [b.message, `Booked online · ${b.email} · ${b.phone}`].filter(Boolean).join("\n"),
-      dueDate: bookingDate,
       contactId,
       leadId,
-      assignedToId: firstUser.id,
-      createdById: firstUser.id,
-    },
-  });
+      userId: firstUser.id,
+    });
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "";
+    if (code === "SLOT_TAKEN") {
+      return NextResponse.json(
+        { error: "slot_taken", message: "That time has just been booked — please pick another slot." },
+        { status: 409, headers: corsHeaders }
+      );
+    }
+    return NextResponse.json(
+      { error: "slot_invalid", message: "That date/time isn't available for booking." },
+      { status: 422, headers: corsHeaders }
+    );
+  }
 
   await logAudit({
     action: "booking.received",
-    summary: `Online service booking for ${formatDate(bookingDate)}: ${summary}`,
+    summary: `Online service booking: ${summary} on ${formatDate(activity.dueDate)}`,
     contactId,
     leadId,
     userName: "Website",
   });
   await sendPushToAll({
     title: "New service booking 📅",
-    body: `${contact ? contactName(contact) : b.name} — ${formatDate(bookingDate)}${
-      b.timePreference && b.timePreference !== "any" ? ` (${b.timePreference})` : ""
-    }`,
+    body: `${contact ? contactName(contact) : b.name} — ${formatDate(activity.dueDate)} at ${b.time}`,
     url: "/workshop-calendar",
   }).catch(() => {});
 

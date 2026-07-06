@@ -9,6 +9,7 @@ import {
   saveSetting,
   saveMyProfile,
   saveQuoteDefaults,
+  saveWorkshopSettings,
   regenerateSetting,
 } from "@/app/actions/settings";
 import { buildSignature } from "@/lib/signature";
@@ -31,6 +32,7 @@ const TABS = [
   { key: "team", label: "Team" },
   { key: "email", label: "Email" },
   { key: "quotes", label: "Quotes" },
+  { key: "workshop", label: "Workshop" },
   { key: "integrations", label: "Integrations" },
   { key: "import", label: "Import" },
 ] as const;
@@ -386,6 +388,67 @@ export default async function SettingsPage({
             </p>
           </div>
           <button className="btn-primary">Save quote defaults</button>
+        </form>
+      )}
+
+      {tab === "workshop" && (
+        <form action={saveWorkshopSettings} className="card space-y-4 max-w-xl">
+          <h2 className="font-semibold">Online booking slots</h2>
+          <p className="text-xs text-slate-400">
+            Customers booking a service on denagocpt.co.za can only pick these slots. A slot
+            disappears from the website the moment it&apos;s taken.
+          </p>
+          <div>
+            <label className="label">Slot start times (comma-separated, 24h)</label>
+            <input
+              name="times"
+              className="input"
+              defaultValue={setting("BOOKING_SLOT_TIMES") || "08:00,10:00,12:00,14:00"}
+            />
+          </div>
+          <div>
+            <label className="label">Booking days</label>
+            <div className="flex gap-3 flex-wrap">
+              {[
+                ["1", "Mon"], ["2", "Tue"], ["3", "Wed"], ["4", "Thu"],
+                ["5", "Fri"], ["6", "Sat"], ["7", "Sun"],
+              ].map(([val, label]) => (
+                <label key={val} className="flex items-center gap-1.5 text-sm text-slate-300">
+                  <input
+                    type="checkbox"
+                    name="days"
+                    value={val}
+                    defaultChecked={(setting("BOOKING_DAYS") || "1,2,3,4,5").split(",").includes(val)}
+                    className="h-4 w-4"
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Vehicles per slot</label>
+              <input
+                name="capacity"
+                type="number"
+                min={1}
+                className="input"
+                defaultValue={setting("BOOKING_CAPACITY") || "1"}
+              />
+            </div>
+            <div>
+              <label className="label">Bookable days ahead</label>
+              <input
+                name="horizon"
+                type="number"
+                min={1}
+                className="input"
+                defaultValue={setting("BOOKING_HORIZON_DAYS") || "30"}
+              />
+            </div>
+          </div>
+          <button className="btn-primary">Save workshop settings</button>
         </form>
       )}
 

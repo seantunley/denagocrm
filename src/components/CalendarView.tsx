@@ -136,7 +136,11 @@ export default async function CalendarView({
                             : "bg-slate-800 text-slate-300"
                         } hover:brightness-125`}
                       >
-                        {activityIcons[a.type] ?? "☑️"} {a.summary}
+                        {activityIcons[a.type] ?? "☑️"}{" "}
+                        {format(a.dueDate, "HH:mm") !== "00:00" && a.category === "workshop"
+                          ? `${format(a.dueDate, "HH:mm")} `
+                          : ""}
+                        {a.summary}
                       </Link>
                     );
                   })}
