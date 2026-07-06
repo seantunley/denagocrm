@@ -85,7 +85,7 @@ export default function EmailComposer({
       {open && (
         <div
           className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 p-4 pt-8 overflow-y-auto"
-          onClick={(e) => e.target === e.currentTarget && setOpen(false)}
+          onPointerDown={(e) => e.target === e.currentTarget && setOpen(false)}
         >
           <div className="card w-full max-w-3xl pb-6">
             <div className="flex items-center justify-between mb-4">
@@ -198,7 +198,7 @@ export default function EmailComposer({
           {attachOpen && (
             <div
               className="fixed inset-0 z-[60] flex items-start justify-center bg-black/70 p-4 pt-16"
-              onClick={(e) => e.target === e.currentTarget && setAttachOpen(false)}
+              onPointerDown={(e) => e.target === e.currentTarget && setAttachOpen(false)}
             >
               <div className="card w-full max-w-lg">
                 <div className="flex items-center justify-between mb-3">

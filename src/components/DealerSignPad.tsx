@@ -83,7 +83,7 @@ export default function DealerSignPad({
       {padOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          onClick={(e) => e.target === e.currentTarget && setPadOpen(false)}
+          onPointerDown={(e) => e.target === e.currentTarget && setPadOpen(false)}
         >
           <div className="card w-full max-w-lg">
             <h3 className="font-bold text-white mb-3">Draw your signature</h3>

@@ -32,7 +32,7 @@ export default function ConfirmDelete({
       {open && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          onClick={(e) => e.target === e.currentTarget && setOpen(false)}
+          onPointerDown={(e) => e.target === e.currentTarget && setOpen(false)}
         >
           <div className="card w-full max-w-md border-red-900/60">
             <div className="flex items-start gap-3 mb-3">

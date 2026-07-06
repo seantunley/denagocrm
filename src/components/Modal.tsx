@@ -39,7 +39,7 @@ export default function ModalTrigger({
       {open && (
         <div
           className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 p-4 pt-10 overflow-y-auto"
-          onClick={(e) => e.target === e.currentTarget && setOpen(false)}
+          onPointerDown={(e) => e.target === e.currentTarget && setOpen(false)}
         >
           <div className="w-full max-w-2xl pb-10">
             <div className="flex items-center justify-between mb-3">
