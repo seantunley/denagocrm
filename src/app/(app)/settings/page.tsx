@@ -400,6 +400,51 @@ export default async function SettingsPage({
           </div>
 
           <div className="card">
+            <h2 className="font-semibold mb-1">WhatsApp Business (Cloud API)</h2>
+            <p className="text-xs text-slate-400 mb-4">
+              Connect your dedicated WhatsApp number: in your Meta app add the <b>WhatsApp</b>{" "}
+              product, register the number, then subscribe the webhook below to the{" "}
+              <b>messages</b> field (same verify token and app secret as Lead Ads). Customer
+              chats then appear on their record, and you can reply from the CRM.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="label">Webhook callback URL</label>
+                <code className="block text-sm bg-slate-800 rounded-lg px-3 py-2">
+                  https://crm.denagocpt.co.za/api/webhooks/whatsapp
+                </code>
+              </div>
+              <form action={saveSetting} className="flex gap-2 items-end">
+                <input type="hidden" name="key" value="WA_PHONE_NUMBER_ID" />
+                <div className="flex-1">
+                  <label className="label">Phone number ID</label>
+                  <input
+                    name="value"
+                    className="input"
+                    defaultValue={setting("WA_PHONE_NUMBER_ID")}
+                    placeholder="From WhatsApp → API Setup"
+                  />
+                </div>
+                <button className="btn-primary">Save</button>
+              </form>
+              <form action={saveSetting} className="flex gap-2 items-end">
+                <input type="hidden" name="key" value="WA_ACCESS_TOKEN" />
+                <div className="flex-1">
+                  <label className="label">Access token (permanent, System User)</label>
+                  <input
+                    name="value"
+                    type="password"
+                    className="input"
+                    defaultValue={setting("WA_ACCESS_TOKEN")}
+                    placeholder="EAAG…"
+                  />
+                </div>
+                <button className="btn-primary">Save</button>
+              </form>
+            </div>
+          </div>
+
+          <div className="card">
             <h2 className="font-semibold mb-1">Website lead intake API</h2>
             <p className="text-xs text-slate-400 mb-4">
               POST leads from your website or landing pages. Include the API key in the{" "}

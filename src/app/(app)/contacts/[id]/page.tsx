@@ -8,6 +8,8 @@ import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
 import LeadTimeline from "@/components/LeadTimeline";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import WhatsAppPanel from "@/components/WhatsAppPanel";
+import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { formatDateTime } from "@/lib/format";
 import { requireUser } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, contactVars } from "@/lib/email";
@@ -35,10 +37,11 @@ export default async function ContactDetailPage({
     },
   });
   if (!contact) notFound();
-  const [users, templates, smtpConfigured, history, libraryDocuments] = await Promise.all([
+  const [users, templates, smtpConfigured, waConfigured, history, libraryDocuments] = await Promise.all([
     prisma.user.findMany({ orderBy: { name: "asc" } }),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
     isSmtpConfigured(),
+    isWhatsAppConfigured(),
     prisma.auditLog.findMany({
       where: {
         OR: [
@@ -218,6 +221,23 @@ export default async function ContactDetailPage({
             contactId={contact.id}
             revalidate={path}
             libraryDocs={libraryDocs}
+          />
+          <WhatsAppPanel
+            phone={contact.whatsapp ?? contact.phone}
+            contactId={contact.id}
+            configured={waConfigured}
+            revalidate={path}
+            messages={contact.communications
+              .filter((c) => c.type === "whatsapp")
+              .slice()
+              .reverse()
+              .map((c) => ({
+                id: c.id,
+                direction: c.direction,
+                body: c.body,
+                occurredAt: c.occurredAt.toISOString(),
+                userName: c.user.name,
+              }))}
           />
           <CommsTimeline
             communications={contact.communications}

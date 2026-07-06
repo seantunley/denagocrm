@@ -14,6 +14,8 @@ import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
 import LeadTimeline from "@/components/LeadTimeline";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import WhatsAppPanel from "@/components/WhatsAppPanel";
+import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { requireUser } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
@@ -39,7 +41,7 @@ export default async function LeadDetailPage({
     },
   });
   if (!lead) notFound();
-  const [contacts, users, templates, smtpConfigured, audit, libraryDocuments] = await Promise.all([
+  const [contacts, users, templates, smtpConfigured, audit, waConfigured, libraryDocuments] = await Promise.all([
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
     prisma.user.findMany({ orderBy: { name: "asc" } }),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
@@ -49,6 +51,7 @@ export default async function LeadDetailPage({
       orderBy: { createdAt: "desc" },
       take: 100,
     }),
+    isWhatsAppConfigured(),
     prisma.libraryDocument.findMany({
       orderBy: { name: "asc" },
       include: { versions: { orderBy: { version: "desc" }, take: 1 } },
@@ -262,6 +265,24 @@ export default async function LeadDetailPage({
             leadId={lead.id}
             revalidate={path}
             libraryDocs={libraryDocs}
+          />
+          <WhatsAppPanel
+            phone={lead.phone ?? lead.contact?.whatsapp ?? lead.contact?.phone ?? null}
+            leadId={lead.id}
+            contactId={lead.contactId ?? undefined}
+            configured={waConfigured}
+            revalidate={path}
+            messages={lead.communications
+              .filter((c) => c.type === "whatsapp")
+              .slice()
+              .reverse()
+              .map((c) => ({
+                id: c.id,
+                direction: c.direction,
+                body: c.body,
+                occurredAt: c.occurredAt.toISOString(),
+                userName: c.user.name,
+              }))}
           />
           <CommsTimeline
             communications={lead.communications}
