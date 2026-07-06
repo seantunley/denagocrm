@@ -8,6 +8,7 @@ import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
 import SlideOver from "@/components/SlideOver";
 import HistoryTimeline from "@/components/HistoryTimeline";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import { formatDateTime } from "@/lib/format";
 import { requireUser } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, contactVars } from "@/lib/email";
@@ -24,10 +25,10 @@ export default async function ContactDetailPage({
   const contact = await prisma.contact.findUnique({
     where: { id },
     include: {
-      vehicles: { include: { serviceRecords: true, mileageLogs: true } },
-      leads: { include: { stage: true, product: true }, orderBy: { createdAt: "desc" } },
+      vehicles: { where: { deletedAt: null }, include: { serviceRecords: true, mileageLogs: true } },
+      leads: { where: { deletedAt: null }, include: { stage: true, product: true }, orderBy: { createdAt: "desc" } },
       communications: { include: { user: true }, orderBy: { occurredAt: "desc" } },
-      documents: { include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
+      documents: { where: { deletedAt: null }, include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
       activities: { include: { assignedTo: true }, orderBy: { dueDate: "asc" } },
       tags: true,
       owner: true,
@@ -92,9 +93,11 @@ export default async function ContactDetailPage({
           <Link href={`/contacts/${contact.id}/edit`} className="btn-secondary">
             Edit
           </Link>
-          <form action={deleteContact.bind(null, contact.id)}>
-            <button className="btn-danger">Delete</button>
-          </form>
+          <ConfirmDelete
+            action={deleteContact.bind(null, contact.id)}
+            title={`Delete contact ${contactName(contact)}?`}
+            description="The contact moves to the Trash and can be restored for 60 days. Their vehicles and job cards stay in place."
+          />
         </div>
       </div>
 

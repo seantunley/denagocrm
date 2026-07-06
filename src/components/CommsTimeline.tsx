@@ -1,4 +1,5 @@
 import { addCommunication, deleteCommunication } from "@/app/actions/communications";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import { formatDateTime } from "@/lib/format";
 
 const typeIcons: Record<string, string> = {
@@ -105,14 +106,15 @@ export default function CommsTimeline({
                 )}
                 <p className="text-sm text-slate-400 whitespace-pre-wrap">{c.body}</p>
               </div>
-              <form action={deleteCommunication.bind(null, c.id, revalidate)}>
-                <button
-                  className="text-xs text-slate-600 hover:text-red-500 opacity-0 group-hover:opacity-100 cursor-pointer"
-                  title="Delete"
-                >
-                  ✕
-                </button>
-              </form>
+              <div className="opacity-0 group-hover:opacity-100">
+                <ConfirmDelete
+                  action={deleteCommunication.bind(null, c.id, revalidate)}
+                  title="Delete this timeline entry?"
+                  description="This cannot be undone. The deletion is recorded in the customer history."
+                  trigger="✕"
+                  triggerClass="text-xs text-slate-600 hover:text-red-500 cursor-pointer"
+                />
+              </div>
             </li>
           ))}
         </ol>

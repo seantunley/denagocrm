@@ -12,7 +12,7 @@ export default async function LeadsPage() {
       orderBy: { order: "asc" },
       include: {
         leads: {
-          where: { status: "open" },
+          where: { status: "open", deletedAt: null },
           orderBy: { position: "asc" },
           include: { product: true, assignedTo: true },
         },

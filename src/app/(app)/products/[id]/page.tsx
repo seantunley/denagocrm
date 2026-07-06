@@ -6,6 +6,7 @@ import {
   deleteProductColor,
   deleteProduct,
 } from "@/app/actions/products";
+import ConfirmDelete from "@/components/ConfirmDelete";
 
 export default async function ProductDetailPage({
   params,
@@ -23,11 +24,11 @@ export default async function ProductDetailPage({
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">{product.name}</h1>
-        <form action={deleteProduct.bind(null, product.id)}>
-          <button className="btn-danger">
-            {product._count.leads + product._count.vehicles > 0 ? "Archive" : "Delete"}
-          </button>
-        </form>
+        <ConfirmDelete
+          action={deleteProduct.bind(null, product.id)}
+          title={`Delete product ${product.name}?`}
+          description="The product moves to the Trash for 60 days. Existing leads and vehicles keep their link to it."
+        />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6 items-start">
@@ -89,11 +90,13 @@ export default async function ProductDetailPage({
             {product.colors.map((c) => (
               <li key={c.id} className="flex items-center justify-between gap-2">
                 <span className="badge bg-slate-800 text-slate-300">{c.name}</span>
-                <form action={deleteProductColor.bind(null, c.id, product.id)}>
-                  <button className="text-xs text-slate-600 hover:text-red-500 cursor-pointer">
-                    ✕
-                  </button>
-                </form>
+                <ConfirmDelete
+                  action={deleteProductColor.bind(null, c.id, product.id)}
+                  title={`Remove colour ${c.name}?`}
+                  description="This cannot be undone."
+                  trigger="✕"
+                  triggerClass="text-xs text-slate-600 hover:text-red-500 cursor-pointer"
+                />
               </li>
             ))}
           </ul>

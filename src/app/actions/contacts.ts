@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { softDeleteRecord } from "@/lib/trash";
 import { contactName } from "@/lib/format";
 
 function contactData(formData: FormData) {
@@ -109,9 +110,16 @@ export async function updateContact(id: string, formData: FormData) {
   redirect(`/contacts/${id}`);
 }
 
-export async function deleteContact(id: string) {
-  await requireUser();
-  await prisma.contact.delete({ where: { id } });
+export async function deleteContact(id: string, formData: FormData) {
+  const user = await requireUser();
+  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+  const contact = await softDeleteRecord("contact", id, reason, user.name);
+  await logAudit({
+    action: "trash.deleted",
+    summary: `Moved contact ${contactName(contact)} to trash — ${reason}`,
+    contactId: id,
+    user,
+  });
   revalidatePath("/contacts");
   redirect("/contacts");
 }

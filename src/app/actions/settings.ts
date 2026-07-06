@@ -56,8 +56,9 @@ export async function moveStage(id: string, direction: "up" | "down") {
   revalidatePath("/leads");
 }
 
-export async function deleteStage(id: string): Promise<void> {
+export async function deleteStage(id: string, formData: FormData): Promise<void> {
   await requireUser();
+  void formData;
   const count = await prisma.lead.count({ where: { stageId: id } });
   if (count > 0) return; // stage still holds leads — refuse silently
   await prisma.pipelineStage.delete({ where: { id } });

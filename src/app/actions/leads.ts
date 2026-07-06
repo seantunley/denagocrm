@@ -7,6 +7,7 @@ import { requireUser } from "@/lib/auth";
 import { parseRands } from "@/lib/format";
 import { runLeadAutomations } from "@/lib/automations";
 import { logAudit } from "@/lib/audit";
+import { softDeleteRecord } from "@/lib/trash";
 
 function leadData(formData: FormData) {
   const str = (k: string) => {
@@ -243,9 +244,17 @@ export async function linkLeadToContact(leadId: string, formData: FormData) {
   revalidatePath("/leads");
 }
 
-export async function deleteLead(leadId: string) {
-  await requireUser();
-  await prisma.lead.delete({ where: { id: leadId } });
+export async function deleteLead(leadId: string, formData: FormData) {
+  const user = await requireUser();
+  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+  const lead = await softDeleteRecord("lead", leadId, reason, user.name);
+  await logAudit({
+    action: "trash.deleted",
+    summary: `Moved lead “${lead.title}” to trash — ${reason}`,
+    leadId,
+    contactId: lead.contactId,
+    user,
+  });
   revalidatePath("/leads");
   redirect("/leads");
 }

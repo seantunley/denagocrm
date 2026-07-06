@@ -52,7 +52,12 @@ export default async function ContactsPage({
       include: {
         tags: true,
         owner: true,
-        _count: { select: { vehicles: true, leads: { where: { status: "open" } } } },
+        _count: {
+          select: {
+            vehicles: { where: { deletedAt: null } },
+            leads: { where: { status: "open", deletedAt: null } },
+          },
+        },
       },
       take: 200,
     }),

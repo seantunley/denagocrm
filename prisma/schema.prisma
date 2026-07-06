@@ -31,14 +31,18 @@ model AppSetting {
 }
 
 model Product {
-  id             String         @id @default(cuid())
+  id             String   @id @default(cuid())
   name           String
   sku            String?
   category       String?
-  basePriceCents Int            @default(0)
+  basePriceCents Int      @default(0)
   description    String?
-  active         Boolean        @default(true)
-  createdAt      DateTime       @default(now())
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  deletedAt     DateTime?
+  deletedByName String?
+  deleteReason  String?
 
   colors   ProductColor[]
   leads    Lead[]
@@ -53,13 +57,13 @@ model ProductColor {
 }
 
 model Contact {
-  id        String   @id @default(cuid())
-  isCompany Boolean  @default(false)
-  firstName String
-  lastName  String?
-  company   String?
-  email     String?
-  phone     String?
+  id         String   @id @default(cuid())
+  isCompany  Boolean  @default(false)
+  firstName  String
+  lastName   String?
+  company    String?
+  email      String?
+  phone      String?
   whatsapp   String?
   address    String? // street address / estate + unit
   suburb     String?
@@ -70,6 +74,10 @@ model Contact {
   notes      String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+
+  deletedAt     DateTime?
+  deletedByName String?
+  deleteReason  String?
 
   ownerId     String?
   owner       User?   @relation("ContactOwner", fields: [ownerId], references: [id])
@@ -116,6 +124,10 @@ model Lead {
   position   Int     @default(0)
   externalId String? @unique // e.g. Facebook leadgen_id
   raw        String? // raw intake payload (JSON string)
+
+  deletedAt     DateTime?
+  deletedByName String?
+  deleteReason  String?
 
   stageId      String
   stage        PipelineStage @relation(fields: [stageId], references: [id])
@@ -233,6 +245,10 @@ model Document {
   sizeBytes  Int
   createdAt  DateTime @default(now())
 
+  deletedAt     DateTime?
+  deletedByName String?
+  deleteReason  String?
+
   contactId    String?
   contact      Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
   vehicleId    String?
@@ -255,6 +271,10 @@ model Vehicle {
   serviceIntervalMonths Int?      @default(6)
   notes                 String?
   createdAt             DateTime  @default(now())
+
+  deletedAt     DateTime?
+  deletedByName String?
+  deleteReason  String?
 
   contactId String
   contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
@@ -306,6 +326,10 @@ model JobCard {
   notes       String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+
+  deletedAt     DateTime?
+  deletedByName String?
+  deleteReason  String?
 
   vehicleId String
   vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)

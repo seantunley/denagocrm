@@ -1,4 +1,5 @@
 import { uploadDocument, deleteDocument } from "@/app/actions/documents";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import { formatDate } from "@/lib/format";
 
 function humanSize(bytes: number): string {
@@ -68,14 +69,15 @@ export default function DocumentsPanel({
                   {humanSize(d.sizeBytes)} · {formatDate(d.createdAt)} · {d.uploadedBy.name}
                 </p>
               </div>
-              <form action={deleteDocument.bind(null, d.id, revalidate)}>
-                <button
-                  className="text-xs text-slate-600 hover:text-red-500 opacity-0 group-hover:opacity-100 cursor-pointer"
-                  title="Delete"
-                >
-                  ✕
-                </button>
-              </form>
+              <div className="opacity-0 group-hover:opacity-100">
+                <ConfirmDelete
+                  action={deleteDocument.bind(null, d.id, revalidate)}
+                  title={`Delete document “${d.fileName}”?`}
+                  description="The document moves to the Trash and can be restored for 60 days."
+                  trigger="✕"
+                  triggerClass="text-xs text-slate-600 hover:text-red-500 cursor-pointer"
+                />
+              </div>
             </li>
           ))}
         </ul>

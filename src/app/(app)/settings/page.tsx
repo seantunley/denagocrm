@@ -17,6 +17,7 @@ import {
   deleteTemplate,
 } from "@/app/actions/emails";
 import TestEmailButton from "@/components/TestEmailButton";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import { formatDate } from "@/lib/format";
 
 const TABS = [
@@ -86,15 +87,19 @@ export default async function SettingsPage({
                 <form action={moveStage.bind(null, s.id, "down")}>
                   <button className="btn-secondary btn-sm" disabled={i === stages.length - 1}>↓</button>
                 </form>
-                <form action={deleteStage.bind(null, s.id)}>
-                  <button
-                    className="btn-danger btn-sm"
-                    disabled={s._count.leads > 0}
-                    title={s._count.leads > 0 ? "Stage still has leads" : "Delete stage"}
-                  >
+                {s._count.leads > 0 ? (
+                  <button className="btn-danger btn-sm" disabled title="Stage still has leads">
                     ✕
                   </button>
-                </form>
+                ) : (
+                  <ConfirmDelete
+                    action={deleteStage.bind(null, s.id)}
+                    title={`Delete stage “${s.name}”?`}
+                    description="This cannot be undone."
+                    trigger="✕"
+                    triggerClass="btn-danger btn-sm"
+                  />
+                )}
               </li>
             ))}
           </ul>
@@ -207,9 +212,13 @@ export default async function SettingsPage({
                         <button className="btn-primary btn-sm">Save template</button>
                       </div>
                     </form>
-                    <form action={deleteTemplate.bind(null, t.id)}>
-                      <button className="btn-danger btn-sm">Delete</button>
-                    </form>
+                    <ConfirmDelete
+                      action={deleteTemplate.bind(null, t.id)}
+                      title={`Delete template “${t.name}”?`}
+                      description="This cannot be undone. Automations using this template will skip their email step."
+                      trigger="Delete"
+                      triggerClass="btn-danger btn-sm"
+                    />
                   </div>
                 </details>
               ))}

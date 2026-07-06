@@ -31,7 +31,10 @@ const groups: NavGroup[] = [
   },
 ];
 
-const bottomLinks: NavLink[] = [{ href: "/settings", label: "Settings", icon: "⚙" }];
+const bottomLinks: NavLink[] = [
+  { href: "/trash", label: "Trash", icon: "🗑" },
+  { href: "/settings", label: "Settings", icon: "⚙" },
+];
 
 const STORAGE_KEY = "denago-nav-collapsed";
 

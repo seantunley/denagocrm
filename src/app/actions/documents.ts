@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
-import { saveFile, deleteFile } from "@/lib/storage";
+import { softDeleteRecord } from "@/lib/trash";
+import { saveFile } from "@/lib/storage";
 
 const MAX_SIZE = 25 * 1024 * 1024; // 25 MB
 
@@ -45,9 +46,16 @@ export async function uploadDocument(formData: FormData) {
   revalidatePath(String(formData.get("revalidate") ?? "/"));
 }
 
-export async function deleteDocument(id: string, revalidate: string) {
-  await requireUser();
-  const doc = await prisma.document.delete({ where: { id } });
-  await deleteFile(doc.storedName);
+export async function deleteDocument(id: string, revalidate: string, formData: FormData) {
+  const user = await requireUser();
+  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+  // soft delete: the stored file is kept until the trash purge
+  const doc = await softDeleteRecord("document", id, reason, user.name);
+  await logAudit({
+    action: "trash.deleted",
+    summary: `Moved document “${doc.fileName}” to trash — ${reason}`,
+    contactId: doc.contactId,
+    user,
+  });
   revalidatePath(revalidate);
 }

@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { softDeleteRecord } from "@/lib/trash";
 
 function vehicleData(formData: FormData) {
   const str = (k: string) => {
@@ -74,9 +75,16 @@ export async function updateVehicle(id: string, formData: FormData) {
   redirect(`/vehicles/${id}`);
 }
 
-export async function deleteVehicle(id: string) {
-  await requireUser();
-  await prisma.vehicle.delete({ where: { id } });
+export async function deleteVehicle(id: string, formData: FormData) {
+  const user = await requireUser();
+  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+  const vehicle = await softDeleteRecord("vehicle", id, reason, user.name);
+  await logAudit({
+    action: "trash.deleted",
+    summary: `Moved vehicle ${vehicle.model} to trash — ${reason}`,
+    contactId: vehicle.contactId,
+    user,
+  });
   revalidatePath("/vehicles");
   redirect("/vehicles");
 }
@@ -91,9 +99,17 @@ export async function addMileage(vehicleId: string, formData: FormData) {
   revalidatePath("/vehicles");
 }
 
-export async function deleteMileage(id: string, vehicleId: string) {
-  await requireUser();
-  await prisma.mileageLog.delete({ where: { id } });
+export async function deleteMileage(id: string, vehicleId: string, formData: FormData) {
+  const user = await requireUser();
+  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+  const entry = await prisma.mileageLog.delete({ where: { id } });
+  const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
+  await logAudit({
+    action: "vehicle.mileage_deleted",
+    summary: `Deleted mileage entry ${entry.km.toLocaleString()} km on ${vehicle?.model ?? "vehicle"} — ${reason}`,
+    contactId: vehicle?.contactId,
+    user,
+  });
   revalidatePath(`/vehicles/${vehicleId}`);
 }
 
@@ -141,8 +157,16 @@ export async function addServiceRecord(vehicleId: string, formData: FormData) {
   revalidatePath("/vehicles");
 }
 
-export async function deleteServiceRecord(id: string, vehicleId: string) {
-  await requireUser();
-  await prisma.serviceRecord.delete({ where: { id } });
+export async function deleteServiceRecord(id: string, vehicleId: string, formData: FormData) {
+  const user = await requireUser();
+  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+  const record = await prisma.serviceRecord.delete({ where: { id } });
+  const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
+  await logAudit({
+    action: "service.deleted",
+    summary: `Deleted service record “${record.summary}” on ${vehicle?.model ?? "vehicle"} — ${reason}`,
+    contactId: vehicle?.contactId,
+    user,
+  });
   revalidatePath(`/vehicles/${vehicleId}`);
 }

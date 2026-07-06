@@ -12,6 +12,7 @@ import CommsTimeline from "@/components/CommsTimeline";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
 import LeadTimeline from "@/components/LeadTimeline";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import { requireUser } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
@@ -95,9 +96,11 @@ export default async function LeadDetailPage({
               <button className="btn-secondary">Reopen</button>
             </form>
           )}
-          <form action={deleteLead.bind(null, lead.id)}>
-            <button className="btn-danger">Delete</button>
-          </form>
+          <ConfirmDelete
+            action={deleteLead.bind(null, lead.id)}
+            title={`Delete lead “${lead.title}”?`}
+            description="The lead moves to the Trash and can be restored for 60 days."
+          />
         </div>
       </div>
 

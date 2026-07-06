@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { put, list, del } from "@vercel/blob";
 import { exportAllData } from "@/lib/backup";
+import { purgeTrash } from "@/lib/trash";
 import { getSetting } from "@/lib/settings";
 
 const KEEP = 30; // retain the last 30 daily backups
@@ -38,11 +39,15 @@ export async function GET(req: NextRequest) {
   const stale = sorted.slice(KEEP);
   for (const b of stale) await del(b.url).catch(() => {});
 
+  // permanently remove trash past its 60-day retention (after backing up)
+  const purgedTrash = await purgeTrash().catch(() => -1);
+
   return NextResponse.json({
     ok: true,
     backup: blob.pathname,
     sizeBytes: JSON.stringify(data).length,
     kept: Math.min(sorted.length, KEEP),
     pruned: stale.length,
+    purgedTrash,
   });
 }

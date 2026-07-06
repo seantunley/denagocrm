@@ -8,6 +8,7 @@ import {
   deleteServiceRecord,
 } from "@/app/actions/vehicles";
 import DocumentsPanel from "@/components/DocumentsPanel";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import { contactName, formatDate, formatDateTime } from "@/lib/format";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
 
@@ -27,8 +28,8 @@ export default async function VehicleDetailPage({
         orderBy: { serviceDate: "desc" },
         include: { performedBy: true, jobCard: true },
       },
-      jobCards: { orderBy: { openedAt: "desc" } },
-      documents: { include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
+      jobCards: { where: { deletedAt: null }, orderBy: { openedAt: "desc" } },
+      documents: { where: { deletedAt: null }, include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
     },
   });
   if (!vehicle) notFound();
@@ -64,9 +65,11 @@ export default async function VehicleDetailPage({
           <Link href={`/vehicles/${vehicle.id}/edit`} className="btn-secondary">
             Edit
           </Link>
-          <form action={deleteVehicle.bind(null, vehicle.id)}>
-            <button className="btn-danger">Delete</button>
-          </form>
+          <ConfirmDelete
+            action={deleteVehicle.bind(null, vehicle.id)}
+            title={`Delete vehicle ${vehicle.model}?`}
+            description="The vehicle (with its service history and job cards) moves to the Trash and can be restored for 60 days."
+          />
         </div>
       </div>
 
@@ -173,14 +176,15 @@ export default async function VehicleDetailPage({
                       {s.nextDueKm != null ? ` at ${s.nextDueKm.toLocaleString()} km` : ""}
                       {s.jobCard ? ` · Job card #${s.jobCard.number}` : ""}
                     </p>
-                    <form
-                      action={deleteServiceRecord.bind(null, s.id, vehicle.id)}
-                      className="absolute right-0 top-0"
-                    >
-                      <button className="text-xs text-slate-600 hover:text-red-500 opacity-0 group-hover:opacity-100 cursor-pointer">
-                        ✕
-                      </button>
-                    </form>
+                    <div className="absolute right-0 top-0 opacity-0 group-hover:opacity-100">
+                      <ConfirmDelete
+                        action={deleteServiceRecord.bind(null, s.id, vehicle.id)}
+                        title={`Delete service record “${s.summary}”?`}
+                        description="This cannot be undone. The deletion is recorded in the customer history."
+                        trigger="✕"
+                        triggerClass="text-xs text-slate-600 hover:text-red-500 cursor-pointer"
+                      />
+                    </div>
                   </li>
                 ))}
               </ol>

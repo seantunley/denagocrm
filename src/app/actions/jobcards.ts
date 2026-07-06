@@ -6,6 +6,7 @@ import { addMonths } from "date-fns";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { softDeleteRecord } from "@/lib/trash";
 import { parseRands } from "@/lib/format";
 
 export async function createJobCard(formData: FormData) {
@@ -60,9 +61,17 @@ export async function addJobCardItem(jobCardId: string, formData: FormData) {
   revalidatePath(`/jobcards/${jobCardId}`);
 }
 
-export async function deleteJobCardItem(id: string, jobCardId: string) {
-  await requireUser();
-  await prisma.jobCardItem.delete({ where: { id } });
+export async function deleteJobCardItem(id: string, jobCardId: string, formData: FormData) {
+  const user = await requireUser();
+  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+  const item = await prisma.jobCardItem.delete({ where: { id } });
+  const jobCard = await prisma.jobCard.findUnique({ where: { id: jobCardId } });
+  await logAudit({
+    action: "jobcard.item_deleted",
+    summary: `Removed “${item.description}” from job card #${jobCard?.number ?? "?"} — ${reason}`,
+    contactId: jobCard?.contactId,
+    user,
+  });
   revalidatePath(`/jobcards/${jobCardId}`);
 }
 
@@ -139,9 +148,16 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
   revalidatePath("/vehicles");
 }
 
-export async function deleteJobCard(id: string) {
-  await requireUser();
-  await prisma.jobCard.delete({ where: { id } });
+export async function deleteJobCard(id: string, formData: FormData) {
+  const user = await requireUser();
+  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+  const jobCard = await softDeleteRecord("jobCard", id, reason, user.name);
+  await logAudit({
+    action: "trash.deleted",
+    summary: `Moved job card #${jobCard.number} to trash — ${reason}`,
+    contactId: jobCard.contactId,
+    user,
+  });
   revalidatePath("/jobcards");
   redirect("/jobcards");
 }

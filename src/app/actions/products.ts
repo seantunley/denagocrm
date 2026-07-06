@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
+import { softDeleteRecord } from "@/lib/trash";
 import { parseRands } from "@/lib/format";
 
 function productData(formData: FormData) {
@@ -53,22 +55,22 @@ export async function addProductColor(productId: string, formData: FormData) {
   revalidatePath(`/products/${productId}`);
 }
 
-export async function deleteProductColor(id: string, productId: string) {
+export async function deleteProductColor(id: string, productId: string, formData: FormData) {
   await requireUser();
+  void formData;
   await prisma.productColor.delete({ where: { id } });
   revalidatePath(`/products/${productId}`);
 }
 
-export async function deleteProduct(id: string) {
-  await requireUser();
-  const inUse = await prisma.lead.count({ where: { productId: id } });
-  const vehicles = await prisma.vehicle.count({ where: { productId: id } });
-  if (inUse > 0 || vehicles > 0) {
-    // Referenced by leads/vehicles — archive instead of delete
-    await prisma.product.update({ where: { id }, data: { active: false } });
-  } else {
-    await prisma.product.delete({ where: { id } });
-  }
+export async function deleteProduct(id: string, formData: FormData) {
+  const user = await requireUser();
+  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+  const product = await softDeleteRecord("product", id, reason, user.name);
+  await logAudit({
+    action: "trash.deleted",
+    summary: `Moved product ${product.name} to trash — ${reason}`,
+    user,
+  });
   revalidatePath("/products");
   redirect("/products");
 }

@@ -7,6 +7,7 @@ import {
   updateAutomationRule,
 } from "@/app/actions/automations";
 import AutomationRuleForm from "@/components/AutomationRuleForm";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import { formatDateTime } from "@/lib/format";
 
 export default async function AutomationsPage() {
@@ -84,14 +85,13 @@ export default async function AutomationsPage() {
                       {r.active ? "Pause" : "Resume"}
                     </button>
                   </form>
-                  <form action={deleteAutomationRule.bind(null, r.id)}>
-                    <button
-                      className="text-xs text-slate-600 hover:text-red-500 cursor-pointer"
-                      title="Delete"
-                    >
-                      ✕
-                    </button>
-                  </form>
+                  <ConfirmDelete
+                    action={deleteAutomationRule.bind(null, r.id)}
+                    title={`Delete automation “${r.name}”?`}
+                    description="This cannot be undone. Its run history is removed too."
+                    trigger="✕"
+                    triggerClass="text-xs text-slate-600 hover:text-red-500 cursor-pointer"
+                  />
                 </div>
                 <details>
                   <summary className="px-4 py-2 text-xs font-medium text-orange-400 cursor-pointer hover:underline list-none [&::-webkit-details-marker]:hidden">

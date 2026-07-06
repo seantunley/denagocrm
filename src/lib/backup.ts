@@ -1,6 +1,6 @@
-import { prisma } from "./db";
+import { basePrisma as prisma } from "./db";
 
-/** Full-database export used by both the cron backup and the local backup script. */
+/** Full-database export (including trashed records) for backups. */
 export async function exportAllData() {
   return {
     exportedAt: new Date().toISOString(),

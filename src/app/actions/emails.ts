@@ -107,8 +107,9 @@ export async function updateTemplate(id: string, formData: FormData) {
   revalidatePath("/settings");
 }
 
-export async function deleteTemplate(id: string) {
+export async function deleteTemplate(id: string, formData: FormData) {
   await requireUser();
+  void formData;
   await prisma.emailTemplate.delete({ where: { id } });
   revalidatePath("/settings");
 }

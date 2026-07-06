@@ -9,6 +9,7 @@ import {
   deleteJobCard,
 } from "@/app/actions/jobcards";
 import DocumentsPanel from "@/components/DocumentsPanel";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 
 export default async function JobCardDetailPage({
@@ -24,7 +25,7 @@ export default async function JobCardDetailPage({
       contact: true,
       items: true,
       serviceRecord: true,
-      documents: { include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
+      documents: { where: { deletedAt: null }, include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
     },
   });
   if (!jobCard) notFound();
@@ -82,9 +83,11 @@ export default async function JobCardDetailPage({
               <button className="btn-secondary">Reopen</button>
             </form>
           )}
-          <form action={deleteJobCard.bind(null, jobCard.id)}>
-            <button className="btn-danger">Delete</button>
-          </form>
+          <ConfirmDelete
+            action={deleteJobCard.bind(null, jobCard.id)}
+            title={`Delete job card #${jobCard.number}?`}
+            description="The job card moves to the Trash and can be restored for 60 days."
+          />
         </div>
       </div>
 
@@ -127,11 +130,13 @@ export default async function JobCardDetailPage({
                     </td>
                     <td className="text-right">
                       {jobCard.status !== "completed" && (
-                        <form action={deleteJobCardItem.bind(null, i.id, jobCard.id)}>
-                          <button className="text-xs text-slate-600 hover:text-red-500 cursor-pointer">
-                            ✕
-                          </button>
-                        </form>
+                        <ConfirmDelete
+                          action={deleteJobCardItem.bind(null, i.id, jobCard.id)}
+                          title={`Remove “${i.description}”?`}
+                          description="This cannot be undone. The removal is recorded in the customer history."
+                          trigger="✕"
+                          triggerClass="text-xs text-slate-600 hover:text-red-500 cursor-pointer"
+                        />
                       )}
                     </td>
                   </tr>

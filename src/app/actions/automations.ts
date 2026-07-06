@@ -60,8 +60,9 @@ export async function toggleAutomationRule(id: string) {
   revalidatePath("/automations");
 }
 
-export async function deleteAutomationRule(id: string) {
+export async function deleteAutomationRule(id: string, formData: FormData) {
   await requireUser();
+  void formData;
   await prisma.automationLog.deleteMany({ where: { ruleId: id } });
   await prisma.automationRule.delete({ where: { id } });
   revalidatePath("/automations");
