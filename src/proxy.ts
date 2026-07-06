@@ -8,6 +8,7 @@ const PUBLIC_PATHS = [
   "/api/intake",
   "/api/cron",
   "/api/bookings",
+  "/api/service-lookup",
   "/sign",
   "/api/sign",
   "/manifest.webmanifest",

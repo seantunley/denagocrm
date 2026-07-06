@@ -471,3 +471,19 @@ model JobCardItem {
   jobCardId String
   jobCard   JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
 }
+
+// One-time codes for verifying vehicle owners on the public booking form.
+model OtpChallenge {
+  id         String    @id @default(cuid())
+  purpose    String // e.g. service-booking
+  key        String // normalized VIN / serial
+  codeHash   String // sha256 of the 6-digit code
+  channel    String // sms | email
+  target     String // masked destination shown to the customer
+  attempts   Int       @default(0)
+  expiresAt  DateTime
+  verifiedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([purpose, key, createdAt])
+}

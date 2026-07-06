@@ -555,6 +555,45 @@ export default async function SettingsPage({
           </div>
 
           <div className="card">
+            <h2 className="font-semibold mb-1">SMS (BulkSMS) — OTP verification</h2>
+            <p className="text-xs text-slate-400 mb-4">
+              Used to send one-time codes to customers verifying their vehicle on the website
+              booking form. Create a free account at bulksms.com, then under{" "}
+              <b>Settings → Developer → API Tokens</b> create a token and paste both parts here.
+              Without this, the code falls back to the customer&apos;s registered email.
+            </p>
+            <div className="space-y-3">
+              <form action={saveSetting} className="flex gap-2 items-end">
+                <input type="hidden" name="key" value="BULKSMS_TOKEN_ID" />
+                <div className="flex-1">
+                  <label className="label">Token ID</label>
+                  <input
+                    name="value"
+                    className="input"
+                    defaultValue={setting("BULKSMS_TOKEN_ID")}
+                    placeholder="From BulkSMS → API Tokens"
+                  />
+                </div>
+                <button className="btn-primary">Save</button>
+              </form>
+              <form action={saveSetting} className="flex gap-2 items-end">
+                <input type="hidden" name="key" value="BULKSMS_TOKEN_SECRET" />
+                <div className="flex-1">
+                  <label className="label">Token secret</label>
+                  <input
+                    name="value"
+                    type="password"
+                    className="input"
+                    defaultValue={setting("BULKSMS_TOKEN_SECRET")}
+                    placeholder="Shown once when the token is created"
+                  />
+                </div>
+                <button className="btn-primary">Save</button>
+              </form>
+            </div>
+          </div>
+
+          <div className="card">
             <h2 className="font-semibold mb-1">Website lead intake API</h2>
             <p className="text-xs text-slate-400 mb-4">
               POST leads from your website or landing pages. Include the API key in the{" "}

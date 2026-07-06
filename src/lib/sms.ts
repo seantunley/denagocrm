@@ -1,0 +1,53 @@
+import { getSetting } from "@/lib/settings";
+
+/**
+ * SMS via BulkSMS (bulksms.com) — Settings → Integrations holds the token.
+ * SA numbers are normalized to +27 international format.
+ */
+export async function isSmsConfigured(): Promise<boolean> {
+  const [id, secret] = await Promise.all([
+    getSetting("BULKSMS_TOKEN_ID"),
+    getSetting("BULKSMS_TOKEN_SECRET"),
+  ]);
+  return Boolean(id && secret);
+}
+
+export function normalizePhone(raw: string): string | null {
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length === 10 && digits.startsWith("0")) return `+27${digits.slice(1)}`;
+  if (digits.length === 11 && digits.startsWith("27")) return `+${digits}`;
+  if (digits.length >= 11 && raw.trim().startsWith("+")) return `+${digits}`;
+  return null;
+}
+
+export function maskPhone(raw: string): string {
+  const digits = raw.replace(/\D/g, "");
+  return `••• ••• •${digits.slice(-3)}`;
+}
+
+export async function sendSms(to: string, body: string): Promise<{ ok: boolean; error?: string }> {
+  const [id, secret] = await Promise.all([
+    getSetting("BULKSMS_TOKEN_ID"),
+    getSetting("BULKSMS_TOKEN_SECRET"),
+  ]);
+  if (!id || !secret) return { ok: false, error: "SMS is not configured" };
+  const intl = normalizePhone(to);
+  if (!intl) return { ok: false, error: "Invalid phone number" };
+  try {
+    const res = await fetch("https://api.bulksms.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Basic ${Buffer.from(`${id}:${secret}`).toString("base64")}`,
+      },
+      body: JSON.stringify({ to: intl, body }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return { ok: false, error: `SMS gateway ${res.status}: ${text.slice(0, 200)}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "SMS send failed" };
+  }
+}

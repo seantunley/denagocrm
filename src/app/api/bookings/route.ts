@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { prisma } from "@/lib/db";
+import { prisma, basePrisma } from "@/lib/db";
 import { getSetting } from "@/lib/settings";
-import { createIntakeLead } from "@/lib/leadIntake";
 import { logAudit } from "@/lib/audit";
 import { sendPushToAll } from "@/lib/push";
 import { reserveSlot } from "@/lib/bookingSlots";
@@ -67,21 +66,27 @@ export async function POST(req: NextRequest) {
     include: { vehicles: true },
   });
 
+  // A service booking is workshop work — it must never open a sales lead.
   let contactId: string | null = contact?.id ?? null;
-  let leadId: string | null = null;
-
   if (!contact) {
-    const lead = await createIntakeLead({
-      name: b.name,
-      email: b.email,
-      phone: b.phone,
-      model: b.model,
-      message: `Service booking for ${b.date} at ${b.time}.${b.message ? `\n\n${b.message}` : ""}`,
-      source: "website",
-      raw: json,
+    const [firstName, ...rest] = b.name.trim().split(/\s+/);
+    const created = await prisma.contact.create({
+      data: {
+        firstName: firstName || b.name,
+        lastName: rest.join(" ") || null,
+        email: b.email,
+        phone: b.phone,
+        source: "website",
+        notes: `Created from an online service booking for ${b.date} at ${b.time}.`,
+      },
     });
-    leadId = lead.id;
-    contactId = lead.contactId;
+    contactId = created.id;
+    await logAudit({
+      action: "contact.created",
+      summary: `Contact created from an online service booking`,
+      contactId,
+      userName: "Website",
+    });
   }
 
   const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
@@ -89,8 +94,38 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "No users configured" }, { status: 500, headers: corsHeaders });
   }
 
+  // Open a job card when we can tell which vehicle is coming in
+  const vehicles = contact?.vehicles.filter((v) => !v.deletedAt) ?? [];
+  const vehicle =
+    vehicles.length === 1
+      ? vehicles[0]
+      : (b.model
+          ? vehicles.find((v) => v.model.toLowerCase().includes(b.model!.toLowerCase()))
+          : null) ?? null;
+  let jobCardNumber: number | null = null;
+  if (vehicle && contactId) {
+    const maxJc = await basePrisma.jobCard.aggregate({ _max: { number: true } });
+    const jc = await prisma.jobCard.create({
+      data: {
+        number: (maxJc._max.number ?? 1000) + 1,
+        description: `Online service booking for ${b.date} at ${b.time} — call the customer to confirm.${
+          b.message ? `\n\nCustomer note: ${b.message}` : ""
+        }`,
+        vehicleId: vehicle.id,
+        contactId,
+      },
+    });
+    jobCardNumber = jc.number;
+    await logAudit({
+      action: "jobcard.created",
+      summary: `Job card #${jc.number} opened from an online service booking (${vehicle.model})`,
+      contactId,
+      userName: "Website",
+    });
+  }
+
   const vehicleHint =
-    b.model ?? (contact && contact.vehicles.length === 1 ? contact.vehicles[0].model : null);
+    vehicle?.model ?? b.model ?? (vehicles.length === 1 ? vehicles[0].model : null);
   const summary = `Service ${b.time} — ${b.name}${vehicleHint ? ` (${vehicleHint})` : ""}`;
 
   let activity;
@@ -99,9 +134,16 @@ export async function POST(req: NextRequest) {
       date: b.date,
       time: b.time,
       summary,
-      note: [b.message, `Booked online · ${b.email} · ${b.phone}`].filter(Boolean).join("\n"),
+      note: [
+        b.message,
+        `Booked online · ${b.email} · ${b.phone} · call to confirm${
+          jobCardNumber ? ` · job card #${jobCardNumber}` : ""
+        }`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
       contactId,
-      leadId,
+      leadId: null,
       userId: firstUser.id,
     });
   } catch (err) {
@@ -120,14 +162,15 @@ export async function POST(req: NextRequest) {
 
   await logAudit({
     action: "booking.received",
-    summary: `Online service booking: ${summary} on ${formatDate(activity.dueDate)}`,
+    summary: `Online service booking: ${summary} on ${formatDate(activity.dueDate)}${
+      jobCardNumber ? ` — job card #${jobCardNumber} opened` : ""
+    }`,
     contactId,
-    leadId,
     userName: "Website",
   });
   await sendPushToAll({
     title: "New service booking 📅",
-    body: `${contact ? contactName(contact) : b.name} — ${formatDate(activity.dueDate)} at ${b.time}`,
+    body: `${contact ? contactName(contact) : b.name} — ${formatDate(activity.dueDate)} at ${b.time} · call to confirm`,
     url: "/workshop-calendar",
   }).catch(() => {});
 
