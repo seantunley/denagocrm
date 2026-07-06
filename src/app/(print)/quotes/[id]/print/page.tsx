@@ -130,10 +130,18 @@ export default async function QuotePrintPage({
         <div className="print-bottom">
         {quote.terms && (
           <div className="rounded-lg bg-slate-50 px-4 py-3 mb-12 no-break">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1.5">
               Terms
             </p>
-            <p className="text-xs text-slate-600 whitespace-pre-wrap">{quote.terms}</p>
+            <ul className="text-xs text-slate-600 space-y-1 list-disc pl-4">
+              {quote.terms
+                .split(/\r?\n/)
+                .map((line) => line.replace(/^[\s•\-*]+/, "").trim())
+                .filter(Boolean)
+                .map((line, i) => (
+                  <li key={i}>{line}</li>
+                ))}
+            </ul>
           </div>
         )}
 

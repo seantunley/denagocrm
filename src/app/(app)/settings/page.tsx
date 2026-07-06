@@ -371,16 +371,19 @@ export default async function SettingsPage({
             />
           </div>
           <div>
-            <label className="label">Default terms</label>
+            <label className="label">Default terms (one bullet per line)</label>
             <textarea
               name="terms"
               className="input"
-              rows={3}
+              rows={6}
               defaultValue={
                 setting("QUOTE_TERMS") ||
                 "Prices include VAT. Delivery arranged on acceptance. E&OE."
               }
             />
+            <p className="text-xs text-slate-500 mt-1">
+              Each line becomes its own bullet point on the printed quote.
+            </p>
           </div>
           <button className="btn-primary">Save quote defaults</button>
         </form>
