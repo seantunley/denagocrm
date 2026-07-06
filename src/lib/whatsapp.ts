@@ -1,6 +1,7 @@
 import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { logAudit } from "./audit";
+import { sendPushToAll } from "./push";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
@@ -103,6 +104,11 @@ export async function recordInboundWhatsApp(
         leadId,
         userName: "System",
       });
+      await sendPushToAll({
+        title: "New WhatsApp lead 💬",
+        body: `${profileName ?? fromDigits}: ${text.slice(0, 80)}`,
+        url: `/leads/${leadId}`,
+      }).catch(() => {});
     }
   }
 

@@ -22,6 +22,7 @@ import {
 import TestEmailButton from "@/components/TestEmailButton";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import ImportContactsForm from "@/components/ImportContactsForm";
+import PushToggle from "@/components/PushToggle";
 import { formatDate } from "@/lib/format";
 
 const TABS = [
@@ -139,6 +140,14 @@ export default async function SettingsPage({
               <h2 className="font-semibold mb-4">Change my password</h2>
               <ChangePasswordForm />
             </div>
+          </div>
+
+          <div className="card">
+            <h2 className="font-semibold mb-1">Push notifications</h2>
+            <p className="text-xs text-slate-400 mb-4">
+              Get a notification on your phone or desktop the moment a new lead comes in.
+            </p>
+            <PushToggle />
           </div>
 
           <div className="grid md:grid-cols-2 gap-6 items-start">

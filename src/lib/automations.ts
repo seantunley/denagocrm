@@ -41,7 +41,7 @@ async function applyRule(
       await prisma.activity.create({
         data: {
           type: rule.activityType ?? "todo",
-          summary: rule.activitySummary || rule.name,
+          summary: `${rule.activitySummary || rule.name} — ${lead.name}`,
           dueDate: addDays(new Date(), rule.activityDueDays ?? 1),
           leadId: lead.id,
           assignedToId: userId,

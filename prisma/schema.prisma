@@ -279,6 +279,16 @@ model ServiceReminderLog {
   @@unique([vehicleId, dueKey])
 }
 
+model PushSubscription {
+  id        String   @id @default(cuid())
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userId    String
+  userName  String
+  createdAt DateTime @default(now())
+}
+
 model AuditLog {
   id        String   @id @default(cuid())
   action    String // e.g. contact.created, lead.stage_changed, jobcard.completed

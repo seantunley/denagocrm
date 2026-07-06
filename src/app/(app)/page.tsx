@@ -88,6 +88,9 @@ export default async function DashboardPage() {
           <ul className="divide-y divide-slate-800">
             {myActivities.map((a) => {
               const overdue = a.dueDate < startOfToday;
+              const endOfToday = new Date(startOfToday);
+              endOfToday.setDate(endOfToday.getDate() + 1);
+              const dueToday = !overdue && a.dueDate < endOfToday;
               return (
                 <li key={a.id} className="py-2.5 flex items-center gap-3">
                   <span className="w-6 text-center">{activityIcons[a.type] ?? "☑️"}</span>
@@ -96,7 +99,7 @@ export default async function DashboardPage() {
                     <p className="text-xs text-slate-400">
                       {a.lead ? (
                         <Link href={`/leads/${a.lead.id}`} className="text-orange-400 hover:underline">
-                          {a.lead.title}
+                          {a.lead.name} — {a.lead.title}
                         </Link>
                       ) : a.contact ? (
                         <Link href={`/contacts/${a.contact.id}`} className="text-orange-400 hover:underline">
@@ -106,8 +109,16 @@ export default async function DashboardPage() {
                         "General"
                       )}{" "}
                       ·{" "}
-                      <span className={overdue ? "text-red-400 font-semibold" : ""}>
-                        {overdue ? "Overdue — " : ""}
+                      <span
+                        className={
+                          overdue
+                            ? "text-red-400 font-semibold"
+                            : dueToday
+                            ? "text-amber-300 font-semibold"
+                            : ""
+                        }
+                      >
+                        {overdue ? "⚠ OVERDUE — " : dueToday ? "Due today — " : ""}
                         {formatDate(a.dueDate)}
                       </span>
                     </p>

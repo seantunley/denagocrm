@@ -83,7 +83,7 @@ export default async function ActivitiesPage({
                       <p className="text-xs text-slate-400">
                         {a.lead ? (
                           <Link href={`/leads/${a.lead.id}`} className="text-orange-400 hover:underline">
-                            {a.lead.title}
+                            {a.lead.name} — {a.lead.title}
                           </Link>
                         ) : a.contact ? (
                           <Link href={`/contacts/${a.contact.id}`} className="text-orange-400 hover:underline">
@@ -93,7 +93,23 @@ export default async function ActivitiesPage({
                           "General"
                         )}
                         {" · "}
-                        {formatDate(a.dueDate)} · {a.assignedTo.name}
+                        <span
+                          className={
+                            a.dueDate < startOfToday
+                              ? "text-red-400 font-semibold"
+                              : a.dueDate < endOfToday
+                              ? "text-amber-300 font-semibold"
+                              : ""
+                          }
+                        >
+                          {a.dueDate < startOfToday
+                            ? "⚠ OVERDUE — "
+                            : a.dueDate < endOfToday
+                            ? "Due today — "
+                            : ""}
+                          {formatDate(a.dueDate)}
+                        </span>{" "}
+                        · {a.assignedTo.name}
                       </p>
                     </div>
                     <form action={completeActivity.bind(null, a.id)} className="flex items-center gap-1.5">
