@@ -192,18 +192,34 @@ export default async function JobCardPrintPage({
         )}
 
         {/* Signatures */}
-        <div className="grid grid-cols-2 gap-10 pt-10">
-          <div>
-            <div className="border-t border-slate-900 pt-1.5">
-              <p className="text-xs text-slate-600">Technician signature · Date</p>
+        {jobCard.signedAt ? (
+          <div className="pt-8">
+            {jobCard.signatureRef?.startsWith("http") && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={jobCard.signatureRef} alt="Signature" className="h-16 w-auto mb-1" />
+            )}
+            <div className="border-t border-slate-900 pt-1.5 max-w-md">
+              <p className="text-xs text-slate-600">
+                Signed electronically by <b>{jobCard.signedByName}</b> on{" "}
+                {formatDate(jobCard.signedAt)}
+                {jobCard.signerIp ? ` · IP ${jobCard.signerIp}` : ""} · ECT Act, 2002
+              </p>
             </div>
           </div>
-          <div>
-            <div className="border-t border-slate-900 pt-1.5">
-              <p className="text-xs text-slate-600">Customer signature · Date</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-10 pt-10">
+            <div>
+              <div className="border-t border-slate-900 pt-1.5">
+                <p className="text-xs text-slate-600">Technician signature · Date</p>
+              </div>
+            </div>
+            <div>
+              <div className="border-t border-slate-900 pt-1.5">
+                <p className="text-xs text-slate-600">Customer signature · Date</p>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         <p className="text-[10px] text-slate-400 mt-8 text-center">
           Denago Cape Town · Authorized Denago EV Dealer · Job card #{jobCard.number} · Generated{" "}

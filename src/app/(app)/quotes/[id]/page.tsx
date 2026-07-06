@@ -10,6 +10,7 @@ import {
   deleteQuote,
 } from "@/app/actions/quotes";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import SigningBlock from "@/components/SigningBlock";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 
 const statusBadge: Record<string, string> = {
@@ -99,13 +100,24 @@ export default async function QuoteDetailPage({
         </div>
       </div>
 
-      {quote.status === "accepted" && quote.lead && (
+      {quote.status === "accepted" && quote.lead && !quote.signedAt && (
         <div className="card bg-emerald-500/10 border-emerald-500/30">
           <p className="text-sm text-emerald-300">
             🎉 Quote accepted — the lead was marked won automatically.
           </p>
         </div>
       )}
+
+      <SigningBlock
+        kind="quote"
+        id={quote.id}
+        refLabel={`Q-${quote.number}`}
+        signToken={quote.signToken}
+        signedAt={quote.signedAt}
+        signedByName={quote.signedByName}
+        customerEmail={quote.contact?.email ?? quote.lead?.email}
+        customerPhone={quote.contact?.whatsapp ?? quote.contact?.phone ?? quote.lead?.phone}
+      />
 
       <div className="grid lg:grid-cols-3 gap-6 items-start">
         <div className="lg:col-span-2 card">

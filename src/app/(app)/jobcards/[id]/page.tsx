@@ -10,6 +10,7 @@ import {
 } from "@/app/actions/jobcards";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import SigningBlock from "@/components/SigningBlock";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 
 export default async function JobCardDetailPage({
@@ -95,6 +96,17 @@ export default async function JobCardDetailPage({
         <h2 className="font-semibold mb-2">Work requested</h2>
         <p className="text-sm text-slate-400 whitespace-pre-wrap">{jobCard.description}</p>
       </div>
+
+      <SigningBlock
+        kind="jobcard"
+        id={jobCard.id}
+        refLabel={`#${jobCard.number}`}
+        signToken={jobCard.signToken}
+        signedAt={jobCard.signedAt}
+        signedByName={jobCard.signedByName}
+        customerEmail={jobCard.contact.email}
+        customerPhone={jobCard.contact.whatsapp ?? jobCard.contact.phone}
+      />
 
       <div className="grid lg:grid-cols-3 gap-6 items-start">
         <div className="lg:col-span-2 space-y-6">

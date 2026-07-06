@@ -146,18 +146,34 @@ export default async function QuotePrintPage({
         )}
 
         {/* Signatures */}
-        <div className="grid grid-cols-2 gap-12 mt-16 mb-12 no-break">
-          <div>
-            <div className="border-t-2 border-slate-900 pt-2">
-              <p className="text-xs text-slate-500">Accepted — customer signature &amp; date</p>
+        {quote.signedAt ? (
+          <div className="mt-12 mb-12 no-break">
+            {quote.signatureRef?.startsWith("http") && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={quote.signatureRef} alt="Signature" className="h-16 w-auto mb-1" />
+            )}
+            <div className="border-t-2 border-slate-900 pt-2 max-w-md">
+              <p className="text-xs text-slate-600">
+                Signed electronically by <b>{quote.signedByName}</b> on{" "}
+                {formatDate(quote.signedAt)}
+                {quote.signerIp ? ` · IP ${quote.signerIp}` : ""} · ECT Act, 2002
+              </p>
             </div>
           </div>
-          <div>
-            <div className="border-t-2 border-slate-900 pt-2">
-              <p className="text-xs text-slate-500">Denago Cape Town &amp; date</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-12 mt-16 mb-12 no-break">
+            <div>
+              <div className="border-t-2 border-slate-900 pt-2">
+                <p className="text-xs text-slate-500">Accepted — customer signature &amp; date</p>
+              </div>
+            </div>
+            <div>
+              <div className="border-t-2 border-slate-900 pt-2">
+                <p className="text-xs text-slate-500">Denago Cape Town &amp; date</p>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Branded footer */}
         <div className="border-t-2 border-orange-600 pt-4 flex items-start justify-between gap-6 flex-wrap no-break">

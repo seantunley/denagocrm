@@ -250,6 +250,12 @@ model Quote {
   deletedByName String?
   deleteReason  String?
 
+  signToken    String?   @unique
+  signedAt     DateTime?
+  signedByName String?
+  signatureRef String?
+  signerIp     String?
+
   leadId      String?
   lead        Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
   contactId   String?
@@ -424,6 +430,12 @@ model JobCard {
   deletedAt     DateTime?
   deletedByName String?
   deleteReason  String?
+
+  signToken    String?   @unique
+  signedAt     DateTime?
+  signedByName String?
+  signatureRef String?
+  signerIp     String?
 
   vehicleId String
   vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
