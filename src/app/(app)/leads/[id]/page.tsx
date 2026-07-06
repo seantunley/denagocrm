@@ -37,7 +37,7 @@ export default async function LeadDetailPage({
     },
   });
   if (!lead) notFound();
-  const [contacts, users, templates, smtpConfigured, audit] = await Promise.all([
+  const [contacts, users, templates, smtpConfigured, audit, libraryDocuments] = await Promise.all([
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
     prisma.user.findMany({ orderBy: { name: "asc" } }),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
@@ -47,7 +47,14 @@ export default async function LeadDetailPage({
       orderBy: { createdAt: "desc" },
       take: 100,
     }),
+    prisma.libraryDocument.findMany({
+      orderBy: { name: "asc" },
+      include: { versions: { orderBy: { version: "desc" }, take: 1 } },
+    }),
   ]);
+  const libraryDocs = libraryDocuments
+    .filter((d) => d.versions[0])
+    .map((d) => ({ id: d.versions[0].id, label: `${d.name} (v${d.versions[0].version})` }));
   const vars = leadVars(lead);
   const renderedTemplates = templates.map((t) => ({
     id: t.id,
@@ -217,6 +224,7 @@ export default async function LeadDetailPage({
             smtpConfigured={smtpConfigured}
             leadId={lead.id}
             revalidate={path}
+            libraryDocs={libraryDocs}
           />
           <CommsTimeline
             communications={lead.communications}

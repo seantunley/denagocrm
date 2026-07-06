@@ -19,6 +19,7 @@ const groups: NavGroup[] = [
       { href: "/activities", label: "Activities", icon: "✓" },
       { href: "/automations", label: "Automations", icon: "🤖" },
       { href: "/products", label: "Products", icon: "⬡" },
+      { href: "/library", label: "Library", icon: "📁" },
     ],
   },
   {

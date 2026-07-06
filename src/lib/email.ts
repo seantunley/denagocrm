@@ -39,6 +39,7 @@ export async function sendEmail(input: {
   to: string;
   subject: string;
   text: string;
+  attachments?: { filename: string; content: Buffer; contentType?: string }[];
 }): Promise<{ ok: boolean; error?: string }> {
   const config = await getSmtpConfig();
   if (!config) return { ok: false, error: "SMTP is not configured (see Settings → Email)." };
@@ -54,6 +55,7 @@ export async function sendEmail(input: {
       to: input.to,
       subject: input.subject,
       text: input.text,
+      attachments: input.attachments,
     });
     return { ok: true };
   } catch (err) {

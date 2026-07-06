@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
+import { readFile } from "@/lib/storage";
 
 export type SendEmailState = { ok?: string; error?: string };
 
@@ -24,7 +25,30 @@ export async function sendEmailAction(
     return { error: "To, subject and message are required." };
   }
 
-  const result = await sendEmail({ to, subject, text: body });
+  // Library attachments (selected version ids)
+  const attachIds = formData.getAll("attach").map(String).filter(Boolean);
+  const attachments: { filename: string; content: Buffer; contentType?: string }[] = [];
+  const attachedNames: string[] = [];
+  if (attachIds.length > 0) {
+    const versions = await prisma.libraryVersion.findMany({
+      where: { id: { in: attachIds } },
+      include: { document: true },
+    });
+    for (const v of versions) {
+      try {
+        attachments.push({
+          filename: v.fileName,
+          content: await readFile(v.storedName),
+          contentType: v.mimeType,
+        });
+        attachedNames.push(`${v.document.name} (v${v.version})`);
+      } catch {
+        return { error: `Attachment “${v.fileName}” could not be read from storage.` };
+      }
+    }
+  }
+
+  const result = await sendEmail({ to, subject, text: body, attachments });
   if (!result.ok) return { error: result.error };
 
   await prisma.communication.create({
@@ -32,7 +56,10 @@ export async function sendEmailAction(
       type: "email",
       direction: "outbound",
       subject,
-      body,
+      body:
+        attachedNames.length > 0
+          ? `${body}\n\n[Attachments: ${attachedNames.join(", ")}]`
+          : body,
       leadId,
       contactId,
       userId: user.id,
@@ -40,7 +67,9 @@ export async function sendEmailAction(
   });
   await logAudit({
     action: "email.sent",
-    summary: `Sent email to ${to}: “${subject}”`,
+    summary: `Sent email to ${to}: “${subject}”${
+      attachedNames.length > 0 ? ` (attached: ${attachedNames.join(", ")})` : ""
+    }`,
     contactId,
     leadId,
     user,

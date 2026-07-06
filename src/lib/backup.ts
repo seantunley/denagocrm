@@ -19,6 +19,7 @@ export async function exportAllData() {
     activities: await prisma.activity.findMany(),
     documents: await prisma.document.findMany(),
     emailTemplates: await prisma.emailTemplate.findMany(),
+    libraryDocuments: await prisma.libraryDocument.findMany({ include: { versions: true } }),
     automationRules: await prisma.automationRule.findMany(),
     automationLogs: await prisma.automationLog.findMany(),
   };

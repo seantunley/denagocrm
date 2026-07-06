@@ -4,7 +4,14 @@ import { deleteFile } from "./storage";
 
 export const TRASH_RETENTION_DAYS = 60;
 
-export type TrashModel = "contact" | "lead" | "vehicle" | "jobCard" | "document" | "product";
+export type TrashModel =
+  | "contact"
+  | "lead"
+  | "vehicle"
+  | "jobCard"
+  | "document"
+  | "product"
+  | "libraryDocument";
 
 export const TRASH_MODELS: TrashModel[] = [
   "contact",
@@ -13,6 +20,7 @@ export const TRASH_MODELS: TrashModel[] = [
   "jobCard",
   "document",
   "product",
+  "libraryDocument",
 ];
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -52,6 +60,17 @@ export async function purgeTrash(): Promise<number> {
   for (const doc of staleDocs) {
     await deleteFile(doc.storedName);
     await basePrisma.document.delete({ where: { id: doc.id } }).catch(() => {});
+    purged++;
+  }
+
+  // library documents: remove all version files before the rows cascade away
+  const staleLibrary = await basePrisma.libraryDocument.findMany({
+    where: { deletedAt: { lt: cutoff } },
+    include: { versions: true },
+  });
+  for (const doc of staleLibrary) {
+    for (const v of doc.versions) await deleteFile(v.storedName);
+    await basePrisma.libraryDocument.delete({ where: { id: doc.id } }).catch(() => {});
     purged++;
   }
 

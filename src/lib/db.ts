@@ -13,6 +13,7 @@ const SOFT_DELETE_MODELS = new Set([
   "JobCard",
   "Document",
   "Product",
+  "LibraryDocument",
 ]);
 
 /* eslint-disable @typescript-eslint/no-explicit-any */

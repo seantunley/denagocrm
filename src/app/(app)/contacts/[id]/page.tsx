@@ -35,7 +35,7 @@ export default async function ContactDetailPage({
     },
   });
   if (!contact) notFound();
-  const [users, templates, smtpConfigured, history] = await Promise.all([
+  const [users, templates, smtpConfigured, history, libraryDocuments] = await Promise.all([
     prisma.user.findMany({ orderBy: { name: "asc" } }),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
     isSmtpConfigured(),
@@ -49,7 +49,14 @@ export default async function ContactDetailPage({
       orderBy: { createdAt: "desc" },
       take: 100,
     }),
+    prisma.libraryDocument.findMany({
+      orderBy: { name: "asc" },
+      include: { versions: { orderBy: { version: "desc" }, take: 1 } },
+    }),
   ]);
+  const libraryDocs = libraryDocuments
+    .filter((d) => d.versions[0])
+    .map((d) => ({ id: d.versions[0].id, label: `${d.name} (v${d.versions[0].version})` }));
   const vars = contactVars(contact);
   const renderedTemplates = templates.map((t) => ({
     id: t.id,
@@ -210,6 +217,7 @@ export default async function ContactDetailPage({
             smtpConfigured={smtpConfigured}
             contactId={contact.id}
             revalidate={path}
+            libraryDocs={libraryDocs}
           />
           <CommsTimeline
             communications={contact.communications}

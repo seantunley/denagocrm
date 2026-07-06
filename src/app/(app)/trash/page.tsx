@@ -19,14 +19,16 @@ export default async function TrashPage() {
   await requireUser();
   const notNull = { deletedAt: { not: null } } as const;
 
-  const [contacts, leads, vehicles, jobCards, documents, products] = await Promise.all([
-    basePrisma.contact.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
-    basePrisma.lead.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
-    basePrisma.vehicle.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
-    basePrisma.jobCard.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
-    basePrisma.document.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
-    basePrisma.product.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
-  ]);
+  const [contacts, leads, vehicles, jobCards, documents, products, libraryDocs] =
+    await Promise.all([
+      basePrisma.contact.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
+      basePrisma.lead.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
+      basePrisma.vehicle.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
+      basePrisma.jobCard.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
+      basePrisma.document.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
+      basePrisma.product.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
+      basePrisma.libraryDocument.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
+    ]);
 
   const rows: Row[] = [
     ...contacts.map((c) => ({
@@ -52,6 +54,10 @@ export default async function TrashPage() {
     ...products.map((p) => ({
       model: "product" as const, id: p.id, label: p.name,
       detail: "Product", deletedAt: p.deletedAt!, deletedByName: p.deletedByName, deleteReason: p.deleteReason,
+    })),
+    ...libraryDocs.map((d) => ({
+      model: "libraryDocument" as const, id: d.id, label: d.name,
+      detail: "Library document", deletedAt: d.deletedAt!, deletedByName: d.deletedByName, deleteReason: d.deleteReason,
     })),
   ].sort((a, b) => b.deletedAt.getTime() - a.deletedAt.getTime());
 

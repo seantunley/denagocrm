@@ -18,16 +18,50 @@ model User {
   documents          Document[]
   serviceRecords     ServiceRecord[]
   leadsAssigned      Lead[]
-  leadsCreated       Lead[]          @relation("LeadCreator")
-  contactsOwned      Contact[]       @relation("ContactOwner")
-  contactsCreated    Contact[]       @relation("ContactCreator")
-  activitiesAssigned Activity[]      @relation("ActivityAssignee")
-  activitiesCreated  Activity[]      @relation("ActivityCreator")
+  leadsCreated       Lead[]           @relation("LeadCreator")
+  contactsOwned      Contact[]        @relation("ContactOwner")
+  contactsCreated    Contact[]        @relation("ContactCreator")
+  activitiesAssigned Activity[]       @relation("ActivityAssignee")
+  activitiesCreated  Activity[]       @relation("ActivityCreator")
+  libraryVersions    LibraryVersion[]
 }
 
 model AppSetting {
   key   String @id
   value String
+}
+
+// Company document library (brochures, price lists) with version control
+model LibraryDocument {
+  id        String   @id @default(cuid())
+  name      String
+  category  String? // Brochure | Price list | Spec sheet | Other
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deletedAt     DateTime?
+  deletedByName String?
+  deleteReason  String?
+
+  versions LibraryVersion[]
+}
+
+model LibraryVersion {
+  id         String   @id @default(cuid())
+  version    Int
+  fileName   String
+  storedName String
+  mimeType   String
+  sizeBytes  Int
+  note       String? // what changed in this version
+  createdAt  DateTime @default(now())
+
+  documentId   String
+  document     LibraryDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  uploadedById String
+  uploadedBy   User            @relation(fields: [uploadedById], references: [id])
+
+  @@unique([documentId, version])
 }
 
 model Product {

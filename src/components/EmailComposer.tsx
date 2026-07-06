@@ -18,6 +18,7 @@ export default function EmailComposer({
   leadId,
   contactId,
   revalidate,
+  libraryDocs = [],
 }: {
   defaultTo: string;
   templates: RenderedTemplate[];
@@ -25,6 +26,7 @@ export default function EmailComposer({
   leadId?: string;
   contactId?: string;
   revalidate: string;
+  libraryDocs?: { id: string; label: string }[];
 }) {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -102,6 +104,22 @@ export default function EmailComposer({
               onChange={(e) => setBody(e.target.value)}
             />
           </div>
+          {libraryDocs.length > 0 && (
+            <div>
+              <label className="label">Attach from library</label>
+              <div className="grid sm:grid-cols-2 gap-1.5">
+                {libraryDocs.map((d) => (
+                  <label
+                    key={d.id}
+                    className="flex items-center gap-2 text-sm text-slate-300 rounded-lg border border-slate-800 px-3 py-1.5 cursor-pointer hover:border-slate-600"
+                  >
+                    <input type="checkbox" name="attach" value={d.id} className="h-4 w-4" />
+                    📄 {d.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
           {state?.error && <p className="text-sm text-red-400">{state.error}</p>}
           {state?.ok && <p className="text-sm text-emerald-400">{state.ok}</p>}
           <button className="btn-primary" disabled={pending}>
