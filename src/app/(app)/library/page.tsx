@@ -36,14 +36,23 @@ export default async function LibraryPage() {
             latest. Attach them to emails straight from any lead or contact.
           </p>
         </div>
-        <ModalTrigger label="+ Add document" title="Add document to library">
+        <ModalTrigger label="+ Add documents" title="Add documents to library">
           <form action={createLibraryDocument} className="card space-y-4">
             <div>
-              <label className="label">Document name *</label>
-              <input name="name" className="input" required placeholder="e.g. Denago EV Price List" />
+              <label className="label">Files * (select multiple at once)</label>
+              <input
+                type="file"
+                name="file"
+                required
+                multiple
+                className="text-sm w-full file:mr-3 file:cursor-pointer file:rounded-lg file:border file:border-slate-700 file:bg-slate-800 file:px-2.5 file:py-1 file:text-xs file:font-medium file:text-slate-300"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                Each file becomes its own library document, named after the file.
+              </p>
             </div>
             <div>
-              <label className="label">Category</label>
+              <label className="label">Category (applies to all)</label>
               <select name="category" className="input" defaultValue="Brochure">
                 {CATEGORIES.map((c) => (
                   <option key={c}>{c}</option>
@@ -51,8 +60,8 @@ export default async function LibraryPage() {
               </select>
             </div>
             <div>
-              <label className="label">File *</label>
-              <input type="file" name="file" required className="text-sm w-full file:mr-3 file:cursor-pointer file:rounded-lg file:border file:border-slate-700 file:bg-slate-800 file:px-2.5 file:py-1 file:text-xs file:font-medium file:text-slate-300" />
+              <label className="label">Custom name (optional — single file only)</label>
+              <input name="name" className="input" placeholder="e.g. Denago EV Price List" />
             </div>
             <button className="btn-primary">Add to library</button>
           </form>
