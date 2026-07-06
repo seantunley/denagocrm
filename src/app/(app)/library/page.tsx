@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import ModalTrigger from "@/components/Modal";
@@ -12,14 +13,113 @@ function humanSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export default async function LibraryPage() {
-  await requireUser();
-  const documents = await prisma.libraryDocument.findMany({
-    orderBy: { updatedAt: "desc" },
+type DocWithVersions = Awaited<ReturnType<typeof getDocuments>>[number];
+
+function getDocuments() {
+  return prisma.libraryDocument.findMany({
+    orderBy: { name: "asc" },
     include: {
       versions: { orderBy: { version: "desc" }, include: { uploadedBy: true } },
     },
   });
+}
+
+function DocumentCard({ doc }: { doc: DocWithVersions }) {
+  const latest = doc.versions[0];
+  return (
+    <div className="card">
+      <div className="flex items-center gap-4 flex-wrap">
+        <span className="text-2xl">📄</span>
+        <div className="flex-1 min-w-48">
+          <p className="font-semibold">
+            {doc.name}{" "}
+            <span className="badge bg-orange-500/15 text-orange-300 ml-1">
+              v{latest?.version ?? 0} — latest
+            </span>
+          </p>
+          <p className="text-xs text-slate-400">
+            {doc.category ?? "Document"} · {latest ? humanSize(latest.sizeBytes) : ""} · updated{" "}
+            {formatDateTime(doc.updatedAt)}
+            {latest ? ` by ${latest.uploadedBy.name}` : ""}
+          </p>
+        </div>
+        {latest && (
+          <a href={`/api/library/${latest.id}`} className="btn-primary btn-sm">
+            ⬇ Download latest
+          </a>
+        )}
+        <ModalTrigger
+          label="⬆ New version"
+          title={`New version of ${doc.name}`}
+          buttonClass="btn-secondary btn-sm"
+        >
+          <NewVersionForm documentId={doc.id} nextVersion={(latest?.version ?? 0) + 1} />
+        </ModalTrigger>
+        <ConfirmDelete
+          action={deleteLibraryDocument.bind(null, doc.id)}
+          title={`Delete “${doc.name}”?`}
+          description="The document and all its versions move to the Trash for 60 days."
+          trigger="✕"
+          triggerClass="text-xs text-slate-600 hover:text-red-500 cursor-pointer"
+        />
+      </div>
+
+      {doc.versions.length > 1 && (
+        <details className="mt-3">
+          <summary className="text-xs font-medium text-orange-400 cursor-pointer hover:underline">
+            Version history ({doc.versions.length})
+          </summary>
+          <ul className="mt-2 divide-y divide-slate-800">
+            {doc.versions.map((v) => (
+              <li key={v.id} className="py-2 flex items-center gap-3 text-sm">
+                <span
+                  className={`badge ${
+                    v.id === doc.versions[0]?.id
+                      ? "bg-orange-500/15 text-orange-300"
+                      : "bg-slate-800 text-slate-400"
+                  }`}
+                >
+                  v{v.version}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="truncate">{v.fileName}</p>
+                  <p className="text-xs text-slate-500">
+                    {humanSize(v.sizeBytes)} · {formatDateTime(v.createdAt)} · {v.uploadedBy.name}
+                    {v.note ? ` — ${v.note}` : ""}
+                  </p>
+                </div>
+                <a href={`/api/library/${v.id}`} className="btn-secondary btn-sm">
+                  ⬇
+                </a>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
+export default async function LibraryPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ cat?: string }>;
+}) {
+  await requireUser();
+  const { cat } = await searchParams;
+  const documents = await getDocuments();
+
+  const categories = [...new Set(documents.map((d) => d.category ?? "Other"))].sort();
+  const active = cat && categories.includes(cat) ? cat : null;
+  const visible = active ? documents.filter((d) => (d.category ?? "Other") === active) : documents;
+
+  // group by category when showing everything
+  const groups = active
+    ? [{ category: active, docs: visible }]
+    : categories.map((c) => ({
+        category: c,
+        docs: documents.filter((d) => (d.category ?? "Other") === c),
+      }));
 
   return (
     <div className="space-y-5 max-w-6xl">
@@ -36,92 +136,41 @@ export default async function LibraryPage() {
         </ModalTrigger>
       </div>
 
+      {documents.length > 0 && (
+        <div className="flex gap-2 flex-wrap">
+          <Link href="/library" className={!active ? "btn-primary btn-sm" : "btn-secondary btn-sm"}>
+            All ({documents.length})
+          </Link>
+          {categories.map((c) => (
+            <Link
+              key={c}
+              href={`/library?cat=${encodeURIComponent(c)}`}
+              className={active === c ? "btn-primary btn-sm" : "btn-secondary btn-sm"}
+            >
+              {c} ({documents.filter((d) => (d.category ?? "Other") === c).length})
+            </Link>
+          ))}
+        </div>
+      )}
+
       {documents.length === 0 ? (
         <div className="card text-center py-10">
           <p className="text-slate-400">No documents yet — add your first brochure or price list.</p>
         </div>
       ) : (
-        <div className="space-y-3">
-          {documents.map((doc) => {
-            const latest = doc.versions[0];
-            return (
-              <div key={doc.id} className="card">
-                <div className="flex items-center gap-4 flex-wrap">
-                  <span className="text-2xl">📄</span>
-                  <div className="flex-1 min-w-48">
-                    <p className="font-semibold">
-                      {doc.name}{" "}
-                      <span className="badge bg-orange-500/15 text-orange-300 ml-1">
-                        v{latest?.version ?? 0} — latest
-                      </span>
-                    </p>
-                    <p className="text-xs text-slate-400">
-                      {doc.category ?? "Document"} · {latest ? humanSize(latest.sizeBytes) : ""} ·
-                      updated {formatDateTime(doc.updatedAt)}
-                      {latest ? ` by ${latest.uploadedBy.name}` : ""}
-                    </p>
-                  </div>
-                  {latest && (
-                    <a href={`/api/library/${latest.id}`} className="btn-primary btn-sm">
-                      ⬇ Download latest
-                    </a>
-                  )}
-                  <ModalTrigger
-                    label="⬆ New version"
-                    title={`New version of ${doc.name}`}
-                    buttonClass="btn-secondary btn-sm"
-                  >
-                    <NewVersionForm
-                      documentId={doc.id}
-                      nextVersion={(latest?.version ?? 0) + 1}
-                    />
-                  </ModalTrigger>
-                  <ConfirmDelete
-                    action={deleteLibraryDocument.bind(null, doc.id)}
-                    title={`Delete “${doc.name}”?`}
-                    description="The document and all its versions move to the Trash for 60 days."
-                    trigger="✕"
-                    triggerClass="text-xs text-slate-600 hover:text-red-500 cursor-pointer"
-                  />
-                </div>
-
-                {doc.versions.length > 1 && (
-                  <details className="mt-3">
-                    <summary className="text-xs font-medium text-orange-400 cursor-pointer hover:underline">
-                      Version history ({doc.versions.length})
-                    </summary>
-                    <ul className="mt-2 divide-y divide-slate-800">
-                      {doc.versions.map((v) => (
-                        <li key={v.id} className="py-2 flex items-center gap-3 text-sm">
-                          <span
-                            className={`badge ${
-                              v.id === latest?.id
-                                ? "bg-orange-500/15 text-orange-300"
-                                : "bg-slate-800 text-slate-400"
-                            }`}
-                          >
-                            v{v.version}
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <p className="truncate">{v.fileName}</p>
-                            <p className="text-xs text-slate-500">
-                              {humanSize(v.sizeBytes)} · {formatDateTime(v.createdAt)} ·{" "}
-                              {v.uploadedBy.name}
-                              {v.note ? ` — ${v.note}` : ""}
-                            </p>
-                          </div>
-                          <a href={`/api/library/${v.id}`} className="btn-secondary btn-sm">
-                            ⬇
-                          </a>
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                )}
+        groups.map(
+          (g) =>
+            g.docs.length > 0 && (
+              <div key={g.category} className="space-y-3">
+                <h2 className="text-sm font-bold uppercase tracking-widest text-slate-500 pt-2">
+                  {g.category} <span className="font-normal">({g.docs.length})</span>
+                </h2>
+                {g.docs.map((doc) => (
+                  <DocumentCard key={doc.id} doc={doc} />
+                ))}
               </div>
-            );
-          })}
-        </div>
+            )
+        )
       )}
     </div>
   );
