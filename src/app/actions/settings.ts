@@ -67,33 +67,45 @@ export async function deleteStage(id: string): Promise<void> {
 
 // ---- Users ----
 
-export async function createUser(formData: FormData) {
+export type FormState = { error?: string; ok?: string };
+
+export async function createUser(
+  _prev: FormState | undefined,
+  formData: FormData
+): Promise<FormState> {
   await requireUser();
   const name = String(formData.get("name") ?? "").trim();
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const password = String(formData.get("password") ?? "");
   if (!name || !email || password.length < 8) {
-    throw new Error("Name, email and a password of at least 8 characters are required");
+    return { error: "Name, email and a password of at least 8 characters are required." };
   }
+  const existing = await prisma.user.findUnique({ where: { email } });
+  if (existing) return { error: "A user with that email already exists." };
   await prisma.user.create({
     data: { name, email, passwordHash: await bcrypt.hash(password, 10) },
   });
   revalidatePath("/settings");
+  return { ok: `${name} added to the team.` };
 }
 
-export async function changeOwnPassword(formData: FormData) {
+export async function changeOwnPassword(
+  _prev: FormState | undefined,
+  formData: FormData
+): Promise<FormState> {
   const user = await requireUser();
   const current = String(formData.get("current") ?? "");
   const next = String(formData.get("next") ?? "");
-  if (next.length < 8) throw new Error("New password must be at least 8 characters");
+  if (next.length < 8) return { error: "New password must be at least 8 characters." };
   if (!(await bcrypt.compare(current, user.passwordHash))) {
-    throw new Error("Current password is incorrect");
+    return { error: "Current password is incorrect." };
   }
   await prisma.user.update({
     where: { id: user.id },
     data: { passwordHash: await bcrypt.hash(next, 10) },
   });
   revalidatePath("/settings");
+  return { ok: "Password updated." };
 }
 
 // ---- Integration settings ----

@@ -6,11 +6,10 @@ import {
   renameStage,
   moveStage,
   deleteStage,
-  createUser,
-  changeOwnPassword,
   saveSetting,
   regenerateSetting,
 } from "@/app/actions/settings";
+import { AddUserForm, ChangePasswordForm } from "@/components/TeamForms";
 import {
   saveSmtpSettings,
   createTemplate,
@@ -121,41 +120,12 @@ export default async function SettingsPage({
                 </li>
               ))}
             </ul>
-            <form action={createUser} className="space-y-2">
-              <input name="name" className="input" placeholder="Full name" required />
-              <input name="email" type="email" className="input" placeholder="Email" required />
-              <input
-                name="password"
-                type="password"
-                className="input"
-                placeholder="Password (min 8 characters)"
-                minLength={8}
-                required
-              />
-              <button className="btn-primary w-full">Add team member</button>
-            </form>
+            <AddUserForm />
           </div>
 
           <div className="card">
             <h2 className="font-semibold mb-4">Change my password</h2>
-            <form action={changeOwnPassword} className="space-y-2">
-              <input
-                name="current"
-                type="password"
-                className="input"
-                placeholder="Current password"
-                required
-              />
-              <input
-                name="next"
-                type="password"
-                className="input"
-                placeholder="New password (min 8 characters)"
-                minLength={8}
-                required
-              />
-              <button className="btn-secondary w-full">Update password</button>
-            </form>
+            <ChangePasswordForm />
           </div>
         </div>
       )}
