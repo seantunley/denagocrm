@@ -114,6 +114,22 @@ export async function saveSmtpSettings(formData: FormData) {
   revalidatePath("/settings");
 }
 
+export async function saveServiceReminderSettings(formData: FormData) {
+  await requireUser();
+  const entries: Record<string, string> = {
+    SERVICE_REMINDER_ENABLED: formData.get("enabled") === "on" ? "true" : "false",
+    SERVICE_REMINDER_TEMPLATE_ID: String(formData.get("templateId") ?? "").trim(),
+  };
+  for (const [key, value] of Object.entries(entries)) {
+    await prisma.appSetting.upsert({
+      where: { key },
+      update: { value },
+      create: { key, value },
+    });
+  }
+  revalidatePath("/settings");
+}
+
 // ---- Email templates ----
 
 export async function createTemplate(formData: FormData) {

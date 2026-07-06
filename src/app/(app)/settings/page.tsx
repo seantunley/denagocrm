@@ -12,6 +12,7 @@ import {
 import { AddUserForm, ChangePasswordForm } from "@/components/TeamForms";
 import {
   saveSmtpSettings,
+  saveServiceReminderSettings,
   createTemplate,
   updateTemplate,
   deleteTemplate,
@@ -188,6 +189,47 @@ export default async function SettingsPage({
               </div>
             </form>
             <TestEmailButton />
+          </div>
+
+          <div className="card">
+            <h2 className="font-semibold mb-1">Service reminders to customers</h2>
+            <p className="text-xs text-slate-400 mb-4">
+              When enabled, customers whose vehicle is due (or overdue) for a service get an
+              automatic email — once per due-cycle. Template placeholders:{" "}
+              <code>{"{{first_name}}"}</code>, <code>{"{{model}}"}</code>,{" "}
+              <code>{"{{due_date}}"}</code>, <code>{"{{due_km}}"}</code>,{" "}
+              <code>{"{{current_km}}"}</code>. Requires SMTP above.
+            </p>
+            <form action={saveServiceReminderSettings} className="flex items-end gap-3 flex-wrap">
+              <div className="flex items-center gap-2 pb-2">
+                <input
+                  type="checkbox"
+                  name="enabled"
+                  id="sr-enabled"
+                  defaultChecked={setting("SERVICE_REMINDER_ENABLED") === "true"}
+                  className="h-4 w-4"
+                />
+                <label htmlFor="sr-enabled" className="text-sm text-slate-300">
+                  Enabled
+                </label>
+              </div>
+              <div className="flex-1 min-w-56">
+                <label className="label">Email template</label>
+                <select
+                  name="templateId"
+                  className="input"
+                  defaultValue={setting("SERVICE_REMINDER_TEMPLATE_ID")}
+                >
+                  <option value="">— choose template —</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button className="btn-primary">Save</button>
+            </form>
           </div>
 
           <div className="card">

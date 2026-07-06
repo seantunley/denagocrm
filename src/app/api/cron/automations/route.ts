@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runIdleAutomations } from "@/lib/automations";
+import { runServiceReminders } from "@/lib/serviceReminders";
 import { getSetting } from "@/lib/settings";
 
 /**
@@ -23,5 +24,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const fired = await runIdleAutomations();
-  return NextResponse.json({ ok: true, fired });
+  const remindersSent = await runServiceReminders().catch(() => -1);
+  return NextResponse.json({ ok: true, fired, remindersSent });
 }

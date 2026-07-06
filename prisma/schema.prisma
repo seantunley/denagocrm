@@ -267,6 +267,16 @@ model QuoteItem {
   quote   Quote  @relation(fields: [quoteId], references: [id], onDelete: Cascade)
 }
 
+model ServiceReminderLog {
+  id        String   @id @default(cuid())
+  vehicleId String
+  dueKey    String // identifies the due-cycle so each service due is reminded once
+  sentTo    String
+  createdAt DateTime @default(now())
+
+  @@unique([vehicleId, dueKey])
+}
+
 model AuditLog {
   id        String   @id @default(cuid())
   action    String // e.g. contact.created, lead.stage_changed, jobcard.completed
