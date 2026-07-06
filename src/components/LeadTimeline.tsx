@@ -27,12 +27,14 @@ type Item = {
 
 export default function LeadTimeline({
   leadId,
+  contactId,
   revalidate,
   audit,
   communications,
   creationNote,
 }: {
-  leadId: string;
+  leadId?: string;
+  contactId?: string;
   revalidate: string;
   audit: { id: string; action: string; summary: string; userName: string; createdAt: Date }[];
   communications: {
@@ -83,7 +85,8 @@ export default function LeadTimeline({
       <h2 className="font-semibold mb-4">Live timeline</h2>
 
       <form action={addCommunication} className="mb-5 space-y-2">
-        <input type="hidden" name="leadId" value={leadId} />
+        {leadId && <input type="hidden" name="leadId" value={leadId} />}
+        {contactId && <input type="hidden" name="contactId" value={contactId} />}
         <input type="hidden" name="type" value="note" />
         <input type="hidden" name="direction" value="" />
         <input type="hidden" name="revalidate" value={revalidate} />

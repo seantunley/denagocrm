@@ -6,8 +6,7 @@ import CommsTimeline from "@/components/CommsTimeline";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
-import SlideOver from "@/components/SlideOver";
-import HistoryTimeline from "@/components/HistoryTimeline";
+import LeadTimeline from "@/components/LeadTimeline";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { formatDateTime } from "@/lib/format";
 import { requireUser } from "@/lib/auth";
@@ -87,9 +86,6 @@ export default async function ContactDetailPage({
           </p>
         </div>
         <div className="flex gap-2">
-          <SlideOver label="🕘 History" title={`History — ${contactName(contact)}`}>
-            <HistoryTimeline entries={history} />
-          </SlideOver>
           <Link href={`/contacts/${contact.id}/edit`} className="btn-secondary">
             Edit
           </Link>
@@ -200,7 +196,7 @@ export default async function ContactDetailPage({
           </div>
         </div>
 
-        <div className="space-y-6 lg:col-span-2">
+        <div className="space-y-6">
           <ActivityPanel
             activities={contact.activities}
             users={users}
@@ -226,6 +222,22 @@ export default async function ContactDetailPage({
             revalidate={path}
           />
         </div>
+
+        <LeadTimeline
+          contactId={contact.id}
+          revalidate={path}
+          audit={history}
+          communications={contact.communications}
+          creationNote={
+            contact.notes
+              ? {
+                  text: contact.notes,
+                  when: contact.createdAt,
+                  who: contact.createdBy?.name ?? "System",
+                }
+              : null
+          }
+        />
       </div>
     </div>
   );
