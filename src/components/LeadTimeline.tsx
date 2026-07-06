@@ -103,7 +103,8 @@ export default function LeadTimeline({
       {items.length === 0 ? (
         <p className="text-sm text-slate-500">Nothing recorded yet.</p>
       ) : (
-        <ol className="relative border-l border-slate-800 ml-2 space-y-5 max-h-[70vh] overflow-y-auto pr-1">
+        <div className="max-h-[70vh] overflow-y-auto pr-1">
+          <ol className="relative border-l border-slate-800 ml-3 space-y-5 py-0.5">
           {items.map((item) => (
             <li key={item.id} className="ml-5">
               <span className="absolute -left-[11px] flex h-5 w-5 items-center justify-center rounded-full bg-slate-800 text-[10px]">
@@ -121,7 +122,8 @@ export default function LeadTimeline({
               </p>
             </li>
           ))}
-        </ol>
+          </ol>
+        </div>
       )}
     </div>
   );
