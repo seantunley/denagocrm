@@ -9,6 +9,7 @@ const PUBLIC_PATHS = [
   "/api/cron",
   "/manifest.webmanifest",
   "/icons",
+  "/sw.js",
 ];
 
 export async function proxy(req: NextRequest) {
