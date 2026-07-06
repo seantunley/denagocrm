@@ -7,8 +7,10 @@ import {
   moveStage,
   deleteStage,
   saveSetting,
+  saveMyProfile,
   regenerateSetting,
 } from "@/app/actions/settings";
+import { buildSignature } from "@/lib/signature";
 import { AddUserForm, ChangePasswordForm } from "@/components/TeamForms";
 import {
   saveSmtpSettings,
@@ -35,7 +37,7 @@ export default async function SettingsPage({
 }: {
   searchParams: Promise<{ tab?: string }>;
 }) {
-  await requireUser();
+  const currentUser = await requireUser();
   const { tab: rawTab } = await searchParams;
   const tab = TABS.some((t) => t.key === rawTab) ? rawTab : "pipeline";
 
@@ -115,27 +117,70 @@ export default async function SettingsPage({
       )}
 
       {tab === "team" && (
-        <div className="grid md:grid-cols-2 gap-6 items-start">
-          <div className="card">
-            <h2 className="font-semibold mb-4">Team members</h2>
-            <ul className="divide-y divide-slate-800 mb-4">
-              {users.map((u) => (
-                <li key={u.id} className="py-2">
-                  <p className="text-sm font-medium">{u.name}</p>
-                  <p className="text-xs text-slate-400">
-                    {u.email} · joined {formatDate(u.createdAt)}
-                  </p>
-                </li>
-              ))}
-            </ul>
-            <AddUserForm />
+        <>
+          <div className="grid md:grid-cols-2 gap-6 items-start">
+            <div className="card">
+              <h2 className="font-semibold mb-4">Team members</h2>
+              <ul className="divide-y divide-slate-800 mb-4">
+                {users.map((u) => (
+                  <li key={u.id} className="py-2">
+                    <p className="text-sm font-medium">{u.name}</p>
+                    <p className="text-xs text-slate-400">
+                      {u.email} · joined {formatDate(u.createdAt)}
+                      {u.mobile ? ` · ${u.mobile}` : ""}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+              <AddUserForm />
+            </div>
+
+            <div className="card">
+              <h2 className="font-semibold mb-4">Change my password</h2>
+              <ChangePasswordForm />
+            </div>
           </div>
 
-          <div className="card">
-            <h2 className="font-semibold mb-4">Change my password</h2>
-            <ChangePasswordForm />
+          <div className="grid md:grid-cols-2 gap-6 items-start">
+            <form action={saveMyProfile} className="card space-y-4">
+              <h2 className="font-semibold">My email signature</h2>
+              <div>
+                <label className="label">My mobile number</label>
+                <input
+                  name="mobile"
+                  className="input"
+                  defaultValue={currentUser.mobile ?? ""}
+                  placeholder="e.g. 082 123 4567"
+                />
+                <p className="text-xs text-slate-500 mt-1">
+                  Shown in your signature and used for the WhatsApp button.
+                </p>
+              </div>
+              <div>
+                <label className="label">Custom signature HTML (optional)</label>
+                <textarea
+                  name="signatureHtml"
+                  className="input font-mono text-xs"
+                  rows={6}
+                  defaultValue={currentUser.signatureHtml ?? ""}
+                  placeholder="Leave blank to use the branded Denago Cape Town signature (recommended)."
+                />
+              </div>
+              <button className="btn-primary">Save signature</button>
+            </form>
+
+            <div className="card">
+              <h2 className="font-semibold mb-4">Signature preview</h2>
+              <p className="text-xs text-slate-500 mb-3">
+                Appended automatically to every email you send from the CRM.
+              </p>
+              <div
+                className="rounded-lg bg-white p-4 overflow-x-auto"
+                dangerouslySetInnerHTML={{ __html: buildSignature(currentUser) }}
+              />
+            </div>
           </div>
-        </div>
+        </>
       )}
 
       {tab === "email" && (

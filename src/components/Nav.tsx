@@ -37,10 +37,6 @@ const groups: NavGroup[] = [
   },
 ];
 
-const bottomLinks: NavLink[] = [
-  { href: "/trash", label: "Trash", icon: "🗑" },
-  { href: "/settings", label: "Settings", icon: "⚙" },
-];
 
 const STORAGE_KEY = "denago-nav-collapsed";
 
@@ -120,11 +116,6 @@ export default function Nav() {
         );
       })}
 
-      <div className="pt-2">
-        {bottomLinks.map((l) => (
-          <NavItem key={l.href} link={l} active={isActive(l.href)} />
-        ))}
-      </div>
     </nav>
   );
 }

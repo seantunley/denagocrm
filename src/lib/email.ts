@@ -39,6 +39,7 @@ export async function sendEmail(input: {
   to: string;
   subject: string;
   text: string;
+  html?: string;
   attachments?: { filename: string; content: Buffer; contentType?: string }[];
 }): Promise<{ ok: boolean; error?: string }> {
   const config = await getSmtpConfig();
@@ -55,6 +56,7 @@ export async function sendEmail(input: {
       to: input.to,
       subject: input.subject,
       text: input.text,
+      html: input.html,
       attachments: input.attachments,
     });
     return { ok: true };

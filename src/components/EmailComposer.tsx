@@ -3,6 +3,19 @@
 import { useState, useActionState } from "react";
 import Link from "next/link";
 import { sendEmailAction, type SendEmailState } from "@/app/actions/emails";
+import RichTextEditor from "@/components/RichTextEditor";
+
+/** Converts a plain-text template into simple HTML paragraphs for the editor. */
+function textToHtml(text: string): string {
+  const esc = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  return esc
+    .split(/\n{2,}/)
+    .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
 
 export type RenderedTemplate = {
   id: string;
@@ -39,7 +52,7 @@ export default function EmailComposer({
     const t = templates.find((x) => x.id === id);
     if (t) {
       setSubject(t.subject);
-      setBody(t.body);
+      setBody(textToHtml(t.body));
     }
   }
 
@@ -95,14 +108,15 @@ export default function EmailComposer({
           </div>
           <div>
             <label className="label">Message</label>
-            <textarea
-              name="body"
-              className="input"
-              rows={6}
-              required
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-            />
+            <input type="hidden" name="bodyHtml" value={body} />
+            <RichTextEditor value={body} onChange={setBody} />
+            <p className="text-xs text-slate-500 mt-1">
+              Your branded signature is added automatically —{" "}
+              <Link href="/settings?tab=team" className="text-orange-400 hover:underline">
+                edit it in Settings
+              </Link>
+              .
+            </p>
           </div>
           {libraryDocs.length > 0 && (
             <div>

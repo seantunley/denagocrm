@@ -109,6 +109,17 @@ export async function changeOwnPassword(
   return { ok: "Password updated." };
 }
 
+export async function saveMyProfile(formData: FormData) {
+  const user = await requireUser();
+  const mobile = String(formData.get("mobile") ?? "").trim() || null;
+  const signatureHtml = String(formData.get("signatureHtml") ?? "").trim() || null;
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { mobile, signatureHtml },
+  });
+  revalidatePath("/settings");
+}
+
 // ---- Integration settings ----
 
 export async function saveSetting(formData: FormData) {

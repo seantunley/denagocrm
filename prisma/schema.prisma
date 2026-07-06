@@ -9,11 +9,13 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  name         String
-  email        String   @unique
-  passwordHash String
-  createdAt    DateTime @default(now())
+  id            String   @id @default(cuid())
+  name          String
+  email         String   @unique
+  passwordHash  String
+  mobile        String?
+  signatureHtml String? // custom override; blank = branded template
+  createdAt     DateTime @default(now())
 
   communications     Communication[]
   documents          Document[]

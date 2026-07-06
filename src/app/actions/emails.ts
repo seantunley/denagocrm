@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
+import { buildSignature, buildEmailHtml, htmlToText } from "@/lib/signature";
 import { readFile } from "@/lib/storage";
 
 export type SendEmailState = { ok?: string; error?: string };
@@ -17,13 +18,16 @@ export async function sendEmailAction(
   const user = await requireUser();
   const to = String(formData.get("to") ?? "").trim();
   const subject = String(formData.get("subject") ?? "").trim();
-  const body = String(formData.get("body") ?? "").trim();
+  const bodyHtml = String(formData.get("bodyHtml") ?? "").trim();
   const leadId = String(formData.get("leadId") ?? "").trim() || null;
   const contactId = String(formData.get("contactId") ?? "").trim() || null;
 
-  if (!to || !subject || !body) {
+  const bodyText = htmlToText(bodyHtml);
+  if (!to || !subject || !bodyText) {
     return { error: "To, subject and message are required." };
   }
+  const signature = buildSignature(user);
+  const html = buildEmailHtml(bodyHtml, signature);
 
   // Library attachments (selected version ids)
   const attachIds = formData.getAll("attach").map(String).filter(Boolean);
@@ -48,7 +52,13 @@ export async function sendEmailAction(
     }
   }
 
-  const result = await sendEmail({ to, subject, text: body, attachments });
+  const result = await sendEmail({
+    to,
+    subject,
+    text: `${bodyText}\n\n--\n${user.name} · Denago Cape Town · 081 515 8319`,
+    html,
+    attachments,
+  });
   if (!result.ok) return { error: result.error };
 
   await prisma.communication.create({
@@ -58,8 +68,8 @@ export async function sendEmailAction(
       subject,
       body:
         attachedNames.length > 0
-          ? `${body}\n\n[Attachments: ${attachedNames.join(", ")}]`
-          : body,
+          ? `${bodyText}\n\n[Attachments: ${attachedNames.join(", ")}]`
+          : bodyText,
       leadId,
       contactId,
       userId: user.id,
