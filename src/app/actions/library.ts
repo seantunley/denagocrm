@@ -5,31 +5,28 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
-import { saveFile } from "@/lib/storage";
 
-const MAX_SIZE = 25 * 1024 * 1024;
+export type UploadedFileMeta = {
+  url: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+};
 
-export async function createLibraryDocument(formData: FormData) {
+/** Records library documents after the browser uploaded the files directly to Blob storage. */
+export async function registerLibraryDocuments(
+  category: string | null,
+  nameOverride: string | null,
+  files: UploadedFileMeta[]
+) {
   const user = await requireUser();
-  const nameOverride = String(formData.get("name") ?? "").trim();
-  const category = String(formData.get("category") ?? "").trim() || null;
-  const files = formData
-    .getAll("file")
-    .filter((f): f is File => f instanceof File && f.size > 0);
   if (files.length === 0) return;
-
   const added: string[] = [];
-  for (const file of files) {
-    if (file.size > MAX_SIZE) throw new Error(`“${file.name}” exceeds the 25 MB limit`);
-    // custom name only applies when uploading a single file; otherwise use each file's name
+  for (const f of files) {
     const name =
       files.length === 1 && nameOverride
         ? nameOverride
-        : file.name.replace(/\.[^.]+$/, "");
-
-    const mimeType = file.type || "application/octet-stream";
-    const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name, mimeType);
-
+        : f.fileName.replace(/\.[^.]+$/, "");
     await prisma.libraryDocument.create({
       data: {
         name,
@@ -37,10 +34,10 @@ export async function createLibraryDocument(formData: FormData) {
         versions: {
           create: {
             version: 1,
-            fileName: file.name,
-            storedName,
-            mimeType,
-            sizeBytes: file.size,
+            fileName: f.fileName,
+            storedName: f.url,
+            mimeType: f.mimeType || "application/octet-stream",
+            sizeBytes: f.sizeBytes,
             uploadedById: user.id,
           },
         },
@@ -48,7 +45,6 @@ export async function createLibraryDocument(formData: FormData) {
     });
     added.push(name);
   }
-
   await logAudit({
     action: "document.uploaded",
     summary:
@@ -60,30 +56,26 @@ export async function createLibraryDocument(formData: FormData) {
   revalidatePath("/library");
 }
 
-export async function addLibraryVersion(documentId: string, formData: FormData) {
+/** Records a new version after a direct browser upload. */
+export async function registerLibraryVersion(
+  documentId: string,
+  note: string | null,
+  f: UploadedFileMeta
+) {
   const user = await requireUser();
-  const file = formData.get("file");
-  const note = String(formData.get("note") ?? "").trim() || null;
-  if (!(file instanceof File) || file.size === 0) return;
-  if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
-
   const doc = await prisma.libraryDocument.findUniqueOrThrow({
     where: { id: documentId },
     include: { versions: { orderBy: { version: "desc" }, take: 1 } },
   });
   const nextVersion = (doc.versions[0]?.version ?? 0) + 1;
-
-  const mimeType = file.type || "application/octet-stream";
-  const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name, mimeType);
-
   await prisma.libraryVersion.create({
     data: {
       documentId,
       version: nextVersion,
-      fileName: file.name,
-      storedName,
-      mimeType,
-      sizeBytes: file.size,
+      fileName: f.fileName,
+      storedName: f.url,
+      mimeType: f.mimeType || "application/octet-stream",
+      sizeBytes: f.sizeBytes,
       note,
       uploadedById: user.id,
     },

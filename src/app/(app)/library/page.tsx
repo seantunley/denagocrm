@@ -2,11 +2,8 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import ModalTrigger from "@/components/Modal";
 import ConfirmDelete from "@/components/ConfirmDelete";
-import {
-  createLibraryDocument,
-  addLibraryVersion,
-  deleteLibraryDocument,
-} from "@/app/actions/library";
+import { deleteLibraryDocument } from "@/app/actions/library";
+import { AddDocumentsForm, NewVersionForm } from "@/components/LibraryUploader";
 import { formatDateTime } from "@/lib/format";
 
 function humanSize(bytes: number): string {
@@ -14,8 +11,6 @@ function humanSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
-
-const CATEGORIES = ["Brochure", "Price list", "Spec sheet", "Warranty", "Other"];
 
 export default async function LibraryPage() {
   await requireUser();
@@ -37,34 +32,7 @@ export default async function LibraryPage() {
           </p>
         </div>
         <ModalTrigger label="+ Add documents" title="Add documents to library">
-          <form action={createLibraryDocument} className="card space-y-4">
-            <div>
-              <label className="label">Files * (select multiple at once)</label>
-              <input
-                type="file"
-                name="file"
-                required
-                multiple
-                className="text-sm w-full file:mr-3 file:cursor-pointer file:rounded-lg file:border file:border-slate-700 file:bg-slate-800 file:px-2.5 file:py-1 file:text-xs file:font-medium file:text-slate-300"
-              />
-              <p className="text-xs text-slate-500 mt-1">
-                Each file becomes its own library document, named after the file.
-              </p>
-            </div>
-            <div>
-              <label className="label">Category (applies to all)</label>
-              <select name="category" className="input" defaultValue="Brochure">
-                {CATEGORIES.map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="label">Custom name (optional — single file only)</label>
-              <input name="name" className="input" placeholder="e.g. Denago EV Price List" />
-            </div>
-            <button className="btn-primary">Add to library</button>
-          </form>
+          <AddDocumentsForm />
         </ModalTrigger>
       </div>
 
@@ -103,17 +71,10 @@ export default async function LibraryPage() {
                     title={`New version of ${doc.name}`}
                     buttonClass="btn-secondary btn-sm"
                   >
-                    <form action={addLibraryVersion.bind(null, doc.id)} className="card space-y-4">
-                      <div>
-                        <label className="label">File * (will become v{(latest?.version ?? 0) + 1})</label>
-                        <input type="file" name="file" required className="text-sm w-full file:mr-3 file:cursor-pointer file:rounded-lg file:border file:border-slate-700 file:bg-slate-800 file:px-2.5 file:py-1 file:text-xs file:font-medium file:text-slate-300" />
-                      </div>
-                      <div>
-                        <label className="label">What changed?</label>
-                        <input name="note" className="input" placeholder="e.g. Updated 2026 pricing" />
-                      </div>
-                      <button className="btn-primary">Upload new version</button>
-                    </form>
+                    <NewVersionForm
+                      documentId={doc.id}
+                      nextVersion={(latest?.version ?? 0) + 1}
+                    />
                   </ModalTrigger>
                   <ConfirmDelete
                     action={deleteLibraryDocument.bind(null, doc.id)}
