@@ -13,8 +13,10 @@ async function main() {
     console.log("Target database already has users — skipping import.");
     return;
   }
-  const raw = JSON.parse(fs.readFileSync("data-export.json", "utf8"));
-  const dates = (obj: Record<string, unknown>, keys: string[]) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw: any = JSON.parse(fs.readFileSync("data-export.json", "utf8"));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const dates = (obj: any, keys: string[]): any => {
     for (const k of keys) if (obj[k]) obj[k] = new Date(obj[k] as string);
     return obj;
   };
@@ -49,7 +51,8 @@ async function main() {
     await prisma.jobCard.create({
       data: {
         ...dates(jobCard, ["openedAt", "completedAt", "createdAt", "updatedAt"]),
-        items: { create: items.map(({ jobCardId: _drop, ...item }: Record<string, unknown>) => item) },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        items: { create: items.map(({ jobCardId: _drop, ...item }: any) => item) },
       },
     });
   }
