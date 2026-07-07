@@ -6,6 +6,7 @@ import { runIdleAutomations } from "@/lib/automations";
 import { completeActivity } from "@/app/actions/activities";
 import { activityIcons } from "@/components/ActivityPanel";
 import Tabs from "@/components/Tabs";
+import ClockWeather from "@/components/ClockWeather";
 import { hasModule } from "@/lib/access";
 import { formatZAR, formatZARCompact, formatDate, formatDateTime, contactName } from "@/lib/format";
 
@@ -186,6 +187,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-4">
+      <ClockWeather />
       <Tabs
         tabs={[
           ...(showSales ? [{
