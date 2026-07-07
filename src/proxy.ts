@@ -19,6 +19,7 @@ const PUBLIC_PATHS = [
   "/manifest.webmanifest",
   "/icons",
   "/sw.js",
+  "/robots.txt",
 ];
 
 export async function proxy(req: NextRequest) {
