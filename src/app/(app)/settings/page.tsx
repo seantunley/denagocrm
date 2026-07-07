@@ -25,6 +25,10 @@ import TestEmailButton from "@/components/TestEmailButton";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import ImportContactsForm from "@/components/ImportContactsForm";
 import PushToggle from "@/components/PushToggle";
+import SecurityPanel from "@/components/SecurityPanel";
+import OwnerUserControls from "@/components/OwnerUserControls";
+import { saveSessionPolicy } from "@/app/actions/security";
+import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { formatDate } from "@/lib/format";
 
 const TABS = [
@@ -56,6 +60,7 @@ export default async function SettingsPage({
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
   ]);
   const setting = (key: string) => settings.find((s) => s.key === key)?.value ?? "";
+  const isOwner = currentUser.role === "owner";
 
   return (
     <div className="space-y-6">
@@ -128,23 +133,79 @@ export default async function SettingsPage({
               <h2 className="font-semibold mb-4">Team members</h2>
               <ul className="divide-y divide-slate-800 mb-4">
                 {users.map((u) => (
-                  <li key={u.id} className="py-2">
-                    <p className="text-sm font-medium">{u.name}</p>
-                    <p className="text-xs text-slate-400">
-                      {u.email} · joined {formatDate(u.createdAt)}
-                      {u.mobile ? ` · ${u.mobile}` : ""}
-                    </p>
+                  <li key={u.id} className="py-2 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium">
+                        {u.name}
+                        {u.role === "owner" && (
+                          <span className="badge bg-orange-500/15 text-orange-300 ml-2">Owner</span>
+                        )}
+                        {u.totpEnabledAt && (
+                          <span className="badge bg-emerald-500/15 text-emerald-300 ml-1">
+                            🔒 2FA
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        {u.email} · joined {formatDate(u.createdAt)}
+                        {u.mobile ? ` · ${u.mobile}` : ""}
+                      </p>
+                    </div>
+                    {isOwner && u.id !== currentUser.id && (
+                      <OwnerUserControls
+                        userId={u.id}
+                        name={u.name}
+                        role={u.role as "owner" | "member"}
+                        has2fa={Boolean(u.totpEnabledAt || u.emailOtpEnabled)}
+                      />
+                    )}
                   </li>
                 ))}
               </ul>
               <AddUserForm />
             </div>
 
-            <div className="card">
-              <h2 className="font-semibold mb-4">Change my password</h2>
-              <ChangePasswordForm />
+            <div className="space-y-6">
+              <div className="card">
+                <h2 className="font-semibold mb-4">Change my password</h2>
+                <ChangePasswordForm />
+              </div>
             </div>
           </div>
+
+          <SecurityPanel
+            totpEnabled={Boolean(currentUser.totpEnabledAt)}
+            emailOtpEnabled={currentUser.emailOtpEnabled}
+          />
+
+          {isOwner && (
+            <form action={saveSessionPolicy} className="card space-y-3">
+              <h2 className="font-semibold">Session policy (all users)</h2>
+              <p className="text-xs text-slate-400">
+                Everyone is signed out after this much inactivity, and must sign in again at least
+                every {ABSOLUTE_SESSION_HOURS} hours regardless.
+              </p>
+              <div className="flex items-end gap-2">
+                <div>
+                  <label className="label">Idle timeout</label>
+                  <select
+                    name="idleMinutes"
+                    className="input w-44"
+                    defaultValue={setting("SESSION_IDLE_MINUTES") || "60"}
+                  >
+                    <option value="15">15 minutes</option>
+                    <option value="30">30 minutes</option>
+                    <option value="60">1 hour</option>
+                    <option value="120">2 hours</option>
+                    <option value="240">4 hours</option>
+                    <option value="480">8 hours</option>
+                    <option value="1440">24 hours</option>
+                  </select>
+                </div>
+                <button className="btn-primary">Save policy</button>
+              </div>
+            </form>
+          )}
 
           <div className="card">
             <h2 className="font-semibold mb-1">Push notifications</h2>

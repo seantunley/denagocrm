@@ -1,7 +1,14 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "./db";
-import { verifySession, signSession, SESSION_COOKIE } from "./session";
+import { getSetting } from "./settings";
+import {
+  verifySession,
+  signFreshSession,
+  SESSION_COOKIE,
+  sessionCookieOptions,
+  DEFAULT_IDLE_MINUTES,
+} from "./session";
 
 export async function getCurrentUser() {
   const store = await cookies();
@@ -19,24 +26,29 @@ export async function requireUser() {
   return user;
 }
 
+/** Owner-only guard for user management and security policy. */
+export async function requireOwner() {
+  const user = await requireUser();
+  if (user.role !== "owner") redirect("/");
+  return user;
+}
+
+export async function getIdleMinutes(): Promise<number> {
+  const raw = await getSetting("SESSION_IDLE_MINUTES");
+  const n = raw ? parseInt(raw, 10) : DEFAULT_IDLE_MINUTES;
+  return isNaN(n) || n < 5 ? DEFAULT_IDLE_MINUTES : n;
+}
+
 export async function createSessionCookie(user: {
   id: string;
   name: string;
   email: string;
+  role: string;
 }) {
-  const token = await signSession({
-    sub: user.id,
-    name: user.name,
-    email: user.email,
-  });
+  const idle = await getIdleMinutes();
+  const token = await signFreshSession(user, idle);
   const store = await cookies();
-  store.set(SESSION_COOKIE, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    maxAge: 60 * 60 * 24 * 30,
-    path: "/",
-  });
+  store.set(SESSION_COOKIE, token, sessionCookieOptions);
 }
 
 export async function destroySessionCookie() {
