@@ -82,15 +82,28 @@ function ActivityBlock({
   );
 }
 
-function StatStrip({ stats }: { stats: { label: string; value: string; href: string }[] }) {
+function StatStrip({
+  stats,
+}: {
+  stats: { label: string; value: string; href: string; icon: string }[];
+}) {
   return (
-    <div className="card p-0 grid grid-cols-2 sm:grid-cols-4 divide-x divide-y sm:divide-y-0 divide-slate-800">
+    <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
       {stats.map((s) => (
-        <Link key={s.label} href={s.href} className="px-4 py-2.5 hover:bg-slate-800/40 transition-colors">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-            {s.label}
-          </p>
-          <p className="text-lg font-bold leading-6">{s.value}</p>
+        <Link
+          key={s.label}
+          href={s.href}
+          className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 px-4 py-3 hover:border-orange-600/60 transition-colors"
+        >
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-slate-800/80 text-base">
+            {s.icon}
+          </span>
+          <span className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 truncate">
+              {s.label}
+            </p>
+            <p className="text-xl font-bold leading-6 truncate">{s.value}</p>
+          </span>
         </Link>
       ))}
     </div>
@@ -175,14 +188,20 @@ export default async function DashboardPage() {
               <div className="space-y-4">
                 <StatStrip
                   stats={[
-                    { label: "Open leads", value: String(openLeads), href: "/leads" },
+                    { label: "Open leads", value: String(openLeads), href: "/leads", icon: "◎" },
                     {
                       label: "Pipeline",
                       value: formatZAR(openValue._sum.valueCents ?? 0),
                       href: "/leads",
+                      icon: "💰",
                     },
-                    { label: "New (7d)", value: String(newThisWeek), href: "/leads" },
-                    { label: "To deliver", value: String(awaitingDelivery), href: "/deliveries" },
+                    { label: "New (7d)", value: String(newThisWeek), href: "/leads", icon: "✨" },
+                    {
+                      label: "To deliver",
+                      value: String(awaitingDelivery),
+                      href: "/deliveries",
+                      icon: "🚚",
+                    },
                   ]}
                 />
                 <div className="grid lg:grid-cols-2 gap-4 items-start">
@@ -292,10 +311,20 @@ export default async function DashboardPage() {
               <div className="space-y-4">
                 <StatStrip
                   stats={[
-                    { label: "Open job cards", value: String(openJobCards), href: "/jobcards" },
-                    { label: "Service due", value: String(dueVehicles.length), href: "/vehicles" },
-                    { label: "Fleet", value: String(vehicles.length), href: "/vehicles" },
-                    { label: "Workshop cal", value: "→", href: "/workshop-calendar" },
+                    {
+                      label: "Open job cards",
+                      value: String(openJobCards),
+                      href: "/jobcards",
+                      icon: "🔧",
+                    },
+                    {
+                      label: "Service due",
+                      value: String(dueVehicles.length),
+                      href: "/vehicles",
+                      icon: "⚠️",
+                    },
+                    { label: "Fleet", value: String(vehicles.length), href: "/vehicles", icon: "⚡" },
+                    { label: "Workshop cal", value: "→", href: "/workshop-calendar", icon: "📅" },
                   ]}
                 />
                 <div className="grid lg:grid-cols-2 gap-4 items-start">
