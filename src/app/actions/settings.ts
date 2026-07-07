@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireUser, requireOwner } from "@/lib/auth";
 import { putSetting } from "@/lib/settings";
 
 // ---- Pipeline stages ----
@@ -75,7 +75,7 @@ export async function createUser(
   _prev: FormState | undefined,
   formData: FormData
 ): Promise<FormState> {
-  await requireUser();
+  await requireOwner(); // adding users is owner-only
   const name = String(formData.get("name") ?? "").trim();
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const password = String(formData.get("password") ?? "");

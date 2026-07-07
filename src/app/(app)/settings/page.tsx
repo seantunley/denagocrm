@@ -66,7 +66,7 @@ export default async function SettingsPage({
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Settings</h1>
 
-      <div className="flex gap-1 border-b border-slate-800 overflow-x-auto">
+      <div className="flex gap-1 border-b border-slate-800 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {TABS.map((t) => (
           <Link
             key={t.key}
@@ -128,94 +128,61 @@ export default async function SettingsPage({
 
       {tab === "team" && (
         <>
-          <div className="grid md:grid-cols-2 gap-6 items-start">
-            <div className="card">
-              <h2 className="font-semibold mb-4">Team members</h2>
-              <ul className="divide-y divide-slate-800 mb-4">
-                {users.map((u) => (
-                  <li key={u.id} className="py-2 flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-medium">
-                        {u.name}
-                        {u.role === "owner" && (
-                          <span className="badge bg-orange-500/15 text-orange-300 ml-2">Owner</span>
-                        )}
-                        {u.totpEnabledAt && (
-                          <span className="badge bg-emerald-500/15 text-emerald-300 ml-1">
-                            🔒 2FA
-                          </span>
-                        )}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        {u.email} · joined {formatDate(u.createdAt)}
-                        {u.mobile ? ` · ${u.mobile}` : ""}
-                      </p>
-                    </div>
-                    {isOwner && u.id !== currentUser.id && (
-                      <OwnerUserControls
-                        userId={u.id}
-                        name={u.name}
-                        role={u.role as "owner" | "member"}
-                        has2fa={Boolean(u.totpEnabledAt || u.emailOtpEnabled)}
-                      />
-                    )}
-                  </li>
-                ))}
-              </ul>
-              <AddUserForm />
+          {/* ===== My account ===== */}
+          <div className="card flex items-center gap-4">
+            <div className="h-14 w-14 shrink-0 rounded-full bg-orange-600 flex items-center justify-center text-xl font-bold text-white">
+              {currentUser.name
+                .split(/\s+/)
+                .map((p) => p[0])
+                .slice(0, 2)
+                .join("")
+                .toUpperCase()}
             </div>
+            <div className="min-w-0">
+              <p className="text-lg font-bold flex items-center gap-2 flex-wrap">
+                {currentUser.name}
+                <span
+                  className={`badge ${
+                    isOwner ? "bg-orange-500/15 text-orange-300" : "bg-slate-800 text-slate-300"
+                  }`}
+                >
+                  {isOwner ? "Owner" : "Member"}
+                </span>
+                {currentUser.totpEnabledAt ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">🔒 2FA on</span>
+                ) : (
+                  <span className="badge bg-amber-500/15 text-amber-300">2FA off</span>
+                )}
+              </p>
+              <p className="text-sm text-slate-400 truncate">
+                {currentUser.email}
+                {currentUser.mobile ? ` · ${currentUser.mobile}` : ""} · joined{" "}
+                {formatDate(currentUser.createdAt)}
+              </p>
+            </div>
+          </div>
 
+          <div className="grid lg:grid-cols-2 gap-6 items-start">
+            <SecurityPanel
+              totpEnabled={Boolean(currentUser.totpEnabledAt)}
+              emailOtpEnabled={currentUser.emailOtpEnabled}
+            />
             <div className="space-y-6">
               <div className="card">
                 <h2 className="font-semibold mb-4">Change my password</h2>
                 <ChangePasswordForm />
               </div>
+              <div className="card">
+                <h2 className="font-semibold mb-1">Push notifications</h2>
+                <p className="text-xs text-slate-400 mb-4">
+                  Get a notification on this device the moment a lead, DM or signature comes in.
+                </p>
+                <PushToggle />
+              </div>
             </div>
           </div>
 
-          <SecurityPanel
-            totpEnabled={Boolean(currentUser.totpEnabledAt)}
-            emailOtpEnabled={currentUser.emailOtpEnabled}
-          />
-
-          {isOwner && (
-            <form action={saveSessionPolicy} className="card space-y-3">
-              <h2 className="font-semibold">Session policy (all users)</h2>
-              <p className="text-xs text-slate-400">
-                Everyone is signed out after this much inactivity, and must sign in again at least
-                every {ABSOLUTE_SESSION_HOURS} hours regardless.
-              </p>
-              <div className="flex items-end gap-2">
-                <div>
-                  <label className="label">Idle timeout</label>
-                  <select
-                    name="idleMinutes"
-                    className="input w-44"
-                    defaultValue={setting("SESSION_IDLE_MINUTES") || "60"}
-                  >
-                    <option value="15">15 minutes</option>
-                    <option value="30">30 minutes</option>
-                    <option value="60">1 hour</option>
-                    <option value="120">2 hours</option>
-                    <option value="240">4 hours</option>
-                    <option value="480">8 hours</option>
-                    <option value="1440">24 hours</option>
-                  </select>
-                </div>
-                <button className="btn-primary">Save policy</button>
-              </div>
-            </form>
-          )}
-
-          <div className="card">
-            <h2 className="font-semibold mb-1">Push notifications</h2>
-            <p className="text-xs text-slate-400 mb-4">
-              Get a notification on your phone or desktop the moment a new lead comes in.
-            </p>
-            <PushToggle />
-          </div>
-
-          <div className="grid md:grid-cols-2 gap-6 items-start">
+          <div className="grid lg:grid-cols-2 gap-6 items-start">
             <form action={saveMyProfile} className="card space-y-4">
               <h2 className="font-semibold">My email signature</h2>
               <div>
@@ -254,6 +221,117 @@ export default async function SettingsPage({
               />
             </div>
           </div>
+
+          {/* ===== Team & access ===== */}
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 pt-2">
+            Team &amp; access
+          </p>
+
+          <div className="card p-0">
+            <table className="table-base">
+              <thead>
+                <tr>
+                  <th>Member</th>
+                  <th>Role</th>
+                  <th>Security</th>
+                  <th>Joined</th>
+                  {isOwner && <th className="text-right">Manage</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((u) => (
+                  <tr key={u.id}>
+                    <td>
+                      <p className="font-medium">
+                        {u.name}
+                        {u.id === currentUser.id && (
+                          <span className="text-xs text-slate-500 ml-1.5">(you)</span>
+                        )}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        {u.email}
+                        {u.mobile ? ` · ${u.mobile}` : ""}
+                      </p>
+                    </td>
+                    <td>
+                      <span
+                        className={`badge ${
+                          u.role === "owner"
+                            ? "bg-orange-500/15 text-orange-300"
+                            : "bg-slate-800 text-slate-300"
+                        }`}
+                      >
+                        {u.role === "owner" ? "Owner" : "Member"}
+                      </span>
+                    </td>
+                    <td>
+                      {u.totpEnabledAt ? (
+                        <span className="badge bg-emerald-500/15 text-emerald-300">
+                          🔒 Authenticator
+                        </span>
+                      ) : u.emailOtpEnabled ? (
+                        <span className="badge bg-sky-500/15 text-sky-300">✉️ Email codes</span>
+                      ) : (
+                        <span className="badge bg-amber-500/15 text-amber-300">No 2FA</span>
+                      )}
+                    </td>
+                    <td className="text-slate-400 text-sm">{formatDate(u.createdAt)}</td>
+                    {isOwner && (
+                      <td className="text-right">
+                        {u.id !== currentUser.id && (
+                          <OwnerUserControls
+                            userId={u.id}
+                            name={u.name}
+                            role={u.role as "owner" | "member"}
+                            has2fa={Boolean(u.totpEnabledAt || u.emailOtpEnabled)}
+                          />
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {isOwner && (
+            <div className="grid lg:grid-cols-2 gap-6 items-start">
+              <div className="card">
+                <h2 className="font-semibold mb-1">Add a team member</h2>
+                <p className="text-xs text-slate-400 mb-4">
+                  New members sign in with the password you set here and can change it and enable
+                  2FA themselves under Settings → Team.
+                </p>
+                <AddUserForm />
+              </div>
+              <form action={saveSessionPolicy} className="card space-y-3">
+                <h2 className="font-semibold">Session policy</h2>
+                <p className="text-xs text-slate-400">
+                  Everyone is signed out after this much inactivity, and must sign in again at
+                  least every {ABSOLUTE_SESSION_HOURS} hours regardless of activity.
+                </p>
+                <div className="flex items-end gap-2">
+                  <div>
+                    <label className="label">Idle timeout</label>
+                    <select
+                      name="idleMinutes"
+                      className="input w-44"
+                      defaultValue={setting("SESSION_IDLE_MINUTES") || "60"}
+                    >
+                      <option value="15">15 minutes</option>
+                      <option value="30">30 minutes</option>
+                      <option value="60">1 hour</option>
+                      <option value="120">2 hours</option>
+                      <option value="240">4 hours</option>
+                      <option value="480">8 hours</option>
+                      <option value="1440">24 hours</option>
+                    </select>
+                  </div>
+                  <button className="btn-primary">Save policy</button>
+                </div>
+              </form>
+            </div>
+          )}
         </>
       )}
 

@@ -68,6 +68,34 @@
   }
 }
 
+/* Horizontal scroll containers must never sprout a 1px vertical scrollbar */
+.overflow-x-auto {
+  overflow-y: hidden;
+}
+
+/* Slim, dark, arrow-free scrollbars app-wide — Windows' default grey widget
+   with its up/down buttons looks broken on the dark theme */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-button {
+  display: none;
+  height: 0;
+  width: 0;
+}
+
 /* No spinner arrows on any input (number, date, time, datetime-local) */
 input::-webkit-outer-spin-button,
 input::-webkit-inner-spin-button {
