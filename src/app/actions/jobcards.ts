@@ -6,6 +6,7 @@ import { addMonths } from "date-fns";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { sendReviewRequest } from "@/lib/reviewRequests";
 import { softDeleteRecord } from "@/lib/trash";
 import { parseRands } from "@/lib/format";
 
@@ -142,6 +143,12 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
     contactId: jobCard.contactId,
     user,
   });
+  // Happy moment → ask for a Google review (self-throttled, best effort)
+  await sendReviewRequest(
+    jobCard.contactId,
+    "service",
+    `the service on your ${jobCard.vehicle.model} (job card #${jobCard.number})`
+  ).catch(() => {});
   revalidatePath("/jobcards");
   revalidatePath(`/jobcards/${jobCardId}`);
   revalidatePath(`/vehicles/${jobCard.vehicleId}`);

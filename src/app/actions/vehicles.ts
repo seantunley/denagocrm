@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { sendReviewRequest } from "@/lib/reviewRequests";
 import { softDeleteRecord } from "@/lib/trash";
 
 function vehicleData(formData: FormData) {
@@ -60,6 +61,10 @@ export async function createVehicle(formData: FormData) {
         note: "Initial reading",
       },
     });
+  }
+  // New-cart delivery → ask for a Google review (only when ticked on the form)
+  if (formData.get("newDelivery")) {
+    await sendReviewRequest(vehicle.contactId, "delivery", vehicle.model).catch(() => {});
   }
   revalidatePath("/vehicles");
   redirect(`/vehicles/${vehicle.id}`);

@@ -157,6 +157,17 @@ export default function VehicleForm({
             <input name="initialKm" type="number" className="input" placeholder="0" />
           </div>
         )}
+        {showInitialKm && (
+          <label className="flex items-center gap-2 text-sm text-slate-300 md:col-span-2 cursor-pointer">
+            <input
+              type="checkbox"
+              name="newDelivery"
+              className="h-4 w-4"
+              defaultChecked={Boolean(defaults.productId)}
+            />
+            🎉 New delivery — email the customer a Google review request
+          </label>
+        )}
       </div>
       <div>
         <label className="label">Notes</label>
