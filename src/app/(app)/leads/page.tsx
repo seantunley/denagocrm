@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
+import { getDailyForecast } from "@/lib/weather";
 import KanbanBoard, { type KanbanStage } from "@/components/KanbanBoard";
 import ModalTrigger from "@/components/Modal";
 import LeadForm from "@/components/LeadForm";
@@ -14,7 +15,15 @@ export default async function LeadsPage() {
         leads: {
           where: { status: "open", deletedAt: null },
           orderBy: { position: "asc" },
-          include: { product: true, assignedTo: true },
+          include: {
+            product: true,
+            assignedTo: true,
+            activities: {
+              where: { status: "planned", type: "test_drive", dueDate: { gte: new Date() } },
+              orderBy: { dueDate: "asc" },
+              take: 1,
+            },
+          },
         },
       },
     }),
@@ -26,6 +35,8 @@ export default async function LeadsPage() {
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
     prisma.user.findMany({ orderBy: { name: "asc" } }),
   ]);
+
+  const forecast = await getDailyForecast();
 
   const boardStages: KanbanStage[] = stages.map((s) => ({
     id: s.id,
@@ -40,6 +51,20 @@ export default async function LeadsPage() {
       color: l.color,
       productName: l.product?.name ?? null,
       assignee: l.assignedTo?.name ?? null,
+      testDrive: (() => {
+        const td = l.activities[0];
+        if (!td) return null;
+        const saDate = new Date(td.dueDate.getTime() + 2 * 60 * 60 * 1000);
+        const dateKey = saDate.toISOString().slice(0, 10);
+        const wx = forecast.get(dateKey);
+        const hasTime = td.dueDate.getUTCHours() !== 0 || td.dueDate.getUTCMinutes() !== 0;
+        return {
+          when:
+            saDate.toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" }) +
+            (hasTime ? ` ${saDate.toISOString().slice(11, 16)}` : ""),
+          weather: wx ? `${wx.icon} ${wx.maxTemp}°${wx.rainChance >= 30 ? ` · ${wx.rainChance}% rain` : ""}` : null,
+        };
+      })(),
     })),
   }));
 
