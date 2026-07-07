@@ -24,6 +24,9 @@ export type SignedDocInput = {
   signedAt: Date;
   signerIp: string;
   signaturePng: Buffer; // the drawn signature
+  dealerSignedByName?: string | null;
+  dealerSignedAt?: Date | null;
+  dealerSignatureUrl?: string | null; // Blob URL of the dealer's drawn signature
 };
 
 /** Builds a branded PDF of a signed quote/job card. */
@@ -152,6 +155,29 @@ export async function buildSignedPdf(input: SignedDocInput): Promise<Buffer> {
     `Signed electronically by ${input.signedByName} on ${formatDate(input.signedAt)} at ${input.signedAt.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" })} (IP ${input.signerIp})`,
     { x: M, y, size: 8, font, color: GRAY }
   );
+
+  // Denago countersignature — right-hand column beside the customer's
+  if (input.dealerSignedByName) {
+    const dx = M + 300;
+    let dy = y + 12; // top of the customer's signature line
+    if (input.dealerSignatureUrl) {
+      try {
+        const bytes = await fetch(input.dealerSignatureUrl).then((r) => r.arrayBuffer());
+        const sig = await pdf.embedPng(bytes);
+        const sh = 44;
+        const sw = Math.min((sig.width / sig.height) * sh, 180);
+        page.drawImage(sig, { x: dx, y: dy + 4, width: sw, height: sh });
+      } catch {}
+    }
+    page.drawLine({ start: { x: dx, y: dy }, end: { x: dx + 200, y: dy }, thickness: 1, color: DARK });
+    dy -= 12;
+    page.drawText(
+      `For Denago Cape Town — ${input.dealerSignedByName}${
+        input.dealerSignedAt ? `, ${formatDate(input.dealerSignedAt)}` : ""
+      }`,
+      { x: dx, y: dy, size: 8, font, color: GRAY }
+    );
+  }
 
   // Footer
   page.drawLine({ start: { x: M, y: 60 }, end: { x: M + W, y: 60 }, thickness: 1.5, color: ORANGE });

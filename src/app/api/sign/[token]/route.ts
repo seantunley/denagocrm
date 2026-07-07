@@ -108,6 +108,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
         signedAt,
         signerIp,
         signaturePng,
+        dealerSignedByName: quote.dealerSignedByName,
+        dealerSignedAt: quote.dealerSignedAt,
+        dealerSignatureUrl: quote.dealerSignatureRef?.startsWith("http")
+          ? quote.dealerSignatureRef
+          : null,
       }));
     const pdfRef = await saveFile(pdf, `Quote-Q${quote.number}-signed.pdf`, "application/pdf");
     const pdfHash = crypto.createHash("sha256").update(pdf).digest("hex");

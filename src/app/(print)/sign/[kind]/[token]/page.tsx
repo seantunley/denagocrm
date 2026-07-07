@@ -53,6 +53,8 @@ export default async function SignPage({
     signedAt: Date | null;
     signedByName: string | null;
     dealerSignedByName?: string | null;
+    dealerSignedAt?: Date | null;
+    dealerSignatureRef?: string | null;
     declinedAt?: Date | null;
     expired?: boolean;
   } | null = null;
@@ -97,6 +99,8 @@ export default async function SignPage({
       signedAt: quote.signedAt,
       signedByName: quote.signedByName,
       dealerSignedByName: quote.dealerSignedByName,
+      dealerSignedAt: quote.dealerSignedAt,
+      dealerSignatureRef: quote.dealerSignatureRef,
       declinedAt: quote.declinedAt,
       expired: quoteExpired(quote.validUntil) && !quote.signedAt,
     };
@@ -185,11 +189,6 @@ export default async function SignPage({
         {doc.validUntil && (
           <p className="text-xs text-slate-500 mt-1">Valid until {formatDate(doc.validUntil)}</p>
         )}
-        {doc.dealerSignedByName && (
-          <p className="text-xs text-slate-500 mt-1">
-            ✓ Countersigned for Denago Cape Town by {doc.dealerSignedByName}
-          </p>
-        )}
       </div>
 
       {doc.description && (
@@ -241,6 +240,29 @@ export default async function SignPage({
               <li key={i}>{line}</li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* Denago's countersignature — the customer sees who signed for us before they sign */}
+      {doc.dealerSignedByName && (
+        <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 flex items-end justify-between gap-4">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
+              Signed for Denago Cape Town
+            </p>
+            <p className="text-sm text-slate-700">
+              <b>{doc.dealerSignedByName}</b>
+              {doc.dealerSignedAt ? ` · ${formatDate(doc.dealerSignedAt)}` : ""}
+            </p>
+          </div>
+          {doc.dealerSignatureRef?.startsWith("http") && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={doc.dealerSignatureRef}
+              alt={`Signature — ${doc.dealerSignedByName}`}
+              className="h-12 w-auto object-contain"
+            />
+          )}
         </div>
       )}
 
