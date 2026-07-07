@@ -43,12 +43,18 @@ export async function syncFacebookLeads(): Promise<number> {
 
     for (const form of forms.data ?? []) {
       const leadsRes = await fetch(
-        `${G}/${form.id}/leads?fields=id,created_time,field_data,ad_name&limit=100&access_token=${encodeURIComponent(page.access_token)}`,
+        `${G}/${form.id}/leads?fields=id,created_time,field_data,ad_name,platform&limit=100&access_token=${encodeURIComponent(page.access_token)}`,
         { cache: "no-store" }
       );
       if (!leadsRes.ok) continue;
       const leads: {
-        data?: { id: string; created_time: string; field_data?: FieldData[]; ad_name?: string }[];
+        data?: {
+          id: string;
+          created_time: string;
+          field_data?: FieldData[];
+          ad_name?: string;
+          platform?: string;
+        }[];
       } = await leadsRes.json();
 
       for (const ld of leads.data ?? []) {
@@ -63,7 +69,7 @@ export async function syncFacebookLeads(): Promise<number> {
           model: pickField(fields, "model", "product", "bike"),
           color: pickField(fields, "colour", "color"),
           message: pickField(fields, "message", "comment", "question"),
-          source: "facebook",
+          source: ld.platform?.toLowerCase().includes("instagram") ? "instagram" : "facebook",
           externalId: ld.id,
           raw: ld,
         });

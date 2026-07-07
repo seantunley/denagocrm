@@ -30,7 +30,7 @@ function pickField(fields: FieldData[], ...keys: string[]): string | null {
 
 async function fetchLeadDetails(leadgenId: string, accessToken: string) {
   const res = await fetch(
-    `https://graph.facebook.com/v21.0/${leadgenId}?fields=field_data,created_time,ad_name,form_id&access_token=${encodeURIComponent(
+    `https://graph.facebook.com/v21.0/${leadgenId}?fields=field_data,created_time,ad_name,form_id,platform&access_token=${encodeURIComponent(
       accessToken
     )}`,
     { cache: "no-store" }
@@ -93,7 +93,11 @@ export async function POST(req: NextRequest) {
           model: pickField(fields, "model", "product", "bike"),
           color: pickField(fields, "colour", "color"),
           message: pickField(fields, "message", "comment", "question"),
-          source: "facebook",
+          source: String(details.platform ?? "")
+            .toLowerCase()
+            .includes("instagram")
+            ? "instagram"
+            : "facebook",
           externalId: leadgenId,
           raw: details,
         });
