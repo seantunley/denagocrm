@@ -17,6 +17,17 @@ export async function syncGoogleReviews(): Promise<number> {
   ]);
   if (!apiKey || !placeId) return 0;
 
+  // Reviews change slowly and this Places call bills at the expensive tier —
+  // sync at most every 6 hours (~120 calls/month, inside the free allowance)
+  // even though the cron fires every 15 minutes.
+  const last = await getSetting("GOOGLE_REVIEWS_LAST_SYNC");
+  if (last && Date.now() - new Date(last).getTime() < 6 * 60 * 60 * 1000) return 0;
+  await basePrisma.appSetting.upsert({
+    where: { key: "GOOGLE_REVIEWS_LAST_SYNC" },
+    update: { value: new Date().toISOString() },
+    create: { key: "GOOGLE_REVIEWS_LAST_SYNC", value: new Date().toISOString() },
+  });
+
   const res = await fetch(
     `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}?fields=reviews&key=${encodeURIComponent(apiKey)}`,
     { cache: "no-store" }
