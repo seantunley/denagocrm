@@ -29,6 +29,7 @@ import SecurityPanel from "@/components/SecurityPanel";
 import OwnerUserControls from "@/components/OwnerUserControls";
 import { saveSessionPolicy } from "@/app/actions/security";
 import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
+import { decryptValue } from "@/lib/settings";
 import { formatDate } from "@/lib/format";
 
 const TABS = [
@@ -60,7 +61,14 @@ export default async function SettingsPage({
     prisma.appSetting.findMany(),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
   ]);
-  const setting = (key: string) => settings.find((s) => s.key === key)?.value ?? "";
+  const setting = (key: string) => {
+    const raw = settings.find((s) => s.key === key)?.value ?? "";
+    try {
+      return decryptValue(raw);
+    } catch {
+      return ""; // encrypted value, key unavailable in this environment
+    }
+  };
   const isOwner = currentUser.role === "owner";
 
   return (
@@ -342,470 +350,574 @@ export default async function SettingsPage({
       )}
 
       {tab === "email" && (
-        <>
-          <div className="card">
-            <h2 className="font-semibold mb-1">Email (SMTP)</h2>
-            <p className="text-xs text-slate-400 mb-4">
-              Used for sending emails from leads/contacts and by automations. Works with any SMTP
-              provider (e.g. your denagocpt.co.za mailbox, Google Workspace, Resend, SendGrid).
-            </p>
-            <form action={saveSmtpSettings} className="grid md:grid-cols-2 gap-3 mb-3">
-              <div>
-                <label className="label">SMTP host</label>
-                <input name="host" className="input" defaultValue={setting("SMTP_HOST")} placeholder="mail.denagocpt.co.za" />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
+        <div className="max-w-3xl">
+          <div className="card p-0 divide-y divide-slate-800">
+            <Row
+              title="Email sending (SMTP)"
+              status={
+                setting("SMTP_HOST") ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                ) : (
+                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
+                )
+              }
+            >
+              <p className="text-xs text-slate-400 mb-4">
+                Used for all outgoing email. Works with any SMTP provider (your denagocpt.co.za
+                mailbox, Google Workspace, Resend, SendGrid).
+              </p>
+              <form action={saveSmtpSettings} className="grid md:grid-cols-2 gap-3 mb-3">
                 <div>
-                  <label className="label">Port</label>
-                  <input name="port" className="input" defaultValue={setting("SMTP_PORT") || "587"} />
+                  <label className="label">SMTP host</label>
+                  <input name="host" className="input" defaultValue={setting("SMTP_HOST")} placeholder="mail.denagocpt.co.za" />
                 </div>
-                <div className="flex items-center gap-2 pt-6">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="label">Port</label>
+                    <input name="port" className="input" defaultValue={setting("SMTP_PORT") || "587"} />
+                  </div>
+                  <div className="flex items-center gap-2 pt-6">
+                    <input
+                      type="checkbox"
+                      name="secure"
+                      id="secure"
+                      defaultChecked={setting("SMTP_SECURE") === "true"}
+                      className="h-4 w-4"
+                    />
+                    <label htmlFor="secure" className="text-sm text-slate-400">
+                      SSL (port 465)
+                    </label>
+                  </div>
+                </div>
+                <div>
+                  <label className="label">Username</label>
+                  <input name="user" className="input" defaultValue={setting("SMTP_USER")} placeholder="sales@denagocpt.co.za" />
+                </div>
+                <div>
+                  <label className="label">Password</label>
+                  <input name="pass" type="password" className="input" defaultValue={setting("SMTP_PASS")} />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="label">From address</label>
+                  <input
+                    name="from"
+                    className="input"
+                    defaultValue={setting("SMTP_FROM")}
+                    placeholder={'"Denago Cape Town" <sales@denagocpt.co.za>'}
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <button className="btn-primary">Save email settings</button>
+                </div>
+              </form>
+              <TestEmailButton />
+            </Row>
+
+            <Row
+              title="Service reminders to customers"
+              status={
+                setting("SERVICE_REMINDER_ENABLED") === "true" ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">On</span>
+                ) : (
+                  <span className="badge bg-slate-800 text-slate-400">Off</span>
+                )
+              }
+            >
+              <p className="text-xs text-slate-400 mb-4">
+                Customers whose vehicle is due for a service get one automatic email per
+                due-cycle. Placeholders: <code>{"{{first_name}}"}</code>,{" "}
+                <code>{"{{model}}"}</code>, <code>{"{{due_date}}"}</code>,{" "}
+                <code>{"{{due_km}}"}</code>, <code>{"{{current_km}}"}</code>.
+              </p>
+              <form action={saveServiceReminderSettings} className="flex items-end gap-3 flex-wrap">
+                <div className="flex items-center gap-2 pb-2">
                   <input
                     type="checkbox"
-                    name="secure"
-                    id="secure"
-                    defaultChecked={setting("SMTP_SECURE") === "true"}
+                    name="enabled"
+                    id="sr-enabled"
+                    defaultChecked={setting("SERVICE_REMINDER_ENABLED") === "true"}
                     className="h-4 w-4"
                   />
-                  <label htmlFor="secure" className="text-sm text-slate-400">
-                    SSL (port 465)
+                  <label htmlFor="sr-enabled" className="text-sm text-slate-300">
+                    Enabled
                   </label>
                 </div>
-              </div>
-              <div>
-                <label className="label">Username</label>
-                <input name="user" className="input" defaultValue={setting("SMTP_USER")} placeholder="sales@denagocpt.co.za" />
-              </div>
-              <div>
-                <label className="label">Password</label>
-                <input name="pass" type="password" className="input" defaultValue={setting("SMTP_PASS")} />
-              </div>
-              <div className="md:col-span-2">
-                <label className="label">From address</label>
-                <input
-                  name="from"
-                  className="input"
-                  defaultValue={setting("SMTP_FROM")}
-                  placeholder={'"Denago Cape Town" <sales@denagocpt.co.za>'}
-                />
-              </div>
-              <div className="md:col-span-2">
-                <button className="btn-primary">Save email settings</button>
-              </div>
-            </form>
-            <TestEmailButton />
-          </div>
+                <div className="flex-1 min-w-56">
+                  <label className="label">Email template</label>
+                  <select
+                    name="templateId"
+                    className="input"
+                    defaultValue={setting("SERVICE_REMINDER_TEMPLATE_ID")}
+                  >
+                    <option value="">— choose template —</option>
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button className="btn-primary">Save</button>
+              </form>
+            </Row>
 
-          <div className="card">
-            <h2 className="font-semibold mb-1">Service reminders to customers</h2>
-            <p className="text-xs text-slate-400 mb-4">
-              When enabled, customers whose vehicle is due (or overdue) for a service get an
-              automatic email — once per due-cycle. Template placeholders:{" "}
-              <code>{"{{first_name}}"}</code>, <code>{"{{model}}"}</code>,{" "}
-              <code>{"{{due_date}}"}</code>, <code>{"{{due_km}}"}</code>,{" "}
-              <code>{"{{current_km}}"}</code>. Requires SMTP above.
-            </p>
-            <form action={saveServiceReminderSettings} className="flex items-end gap-3 flex-wrap">
-              <div className="flex items-center gap-2 pb-2">
-                <input
-                  type="checkbox"
-                  name="enabled"
-                  id="sr-enabled"
-                  defaultChecked={setting("SERVICE_REMINDER_ENABLED") === "true"}
-                  className="h-4 w-4"
-                />
-                <label htmlFor="sr-enabled" className="text-sm text-slate-300">
-                  Enabled
-                </label>
-              </div>
-              <div className="flex-1 min-w-56">
-                <label className="label">Email template</label>
-                <select
-                  name="templateId"
-                  className="input"
-                  defaultValue={setting("SERVICE_REMINDER_TEMPLATE_ID")}
-                >
-                  <option value="">— choose template —</option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>
+            <Row
+              title="Email templates"
+              status={
+                <span className="badge bg-slate-800 text-slate-300">{templates.length}</span>
+              }
+              action="Manage"
+            >
+              <p className="text-xs text-slate-400 mb-4">
+                Placeholders: <code>{"{{name}}"}</code>, <code>{"{{first_name}}"}</code>,{" "}
+                <code>{"{{model}}"}</code>, <code>{"{{color}}"}</code>, <code>{"{{value}}"}</code>,{" "}
+                <code>{"{{user_name}}"}</code> — filled from the lead/contact when sending.
+              </p>
+              <div className="space-y-3 mb-4">
+                {templates.map((t) => (
+                  <details key={t.id} className="rounded-lg border border-slate-800 bg-slate-800/40">
+                    <summary className="px-4 py-2.5 cursor-pointer text-sm font-medium">
                       {t.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <button className="btn-primary">Save</button>
-            </form>
-          </div>
-
-          <div className="card">
-            <h2 className="font-semibold mb-1">Email templates</h2>
-            <p className="text-xs text-slate-400 mb-4">
-              Placeholders: <code>{"{{name}}"}</code>, <code>{"{{first_name}}"}</code>,{" "}
-              <code>{"{{model}}"}</code>, <code>{"{{color}}"}</code>, <code>{"{{value}}"}</code>,{" "}
-              <code>{"{{user_name}}"}</code> — filled from the lead/contact when sending.
-            </p>
-            <div className="space-y-4 mb-5">
-              {templates.map((t) => (
-                <details key={t.id} className="rounded-lg border border-slate-800 bg-slate-800/40">
-                  <summary className="px-4 py-2.5 cursor-pointer text-sm font-medium flex items-center justify-between">
-                    {t.name}
-                  </summary>
-                  <div className="p-4 pt-1 space-y-2">
-                    <form action={updateTemplate.bind(null, t.id)} className="space-y-2">
-                      <input name="name" className="input" defaultValue={t.name} required />
-                      <input name="subject" className="input" defaultValue={t.subject} required />
-                      <textarea name="body" className="input" rows={5} defaultValue={t.body} required />
-                      <div className="flex gap-2">
+                    </summary>
+                    <div className="p-4 pt-1 space-y-2">
+                      <form action={updateTemplate.bind(null, t.id)} className="space-y-2">
+                        <input name="name" className="input" defaultValue={t.name} required />
+                        <input name="subject" className="input" defaultValue={t.subject} required />
+                        <textarea name="body" className="input" rows={5} defaultValue={t.body} required />
                         <button className="btn-primary btn-sm">Save template</button>
-                      </div>
-                    </form>
-                    <ConfirmDelete
-                      action={deleteTemplate.bind(null, t.id)}
-                      title={`Delete template “${t.name}”?`}
-                      description="This cannot be undone. Automations using this template will skip their email step."
-                      trigger="Delete"
-                      triggerClass="btn-danger btn-sm"
-                    />
-                  </div>
-                </details>
-              ))}
-            </div>
-            <form action={createTemplate} className="rounded-lg bg-slate-800/40 p-4 border border-slate-800 space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">New template</p>
-              <input name="name" className="input" placeholder="Template name (e.g. New lead welcome)" required />
-              <input name="subject" className="input" placeholder="Subject — e.g. Your {{model}} enquiry" required />
-              <textarea
-                name="body"
-                className="input"
-                rows={5}
-                required
-                placeholder={"Hi {{first_name}},\n\nThanks for your interest in the {{model}}…\n\n{{user_name}}\nDenago Cape Town · 073 789 3438"}
-              />
-              <button className="btn-primary btn-sm">Create template</button>
-            </form>
+                      </form>
+                      <ConfirmDelete
+                        action={deleteTemplate.bind(null, t.id)}
+                        title={`Delete template “${t.name}”?`}
+                        description="This cannot be undone. Automations using this template will skip their email step."
+                        trigger="Delete"
+                        triggerClass="btn-danger btn-sm"
+                      />
+                    </div>
+                  </details>
+                ))}
+              </div>
+              <details className="rounded-lg border border-slate-800 bg-slate-800/40">
+                <summary className="px-4 py-2.5 cursor-pointer text-sm font-medium">
+                  + New template
+                </summary>
+                <form action={createTemplate} className="p-4 pt-1 space-y-2">
+                  <input name="name" className="input" placeholder="Template name (e.g. New lead welcome)" required />
+                  <input name="subject" className="input" placeholder="Subject — e.g. Your {{model}} enquiry" required />
+                  <textarea
+                    name="body"
+                    className="input"
+                    rows={5}
+                    required
+                    placeholder={"Hi {{first_name}},\n\nThanks for your interest in the {{model}}…\n\n{{user_name}}\nDenago Cape Town · 073 789 3438"}
+                  />
+                  <button className="btn-primary btn-sm">Create template</button>
+                </form>
+              </details>
+            </Row>
           </div>
-        </>
+        </div>
       )}
 
       {tab === "import" && (
-        <div className="card max-w-xl">
-          <h2 className="font-semibold mb-1">Import contacts from CSV</h2>
-          <p className="text-xs text-slate-400 mb-4">
-            Upload a CSV with a header row. Recognised columns: Name (or First Name / Last
-            Name), Email, Phone, WhatsApp, Company, Address, Suburb, City, Province, Postal
-            Code, Notes, Source. Contacts matching an existing email or phone are skipped —
-            safe to re-run.
-          </p>
-          <ImportContactsForm />
+        <div className="max-w-3xl">
+          <div className="card p-0 divide-y divide-slate-800">
+            <Row title="Import contacts from CSV" action="Import">
+              <p className="text-xs text-slate-400 mb-4">
+                Upload a CSV with a header row. Recognised columns: Name (or First Name / Last
+                Name), Email, Phone, WhatsApp, Company, Address, Suburb, City, Province, Postal
+                Code, Notes, Source. Contacts matching an existing email or phone are skipped —
+                safe to re-run.
+              </p>
+              <ImportContactsForm />
+            </Row>
+          </div>
         </div>
       )}
 
       {tab === "quotes" && (
-        <form action={saveQuoteDefaults} className="card space-y-4 max-w-xl">
-          <h2 className="font-semibold">Quote defaults</h2>
-          <p className="text-xs text-slate-400">
-            Applied to new quotes. You can still change the validity date and terms on any
-            individual quote.
-          </p>
-          <div>
-            <label className="label">Valid for (days)</label>
-            <input
-              name="validDays"
-              type="number"
-              min={1}
-              className="input w-32"
-              defaultValue={setting("QUOTE_VALID_DAYS") || "7"}
-            />
-          </div>
-          <div>
-            <label className="label">Default terms (one bullet per line)</label>
-            <textarea
-              name="terms"
-              className="input"
-              rows={6}
-              defaultValue={
-                setting("QUOTE_TERMS") ||
-                "Prices include VAT. Delivery arranged on acceptance. E&OE."
+        <div className="max-w-3xl">
+          <div className="card p-0 divide-y divide-slate-800">
+            <Row
+              title="Quote defaults"
+              status={
+                <span className="badge bg-slate-800 text-slate-300">
+                  valid {setting("QUOTE_VALID_DAYS") || "7"} days
+                </span>
               }
-            />
-            <p className="text-xs text-slate-500 mt-1">
-              Each line becomes its own bullet point on the printed quote.
-            </p>
+              action="Edit"
+            >
+              <p className="text-xs text-slate-400 mb-4">
+                Applied to new quotes; each quote can still be adjusted individually.
+              </p>
+              <form action={saveQuoteDefaults} className="space-y-4 max-w-xl">
+                <div>
+                  <label className="label">Valid for (days)</label>
+                  <input
+                    name="validDays"
+                    type="number"
+                    min={1}
+                    className="input w-32"
+                    defaultValue={setting("QUOTE_VALID_DAYS") || "7"}
+                  />
+                </div>
+                <div>
+                  <label className="label">Default terms (one bullet per line)</label>
+                  <textarea
+                    name="terms"
+                    className="input"
+                    rows={6}
+                    defaultValue={
+                      setting("QUOTE_TERMS") ||
+                      "Prices include VAT. Delivery arranged on acceptance. E&OE."
+                    }
+                  />
+                  <p className="text-xs text-slate-500 mt-1">
+                    Each line becomes its own bullet point on the printed quote.
+                  </p>
+                </div>
+                <button className="btn-primary">Save quote defaults</button>
+              </form>
+            </Row>
           </div>
-          <button className="btn-primary">Save quote defaults</button>
-        </form>
+        </div>
       )}
 
       {tab === "workshop" && (
-        <form action={saveWorkshopSettings} className="card space-y-4 max-w-xl">
-          <h2 className="font-semibold">Online booking slots</h2>
-          <p className="text-xs text-slate-400">
-            Customers booking a service on denagocpt.co.za can only pick these slots. A slot
-            disappears from the website the moment it&apos;s taken.
-          </p>
-          <div>
-            <label className="label">Slot start times (comma-separated, 24h)</label>
-            <input
-              name="times"
-              className="input"
-              defaultValue={setting("BOOKING_SLOT_TIMES") || "08:00,10:00,12:00,14:00"}
-            />
-          </div>
-          <div>
-            <label className="label">Booking days</label>
-            <div className="flex gap-3 flex-wrap">
-              {[
-                ["1", "Mon"], ["2", "Tue"], ["3", "Wed"], ["4", "Thu"],
-                ["5", "Fri"], ["6", "Sat"], ["7", "Sun"],
-              ].map(([val, label]) => (
-                <label key={val} className="flex items-center gap-1.5 text-sm text-slate-300">
+        <div className="max-w-3xl">
+          <div className="card p-0 divide-y divide-slate-800">
+            <Row
+              title="Online booking slots"
+              status={
+                <span className="badge bg-slate-800 text-slate-300">
+                  {(setting("BOOKING_SLOT_TIMES") || "08:00,10:00,12:00,14:00").split(",").length}{" "}
+                  per day
+                </span>
+              }
+              action="Edit"
+            >
+              <p className="text-xs text-slate-400 mb-4">
+                Customers booking a service on denagocpt.co.za can only pick these slots. A slot
+                disappears from the website the moment it&apos;s taken.
+              </p>
+              <form action={saveWorkshopSettings} className="space-y-4 max-w-xl">
+                <div>
+                  <label className="label">Slot start times (comma-separated, 24h)</label>
                   <input
-                    type="checkbox"
-                    name="days"
-                    value={val}
-                    defaultChecked={(setting("BOOKING_DAYS") || "1,2,3,4,5").split(",").includes(val)}
-                    className="h-4 w-4"
+                    name="times"
+                    className="input"
+                    defaultValue={setting("BOOKING_SLOT_TIMES") || "08:00,10:00,12:00,14:00"}
                   />
-                  {label}
-                </label>
-              ))}
-            </div>
+                </div>
+                <div>
+                  <label className="label">Booking days</label>
+                  <div className="flex gap-3 flex-wrap">
+                    {[
+                      ["1", "Mon"], ["2", "Tue"], ["3", "Wed"], ["4", "Thu"],
+                      ["5", "Fri"], ["6", "Sat"], ["7", "Sun"],
+                    ].map(([val, label]) => (
+                      <label key={val} className="flex items-center gap-1.5 text-sm text-slate-300">
+                        <input
+                          type="checkbox"
+                          name="days"
+                          value={val}
+                          defaultChecked={(setting("BOOKING_DAYS") || "1,2,3,4,5").split(",").includes(val)}
+                          className="h-4 w-4"
+                        />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="label">Vehicles per slot</label>
+                    <input
+                      name="capacity"
+                      type="number"
+                      min={1}
+                      className="input"
+                      defaultValue={setting("BOOKING_CAPACITY") || "1"}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Bookable days ahead</label>
+                    <input
+                      name="horizon"
+                      type="number"
+                      min={1}
+                      className="input"
+                      defaultValue={setting("BOOKING_HORIZON_DAYS") || "30"}
+                    />
+                  </div>
+                </div>
+                <button className="btn-primary">Save workshop settings</button>
+              </form>
+            </Row>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="label">Vehicles per slot</label>
-              <input
-                name="capacity"
-                type="number"
-                min={1}
-                className="input"
-                defaultValue={setting("BOOKING_CAPACITY") || "1"}
-              />
-            </div>
-            <div>
-              <label className="label">Bookable days ahead</label>
-              <input
-                name="horizon"
-                type="number"
-                min={1}
-                className="input"
-                defaultValue={setting("BOOKING_HORIZON_DAYS") || "30"}
-              />
-            </div>
-          </div>
-          <button className="btn-primary">Save workshop settings</button>
-        </form>
+        </div>
       )}
 
       {tab === "integrations" && (
-        <>
-          <div className="card">
-            <h2 className="font-semibold mb-1">Facebook / Instagram Lead Ads</h2>
-            <p className="text-xs text-slate-400 mb-4">
-              In your Meta app, subscribe the webhook below to the <b>leadgen</b> field of your
-              Facebook Page, using the verify token. Then paste a Page Access Token with{" "}
-              <code>leads_retrieval</code> permission.
-            </p>
-            <div className="space-y-3">
-              <div>
-                <label className="label">Webhook callback URL</label>
-                <code className="block text-sm bg-slate-800 rounded-lg px-3 py-2">
-                  https://&lt;your-domain&gt;/api/webhooks/meta
-                </code>
-              </div>
-              <div>
-                <label className="label">Verify token</label>
-                <div className="flex gap-2">
-                  <code className="flex-1 text-sm bg-slate-800 rounded-lg px-3 py-2 break-all">
-                    {setting("META_VERIFY_TOKEN") || "—"}
+        <div className="max-w-3xl">
+          <div className="card p-0 divide-y divide-slate-800">
+            <Row
+              title="Facebook & Instagram (Meta)"
+              status={
+                setting("META_PAGE_ACCESS_TOKEN") ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                ) : (
+                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
+                )
+              }
+            >
+              <p className="text-xs text-slate-400 mb-4">
+                Powers lead ads and Messenger/Instagram DMs. Webhook (leadgen + messages fields):
+              </p>
+              <div className="space-y-3">
+                <div>
+                  <label className="label">Webhook callback URL</label>
+                  <code className="block text-sm bg-slate-800 rounded-lg px-3 py-2">
+                    https://crm.denagocpt.co.za/api/webhooks/meta
                   </code>
-                  <form action={regenerateSetting.bind(null, "META_VERIFY_TOKEN")}>
-                    <button className="btn-secondary">Regenerate</button>
-                  </form>
                 </div>
+                <div>
+                  <label className="label">Verify token</label>
+                  <div className="flex gap-2">
+                    <code className="flex-1 text-sm bg-slate-800 rounded-lg px-3 py-2 break-all">
+                      {setting("META_VERIFY_TOKEN") || "—"}
+                    </code>
+                    <form action={regenerateSetting.bind(null, "META_VERIFY_TOKEN")}>
+                      <button className="btn-secondary">Regenerate</button>
+                    </form>
+                  </div>
+                </div>
+                <form action={saveSetting} className="flex gap-2 items-end">
+                  <input type="hidden" name="key" value="META_PAGE_ACCESS_TOKEN" />
+                  <div className="flex-1">
+                    <label className="label">Page access token (System User)</label>
+                    <input
+                      name="value"
+                      type="password"
+                      className="input"
+                      defaultValue={setting("META_PAGE_ACCESS_TOKEN")}
+                      placeholder="EAAG…"
+                    />
+                  </div>
+                  <button className="btn-primary">Save</button>
+                </form>
+                <form action={saveSetting} className="flex gap-2 items-end">
+                  <input type="hidden" name="key" value="META_APP_SECRET" />
+                  <div className="flex-1">
+                    <label className="label">App secret (verifies webhook signatures)</label>
+                    <input
+                      name="value"
+                      type="password"
+                      className="input"
+                      defaultValue={setting("META_APP_SECRET")}
+                      placeholder="From Meta app → Settings → Basic"
+                    />
+                  </div>
+                  <button className="btn-primary">Save</button>
+                </form>
               </div>
-              <form action={saveSetting} className="flex gap-2 items-end">
-                <input type="hidden" name="key" value="META_PAGE_ACCESS_TOKEN" />
-                <div className="flex-1">
-                  <label className="label">Page access token</label>
-                  <input
-                    name="value"
-                    className="input"
-                    defaultValue={setting("META_PAGE_ACCESS_TOKEN")}
-                    placeholder="EAAG…"
-                  />
-                </div>
-                <button className="btn-primary">Save</button>
-              </form>
-              <form action={saveSetting} className="flex gap-2 items-end">
-                <input type="hidden" name="key" value="META_APP_SECRET" />
-                <div className="flex-1">
-                  <label className="label">App secret (recommended — verifies webhook signatures)</label>
-                  <input
-                    name="value"
-                    type="password"
-                    className="input"
-                    defaultValue={setting("META_APP_SECRET")}
-                    placeholder="From Meta app → Settings → Basic"
-                  />
-                </div>
-                <button className="btn-primary">Save</button>
-              </form>
-            </div>
-          </div>
+            </Row>
 
-          <div className="card">
-            <h2 className="font-semibold mb-1">WhatsApp Business (Cloud API)</h2>
-            <p className="text-xs text-slate-400 mb-4">
-              Connect your dedicated WhatsApp number: in your Meta app add the <b>WhatsApp</b>{" "}
-              product, register the number, then subscribe the webhook below to the{" "}
-              <b>messages</b> field (same verify token and app secret as Lead Ads). Customer
-              chats then appear on their record, and you can reply from the CRM.
-            </p>
-            <div className="space-y-3">
-              <div>
-                <label className="label">Webhook callback URL</label>
-                <code className="block text-sm bg-slate-800 rounded-lg px-3 py-2">
-                  https://crm.denagocpt.co.za/api/webhooks/whatsapp
-                </code>
-              </div>
-              <form action={saveSetting} className="flex gap-2 items-end">
-                <input type="hidden" name="key" value="WA_PHONE_NUMBER_ID" />
-                <div className="flex-1">
-                  <label className="label">Phone number ID</label>
-                  <input
-                    name="value"
-                    className="input"
-                    defaultValue={setting("WA_PHONE_NUMBER_ID")}
-                    placeholder="From WhatsApp → API Setup"
-                  />
-                </div>
-                <button className="btn-primary">Save</button>
-              </form>
-              <form action={saveSetting} className="flex gap-2 items-end">
-                <input type="hidden" name="key" value="WA_ACCESS_TOKEN" />
-                <div className="flex-1">
-                  <label className="label">Access token (permanent, System User)</label>
-                  <input
-                    name="value"
-                    type="password"
-                    className="input"
-                    defaultValue={setting("WA_ACCESS_TOKEN")}
-                    placeholder="EAAG…"
-                  />
-                </div>
-                <button className="btn-primary">Save</button>
-              </form>
-            </div>
-          </div>
-
-          <div className="card">
-            <h2 className="font-semibold mb-1">Google reviews</h2>
-            <p className="text-xs text-slate-400 mb-4">
-              New reviews appear in the Social inbox with a push notification. Needs a Google
-              Cloud API key with the <b>Places API (New)</b> enabled, plus your business&apos;s
-              Place ID (find it at developers.google.com/maps/documentation/places/web-service/place-id).
-            </p>
-            <div className="space-y-3">
-              <form action={saveSetting} className="flex gap-2 items-end">
-                <input type="hidden" name="key" value="GOOGLE_PLACES_API_KEY" />
-                <div className="flex-1">
-                  <label className="label">Places API key</label>
-                  <input
-                    name="value"
-                    type="password"
-                    className="input"
-                    defaultValue={setting("GOOGLE_PLACES_API_KEY")}
-                    placeholder="AIza…"
-                  />
-                </div>
-                <button className="btn-primary">Save</button>
-              </form>
-              <form action={saveSetting} className="flex gap-2 items-end">
-                <input type="hidden" name="key" value="GOOGLE_PLACE_ID" />
-                <div className="flex-1">
-                  <label className="label">Place ID</label>
-                  <input
-                    name="value"
-                    className="input"
-                    defaultValue={setting("GOOGLE_PLACE_ID")}
-                    placeholder="ChIJ…"
-                  />
-                </div>
-                <button className="btn-primary">Save</button>
-              </form>
-            </div>
-          </div>
-
-          <div className="card">
-            <h2 className="font-semibold mb-1">SMS (BulkSMS) — OTP verification</h2>
-            <p className="text-xs text-slate-400 mb-4">
-              Used to send one-time codes to customers verifying their vehicle on the website
-              booking form. Create a free account at bulksms.com, then under{" "}
-              <b>Settings → Developer → API Tokens</b> create a token and paste both parts here.
-              Without this, the code falls back to the customer&apos;s registered email.
-            </p>
-            <div className="space-y-3">
-              <form action={saveSetting} className="flex gap-2 items-end">
-                <input type="hidden" name="key" value="BULKSMS_TOKEN_ID" />
-                <div className="flex-1">
-                  <label className="label">Token ID</label>
-                  <input
-                    name="value"
-                    className="input"
-                    defaultValue={setting("BULKSMS_TOKEN_ID")}
-                    placeholder="From BulkSMS → API Tokens"
-                  />
-                </div>
-                <button className="btn-primary">Save</button>
-              </form>
-              <form action={saveSetting} className="flex gap-2 items-end">
-                <input type="hidden" name="key" value="BULKSMS_TOKEN_SECRET" />
-                <div className="flex-1">
-                  <label className="label">Token secret</label>
-                  <input
-                    name="value"
-                    type="password"
-                    className="input"
-                    defaultValue={setting("BULKSMS_TOKEN_SECRET")}
-                    placeholder="Shown once when the token is created"
-                  />
-                </div>
-                <button className="btn-primary">Save</button>
-              </form>
-            </div>
-          </div>
-
-          <div className="card">
-            <h2 className="font-semibold mb-1">Website lead intake API</h2>
-            <p className="text-xs text-slate-400 mb-4">
-              POST leads from your website or landing pages. Include the API key in the{" "}
-              <code>X-Api-Key</code> header. Supported fields: name (required), email, phone,
-              message, model, color, source.
-            </p>
-            <div className="space-y-3">
-              <div>
-                <label className="label">API key</label>
-                <div className="flex gap-2">
-                  <code className="flex-1 text-sm bg-slate-800 rounded-lg px-3 py-2 break-all">
-                    {setting("INTAKE_API_KEY") || "—"}
+            <Row
+              title="WhatsApp Business (Cloud API)"
+              status={
+                setting("WA_PHONE_NUMBER_ID") ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                ) : (
+                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
+                )
+              }
+            >
+              <p className="text-xs text-slate-400 mb-4">
+                Connect your dedicated WhatsApp number: add the <b>WhatsApp</b> product in your
+                Meta app, register the number, subscribe the webhook below to the <b>messages</b>{" "}
+                field (same verify token and app secret as above).
+              </p>
+              <div className="space-y-3">
+                <div>
+                  <label className="label">Webhook callback URL</label>
+                  <code className="block text-sm bg-slate-800 rounded-lg px-3 py-2">
+                    https://crm.denagocpt.co.za/api/webhooks/whatsapp
                   </code>
-                  <form action={regenerateSetting.bind(null, "INTAKE_API_KEY")}>
-                    <button className="btn-secondary">Regenerate</button>
-                  </form>
+                </div>
+                <form action={saveSetting} className="flex gap-2 items-end">
+                  <input type="hidden" name="key" value="WA_PHONE_NUMBER_ID" />
+                  <div className="flex-1">
+                    <label className="label">Phone number ID</label>
+                    <input
+                      name="value"
+                      className="input"
+                      defaultValue={setting("WA_PHONE_NUMBER_ID")}
+                      placeholder="From WhatsApp → API Setup"
+                    />
+                  </div>
+                  <button className="btn-primary">Save</button>
+                </form>
+                <form action={saveSetting} className="flex gap-2 items-end">
+                  <input type="hidden" name="key" value="WA_ACCESS_TOKEN" />
+                  <div className="flex-1">
+                    <label className="label">Access token (permanent, System User)</label>
+                    <input
+                      name="value"
+                      type="password"
+                      className="input"
+                      defaultValue={setting("WA_ACCESS_TOKEN")}
+                      placeholder="EAAG…"
+                    />
+                  </div>
+                  <button className="btn-primary">Save</button>
+                </form>
+              </div>
+            </Row>
+
+            <Row
+              title="Google reviews"
+              status={
+                setting("GOOGLE_PLACES_API_KEY") && setting("GOOGLE_PLACE_ID") ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                ) : (
+                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
+                )
+              }
+            >
+              <p className="text-xs text-slate-400 mb-4">
+                New reviews appear in the Social inbox with a push notification. Needs a Google
+                Cloud API key with the <b>Places API (New)</b> enabled, plus your Place ID.
+              </p>
+              <div className="space-y-3">
+                <form action={saveSetting} className="flex gap-2 items-end">
+                  <input type="hidden" name="key" value="GOOGLE_PLACES_API_KEY" />
+                  <div className="flex-1">
+                    <label className="label">Places API key</label>
+                    <input
+                      name="value"
+                      type="password"
+                      className="input"
+                      defaultValue={setting("GOOGLE_PLACES_API_KEY")}
+                      placeholder="AIza…"
+                    />
+                  </div>
+                  <button className="btn-primary">Save</button>
+                </form>
+                <form action={saveSetting} className="flex gap-2 items-end">
+                  <input type="hidden" name="key" value="GOOGLE_PLACE_ID" />
+                  <div className="flex-1">
+                    <label className="label">Place ID</label>
+                    <input
+                      name="value"
+                      className="input"
+                      defaultValue={setting("GOOGLE_PLACE_ID")}
+                      placeholder="ChIJ…"
+                    />
+                  </div>
+                  <button className="btn-primary">Save</button>
+                </form>
+              </div>
+            </Row>
+
+            <Row
+              title="SMS one-time codes (BulkSMS)"
+              status={
+                setting("BULKSMS_TOKEN_ID") ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                ) : (
+                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
+                )
+              }
+            >
+              <p className="text-xs text-slate-400 mb-4">
+                Sends OTPs to customers verifying their vehicle on the website booking form.
+                Create a free account at bulksms.com → Settings → Developer → API Tokens.
+                Without this, codes fall back to the customer&apos;s registered email.
+              </p>
+              <div className="space-y-3">
+                <form action={saveSetting} className="flex gap-2 items-end">
+                  <input type="hidden" name="key" value="BULKSMS_TOKEN_ID" />
+                  <div className="flex-1">
+                    <label className="label">Token ID</label>
+                    <input
+                      name="value"
+                      className="input"
+                      defaultValue={setting("BULKSMS_TOKEN_ID")}
+                      placeholder="From BulkSMS → API Tokens"
+                    />
+                  </div>
+                  <button className="btn-primary">Save</button>
+                </form>
+                <form action={saveSetting} className="flex gap-2 items-end">
+                  <input type="hidden" name="key" value="BULKSMS_TOKEN_SECRET" />
+                  <div className="flex-1">
+                    <label className="label">Token secret</label>
+                    <input
+                      name="value"
+                      type="password"
+                      className="input"
+                      defaultValue={setting("BULKSMS_TOKEN_SECRET")}
+                      placeholder="Shown once when the token is created"
+                    />
+                  </div>
+                  <button className="btn-primary">Save</button>
+                </form>
+              </div>
+            </Row>
+
+            <Row
+              title="Website lead intake API"
+              status={<span className="badge bg-emerald-500/15 text-emerald-300">Active</span>}
+              action="View"
+            >
+              <p className="text-xs text-slate-400 mb-4">
+                POST leads from the website or landing pages with the <code>X-Api-Key</code>{" "}
+                header. Fields: name (required), email, phone, message, model, color, source.
+              </p>
+              <div className="space-y-3">
+                <div>
+                  <label className="label">API key</label>
+                  <div className="flex gap-2">
+                    <code className="flex-1 text-sm bg-slate-800 rounded-lg px-3 py-2 break-all">
+                      {setting("INTAKE_API_KEY") || "—"}
+                    </code>
+                    <form action={regenerateSetting.bind(null, "INTAKE_API_KEY")}>
+                      <button className="btn-secondary">Regenerate</button>
+                    </form>
+                  </div>
                 </div>
               </div>
-              <div>
-                <label className="label">Example</label>
-                <pre className="text-xs bg-slate-950 text-slate-200 rounded-lg px-3 py-2 overflow-x-auto">{`curl -X POST https://<your-domain>/api/intake \\
-  -H "Content-Type: application/json" \\
-  -H "X-Api-Key: ${setting("INTAKE_API_KEY") || "<key>"}" \\
-  -d '{"name":"Jane Doe","email":"jane@example.com","phone":"0821234567","model":"Denago EV Rover XL","color":"Lava","message":"Interested in a demo drive"}'`}</pre>
-              </div>
-            </div>
+            </Row>
           </div>
-        </>
+        </div>
       )}
     </div>
+  );
+}
+
+/** One settings row: label + status left, action button right, form folds out below. */
+function Row({
+  title,
+  status,
+  action = "Configure",
+  children,
+}: {
+  title: string;
+  status?: React.ReactNode;
+  action?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <details>
+      <summary className="flex items-center justify-between gap-4 px-5 py-4 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+        <span className="text-sm font-medium flex items-center gap-2 flex-wrap">
+          {title}
+          {status}
+        </span>
+        <span className="btn-secondary btn-sm shrink-0">{action}</span>
+      </summary>
+      <div className="px-5 pb-5">{children}</div>
+    </details>
   );
 }
