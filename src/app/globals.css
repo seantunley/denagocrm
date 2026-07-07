@@ -57,7 +57,10 @@
     @apply block text-xs font-semibold text-slate-400 mb-1 uppercase tracking-wide;
   }
   .card {
-    @apply rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-sm;
+    /* min-w-0: cards live inside grids/flex rows — without it a long
+       unbroken line inside sets the card's minimum width and drags the
+       whole page sideways on phones */
+    @apply rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-sm min-w-0;
   }
   .badge {
     @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;
