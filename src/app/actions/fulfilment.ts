@@ -144,6 +144,39 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
   revalidatePath("/workshop-calendar");
 }
 
+/** Delivery photos — multiple, any time from scheduling onwards. */
+export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) {
+  const user = await requireUser();
+  const quote = await prisma.quote.findUniqueOrThrow({ where: { id: quoteId } });
+  const files = formData.getAll("files").filter(
+    (f): f is File => typeof f === "object" && (f as File).size > 0
+  );
+  let saved = 0;
+  for (const file of files.slice(0, 10)) {
+    if (file.size > MAX_FILE || !file.type.startsWith("image/")) continue;
+    await attachStageDocument(
+      quoteId,
+      quote.contactId,
+      "delivery-photo",
+      `Delivery photo — Q-${quote.number} — ${file.name}`,
+      file,
+      user.id
+    );
+    saved++;
+  }
+  if (saved > 0) {
+    await logAudit({
+      action: "fulfilment.photos",
+      summary: `${saved} delivery photo${saved !== 1 ? "s" : ""} added to Q-${quote.number}`,
+      contactId: quote.contactId,
+      leadId: quote.leadId,
+      user,
+    });
+  }
+  revalidatePath("/deliveries");
+  revalidatePath(`/quotes/${quoteId}`);
+}
+
 /** Delivered — optional signed delivery note, then straight to vehicle registration. */
 export async function markDelivered(quoteId: string, formData: FormData) {
   const user = await requireUser();

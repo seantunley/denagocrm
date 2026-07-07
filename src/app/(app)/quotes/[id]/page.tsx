@@ -11,6 +11,7 @@ import {
   createQuoteRevision,
 } from "@/app/actions/quotes";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import { uploadDeliveryPhotos } from "@/app/actions/fulfilment";
 import SigningBlock from "@/components/SigningBlock";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 
@@ -89,6 +90,13 @@ export default async function QuoteDetailPage({
   });
   if (!quote) notFound();
   const family = await getQuoteFamily(quote);
+  const deliveryPhotos =
+    quote.status === "accepted"
+      ? await prisma.document.findMany({
+          where: { quoteId: quote.id, tag: "delivery-photo", deletedAt: null },
+          orderBy: { createdAt: "desc" },
+        })
+      : [];
   const successor = quote.revisions[0] ?? null;
   const total = quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
   const lockedBySigning = Boolean(quote.signToken) && !quote.signedAt;
@@ -303,6 +311,50 @@ export default async function QuoteDetailPage({
         declineReason={quote.declineReason}
         signedPdfHash={quote.signedPdfHash}
       />
+      )}
+
+      {quote.status === "accepted" && !quote.supersededAt && (
+        <div className="card">
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+            <div>
+              <h2 className="font-semibold">📷 Delivery photos</h2>
+              <p className="text-xs text-slate-400">
+                The happy handover — filed on the customer and this quote.
+              </p>
+            </div>
+            <form
+              action={uploadDeliveryPhotos.bind(null, quote.id)}
+              className="flex items-center gap-2"
+            >
+              <input
+                type="file"
+                name="files"
+                multiple
+                required
+                accept="image/*"
+                capture="environment"
+                className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0"
+              />
+              <button className="btn-primary btn-sm">Upload</button>
+            </form>
+          </div>
+          {deliveryPhotos.length === 0 ? (
+            <p className="text-xs text-slate-500">No photos yet.</p>
+          ) : (
+            <div className="flex gap-2 flex-wrap">
+              {deliveryPhotos.map((d) => (
+                <a key={d.id} href={d.storedName} target="_blank">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={d.storedName}
+                    alt={d.fileName}
+                    className="h-24 w-24 object-cover rounded-lg border border-slate-700 hover:border-orange-500 transition-colors"
+                  />
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
       )}
 
       <div className="grid lg:grid-cols-3 gap-6 items-start">

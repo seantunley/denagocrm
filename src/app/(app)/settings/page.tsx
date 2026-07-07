@@ -33,6 +33,9 @@ import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { decryptValue } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
 import { formatDate } from "@/lib/format";
+import AutomationsPage from "../automations/page";
+import ProductsPage from "../products/page";
+import LibraryPage from "../library/page";
 
 const TABS = [
   { key: "pipeline", label: "Pipeline" },
@@ -42,6 +45,9 @@ const TABS = [
   { key: "email", label: "Email" },
   { key: "quotes", label: "Quotes" },
   { key: "workshop", label: "Workshop" },
+  { key: "automations", label: "Automations" },
+  { key: "products", label: "Products" },
+  { key: "library", label: "Library" },
   { key: "integrations", label: "Integrations" },
   { key: "import", label: "Import" },
 ] as const;
@@ -705,6 +711,10 @@ export default async function SettingsPage({
           </div>
         </div>
       )}
+
+      {tab === "automations" && <AutomationsPage />}
+      {tab === "products" && <ProductsPage />}
+      {tab === "library" && <LibraryPage />}
 
       {tab === "integrations" && (
         <div className="max-w-3xl">

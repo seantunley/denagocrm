@@ -1,11 +1,19 @@
 import { addCommunication } from "@/app/actions/communications";
 import { formatDateTime } from "@/lib/format";
 
-const icons: Record<string, string> = {
+/* eslint-disable @next/next/no-img-element */
+const logo = (src: string, alt: string) => (
+  <img src={src} alt={alt} className="h-3.5 w-3.5 rounded-[3px] object-contain" />
+);
+/* eslint-enable @next/next/no-img-element */
+
+const icons: Record<string, React.ReactNode> = {
   note: "📝",
   call: "📞",
   email: "✉️",
-  whatsapp: "💬",
+  whatsapp: logo("/branding/social-whatsapp.png", "WhatsApp"),
+  messenger: logo("/branding/social-facebook.png", "Messenger"),
+  instagram: logo("/branding/social-instagram.png", "Instagram"),
   meeting: "🤝",
   audit: "•",
   lead: "◎",
@@ -18,7 +26,7 @@ const icons: Record<string, string> = {
 
 type Item = {
   id: string;
-  icon: string;
+  icon: React.ReactNode;
   title: string;
   body?: string | null;
   who: string;

@@ -8,7 +8,48 @@ import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendReviewRequest } from "@/lib/reviewRequests";
 import { softDeleteRecord } from "@/lib/trash";
+import { saveFile } from "@/lib/storage";
 import { parseRands } from "@/lib/format";
+
+/**
+ * Check-in photos: condition of the cart BEFORE work starts (scratches,
+ * dents, odometer). Filed on the job card and the customer.
+ */
+export async function uploadJobCardPhotos(jobCardId: string, formData: FormData) {
+  const user = await requireUser();
+  const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId } });
+  const files = formData
+    .getAll("files")
+    .filter((f): f is File => typeof f === "object" && (f as File).size > 0);
+  let saved = 0;
+  for (const file of files.slice(0, 12)) {
+    if (file.size > 4 * 1024 * 1024 || !file.type.startsWith("image/")) continue;
+    const buf = Buffer.from(await file.arrayBuffer());
+    const storedName = await saveFile(buf, file.name || "checkin.jpg", file.type);
+    await prisma.document.create({
+      data: {
+        fileName: `Check-in photo — job card #${jobCard.number} — ${file.name}`,
+        storedName,
+        mimeType: file.type,
+        sizeBytes: file.size,
+        contactId: jobCard.contactId,
+        jobCardId,
+        tag: "checkin-photo",
+        uploadedById: user.id,
+      },
+    });
+    saved++;
+  }
+  if (saved > 0) {
+    await logAudit({
+      action: "jobcard.photos",
+      summary: `${saved} check-in photo${saved !== 1 ? "s" : ""} added to job card #${jobCard.number} (pre-work condition)`,
+      contactId: jobCard.contactId,
+      user,
+    });
+  }
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
 
 export async function createJobCard(formData: FormData) {
   const user = await requireUser();

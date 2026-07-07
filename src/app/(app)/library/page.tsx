@@ -103,10 +103,10 @@ function DocumentCard({ doc }: { doc: DocWithVersions }) {
 export default async function LibraryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ cat?: string }>;
+  searchParams?: Promise<{ cat?: string }>;
 }) {
   await requireUser();
-  const { cat } = await searchParams;
+  const { cat } = (await searchParams) ?? {};
   const documents = await getDocuments();
 
   const categories = [...new Set(documents.map((d) => d.category ?? "Other"))].sort();

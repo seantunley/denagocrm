@@ -29,9 +29,6 @@ const groups: NavGroup[] = [
       { href: "/contacts", label: "Contacts", icon: "☰" },
       { href: "/activities", label: "Activities", icon: "✓" },
       { href: "/calendar", label: "Calendar", icon: "📅" },
-      { href: "/automations", label: "Automations", icon: "🤖" },
-      { href: "/products", label: "Products", icon: "⬡" },
-      { href: "/library", label: "Library", icon: "📁" },
     ],
   },
   {

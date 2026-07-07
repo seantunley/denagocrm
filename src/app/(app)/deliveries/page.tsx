@@ -6,6 +6,7 @@ import {
   markDepositPaid,
   scheduleDelivery,
   markDelivered,
+  uploadDeliveryPhotos,
 } from "@/app/actions/fulfilment";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 
@@ -24,6 +25,8 @@ export default async function DeliveriesPage() {
     where: { quoteId: { in: quotes.map((q) => q.id) } },
     select: { quoteId: true, tag: true },
   });
+  const photoCount = (quoteId: string) =>
+    docs.filter((d) => d.quoteId === quoteId && d.tag === "delivery-photo").length;
   const hasDoc = (quoteId: string, tag: string) =>
     docs.some((d) => d.quoteId === quoteId && d.tag === tag);
 
@@ -88,6 +91,7 @@ export default async function DeliveriesPage() {
                       <p className="text-[11px] text-slate-500 mt-1">
                         {hasDoc(q.id, "invoice") ? "📄 invoice ✓" : ""}
                         {hasDoc(q.id, "pop") ? " · 💰 POP ✓" : ""}
+                        {photoCount(q.id) > 0 ? ` · 📷 ${photoCount(q.id)}` : ""}
                         {q.deliveryScheduledFor
                           ? ` · 🚚 ${formatDate(q.deliveryScheduledFor)}`
                           : ""}
@@ -147,6 +151,24 @@ export default async function DeliveriesPage() {
                           <p className="text-[10px] text-slate-500">
                             Optional: attach the signed delivery note first.
                           </p>
+                        </form>
+                      )}
+                      {col.key === "deliver" && (
+                        <form
+                          action={uploadDeliveryPhotos.bind(null, q.id)}
+                          className="mt-1.5 space-y-1.5"
+                        >
+                          <input
+                            type="file"
+                            name="files"
+                            multiple
+                            accept="image/*"
+                            capture="environment"
+                            className="block w-full text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0"
+                          />
+                          <button className="btn-secondary btn-sm w-full">
+                            📷 Add delivery photos
+                          </button>
                         </form>
                       )}
                     </div>

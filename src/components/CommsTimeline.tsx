@@ -2,12 +2,18 @@ import { addCommunication, deleteCommunication } from "@/app/actions/communicati
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { formatDateTime } from "@/lib/format";
 
-const typeIcons: Record<string, string> = {
+/* eslint-disable @next/next/no-img-element */
+const logo = (src: string, alt: string) => (
+  <img src={src} alt={alt} className="h-3.5 w-3.5 rounded-[3px] object-contain" />
+);
+/* eslint-enable @next/next/no-img-element */
+
+const typeIcons: Record<string, React.ReactNode> = {
   call: "📞",
   email: "✉️",
-  whatsapp: "💬",
-  messenger: "🔵",
-  instagram: "📸",
+  whatsapp: logo("/branding/social-whatsapp.png", "WhatsApp"),
+  messenger: logo("/branding/social-facebook.png", "Messenger"),
+  instagram: logo("/branding/social-instagram.png", "Instagram"),
   meeting: "🤝",
   note: "📝",
 };
