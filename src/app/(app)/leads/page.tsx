@@ -22,6 +22,7 @@ export default async function LeadsPage() {
               where: { status: "planned", type: "test_drive", dueDate: { gte: new Date() } },
               orderBy: { dueDate: "asc" },
               take: 1,
+              include: { assignedTo: true },
             },
           },
         },
@@ -63,6 +64,7 @@ export default async function LeadsPage() {
             saDate.toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" }) +
             (hasTime ? ` ${saDate.toISOString().slice(11, 16)}` : ""),
           weather: wx ? `${wx.icon} ${wx.maxTemp}°${wx.rainChance >= 30 ? ` · ${wx.rainChance}% rain` : ""}` : null,
+          who: td.assignedTo.name.split(" ")[0],
         };
       })(),
     })),
