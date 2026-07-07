@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/auth";
 import InboxReply from "@/components/InboxReply";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
+import RowModal from "@/components/RowModal";
 import { contactName, formatDateTime } from "@/lib/format";
 
 export const metadata = { title: "Social inbox — DenagoCRM" };
@@ -216,68 +217,93 @@ function ThreadList({ list, empty }: { list: ThreadForList[]; empty: string }) {
     return <div className="card max-w-2xl text-sm text-slate-400">{empty}</div>;
   }
   return (
-    <div className="space-y-4 max-w-3xl">
+    <div className="card p-0 divide-y divide-slate-800 max-w-3xl">
       {list.map((t) => {
         const meta = CHANNEL_META[t.channel];
+        const last = t.messages[0];
+        const preview = last
+          ? `${last.direction === "outbound" ? "You: " : ""}${last.body}`
+          : "";
         return (
-          <div key={t.key} className="card p-4">
-            <div className="flex items-center gap-2 flex-wrap">
-              {meta.icon}
-              {t.href ? (
-                <Link href={t.href} className="font-semibold text-orange-400 hover:underline">
-                  {t.name}
-                </Link>
-              ) : (
-                <span className="font-semibold">{t.name}</span>
-              )}
-              <span className="text-xs text-slate-500">{meta.label}</span>
-              {t.awaiting && (
-                <span className="badge bg-amber-500/15 text-amber-300">awaiting reply</span>
-              )}
-              <span className="text-[11px] text-slate-500 ml-auto">{formatDateTime(t.lastAt)}</span>
-            </div>
-            <div className="mt-3 space-y-1">
-              {[...t.messages].reverse().map((m) => (
-                <div
-                  key={m.id}
-                  className={`w-fit max-w-[75%] rounded-2xl px-3 py-1.5 text-sm leading-snug whitespace-pre-wrap ${
-                    m.direction === "inbound"
-                      ? "bg-slate-800 text-slate-200 rounded-bl-md"
-                      : "bg-orange-600 text-white ml-auto rounded-br-md"
-                  }`}
-                >
-                  {m.attachmentUrl && m.attachmentType === "image" ? (
-                    <a href={m.attachmentUrl} target="_blank">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={m.attachmentUrl} alt="Attachment" className="max-h-48 rounded-md my-1" />
-                    </a>
-                  ) : m.attachmentUrl && m.attachmentType === "audio" ? (
-                    <audio controls src={m.attachmentUrl} className="my-1 max-w-full" />
-                  ) : m.attachmentUrl && m.attachmentType === "video" ? (
-                    <video controls src={m.attachmentUrl} className="max-h-48 rounded-md my-1" />
-                  ) : m.attachmentUrl ? (
-                    <a href={m.attachmentUrl} target="_blank" className="underline text-orange-300">
-                      {m.body || "📎 Attachment"}
-                    </a>
-                  ) : null}
-                  {(!m.attachmentUrl ||
-                    (m.body &&
-                      !m.body.startsWith("🖼") &&
-                      !m.body.startsWith("🎤") &&
-                      !m.body.startsWith("🎬") &&
-                      !m.body.startsWith("📎"))) &&
-                    m.body}
+          <RowModal
+            key={t.key}
+            row={
+              <div className="flex items-center gap-3">
+                <span className="shrink-0">{meta.icon}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">
+                    {t.name}
+                    <span className="text-xs text-slate-500 font-normal ml-2">{meta.label}</span>
+                  </p>
+                  <p className="text-xs text-slate-400 truncate">{preview}</p>
                 </div>
-              ))}
+                <div className="text-right shrink-0">
+                  {t.awaiting && (
+                    <span className="badge bg-amber-500/15 text-amber-300">awaiting reply</span>
+                  )}
+                  <p className="text-[11px] text-slate-500 mt-0.5">{formatDateTime(t.lastAt)}</p>
+                </div>
+              </div>
+            }
+          >
+            <div className="card">
+              <div className="flex items-center gap-2 flex-wrap">
+                {meta.icon}
+                {t.href ? (
+                  <Link href={t.href} className="font-semibold text-orange-400 hover:underline">
+                    {t.name}
+                  </Link>
+                ) : (
+                  <span className="font-semibold">{t.name}</span>
+                )}
+                <span className="text-xs text-slate-500">{meta.label}</span>
+                <span className="text-[11px] text-slate-500 ml-auto">
+                  {formatDateTime(t.lastAt)}
+                </span>
+              </div>
+              <div className="mt-3 space-y-1">
+                {[...t.messages].reverse().map((m) => (
+                  <div
+                    key={m.id}
+                    className={`w-fit max-w-[75%] rounded-2xl px-3 py-1.5 text-sm leading-snug whitespace-pre-wrap ${
+                      m.direction === "inbound"
+                        ? "bg-slate-800 text-slate-200 rounded-bl-md"
+                        : "bg-orange-600 text-white ml-auto rounded-br-md"
+                    }`}
+                  >
+                    {m.attachmentUrl && m.attachmentType === "image" ? (
+                      <a href={m.attachmentUrl} target="_blank">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={m.attachmentUrl} alt="Attachment" className="max-h-48 rounded-md my-1" />
+                      </a>
+                    ) : m.attachmentUrl && m.attachmentType === "audio" ? (
+                      <audio controls src={m.attachmentUrl} className="my-1 max-w-full" />
+                    ) : m.attachmentUrl && m.attachmentType === "video" ? (
+                      <video controls src={m.attachmentUrl} className="max-h-48 rounded-md my-1" />
+                    ) : m.attachmentUrl ? (
+                      <a href={m.attachmentUrl} target="_blank" className="underline text-orange-200">
+                        {m.body || "📎 Attachment"}
+                      </a>
+                    ) : null}
+                    {(!m.attachmentUrl ||
+                      (m.body &&
+                        !m.body.startsWith("🖼") &&
+                        !m.body.startsWith("🎤") &&
+                        !m.body.startsWith("🎬") &&
+                        !m.body.startsWith("📎"))) &&
+                      m.body}
+                  </div>
+                ))}
+              </div>
+              <InboxReply
+                channel={t.channel}
+                contactId={t.contactId}
+                leadId={t.leadId}
+                phone={t.phone}
+                revalidate="/inbox"
+              />
             </div>
-            <InboxReply
-              channel={t.channel}
-              contactId={t.contactId}
-              leadId={t.leadId}
-              phone={t.phone}
-              revalidate="/inbox"
-            />
-          </div>
+          </RowModal>
         );
       })}
     </div>
