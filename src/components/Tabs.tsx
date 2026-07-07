@@ -14,7 +14,7 @@ export default function Tabs({ tabs }: { tabs: TabDef[] }) {
 
   return (
     <div>
-      <div className="flex gap-1 border-b border-slate-800 mb-5 overflow-x-auto">
+      <div className="flex gap-1 border-b border-slate-800 mb-5 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {tabs.map((t) => (
           <button
             key={t.key}
