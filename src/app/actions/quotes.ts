@@ -8,6 +8,7 @@ import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { getSetting } from "@/lib/settings";
+import { markReferralEarned } from "@/lib/referrals";
 import { parseRands, formatZAR, contactName } from "@/lib/format";
 
 /** Creates a draft quote from a lead, pre-filled with its product line. */
@@ -260,6 +261,7 @@ export async function setQuoteStatus(quoteId: string, status: string) {
   // Accepting a quote wins its lead
   if (status === "accepted" && quote.leadId && quote.lead?.status === "open") {
     await prisma.lead.update({ where: { id: quote.leadId }, data: { status: "won" } });
+    await markReferralEarned(quote.leadId).catch(() => {});
     await logAudit({
       action: "lead.won",
       summary: `Lead “${quote.lead.title}” won via accepted quote Q-${quote.number} 🎉`,

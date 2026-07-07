@@ -112,6 +112,7 @@ model Contact {
   email         String?
   phone         String?
   whatsapp      String?
+  referralCode  String?  @unique // customer's shareable referral code
   messengerPsid String?  @unique // Facebook Messenger page-scoped id
   instagramId   String?  @unique // Instagram-scoped user id
   address       String? // street address / estate + unit
@@ -135,6 +136,8 @@ model Contact {
 
   leads          Lead[]
   communications Communication[]
+  referralsMade  Referral[]      @relation("ReferralsMade")
+  referredIn     Referral[]      @relation("ReferredIn")
   documents      Document[]
   vehicles       Vehicle[]
   jobCards       JobCard[]
@@ -194,8 +197,9 @@ model Lead {
   activities     Activity[]
   quotes         Quote[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  referral  Referral?
 }
 
 model Activity {
@@ -526,4 +530,24 @@ model GoogleReview {
   publishedAt DateTime
   raw         String?
   createdAt   DateTime @default(now())
+}
+
+// A customer referred someone. Fee is earned when the referred lead is won,
+// and redeemed manually (note records what was given at the time).
+model Referral {
+  id           String    @id @default(cuid())
+  status       String    @default("pending") // pending | earned | redeemed
+  earnedAt     DateTime?
+  redeemedAt   DateTime?
+  redeemedNote String? // e.g. "R1,000 service voucher"
+  createdAt    DateTime  @default(now())
+
+  referrerId String
+  referrer   Contact  @relation("ReferralsMade", fields: [referrerId], references: [id], onDelete: Cascade)
+  leadId     String?  @unique
+  lead       Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  contactId  String? // the referred person once they are a contact
+  contact    Contact? @relation("ReferredIn", fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@index([referrerId, createdAt])
 }

@@ -68,7 +68,7 @@ export async function syncGoogleReviews(): Promise<number> {
       title: `New Google review ${"⭐".repeat(Math.min(5, review.rating))}`,
       body: `${author}: ${(review.text ?? "").slice(0, 90) || "(no text)"}`,
       url: "/inbox",
-    }).catch(() => {});
+    }, "review").catch(() => {});
   }
   return created;
 }

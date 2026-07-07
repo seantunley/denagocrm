@@ -108,7 +108,7 @@ export async function recordInboundWhatsApp(
         title: "New WhatsApp lead 💬",
         body: `${profileName ?? fromDigits}: ${text.slice(0, 80)}`,
         url: `/leads/${leadId}`,
-      }).catch(() => {});
+      }, "whatsapp").catch(() => {});
     }
   }
 

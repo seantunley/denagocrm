@@ -72,6 +72,15 @@ export default function LeadForm({
           </select>
         </div>
         <div>
+          <label className="label">Referral code (if referred)</label>
+          <input
+            name="referralCode"
+            className="input uppercase"
+            placeholder="DGO-XXXX"
+            maxLength={12}
+          />
+        </div>
+        <div>
           <label className="label">Email</label>
           <input name="email" type="email" className="input" defaultValue={defaults.email ?? ""} />
         </div>

@@ -13,13 +13,39 @@ function ensureConfigured(): boolean {
   return true;
 }
 
+/** Every push the CRM can send — shown as toggles in Settings → Notifications. */
+export const PUSH_KINDS = [
+  { id: "lead_new", label: "New lead", desc: "Facebook, Instagram, website or WhatsApp lead arrives" },
+  { id: "dm", label: "Social DMs", desc: "New Messenger / Instagram message" },
+  { id: "whatsapp", label: "WhatsApp messages", desc: "New inbound WhatsApp" },
+  { id: "booking", label: "Service bookings", desc: "Online booking lands in the workshop diary" },
+  { id: "quote_viewed", label: "Quote opened", desc: "Customer views their signing link" },
+  { id: "quote_signed", label: "Quote / job card signed", desc: "Customer signs online" },
+  { id: "quote_feedback", label: "Quote declined / changes", desc: "Customer declines or requests changes" },
+  { id: "review", label: "Google reviews", desc: "A new review appears" },
+  { id: "referral", label: "Referral fees", desc: "A referred deal is won — fee due" },
+] as const;
+
+export type PushKind = (typeof PUSH_KINDS)[number]["id"];
+
+async function isKindDisabled(kind?: PushKind): Promise<boolean> {
+  if (!kind) return false;
+  const row = await prisma.appSetting.findUnique({ where: { key: "PUSH_DISABLED_KINDS" } });
+  if (!row?.value) return false;
+  return row.value.split(",").includes(kind);
+}
+
 /** Sends a push notification to every subscribed device; prunes dead subscriptions. */
-export async function sendPushToAll(payload: {
-  title: string;
-  body: string;
-  url?: string;
-}): Promise<number> {
+export async function sendPushToAll(
+  payload: {
+    title: string;
+    body: string;
+    url?: string;
+  },
+  kind?: PushKind
+): Promise<number> {
   if (!ensureConfigured()) return 0;
+  if (await isKindDisabled(kind)) return 0;
   const subs = await prisma.pushSubscription.findMany();
   let sent = 0;
   await Promise.all(

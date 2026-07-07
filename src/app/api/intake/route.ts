@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getSetting } from "@/lib/settings";
 import { createIntakeLead } from "@/lib/leadIntake";
+import { recordReferral } from "@/lib/referrals";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -17,6 +18,7 @@ const intakeSchema = z.object({
   model: z.string().max(200).optional().nullable(),
   color: z.string().max(100).optional().nullable(),
   source: z.string().max(50).optional(),
+  referralCode: z.string().max(20).optional().nullable(),
 });
 
 export async function OPTIONS() {
@@ -52,11 +54,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const { referralCode, ...leadInput } = parsed.data;
   const lead = await createIntakeLead({
-    ...parsed.data,
-    source: parsed.data.source ?? "website",
+    ...leadInput,
+    source: leadInput.source ?? "website",
     raw: json,
   });
+  if (referralCode) await recordReferral(referralCode, lead.id).catch(() => {});
 
   return NextResponse.json(
     { ok: true, id: lead.id },

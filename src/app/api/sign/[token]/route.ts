@@ -10,6 +10,7 @@ import { renderUrlToPdf } from "@/lib/htmlPdf";
 import { sendEmail } from "@/lib/email";
 import { contactName, formatZAR } from "@/lib/format";
 import { quoteExpired } from "@/lib/quoteExpiry";
+import { markReferralEarned } from "@/lib/referrals";
 
 export const maxDuration = 60; // PDF rendering can take a few seconds
 
@@ -88,6 +89,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     }
     if (quote.leadId && quote.lead?.status === "open") {
       await prisma.lead.update({ where: { id: quote.leadId }, data: { status: "won" } });
+      await markReferralEarned(quote.leadId).catch(() => {});
     }
 
     // True-to-design PDF from the actual print page; pdf-lib as fallback
@@ -157,7 +159,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       title: "Quote signed 🎉",
       body: `Q-${quote.number} — ${name} · ${formatZAR(Math.round(total))}`,
       url: `/quotes/${quote.id}`,
-    }).catch(() => {});
+    }, "quote_signed").catch(() => {});
     return NextResponse.json({ ok: true });
   }
 
@@ -224,6 +226,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     title: "Job card signed ✍",
     body: `#${jobCard.number} — ${name}`,
     url: `/jobcards/${jobCard.id}`,
-  }).catch(() => {});
+  }, "quote_signed").catch(() => {});
   return NextResponse.json({ ok: true });
 }

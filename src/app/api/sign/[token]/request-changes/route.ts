@@ -72,7 +72,7 @@ export async function POST(
     title: "Quote change requested ✏️",
     body: `Q-${quote.number} — “${note.slice(0, 90)}”`,
     url: `/quotes/${quote.id}`,
-  }).catch(() => {});
+  }, "quote_feedback").catch(() => {});
 
   return NextResponse.json({ ok: true });
 }

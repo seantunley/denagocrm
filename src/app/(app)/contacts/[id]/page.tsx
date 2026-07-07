@@ -10,6 +10,9 @@ import LeadTimeline from "@/components/LeadTimeline";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
 import Tabs from "@/components/Tabs";
+import CopyButton from "@/components/CopyButton";
+import { ensureReferralCode } from "@/lib/referrals";
+import { redeemReferral } from "@/app/actions/referrals";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { formatDateTime } from "@/lib/format";
 import { requireUser } from "@/lib/auth";
@@ -56,6 +59,18 @@ export default async function ContactDetailPage({
     prisma.libraryDocument.findMany({
       orderBy: { name: "asc" },
       include: { versions: { orderBy: { version: "desc" }, take: 1 } },
+    }),
+  ]);
+  const referralCode = await ensureReferralCode(contact.id);
+  const [referralsMade, referredIn] = await Promise.all([
+    prisma.referral.findMany({
+      where: { referrerId: contact.id },
+      include: { lead: true, contact: true },
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.referral.findFirst({
+      where: { OR: [{ contactId: contact.id }, { lead: { contactId: contact.id } }] },
+      include: { referrer: true },
     }),
   ]);
   const libraryDocs = libraryDocuments
@@ -277,6 +292,117 @@ export default async function ContactDetailPage({
                       contactId={contact.id}
                       revalidate={path}
                     />
+                  </>
+                ),
+              },
+              {
+                key: "referrals",
+                label: "Referrals",
+                count: referralsMade.length,
+                content: (
+                  <>
+                    <div className="card max-w-xl">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">
+                        {contact.firstName}&apos;s referral code
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <code className="text-xl font-bold tracking-widest text-orange-400 bg-slate-800 rounded-lg px-4 py-2">
+                          {referralCode}
+                        </code>
+                        <CopyButton text={referralCode} />
+                        <a
+                          href={`https://wa.me/?text=${encodeURIComponent(
+                            `Use my referral code ${referralCode} when you enquire at Denago Cape Town (denagocpt.co.za) and mention my name — ${contactName(contact)}`
+                          )}`}
+                          target="_blank"
+                          className="btn-secondary btn-sm"
+                        >
+                          💬 Share
+                        </a>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-2">
+                        New leads captured with this code are tracked below. The fee becomes due
+                        when the referred deal is won.
+                      </p>
+                      {referredIn && (
+                        <p className="text-xs text-slate-400 mt-2 pt-2 border-t border-slate-800">
+                          👤 This customer was referred by{" "}
+                          <Link
+                            href={`/contacts/${referredIn.referrerId}`}
+                            className="text-orange-400 hover:underline"
+                          >
+                            {contactName(referredIn.referrer)}
+                          </Link>
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="card p-0 max-w-xl">
+                      {referralsMade.length === 0 ? (
+                        <p className="text-sm text-slate-400 p-5">
+                          No referrals yet — share the code above.
+                        </p>
+                      ) : (
+                        <ul className="divide-y divide-slate-800">
+                          {referralsMade.map((r) => (
+                            <li key={r.id} className="px-4 py-3">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-sm font-medium flex-1 min-w-0 truncate">
+                                  {r.lead ? (
+                                    <Link
+                                      href={`/leads/${r.lead.id}`}
+                                      className="text-orange-400 hover:underline"
+                                    >
+                                      {r.lead.name}
+                                    </Link>
+                                  ) : r.contact ? (
+                                    <Link
+                                      href={`/contacts/${r.contact.id}`}
+                                      className="text-orange-400 hover:underline"
+                                    >
+                                      {contactName(r.contact)}
+                                    </Link>
+                                  ) : (
+                                    "Referred lead"
+                                  )}
+                                  <span className="text-xs text-slate-500">
+                                    {" "}· {formatDate(r.createdAt)}
+                                  </span>
+                                </span>
+                                <span
+                                  className={`badge ${
+                                    r.status === "redeemed"
+                                      ? "bg-emerald-500/15 text-emerald-300"
+                                      : r.status === "earned"
+                                      ? "bg-amber-500/15 text-amber-300"
+                                      : "bg-slate-800 text-slate-300"
+                                  }`}
+                                >
+                                  {r.status === "earned" ? "fee due" : r.status}
+                                </span>
+                              </div>
+                              {r.status === "earned" && (
+                                <form
+                                  action={redeemReferral.bind(null, r.id)}
+                                  className="flex items-center gap-1.5 mt-2"
+                                >
+                                  <input
+                                    name="note"
+                                    required
+                                    className="input btn-sm flex-1 text-xs"
+                                    placeholder="What was given? e.g. R1,000 service voucher"
+                                  />
+                                  <button className="btn-primary btn-sm">Redeem</button>
+                                </form>
+                              )}
+                              {r.redeemedNote && (
+                                <p className="text-xs text-slate-500 mt-1">🎁 {r.redeemedNote}</p>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
                   </>
                 ),
               },

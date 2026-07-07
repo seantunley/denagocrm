@@ -66,6 +66,6 @@ export async function POST(
     title: "Quote declined",
     body: `Q-${quote.number} — “${parsed.data.reason.slice(0, 80)}”`,
     url: `/quotes/${quote.id}`,
-  }).catch(() => {});
+  }, "quote_feedback").catch(() => {});
   return NextResponse.json({ ok: true });
 }

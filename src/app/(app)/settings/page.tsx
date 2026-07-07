@@ -11,6 +11,7 @@ import {
   saveQuoteDefaults,
   saveWorkshopSettings,
   regenerateSetting,
+  saveNotificationPrefs,
 } from "@/app/actions/settings";
 import { buildSignature } from "@/lib/signature";
 import { AddUserForm, ChangePasswordForm } from "@/components/TeamForms";
@@ -30,12 +31,14 @@ import OwnerUserControls from "@/components/OwnerUserControls";
 import { saveSessionPolicy } from "@/app/actions/security";
 import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { decryptValue } from "@/lib/settings";
+import { PUSH_KINDS } from "@/lib/push";
 import { formatDate } from "@/lib/format";
 
 const TABS = [
   { key: "pipeline", label: "Pipeline" },
   { key: "account", label: "My Account" },
   { key: "team", label: "Team" },
+  { key: "notifications", label: "Notifications" },
   { key: "email", label: "Email" },
   { key: "quotes", label: "Quotes" },
   { key: "workshop", label: "Workshop" },
@@ -346,6 +349,51 @@ export default async function SettingsPage({
               </form>
             </div>
           )}
+        </div>
+      )}
+
+      {tab === "notifications" && (
+        <div className="max-w-3xl">
+          <div className="card p-0 divide-y divide-slate-800">
+            <details>
+              <summary className="flex items-center justify-between gap-4 px-5 py-4 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                <span className="text-sm font-medium">Push on this device</span>
+                <span className="btn-secondary btn-sm">Manage</span>
+              </summary>
+              <div className="px-5 pb-5">
+                <p className="text-xs text-slate-400 mb-3">
+                  Each phone/computer opts in separately. Install the app on your phone for
+                  lock-screen notifications.
+                </p>
+                <PushToggle />
+              </div>
+            </details>
+
+            <form action={saveNotificationPrefs} className="px-5 py-4">
+              <p className="text-sm font-medium">What sends a notification</p>
+              <p className="text-xs text-slate-500 mb-3">
+                Applies to the whole team&apos;s devices. Untick to silence a type everywhere.
+              </p>
+              <div className="space-y-2.5">
+                {PUSH_KINDS.map((k) => (
+                  <label key={k.id} className="flex items-start gap-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      name="kinds"
+                      value={k.id}
+                      defaultChecked={!(setting("PUSH_DISABLED_KINDS") || "").split(",").includes(k.id)}
+                      className="h-4 w-4 mt-0.5"
+                    />
+                    <span className="text-sm leading-5">
+                      {k.label}
+                      <span className="block text-xs text-slate-500">{k.desc}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <button className="btn-primary btn-sm mt-4">Save</button>
+            </form>
+          </div>
         </div>
       )}
 

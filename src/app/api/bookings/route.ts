@@ -172,7 +172,7 @@ export async function POST(req: NextRequest) {
     title: "New service booking 📅",
     body: `${contact ? contactName(contact) : b.name} — ${formatDate(activity.dueDate)} at ${b.time} · call to confirm`,
     url: "/workshop-calendar",
-  }).catch(() => {});
+  }, "booking").catch(() => {});
 
   return NextResponse.json(
     { ok: true, activityId: activity.id },

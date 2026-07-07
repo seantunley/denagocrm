@@ -269,7 +269,7 @@ export async function recordInboundDm(
     title: platform === "instagram" ? "New Instagram DM 📸" : "New Messenger message 🔵",
     body: `${contact.firstName}${contact.lastName ? ` ${contact.lastName}` : ""}: ${pushBody.slice(0, 80)}`,
     url: `/contacts/${contact.id}`,
-  }).catch(() => {});
+  }, "dm").catch(() => {});
 }
 
 /** Replies sent from Business Suite / the phone app arrive as echoes — file them too. */

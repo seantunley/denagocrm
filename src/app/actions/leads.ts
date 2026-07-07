@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { parseRands } from "@/lib/format";
 import { runLeadAutomations } from "@/lib/automations";
+import { recordReferral, markReferralEarned } from "@/lib/referrals";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 
@@ -101,6 +102,8 @@ export async function createLead(formData: FormData) {
     contactId: lead.contactId,
     user,
   });
+  const refCode = String(formData.get("referralCode") ?? "").trim();
+  if (refCode) await recordReferral(refCode, lead.id).catch(() => {});
   await runLeadAutomations("lead_created", lead.id);
   revalidatePath("/leads");
   redirect(`/leads/${lead.id}`);
@@ -177,6 +180,7 @@ export async function markWon(leadId: string) {
     where: { id: leadId },
     data: { status: "won", contactId },
   });
+  await markReferralEarned(leadId).catch(() => {});
   await logAudit({
     action: "lead.won",
     summary: `Marked lead “${lead.title}” as WON 🎉`,

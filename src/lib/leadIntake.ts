@@ -75,7 +75,7 @@ export async function createIntakeLead(input: IntakeLead) {
     title: "New lead 🚀",
     body: `${lead.title} — ${lead.name} (via ${input.source})`,
     url: `/leads/${lead.id}`,
-  }).catch(() => {});
+  }, "lead_new").catch(() => {});
   await runLeadAutomations("lead_created", lead.id);
   return lead;
 }

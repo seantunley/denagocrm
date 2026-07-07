@@ -6,6 +6,7 @@ import crypto from "crypto";
 import { prisma } from "@/lib/db";
 import { requireUser, requireOwner } from "@/lib/auth";
 import { putSetting } from "@/lib/settings";
+import { PUSH_KINDS } from "@/lib/push";
 
 // ---- Pipeline stages ----
 
@@ -172,5 +173,14 @@ export async function regenerateSetting(key: string) {
   await requireUser();
   const value = crypto.randomBytes(24).toString("hex");
   await putSetting(key, value);
+  revalidatePath("/settings");
+}
+
+/** Team-wide push toggles: unticked kinds are stored as disabled. */
+export async function saveNotificationPrefs(formData: FormData) {
+  await requireUser();
+  const enabled = new Set(formData.getAll("kinds").map(String));
+  const disabled = PUSH_KINDS.map((k) => k.id).filter((id) => !enabled.has(id));
+  await putSetting("PUSH_DISABLED_KINDS", disabled.join(","));
   revalidatePath("/settings");
 }

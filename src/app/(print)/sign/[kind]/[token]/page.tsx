@@ -83,7 +83,7 @@ export default async function SignPage({
           title: "👀 Quote opened",
           body: `Q-${quote.number} — the signing link was just viewed`,
           url: `/quotes/${quote.id}`,
-        });
+        }, "quote_viewed");
       } catch {}
     }
     doc = {
