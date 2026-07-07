@@ -85,25 +85,18 @@ function ActivityBlock({
 function StatStrip({
   stats,
 }: {
-  stats: { label: string; value: string; href: string; icon: string }[];
+  stats: { label: string; value: string; href: string; icon?: string }[];
 }) {
   return (
-    <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
       {stats.map((s) => (
         <Link
           key={s.label}
           href={s.href}
-          className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 px-4 py-3 hover:border-orange-600/60 transition-colors"
+          className="card hover:border-orange-600/60 transition-colors"
         >
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-slate-800/80 text-base">
-            {s.icon}
-          </span>
-          <span className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 truncate">
-              {s.label}
-            </p>
-            <p className="text-xl font-bold leading-6 truncate">{s.value}</p>
-          </span>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{s.label}</p>
+          <p className="text-2xl font-bold mt-1">{s.value}</p>
         </Link>
       ))}
     </div>
