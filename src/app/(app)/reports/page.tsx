@@ -2,7 +2,7 @@ import { subDays, subMonths, startOfMonth, format } from "date-fns";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import Tabs from "@/components/Tabs";
-import { formatZAR } from "@/lib/format";
+import { formatZAR, formatZARCompact } from "@/lib/format";
 
 function Bar({ value, max, color = "bg-orange-600" }: { value: number; max: number; color?: string }) {
   const pct = max > 0 ? Math.max(2, Math.round((value / max) * 100)) : 0;
@@ -138,7 +138,7 @@ export default async function ReportsPage() {
                     value={winRate != null ? `${winRate}%` : "—"}
                     sub={`${won90.length} won · ${lost90.length} lost`}
                   />
-                  <StatCard label="Sales value (90 days)" value={formatZAR(wonValue90)} />
+                  <StatCard label="Sales value (90 days)" value={formatZARCompact(wonValue90)} />
                   <StatCard
                     label="Quote acceptance"
                     value={quoteRate != null ? `${quoteRate}%` : "—"}
@@ -251,13 +251,13 @@ export default async function ReportsPage() {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   <StatCard
                     label="Workshop revenue (6 mo)"
-                    value={formatZAR(Math.round(workshopRevenue6mo))}
+                    value={formatZARCompact(Math.round(workshopRevenue6mo))}
                   />
                   <StatCard label="Jobs completed (6 mo)" value={String(workshopJobs6mo)} />
-                  <StatCard label="Avg job value" value={formatZAR(Math.round(avgJobValue))} />
+                  <StatCard label="Avg job value" value={formatZARCompact(Math.round(avgJobValue))} />
                   <StatCard
                     label="This month"
-                    value={formatZAR(Math.round(thisMonthShop?.value ?? 0))}
+                    value={formatZARCompact(Math.round(thisMonthShop?.value ?? 0))}
                     sub={`${thisMonthShop?.count ?? 0} job${(thisMonthShop?.count ?? 0) !== 1 ? "s" : ""} completed`}
                   />
                 </div>
@@ -292,9 +292,9 @@ export default async function ReportsPage() {
 
 function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="card">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="text-2xl font-bold mt-1">{value}</p>
+    <div className="card min-w-0">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 truncate">{label}</p>
+      <p className="text-2xl font-bold mt-1 truncate" title={value}>{value}</p>
       {sub && <p className="text-xs text-slate-500">{sub}</p>}
     </div>
   );

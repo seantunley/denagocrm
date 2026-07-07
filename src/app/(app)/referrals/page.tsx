@@ -39,7 +39,7 @@ export default async function ReferralsPage() {
         </p>
       </div>
 
-      <div className="card p-0">
+      <div className="card p-0 overflow-x-auto">
         <table className="table-base">
           <thead>
             <tr>

@@ -268,7 +268,7 @@ export default async function SettingsPage({
 
       {tab === "team" && (
         <div className="max-w-3xl space-y-6">
-          <div className="card p-0">
+          <div className="card p-0 overflow-x-auto">
             <table className="table-base">
               <thead>
                 <tr>

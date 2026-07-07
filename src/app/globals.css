@@ -68,6 +68,13 @@
   }
 }
 
+/* Phones: never let a rogue element drag the whole page sideways */
+@media (max-width: 1023px) {
+  main {
+    overflow-x: clip;
+  }
+}
+
 /* Horizontal scroll containers must never sprout a 1px vertical scrollbar */
 .overflow-x-auto {
   overflow-y: hidden;

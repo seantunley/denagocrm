@@ -358,8 +358,9 @@ export default async function QuoteDetailPage({
       )}
 
       <div className="grid lg:grid-cols-3 gap-6 items-start">
-        <div className="lg:col-span-2 card">
+        <div className="lg:col-span-2 card min-w-0">
           <h2 className="font-semibold mb-4">Line items</h2>
+          <div className="overflow-x-auto">
           <table className="table-base mb-4">
             <thead>
               <tr>
@@ -401,6 +402,7 @@ export default async function QuoteDetailPage({
               ))}
             </tbody>
           </table>
+          </div>
 
           {editable && (
             <form

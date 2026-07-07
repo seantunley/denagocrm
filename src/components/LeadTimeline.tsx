@@ -89,7 +89,7 @@ export default function LeadTimeline({
   ].sort((a, b) => b.when.getTime() - a.when.getTime());
 
   return (
-    <div className="card">
+    <div className="card min-w-0">
       <h2 className="font-semibold mb-4">Live timeline</h2>
 
       <form action={addCommunication} className="mb-5 space-y-2">
@@ -118,9 +118,9 @@ export default function LeadTimeline({
               <span className="absolute -left-[11px] flex h-5 w-5 items-center justify-center rounded-full bg-slate-800 text-[10px]">
                 {item.icon}
               </span>
-              <p className="text-sm text-slate-200">{item.title}</p>
+              <p className="text-sm text-slate-200 break-words [overflow-wrap:anywhere]">{item.title}</p>
               {item.body && (
-                <p className="text-xs text-slate-400 whitespace-pre-wrap mt-0.5 line-clamp-4">
+                <p className="text-xs text-slate-400 whitespace-pre-wrap mt-0.5 line-clamp-4 break-words [overflow-wrap:anywhere]">
                   {item.body}
                 </p>
               )}

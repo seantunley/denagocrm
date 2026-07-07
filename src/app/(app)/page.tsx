@@ -7,7 +7,7 @@ import { completeActivity } from "@/app/actions/activities";
 import { activityIcons } from "@/components/ActivityPanel";
 import Tabs from "@/components/Tabs";
 import { hasModule } from "@/lib/access";
-import { formatZAR, formatDate, formatDateTime, contactName } from "@/lib/format";
+import { formatZAR, formatZARCompact, formatDate, formatDateTime, contactName } from "@/lib/format";
 import { computeDue, dueLabels, dueColors } from "@/lib/serviceDue";
 
 type DashActivity = {
@@ -94,10 +94,14 @@ function StatStrip({
         <Link
           key={s.label}
           href={s.href}
-          className="card hover:border-orange-600/60 transition-colors"
+          className="card hover:border-orange-600/60 transition-colors min-w-0"
         >
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{s.label}</p>
-          <p className="text-2xl font-bold mt-1">{s.value}</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 truncate">
+            {s.label}
+          </p>
+          <p className="text-2xl font-bold mt-1 truncate" title={s.value}>
+            {s.value}
+          </p>
         </Link>
       ))}
     </div>
@@ -187,7 +191,7 @@ export default async function DashboardPage() {
                     { label: "Open leads", value: String(openLeads), href: "/leads", icon: "◎" },
                     {
                       label: "Pipeline",
-                      value: formatZAR(openValue._sum.valueCents ?? 0),
+                      value: formatZARCompact(openValue._sum.valueCents ?? 0),
                       href: "/leads",
                       icon: "💰",
                     },

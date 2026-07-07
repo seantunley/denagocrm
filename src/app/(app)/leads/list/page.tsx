@@ -157,7 +157,7 @@ export default async function LeadListPage({
         </form>
       )}
 
-      <div className="card p-0">
+      <div className="card p-0 overflow-x-auto">
         <table className="table-base">
           <thead>
             <tr>

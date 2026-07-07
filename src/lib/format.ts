@@ -1,3 +1,11 @@
+/** Compact money for tight stat cards: R 370k, R 2,27m. */
+export function formatZARCompact(cents: number): string {
+  const r = cents / 100;
+  if (r >= 1_000_000) return `R ${(r / 1_000_000).toFixed(2).replace(".", ",")}m`;
+  if (r >= 100_000) return `R ${Math.round(r / 1000)}k`;
+  return formatZAR(cents);
+}
+
 export function formatZAR(cents: number): string {
   return new Intl.NumberFormat("en-ZA", {
     style: "currency",

@@ -117,7 +117,7 @@ export default function CommsTimeline({
                 {c.subject && (
                   <p className="text-sm font-medium text-slate-300">{c.subject}</p>
                 )}
-                <p className="text-sm text-slate-400 whitespace-pre-wrap">{c.body}</p>
+                <p className="text-sm text-slate-400 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{c.body}</p>
               </div>
               <div className="opacity-0 group-hover:opacity-100">
                 <ConfirmDelete
