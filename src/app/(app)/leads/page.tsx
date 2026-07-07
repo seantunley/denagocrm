@@ -51,6 +51,7 @@ export default async function LeadsPage() {
           <Link href="/leads/closed" className="btn-secondary">
             Won / Lost
           </Link>
+          <a href="/leads/list" className="btn-secondary">☰ List view</a>
           <ModalTrigger label="+ New lead" title="New lead">
             <LeadForm
               action={createLead}

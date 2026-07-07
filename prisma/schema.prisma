@@ -557,3 +557,12 @@ model Referral {
 
   @@index([referrerId, createdAt])
 }
+
+// Saved list filters ("Facebook leads over R200k this month")
+model SavedView {
+  id        String   @id @default(cuid())
+  name      String
+  page      String // e.g. leads
+  query     String // URL search params
+  createdAt DateTime @default(now())
+}

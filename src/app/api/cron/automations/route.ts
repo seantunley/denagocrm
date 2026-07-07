@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+
+export const maxDuration = 60; // IMAP + Graph sync can take a few seconds
 import { runIdleAutomations } from "@/lib/automations";
 import { runServiceReminders } from "@/lib/serviceReminders";
 import { runQuoteSigningReminders } from "@/lib/signingReminders";
 import { syncFacebookLeads } from "@/lib/metaLeadSync";
 import { syncGoogleReviews } from "@/lib/googleReviews";
+import { syncInboundEmail } from "@/lib/imapSync";
 import { getSetting } from "@/lib/settings";
 
 /**
@@ -31,6 +34,7 @@ export async function GET(req: NextRequest) {
   const quoteReminders = await runQuoteSigningReminders().catch(() => -1);
   const fbLeads = await syncFacebookLeads().catch(() => -1);
   const googleReviews = await syncGoogleReviews().catch(() => -1);
+  const inboundEmail = await syncInboundEmail().catch(() => -1);
   return NextResponse.json({
     ok: true,
     fired,
@@ -38,5 +42,6 @@ export async function GET(req: NextRequest) {
     quoteReminders,
     fbLeads,
     googleReviews,
+    inboundEmail,
   });
 }

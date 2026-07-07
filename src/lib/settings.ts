@@ -9,6 +9,7 @@ import { prisma } from "./db";
  */
 const SECRET_KEYS = new Set([
   "SMTP_PASS",
+  "IMAP_PASS",
   "META_PAGE_ACCESS_TOKEN",
   "META_APP_SECRET",
   "META_VERIFY_TOKEN",

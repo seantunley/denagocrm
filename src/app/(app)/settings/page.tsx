@@ -30,6 +30,7 @@ import SecurityPanel from "@/components/SecurityPanel";
 import OwnerUserControls from "@/components/OwnerUserControls";
 import { saveSessionPolicy } from "@/app/actions/security";
 import { saveBotSettings, addBotRule, deleteBotRule } from "@/app/actions/bot";
+import { saveImapSettings } from "@/app/actions/emails";
 import { getBotRules } from "@/lib/bot";
 import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { decryptValue } from "@/lib/settings";
@@ -605,6 +606,56 @@ export default async function SettingsPage({
                 </div>
               </form>
               <TestEmailButton />
+            </Row>
+
+            <Row
+              title="Incoming email (IMAP)"
+              status={
+                setting("IMAP_HOST") ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                ) : (
+                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
+                )
+              }
+            >
+              <p className="text-xs text-slate-400 mb-4">
+                Customer replies land on their record automatically (checked every 15 minutes,
+                read-only — nothing is moved or marked in the mailbox). Unknown senders are left
+                alone. Usually the same details as SMTP with port 993.
+              </p>
+              <form action={saveImapSettings} className="grid md:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">IMAP host</label>
+                  <input name="host" className="input" defaultValue={setting("IMAP_HOST")} placeholder="mail.denagocpt.co.za" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="label">Port</label>
+                    <input name="port" className="input" defaultValue={setting("IMAP_PORT") || "993"} />
+                  </div>
+                  <div className="flex items-center gap-2 pt-6">
+                    <input
+                      type="checkbox"
+                      name="secure"
+                      id="imap-secure"
+                      defaultChecked={setting("IMAP_SECURE") !== "false"}
+                      className="h-4 w-4"
+                    />
+                    <label htmlFor="imap-secure" className="text-sm text-slate-400">SSL</label>
+                  </div>
+                </div>
+                <div>
+                  <label className="label">Username</label>
+                  <input name="user" className="input" defaultValue={setting("IMAP_USER")} placeholder="sales@denagocpt.co.za" />
+                </div>
+                <div>
+                  <label className="label">Password</label>
+                  <input name="pass" type="password" className="input" defaultValue={setting("IMAP_PASS")} />
+                </div>
+                <div className="md:col-span-2">
+                  <button className="btn-primary">Save incoming email</button>
+                </div>
+              </form>
             </Row>
 
             <Row

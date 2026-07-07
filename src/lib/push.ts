@@ -23,6 +23,7 @@ export const PUSH_KINDS = [
   { id: "quote_signed", label: "Quote / job card signed", desc: "Customer signs online" },
   { id: "quote_feedback", label: "Quote declined / changes", desc: "Customer declines or requests changes" },
   { id: "review", label: "Google reviews", desc: "A new review appears" },
+  { id: "email_in", label: "Email replies", desc: "A customer replies to an email (IMAP)" },
   { id: "referral", label: "Referral fees", desc: "A referred deal is won — fee due" },
 ] as const;
 

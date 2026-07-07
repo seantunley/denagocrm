@@ -161,3 +161,19 @@ export async function deleteTemplate(id: string, formData: FormData) {
   await prisma.emailTemplate.delete({ where: { id } });
   revalidatePath("/settings");
 }
+
+/** Incoming-mail (IMAP) credentials — password encrypted at rest. */
+export async function saveImapSettings(formData: FormData) {
+  await requireUser();
+  const entries: Record<string, string> = {
+    IMAP_HOST: String(formData.get("host") ?? "").trim(),
+    IMAP_PORT: String(formData.get("port") ?? "993").trim(),
+    IMAP_SECURE: formData.get("secure") === "on" ? "true" : "false",
+    IMAP_USER: String(formData.get("user") ?? "").trim(),
+    IMAP_PASS: String(formData.get("pass") ?? "").trim(),
+  };
+  for (const [key, value] of Object.entries(entries)) {
+    await putSetting(key, value);
+  }
+  revalidatePath("/settings");
+}
