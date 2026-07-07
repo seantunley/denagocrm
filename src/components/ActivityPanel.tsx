@@ -1,5 +1,6 @@
 import { scheduleActivity, completeActivity, cancelActivity, updateActivity } from "@/app/actions/activities";
 import ModalTrigger from "@/components/Modal";
+import ActivityTypeFields from "@/components/ActivityTypeFields";
 import { formatDate, formatDue } from "@/lib/format";
 
 export const activityIcons: Record<string, string> = {
@@ -70,17 +71,7 @@ export default function ActivityPanel({
         {leadId && <input type="hidden" name="leadId" value={leadId} />}
         {contactId && <input type="hidden" name="contactId" value={contactId} />}
         <input type="hidden" name="revalidate" value={revalidate} />
-        <div>
-          <label className="label">Type</label>
-          <select name="type" className="input" defaultValue="call">
-            <option value="call">Call</option>
-            <option value="email">Email</option>
-            <option value="meeting">Meeting</option>
-            <option value="whatsapp">WhatsApp</option>
-            <option value="test_drive">🚗 Test drive</option>
-            <option value="todo">To-do</option>
-          </select>
-        </div>
+        <ActivityTypeFields />
         <div className="col-span-1 md:col-span-2">
           <label className="label">What needs doing?</label>
           <input name="summary" className="input" required placeholder="e.g. Follow up on quote" />
@@ -98,14 +89,6 @@ export default function ActivityPanel({
               </option>
             ))}
           </select>
-        </div>
-        <div className="col-span-2 md:col-span-3">
-          <label className="label">📍 Location (optional — meetings & test drives)</label>
-          <input
-            name="location"
-            className="input"
-            placeholder="Address, estate or Google Maps link"
-          />
         </div>
         <label className="flex items-center gap-2 text-sm text-slate-300 pb-2 cursor-pointer">
           <input type="checkbox" name="workshop" className="h-4 w-4" />
@@ -187,17 +170,11 @@ export default function ActivityPanel({
                     className="card grid grid-cols-2 gap-3 items-end"
                   >
                     <input type="hidden" name="revalidate" value={revalidate} />
-                    <div>
-                      <label className="label">Type</label>
-                      <select name="type" className="input" defaultValue={a.type}>
-                        <option value="call">Call</option>
-                        <option value="email">Email</option>
-                        <option value="meeting">Meeting</option>
-                        <option value="whatsapp">WhatsApp</option>
-                        <option value="test_drive">🚗 Test drive</option>
-                        <option value="todo">To-do</option>
-                      </select>
-                    </div>
+                    <ActivityTypeFields
+                      defaultType={a.type}
+                      defaultLocation={a.location ?? ""}
+                      locationClass="col-span-2"
+                    />
                     <div>
                       <label className="label">Due</label>
                       <input
@@ -211,15 +188,6 @@ export default function ActivityPanel({
                     <div className="col-span-2">
                       <label className="label">What needs doing?</label>
                       <input name="summary" className="input" required defaultValue={a.summary} />
-                    </div>
-                    <div className="col-span-2">
-                      <label className="label">📍 Location (optional)</label>
-                      <input
-                        name="location"
-                        className="input"
-                        defaultValue={a.location ?? ""}
-                        placeholder="Address, estate or Google Maps link"
-                      />
                     </div>
                     <div>
                       <label className="label">Assign to</label>
