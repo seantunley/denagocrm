@@ -1,6 +1,7 @@
 import { subDays, subMonths, startOfMonth, format } from "date-fns";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import Tabs from "@/components/Tabs";
 import { formatZAR } from "@/lib/format";
 
 function Bar({ value, max, color = "bg-orange-600" }: { value: number; max: number; color?: string }) {
@@ -114,140 +115,187 @@ export default async function ReportsPage() {
   }
   const maxWorkshop = Math.max(1, ...workshopMonths.map((m) => m.value));
 
+  const workshopRevenue6mo = workshopMonths.reduce((s2, m) => s2 + m.value, 0);
+  const workshopJobs6mo = workshopMonths.reduce((s2, m) => s2 + m.count, 0);
+  const avgJobValue = workshopJobs6mo > 0 ? workshopRevenue6mo / workshopJobs6mo : 0;
+  const thisMonthShop = workshopMonths[workshopMonths.length - 1];
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <h1 className="text-2xl font-bold">Reports</h1>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="card">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Leads (90 days)
-          </p>
-          <p className="text-2xl font-bold mt-1">{leads90.length}</p>
-        </div>
-        <div className="card">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Win rate (90 days)
-          </p>
-          <p className="text-2xl font-bold mt-1">{winRate != null ? `${winRate}%` : "—"}</p>
-          <p className="text-xs text-slate-500">
-            {won90.length} won · {lost90.length} lost
-          </p>
-        </div>
-        <div className="card">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Sales value (90 days)
-          </p>
-          <p className="text-2xl font-bold mt-1">{formatZAR(wonValue90)}</p>
-        </div>
-        <div className="card">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Quote acceptance
-          </p>
-          <p className="text-2xl font-bold mt-1">{quoteRate != null ? `${quoteRate}%` : "—"}</p>
-          <p className="text-xs text-slate-500">
-            {quoteCounts.accepted} accepted · {formatZAR(Math.round(acceptedValue))}
-          </p>
-        </div>
-      </div>
+      <Tabs
+        tabs={[
+          {
+            key: "sales",
+            label: "Sales",
+            content: (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <StatCard label="Leads (90 days)" value={String(leads90.length)} />
+                  <StatCard
+                    label="Win rate (90 days)"
+                    value={winRate != null ? `${winRate}%` : "—"}
+                    sub={`${won90.length} won · ${lost90.length} lost`}
+                  />
+                  <StatCard label="Sales value (90 days)" value={formatZAR(wonValue90)} />
+                  <StatCard
+                    label="Quote acceptance"
+                    value={quoteRate != null ? `${quoteRate}%` : "—"}
+                    sub={`${quoteCounts.accepted} accepted · ${formatZAR(Math.round(acceptedValue))}`}
+                  />
+                </div>
 
-      <div className="grid lg:grid-cols-2 gap-6">
-        <div className="card">
-          <h2 className="font-semibold mb-4">Where leads come from (90 days)</h2>
-          {sourceRows.length === 0 ? (
-            <p className="text-sm text-slate-400">No leads yet.</p>
-          ) : (
-            <div className="space-y-3">
-              {sourceRows.map(([source, v]) => (
-                <div key={source}>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="capitalize">{source}</span>
-                    <span className="text-slate-400">
-                      {v.total} lead{v.total !== 1 ? "s" : ""}
-                      {v.won > 0 ? ` · ${v.won} won` : ""}
-                    </span>
+                <div className="grid lg:grid-cols-2 gap-4">
+                  <div className="card p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">
+                      Where leads come from (90 days)
+                    </p>
+                    {sourceRows.length === 0 ? (
+                      <p className="text-sm text-slate-400">No leads yet.</p>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {sourceRows.map(([source, v]) => (
+                          <div key={source}>
+                            <div className="flex justify-between text-sm mb-0.5">
+                              <span className="capitalize">{source}</span>
+                              <span className="text-slate-400 text-xs">
+                                {v.total} lead{v.total !== 1 ? "s" : ""}
+                                {v.won > 0 ? ` · ${v.won} won` : ""}
+                              </span>
+                            </div>
+                            <Bar value={v.total} max={maxSource} />
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  <Bar value={v.total} max={maxSource} />
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
 
-        <div className="card">
-          <h2 className="font-semibold mb-4">Open pipeline by stage</h2>
-          <div className="space-y-3">
-            {stageRows.map((r) => (
-              <div key={r.name}>
-                <div className="flex justify-between text-sm mb-1">
-                  <span className="flex items-center gap-2">
-                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: r.color }} />
-                    {r.name}
-                  </span>
-                  <span className="text-slate-400">
-                    {r.count} · {formatZAR(r.value)}
-                  </span>
-                </div>
-                <Bar value={r.value} max={maxStage} />
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="card">
-          <h2 className="font-semibold mb-4">Sales by model (all time)</h2>
-          {modelRows.length === 0 ? (
-            <p className="text-sm text-slate-400">No sales recorded yet.</p>
-          ) : (
-            <div className="space-y-3">
-              {modelRows.map(([model, v]) => (
-                <div key={model}>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="truncate">{model}</span>
-                    <span className="text-slate-400">
-                      {v.count} · {formatZAR(v.value)}
-                    </span>
+                  <div className="card p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">
+                      Open pipeline by stage
+                    </p>
+                    <div className="space-y-2.5">
+                      {stageRows.map((r) => (
+                        <div key={r.name}>
+                          <div className="flex justify-between text-sm mb-0.5">
+                            <span className="flex items-center gap-2">
+                              <span
+                                className="h-2 w-2 rounded-full"
+                                style={{ backgroundColor: r.color }}
+                              />
+                              {r.name}
+                            </span>
+                            <span className="text-slate-400 text-xs">
+                              {r.count} · {formatZAR(r.value)}
+                            </span>
+                          </div>
+                          <Bar value={r.value} max={maxStage} />
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <Bar value={v.count} max={maxModel} color="bg-emerald-600" />
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
 
-        <div className="card">
-          <h2 className="font-semibold mb-4">Workshop revenue (6 months)</h2>
-          <div className="space-y-3">
-            {workshopMonths.map((mo) => (
-              <div key={mo.label}>
-                <div className="flex justify-between text-sm mb-1">
-                  <span>{mo.label}</span>
-                  <span className="text-slate-400">
-                    {mo.count} job{mo.count !== 1 ? "s" : ""} · {formatZAR(Math.round(mo.value))}
-                  </span>
+                  <div className="card p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">
+                      Sales by model (all time)
+                    </p>
+                    {modelRows.length === 0 ? (
+                      <p className="text-sm text-slate-400">No sales recorded yet.</p>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {modelRows.map(([model, v]) => (
+                          <div key={model}>
+                            <div className="flex justify-between text-sm mb-0.5">
+                              <span className="truncate">{model}</span>
+                              <span className="text-slate-400 text-xs">
+                                {v.count} · {formatZAR(v.value)}
+                              </span>
+                            </div>
+                            <Bar value={v.count} max={maxModel} color="bg-emerald-600" />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="card p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">
+                      Why leads are lost (90 days)
+                    </p>
+                    {lostRows.length === 0 ? (
+                      <p className="text-sm text-slate-400">No lost leads — long may it last.</p>
+                    ) : (
+                      <ul>
+                        {lostRows.map(([reason, count]) => (
+                          <li
+                            key={reason}
+                            className="flex justify-between text-sm border-b border-slate-800/60 py-1.5 last:border-0"
+                          >
+                            <span className="truncate">{reason}</span>
+                            <span className="text-slate-400 ml-4">{count}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 </div>
-                <Bar value={mo.value} max={maxWorkshop} color="bg-blue-600" />
               </div>
-            ))}
-          </div>
-        </div>
+            ),
+          },
+          {
+            key: "service",
+            label: "Service",
+            content: (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <StatCard
+                    label="Workshop revenue (6 mo)"
+                    value={formatZAR(Math.round(workshopRevenue6mo))}
+                  />
+                  <StatCard label="Jobs completed (6 mo)" value={String(workshopJobs6mo)} />
+                  <StatCard label="Avg job value" value={formatZAR(Math.round(avgJobValue))} />
+                  <StatCard
+                    label="This month"
+                    value={formatZAR(Math.round(thisMonthShop?.value ?? 0))}
+                    sub={`${thisMonthShop?.count ?? 0} job${(thisMonthShop?.count ?? 0) !== 1 ? "s" : ""} completed`}
+                  />
+                </div>
 
-        <div className="card lg:col-span-2">
-          <h2 className="font-semibold mb-4">Why leads are lost (90 days)</h2>
-          {lostRows.length === 0 ? (
-            <p className="text-sm text-slate-400">No lost leads — long may it last.</p>
-          ) : (
-            <ul className="grid md:grid-cols-2 gap-x-8 gap-y-2">
-              {lostRows.map(([reason, count]) => (
-                <li key={reason} className="flex justify-between text-sm border-b border-slate-800/60 py-1.5">
-                  <span className="truncate">{reason}</span>
-                  <span className="text-slate-400 ml-4">{count}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
+                <div className="card p-4 max-w-3xl">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">
+                    Workshop revenue by month
+                  </p>
+                  <div className="space-y-2.5">
+                    {workshopMonths.map((mo) => (
+                      <div key={mo.label}>
+                        <div className="flex justify-between text-sm mb-0.5">
+                          <span>{mo.label}</span>
+                          <span className="text-slate-400 text-xs">
+                            {mo.count} job{mo.count !== 1 ? "s" : ""} ·{" "}
+                            {formatZAR(Math.round(mo.value))}
+                          </span>
+                        </div>
+                        <Bar value={mo.value} max={maxWorkshop} color="bg-blue-600" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ),
+          },
+        ]}
+      />
+    </div>
+  );
+}
+
+function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="card">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="text-2xl font-bold mt-1">{value}</p>
+      {sub && <p className="text-xs text-slate-500">{sub}</p>}
     </div>
   );
 }
