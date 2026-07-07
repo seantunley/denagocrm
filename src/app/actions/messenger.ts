@@ -4,7 +4,11 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
-import { sendDirectMessage, type DmPlatform } from "@/lib/messenger";
+import { sendDirectMessage, sendDirectAttachment, type DmPlatform } from "@/lib/messenger";
+import { saveFile } from "@/lib/storage";
+
+const ATTACH_KIND = (mime: string): "image" | "audio" | "video" | "file" =>
+  mime.startsWith("image/") ? "image" : mime.startsWith("audio/") ? "audio" : mime.startsWith("video/") ? "video" : "file";
 
 export type DmState = { ok?: string; error?: string };
 
@@ -16,7 +20,9 @@ export async function sendDmReply(
   const user = await requireUser();
   const contactId = String(formData.get("contactId") ?? "").trim();
   const text = String(formData.get("text") ?? "").trim();
-  if (!contactId || !text) return { error: "Message is required." };
+  const file = formData.get("file") as File | null;
+  const hasFile = file && typeof file === "object" && file.size > 0;
+  if (!contactId || (!text && !hasFile)) return { error: "Type a message or attach a file." };
 
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) return { error: "Contact not found." };
@@ -25,14 +31,34 @@ export async function sendDmReply(
   const recipientId = platform === "instagram" ? contact.instagramId : contact.messengerPsid;
   if (!recipientId) return { error: "This contact has no Messenger/Instagram identity." };
 
-  const result = await sendDirectMessage(platform, recipientId, text);
-  if (!result.ok) return { error: result.error };
+  let attachmentUrl: string | null = null;
+  let attachmentType: string | null = null;
+  if (hasFile) {
+    if (file.size > 4 * 1024 * 1024) {
+      return { error: "File too big — 4MB max here. For larger files, share a Library link instead." };
+    }
+    const buf = Buffer.from(await file.arrayBuffer());
+    attachmentUrl = await saveFile(buf, file.name || "attachment", file.type || "application/octet-stream");
+    attachmentType = ATTACH_KIND(file.type || "");
+    const sent = await sendDirectAttachment(platform, recipientId, {
+      type: attachmentType as "image" | "audio" | "video" | "file",
+      url: attachmentUrl,
+    });
+    if (!sent.ok) return { error: sent.error };
+  }
+
+  if (text) {
+    const result = await sendDirectMessage(platform, recipientId, text);
+    if (!result.ok) return { error: result.error };
+  }
 
   await prisma.communication.create({
     data: {
       type: platform,
       direction: "outbound",
-      body: text,
+      body: text || (attachmentType === "image" ? "🖼 Image" : "📎 File"),
+      attachmentUrl,
+      attachmentType,
       contactId,
       userId: user.id,
     },

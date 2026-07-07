@@ -75,19 +75,17 @@ export async function POST(req: NextRequest) {
     for (const entry of (body as any).entry ?? []) {
       for (const ev of entry.messaging ?? []) {
         try {
-          const text: string =
-            ev.message?.text ??
-            (ev.message?.attachments?.length ? "[attachment]" : "");
+          const text: string = ev.message?.text ?? "";
+          const attachments = ((ev.message?.attachments ?? []) as any[])
+            .map((a) => ({ type: String(a.type ?? "file"), url: String(a.payload?.url ?? "") }))
+            .filter((a) => a.url);
           if (ev.message?.is_echo) {
             if (text) await recordDmEcho(platform, String(ev.recipient?.id ?? ""), text);
             continue;
           }
-          if (ev.message && text) {
+          if (ev.message && (text || attachments.length > 0)) {
             const referral = ev.message.referral ?? ev.referral ?? ev.postback?.referral ?? null;
-            await recordInboundDm(platform, String(ev.sender?.id ?? ""), text, referral);
-          } else if (ev.referral) {
-            // Referral-only event (ad click, no message yet) — nothing to file
-            continue;
+            await recordInboundDm(platform, String(ev.sender?.id ?? ""), text, referral, attachments);
           }
         } catch {}
       }

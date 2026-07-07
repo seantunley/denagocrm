@@ -49,7 +49,14 @@ export default async function InboxPage() {
     phone: string | null;
     awaiting: boolean;
     lastAt: Date;
-    messages: { id: string; direction: string | null; body: string; at: Date }[];
+    messages: {
+      id: string;
+      direction: string | null;
+      body: string;
+      at: Date;
+      attachmentUrl: string | null;
+      attachmentType: string | null;
+    }[];
   };
 
   const threads = new Map<string, Thread>();
@@ -73,7 +80,14 @@ export default async function InboxPage() {
       threads.set(key, t);
     }
     if (t.messages.length < 8) {
-      t.messages.push({ id: c.id, direction: c.direction, body: c.body, at: c.occurredAt });
+      t.messages.push({
+        id: c.id,
+        direction: c.direction,
+        body: c.body,
+        at: c.occurredAt,
+        attachmentUrl: c.attachmentUrl,
+        attachmentType: c.attachmentType,
+      });
     }
   }
   const threadList = [...threads.values()].sort(
@@ -131,7 +145,29 @@ export default async function InboxPage() {
                             : "bg-orange-600/20 text-orange-100 ml-auto"
                         }`}
                       >
-                        {m.body}
+                        {m.attachmentUrl && m.attachmentType === "image" ? (
+                          <a href={m.attachmentUrl} target="_blank">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={m.attachmentUrl}
+                              alt="Attachment"
+                              className="max-h-48 rounded-md my-1"
+                            />
+                          </a>
+                        ) : m.attachmentUrl && m.attachmentType === "audio" ? (
+                          <audio controls src={m.attachmentUrl} className="my-1 max-w-full" />
+                        ) : m.attachmentUrl && m.attachmentType === "video" ? (
+                          <video controls src={m.attachmentUrl} className="max-h-48 rounded-md my-1" />
+                        ) : m.attachmentUrl ? (
+                          <a
+                            href={m.attachmentUrl}
+                            target="_blank"
+                            className="underline text-orange-300"
+                          >
+                            {m.body || "📎 Attachment"}
+                          </a>
+                        ) : null}
+                        {(!m.attachmentUrl || (m.body && !m.body.startsWith("🖼") && !m.body.startsWith("🎤") && !m.body.startsWith("🎬") && !m.body.startsWith("📎"))) && m.body}
                       </div>
                     ))}
                   </div>

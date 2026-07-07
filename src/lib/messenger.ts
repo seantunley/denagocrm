@@ -2,6 +2,7 @@ import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
+import { saveFile } from "./storage";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
@@ -65,6 +66,62 @@ export async function sendDirectMessage(
   return { ok: true };
 }
 
+/** Sends an image / audio / video / file attachment by URL. */
+export async function sendDirectAttachment(
+  platform: DmPlatform,
+  recipientId: string,
+  attachment: { type: "image" | "audio" | "video" | "file"; url: string }
+): Promise<{ ok: boolean; error?: string }> {
+  const token = await getPageToken();
+  if (!token) return { ok: false, error: "Meta page token is not configured (Settings → Integrations)." };
+  const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      recipient: { id: recipientId },
+      messaging_type: "RESPONSE",
+      message: {
+        attachment: { type: attachment.type, payload: { url: attachment.url, is_reusable: false } },
+      },
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    return { ok: false, error: err?.error?.message ?? `Send API error ${res.status}` };
+  }
+  return { ok: true };
+}
+
+export type InboundAttachment = { type: string; url: string };
+
+const ATTACHMENT_EXT: Record<string, string> = {
+  image: ".jpg",
+  audio: ".mp4",
+  video: ".mp4",
+  file: ".bin",
+};
+
+/**
+ * Meta's attachment URLs expire, so pull the media down into our own storage
+ * and keep a permanent link. Returns null if the download fails.
+ */
+async function persistAttachment(
+  att: InboundAttachment
+): Promise<{ url: string; type: string } | null> {
+  try {
+    const res = await fetch(att.url, { cache: "no-store" });
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > 20 * 1024 * 1024) return null; // 20MB cap
+    const kind = ["image", "audio", "video", "file"].includes(att.type) ? att.type : "file";
+    const contentType = res.headers.get("content-type") ?? "application/octet-stream";
+    const url = await saveFile(buf, `dm-${kind}${ATTACHMENT_EXT[kind]}`, contentType);
+    return { url, type: kind };
+  } catch {
+    return null;
+  }
+}
+
 async function fetchProfileName(platform: DmPlatform, userId: string): Promise<string | null> {
   const token = await getPageToken();
   if (!token) return null;
@@ -95,7 +152,8 @@ export async function recordInboundDm(
   platform: DmPlatform,
   senderId: string,
   text: string,
-  referral: Referral
+  referral: Referral,
+  attachments: InboundAttachment[] = []
 ) {
   const idField = platform === "instagram" ? "instagramId" : "messengerPsid";
   let contact = await prisma.contact.findFirst({ where: { [idField]: senderId } });
@@ -163,20 +221,53 @@ export async function recordInboundDm(
 
   const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
   if (firstUser) {
-    await prisma.communication.create({
-      data: {
-        type: platform,
-        direction: "inbound",
-        body: text,
-        contactId: contact.id,
-        leadId,
-        userId: firstUser.id,
-      },
-    });
+    if (text) {
+      await prisma.communication.create({
+        data: {
+          type: platform,
+          direction: "inbound",
+          body: text,
+          contactId: contact.id,
+          leadId,
+          userId: firstUser.id,
+        },
+      });
+    }
+    // Media becomes one communication per attachment, stored permanently
+    for (const att of attachments.slice(0, 5)) {
+      const saved = await persistAttachment(att);
+      await prisma.communication.create({
+        data: {
+          type: platform,
+          direction: "inbound",
+          body: saved
+            ? saved.type === "audio"
+              ? "🎤 Voice note"
+              : saved.type === "image"
+              ? "🖼 Image"
+              : saved.type === "video"
+              ? "🎬 Video"
+              : "📎 File"
+            : `[${att.type} attachment — could not be saved]`,
+          attachmentUrl: saved?.url ?? null,
+          attachmentType: saved?.type ?? null,
+          contactId: contact.id,
+          leadId,
+          userId: firstUser.id,
+        },
+      });
+    }
   }
+  const pushBody =
+    text ||
+    (attachments[0]
+      ? attachments[0].type === "audio"
+        ? "🎤 sent a voice note"
+        : `sent a ${attachments[0].type}`
+      : "sent a message");
   await sendPushToAll({
     title: platform === "instagram" ? "New Instagram DM 📸" : "New Messenger message 🔵",
-    body: `${contact.firstName}${contact.lastName ? ` ${contact.lastName}` : ""}: ${text.slice(0, 80)}`,
+    body: `${contact.firstName}${contact.lastName ? ` ${contact.lastName}` : ""}: ${pushBody.slice(0, 80)}`,
     url: `/contacts/${contact.id}`,
   }).catch(() => {});
 }
