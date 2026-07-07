@@ -6,6 +6,7 @@ import { runIdleAutomations } from "@/lib/automations";
 import { completeActivity } from "@/app/actions/activities";
 import { activityIcons } from "@/components/ActivityPanel";
 import Tabs from "@/components/Tabs";
+import { hasModule } from "@/lib/access";
 import { formatZAR, formatDate, formatDateTime, contactName } from "@/lib/format";
 import { computeDue, dueLabels, dueColors } from "@/lib/serviceDue";
 
@@ -104,7 +105,9 @@ function StatStrip({
 }
 
 export default async function DashboardPage() {
-  await requireUser();
+  const user = await requireUser();
+  const showSales = hasModule(user, "crm");
+  const showService = hasModule(user, "workshop");
   try {
     await runIdleAutomations();
   } catch {}
@@ -173,7 +176,7 @@ export default async function DashboardPage() {
     <div className="space-y-4">
       <Tabs
         tabs={[
-          {
+          ...(showSales ? [{
             key: "sales",
             label: "Sales",
             count: salesToday.length,
@@ -295,8 +298,8 @@ export default async function DashboardPage() {
                 </div>
               </div>
             ),
-          },
-          {
+          }] : []),
+          ...(showService ? [{
             key: "service",
             label: "Service",
             count: shopToday.length + dueVehicles.length,
@@ -371,7 +374,7 @@ export default async function DashboardPage() {
                 </div>
               </div>
             ),
-          },
+          }] : []),
         ]}
       />
     </div>

@@ -21,6 +21,7 @@ export type SessionPayload = {
   name: string;
   email: string;
   role: string;
+  mods: string; // module claims, csv
   idle: number; // idle-timeout minutes baked in at login
   la: number; // last-active unix seconds
   abs: number; // absolute expiry unix seconds (login + 72h, never extended)
@@ -28,7 +29,7 @@ export type SessionPayload = {
 
 /** Issues a fresh session at login: 72h absolute cap, chosen idle window. */
 export async function signFreshSession(
-  user: { id: string; name: string; email: string; role: string },
+  user: { id: string; name: string; email: string; role: string; modules: string },
   idleMinutes: number
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
@@ -38,6 +39,7 @@ export async function signFreshSession(
     name: user.name,
     email: user.email,
     role: user.role,
+    mods: user.modules,
     idle: idleMinutes,
     la: now,
     abs,

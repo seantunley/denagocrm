@@ -44,6 +44,7 @@ export async function createSessionCookie(user: {
   name: string;
   email: string;
   role: string;
+  modules: string;
 }) {
   const idle = await getIdleMinutes();
   const token = await signFreshSession(user, idle);

@@ -14,6 +14,7 @@ model User {
   email             String    @unique
   passwordHash      String
   role              String    @default("member") // owner | member
+  modules           String    @default("crm,workshop,reports,inbox") // gated modules, csv
   totpSecret        String? // encrypted TOTP secret
   totpEnabledAt     DateTime?
   totpBackupCodes   String? // JSON array of bcrypt-hashed one-time backup codes

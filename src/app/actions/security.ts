@@ -149,3 +149,21 @@ export async function ownerResetUser2fa(userId: string) {
   });
   revalidatePath("/settings");
 }
+
+/** Admin-only: which modules a member can access (applies at their next sign-in). */
+export async function setUserModules(userId: string, modulesCsv: string) {
+  const owner = await requireOwner();
+  const valid = new Set(["crm", "workshop", "reports", "inbox"]);
+  const clean = modulesCsv
+    .split(",")
+    .map((m) => m.trim())
+    .filter((m) => valid.has(m))
+    .join(",");
+  const target = await prisma.user.update({ where: { id: userId }, data: { modules: clean } });
+  await logAudit({
+    action: "security.modules_changed",
+    summary: `${target.name}'s access set to: ${clean || "none"} (applies at next sign-in)`,
+    userName: owner.name,
+  });
+  revalidatePath("/settings");
+}

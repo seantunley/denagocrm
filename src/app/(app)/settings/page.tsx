@@ -58,8 +58,15 @@ export default async function SettingsPage({
   searchParams: Promise<{ tab?: string }>;
 }) {
   const currentUser = await requireUser();
+  const isAdmin = currentUser.role === "owner";
+  // Non-admins get exactly one tab: their own account
+  const visibleTabs = isAdmin ? TABS : TABS.filter((t) => t.key === "account");
   const { tab: rawTab } = await searchParams;
-  const tab = TABS.some((t) => t.key === rawTab) ? rawTab : "pipeline";
+  const tab = visibleTabs.some((t) => t.key === rawTab)
+    ? rawTab
+    : isAdmin
+    ? "pipeline"
+    : "account";
 
   const [stages, users, settings, templates] = await Promise.all([
     prisma.pipelineStage.findMany({
@@ -78,14 +85,14 @@ export default async function SettingsPage({
       return ""; // encrypted value, key unavailable in this environment
     }
   };
-  const isOwner = currentUser.role === "owner";
+  const isOwner = isAdmin;
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Settings</h1>
 
       <div className="flex gap-1 border-b border-slate-800 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {TABS.map((t) => (
+        {visibleTabs.map((t) => (
           <Link
             key={t.key}
             href={`/settings?tab=${t.key}`}
@@ -286,7 +293,7 @@ export default async function SettingsPage({
                             : "bg-slate-800 text-slate-300"
                         }`}
                       >
-                        {u.role === "owner" ? "Owner" : "Member"}
+                        {u.role === "owner" ? "Admin" : "Member"}
                       </span>
                     </td>
                     <td>
@@ -303,6 +310,7 @@ export default async function SettingsPage({
                             userId={u.id}
                             name={u.name}
                             role={u.role as "owner" | "member"}
+                            modules={u.modules}
                             has2fa={Boolean(u.totpEnabledAt || u.emailOtpEnabled)}
                           />
                         )}

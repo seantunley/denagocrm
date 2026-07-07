@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { routeAllowed } from "@/lib/access";
 import {
   verifySessionFull,
   refreshSession,
@@ -43,6 +44,21 @@ export async function proxy(req: NextRequest) {
     const res = NextResponse.redirect(url);
     res.cookies.delete(SESSION_COOKIE);
     return res;
+  }
+
+  // Module gating: users only reach the modules ticked on their account
+  if (
+    !routeAllowed(pathname, {
+      role: result.payload.role ?? "member",
+      modules: result.payload.mods ?? "",
+    })
+  ) {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    const url = req.nextUrl.clone();
+    url.pathname = "/";
+    return NextResponse.redirect(url);
   }
 
   // Roll the session's last-active forward on activity (idle window slides,

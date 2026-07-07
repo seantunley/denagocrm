@@ -7,40 +7,50 @@ import { usePathname } from "next/navigation";
 type NavLink = { href: string; label: string; icon: string };
 type NavGroup = { key: string; label: string; links: NavLink[] };
 
-const topLinks: NavLink[] = [
-  { href: "/", label: "Dashboard", icon: "▦" },
-  { href: "/reports", label: "Reports", icon: "📊" },
-];
-
-const groups: NavGroup[] = [
-  {
-    key: "social",
-    label: "Social Media",
-    links: [{ href: "/inbox", label: "Social Inbox", icon: "💬" }],
-  },
-  {
-    key: "crm",
-    label: "CRM",
-    links: [
-      { href: "/leads", label: "Leads", icon: "◎" },
-      { href: "/quotes", label: "Quotes", icon: "📄" },
-      { href: "/deliveries", label: "Deliveries", icon: "🚚" },
-      { href: "/referrals", label: "Referrals", icon: "🎁" },
-      { href: "/contacts", label: "Contacts", icon: "☰" },
-      { href: "/activities", label: "Activities", icon: "✓" },
-      { href: "/calendar", label: "Calendar", icon: "📅" },
-    ],
-  },
-  {
-    key: "workshop",
-    label: "Workshop",
-    links: [
-      { href: "/vehicles", label: "Vehicles", icon: "⚡" },
-      { href: "/jobcards", label: "Job Cards", icon: "🔧" },
-      { href: "/workshop-calendar", label: "Workshop Cal", icon: "📅" },
-    ],
-  },
-];
+function buildNav(mods: Set<string>, isAdmin: boolean) {
+  const has = (m: string) => isAdmin || mods.has(m);
+  const topLinks: NavLink[] = [
+    { href: "/", label: "Dashboard", icon: "▦" },
+    ...(has("reports") ? [{ href: "/reports", label: "Reports", icon: "📊" }] : []),
+  ];
+  const groups: NavGroup[] = [];
+  if (has("inbox")) {
+    groups.push({
+      key: "social",
+      label: "Social Media",
+      links: [{ href: "/inbox", label: "Social Inbox", icon: "💬" }],
+    });
+  }
+  if (has("crm")) {
+    groups.push({
+      key: "crm",
+      label: "CRM",
+      links: [
+        { href: "/leads", label: "Leads", icon: "◎" },
+        { href: "/quotes", label: "Quotes", icon: "📄" },
+        { href: "/deliveries", label: "Deliveries", icon: "🚚" },
+        { href: "/referrals", label: "Referrals", icon: "🎁" },
+        { href: "/contacts", label: "Contacts", icon: "☰" },
+        { href: "/activities", label: "Activities", icon: "✓" },
+        { href: "/calendar", label: "Calendar", icon: "📅" },
+      ],
+    });
+  }
+  if (has("workshop")) {
+    groups.push({
+      key: "workshop",
+      label: "Workshop",
+      links: [
+        // Contacts are shared with the workshop when CRM is off
+        ...(!has("crm") ? [{ href: "/contacts", label: "Contacts", icon: "☰" }] : []),
+        { href: "/vehicles", label: "Vehicles", icon: "⚡" },
+        { href: "/jobcards", label: "Job Cards", icon: "🔧" },
+        { href: "/workshop-calendar", label: "Workshop Cal", icon: "📅" },
+      ],
+    });
+  }
+  return { topLinks, groups };
+}
 
 
 const STORAGE_KEY = "denago-nav-collapsed";
@@ -61,7 +71,17 @@ function NavItem({ link, active }: { link: NavLink; active: boolean }) {
   );
 }
 
-export default function Nav() {
+export default function Nav({
+  modules = "crm,workshop,reports,inbox",
+  isAdmin = false,
+}: {
+  modules?: string;
+  isAdmin?: boolean;
+}) {
+  const { topLinks, groups } = buildNav(
+    new Set(modules.split(",").map((m) => m.trim()).filter(Boolean)),
+    isAdmin
+  );
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 

@@ -29,12 +29,13 @@ export default async function AppLayout({
         </form>
       </div>
       <div className="flex-1 px-3 overflow-y-auto">
-        <Nav />
+        <Nav modules={user.modules} isAdmin={user.role === "owner"} />
       </div>
       <div className="px-4 py-4 border-t border-slate-800">
         <div className="flex items-center justify-between gap-2">
           <p className="text-sm text-slate-300 font-medium truncate">{user.name}</p>
           <div className="flex items-center gap-1 shrink-0">
+            {user.role === "owner" && (
             <Link
               href="/trash"
               title="Trash"
@@ -42,6 +43,7 @@ export default async function AppLayout({
             >
               🗑
             </Link>
+            )}
             <Link
               href="/settings"
               title="Settings"
