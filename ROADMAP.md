@@ -16,6 +16,25 @@ progress indicator and a per-step terms acknowledgment checkbox.
   acknowledgments earn their friction. For quick quote acceptance the current
   one-screen flow converts better.
 
+## Unified social inbox (requested 2026-07-07)
+
+One Inbox page listing every unanswered inbound message across channels,
+each linked to its customer record with an in-CRM reply box. Channels are
+adapters over the existing Communication model (WhatsApp panel = the
+template).
+
+Phases, in value order:
+1. **Facebook Messenger + Instagram DMs** — same Meta app as lead ads;
+   needs `pages_messaging` + `instagram_manage_messages` in the same app
+   review as leads. Webhook → contact/lead match → chat panel → reply.
+   Mind the 24-hour reply window.
+2. **Google Reviews** — Business Profile API: new-review push, reply from
+   CRM, and auto-request a review on job-card completion / signed quote.
+3. **YouTube comments** — own-channel read/reply via YouTube Data API.
+4. **TikTok** — Lead Generation API only (flows in like Meta leads);
+   DMs are not available to regular businesses. Comments possible with
+   app approval.
+
 ## Previously parked
 
 - Follow-up sequences (multi-step drip; approximated today with multiple idle
