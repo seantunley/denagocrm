@@ -220,7 +220,7 @@ function ThreadList({ list, empty }: { list: ThreadForList[]; empty: string }) {
       {list.map((t) => {
         const meta = CHANNEL_META[t.channel];
         return (
-          <div key={t.key} className="card">
+          <div key={t.key} className="card p-4">
             <div className="flex items-center gap-2 flex-wrap">
               {meta.icon}
               {t.href ? (
@@ -234,16 +234,16 @@ function ThreadList({ list, empty }: { list: ThreadForList[]; empty: string }) {
               {t.awaiting && (
                 <span className="badge bg-amber-500/15 text-amber-300">awaiting reply</span>
               )}
-              <span className="text-xs text-slate-500 ml-auto">{formatDateTime(t.lastAt)}</span>
+              <span className="text-[11px] text-slate-500 ml-auto">{formatDateTime(t.lastAt)}</span>
             </div>
-            <div className="mt-3 space-y-1.5">
+            <div className="mt-3 space-y-1">
               {[...t.messages].reverse().map((m) => (
                 <div
                   key={m.id}
-                  className={`max-w-[85%] rounded-lg px-3 py-1.5 text-sm whitespace-pre-wrap ${
+                  className={`w-fit max-w-[75%] rounded-2xl px-3 py-1.5 text-sm leading-snug whitespace-pre-wrap ${
                     m.direction === "inbound"
-                      ? "bg-slate-800 text-slate-200"
-                      : "bg-orange-600/20 text-orange-100 ml-auto"
+                      ? "bg-slate-800 text-slate-200 rounded-bl-md"
+                      : "bg-orange-600 text-white ml-auto rounded-br-md"
                   }`}
                 >
                   {m.attachmentUrl && m.attachmentType === "image" ? (
