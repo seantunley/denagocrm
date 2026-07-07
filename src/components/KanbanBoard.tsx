@@ -44,9 +44,15 @@ export type KanbanStage = {
   leads: KanbanLead[];
 };
 
-const sourceIcons: Record<string, string> = {
-  facebook: "📘",
-  instagram: "📸",
+const sourceIcons: Record<string, React.ReactNode> = {
+  facebook: (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src="/branding/social-facebook.png" alt="Facebook" className="h-4 w-4 rounded-sm" />
+  ),
+  instagram: (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src="/branding/social-instagram.png" alt="Instagram" className="h-4 w-4 rounded-sm" />
+  ),
   website: "🌐",
   manual: "✍️",
 };
@@ -65,7 +71,9 @@ function LeadCard({ lead, dragging }: { lead: KanbanLead; dragging?: boolean }) 
         >
           {lead.title}
         </Link>
-        <span title={lead.source}>{sourceIcons[lead.source] ?? "•"}</span>
+        <span title={lead.source} className="shrink-0 mt-0.5">
+          {sourceIcons[lead.source] ?? "•"}
+        </span>
       </div>
       <p className="text-xs text-slate-400 mt-1">{lead.name}</p>
       {lead.productName && (
