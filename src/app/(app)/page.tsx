@@ -16,7 +16,7 @@ type DashActivity = {
   summary: string;
   dueDate: Date;
   assignedTo: { name: string };
-  lead: { id: string; name: string; title: string } | null;
+  lead: { id: string; name: string } | null;
   contact: { id: string; firstName: string; lastName: string | null; isCompany: boolean; company: string | null } | null;
 };
 
@@ -33,46 +33,45 @@ function ActivityBlock({
 }) {
   const startOfToday = startOfDay(new Date());
   return (
-    <div className="card">
-      <h2 className="font-semibold mb-3">{title}</h2>
+    <div className="card p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{title}</p>
       {items.length === 0 ? (
-        <p className="text-sm text-slate-400">{emptyText}</p>
+        <p className="text-xs text-slate-500">{emptyText}</p>
       ) : (
-        <ul className="divide-y divide-slate-800">
+        <ul className="divide-y divide-slate-800/60">
           {items.map((a) => {
             const overdue = highlightOverdue && a.dueDate < startOfToday;
+            const who = a.lead ? (
+              <Link href={`/leads/${a.lead.id}`} className="text-orange-400 hover:underline">
+                {a.lead.name}
+              </Link>
+            ) : a.contact ? (
+              <Link href={`/contacts/${a.contact.id}`} className="text-orange-400 hover:underline">
+                {contactName(a.contact)}
+              </Link>
+            ) : null;
             return (
-              <li key={a.id} className="py-2 flex items-center gap-3">
-                <span className="w-6 text-center shrink-0">
+              <li key={a.id} className="py-1.5 flex items-center gap-2">
+                <span className="w-5 text-center text-sm shrink-0">
                   {a.category === "workshop" ? "🔧" : activityIcons[a.type] ?? "☑️"}
                 </span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">
-                    {overdue && <span className="text-red-400 font-semibold">⚠ </span>}
-                    {a.summary}
-                  </p>
-                  <p className="text-xs text-slate-400 truncate">
-                    {a.lead ? (
-                      <Link href={`/leads/${a.lead.id}`} className="text-orange-400 hover:underline">
-                        {a.lead.name}
-                      </Link>
-                    ) : a.contact ? (
-                      <Link href={`/contacts/${a.contact.id}`} className="text-orange-400 hover:underline">
-                        {contactName(a.contact)}
-                      </Link>
-                    ) : (
-                      "General"
-                    )}
-                    {overdue ? (
-                      <span className="text-red-400"> · overdue since {formatDate(a.dueDate)}</span>
-                    ) : null}
-                    {" · "}
-                    {a.assignedTo.name}
-                  </p>
-                </div>
-                <form action={completeActivity.bind(null, a.id)}>
+                <p className="flex-1 min-w-0 truncate text-sm">
+                  {overdue && <span className="text-red-400">⚠ </span>}
+                  {a.summary}
+                  <span className="text-[11px] text-slate-500">
+                    {" — "}
+                    {who ?? "general"} · {a.assignedTo.name.split(" ")[0]}
+                    {overdue && <span className="text-red-400"> · {formatDate(a.dueDate)}</span>}
+                  </span>
+                </p>
+                <form action={completeActivity.bind(null, a.id)} className="shrink-0">
                   <input type="hidden" name="revalidate" value="/" />
-                  <button className="btn-secondary btn-sm shrink-0">✓</button>
+                  <button
+                    className="text-slate-500 hover:text-emerald-400 text-sm cursor-pointer px-1"
+                    title="Mark done"
+                  >
+                    ✓
+                  </button>
                 </form>
               </li>
             );
@@ -83,13 +82,15 @@ function ActivityBlock({
   );
 }
 
-function StatCards({ stats }: { stats: { label: string; value: string; href: string }[] }) {
+function StatStrip({ stats }: { stats: { label: string; value: string; href: string }[] }) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <div className="card p-0 grid grid-cols-2 sm:grid-cols-4 divide-x divide-y sm:divide-y-0 divide-slate-800">
       {stats.map((s) => (
-        <Link key={s.label} href={s.href} className="card hover:border-orange-600/60 transition-colors">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{s.label}</p>
-          <p className="text-2xl font-bold mt-1">{s.value}</p>
+        <Link key={s.label} href={s.href} className="px-4 py-2.5 hover:bg-slate-800/40 transition-colors">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+            {s.label}
+          </p>
+          <p className="text-lg font-bold leading-6">{s.value}</p>
         </Link>
       ))}
     </div>
@@ -98,7 +99,6 @@ function StatCards({ stats }: { stats: { label: string; value: string; href: str
 
 export default async function DashboardPage() {
   await requireUser();
-  // Opportunistic sweep of idle-lead automation rules (also exposed as a cron endpoint)
   try {
     await runIdleAutomations();
   } catch {}
@@ -118,8 +118,8 @@ export default async function DashboardPage() {
     vehicles,
     recentComms,
     recentLeads,
-    todayActivities,
-    tomorrowActivities,
+    todayAll,
+    tomorrowAll,
   ] = await Promise.all([
     prisma.lead.count({ where: { status: "open" } }),
     prisma.lead.aggregate({ where: { status: "open" }, _sum: { valueCents: true } }),
@@ -130,29 +130,33 @@ export default async function DashboardPage() {
       include: { contact: true, serviceRecords: true, mileageLogs: true },
     }),
     prisma.communication.findMany({
-      take: 6,
+      take: 5,
       orderBy: { occurredAt: "desc" },
       include: { user: true, contact: true, lead: true },
     }),
     prisma.lead.findMany({
-      take: 6,
+      take: 5,
       orderBy: { createdAt: "desc" },
       include: { product: true, stage: true },
     }),
-    // Today includes anything overdue — it still needs doing today
     prisma.activity.findMany({
-      where: { status: "planned", dueDate: { lt: tomorrowStart } },
+      where: { status: "planned", dueDate: { lt: tomorrowStart } }, // incl. overdue
       orderBy: { dueDate: "asc" },
       include: { lead: true, contact: true, assignedTo: true },
-      take: 12,
+      take: 20,
     }),
     prisma.activity.findMany({
       where: { status: "planned", dueDate: { gte: tomorrowStart, lt: dayAfterStart } },
       orderBy: { dueDate: "asc" },
       include: { lead: true, contact: true, assignedTo: true },
-      take: 12,
+      take: 20,
     }),
   ]);
+
+  const salesToday = todayAll.filter((a) => a.category !== "workshop");
+  const salesTomorrow = tomorrowAll.filter((a) => a.category !== "workshop");
+  const shopToday = todayAll.filter((a) => a.category === "workshop");
+  const shopTomorrow = tomorrowAll.filter((a) => a.category === "workshop");
 
   const dueVehicles = vehicles
     .map((v) => ({ vehicle: v, due: computeDue(v) }))
@@ -160,177 +164,190 @@ export default async function DashboardPage() {
     .sort((a, b) => (a.due.status === "overdue" ? -1 : 1) - (b.due.status === "overdue" ? -1 : 1));
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Dashboard</h1>
-
-      <div className="grid lg:grid-cols-2 gap-6 items-start">
-        <ActivityBlock
-          title="📌 Today"
-          items={todayActivities}
-          emptyText="Nothing due today. 🎉"
-          highlightOverdue
-        />
-        <ActivityBlock
-          title="🗓 Tomorrow"
-          items={tomorrowActivities}
-          emptyText="Nothing planned for tomorrow yet."
-        />
-      </div>
-
+    <div className="space-y-4">
       <Tabs
         tabs={[
           {
             key: "sales",
             label: "Sales",
+            count: salesToday.length,
             content: (
-              <>
-                <StatCards
+              <div className="space-y-4">
+                <StatStrip
                   stats={[
                     { label: "Open leads", value: String(openLeads), href: "/leads" },
                     {
-                      label: "Pipeline value",
+                      label: "Pipeline",
                       value: formatZAR(openValue._sum.valueCents ?? 0),
                       href: "/leads",
                     },
-                    { label: "New leads (7 days)", value: String(newThisWeek), href: "/leads" },
-                    {
-                      label: "Awaiting delivery",
-                      value: String(awaitingDelivery),
-                      href: "/deliveries",
-                    },
+                    { label: "New (7d)", value: String(newThisWeek), href: "/leads" },
+                    { label: "To deliver", value: String(awaitingDelivery), href: "/deliveries" },
                   ]}
                 />
-                <div className="grid lg:grid-cols-2 gap-6 mt-6 items-start">
-                  <div className="card">
-                    <div className="flex items-center justify-between mb-4">
-                      <h2 className="font-semibold">Latest leads</h2>
-                      <Link href="/leads" className="text-sm text-orange-400 hover:underline">
+                <div className="grid lg:grid-cols-2 gap-4 items-start">
+                  <ActivityBlock
+                    title="Today"
+                    items={salesToday}
+                    emptyText="Nothing due today."
+                    highlightOverdue
+                  />
+                  <ActivityBlock
+                    title="Tomorrow"
+                    items={salesTomorrow}
+                    emptyText="Nothing planned yet."
+                  />
+                </div>
+                <div className="grid lg:grid-cols-2 gap-4 items-start">
+                  <div className="card p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        Latest leads
+                      </p>
+                      <Link href="/leads" className="text-xs text-orange-400 hover:underline">
                         Pipeline →
                       </Link>
                     </div>
-                    {recentLeads.length === 0 ? (
-                      <p className="text-sm text-slate-400">No leads yet.</p>
-                    ) : (
-                      <ul className="divide-y divide-slate-800">
-                        {recentLeads.map((l) => (
-                          <li key={l.id} className="py-2.5 flex items-center gap-3">
-                            <div className="flex-1 min-w-0">
-                              <Link
-                                href={`/leads/${l.id}`}
-                                className="text-sm font-medium text-orange-400 hover:underline"
-                              >
-                                {l.name}
-                              </Link>
-                              <p className="text-xs text-slate-400">
-                                {l.product ? `${l.product.name}${l.color ? ` (${l.color})` : ""} · ` : ""}
-                                {l.source} · {formatDate(l.createdAt)}
-                              </p>
-                            </div>
-                            <span className="badge text-white" style={{ backgroundColor: l.stage.color }}>
-                              {l.status === "open" ? l.stage.name : l.status}
+                    <ul className="divide-y divide-slate-800/60">
+                      {recentLeads.length === 0 && (
+                        <li className="py-1.5 text-xs text-slate-500">No leads yet.</li>
+                      )}
+                      {recentLeads.map((l) => (
+                        <li key={l.id} className="py-1.5 flex items-center gap-2">
+                          <p className="flex-1 min-w-0 truncate text-sm">
+                            <Link
+                              href={`/leads/${l.id}`}
+                              className="font-medium text-orange-400 hover:underline"
+                            >
+                              {l.name}
+                            </Link>
+                            <span className="text-[11px] text-slate-500">
+                              {" — "}
+                              {l.product ? `${l.product.name} · ` : ""}
+                              {l.source} · {formatDate(l.createdAt)}
                             </span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                          </p>
+                          <span
+                            className="badge text-white shrink-0"
+                            style={{ backgroundColor: l.stage.color }}
+                          >
+                            {l.status === "open" ? l.stage.name : l.status}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
 
-                  <div className="card">
-                    <h2 className="font-semibold mb-4">Recent communications</h2>
-                    {recentComms.length === 0 ? (
-                      <p className="text-sm text-slate-400">Nothing logged yet.</p>
-                    ) : (
-                      <ul className="divide-y divide-slate-800">
-                        {recentComms.map((c) => (
-                          <li key={c.id} className="py-2.5">
-                            <p className="text-sm">
-                              <span className="font-medium capitalize">{c.type}</span>
-                              {" — "}
-                              {c.contact ? (
-                                <Link
-                                  href={`/contacts/${c.contact.id}`}
-                                  className="text-orange-400 hover:underline"
-                                >
-                                  {contactName(c.contact)}
-                                </Link>
-                              ) : c.lead ? (
-                                <Link
-                                  href={`/leads/${c.lead.id}`}
-                                  className="text-orange-400 hover:underline"
-                                >
-                                  {c.lead.name}
-                                </Link>
-                              ) : (
-                                "—"
-                              )}
-                            </p>
-                            <p className="text-xs text-slate-400 truncate">
-                              {c.body} · {formatDateTime(c.occurredAt)} · {c.user.name}
-                            </p>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                  <div className="card p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        Recent communications
+                      </p>
+                      <Link href="/inbox" className="text-xs text-orange-400 hover:underline">
+                        Inbox →
+                      </Link>
+                    </div>
+                    <ul className="divide-y divide-slate-800/60">
+                      {recentComms.length === 0 && (
+                        <li className="py-1.5 text-xs text-slate-500">Nothing logged yet.</li>
+                      )}
+                      {recentComms.map((c) => (
+                        <li key={c.id} className="py-1.5 text-sm truncate">
+                          <span className="capitalize font-medium">{c.type}</span>
+                          {" — "}
+                          {c.contact ? (
+                            <Link
+                              href={`/contacts/${c.contact.id}`}
+                              className="text-orange-400 hover:underline"
+                            >
+                              {contactName(c.contact)}
+                            </Link>
+                          ) : c.lead ? (
+                            <Link
+                              href={`/leads/${c.lead.id}`}
+                              className="text-orange-400 hover:underline"
+                            >
+                              {c.lead.name}
+                            </Link>
+                          ) : (
+                            "—"
+                          )}
+                          <span className="text-[11px] text-slate-500">
+                            {" · "}
+                            {c.body.slice(0, 60)} · {formatDateTime(c.occurredAt)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 </div>
-              </>
+              </div>
             ),
           },
           {
             key: "service",
             label: "Service",
-            count: dueVehicles.length + openJobCards,
+            count: shopToday.length + dueVehicles.length,
             content: (
-              <>
-                <StatCards
+              <div className="space-y-4">
+                <StatStrip
                   stats={[
                     { label: "Open job cards", value: String(openJobCards), href: "/jobcards" },
                     { label: "Service due", value: String(dueVehicles.length), href: "/vehicles" },
-                    {
-                      label: "Vehicles on record",
-                      value: String(vehicles.length),
-                      href: "/vehicles",
-                    },
-                    { label: "Workshop calendar", value: "→", href: "/workshop-calendar" },
+                    { label: "Fleet", value: String(vehicles.length), href: "/vehicles" },
+                    { label: "Workshop cal", value: "→", href: "/workshop-calendar" },
                   ]}
                 />
-                <div className="card mt-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <h2 className="font-semibold">Vehicles due for service</h2>
-                    <Link href="/vehicles" className="text-sm text-orange-400 hover:underline">
+                <div className="grid lg:grid-cols-2 gap-4 items-start">
+                  <ActivityBlock
+                    title="Today in the workshop"
+                    items={shopToday}
+                    emptyText="No bookings today."
+                    highlightOverdue
+                  />
+                  <ActivityBlock
+                    title="Tomorrow in the workshop"
+                    items={shopTomorrow}
+                    emptyText="No bookings tomorrow."
+                  />
+                </div>
+                <div className="card p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      Vehicles due for service
+                    </p>
+                    <Link href="/vehicles" className="text-xs text-orange-400 hover:underline">
                       All vehicles →
                     </Link>
                   </div>
-                  {dueVehicles.length === 0 ? (
-                    <p className="text-sm text-slate-400">Nothing due. 🎉</p>
-                  ) : (
-                    <ul className="divide-y divide-slate-800">
-                      {dueVehicles.slice(0, 10).map(({ vehicle, due }) => (
-                        <li key={vehicle.id} className="py-2.5 flex items-center gap-3">
-                          <div className="flex-1 min-w-0">
-                            <Link
-                              href={`/vehicles/${vehicle.id}`}
-                              className="text-sm font-medium text-orange-400 hover:underline"
-                            >
-                              {vehicle.model}
-                            </Link>
-                            <p className="text-xs text-slate-400">
-                              {contactName(vehicle.contact)}
-                              {due.nextDueDate ? ` · due ${formatDate(due.nextDueDate)}` : ""}
-                              {due.nextDueKm != null
-                                ? ` · at ${due.nextDueKm.toLocaleString()} km`
-                                : ""}
-                            </p>
-                          </div>
-                          <span className={`badge ${dueColors[due.status]}`}>
-                            {dueLabels[due.status]}
+                  <ul className="divide-y divide-slate-800/60">
+                    {dueVehicles.length === 0 && (
+                      <li className="py-1.5 text-xs text-slate-500">Nothing due. 🎉</li>
+                    )}
+                    {dueVehicles.slice(0, 10).map(({ vehicle, due }) => (
+                      <li key={vehicle.id} className="py-1.5 flex items-center gap-2">
+                        <p className="flex-1 min-w-0 truncate text-sm">
+                          <Link
+                            href={`/vehicles/${vehicle.id}`}
+                            className="font-medium text-orange-400 hover:underline"
+                          >
+                            {vehicle.model}
+                          </Link>
+                          <span className="text-[11px] text-slate-500">
+                            {" — "}
+                            {contactName(vehicle.contact)}
+                            {due.nextDueDate ? ` · due ${formatDate(due.nextDueDate)}` : ""}
+                            {due.nextDueKm != null ? ` · ${due.nextDueKm.toLocaleString()} km` : ""}
                           </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+                        </p>
+                        <span className={`badge ${dueColors[due.status]} shrink-0`}>
+                          {dueLabels[due.status]}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-              </>
+              </div>
             ),
           },
         ]}
