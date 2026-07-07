@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
+import ClockWeather from "@/components/ClockWeather";
 
 export default function AppShell({
   sidebar,
@@ -53,6 +54,9 @@ export default function AppShell({
       </aside>
 
       <main className="lg:ml-56 p-4 pt-[4.5rem] lg:p-8 lg:pt-8">
+        <div className="mb-4">
+          <ClockWeather />
+        </div>
         {children}
       </main>
     </div>
