@@ -2,6 +2,7 @@ import Link from "next/link";
 import { prisma, basePrisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import InboxReply from "@/components/InboxReply";
+import AutoRefresh from "@/components/AutoRefresh";
 import { contactName, formatDateTime } from "@/lib/format";
 
 export const metadata = { title: "Social inbox — DenagoCRM" };
@@ -81,6 +82,7 @@ export default async function InboxPage() {
 
   return (
     <div className="space-y-5">
+      <AutoRefresh seconds={20} />
       <div>
         <h1 className="text-2xl font-bold">Social inbox</h1>
         <p className="text-sm text-slate-400 mt-1">

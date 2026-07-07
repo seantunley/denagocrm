@@ -14,11 +14,15 @@ const topLinks: NavLink[] = [
 
 const groups: NavGroup[] = [
   {
+    key: "social",
+    label: "Social Media",
+    links: [{ href: "/inbox", label: "Social Inbox", icon: "💬" }],
+  },
+  {
     key: "crm",
     label: "CRM",
     links: [
       { href: "/leads", label: "Leads", icon: "◎" },
-      { href: "/inbox", label: "Social Inbox", icon: "💬" },
       { href: "/quotes", label: "Quotes", icon: "📄" },
       { href: "/contacts", label: "Contacts", icon: "☰" },
       { href: "/activities", label: "Activities", icon: "✓" },
