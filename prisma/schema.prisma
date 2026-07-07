@@ -96,23 +96,25 @@ model ProductColor {
 }
 
 model Contact {
-  id         String   @id @default(cuid())
-  isCompany  Boolean  @default(false)
-  firstName  String
-  lastName   String?
-  company    String?
-  email      String?
-  phone      String?
-  whatsapp   String?
-  address    String? // street address / estate + unit
-  suburb     String?
-  city       String?
-  province   String?
-  postalCode String?
-  source     String?
-  notes      String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id            String   @id @default(cuid())
+  isCompany     Boolean  @default(false)
+  firstName     String
+  lastName      String?
+  company       String?
+  email         String?
+  phone         String?
+  whatsapp      String?
+  messengerPsid String?  @unique // Facebook Messenger page-scoped id
+  instagramId   String?  @unique // Instagram-scoped user id
+  address       String? // street address / estate + unit
+  suburb        String?
+  city          String?
+  province      String?
+  postalCode    String?
+  source        String?
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   deletedAt     DateTime?
   deletedByName String?
@@ -495,4 +497,16 @@ model OtpChallenge {
   createdAt  DateTime  @default(now())
 
   @@index([purpose, key, createdAt])
+}
+
+// Google reviews pulled from the Places API (read-only; reply via Google Maps).
+model GoogleReview {
+  id          String   @id @default(cuid())
+  externalKey String   @unique // hash of author + time (Places API has no stable id)
+  author      String
+  rating      Int
+  text        String?
+  publishedAt DateTime
+  raw         String?
+  createdAt   DateTime @default(now())
 }

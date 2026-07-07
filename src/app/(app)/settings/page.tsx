@@ -555,6 +555,44 @@ export default async function SettingsPage({
           </div>
 
           <div className="card">
+            <h2 className="font-semibold mb-1">Google reviews</h2>
+            <p className="text-xs text-slate-400 mb-4">
+              New reviews appear in the Social inbox with a push notification. Needs a Google
+              Cloud API key with the <b>Places API (New)</b> enabled, plus your business&apos;s
+              Place ID (find it at developers.google.com/maps/documentation/places/web-service/place-id).
+            </p>
+            <div className="space-y-3">
+              <form action={saveSetting} className="flex gap-2 items-end">
+                <input type="hidden" name="key" value="GOOGLE_PLACES_API_KEY" />
+                <div className="flex-1">
+                  <label className="label">Places API key</label>
+                  <input
+                    name="value"
+                    type="password"
+                    className="input"
+                    defaultValue={setting("GOOGLE_PLACES_API_KEY")}
+                    placeholder="AIza…"
+                  />
+                </div>
+                <button className="btn-primary">Save</button>
+              </form>
+              <form action={saveSetting} className="flex gap-2 items-end">
+                <input type="hidden" name="key" value="GOOGLE_PLACE_ID" />
+                <div className="flex-1">
+                  <label className="label">Place ID</label>
+                  <input
+                    name="value"
+                    className="input"
+                    defaultValue={setting("GOOGLE_PLACE_ID")}
+                    placeholder="ChIJ…"
+                  />
+                </div>
+                <button className="btn-primary">Save</button>
+              </form>
+            </div>
+          </div>
+
+          <div className="card">
             <h2 className="font-semibold mb-1">SMS (BulkSMS) — OTP verification</h2>
             <p className="text-xs text-slate-400 mb-4">
               Used to send one-time codes to customers verifying their vehicle on the website

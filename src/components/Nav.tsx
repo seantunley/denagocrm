@@ -18,6 +18,7 @@ const groups: NavGroup[] = [
     label: "CRM",
     links: [
       { href: "/leads", label: "Leads", icon: "◎" },
+      { href: "/inbox", label: "Social Inbox", icon: "💬" },
       { href: "/quotes", label: "Quotes", icon: "📄" },
       { href: "/contacts", label: "Contacts", icon: "☰" },
       { href: "/activities", label: "Activities", icon: "✓" },

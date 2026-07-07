@@ -3,6 +3,7 @@ import { runIdleAutomations } from "@/lib/automations";
 import { runServiceReminders } from "@/lib/serviceReminders";
 import { runQuoteSigningReminders } from "@/lib/signingReminders";
 import { syncFacebookLeads } from "@/lib/metaLeadSync";
+import { syncGoogleReviews } from "@/lib/googleReviews";
 import { getSetting } from "@/lib/settings";
 
 /**
@@ -29,5 +30,13 @@ export async function GET(req: NextRequest) {
   const remindersSent = await runServiceReminders().catch(() => -1);
   const quoteReminders = await runQuoteSigningReminders().catch(() => -1);
   const fbLeads = await syncFacebookLeads().catch(() => -1);
-  return NextResponse.json({ ok: true, fired, remindersSent, quoteReminders, fbLeads });
+  const googleReviews = await syncGoogleReviews().catch(() => -1);
+  return NextResponse.json({
+    ok: true,
+    fired,
+    remindersSent,
+    quoteReminders,
+    fbLeads,
+    googleReviews,
+  });
 }

@@ -6,6 +6,8 @@ const typeIcons: Record<string, string> = {
   call: "📞",
   email: "✉️",
   whatsapp: "💬",
+  messenger: "🔵",
+  instagram: "📸",
   meeting: "🤝",
   note: "📝",
 };

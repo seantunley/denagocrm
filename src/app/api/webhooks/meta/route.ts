@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { prisma } from "@/lib/db";
 import { getSetting } from "@/lib/settings";
 import { createIntakeLead } from "@/lib/leadIntake";
+import { recordInboundDm, recordDmEcho, type DmPlatform } from "@/lib/messenger";
 
 /** Meta webhook verification handshake. */
 export async function GET(req: NextRequest) {
@@ -64,6 +65,35 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
+
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const objectType = (body as any).object as string | undefined;
+
+  // Messenger / Instagram DM events arrive as entry[].messaging[]
+  if (objectType === "page" || objectType === "instagram") {
+    const platform: DmPlatform = objectType === "instagram" ? "instagram" : "messenger";
+    for (const entry of (body as any).entry ?? []) {
+      for (const ev of entry.messaging ?? []) {
+        try {
+          const text: string =
+            ev.message?.text ??
+            (ev.message?.attachments?.length ? "[attachment]" : "");
+          if (ev.message?.is_echo) {
+            if (text) await recordDmEcho(platform, String(ev.recipient?.id ?? ""), text);
+            continue;
+          }
+          if (ev.message && text) {
+            const referral = ev.message.referral ?? ev.referral ?? ev.postback?.referral ?? null;
+            await recordInboundDm(platform, String(ev.sender?.id ?? ""), text, referral);
+          } else if (ev.referral) {
+            // Referral-only event (ad click, no message yet) — nothing to file
+            continue;
+          }
+        } catch {}
+      }
+    }
+  }
+  /* eslint-enable @typescript-eslint/no-explicit-any */
 
   const entries =
     (body as { entry?: { changes?: { field: string; value: Record<string, unknown> }[] }[] })
