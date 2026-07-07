@@ -253,21 +253,26 @@ model Quote {
   deletedByName String?
   deleteReason  String?
 
-  signToken          String?   @unique
-  signedAt           DateTime?
-  signedByName       String?
-  signatureRef       String?
-  signerIp           String?
-  signerUserAgent    String?
-  signedPdfHash      String? // SHA-256 of the filed signed PDF (tamper evidence)
-  signLinkCreatedAt  DateTime?
-  viewedAt           DateTime? // first time the customer opened the signing link
-  declinedAt         DateTime?
-  declineReason      String?
-  reminderSentAt     DateTime? // unsigned-quote nudge already sent
-  dealerSignedAt     DateTime?
-  dealerSignedByName String?
-  dealerSignatureRef String?
+  signToken            String?   @unique
+  signedAt             DateTime?
+  signedByName         String?
+  signatureRef         String?
+  signerIp             String?
+  signerUserAgent      String?
+  signedPdfHash        String? // SHA-256 of the filed signed PDF (tamper evidence)
+  signLinkCreatedAt    DateTime?
+  viewedAt             DateTime? // first time the customer opened the signing link
+  declinedAt           DateTime?
+  declineReason        String?
+  reminderSentAt       DateTime? // unsigned-quote nudge already sent
+  // Fulfilment flow after signing (all set manually from the Deliveries board)
+  invoicedAt           DateTime?
+  depositPaidAt        DateTime?
+  deliveryScheduledFor DateTime?
+  deliveredAt          DateTime?
+  dealerSignedAt       DateTime?
+  dealerSignedByName   String?
+  dealerSignatureRef   String?
 
   // Version control: a revision points at the quote it replaces; the old one
   // is stamped superseded and becomes read-only.
@@ -379,6 +384,8 @@ model Document {
   vehicle      Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
   jobCardId    String?
   jobCard      JobCard? @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  quoteId      String? // fulfilment paperwork (invoice, proof of payment, delivery note)
+  tag          String? // invoice | pop | delivery-note
   uploadedById String
   uploadedBy   User     @relation(fields: [uploadedById], references: [id])
 }

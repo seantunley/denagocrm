@@ -251,6 +251,40 @@ export default async function QuoteDetailPage({
         </div>
       )}
 
+      {quote.status === "accepted" && !quote.supersededAt && (
+        <div className="card py-3 flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-400 mr-1">
+            Fulfilment
+          </span>
+          {[
+            { label: "Invoiced", at: quote.invoicedAt },
+            { label: "Deposit paid", at: quote.depositPaidAt },
+            {
+              label: quote.deliveryScheduledFor
+                ? `Delivery ${formatDate(quote.deliveryScheduledFor)}`
+                : "Delivery scheduled",
+              at: quote.deliveryScheduledFor,
+            },
+            { label: "Delivered", at: quote.deliveredAt },
+          ].map((s, i) => (
+            <span
+              key={i}
+              className={`badge ${
+                s.at ? "bg-emerald-500/15 text-emerald-300" : "bg-slate-800 text-slate-500"
+              }`}
+            >
+              {s.at ? "✓ " : ""}
+              {s.label}
+            </span>
+          ))}
+          {!quote.deliveredAt && (
+            <Link href="/deliveries" className="text-xs text-orange-400 hover:underline ml-auto">
+              Manage on the Deliveries board →
+            </Link>
+          )}
+        </div>
+      )}
+
       {!quote.supersededAt && (
       <SigningBlock
         kind="quote"

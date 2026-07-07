@@ -16,12 +16,15 @@ export default async function DashboardPage() {
   } catch {}
   const weekAgo = subDays(new Date(), 7);
 
-  const [openLeads, openValue, newThisWeek, openJobCards, vehicles, recentComms, recentLeads] =
+  const [openLeads, openValue, newThisWeek, openJobCards, awaitingDelivery, vehicles, recentComms, recentLeads] =
     await Promise.all([
       prisma.lead.count({ where: { status: "open" } }),
       prisma.lead.aggregate({ where: { status: "open" }, _sum: { valueCents: true } }),
       prisma.lead.count({ where: { createdAt: { gte: weekAgo } } }),
       prisma.jobCard.count({ where: { status: { not: "completed" } } }),
+      prisma.quote.count({
+        where: { status: "accepted", deliveredAt: null, supersededAt: null },
+      }),
       prisma.vehicle.findMany({
         include: { contact: true, serviceRecords: true, mileageLogs: true },
       }),
@@ -54,6 +57,7 @@ export default async function DashboardPage() {
     { label: "Open leads", value: String(openLeads), href: "/leads" },
     { label: "Pipeline value", value: formatZAR(openValue._sum.valueCents ?? 0), href: "/leads" },
     { label: "New leads (7 days)", value: String(newThisWeek), href: "/leads" },
+    { label: "Awaiting delivery", value: String(awaitingDelivery), href: "/deliveries" },
     { label: "Open job cards", value: String(openJobCards), href: "/jobcards" },
     { label: "Service due", value: String(dueVehicles.length), href: "/vehicles" },
   ];
@@ -62,7 +66,7 @@ export default async function DashboardPage() {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Dashboard</h1>
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
         {stats.map((s) => (
           <Link key={s.label} href={s.href} className="card hover:border-orange-600/60 transition-colors">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
