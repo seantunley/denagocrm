@@ -51,3 +51,4 @@ prisma/dev.db-journal
 .env*
 data-export.json
 backups/
+.poll-fb2.mjs
