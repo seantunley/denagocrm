@@ -186,7 +186,7 @@ export default function QuotePrintDoc({ quote }: { quote: QuoteForPrint }) {
               <p className="font-bold text-slate-700 text-[11px]">
                 Denago Cape Town — Authorized Denago EV Dealer
               </p>
-              <p>Unit 55, M5 Freeway Business Park, Maitland, Cape Town · 081 515 8319</p>
+              <p>Unit 55, M5 Freeway Business Park, Maitland, Cape Town · 073 789 3438</p>
               <p>sales@denagocpt.co.za · denagocpt.co.za</p>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">

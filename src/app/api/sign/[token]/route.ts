@@ -143,7 +143,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       await sendEmail({
         to: confirmTo,
         subject: `Signed copy of your Denago Cape Town quote Q-${quote.number}`,
-        text: `Hi ${name.split(/\s+/)[0]},\n\nThank you — quote Q-${quote.number} (${formatZAR(Math.round(total))}) has been signed and accepted. Your signed copy is attached for your records.\n\nWe'll be in touch shortly to arrange the next steps.\n\nWarm regards,\nDenago Cape Town\n081 515 8319`,
+        text: `Hi ${name.split(/\s+/)[0]},\n\nThank you — quote Q-${quote.number} (${formatZAR(Math.round(total))}) has been signed and accepted. Your signed copy is attached for your records.\n\nWe'll be in touch shortly to arrange the next steps.\n\nWarm regards,\nDenago Cape Town\n073 789 3438`,
         attachments: [
           {
             filename: `Quote-Q${quote.number}-signed.pdf`,

@@ -64,7 +64,7 @@ export default async function JobCardPrintPage({
         </div>
         <div className="flex justify-between items-center px-1 py-3 text-xs text-slate-500">
           <span>Unit 55, M5 Freeway Business Park, Maitland, Cape Town</span>
-          <span>081 515 8319 · sales@denagocpt.co.za</span>
+          <span>073 789 3438 · sales@denagocpt.co.za</span>
         </div>
 
         {/* Meta */}

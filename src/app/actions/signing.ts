@@ -134,7 +134,7 @@ export async function emailSigningLink(kind: "quote" | "jobcard", id: string) {
     await sendEmail({
       to,
       subject: `Your Denago Cape Town quote Q-${quote.number} — review & sign online`,
-      text: `Hi ${firstName},\n\nYour quotation Q-${quote.number} is ready. You can review and accept it online here:\n\n${link}\n\nAny questions, just reply or call us on 081 515 8319.\n\nWarm regards,\n${user.name}\nDenago Cape Town`,
+      text: `Hi ${firstName},\n\nYour quotation Q-${quote.number} is ready. You can review and accept it online here:\n\n${link}\n\nAny questions, just reply or call us on 073 789 3438.\n\nWarm regards,\n${user.name}\nDenago Cape Town`,
     });
     await prisma.communication.create({
       data: {

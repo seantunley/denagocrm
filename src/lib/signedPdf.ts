@@ -185,7 +185,7 @@ export async function buildSignedPdf(input: SignedDocInput): Promise<Buffer> {
     x: M, y: 48, size: 8, font: bold, color: DARK,
   });
   page.drawText(
-    "Unit 55, M5 Freeway Business Park, Maitland, Cape Town · 081 515 8319 · sales@denagocpt.co.za · denagocpt.co.za",
+    "Unit 55, M5 Freeway Business Park, Maitland, Cape Town · 073 789 3438 · sales@denagocpt.co.za · denagocpt.co.za",
     { x: M, y: 37, size: 7, font, color: GRAY }
   );
 

@@ -39,7 +39,7 @@ export async function runQuoteSigningReminders(): Promise<number> {
       subject: `Friendly reminder: your Denago Cape Town quote Q-${q.number}`,
       text: `Hi ${firstName},\n\nJust a friendly nudge — your quotation Q-${q.number} is still waiting for you. You can review and accept it online here:\n\n${link}\n\n${
         q.validUntil ? `It's valid until ${formatDate(q.validUntil)}.\n\n` : ""
-      }Any questions at all, reply to this email or call us on 081 515 8319.\n\nWarm regards,\nDenago Cape Town`,
+      }Any questions at all, reply to this email or call us on 073 789 3438.\n\nWarm regards,\nDenago Cape Town`,
     });
     if (!res.ok) continue;
     await basePrisma.quote.update({

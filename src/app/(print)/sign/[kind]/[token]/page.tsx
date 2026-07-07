@@ -281,7 +281,7 @@ export default async function SignPage({
           <p className="text-lg font-bold text-amber-800">This quote has expired</p>
           <p className="text-sm text-amber-700 mt-1">
             It was valid until {doc.validUntil ? formatDate(doc.validUntil) : "recently"}. Give us
-            a call on 081 515 8319 or reply to our email and we&apos;ll send you an updated one.
+            a call on 073 789 3438 or reply to our email and we&apos;ll send you an updated one.
           </p>
         </div>
       ) : doc.declinedAt ? (
@@ -291,7 +291,7 @@ export default async function SignPage({
             You declined this quote on {formatDate(doc.declinedAt)}
           </p>
           <p className="text-sm text-slate-600 mt-1">
-            Changed your mind? You can still sign below — or call us on 081 515 8319.
+            Changed your mind? You can still sign below — or call us on 073 789 3438.
           </p>
           <div className="mt-5 text-left">
             <SignPanel token={token} kind={kind as "quote" | "jobcard"} />
@@ -304,7 +304,7 @@ export default async function SignPage({
         </div>
 
         <p className="text-[11px] text-slate-500 mt-6 text-center">
-          Denago Cape Town · Authorized Denago EV Dealer · 081 515 8319 · denagocpt.co.za
+          Denago Cape Town · Authorized Denago EV Dealer · 073 789 3438 · denagocpt.co.za
         </p>
       </main>
 

@@ -179,7 +179,7 @@ export default function SignPanel({
         <p className="text-lg font-bold text-slate-700">Thanks for letting us know</p>
         <p className="text-sm text-slate-600 mt-1">
           We&apos;ve recorded that you declined this quote. If anything changes, this link stays
-          available — or call us on 081 515 8319.
+          available — or call us on 073 789 3438.
         </p>
       </div>
     );

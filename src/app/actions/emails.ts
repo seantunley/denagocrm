@@ -55,7 +55,7 @@ export async function sendEmailAction(
   const result = await sendEmail({
     to,
     subject,
-    text: `${bodyText}\n\n--\n${user.name} · Denago Cape Town · 081 515 8319`,
+    text: `${bodyText}\n\n--\n${user.name} · Denago Cape Town · 073 789 3438`,
     html,
     attachments,
   });

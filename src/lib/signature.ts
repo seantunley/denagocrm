@@ -15,7 +15,7 @@ export function buildSignature(user: {
     user.mobile
       ? `<a href="tel:${user.mobile.replace(/\s/g, "")}" style="color:#475569;text-decoration:none;">${user.mobile}</a>`
       : null,
-    `<a href="tel:+27815158319" style="color:#475569;text-decoration:none;">081 515 8319</a>`,
+    `<a href="tel:+27737893438" style="color:#475569;text-decoration:none;">073 789 3438</a>`,
     `<a href="mailto:${user.email}" style="color:#ea580c;text-decoration:none;">${user.email}</a>`,
   ]
     .filter(Boolean)
