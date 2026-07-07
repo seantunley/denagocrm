@@ -1,6 +1,7 @@
 import { addCommunication, deleteCommunication } from "@/app/actions/communications";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { formatDateTime } from "@/lib/format";
+import PasteImageInput from "@/components/PasteImageInput";
 
 /* eslint-disable @next/next/no-img-element */
 const logo = (src: string, alt: string) => (
@@ -82,9 +83,12 @@ export default function CommsTimeline({
             name="body"
             className="input"
             rows={2}
-            required
             placeholder="What was discussed?"
           />
+        </div>
+        <div>
+          <label className="label">Image (optional)</label>
+          <PasteImageInput />
         </div>
         <div className="flex items-end justify-between gap-3">
           <div>

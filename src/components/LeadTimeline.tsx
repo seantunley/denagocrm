@@ -1,5 +1,6 @@
 import { addCommunication } from "@/app/actions/communications";
 import { formatDateTime } from "@/lib/format";
+import PasteImageInput from "@/components/PasteImageInput";
 
 /* eslint-disable @next/next/no-img-element */
 const logo = (src: string, alt: string) => (
@@ -107,12 +108,7 @@ export default function LeadTimeline({
           rows={2}
           placeholder="Add an internal note…"
         />
-        <input
-          type="file"
-          name="image"
-          accept="image/*"
-          className="block w-full text-xs text-slate-500 file:btn-secondary file:btn-sm file:mr-2 file:border-0"
-        />
+        <PasteImageInput />
         <button className="btn-secondary btn-sm w-full">+ Add note</button>
       </form>
 
