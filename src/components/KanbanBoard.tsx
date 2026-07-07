@@ -15,6 +15,7 @@ import {
 } from "@dnd-kit/core";
 import { moveLead } from "@/app/actions/leads";
 import { formatZAR } from "@/lib/format";
+import TestDriveWeather from "@/components/TestDriveWeather";
 
 export type KanbanLead = {
   id: string;
@@ -25,7 +26,7 @@ export type KanbanLead = {
   color: string | null;
   productName: string | null;
   assignee: string | null;
-  testDrive?: { when: string; weather: string | null; who: string | null } | null;
+  testDrive?: { when: string; weather: string | null; date: string } | null;
 };
 
 function initials(name: string) {
@@ -85,13 +86,9 @@ function LeadCard({ lead, dragging }: { lead: KanbanLead; dragging?: boolean }) 
       </div>
       <p className="text-xs text-slate-400 mt-1">{lead.name}</p>
       {lead.testDrive && (
-        <div className="text-xs mt-1 rounded-md bg-sky-500/10 border border-sky-500/20 px-1.5 py-0.5 text-sky-300 w-fit space-y-0.5">
-          <p>
-            🚗 {lead.testDrive.when}
-            {lead.testDrive.who ? ` · ${lead.testDrive.who}` : ""}
-          </p>
-          {lead.testDrive.weather && <p>{lead.testDrive.weather}</p>}
-        </div>
+        <p className="text-xs mt-1 rounded-md bg-sky-500/10 border border-sky-500/20 px-1.5 py-0.5 text-sky-300 w-fit">
+          🚗 {lead.testDrive.when}
+        </p>
       )}
       {lead.productName && (
         <p className="text-xs text-slate-400">
@@ -116,6 +113,15 @@ function LeadCard({ lead, dragging }: { lead: KanbanLead; dragging?: boolean }) 
           </span>
         )}
       </div>
+      {lead.testDrive?.weather && (
+        <div className="mt-1.5">
+          <TestDriveWeather
+            date={lead.testDrive.date}
+            when={lead.testDrive.when}
+            summary={lead.testDrive.weather}
+          />
+        </div>
+      )}
     </div>
   );
 }
