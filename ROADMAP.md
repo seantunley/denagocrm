@@ -35,6 +35,23 @@ Phases, in value order:
    DMs are not available to regular businesses. Comments possible with
    app approval.
 
+## Inbound email onto the record (Krayin takeaway, 2026-07-07)
+
+IMAP sync: replies to CRM emails land on the customer's timeline
+automatically instead of only in the mailbox. Highest-value gap left
+after the automations v2 build.
+
+## Saved filters / views on list pages (Krayin takeaway)
+
+One-click saved views like "Facebook leads over R200k this month" on
+leads/contacts/quotes tables.
+
+## WhatsApp bot phase 2
+
+Swap the keyword matcher for a Claude API answerer grounded in models,
+prices and policies; automatic human handoff on uncertainty. Same
+webhook plumbing as phase 1.
+
 ## Previously parked
 
 - Follow-up sequences (multi-step drip; approximated today with multiple idle
