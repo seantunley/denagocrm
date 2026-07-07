@@ -100,10 +100,69 @@ export async function createQuoteForContact(formData: FormData) {
   redirect(`/quotes/${quote.id}`);
 }
 
-/** A quote is frozen once a signing link exists or it has been signed. */
+/**
+ * A quote is frozen once a signing link exists, it has been signed, it was
+ * superseded by a revision, or it has left draft (customers must never see a
+ * quote change under them — revise instead).
+ */
 async function quoteLocked(quoteId: string): Promise<boolean> {
   const quote = await prisma.quote.findUnique({ where: { id: quoteId } });
-  return !quote || Boolean(quote.signToken) || Boolean(quote.signedAt);
+  return (
+    !quote ||
+    Boolean(quote.signToken) ||
+    Boolean(quote.signedAt) ||
+    Boolean(quote.supersededAt) ||
+    quote.status !== "draft"
+  );
+}
+
+/**
+ * Clones a quote into a fresh draft revision and freezes the original —
+ * the version the customer saw stays on record, read-only.
+ */
+export async function createQuoteRevision(quoteId: string) {
+  const user = await requireUser();
+  const original = await prisma.quote.findUniqueOrThrow({
+    where: { id: quoteId },
+    include: { items: true },
+  });
+  if (original.supersededAt || original.signedAt) return; // only the latest, unsigned version can be revised
+  const max = await basePrisma.quote.aggregate({ _max: { number: true } });
+  const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
+  const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
+  const revision = await prisma.quote.create({
+    data: {
+      number: (max._max.number ?? 1000) + 1,
+      contactId: original.contactId,
+      leadId: original.leadId,
+      createdById: user.id,
+      validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
+      terms: original.terms,
+      revisionOfId: original.id,
+      items: {
+        create: original.items.map((i) => ({
+          description: i.description,
+          qty: i.qty,
+          unitPriceCents: i.unitPriceCents,
+        })),
+      },
+    },
+  });
+  // Freeze the original and kill its signing link so a stale price can't be accepted
+  await prisma.quote.update({
+    where: { id: original.id },
+    data: { supersededAt: new Date(), signToken: null, signLinkCreatedAt: null, reminderSentAt: null },
+  });
+  await logAudit({
+    action: "quote.revised",
+    summary: `Quote Q-${original.number} superseded by revision Q-${revision.number}`,
+    leadId: original.leadId,
+    contactId: original.contactId,
+    user,
+  });
+  revalidatePath("/quotes");
+  revalidatePath(`/quotes/${quoteId}`);
+  redirect(`/quotes/${revision.id}`);
 }
 
 export async function addQuoteItem(quoteId: string, formData: FormData) {
@@ -176,6 +235,7 @@ async function reopenLeadIfNoAcceptedQuote(
 export async function setQuoteStatus(quoteId: string, status: string) {
   const user = await requireUser();
   const before = await prisma.quote.findUniqueOrThrow({ where: { id: quoteId } });
+  if (before.signedAt || before.supersededAt) return; // signed and superseded versions are read-only
   const quote = await prisma.quote.update({
     where: { id: quoteId },
     data: { status },

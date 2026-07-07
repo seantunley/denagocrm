@@ -267,6 +267,15 @@ model Quote {
   dealerSignedByName String?
   dealerSignatureRef String?
 
+  // Version control: a revision points at the quote it replaces; the old one
+  // is stamped superseded and becomes read-only.
+  changeRequestedAt DateTime?
+  changeRequestNote String?
+  revisionOfId      String?
+  revisionOf        Quote?    @relation("QuoteRevisions", fields: [revisionOfId], references: [id], onDelete: SetNull)
+  revisions         Quote[]   @relation("QuoteRevisions")
+  supersededAt      DateTime?
+
   leadId      String?
   lead        Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
   contactId   String?

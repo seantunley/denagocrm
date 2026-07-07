@@ -115,8 +115,14 @@ export default async function QuotesPage() {
                   </td>
                   <td className="font-medium">{formatZAR(Math.round(total))}</td>
                   <td>
-                    <span className={`badge ${statusBadge[q.status] ?? statusBadge.draft}`}>
-                      {q.status}
+                    <span
+                      className={`badge ${
+                        q.supersededAt
+                          ? "bg-slate-800 text-slate-500"
+                          : statusBadge[q.status] ?? statusBadge.draft
+                      }`}
+                    >
+                      {q.supersededAt ? "superseded" : q.status}
                     </span>
                   </td>
                   <td className="text-slate-400">{formatDate(q.validUntil)}</td>

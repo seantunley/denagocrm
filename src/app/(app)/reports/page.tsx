@@ -82,10 +82,11 @@ export default async function ReportsPage() {
   const modelRows = [...byModel.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, 8);
   const maxModel = Math.max(1, ...modelRows.map(([, v]) => v.count));
 
-  // Quotes
+  // Quotes — superseded versions don't count; only the latest of each chain
   const quoteCounts = { draft: 0, sent: 0, accepted: 0, declined: 0 };
   let acceptedValue = 0;
   for (const q of quotes) {
+    if (q.supersededAt) continue;
     quoteCounts[q.status as keyof typeof quoteCounts] =
       (quoteCounts[q.status as keyof typeof quoteCounts] ?? 0) + 1;
     if (q.status === "accepted")

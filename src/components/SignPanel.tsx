@@ -16,11 +16,15 @@ export default function SignPanel({
   const drawing = useRef(false);
   const hasInk = useRef(false);
   const [name, setName] = useState("");
-  const [status, setStatus] = useState<"idle" | "sending" | "done" | "declined">("idle");
+  const [status, setStatus] = useState<
+    "idle" | "sending" | "done" | "declined" | "changes"
+  >("idle");
   const [error, setError] = useState("");
-  const [declineOpen, setDeclineOpen] = useState(false);
+  const [footerMode, setFooterMode] = useState<"none" | "decline" | "change">("none");
   const [declineReason, setDeclineReason] = useState("");
   const [declining, setDeclining] = useState(false);
+  const [changeNote, setChangeNote] = useState("");
+  const [sendingChange, setSendingChange] = useState(false);
 
   function pos(e: React.PointerEvent<HTMLCanvasElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -129,6 +133,45 @@ export default function SignPanel({
     }
   }
 
+  async function submitChangeRequest() {
+    setError("");
+    if (changeNote.trim().length < 2) {
+      setError("Please tell us what you'd like changed.");
+      return;
+    }
+    setSendingChange(true);
+    try {
+      const res = await fetch(`/api/sign/${token}/request-changes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "quote", note: changeNote.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setError(json.error ?? "Something went wrong — please try again.");
+        setSendingChange(false);
+        return;
+      }
+      setStatus("changes");
+    } catch {
+      setError("Connection problem — please try again.");
+      setSendingChange(false);
+    }
+  }
+
+  if (status === "changes") {
+    return (
+      <div className="rounded-xl border-2 border-sky-500 bg-sky-50 p-6 text-center">
+        <p className="text-3xl mb-2">✏️</p>
+        <p className="text-lg font-bold text-sky-800">Change request received</p>
+        <p className="text-sm text-sky-700 mt-1">
+          Thanks — we&apos;ll update the quotation and send you a fresh link shortly. Nothing to
+          sign for now.
+        </p>
+      </div>
+    );
+  }
+
   if (status === "declined") {
     return (
       <div className="rounded-xl border-2 border-slate-400 bg-slate-100 p-6 text-center">
@@ -211,15 +254,58 @@ export default function SignPanel({
 
       {allowDecline && (
         <div className="mt-4 pt-4 border-t border-orange-200">
-          {!declineOpen ? (
-            <button
-              type="button"
-              onClick={() => setDeclineOpen(true)}
-              className="text-sm text-slate-500 hover:text-slate-700 underline cursor-pointer"
-            >
-              Not going ahead? Decline this quote
-            </button>
-          ) : (
+          {footerMode === "none" && (
+            <div className="flex flex-wrap gap-x-6 gap-y-2">
+              <button
+                type="button"
+                onClick={() => setFooterMode("change")}
+                className="text-sm text-slate-600 hover:text-slate-800 underline cursor-pointer"
+              >
+                ✏️ Want something changed? Request a change
+              </button>
+              <button
+                type="button"
+                onClick={() => setFooterMode("decline")}
+                className="text-sm text-slate-500 hover:text-slate-700 underline cursor-pointer"
+              >
+                Not going ahead? Decline this quote
+              </button>
+            </div>
+          )}
+
+          {footerMode === "change" && (
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                What would you like changed? *
+              </label>
+              <textarea
+                value={changeNote}
+                onChange={(e) => setChangeNote(e.target.value)}
+                rows={2}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-orange-500"
+                placeholder="e.g. Rather the Lava colour · add a canopy · deliver to the estate"
+              />
+              <div className="flex gap-3 mt-2">
+                <button
+                  type="button"
+                  onClick={submitChangeRequest}
+                  disabled={sendingChange}
+                  className="rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 cursor-pointer"
+                >
+                  {sendingChange ? "Sending…" : "Send change request"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFooterMode("none")}
+                  className="text-sm text-slate-500 underline cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {footerMode === "decline" && (
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1">
                 Sorry to hear that — mind telling us why? *
@@ -242,7 +328,7 @@ export default function SignPanel({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setDeclineOpen(false)}
+                  onClick={() => setFooterMode("none")}
                   className="text-sm text-slate-500 underline cursor-pointer"
                 >
                   Cancel

@@ -8,6 +8,7 @@ import {
   updateQuoteMeta,
   setQuoteStatus,
   deleteQuote,
+  createQuoteRevision,
 } from "@/app/actions/quotes";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import SigningBlock from "@/components/SigningBlock";
@@ -20,6 +21,55 @@ const statusBadge: Record<string, string> = {
   declined: "bg-red-500/15 text-red-300",
 };
 
+type FamilyQuote = {
+  id: string;
+  number: number;
+  status: string;
+  supersededAt: Date | null;
+  declineReason: string | null;
+  createdAt: Date;
+  items: { qty: number; unitPriceCents: number }[];
+};
+
+/** All versions of a quote: walk up to the root, then collect descendants. */
+async function getQuoteFamily(start: {
+  id: string;
+  revisionOfId: string | null;
+}): Promise<FamilyQuote[]> {
+  let rootId = start.id;
+  let parentId = start.revisionOfId;
+  while (parentId) {
+    const parent = await prisma.quote.findUnique({
+      where: { id: parentId },
+      select: { id: true, revisionOfId: true },
+    });
+    if (!parent) break;
+    rootId = parent.id;
+    parentId = parent.revisionOfId;
+  }
+  const family: FamilyQuote[] = [];
+  let frontier = [rootId];
+  while (frontier.length > 0) {
+    const batch = await prisma.quote.findMany({
+      where: { id: { in: frontier } },
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        supersededAt: true,
+        declineReason: true,
+        createdAt: true,
+        items: { select: { qty: true, unitPriceCents: true } },
+        revisions: { select: { id: true } },
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    family.push(...batch);
+    frontier = batch.flatMap((q) => q.revisions.map((r) => r.id));
+  }
+  return family;
+}
+
 export default async function QuoteDetailPage({
   params,
 }: {
@@ -29,15 +79,22 @@ export default async function QuoteDetailPage({
   const { id } = await params;
   const quote = await prisma.quote.findUnique({
     where: { id },
-    include: { items: true, lead: true, contact: true, createdBy: true },
+    include: {
+      items: true,
+      lead: true,
+      contact: true,
+      createdBy: true,
+      revisions: { select: { id: true, number: true } },
+    },
   });
   if (!quote) notFound();
+  const family = await getQuoteFamily(quote);
+  const successor = quote.revisions[0] ?? null;
   const total = quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
   const lockedBySigning = Boolean(quote.signToken) && !quote.signedAt;
-  const editable =
-    (quote.status === "draft" || quote.status === "sent") &&
-    !lockedBySigning &&
-    !quote.signedAt;
+  const readOnly = Boolean(quote.signedAt || quote.supersededAt);
+  const editable = quote.status === "draft" && !lockedBySigning && !readOnly;
+  const canRevise = !readOnly && (quote.status === "sent" || quote.status === "declined");
 
   return (
     <div className="space-y-6">
@@ -74,12 +131,22 @@ export default async function QuoteDetailPage({
           <Link href={`/quotes/${quote.id}/print`} className="btn-secondary">
             🖨 Print / PDF
           </Link>
-          {quote.status === "draft" && (
+          {canRevise && (
+            <form action={createQuoteRevision.bind(null, quote.id)}>
+              <button
+                className="btn-primary"
+                title="Copies this quote into a fresh editable draft; this version stays on record read-only."
+              >
+                ↻ Create revision
+              </button>
+            </form>
+          )}
+          {!readOnly && quote.status === "draft" && (
             <form action={setQuoteStatus.bind(null, quote.id, "sent")}>
               <button className="btn-primary">Mark sent</button>
             </form>
           )}
-          {quote.status === "sent" && (
+          {!readOnly && quote.status === "sent" && (
             <>
               <form action={setQuoteStatus.bind(null, quote.id, "accepted")}>
                 <button className="btn bg-emerald-700 text-white hover:bg-emerald-600">
@@ -91,7 +158,7 @@ export default async function QuoteDetailPage({
               </form>
             </>
           )}
-          {(quote.status === "accepted" || quote.status === "declined") && (
+          {!readOnly && (quote.status === "accepted" || quote.status === "declined") && (
             <form action={setQuoteStatus.bind(null, quote.id, "draft")}>
               <button className="btn-secondary">Back to draft</button>
             </form>
@@ -104,6 +171,78 @@ export default async function QuoteDetailPage({
         </div>
       </div>
 
+      {quote.supersededAt && (
+        <div className="card bg-slate-800/60 border-slate-700">
+          <p className="text-sm text-slate-300">
+            📜 This is an old version, kept for the record — it was superseded on{" "}
+            {formatDate(quote.supersededAt)}
+            {successor && (
+              <>
+                {" "}by{" "}
+                <Link href={`/quotes/${successor.id}`} className="text-orange-400 hover:underline font-medium">
+                  Q-{successor.number}
+                </Link>
+              </>
+            )}
+            . It can be viewed and printed but not edited.
+          </p>
+        </div>
+      )}
+
+      {quote.changeRequestedAt && !quote.supersededAt && !quote.signedAt && (
+        <div className="card bg-sky-500/10 border-sky-500/30 flex items-center justify-between gap-4 flex-wrap">
+          <p className="text-sm text-sky-300">
+            ✏️ Customer requested changes on {formatDate(quote.changeRequestedAt)} —{" "}
+            <span className="font-medium">“{quote.changeRequestNote}”</span>
+          </p>
+          <form action={createQuoteRevision.bind(null, quote.id)}>
+            <button className="btn-primary btn-sm">↻ Create revision</button>
+          </form>
+        </div>
+      )}
+
+      {family.length > 1 && (
+        <div className="card">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">
+            Version history
+          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            {family.map((f, idx) => {
+              const fTotal = f.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+              const current = f.id === quote.id;
+              return (
+                <div key={f.id} className="flex items-center gap-2">
+                  {idx > 0 && <span className="text-slate-600">→</span>}
+                  <Link
+                    href={`/quotes/${f.id}`}
+                    className={`rounded-lg border px-3 py-2 text-xs leading-5 transition-colors ${
+                      current
+                        ? "border-orange-500 bg-orange-500/10"
+                        : "border-slate-700 hover:border-slate-500"
+                    }`}
+                  >
+                    <span className="font-semibold text-slate-200">Q-{f.number}</span>{" "}
+                    <span className="text-slate-400">{formatZAR(Math.round(fTotal))}</span>{" "}
+                    <span
+                      className={`badge ${
+                        f.supersededAt
+                          ? "bg-slate-800 text-slate-400"
+                          : statusBadge[f.status] ?? statusBadge.draft
+                      }`}
+                    >
+                      {f.supersededAt ? "superseded" : f.status}
+                    </span>
+                    {f.declineReason && (
+                      <span className="block text-slate-500 mt-0.5">“{f.declineReason}”</span>
+                    )}
+                  </Link>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {quote.status === "accepted" && quote.lead && !quote.signedAt && (
         <div className="card bg-emerald-500/10 border-emerald-500/30">
           <p className="text-sm text-emerald-300">
@@ -112,6 +251,7 @@ export default async function QuoteDetailPage({
         </div>
       )}
 
+      {!quote.supersededAt && (
       <SigningBlock
         kind="quote"
         id={quote.id}
@@ -129,6 +269,7 @@ export default async function QuoteDetailPage({
         declineReason={quote.declineReason}
         signedPdfHash={quote.signedPdfHash}
       />
+      )}
 
       <div className="grid lg:grid-cols-3 gap-6 items-start">
         <div className="lg:col-span-2 card">
@@ -229,12 +370,21 @@ export default async function QuoteDetailPage({
         ) : (
           <div className="card space-y-3">
             <h2 className="font-semibold">Quote details</h2>
-            {lockedBySigning && (
+            {lockedBySigning ? (
               <p className="text-xs text-slate-400">
                 🔒 Locked while the signing link is active. Revoke the link in the signature card
                 to edit this quote.
               </p>
-            )}
+            ) : quote.supersededAt ? (
+              <p className="text-xs text-slate-400">📜 Old version — read-only.</p>
+            ) : quote.signedAt ? (
+              <p className="text-xs text-slate-400">✍ Signed — read-only.</p>
+            ) : quote.status !== "draft" ? (
+              <p className="text-xs text-slate-400">
+                🔒 This version has been in front of the customer, so it can&apos;t be edited —
+                use “↻ Create revision” to make changes.
+              </p>
+            ) : null}
             <div className="text-sm space-y-1.5">
               <p>
                 <span className="text-slate-400">Valid until:</span>{" "}

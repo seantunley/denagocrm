@@ -307,7 +307,9 @@ export default async function LeadDetailPage({
                               <span className="flex-1 text-slate-400">{formatZAR(Math.round(total))}</span>
                               <span
                                 className={`badge ${
-                                  q.status === "accepted"
+                                  q.supersededAt
+                                    ? "bg-slate-800 text-slate-500"
+                                    : q.status === "accepted"
                                     ? "bg-emerald-500/15 text-emerald-300"
                                     : q.status === "declined"
                                     ? "bg-red-500/15 text-red-300"
@@ -316,7 +318,7 @@ export default async function LeadDetailPage({
                                     : "bg-slate-800 text-slate-300"
                                 }`}
                               >
-                                {q.status}
+                                {q.supersededAt ? "superseded" : q.status}
                               </span>
                             </li>
                           );
