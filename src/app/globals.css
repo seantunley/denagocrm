@@ -68,11 +68,13 @@
   }
 }
 
-/* No spinner arrows on number inputs, anywhere */
-input[type="number"]::-webkit-outer-spin-button,
-input[type="number"]::-webkit-inner-spin-button {
+/* No spinner arrows on any input (number, date, time, datetime-local) */
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
   -webkit-appearance: none;
+  appearance: none;
   margin: 0;
+  display: none;
 }
 input[type="number"] {
   -moz-appearance: textfield;
