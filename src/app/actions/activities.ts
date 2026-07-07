@@ -94,3 +94,45 @@ export async function cancelActivity(id: string, revalidate: string) {
   revalidatePath("/activities");
   revalidatePath("/");
 }
+
+/** Edits a planned activity — same fields as scheduling, audit-logged. */
+export async function updateActivity(id: string, formData: FormData) {
+  const user = await requireUser();
+  const str = (k: string) => {
+    const v = String(formData.get(k) ?? "").trim();
+    return v === "" ? null : v;
+  };
+  const summary = String(formData.get("summary") ?? "").trim();
+  if (!summary) return;
+  const rawDue = str("dueDate");
+  const activity = await prisma.activity.update({
+    where: { id },
+    data: {
+      type: str("type") ?? "todo",
+      category: formData.get("workshop") === "on" ? "workshop" : null,
+      summary,
+      location: str("location"),
+      assignedToId: str("assignedToId") ?? user.id,
+      ...(rawDue
+        ? {
+            dueDate: rawDue.endsWith("T00:00")
+              ? new Date(rawDue.slice(0, 10)) // date-only stays date-only
+              : rawDue.includes("T")
+              ? new Date(`${rawDue}:00+02:00`)
+              : new Date(rawDue),
+            reminderSentAt: null, // re-arm the hour-before reminder
+          }
+        : {}),
+    },
+  });
+  await logAudit({
+    action: "activity.updated",
+    summary: `Updated activity “${summary}”`,
+    leadId: activity.leadId,
+    contactId: activity.contactId,
+    user,
+  });
+  revalidatePath(String(formData.get("revalidate") ?? "/activities"));
+  revalidatePath("/activities");
+  revalidatePath("/");
+}

@@ -1,4 +1,5 @@
-import { scheduleActivity, completeActivity, cancelActivity } from "@/app/actions/activities";
+import { scheduleActivity, completeActivity, cancelActivity, updateActivity } from "@/app/actions/activities";
+import ModalTrigger from "@/components/Modal";
 import { formatDate, formatDue } from "@/lib/format";
 
 export const activityIcons: Record<string, string> = {
@@ -13,6 +14,7 @@ export const activityIcons: Record<string, string> = {
 type ActivityItem = {
   id: string;
   type: string;
+  category?: string | null;
   summary: string;
   note: string | null;
   location: string | null;
@@ -20,6 +22,14 @@ type ActivityItem = {
   status: string;
   assignedTo: { id: string; name: string };
 };
+
+/** UTC-stored due date → datetime-local value in SA time (date-only stays 00:00). */
+function toLocalInput(d: Date): string {
+  if (d.getUTCHours() === 0 && d.getUTCMinutes() === 0) {
+    return d.toISOString().slice(0, 10) + "T00:00";
+  }
+  return new Date(d.getTime() + 2 * 60 * 60 * 1000).toISOString().slice(0, 16);
+}
 
 export default function ActivityPanel({
   activities,
@@ -167,6 +177,74 @@ export default function ActivityPanel({
                     ✓ Done
                   </button>
                 </form>
+                <ModalTrigger
+                  label="✎"
+                  title="Edit activity"
+                  buttonClass="text-xs text-slate-600 hover:text-orange-400 cursor-pointer mt-1.5"
+                >
+                  <form
+                    action={updateActivity.bind(null, a.id)}
+                    className="card grid grid-cols-2 gap-3 items-end"
+                  >
+                    <input type="hidden" name="revalidate" value={revalidate} />
+                    <div>
+                      <label className="label">Type</label>
+                      <select name="type" className="input" defaultValue={a.type}>
+                        <option value="call">Call</option>
+                        <option value="email">Email</option>
+                        <option value="meeting">Meeting</option>
+                        <option value="whatsapp">WhatsApp</option>
+                        <option value="test_drive">🚗 Test drive</option>
+                        <option value="todo">To-do</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="label">Due</label>
+                      <input
+                        type="datetime-local"
+                        name="dueDate"
+                        className="input"
+                        defaultValue={toLocalInput(a.dueDate)}
+                        required
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="label">What needs doing?</label>
+                      <input name="summary" className="input" required defaultValue={a.summary} />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="label">📍 Location (optional)</label>
+                      <input
+                        name="location"
+                        className="input"
+                        defaultValue={a.location ?? ""}
+                        placeholder="Address, estate or Google Maps link"
+                      />
+                    </div>
+                    <div>
+                      <label className="label">Assign to</label>
+                      <select name="assignedToId" className="input" defaultValue={a.assignedTo.id}>
+                        {users.map((u) => (
+                          <option key={u.id} value={u.id}>
+                            {u.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <label className="flex items-center gap-2 text-sm text-slate-300 pb-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        name="workshop"
+                        className="h-4 w-4"
+                        defaultChecked={a.category === "workshop"}
+                      />
+                      🔧 Workshop
+                    </label>
+                    <div className="col-span-2">
+                      <button className="btn-primary w-full">Save changes</button>
+                    </div>
+                  </form>
+                </ModalTrigger>
                 <form action={cancelActivity.bind(null, a.id, revalidate)}>
                   <button
                     className="text-xs text-slate-600 hover:text-red-500 cursor-pointer mt-1.5"
