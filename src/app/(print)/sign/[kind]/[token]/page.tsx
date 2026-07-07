@@ -6,7 +6,33 @@ import SignPanel from "@/components/SignPanel";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { quoteExpired } from "@/lib/quoteExpiry";
 
-export const metadata = { title: "Denago Cape Town — Sign document", robots: { index: false } };
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ kind: string; token: string }>;
+}) {
+  const { kind } = await params;
+  const isQuote = kind === "quote";
+  const title = isQuote
+    ? "Your quotation — Denago Cape Town"
+    : "Your job card — Denago Cape Town";
+  const description = isQuote
+    ? "Review and accept your Denago Cape Town quotation online — it takes less than a minute."
+    : "Review and sign your Denago Cape Town job card online.";
+  return {
+    title,
+    description,
+    robots: { index: false },
+    openGraph: {
+      title,
+      description,
+      siteName: "Denago Cape Town",
+      type: "website",
+      images: [{ url: "https://crm.denagocpt.co.za/branding/denago-logo-email.png" }],
+    },
+    twitter: { card: "summary", title, description },
+  };
+}
 
 export default async function SignPage({
   params,
@@ -108,9 +134,35 @@ export default async function SignPage({
   }
 
   const total = doc.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+  const signable = !doc.signedAt && !doc.expired;
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-8 text-sm text-slate-800">
+    <div className="min-h-screen bg-[#020617] bg-[radial-gradient(ellipse_at_top,rgba(234,88,12,0.08),transparent_60%)] pb-28 md:pb-16">
+      {/* Slim branded bar that stays put while the document scrolls */}
+      <header className="sticky top-0 z-20 bg-[#020617]/90 backdrop-blur border-b border-white/10">
+        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/branding/denago-logo-email.png"
+            alt="Denago Cape Town EV"
+            className="h-7 w-auto object-contain"
+          />
+          <div className="text-right leading-tight">
+            <p className="text-sm font-bold tracking-widest text-white">
+              {kind === "quote" ? "QUOTATION" : "JOB CARD"}{" "}
+              <span className="text-orange-500">{doc.refNumber}</span>
+            </p>
+            <p className="text-[11px] text-slate-400">
+              {formatZAR(Math.round(total))} incl. VAT
+              {doc.validUntil && !doc.signedAt ? ` · valid until ${formatDate(doc.validUntil)}` : ""}
+            </p>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-3 sm:px-6 mt-6 md:mt-10">
+        {/* The document itself: a white sheet on the desk */}
+        <div className="bg-white rounded-xl ring-1 ring-white/10 shadow-[0_30px_70px_-20px_rgba(0,0,0,0.8)] px-5 py-8 sm:px-10 sm:py-12 text-sm text-slate-800">
       {/* Brand banner */}
       <div className="flex items-center justify-between rounded-xl bg-[#020617] px-6 py-4 mb-5">
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -192,6 +244,7 @@ export default async function SignPage({
         </div>
       )}
 
+      <div id="sign" className="scroll-mt-20">
       {doc.signedAt ? (
         <div className="rounded-xl border-2 border-emerald-600 bg-emerald-50 p-6 text-center">
           <p className="text-3xl mb-2">✅</p>
@@ -225,10 +278,23 @@ export default async function SignPage({
       ) : (
         <SignPanel token={token} kind={kind as "quote" | "jobcard"} allowDecline={kind === "quote"} />
       )}
+      </div>
+        </div>
 
-      <p className="text-[11px] text-slate-400 mt-8 text-center">
-        Denago Cape Town · Authorized Denago EV Dealer · 081 515 8319 · denagocpt.co.za
-      </p>
+        <p className="text-[11px] text-slate-500 mt-6 text-center">
+          Denago Cape Town · Authorized Denago EV Dealer · 081 515 8319 · denagocpt.co.za
+        </p>
+      </main>
+
+      {/* On the phone, the pen is always within thumb's reach */}
+      {signable && (
+        <a
+          href="#sign"
+          className="md:hidden fixed bottom-4 left-4 right-4 z-30 rounded-xl bg-orange-600 py-3.5 text-center font-bold text-white shadow-[0_10px_30px_rgba(234,88,12,0.4)]"
+        >
+          ✍ {kind === "quote" ? "Review & accept this quote" : "Review & sign"}
+        </a>
+      )}
     </div>
   );
 }
