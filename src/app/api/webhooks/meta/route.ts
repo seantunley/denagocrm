@@ -87,7 +87,10 @@ export async function POST(req: NextRequest) {
             const referral = ev.message.referral ?? ev.referral ?? ev.postback?.referral ?? null;
             await recordInboundDm(platform, String(ev.sender?.id ?? ""), text, referral, attachments);
           }
-        } catch {}
+        } catch (e) {
+          const { logError } = await import("@/lib/errorLog");
+          await logError("meta-dm-webhook", e);
+        }
       }
     }
   }

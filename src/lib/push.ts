@@ -25,6 +25,8 @@ export const PUSH_KINDS = [
   { id: "review", label: "Google reviews", desc: "A new review appears" },
   { id: "email_in", label: "Email replies", desc: "A customer replies to an email (IMAP)" },
   { id: "referral", label: "Referral fees", desc: "A referred deal is won — fee due" },
+  { id: "system_error", label: "System errors", desc: "Something in the CRM failed (throttled to 1/30min)" },
+  { id: "activity_reminder", label: "Meeting reminders", desc: "An hour before timed meetings/test drives — tap opens Google Maps" },
 ] as const;
 
 export type PushKind = (typeof PUSH_KINDS)[number]["id"];

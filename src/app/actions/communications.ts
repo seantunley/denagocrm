@@ -11,7 +11,17 @@ export async function addCommunication(formData: FormData) {
     return v === "" ? null : v;
   };
   const body = String(formData.get("body") ?? "").trim();
-  if (!body) return;
+  const file = formData.get("image");
+  const hasFile =
+    file && typeof file === "object" && (file as File).size > 0 && (file as File).size <= 4 * 1024 * 1024;
+  if (!body && !hasFile) return;
+
+  let attachmentUrl: string | null = null;
+  if (hasFile && (file as File).type.startsWith("image/")) {
+    const { saveFile } = await import("@/lib/storage");
+    const f = file as File;
+    attachmentUrl = await saveFile(Buffer.from(await f.arrayBuffer()), f.name || "note.png", f.type);
+  }
 
   const occurredAtRaw = str("occurredAt");
   await prisma.communication.create({
@@ -19,7 +29,9 @@ export async function addCommunication(formData: FormData) {
       type: str("type") ?? "note",
       direction: str("direction"),
       subject: str("subject"),
-      body,
+      body: body || "🖼 Image",
+      attachmentUrl,
+      attachmentType: attachmentUrl ? "image" : null,
       occurredAt: occurredAtRaw ? new Date(occurredAtRaw) : new Date(),
       contactId: str("contactId"),
       leadId: str("leadId"),

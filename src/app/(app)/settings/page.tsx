@@ -32,6 +32,9 @@ import { saveSessionPolicy } from "@/app/actions/security";
 import { saveBotSettings, addBotRule, deleteBotRule } from "@/app/actions/bot";
 import { saveImapSettings } from "@/app/actions/emails";
 import { getBotRules } from "@/lib/bot";
+import { clearErrorLog } from "@/app/actions/ai";
+import { basePrisma } from "@/lib/db";
+import { formatDateTime } from "@/lib/format";
 import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { decryptValue } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
@@ -54,6 +57,7 @@ const TABS = [
   { key: "library", label: "Library" },
   { key: "integrations", label: "Integrations" },
   { key: "import", label: "Import" },
+  { key: "system", label: "System Log" },
 ] as const;
 
 export default async function SettingsPage({
@@ -91,6 +95,9 @@ export default async function SettingsPage({
   };
   const isOwner = isAdmin;
   const botRules = isAdmin ? await getBotRules() : [];
+  const errorLogs = isAdmin && tab === "system"
+    ? await basePrisma.errorLog.findMany({ orderBy: { createdAt: "desc" }, take: 100 })
+    : [];
 
   return (
     <div className="space-y-6">
@@ -540,6 +547,47 @@ export default async function SettingsPage({
                 </form>
               </details>
             </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "system" && (
+        <div className="max-w-3xl space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-slate-400">
+              System errors from syncs, webhooks, email/SMS and unhandled crashes. Auto-purged
+              after 30 days. A push fires on the first error in any 30-minute window.
+            </p>
+            {errorLogs.length > 0 && (
+              <form action={clearErrorLog}>
+                <button className="btn-secondary btn-sm">Clear log</button>
+              </form>
+            )}
+          </div>
+          <div className="card p-0 divide-y divide-slate-800">
+            {errorLogs.length === 0 ? (
+              <p className="text-sm text-slate-400 p-5">No errors on record. 🎉</p>
+            ) : (
+              errorLogs.map((e) => (
+                <details key={e.id}>
+                  <summary className="px-4 py-2.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden flex items-baseline gap-2">
+                    <span className="badge bg-red-500/15 text-red-300 shrink-0">{e.scope}</span>
+                    <span className="text-sm truncate flex-1">{e.message}</span>
+                    <span className="text-[11px] text-slate-500 shrink-0">
+                      {formatDateTime(e.createdAt)}
+                    </span>
+                  </summary>
+                  <div className="px-4 pb-3">
+                    {e.context && <p className="text-xs text-slate-400 mb-1">{e.context}</p>}
+                    {e.stack && (
+                      <pre className="text-[10px] text-slate-500 whitespace-pre-wrap max-h-40 overflow-y-auto">
+                        {e.stack}
+                      </pre>
+                    )}
+                  </div>
+                </details>
+              ))
+            )}
           </div>
         </div>
       )}
@@ -1111,6 +1159,53 @@ export default async function SettingsPage({
                     />
                   </div>
                   <button className="btn-primary">Save</button>
+                </form>
+              </div>
+            </Row>
+
+            <Row
+              title="AI Assist (Claude)"
+              status={
+                setting("ANTHROPIC_API_KEY") ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                ) : (
+                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
+                )
+              }
+            >
+              <p className="text-xs text-slate-400 mb-4">
+                Powers the ✨ message check, 🔎 lead research and (optionally) automatic research
+                on new leads. Suggestions only — the AI never changes data. Get a key at
+                console.anthropic.com.
+              </p>
+              <div className="space-y-3">
+                <form action={saveSetting} className="flex gap-2 items-end">
+                  <input type="hidden" name="key" value="ANTHROPIC_API_KEY" />
+                  <div className="flex-1">
+                    <label className="label">Anthropic API key</label>
+                    <input
+                      name="value"
+                      type="password"
+                      className="input"
+                      defaultValue={setting("ANTHROPIC_API_KEY")}
+                      placeholder="sk-ant-…"
+                    />
+                  </div>
+                  <button className="btn-primary">Save</button>
+                </form>
+                <form action={saveSetting} className="flex items-center gap-2">
+                  <input type="hidden" name="key" value="AI_AUTO_RESEARCH" />
+                  <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      name="value"
+                      value="true"
+                      defaultChecked={setting("AI_AUTO_RESEARCH") === "true"}
+                      className="h-4 w-4"
+                    />
+                    Automatically research every new lead (files a note within ~15 min)
+                  </label>
+                  <button className="btn-secondary btn-sm">Save</button>
                 </form>
               </div>
             </Row>

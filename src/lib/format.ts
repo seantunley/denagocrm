@@ -1,3 +1,9 @@
+/** Due date, with the time when one was set (midnight = date-only). */
+export function formatDue(d: Date): string {
+  const hasTime = d.getUTCHours() !== 0 || d.getUTCMinutes() !== 0;
+  return hasTime ? formatDateTime(d) : formatDate(d);
+}
+
 /** Compact money for tight stat cards: R 370k, R 2,27m. */
 export function formatZARCompact(cents: number): string {
   const r = cents / 100;

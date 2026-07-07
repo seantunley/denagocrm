@@ -24,6 +24,7 @@ type Comm = {
   direction: string | null;
   subject: string | null;
   body: string;
+  attachmentUrl?: string | null;
   occurredAt: Date;
   user: { name: string };
 };
@@ -116,6 +117,16 @@ export default function CommsTimeline({
                 </div>
                 {c.subject && (
                   <p className="text-sm font-medium text-slate-300">{c.subject}</p>
+                )}
+                {c.attachmentUrl && (
+                  <a href={c.attachmentUrl} target="_blank">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={c.attachmentUrl}
+                      alt="Attachment"
+                      className="mt-1 mb-1 max-h-36 rounded-lg border border-slate-700 hover:border-orange-500 transition-colors"
+                    />
+                  </a>
                 )}
                 <p className="text-sm text-slate-400 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{c.body}</p>
               </div>

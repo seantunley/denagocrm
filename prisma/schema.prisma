@@ -204,14 +204,16 @@ model Lead {
 }
 
 model Activity {
-  id       String    @id @default(cuid())
-  type     String    @default("todo") // call | email | meeting | whatsapp | todo
-  category String? // null/sales = sales calendar, "workshop" = workshop calendar
-  summary  String
-  note     String?
-  dueDate  DateTime
-  status   String    @default("planned") // planned | done | canceled
-  doneAt   DateTime?
+  id             String    @id @default(cuid())
+  type           String    @default("todo") // call | email | meeting | whatsapp | todo
+  category       String? // null/sales = sales calendar, "workshop" = workshop calendar
+  summary        String
+  note           String?
+  location       String? // meeting place - opens in Google Maps
+  reminderSentAt DateTime? // hour-before push already sent
+  dueDate        DateTime
+  status         String    @default("planned") // planned | done | canceled
+  doneAt         DateTime?
 
   leadId       String?
   lead         Lead?    @relation(fields: [leadId], references: [id], onDelete: Cascade)
@@ -565,4 +567,16 @@ model SavedView {
   page      String // e.g. leads
   query     String // URL search params
   createdAt DateTime @default(now())
+}
+
+// System errors that would otherwise vanish into serverless logs
+model ErrorLog {
+  id        String   @id @default(cuid())
+  scope     String // e.g. imap-sync, meta-webhook, smtp, pdf, unhandled
+  message   String
+  stack     String?
+  context   String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }

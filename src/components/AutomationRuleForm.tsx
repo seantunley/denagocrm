@@ -169,6 +169,7 @@ export default function AutomationRuleForm({
                     <option value="email">Email</option>
                     <option value="meeting">Meeting</option>
                     <option value="whatsapp">WhatsApp</option>
+                    <option value="test_drive">Test drive</option>
                     <option value="todo">To-do</option>
                   </select>
                 </div>

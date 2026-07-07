@@ -1,11 +1,12 @@
 import { scheduleActivity, completeActivity, cancelActivity } from "@/app/actions/activities";
-import { formatDate } from "@/lib/format";
+import { formatDate, formatDue } from "@/lib/format";
 
 export const activityIcons: Record<string, string> = {
   call: "📞",
   email: "✉️",
   meeting: "🤝",
   whatsapp: "💬",
+  test_drive: "🚗",
   todo: "☑️",
 };
 
@@ -14,6 +15,7 @@ type ActivityItem = {
   type: string;
   summary: string;
   note: string | null;
+  location: string | null;
   dueDate: Date;
   status: string;
   assignedTo: { id: string; name: string };
@@ -65,6 +67,7 @@ export default function ActivityPanel({
             <option value="email">Email</option>
             <option value="meeting">Meeting</option>
             <option value="whatsapp">WhatsApp</option>
+            <option value="test_drive">🚗 Test drive</option>
             <option value="todo">To-do</option>
           </select>
         </div>
@@ -74,7 +77,7 @@ export default function ActivityPanel({
         </div>
         <div>
           <label className="label">Due</label>
-          <input type="date" name="dueDate" className="input" required />
+          <input type="datetime-local" name="dueDate" className="input" required />
         </div>
         <div className="col-span-2 md:col-span-2">
           <label className="label">Assign to</label>
@@ -85,6 +88,14 @@ export default function ActivityPanel({
               </option>
             ))}
           </select>
+        </div>
+        <div className="col-span-2 md:col-span-3">
+          <label className="label">📍 Location (optional — meetings & test drives)</label>
+          <input
+            name="location"
+            className="input"
+            placeholder="Address, estate or Google Maps link"
+          />
         </div>
         <label className="flex items-center gap-2 text-sm text-slate-300 pb-2 cursor-pointer">
           <input type="checkbox" name="workshop" className="h-4 w-4" />
@@ -121,9 +132,25 @@ export default function ActivityPanel({
                       }
                     >
                       {overdue ? "Overdue — " : dueToday ? "Today — " : ""}
-                      {formatDate(a.dueDate)}
+                      {formatDue(a.dueDate)}
                     </span>{" "}
                     · {a.assignedTo.name}
+                    {a.location && (
+                      <>
+                        {" · "}
+                        <a
+                          href={
+                            a.location.startsWith("http")
+                              ? a.location
+                              : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(a.location)}`
+                          }
+                          target="_blank"
+                          className="text-sky-400 hover:underline"
+                        >
+                          📍 Map
+                        </a>
+                      </>
+                    )}
                   </p>
                 </div>
                 <form

@@ -19,6 +19,8 @@ import ConfirmDelete from "@/components/ConfirmDelete";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
 import Tabs from "@/components/Tabs";
 import ModalTrigger from "@/components/Modal";
+import ResearchButton from "@/components/ResearchButton";
+import { isAiConfigured } from "@/lib/ai";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { requireUser } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
@@ -78,6 +80,7 @@ export default async function LeadDetailPage({
     body: renderTemplate(t.body, vars),
   }));
   const path = `/leads/${lead.id}`;
+  const aiOn = await isAiConfigured();
 
   const statusBadge =
     lead.status === "won"
@@ -101,6 +104,7 @@ export default async function LeadDetailPage({
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <ResearchButton leadId={lead.id} configured={aiOn} />
           {lead.status === "open" && (
             <>
               <form action={createQuoteFromLead.bind(null, lead.id)}>
@@ -341,6 +345,7 @@ export default async function LeadDetailPage({
                       leadId={lead.id}
                       revalidate={path}
                       libraryDocs={libraryDocs}
+                      aiConfigured={aiOn}
                     />
                     <WhatsAppPanel
                       phone={lead.phone ?? lead.contact?.whatsapp ?? lead.contact?.phone ?? null}

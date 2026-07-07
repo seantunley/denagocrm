@@ -8,6 +8,10 @@ import { syncFacebookLeads } from "@/lib/metaLeadSync";
 import { syncGoogleReviews } from "@/lib/googleReviews";
 import { syncInboundEmail } from "@/lib/imapSync";
 import { getSetting } from "@/lib/settings";
+import { logError } from "@/lib/errorLog";
+import { runAutoResearch } from "@/lib/ai";
+import { runActivityReminders } from "@/lib/activityReminders";
+import { basePrisma } from "@/lib/db";
 
 /**
  * Runs idle-lead automation rules. Call periodically (cron, uptime monitor):
@@ -30,11 +34,16 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const fired = await runIdleAutomations();
-  const remindersSent = await runServiceReminders().catch(() => -1);
-  const quoteReminders = await runQuoteSigningReminders().catch(() => -1);
-  const fbLeads = await syncFacebookLeads().catch(() => -1);
-  const googleReviews = await syncGoogleReviews().catch(() => -1);
-  const inboundEmail = await syncInboundEmail().catch(() => -1);
+  const remindersSent = await runServiceReminders().catch((e) => { logError("service-reminders", e); return -1; });
+  const quoteReminders = await runQuoteSigningReminders().catch((e) => { logError("quote-reminders", e); return -1; });
+  const fbLeads = await syncFacebookLeads().catch((e) => { logError("meta-lead-sync", e); return -1; });
+  const googleReviews = await syncGoogleReviews().catch((e) => { logError("google-reviews", e); return -1; });
+  const inboundEmail = await syncInboundEmail().catch((e) => { logError("imap-sync", e); return -1; });
+  const activityReminders = await runActivityReminders().catch((e) => { logError("activity-reminders", e); return -1; });
+  const aiResearch = await runAutoResearch().catch((e) => { logError("ai-auto-research", e); return -1; });
+  await basePrisma.errorLog
+    .deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } } })
+    .catch(() => {});
   return NextResponse.json({
     ok: true,
     fired,
@@ -43,5 +52,7 @@ export async function GET(req: NextRequest) {
     fbLeads,
     googleReviews,
     inboundEmail,
+    aiResearch,
+    activityReminders,
   });
 }

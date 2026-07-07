@@ -61,6 +61,8 @@ export async function sendEmail(input: {
     });
     return { ok: true };
   } catch (err) {
+    const { logError } = await import("./errorLog");
+    await logError("smtp", err, `to: ${input.to} — ${input.subject}`);
     return { ok: false, error: err instanceof Error ? err.message : "Failed to send email" };
   }
 }

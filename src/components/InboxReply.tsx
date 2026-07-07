@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useActionState } from "react";
 import { sendWhatsAppMessage, type WaState } from "@/app/actions/whatsapp";
 import { sendDmReply, type DmState } from "@/app/actions/messenger";
+import AiCheckButton from "@/components/AiCheckButton";
 
 const QUICK_EMOJI = ["😀", "👍", "🙏", "🎉", "🔥", "❤️", "😂", "👌", "🚗", "⚡"];
 
@@ -14,12 +15,14 @@ export default function InboxReply({
   leadId,
   phone,
   revalidate,
+  aiConfigured = false,
 }: {
   channel: "whatsapp" | "messenger" | "instagram";
   contactId?: string | null;
   leadId?: string | null;
   phone?: string | null;
   revalidate: string;
+  aiConfigured?: boolean;
 }) {
   const [waState, waAction] = useActionState<WaState | undefined, FormData>(
     sendWhatsAppMessage,
@@ -99,6 +102,15 @@ export default function InboxReply({
           </>
         )}
         <button className="btn-primary btn-sm">Send</button>
+      </div>
+
+      <div className="mt-1">
+        <AiCheckButton
+          getDraft={() => textRef.current?.value ?? ""}
+          contactId={contactId}
+          leadId={leadId}
+          configured={aiConfigured}
+        />
       </div>
 
       {(showEmoji || fileName || state?.error || state?.ok) && (

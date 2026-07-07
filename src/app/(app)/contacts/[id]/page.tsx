@@ -11,6 +11,8 @@ import ConfirmDelete from "@/components/ConfirmDelete";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
 import Tabs from "@/components/Tabs";
 import CopyButton from "@/components/CopyButton";
+import ResearchButton from "@/components/ResearchButton";
+import { isAiConfigured } from "@/lib/ai";
 import { ensureReferralCode } from "@/lib/referrals";
 import { redeemReferral } from "@/app/actions/referrals";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
@@ -84,6 +86,7 @@ export default async function ContactDetailPage({
     body: renderTemplate(t.body, vars),
   }));
   const path = `/contacts/${contact.id}`;
+  const aiOn = await isAiConfigured();
 
   return (
     <div className="space-y-6">
@@ -112,6 +115,7 @@ export default async function ContactDetailPage({
           </p>
         </div>
         <div className="flex gap-2">
+          <ResearchButton contactId={contact.id} configured={aiOn} />
           <Link href={`/contacts/${contact.id}/edit`} className="btn-secondary">
             Edit
           </Link>
@@ -269,6 +273,7 @@ export default async function ContactDetailPage({
                       contactId={contact.id}
                       revalidate={path}
                       libraryDocs={libraryDocs}
+                      aiConfigured={aiOn}
                     />
                     <WhatsAppPanel
                       phone={contact.whatsapp ?? contact.phone}

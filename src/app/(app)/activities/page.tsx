@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { completeActivity, cancelActivity } from "@/app/actions/activities";
 import { activityIcons } from "@/components/ActivityPanel";
-import { contactName, formatDate } from "@/lib/format";
+import { contactName, formatDate, formatDue } from "@/lib/format";
 
 export default async function ActivitiesPage({
   searchParams,
@@ -107,7 +107,7 @@ export default async function ActivitiesPage({
                             : a.dueDate < endOfToday
                             ? "Due today — "
                             : ""}
-                          {formatDate(a.dueDate)}
+                          {formatDue(a.dueDate)}
                         </span>{" "}
                         · {a.assignedTo.name}
                       </p>

@@ -14,7 +14,9 @@ export async function renderUrlToPdf(url: string): Promise<Buffer | null> {
     let executablePath: string | null = null;
     try {
       executablePath = await chromium.executablePath();
-    } catch {
+    } catch (err) {
+    const { logError } = await import("./errorLog");
+    await logError("pdf-render", err);
       executablePath = null;
     }
     if (!executablePath) {

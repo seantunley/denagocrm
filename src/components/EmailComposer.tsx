@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useActionState } from "react";
+import AiCheckButton from "@/components/AiCheckButton";
 import Link from "next/link";
 import { sendEmailAction, type SendEmailState } from "@/app/actions/emails";
 import RichTextEditor from "@/components/RichTextEditor";
@@ -32,6 +33,7 @@ export default function EmailComposer({
   contactId,
   revalidate,
   libraryDocs = [],
+  aiConfigured = false,
 }: {
   defaultTo: string;
   templates: RenderedTemplate[];
@@ -40,6 +42,7 @@ export default function EmailComposer({
   contactId?: string;
   revalidate: string;
   libraryDocs?: { id: string; label: string }[];
+  aiConfigured?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [subject, setSubject] = useState("");
@@ -148,6 +151,12 @@ export default function EmailComposer({
             <label className="label">Message</label>
             <input type="hidden" name="bodyHtml" value={body} />
             <RichTextEditor value={body} onChange={setBody} />
+            <AiCheckButton
+              getDraft={() => body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()}
+              contactId={contactId}
+              leadId={leadId}
+              configured={aiConfigured}
+            />
             <p className="text-xs text-slate-500 mt-1">
               Your branded signature is added automatically —{" "}
               <Link href="/settings?tab=team" className="text-orange-400 hover:underline">

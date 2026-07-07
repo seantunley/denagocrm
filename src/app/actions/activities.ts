@@ -20,12 +20,30 @@ export async function scheduleActivity(formData: FormData) {
       category: formData.get("workshop") === "on" ? "workshop" : null,
       summary,
       note: str("note"),
-      dueDate: str("dueDate") ? new Date(String(formData.get("dueDate"))) : new Date(),
+      dueDate: (() => {
+        const raw = str("dueDate");
+        if (!raw) return new Date();
+        // datetime-local has no zone — treat it as South African time
+        return raw.includes("T") ? new Date(`${raw}:00+02:00`) : new Date(raw);
+      })(),
+      location: str("location"),
       leadId: str("leadId"),
       contactId: str("contactId"),
       assignedToId: str("assignedToId") ?? user.id,
       createdById: user.id,
     },
+  });
+  const assignee = str("assignedToId")
+    ? await prisma.user.findUnique({ where: { id: String(str("assignedToId")) } })
+    : user;
+  await logAudit({
+    action: "activity.scheduled",
+    summary: `Scheduled ${str("type") ?? "to-do"}: “${summary}”${
+      str("location") ? ` at ${str("location")}` : ""
+    } — assigned to ${assignee?.name ?? user.name}`,
+    leadId: str("leadId"),
+    contactId: str("contactId"),
+    user,
   });
   revalidatePath(String(formData.get("revalidate") ?? "/activities"));
   revalidatePath("/activities");

@@ -48,6 +48,8 @@ export async function sendSms(to: string, body: string): Promise<{ ok: boolean; 
     }
     return { ok: true };
   } catch (err) {
+    const { logError } = await import("./errorLog");
+    await logError("sms", err, `to: ${to}`);
     return { ok: false, error: err instanceof Error ? err.message : "SMS send failed" };
   }
 }

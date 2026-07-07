@@ -8,6 +8,11 @@ import { activityIcons } from "@/components/ActivityPanel";
 import Tabs from "@/components/Tabs";
 import { hasModule } from "@/lib/access";
 import { formatZAR, formatZARCompact, formatDate, formatDateTime, contactName } from "@/lib/format";
+
+const timeOf = (d: Date) =>
+  d.getUTCHours() !== 0 || d.getUTCMinutes() !== 0
+    ? d.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Johannesburg" })
+    : null;
 import { computeDue, dueLabels, dueColors } from "@/lib/serviceDue";
 
 type DashActivity = {
@@ -58,6 +63,9 @@ function ActivityBlock({
                 </span>
                 <p className="flex-1 min-w-0 truncate text-sm">
                   {overdue && <span className="text-red-400">⚠ </span>}
+                  {timeOf(a.dueDate) && (
+                    <span className="font-semibold text-orange-300">{timeOf(a.dueDate)} </span>
+                  )}
                   {a.summary}
                   <span className="text-[11px] text-slate-500">
                     {" — "}

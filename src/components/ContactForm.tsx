@@ -1,3 +1,4 @@
+import DuplicateGuard from "@/components/DuplicateGuard";
 type ContactDefaults = {
   isCompany?: boolean;
   firstName?: string;
@@ -142,6 +143,7 @@ export default function ContactForm({
         <label className="label">Notes</label>
         <textarea name="notes" className="input" rows={3} defaultValue={defaults.notes ?? ""} />
       </div>
+      <DuplicateGuard />
       <button className="btn-primary">{submitLabel}</button>
     </form>
   );

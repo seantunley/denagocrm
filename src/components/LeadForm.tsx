@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import DuplicateGuard from "@/components/DuplicateGuard";
 
 export type LeadFormProduct = {
   id: string;
@@ -178,6 +179,7 @@ export default function LeadForm({
         <label className="label">Notes</label>
         <textarea name="notes" className="input" rows={3} defaultValue={defaults.notes ?? ""} />
       </div>
+      <DuplicateGuard />
       <button className="btn-primary">{submitLabel}</button>
     </form>
   );

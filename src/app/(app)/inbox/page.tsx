@@ -3,6 +3,7 @@ import { prisma, basePrisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import InboxReply from "@/components/InboxReply";
 import AutoRefresh from "@/components/AutoRefresh";
+import { isAiConfigured } from "@/lib/ai";
 import Tabs from "@/components/Tabs";
 import RowModal from "@/components/RowModal";
 import { contactName, formatDateTime } from "@/lib/format";
@@ -30,6 +31,7 @@ const CHANNEL_META: Record<string, { label: string; icon: React.ReactNode }> = {
 export default async function InboxPage() {
   await requireUser();
 
+  const aiOn = await isAiConfigured();
   const [comms, reviews, placeId] = await Promise.all([
     prisma.communication.findMany({
       where: { type: { in: ["whatsapp", "messenger", "instagram"] } },

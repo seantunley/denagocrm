@@ -29,6 +29,7 @@ type Item = {
   icon: React.ReactNode;
   title: string;
   body?: string | null;
+  image?: string | null;
   who: string;
   when: Date;
 };
@@ -51,6 +52,7 @@ export default function LeadTimeline({
     direction: string | null;
     subject: string | null;
     body: string;
+    attachmentUrl?: string | null;
     occurredAt: Date;
     user: { name: string };
   }[];
@@ -71,6 +73,7 @@ export default function LeadTimeline({
         c.direction ? ` (${c.direction})` : ""
       }${c.subject ? `: ${c.subject}` : ""}`,
       body: c.body,
+      image: c.attachmentUrl ?? null,
       who: c.user.name,
       when: c.occurredAt,
     })),
@@ -102,8 +105,13 @@ export default function LeadTimeline({
           name="body"
           className="input"
           rows={2}
-          required
           placeholder="Add an internal note…"
+        />
+        <input
+          type="file"
+          name="image"
+          accept="image/*"
+          className="block w-full text-xs text-slate-500 file:btn-secondary file:btn-sm file:mr-2 file:border-0"
         />
         <button className="btn-secondary btn-sm w-full">+ Add note</button>
       </form>
@@ -119,7 +127,17 @@ export default function LeadTimeline({
                 {item.icon}
               </span>
               <p className="text-sm text-slate-200 break-words [overflow-wrap:anywhere]">{item.title}</p>
-              {item.body && (
+              {item.image && (
+                <a href={item.image} target="_blank">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={item.image}
+                    alt="Attachment"
+                    className="mt-1 max-h-36 rounded-lg border border-slate-700 hover:border-orange-500 transition-colors"
+                  />
+                </a>
+              )}
+              {item.body && item.body !== "🖼 Image" && (
                 <p className="text-xs text-slate-400 whitespace-pre-wrap mt-0.5 line-clamp-4 break-words [overflow-wrap:anywhere]">
                   {item.body}
                 </p>
