@@ -85,11 +85,6 @@ function LeadCard({ lead, dragging }: { lead: KanbanLead; dragging?: boolean }) 
         </span>
       </div>
       <p className="text-xs text-slate-400 mt-1">{lead.name}</p>
-      {lead.testDrive && (
-        <p className="text-xs mt-1 rounded-md bg-sky-500/10 border border-sky-500/20 px-1.5 py-0.5 text-sky-300 w-fit">
-          🚗 {lead.testDrive.when}
-        </p>
-      )}
       {lead.productName && (
         <p className="text-xs text-slate-400">
           {lead.productName}
@@ -113,13 +108,18 @@ function LeadCard({ lead, dragging }: { lead: KanbanLead; dragging?: boolean }) 
           </span>
         )}
       </div>
-      {lead.testDrive?.weather && (
-        <div className="mt-1.5">
-          <TestDriveWeather
-            date={lead.testDrive.date}
-            when={lead.testDrive.when}
-            summary={lead.testDrive.weather}
-          />
+      {lead.testDrive && (
+        <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+          <span className="text-xs rounded-md bg-sky-500/10 border border-sky-500/20 px-1.5 py-0.5 text-sky-300">
+            🚗 {lead.testDrive.when}
+          </span>
+          {lead.testDrive.weather && (
+            <TestDriveWeather
+              date={lead.testDrive.date}
+              when={lead.testDrive.when}
+              summary={lead.testDrive.weather}
+            />
+          )}
         </div>
       )}
     </div>
