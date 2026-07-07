@@ -55,13 +55,14 @@ export default function ClockWeather() {
   }, []);
 
   return (
-    <div className="card px-4 py-2.5 flex items-center gap-x-6 gap-y-1 flex-wrap">
+    <div className="card px-4 py-2.5 flex items-center gap-x-4 gap-y-1 flex-wrap">
       <p className="text-sm text-slate-400">
         {now
           ? now.toLocaleDateString("en-ZA", {
               weekday: "long",
               day: "numeric",
               month: "long",
+              year: "numeric",
               timeZone: "Africa/Johannesburg",
             })
           : "…"}
@@ -69,7 +70,14 @@ export default function ClockWeather() {
       {CITIES.map((c, i) => {
         const wx = weather[i] ? describe(weather[i]!.code) : null;
         return (
-          <p key={c.name} className="text-sm text-slate-300 flex items-center" title={c.name}>
+          <p
+            key={c.name}
+            className="text-sm text-slate-300 flex items-center whitespace-nowrap"
+            title={c.name}
+          >
+            <span className="text-slate-600 mr-4 select-none hidden sm:inline" aria-hidden>
+              |
+            </span>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={c.flag} alt="" className="h-3.5 w-auto rounded-[2px] mr-1.5" />
             <span className="text-slate-400 mr-2">{c.name}</span>
