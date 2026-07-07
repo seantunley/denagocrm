@@ -9,8 +9,16 @@
   :root {
     color-scheme: dark;
   }
+  /* Dark html too: if anything ever overflows the body, the exposed area
+     must not flash white */
+  html {
+    @apply bg-slate-950;
+  }
   body {
     @apply bg-slate-950 text-slate-100 antialiased;
+    /* Long unbroken strings (URLs, VINs, tokens) wrap instead of dragging
+       the whole page sideways on phones */
+    overflow-wrap: anywhere;
   }
 }
 
@@ -68,8 +76,11 @@
   }
 }
 
-/* Phones: never let a rogue element drag the whole page sideways */
+/* Phones: never let a rogue element drag the whole page sideways —
+   clip at every level (fixed-position modals live outside main) */
 @media (max-width: 1023px) {
+  html,
+  body,
   main {
     overflow-x: clip;
   }

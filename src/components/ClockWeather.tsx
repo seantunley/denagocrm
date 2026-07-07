@@ -17,8 +17,8 @@ function describe(code: number): { icon: string; label: string } {
 }
 
 const CITIES = [
-  { flag: "🇿🇦", name: "Cape Town", zone: "Africa/Johannesburg", lat: -33.925, lon: 18.48 },
-  { flag: "🇷🇺", name: "Moscow", zone: "Europe/Moscow", lat: 55.751, lon: 37.618 },
+  { flag: "/branding/flag-za.svg", name: "Cape Town", zone: "Africa/Johannesburg", lat: -33.925, lon: 18.48 },
+  { flag: "/branding/flag-ru.svg", name: "Moscow", zone: "Europe/Moscow", lat: 55.751, lon: 37.618 },
 ];
 
 type Weather = { temp: number; code: number };
@@ -69,8 +69,10 @@ export default function ClockWeather() {
       {CITIES.map((c, i) => {
         const wx = weather[i] ? describe(weather[i]!.code) : null;
         return (
-          <p key={c.name} className="text-sm text-slate-300" title={c.name}>
-            <span className="text-base mr-1.5">{c.flag}</span>
+          <p key={c.name} className="text-sm text-slate-300 flex items-center" title={c.name}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={c.flag} alt="" className="h-3.5 w-auto rounded-[2px] mr-1.5" />
+            <span className="text-slate-400 mr-2">{c.name}</span>
             <span className="font-bold text-lg text-white tabular-nums">
               {now
                 ? now.toLocaleTimeString("en-ZA", {
