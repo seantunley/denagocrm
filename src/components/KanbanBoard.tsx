@@ -53,7 +53,10 @@ const sourceIcons: Record<string, React.ReactNode> = {
     // eslint-disable-next-line @next/next/no-img-element
     <img src="/branding/social-instagram.png" alt="Instagram" className="h-4 w-4 rounded-sm" />
   ),
-  website: "🌐",
+  website: (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src="/branding/denago-mark.png" alt="Website" className="h-4 w-4 object-contain" />
+  ),
   manual: "✍️",
 };
 
