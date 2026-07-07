@@ -57,11 +57,11 @@ export default function CommsTimeline({
           <div>
             <label className="label">Type</label>
             <select name="type" className="input" defaultValue="call">
-              <option value="call">Call</option>
-              <option value="email">Email</option>
-              <option value="whatsapp">WhatsApp</option>
-              <option value="meeting">Meeting</option>
-              <option value="note">Note</option>
+              <option value="call">📞 Call</option>
+              <option value="email">✉️ Email</option>
+              <option value="whatsapp">💬 WhatsApp</option>
+              <option value="meeting">🤝 Meeting</option>
+              <option value="note">📝 Note</option>
             </select>
           </div>
           <div>

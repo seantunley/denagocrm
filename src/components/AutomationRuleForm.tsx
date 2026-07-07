@@ -165,12 +165,12 @@ export default function AutomationRuleForm({
                     className="input"
                     defaultValue={defaults.activityType ?? "call"}
                   >
-                    <option value="call">Call</option>
-                    <option value="email">Email</option>
-                    <option value="meeting">Meeting</option>
-                    <option value="whatsapp">WhatsApp</option>
-                    <option value="test_drive">Test drive</option>
-                    <option value="todo">To-do</option>
+                    <option value="call">📞 Call</option>
+                    <option value="email">✉️ Email</option>
+                    <option value="meeting">🤝 Meeting</option>
+                    <option value="whatsapp">💬 WhatsApp</option>
+                    <option value="test_drive">🚗 Test drive</option>
+                    <option value="todo">☑️ To-do</option>
                   </select>
                 </div>
                 <div>

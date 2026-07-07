@@ -28,12 +28,12 @@ export default function ActivityTypeFields({
           value={type}
           onChange={(e) => setType(e.target.value)}
         >
-          <option value="call">Call</option>
-          <option value="email">Email</option>
-          <option value="meeting">Meeting</option>
-          <option value="whatsapp">WhatsApp</option>
+          <option value="call">📞 Call</option>
+          <option value="email">✉️ Email</option>
+          <option value="meeting">🤝 Meeting</option>
+          <option value="whatsapp">💬 WhatsApp</option>
           <option value="test_drive">🚗 Test drive</option>
-          <option value="todo">To-do</option>
+          <option value="todo">☑️ To-do</option>
         </select>
       </div>
       {needsLocation && (
