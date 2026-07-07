@@ -33,6 +33,7 @@ import { formatDate } from "@/lib/format";
 
 const TABS = [
   { key: "pipeline", label: "Pipeline" },
+  { key: "account", label: "My Account" },
   { key: "team", label: "Team" },
   { key: "email", label: "Email" },
   { key: "quotes", label: "Quotes" },
@@ -126,11 +127,10 @@ export default async function SettingsPage({
         </div>
       )}
 
-      {tab === "team" && (
-        <>
-          {/* ===== My account ===== */}
-          <div className="card flex items-center gap-4">
-            <div className="h-14 w-14 shrink-0 rounded-full bg-orange-600 flex items-center justify-center text-xl font-bold text-white">
+      {tab === "account" && (
+        <div className="max-w-3xl space-y-6">
+          <div className="flex items-center gap-3">
+            <div className="h-11 w-11 shrink-0 rounded-full bg-orange-600 flex items-center justify-center font-bold text-white">
               {currentUser.name
                 .split(/\s+/)
                 .map((p) => p[0])
@@ -139,7 +139,7 @@ export default async function SettingsPage({
                 .toUpperCase()}
             </div>
             <div className="min-w-0">
-              <p className="text-lg font-bold flex items-center gap-2 flex-wrap">
+              <p className="font-semibold flex items-center gap-2 flex-wrap">
                 {currentUser.name}
                 <span
                   className={`badge ${
@@ -148,93 +148,104 @@ export default async function SettingsPage({
                 >
                   {isOwner ? "Owner" : "Member"}
                 </span>
-                {currentUser.totpEnabledAt ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">🔒 2FA on</span>
-                ) : (
-                  <span className="badge bg-amber-500/15 text-amber-300">2FA off</span>
-                )}
               </p>
-              <p className="text-sm text-slate-400 truncate">
-                {currentUser.email}
-                {currentUser.mobile ? ` · ${currentUser.mobile}` : ""} · joined{" "}
-                {formatDate(currentUser.createdAt)}
-              </p>
+              <p className="text-xs text-slate-400 truncate">{currentUser.email}</p>
             </div>
           </div>
 
-          <div className="grid lg:grid-cols-2 gap-6 items-start">
-            <SecurityPanel
-              totpEnabled={Boolean(currentUser.totpEnabledAt)}
-              emailOtpEnabled={currentUser.emailOtpEnabled}
-            />
-            <div className="space-y-6">
-              <div className="card">
-                <h2 className="font-semibold mb-4">Change my password</h2>
+          <div className="card p-0 divide-y divide-slate-800">
+            <details>
+              <summary className="flex items-center justify-between gap-4 px-5 py-4 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                <span className="text-sm font-medium">Password</span>
+                <span className="btn-secondary btn-sm">Change</span>
+              </summary>
+              <div className="px-5 pb-5 max-w-md">
                 <ChangePasswordForm />
               </div>
-              <div className="card">
-                <h2 className="font-semibold mb-1">Push notifications</h2>
-                <p className="text-xs text-slate-400 mb-4">
-                  Get a notification on this device the moment a lead, DM or signature comes in.
+            </details>
+
+            <details>
+              <summary className="flex items-center justify-between gap-4 px-5 py-4 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                <span className="text-sm font-medium flex items-center gap-2">
+                  Two-factor authentication
+                  {currentUser.totpEnabledAt ? (
+                    <span className="badge bg-emerald-500/15 text-emerald-300">On</span>
+                  ) : (
+                    <span className="badge bg-amber-500/15 text-amber-300">Off</span>
+                  )}
+                </span>
+                <span className="btn-secondary btn-sm">
+                  {currentUser.totpEnabledAt ? "Manage" : "Set up"}
+                </span>
+              </summary>
+              <div className="px-5 pb-5">
+                <SecurityPanel
+                  totpEnabled={Boolean(currentUser.totpEnabledAt)}
+                  emailOtpEnabled={currentUser.emailOtpEnabled}
+                />
+              </div>
+            </details>
+
+            <details>
+              <summary className="flex items-center justify-between gap-4 px-5 py-4 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                <span className="text-sm font-medium">Push notifications</span>
+                <span className="btn-secondary btn-sm">Manage</span>
+              </summary>
+              <div className="px-5 pb-5">
+                <p className="text-xs text-slate-400 mb-3">
+                  A notification on this device when a lead, DM or signed quote comes in.
                 </p>
                 <PushToggle />
               </div>
-            </div>
-          </div>
+            </details>
 
-          <div className="grid lg:grid-cols-2 gap-6 items-start">
-            <form action={saveMyProfile} className="card space-y-4">
-              <h2 className="font-semibold">My email signature</h2>
-              <div>
-                <label className="label">My mobile number</label>
-                <input
-                  name="mobile"
-                  className="input"
-                  defaultValue={currentUser.mobile ?? ""}
-                  placeholder="e.g. 082 123 4567"
+            <details>
+              <summary className="flex items-center justify-between gap-4 px-5 py-4 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                <span className="text-sm font-medium">Email signature</span>
+                <span className="btn-secondary btn-sm">View &amp; edit</span>
+              </summary>
+              <div className="px-5 pb-5 space-y-4">
+                <div
+                  className="rounded-lg bg-white p-4 overflow-x-auto"
+                  dangerouslySetInnerHTML={{ __html: buildSignature(currentUser) }}
                 />
-                <p className="text-xs text-slate-500 mt-1">
-                  Shown in your signature and used for the WhatsApp button.
-                </p>
+                <form action={saveMyProfile} className="space-y-3 max-w-md">
+                  <div>
+                    <label className="label">My mobile number</label>
+                    <input
+                      name="mobile"
+                      className="input"
+                      defaultValue={currentUser.mobile ?? ""}
+                      placeholder="e.g. 082 123 4567"
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Custom signature HTML (optional)</label>
+                    <textarea
+                      name="signatureHtml"
+                      className="input font-mono text-xs"
+                      rows={4}
+                      defaultValue={currentUser.signatureHtml ?? ""}
+                      placeholder="Leave blank to use the branded signature (recommended)."
+                    />
+                  </div>
+                  <button className="btn-primary btn-sm">Save</button>
+                </form>
               </div>
-              <div>
-                <label className="label">Custom signature HTML (optional)</label>
-                <textarea
-                  name="signatureHtml"
-                  className="input font-mono text-xs"
-                  rows={6}
-                  defaultValue={currentUser.signatureHtml ?? ""}
-                  placeholder="Leave blank to use the branded Denago Cape Town signature (recommended)."
-                />
-              </div>
-              <button className="btn-primary">Save signature</button>
-            </form>
-
-            <div className="card">
-              <h2 className="font-semibold mb-4">Signature preview</h2>
-              <p className="text-xs text-slate-500 mb-3">
-                Appended automatically to every email you send from the CRM.
-              </p>
-              <div
-                className="rounded-lg bg-white p-4 overflow-x-auto"
-                dangerouslySetInnerHTML={{ __html: buildSignature(currentUser) }}
-              />
-            </div>
+            </details>
           </div>
+        </div>
+      )}
 
-          {/* ===== Team & access ===== */}
-          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 pt-2">
-            Team &amp; access
-          </p>
-
+      {tab === "team" && (
+        <div className="max-w-3xl space-y-6">
           <div className="card p-0">
             <table className="table-base">
               <thead>
                 <tr>
                   <th>Member</th>
                   <th>Role</th>
-                  <th>Security</th>
-                  <th>Joined</th>
+                  <th>2FA</th>
                   {isOwner && <th className="text-right">Manage</th>}
                 </tr>
               </thead>
@@ -248,10 +259,7 @@ export default async function SettingsPage({
                           <span className="text-xs text-slate-500 ml-1.5">(you)</span>
                         )}
                       </p>
-                      <p className="text-xs text-slate-400">
-                        {u.email}
-                        {u.mobile ? ` · ${u.mobile}` : ""}
-                      </p>
+                      <p className="text-xs text-slate-400">{u.email}</p>
                     </td>
                     <td>
                       <span
@@ -265,17 +273,12 @@ export default async function SettingsPage({
                       </span>
                     </td>
                     <td>
-                      {u.totpEnabledAt ? (
-                        <span className="badge bg-emerald-500/15 text-emerald-300">
-                          🔒 Authenticator
-                        </span>
-                      ) : u.emailOtpEnabled ? (
-                        <span className="badge bg-sky-500/15 text-sky-300">✉️ Email codes</span>
+                      {u.totpEnabledAt || u.emailOtpEnabled ? (
+                        <span className="badge bg-emerald-500/15 text-emerald-300">On</span>
                       ) : (
-                        <span className="badge bg-amber-500/15 text-amber-300">No 2FA</span>
+                        <span className="badge bg-amber-500/15 text-amber-300">Off</span>
                       )}
                     </td>
-                    <td className="text-slate-400 text-sm">{formatDate(u.createdAt)}</td>
                     {isOwner && (
                       <td className="text-right">
                         {u.id !== currentUser.id && (
@@ -295,44 +298,47 @@ export default async function SettingsPage({
           </div>
 
           {isOwner && (
-            <div className="grid lg:grid-cols-2 gap-6 items-start">
-              <div className="card">
-                <h2 className="font-semibold mb-1">Add a team member</h2>
-                <p className="text-xs text-slate-400 mb-4">
-                  New members sign in with the password you set here and can change it and enable
-                  2FA themselves under Settings → Team.
-                </p>
-                <AddUserForm />
-              </div>
-              <form action={saveSessionPolicy} className="card space-y-3">
-                <h2 className="font-semibold">Session policy</h2>
-                <p className="text-xs text-slate-400">
-                  Everyone is signed out after this much inactivity, and must sign in again at
-                  least every {ABSOLUTE_SESSION_HOURS} hours regardless of activity.
-                </p>
-                <div className="flex items-end gap-2">
-                  <div>
-                    <label className="label">Idle timeout</label>
-                    <select
-                      name="idleMinutes"
-                      className="input w-44"
-                      defaultValue={setting("SESSION_IDLE_MINUTES") || "60"}
-                    >
-                      <option value="15">15 minutes</option>
-                      <option value="30">30 minutes</option>
-                      <option value="60">1 hour</option>
-                      <option value="120">2 hours</option>
-                      <option value="240">4 hours</option>
-                      <option value="480">8 hours</option>
-                      <option value="1440">24 hours</option>
-                    </select>
-                  </div>
-                  <button className="btn-primary">Save policy</button>
+            <div className="card p-0 divide-y divide-slate-800">
+              <details>
+                <summary className="flex items-center justify-between gap-4 px-5 py-4 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                  <span className="text-sm font-medium">Add a team member</span>
+                  <span className="btn-secondary btn-sm">+ Add</span>
+                </summary>
+                <div className="px-5 pb-5 max-w-md">
+                  <AddUserForm />
+                </div>
+              </details>
+
+              <form
+                action={saveSessionPolicy}
+                className="flex items-center justify-between gap-4 px-5 py-4 flex-wrap"
+              >
+                <div>
+                  <p className="text-sm font-medium">Auto sign-out after inactivity</p>
+                  <p className="text-xs text-slate-500">
+                    Everyone re-signs in at least every {ABSOLUTE_SESSION_HOURS}h regardless.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    name="idleMinutes"
+                    className="input w-36"
+                    defaultValue={setting("SESSION_IDLE_MINUTES") || "60"}
+                  >
+                    <option value="15">15 minutes</option>
+                    <option value="30">30 minutes</option>
+                    <option value="60">1 hour</option>
+                    <option value="120">2 hours</option>
+                    <option value="240">4 hours</option>
+                    <option value="480">8 hours</option>
+                    <option value="1440">24 hours</option>
+                  </select>
+                  <button className="btn-primary btn-sm">Save</button>
                 </div>
               </form>
             </div>
           )}
-        </>
+        </div>
       )}
 
       {tab === "email" && (

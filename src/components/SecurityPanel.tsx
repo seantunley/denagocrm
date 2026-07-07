@@ -29,11 +29,9 @@ export default function SecurityPanel({
   const codes = confirmState?.backupCodes;
 
   return (
-    <div className="card">
-      <h2 className="font-semibold mb-1">Two-factor authentication</h2>
+    <div>
       <p className="text-xs text-slate-400 mb-4">
-        Add a second step at sign-in. Strongly recommended — it protects your account even if your
-        password leaks.
+        Adds a second step at sign-in — protects your account even if your password leaks.
       </p>
 
       {codes && (
