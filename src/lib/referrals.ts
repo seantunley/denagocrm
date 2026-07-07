@@ -73,6 +73,8 @@ export async function markReferralEarned(leadId: string): Promise<void> {
     contactId: referral.referrerId,
     userName: "System",
   });
+  const { runLeadAutomations } = await import("./automations");
+  await runLeadAutomations("referral_earned", leadId).catch(() => {});
   await sendPushToAll({
     title: "Referral fee due 🎁",
     body: `${contactName(referral.referrer)} referred a won deal — sort out their reward`,

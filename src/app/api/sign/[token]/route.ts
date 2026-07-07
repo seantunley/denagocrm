@@ -11,6 +11,7 @@ import { sendEmail } from "@/lib/email";
 import { contactName, formatZAR } from "@/lib/format";
 import { quoteExpired } from "@/lib/quoteExpiry";
 import { markReferralEarned } from "@/lib/referrals";
+import { runLeadAutomations } from "@/lib/automations";
 
 export const maxDuration = 60; // PDF rendering can take a few seconds
 
@@ -90,6 +91,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     if (quote.leadId && quote.lead?.status === "open") {
       await prisma.lead.update({ where: { id: quote.leadId }, data: { status: "won" } });
       await markReferralEarned(quote.leadId).catch(() => {});
+      await runLeadAutomations("lead_won", quote.leadId).catch(() => {});
     }
 
     // True-to-design PDF from the actual print page; pdf-lib as fallback
@@ -155,6 +157,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
         ],
       }).catch(() => {});
     }
+    if (quote.leadId) await runLeadAutomations("quote_signed", quote.leadId).catch(() => {});
     await sendPushToAll({
       title: "Quote signed 🎉",
       body: `Q-${quote.number} — ${name} · ${formatZAR(Math.round(total))}`,

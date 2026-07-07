@@ -17,6 +17,9 @@ export type RuleDefaults = {
   emailTemplateId?: string | null;
   targetStageId?: string | null;
   assignToId?: string | null;
+  pushMessage?: string | null;
+  conditionSources?: string | null;
+  minValueCents?: number | null;
 };
 
 export default function AutomationRuleForm({
@@ -66,6 +69,12 @@ export default function AutomationRuleForm({
               <option value="lead_created">A new lead is created</option>
               <option value="stage_entered">A lead enters a stage</option>
               <option value="lead_idle">A lead sits untouched</option>
+              <option value="lead_won">A lead is won</option>
+              <option value="lead_lost">A lead is lost</option>
+              <option value="quote_signed">A quote is signed online</option>
+              <option value="quote_declined">A quote is declined online</option>
+              <option value="delivered">A cart is delivered</option>
+              <option value="referral_earned">A referral fee is earned</option>
             </select>
           </div>
           {trigger === "stage_entered" && (
@@ -98,6 +107,35 @@ export default function AutomationRuleForm({
               />
             </div>
           )}
+
+          <details className="rounded-lg border border-slate-800 bg-slate-900/50">
+            <summary className="px-3 py-2 text-xs font-medium text-slate-400 cursor-pointer select-none">
+              Only if… (optional conditions)
+            </summary>
+            <div className="p-3 pt-1 space-y-2">
+              <div>
+                <label className="label">Lead source is one of (comma-separated)</label>
+                <input
+                  name="conditionSources"
+                  className="input"
+                  defaultValue={defaults.conditionSources ?? ""}
+                  placeholder="e.g. facebook,instagram — blank = any"
+                />
+              </div>
+              <div>
+                <label className="label">Lead value at least (R)</label>
+                <input
+                  name="minValueRands"
+                  type="number"
+                  className="input"
+                  defaultValue={
+                    defaults.minValueCents != null ? Math.round(defaults.minValueCents / 100) : ""
+                  }
+                  placeholder="blank = any value"
+                />
+              </div>
+            </div>
+          </details>
         </div>
 
         <div className="space-y-3">
@@ -113,6 +151,7 @@ export default function AutomationRuleForm({
               <option value="send_email">Send an email template to the lead</option>
               <option value="move_stage">Move the lead to a stage</option>
               <option value="assign_user">Assign the lead to a team member</option>
+              <option value="send_push">Send the team a push notification</option>
             </select>
           </div>
 
@@ -210,6 +249,21 @@ export default function AutomationRuleForm({
                   </option>
                 ))}
               </select>
+            </div>
+          )}
+
+          {action === "send_push" && (
+            <div>
+              <label className="label">Notification message</label>
+              <input
+                name="pushMessage"
+                className="input"
+                defaultValue={defaults.pushMessage ?? ""}
+                placeholder="e.g. {{name}} ({{model}}) needs attention"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                Placeholders: {"{{name}}"}, {"{{model}}"}, {"{{value}}"}
+              </p>
             </div>
           )}
 

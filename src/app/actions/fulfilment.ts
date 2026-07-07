@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { runLeadAutomations } from "@/lib/automations";
 import { saveFile } from "@/lib/storage";
 import { contactName } from "@/lib/format";
 
@@ -197,6 +198,7 @@ export async function markDelivered(quoteId: string, formData: FormData) {
     );
   }
   await prisma.quote.update({ where: { id: quoteId }, data: { deliveredAt: new Date() } });
+  if (quote.leadId) await runLeadAutomations("delivered", quote.leadId).catch(() => {});
   await logAudit({
     action: "fulfilment.delivered",
     summary: `Q-${quote.number} delivered 🎉 — register the vehicle to start its service life`,

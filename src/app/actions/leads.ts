@@ -181,6 +181,7 @@ export async function markWon(leadId: string) {
     data: { status: "won", contactId },
   });
   await markReferralEarned(leadId).catch(() => {});
+  await runLeadAutomations("lead_won", leadId);
   await logAudit({
     action: "lead.won",
     summary: `Marked lead “${lead.title}” as WON 🎉`,
@@ -201,6 +202,7 @@ export async function markLost(leadId: string, formData: FormData) {
     where: { id: leadId },
     data: { status: "lost", lostReason: reason },
   });
+  await runLeadAutomations("lead_lost", leadId);
   await logAudit({
     action: "lead.lost",
     summary: `Marked lead “${lead.title}” as lost — ${reason}`,

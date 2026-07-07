@@ -2,6 +2,19 @@ import { addDays, subDays } from "date-fns";
 import { prisma } from "./db";
 import { logAudit } from "./audit";
 import { sendEmail, renderTemplate, leadVars } from "./email";
+import { sendPushToAll } from "./push";
+
+export const LEAD_TRIGGERS = [
+  "lead_created",
+  "stage_entered",
+  "lead_won",
+  "lead_lost",
+  "quote_signed",
+  "quote_declined",
+  "delivered",
+  "referral_earned",
+] as const;
+export type LeadTrigger = (typeof LEAD_TRIGGERS)[number];
 
 type LeadForRules = NonNullable<Awaited<ReturnType<typeof loadLead>>>;
 
@@ -31,6 +44,7 @@ async function applyRule(
     emailTemplateId: string | null;
     targetStageId: string | null;
     assignToId: string | null;
+    pushMessage: string | null;
   },
   lead: LeadForRules,
   depth: number
@@ -99,6 +113,15 @@ async function applyRule(
       });
       return "assigned";
     }
+    case "send_push": {
+      const vars = leadVars(lead);
+      await sendPushToAll({
+        title: `🤖 ${rule.name}`,
+        body: renderTemplate(rule.pushMessage || "{{name}}", vars),
+        url: `/leads/${lead.id}`,
+      });
+      return "push sent";
+    }
     default:
       return `skipped: unknown action ${rule.action}`;
   }
@@ -125,9 +148,21 @@ async function logRule(
   }
 }
 
-/** Fires event-based rules (lead_created / stage_entered) for a lead. */
+function conditionsHold(
+  rule: { conditionSources: string | null; minValueCents: number | null },
+  lead: { source: string; valueCents: number }
+): boolean {
+  if (rule.conditionSources) {
+    const allowed = rule.conditionSources.split(",").map((s) => s.trim()).filter(Boolean);
+    if (allowed.length > 0 && !allowed.includes(lead.source)) return false;
+  }
+  if (rule.minValueCents != null && lead.valueCents < rule.minValueCents) return false;
+  return true;
+}
+
+/** Fires event-based rules for a lead. */
 export async function runLeadAutomations(
-  trigger: "lead_created" | "stage_entered",
+  trigger: LeadTrigger,
   leadId: string,
   depth = 0
 ): Promise<void> {
@@ -139,6 +174,7 @@ export async function runLeadAutomations(
     });
     for (const rule of rules) {
       if (trigger === "stage_entered" && rule.triggerStageId !== lead.stageId) continue;
+      if (!conditionsHold(rule, lead)) continue;
       try {
         const note = await applyRule(rule, lead, depth);
         await logRule(rule.id, lead.id, note, rule.name, lead.contactId);
@@ -171,6 +207,7 @@ export async function runIdleAutomations(): Promise<number> {
         where: { ruleId: rule.id, leadId: lead.id },
       });
       if (already) continue;
+      if (!conditionsHold(rule, lead)) continue;
       try {
         const note = await applyRule(rule, lead, 0);
         await logRule(rule.id, lead.id, note, rule.name, lead.contactId);

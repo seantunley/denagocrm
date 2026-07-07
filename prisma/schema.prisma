@@ -238,9 +238,13 @@ model AutomationRule {
   name   String
   active Boolean @default(true)
 
-  trigger        String // lead_created | stage_entered | lead_idle
+  trigger        String // lead_created | stage_entered | lead_idle | lead_won | lead_lost | quote_signed | quote_declined | delivered | referral_earned
   triggerStageId String? // for stage_entered
   idleDays       Int? // for lead_idle
+
+  // Optional conditions - rule only fires when they hold
+  conditionSources String? // csv of lead sources, empty = any
+  minValueCents    Int? // minimum lead value
 
   action          String // create_activity | send_email | move_stage | assign_user
   activityType    String?
@@ -249,6 +253,7 @@ model AutomationRule {
   emailTemplateId String?
   targetStageId   String?
   assignToId      String?
+  pushMessage     String? // for send_push
 
   createdAt DateTime @default(now())
 }

@@ -29,6 +29,8 @@ import PushToggle from "@/components/PushToggle";
 import SecurityPanel from "@/components/SecurityPanel";
 import OwnerUserControls from "@/components/OwnerUserControls";
 import { saveSessionPolicy } from "@/app/actions/security";
+import { saveBotSettings, addBotRule, deleteBotRule } from "@/app/actions/bot";
+import { getBotRules } from "@/lib/bot";
 import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { decryptValue } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
@@ -46,6 +48,7 @@ const TABS = [
   { key: "quotes", label: "Quotes" },
   { key: "workshop", label: "Workshop" },
   { key: "automations", label: "Automations" },
+  { key: "bot", label: "WhatsApp Bot" },
   { key: "products", label: "Products" },
   { key: "library", label: "Library" },
   { key: "integrations", label: "Integrations" },
@@ -86,6 +89,7 @@ export default async function SettingsPage({
     }
   };
   const isOwner = isAdmin;
+  const botRules = isAdmin ? await getBotRules() : [];
 
   return (
     <div className="space-y-6">
@@ -407,6 +411,134 @@ export default async function SettingsPage({
               </div>
               <button className="btn-primary btn-sm mt-4">Save</button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {tab === "bot" && (
+        <div className="max-w-3xl">
+          <div className="card p-0 divide-y divide-slate-800">
+            <form action={saveBotSettings} className="px-5 py-4 space-y-3">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium">Auto-replies on WhatsApp</p>
+                  <p className="text-xs text-slate-500">
+                    Keyword rules answer instantly, any time. Outside office hours an away
+                    message is sent (max once per customer per 4 hours). Everything else waits
+                    for a human — you still get the push.
+                  </p>
+                </div>
+                <label className="flex items-center gap-2 text-sm cursor-pointer shrink-0">
+                  <input
+                    type="checkbox"
+                    name="enabled"
+                    defaultChecked={setting("BOT_ENABLED") === "true"}
+                    className="h-4 w-4"
+                  />
+                  Enabled
+                </label>
+              </div>
+              <div className="flex items-end gap-3 flex-wrap">
+                <div>
+                  <label className="label">Office hours</label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="time"
+                      name="start"
+                      className="input w-28"
+                      defaultValue={(setting("BOT_HOURS") || "08:00-17:00").split("-")[0]}
+                    />
+                    <span className="text-slate-500">–</span>
+                    <input
+                      type="time"
+                      name="end"
+                      className="input w-28"
+                      defaultValue={(setting("BOT_HOURS") || "08:00-17:00").split("-")[1]}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="label">Days</label>
+                  <div className="flex gap-2 flex-wrap">
+                    {[["1","Mo"],["2","Tu"],["3","We"],["4","Th"],["5","Fr"],["6","Sa"],["7","Su"]].map(([v,l]) => (
+                      <label key={v} className="flex items-center gap-1 text-xs text-slate-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          name="days"
+                          value={v}
+                          defaultChecked={(setting("BOT_DAYS") || "1,2,3,4,5").split(",").includes(v)}
+                          className="h-3.5 w-3.5"
+                        />
+                        {l}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div>
+                <label className="label">After-hours away message</label>
+                <textarea
+                  name="afterhours"
+                  className="input"
+                  rows={2}
+                  defaultValue={setting("BOT_AFTERHOURS_MSG") || "Thanks for your message! Our showroom is open Mon–Fri 08:00–17:00 — we'll get back to you first thing. For urgent matters call 073 789 3438."}
+                />
+              </div>
+              <button className="btn-primary btn-sm">Save bot settings</button>
+            </form>
+
+            <div className="px-5 py-4">
+              <p className="text-sm font-medium mb-1">Keyword rules</p>
+              <p className="text-xs text-slate-500 mb-3">
+                If a message contains any keyword, the reply goes out instantly and is logged on
+                the customer&apos;s record.
+              </p>
+              <ul className="space-y-2 mb-3">
+                {botRules.length === 0 && (
+                  <li className="text-xs text-slate-500">
+                    No rules yet — e.g. keywords “price, cost, how much” → reply with the price
+                    list link.
+                  </li>
+                )}
+                {botRules.map((r) => (
+                  <li
+                    key={r.id}
+                    className="rounded-lg border border-slate-800 bg-slate-800/40 px-3 py-2 flex items-start gap-3"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-orange-300">{r.keywords}</p>
+                      <p className="text-xs text-slate-400 whitespace-pre-wrap">{r.reply}</p>
+                    </div>
+                    <form action={deleteBotRule.bind(null, r.id)}>
+                      <button className="text-xs text-slate-600 hover:text-red-400 cursor-pointer">
+                        ✕
+                      </button>
+                    </form>
+                  </li>
+                ))}
+              </ul>
+              <details className="rounded-lg border border-slate-800 bg-slate-800/40">
+                <summary className="px-3 py-2 text-sm font-medium cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                  + Add rule
+                </summary>
+                <form action={addBotRule} className="p-3 pt-1 space-y-2">
+                  <input
+                    name="keywords"
+                    className="input"
+                    required
+                    placeholder="Keywords, comma-separated — e.g. price, cost, how much"
+                  />
+                  <textarea
+                    name="reply"
+                    className="input"
+                    rows={3}
+                    required
+                    placeholder="Reply — e.g. You can view our full price list here: https://denagocpt.co.za/models — a team member will follow up shortly!"
+                  />
+                  <button className="btn-primary btn-sm">Add rule</button>
+                </form>
+              </details>
+            </div>
           </div>
         </div>
       )}

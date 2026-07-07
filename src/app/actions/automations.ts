@@ -31,6 +31,9 @@ function ruleData(formData: FormData) {
     emailTemplateId: str("emailTemplateId"),
     targetStageId: str("targetStageId"),
     assignToId: str("assignToId"),
+    pushMessage: str("pushMessage"),
+    conditionSources: str("conditionSources"),
+    minValueCents: int("minValueRands") != null ? int("minValueRands")! * 100 : null,
   };
 }
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma, basePrisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
+import { runLeadAutomations } from "@/lib/automations";
 import { sendPushToAll } from "@/lib/push";
 import { formatZAR } from "@/lib/format";
 
@@ -62,6 +63,7 @@ export async function POST(
     leadId: quote.leadId,
     userName: "Customer",
   });
+  if (quote.leadId) await runLeadAutomations("quote_declined", quote.leadId).catch(() => {});
   await sendPushToAll({
     title: "Quote declined",
     body: `Q-${quote.number} — “${parsed.data.reason.slice(0, 80)}”`,

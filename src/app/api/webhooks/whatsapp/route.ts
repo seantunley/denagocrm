@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { getSetting } from "@/lib/settings";
 import { recordInboundWhatsApp } from "@/lib/whatsapp";
+import { maybeAutoReply } from "@/lib/bot";
 
 /** Meta webhook verification handshake (same flow as Lead Ads). */
 export async function GET(req: NextRequest) {
@@ -50,6 +51,7 @@ export async function POST(req: NextRequest) {
         const profileName: string | null =
           contactsMeta.find((c: any) => c.wa_id === from)?.profile?.name ?? null;
         await recordInboundWhatsApp(from, profileName, message.text?.body ?? "").catch(() => {});
+        await maybeAutoReply(from, message.text?.body ?? "").catch(() => {});
       }
     }
   }

@@ -7,6 +7,7 @@ import {
   updateAutomationRule,
 } from "@/app/actions/automations";
 import AutomationRuleForm from "@/components/AutomationRuleForm";
+import ModalTrigger from "@/components/Modal";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { formatDateTime } from "@/lib/format";
 
@@ -51,18 +52,27 @@ export default async function AutomationsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Automations</h1>
-        <p className="text-sm text-slate-400 mt-1">
-          Rules run when leads are created, change stage, or go quiet. Idle rules are checked
-          when the dashboard loads and via the cron endpoint (see Settings for the API key).
-        </p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold">Automations</h1>
+          <p className="text-sm text-slate-400 mt-1">
+            Rules fire on lead events, quote signing/declining, deliveries, referrals and idle
+            leads — with optional source/value conditions.
+          </p>
+        </div>
+        <ModalTrigger label="+ New automation" title="New automation">
+          <AutomationRuleForm
+            stages={stages.map((s) => ({ id: s.id, name: s.name }))}
+            users={users.map((u) => ({ id: u.id, name: u.name }))}
+            templates={templates.map((t) => ({ id: t.id, name: t.name }))}
+          />
+        </ModalTrigger>
       </div>
 
       <div className="card">
         <h2 className="font-semibold mb-4">Rules</h2>
         {rules.length === 0 ? (
-          <p className="text-sm text-slate-400 mb-4">No rules yet — create your first one below.</p>
+          <p className="text-sm text-slate-400 mb-4">No rules yet — click “+ New automation” to create your first.</p>
         ) : (
           <ul className="space-y-2 mb-5">
             {rules.map((r) => (
@@ -112,11 +122,6 @@ export default async function AutomationsPage() {
             ))}
           </ul>
         )}
-        <AutomationRuleForm
-          stages={stages.map((s) => ({ id: s.id, name: s.name }))}
-          users={users.map((u) => ({ id: u.id, name: u.name }))}
-          templates={templates.map((t) => ({ id: t.id, name: t.name }))}
-        />
       </div>
 
       <div className="card">
