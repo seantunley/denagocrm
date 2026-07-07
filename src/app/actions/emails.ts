@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { putSetting } from "@/lib/settings";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
@@ -115,11 +116,7 @@ export async function saveSmtpSettings(formData: FormData) {
     SMTP_FROM: String(formData.get("from") ?? "").trim(),
   };
   for (const [key, value] of Object.entries(entries)) {
-    await prisma.appSetting.upsert({
-      where: { key },
-      update: { value },
-      create: { key, value },
-    });
+    await putSetting(key, value);
   }
   revalidatePath("/settings");
 }
@@ -131,11 +128,7 @@ export async function saveServiceReminderSettings(formData: FormData) {
     SERVICE_REMINDER_TEMPLATE_ID: String(formData.get("templateId") ?? "").trim(),
   };
   for (const [key, value] of Object.entries(entries)) {
-    await prisma.appSetting.upsert({
-      where: { key },
-      update: { value },
-      create: { key, value },
-    });
+    await putSetting(key, value);
   }
   revalidatePath("/settings");
 }

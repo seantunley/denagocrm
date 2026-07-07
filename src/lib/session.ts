@@ -1,7 +1,17 @@
 import { SignJWT, jwtVerify } from "jose";
 
-const secret = () =>
-  new TextEncoder().encode(process.env.SESSION_SECRET ?? "dev-secret");
+const secret = () => {
+  const s = process.env.SESSION_SECRET;
+  // Never fall back to a known value in production — that would let anyone
+  // forge a valid session cookie.
+  if (!s || s.length < 16) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("SESSION_SECRET is not set (or too short) in production.");
+    }
+    return new TextEncoder().encode("dev-secret-local-only");
+  }
+  return new TextEncoder().encode(s);
+};
 
 export type SessionPayload = {
   sub: string;

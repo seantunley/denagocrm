@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { putSetting } from "@/lib/settings";
 
 // ---- Pipeline stages ----
 
@@ -163,21 +164,13 @@ export async function saveSetting(formData: FormData) {
   const key = String(formData.get("key") ?? "");
   const value = String(formData.get("value") ?? "").trim();
   if (!key) return;
-  await prisma.appSetting.upsert({
-    where: { key },
-    update: { value },
-    create: { key, value },
-  });
+  await putSetting(key, value); // credential keys are encrypted at rest
   revalidatePath("/settings");
 }
 
 export async function regenerateSetting(key: string) {
   await requireUser();
   const value = crypto.randomBytes(24).toString("hex");
-  await prisma.appSetting.upsert({
-    where: { key },
-    update: { value },
-    create: { key, value },
-  });
+  await putSetting(key, value);
   revalidatePath("/settings");
 }
