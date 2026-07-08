@@ -179,17 +179,18 @@ model Contact {
   createdById String?
   createdBy   User?   @relation("ContactCreator", fields: [createdById], references: [id])
 
-  leads          Lead[]
-  communications Communication[]
-  referralsMade  Referral[]      @relation("ReferralsMade")
-  referredIn     Referral[]      @relation("ReferredIn")
-  documents      Document[]
-  vehicles       Vehicle[]
-  jobCards       JobCard[]
-  activities     Activity[]
-  tags           Tag[]
-  quotes         Quote[]
-  researchNotes  ResearchNote[]
+  leads             Lead[]
+  communications    Communication[]
+  referralsMade     Referral[]      @relation("ReferralsMade")
+  referredIn        Referral[]      @relation("ReferredIn")
+  documents         Document[]
+  vehicles          Vehicle[]
+  jobCards          JobCard[]
+  activities        Activity[]
+  tags              Tag[]
+  quotes            Quote[]
+  researchNotes     ResearchNote[]
+  campaignRecipients CampaignRecipient[]
 }
 
 model Tag {
@@ -204,16 +205,48 @@ model Campaign {
   name           String
   channel        String // email | sms
   subject        String?
-  body           String
+  body           String // plain-text (SMS body, or text fallback for email)
+  htmlBody       String? // rich HTML for email campaigns
   audience       String // human-readable audience label
   recipientCount Int       @default(0)
   sentCount      Int       @default(0)
   failedCount    Int       @default(0)
-  status         String    @default("draft") // draft | sent
+  openCount      Int       @default(0) // unique recipients who opened
+  clickCount     Int       @default(0) // unique recipients who clicked
+  status         String    @default("draft") // draft | queued | sending | sent
   createdAt      DateTime  @default(now())
   sentAt         DateTime?
   createdById    String?
   createdBy      User?     @relation("CampaignCreator", fields: [createdById], references: [id])
+  recipients     CampaignRecipient[]
+
+  @@index([status])
+}
+
+model CampaignRecipient {
+  id         String    @id @default(cuid())
+  campaignId String
+  campaign   Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contactId  String
+  contact    Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  token      String    @unique // tracking/unsubscribe token
+  status     String    @default("queued") // queued | sent | failed
+  sentAt     DateTime?
+  openedAt   DateTime?
+  openCount  Int       @default(0)
+  clickedAt  DateTime?
+  clickCount Int       @default(0)
+  error      String?
+
+  @@index([campaignId])
+  @@index([status])
+}
+
+model Segment {
+  id        String   @id @default(cuid())
+  name      String
+  criteria  String // JSON: { source?, tagId?, hasVehicle?, serviceDue?, province?, wonOnly? }
+  createdAt DateTime @default(now())
 }
 
 model PipelineStage {

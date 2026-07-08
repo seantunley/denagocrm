@@ -3,40 +3,61 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireCrm } from "@/lib/auth";
-import { sendEmail, isSmtpConfigured, renderTemplate } from "@/lib/email";
-import { sendSms, isSmsConfigured } from "@/lib/sms";
-import { contactName } from "@/lib/format";
+import { sendEmail, isSmtpConfigured } from "@/lib/email";
+import { isSmsConfigured } from "@/lib/sms";
+import { saveFile } from "@/lib/storage";
 import { logAudit } from "@/lib/audit";
+import {
+  resolveContacts,
+  sendCampaignBatch,
+  buildTrackedEmail,
+  newToken,
+  htmlToText,
+  type SegmentCriteria,
+} from "@/lib/campaigns";
 
 export type CampaignState = { ok?: string; error?: string };
-
-const MAX_RECIPIENTS = 250;
 const str = (v: FormDataEntryValue | null) => String(v ?? "").trim();
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-async function resolveRecipients(audience: string, channel: string) {
-  const where: any = { deletedAt: null, marketingOptOut: false };
-  if (audience === "vehicle_owners") where.vehicles = { some: { deletedAt: null } };
-  else if (audience.startsWith("tag:")) where.tags = { some: { id: audience.slice(4) } };
-  if (channel === "email") where.email = { not: null };
-  const contacts = await prisma.contact.findMany({
-    where,
-    take: MAX_RECIPIENTS,
-    orderBy: { createdAt: "desc" },
-  });
-  return channel === "sms"
-    ? contacts.filter((c) => c.whatsapp || c.phone)
-    : contacts.filter((c) => c.email);
-}
-/* eslint-enable @typescript-eslint/no-explicit-any */
-
-function audienceLabel(audience: string, tagName?: string) {
-  if (audience === "vehicle_owners") return "Vehicle owners";
-  if (audience.startsWith("tag:")) return `Tag: ${tagName ?? "?"}`;
-  return "All customers";
+function criteriaFromForm(formData: FormData): SegmentCriteria {
+  return {
+    source: str(formData.get("f_source")) || undefined,
+    tagId: str(formData.get("f_tagId")) || undefined,
+    province: str(formData.get("f_province")) || undefined,
+    hasVehicle: formData.get("f_hasVehicle") === "on",
+    serviceDue: formData.get("f_serviceDue") === "on",
+    wonOnly: formData.get("f_wonOnly") === "on",
+  };
 }
 
-/** Send a single test to a typed address/number without recording a campaign. */
+async function audienceLabel(cr: SegmentCriteria): Promise<string> {
+  const parts: string[] = [];
+  if (cr.source) parts.push(`source: ${cr.source}`);
+  if (cr.tagId) parts.push(`tag: ${(await prisma.tag.findUnique({ where: { id: cr.tagId } }))?.name ?? "?"}`);
+  if (cr.province) parts.push(cr.province);
+  if (cr.hasVehicle) parts.push("cart owners");
+  if (cr.serviceDue) parts.push("service due");
+  if (cr.wonOnly) parts.push("customers");
+  return parts.length ? parts.join(" · ") : "All customers";
+}
+
+/** Upload an inline image for the email composer; returns the hosted URL. */
+export async function uploadCampaignImage(formData: FormData): Promise<string | null> {
+  await requireCrm();
+  const file = formData.get("file") as File | null;
+  if (!file || !file.type.startsWith("image/")) return null;
+  if (file.size > 5 * 1024 * 1024) return null;
+  const buf = Buffer.from(await file.arrayBuffer());
+  return saveFile(buf, file.name, file.type);
+}
+
+/** Live recipient count for the composer's current audience + channel. */
+export async function previewAudience(formData: FormData): Promise<{ count: number }> {
+  await requireCrm();
+  const channel = str(formData.get("channel")) || "email";
+  return { count: (await resolveContacts(criteriaFromForm(formData), channel)).length };
+}
+
 export async function sendCampaignTest(
   _prev: CampaignState | undefined,
   formData: FormData
@@ -44,17 +65,25 @@ export async function sendCampaignTest(
   await requireCrm();
   const channel = str(formData.get("channel")) || "email";
   const to = str(formData.get("testTo"));
-  const subject = str(formData.get("subject")) || "Test";
-  const body = str(formData.get("body"));
   if (!to) return { error: "Enter a test address / number." };
-  if (!body) return { error: "Write a message first." };
-  const vars = { first_name: "there", name: "there" };
-  const text = renderTemplate(body, vars);
-  const res =
-    channel === "email"
-      ? await sendEmail({ to, subject: renderTemplate(subject, vars), text })
-      : await sendSms(to, text);
-  return res.ok ? { ok: `Test ${channel} sent to ${to}.` } : { error: res.error ?? "Send failed." };
+  const vars = "there";
+  if (channel === "email") {
+    const subject = str(formData.get("subject")).replace(/\{\{\s*(first_name|name)\s*\}\}/g, vars) || "Test";
+    const html = str(formData.get("htmlBody")).replace(/\{\{\s*(first_name|name)\s*\}\}/g, vars);
+    if (!html) return { error: "Write the email first." };
+    const res = await sendEmail({
+      to,
+      subject,
+      text: htmlToText(html),
+      html: buildTrackedEmail(html, "preview"),
+    });
+    return res.ok ? { ok: `Test email sent to ${to}.` } : { error: res.error ?? "Send failed." };
+  }
+  const body = str(formData.get("body")).replace(/\{\{\s*(first_name|name)\s*\}\}/g, vars);
+  if (!body) return { error: "Write the message first." };
+  const { sendSms } = await import("@/lib/sms");
+  const res = await sendSms(to, body);
+  return res.ok ? { ok: `Test SMS sent to ${to}.` } : { error: res.error ?? "Send failed." };
 }
 
 export async function sendCampaign(
@@ -64,74 +93,62 @@ export async function sendCampaign(
   const user = await requireCrm();
   const name = str(formData.get("name"));
   const channel = str(formData.get("channel")) || "email";
-  const audience = str(formData.get("audience")) || "all";
   const subject = str(formData.get("subject"));
-  const body = str(formData.get("body"));
+  const htmlBody = str(formData.get("htmlBody"));
+  const smsBody = str(formData.get("body"));
   if (!name) return { error: "Give the campaign a name." };
-  if (!body) return { error: "Write a message." };
   if (channel === "email" && !subject) return { error: "Email needs a subject." };
+  if (channel === "email" && !htmlBody) return { error: "Write the email." };
+  if (channel === "sms" && !smsBody) return { error: "Write the message." };
   if (channel === "email" && !(await isSmtpConfigured()))
     return { error: "Email isn't configured (Settings → Email)." };
   if (channel === "sms" && !(await isSmsConfigured()))
     return { error: "SMS isn't configured (Settings → Integrations)." };
 
-  const recipients = await resolveRecipients(audience, channel);
-  if (recipients.length === 0) return { error: "No opted-in recipients match that audience." };
+  const criteria = criteriaFromForm(formData);
+  const contacts = await resolveContacts(criteria, channel);
+  if (contacts.length === 0) return { error: "No opted-in recipients match that audience." };
 
-  let sent = 0;
-  let failed = 0;
-  for (const c of recipients) {
-    const vars = { first_name: c.firstName, name: contactName(c) };
-    const text = renderTemplate(body, vars);
-    const res =
-      channel === "email"
-        ? await sendEmail({ to: c.email!, subject: renderTemplate(subject, vars), text })
-        : await sendSms((c.whatsapp ?? c.phone)!, text);
-    if (res.ok) {
-      sent++;
-      await prisma.communication
-        .create({
-          data: {
-            type: channel,
-            direction: "outbound",
-            subject: channel === "email" ? subject : null,
-            body: `[Campaign: ${name}]\n\n${text}`,
-            contactId: c.id,
-            userId: user.id,
-          },
-        })
-        .catch(() => {});
-    } else {
-      failed++;
-    }
-  }
-
-  let tagName: string | undefined;
-  if (audience.startsWith("tag:")) {
-    tagName = (await prisma.tag.findUnique({ where: { id: audience.slice(4) } }))?.name;
-  }
-  await prisma.campaign.create({
+  const campaign = await prisma.campaign.create({
     data: {
       name,
       channel,
       subject: channel === "email" ? subject : null,
-      body,
-      audience: audienceLabel(audience, tagName),
-      recipientCount: recipients.length,
-      sentCount: sent,
-      failedCount: failed,
-      status: "sent",
-      sentAt: new Date(),
+      body: channel === "email" ? htmlToText(htmlBody) : smsBody,
+      htmlBody: channel === "email" ? htmlBody : null,
+      audience: await audienceLabel(criteria),
+      recipientCount: contacts.length,
+      status: "queued",
       createdById: user.id,
+      recipients: { create: contacts.map((c) => ({ contactId: c.id, token: newToken() })) },
     },
   });
+
+  // Send a first batch immediately for instant feedback; the cron drains the rest.
+  await sendCampaignBatch(campaign.id, 60);
   await logAudit({
-    action: "campaign.sent",
-    summary: `Campaign "${name}" (${channel}) sent to ${sent}/${recipients.length}${
-      failed ? `, ${failed} failed` : ""
-    }`,
+    action: "campaign.started",
+    summary: `Campaign "${name}" (${channel}) started — ${contacts.length} recipients`,
     user,
   });
   revalidatePath("/campaigns");
-  return { ok: `Sent ${sent} of ${recipients.length}${failed ? `, ${failed} failed` : ""}.` };
+  return {
+    ok: `Campaign started — sending to ${contacts.length} recipient${contacts.length === 1 ? "" : "s"}. Progress shows below.`,
+  };
+}
+
+export async function saveSegment(formData: FormData) {
+  await requireCrm();
+  const name = str(formData.get("name"));
+  if (!name) return;
+  await prisma.segment.create({
+    data: { name, criteria: JSON.stringify(criteriaFromForm(formData)) },
+  });
+  revalidatePath("/campaigns");
+}
+
+export async function deleteSegment(id: string) {
+  await requireCrm();
+  await prisma.segment.delete({ where: { id } });
+  revalidatePath("/campaigns");
 }

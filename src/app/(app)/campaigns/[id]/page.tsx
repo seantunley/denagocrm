@@ -1,0 +1,125 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { prisma } from "@/lib/db";
+import { requireUser } from "@/lib/auth";
+import { contactName, formatDateTime } from "@/lib/format";
+
+function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="card">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="text-2xl font-bold mt-1">{value}</p>
+      {sub && <p className="text-xs text-slate-500">{sub}</p>}
+    </div>
+  );
+}
+
+export default async function CampaignDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireUser();
+  const { id } = await params;
+  const campaign = await prisma.campaign.findUnique({
+    where: { id },
+    include: {
+      createdBy: true,
+      recipients: {
+        orderBy: [{ clickedAt: "desc" }, { openedAt: "desc" }],
+        take: 100,
+        include: { contact: true },
+      },
+    },
+  });
+  if (!campaign) notFound();
+
+  const isEmail = campaign.channel === "email";
+  const openRate = campaign.sentCount > 0 ? Math.round((campaign.openCount / campaign.sentCount) * 100) : 0;
+  const clickRate = campaign.sentCount > 0 ? Math.round((campaign.clickCount / campaign.sentCount) * 100) : 0;
+  const queued = campaign.recipientCount - campaign.sentCount - campaign.failedCount;
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <Link href="/campaigns" className="text-sm text-orange-400 hover:underline">
+          ← Campaigns
+        </Link>
+        <div className="flex items-center gap-3 mt-1 flex-wrap">
+          <h1 className="text-2xl font-bold">{campaign.name}</h1>
+          <span className="badge bg-slate-800 text-slate-300 uppercase">{campaign.channel}</span>
+          <span className="badge bg-slate-800 text-slate-300">{campaign.status}</span>
+        </div>
+        <p className="text-sm text-slate-400 mt-0.5">
+          {campaign.audience} · created {formatDateTime(campaign.createdAt)}
+          {campaign.createdBy ? ` by ${campaign.createdBy.name}` : ""}
+          {campaign.subject ? ` · “${campaign.subject}”` : ""}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Stat label="Recipients" value={String(campaign.recipientCount)} sub={queued > 0 ? `${queued} still queued` : "all processed"} />
+        <Stat label="Sent" value={String(campaign.sentCount)} sub={campaign.failedCount ? `${campaign.failedCount} failed` : undefined} />
+        {isEmail && <Stat label="Opened" value={`${openRate}%`} sub={`${campaign.openCount} recipients`} />}
+        {isEmail && <Stat label="Clicked" value={`${clickRate}%`} sub={`${campaign.clickCount} recipients`} />}
+      </div>
+
+      {isEmail && (
+        <p className="text-xs text-slate-500">
+          Open rates are approximate — some mail apps (e.g. Apple Mail Privacy Protection) auto-load
+          the tracking pixel, and image-blocking hides it. Clicks are the reliable signal.
+        </p>
+      )}
+
+      {isEmail && campaign.htmlBody && (
+        <details className="card">
+          <summary className="font-semibold cursor-pointer text-sm">Preview email</summary>
+          <div className="mt-3 rounded-lg overflow-hidden border border-slate-800 bg-white">
+            <iframe title="Email preview" srcDoc={campaign.htmlBody} className="w-full h-[480px]" />
+          </div>
+        </details>
+      )}
+
+      <div className="card p-0 overflow-x-auto">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 px-4 pt-4">
+          Recipients {campaign.recipients.length >= 100 ? "(first 100)" : ""}
+        </p>
+        <table className="table-base mt-2">
+          <thead>
+            <tr>
+              <th>Customer</th>
+              <th>Status</th>
+              {isEmail && <th className="text-right">Opens</th>}
+              {isEmail && <th className="text-right">Clicks</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {campaign.recipients.map((r) => (
+              <tr key={r.id}>
+                <td>
+                  <Link href={`/contacts/${r.contactId}`} className="text-orange-400 hover:underline">
+                    {contactName(r.contact)}
+                  </Link>
+                </td>
+                <td>
+                  <span
+                    className={`badge ${
+                      r.status === "sent"
+                        ? "bg-emerald-500/15 text-emerald-300"
+                        : r.status === "failed"
+                        ? "bg-red-500/15 text-red-300"
+                        : "bg-slate-800 text-slate-400"
+                    }`}
+                  >
+                    {r.status}
+                  </span>
+                  {r.status === "failed" && r.error ? (
+                    <span className="text-xs text-slate-500 ml-2">{r.error}</span>
+                  ) : null}
+                </td>
+                {isEmail && <td className="text-right">{r.openCount || "—"}</td>}
+                {isEmail && <td className="text-right">{r.clickCount || "—"}</td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

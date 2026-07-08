@@ -5,7 +5,7 @@ import StarterKit from "@tiptap/starter-kit";
 import Image from "@tiptap/extension-image";
 import { Table, TableRow, TableCell, TableHeader } from "@tiptap/extension-table";
 import { TextStyle, Color } from "@tiptap/extension-text-style";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const COLORS = ["#1e293b", "#ea580c", "#2563eb", "#059669", "#dc2626"];
 
@@ -34,7 +34,15 @@ function Btn({
   );
 }
 
-function Toolbar({ editor }: { editor: Editor }) {
+function Toolbar({
+  editor,
+  onImageUpload,
+}: {
+  editor: Editor;
+  onImageUpload?: (file: File) => Promise<string | null>;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
   return (
     <div className="flex flex-wrap gap-1 border-b border-slate-700 bg-slate-900 p-1.5 rounded-t-lg">
       <Btn title="Bold" label="B" active={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()} />
@@ -58,12 +66,36 @@ function Toolbar({ editor }: { editor: Editor }) {
       />
       <Btn
         title="Insert image from URL"
-        label="🖼 Image"
+        label="🖼 URL"
         onClick={() => {
           const url = window.prompt("Image URL:");
           if (url) editor.chain().focus().setImage({ src: url }).run();
         }}
       />
+      {onImageUpload && (
+        <>
+          <Btn
+            title="Upload an image"
+            label={uploading ? "…" : "⬆ Upload"}
+            onClick={() => fileRef.current?.click()}
+          />
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (!file) return;
+              setUploading(true);
+              const url = await onImageUpload(file);
+              setUploading(false);
+              if (url) editor.chain().focus().setImage({ src: url }).run();
+            }}
+          />
+        </>
+      )}
       <Btn
         title="Insert table"
         label="⊞ Table"
@@ -96,10 +128,12 @@ export default function RichTextEditor({
   value,
   onChange,
   placeholder,
+  onImageUpload,
 }: {
   value: string;
   onChange: (html: string) => void;
   placeholder?: string;
+  onImageUpload?: (file: File) => Promise<string | null>;
 }) {
   const editor = useEditor({
     extensions: [
@@ -138,7 +172,7 @@ export default function RichTextEditor({
 
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-900 focus-within:border-orange-500">
-      <Toolbar editor={editor} />
+      <Toolbar editor={editor} onImageUpload={onImageUpload} />
       <EditorContent editor={editor} />
     </div>
   );
