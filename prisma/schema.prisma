@@ -191,6 +191,24 @@ model Contact {
   quotes            Quote[]
   researchNotes     ResearchNote[]
   campaignRecipients CampaignRecipient[]
+  consentRecords    ConsentRecord[]
+}
+
+// POPIA consent ledger — an append-only history of consent given/withdrawn,
+// so we can prove lawful basis for holding and marketing to a person.
+model ConsentRecord {
+  id          String   @id @default(cuid())
+  type        String // marketing | service | data_processing
+  granted     Boolean
+  source      String? // form | phone | email | import | admin
+  note        String?
+  createdAt   DateTime @default(now())
+  createdById String?
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId, createdAt])
 }
 
 model Tag {

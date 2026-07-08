@@ -1,0 +1,84 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { prisma } from "@/lib/db";
+import { requireCrm, requireOwner } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
+import { CONSENT_TYPES } from "@/lib/consent";
+
+/** Record a consent grant or withdrawal, and keep marketingOptOut in sync. */
+export async function recordConsent(contactId: string, formData: FormData) {
+  const user = await requireCrm();
+  const type = String(formData.get("type") ?? "");
+  const granted = String(formData.get("granted") ?? "") === "granted";
+  if (!CONSENT_TYPES.some((t) => t.id === type)) return;
+
+  await prisma.consentRecord.create({
+    data: {
+      contactId,
+      type,
+      granted,
+      source: String(formData.get("source") ?? "admin").trim() || "admin",
+      note: String(formData.get("note") ?? "").trim() || null,
+      createdById: user.id,
+    },
+  });
+  // Marketing consent drives the opt-out flag used by campaigns
+  if (type === "marketing") {
+    await prisma.contact.update({ where: { id: contactId }, data: { marketingOptOut: !granted } });
+  }
+  await logAudit({
+    action: "consent.recorded",
+    summary: `Consent ${granted ? "granted" : "withdrawn"} — ${type}`,
+    contactId,
+    user,
+  });
+  revalidatePath(`/contacts/${contactId}`);
+}
+
+/**
+ * POPIA erasure. We do NOT hard-delete (records are needed for warranty,
+ * safety and audit) — we redact personal identifiers from the contact and
+ * their leads, withdraw consent, and soft-delete the contact.
+ */
+export async function anonymizeContact(contactId: string) {
+  const user = await requireOwner();
+  const contact = await prisma.contact.findUnique({ where: { id: contactId } });
+  if (!contact) return;
+
+  await prisma.contact.update({
+    where: { id: contactId },
+    data: {
+      firstName: "Redacted",
+      lastName: null,
+      company: null,
+      email: null,
+      phone: null,
+      whatsapp: null,
+      address: null,
+      suburb: null,
+      city: null,
+      province: null,
+      postalCode: null,
+      notes: null,
+      marketingOptOut: true,
+      deletedAt: new Date(),
+      deletedByName: user.name,
+      deleteReason: "POPIA erasure request",
+    },
+  });
+  await prisma.lead.updateMany({
+    where: { contactId },
+    data: { name: "Redacted", email: null, phone: null },
+  });
+  await prisma.consentRecord.create({
+    data: { contactId, type: "data_processing", granted: false, source: "admin", note: "Erasure request", createdById: user.id },
+  });
+  await logAudit({
+    action: "privacy.erased",
+    summary: `POPIA erasure — personal data redacted for a contact`,
+    contactId,
+    user,
+  });
+  revalidatePath(`/contacts/${contactId}`);
+}

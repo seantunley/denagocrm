@@ -20,6 +20,8 @@ import { formatDateTime } from "@/lib/format";
 import { requireUser } from "@/lib/auth";
 import { contactHealth } from "@/lib/healthData";
 import { healthColors, healthLabels } from "@/lib/health";
+import { recordConsent, anonymizeContact } from "@/app/actions/privacy";
+import { CONSENT_TYPES } from "@/lib/consent";
 import { isSmtpConfigured, renderTemplate, contactVars } from "@/lib/email";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
@@ -41,6 +43,7 @@ export default async function ContactDetailPage({
       communications: { include: { user: true }, orderBy: { occurredAt: "desc" } },
       documents: { where: { deletedAt: null }, include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
       activities: { include: { assignedTo: true }, orderBy: { dueDate: "asc" } },
+      consentRecords: { orderBy: { createdAt: "desc" } },
       researchNotes: { orderBy: { createdAt: "desc" } },
       tags: true,
       owner: true,
@@ -471,6 +474,85 @@ export default async function ContactDetailPage({
                     contactId={contact.id}
                     revalidate={path}
                   />
+                ),
+              },
+              {
+                key: "privacy",
+                label: "Privacy",
+                content: (
+                  <div className="space-y-4">
+                    <div className="card">
+                      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                        <h2 className="font-semibold">Consent & data (POPIA)</h2>
+                        <a
+                          href={`/api/contacts/${contact.id}/export`}
+                          className="btn-secondary btn-sm"
+                          download
+                        >
+                          ⬇ Export data
+                        </a>
+                      </div>
+                      <form
+                        action={recordConsent.bind(null, contact.id)}
+                        className="flex flex-wrap items-end gap-2 mb-4"
+                      >
+                        <div>
+                          <label className="label">Consent</label>
+                          <select name="type" className="input !w-auto">
+                            {CONSENT_TYPES.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="label">Status</label>
+                          <select name="granted" className="input !w-auto" defaultValue="granted">
+                            <option value="granted">Granted</option>
+                            <option value="withdrawn">Withdrawn</option>
+                          </select>
+                        </div>
+                        <input name="source" className="input !w-32" placeholder="Source" defaultValue="admin" />
+                        <button className="btn-primary btn-sm">Record</button>
+                      </form>
+                      {contact.consentRecords.length === 0 ? (
+                        <p className="text-sm text-slate-400">No consent recorded yet.</p>
+                      ) : (
+                        <ul className="divide-y divide-slate-800 text-sm">
+                          {contact.consentRecords.map((r) => (
+                            <li key={r.id} className="py-1.5 flex items-center gap-3">
+                              <span
+                                className={`badge ${r.granted ? "bg-emerald-500/15 text-emerald-300" : "bg-red-500/15 text-red-300"}`}
+                              >
+                                {r.granted ? "Granted" : "Withdrawn"}
+                              </span>
+                              <span className="flex-1 capitalize">{r.type.replace("_", " ")}</span>
+                              <span className="text-xs text-slate-500">{r.source}</span>
+                              <span className="text-xs text-slate-400">{formatDateTime(r.createdAt)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+
+                    {user.role === "owner" && (
+                      <div className="card border-red-900/50">
+                        <h2 className="font-semibold mb-1 text-red-300">Right to erasure</h2>
+                        <p className="text-xs text-slate-400 mb-3">
+                          Redacts personal identifiers from this contact and their leads, withdraws
+                          consent and moves them to Trash. Vehicles, job cards and safety records are
+                          kept (de-identified) for warranty and legal reasons.
+                        </p>
+                        <ConfirmDelete
+                          action={anonymizeContact.bind(null, contact.id)}
+                          trigger="Erase personal data"
+                          title="Erase this person's personal data?"
+                          description="This redacts their name and contact details everywhere and cannot be undone. Continue only on a valid POPIA erasure request."
+                        />
+                      </div>
+                    )}
+                  </div>
                 ),
               },
             ]}
