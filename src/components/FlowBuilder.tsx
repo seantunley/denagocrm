@@ -16,6 +16,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import { saveFlow, resetFlow } from "@/app/actions/flow";
+import { uploadCampaignImage } from "@/app/actions/campaigns";
 import type { FlowNode } from "@/lib/flow";
 
 type Pos = { x: number; y: number };
@@ -26,8 +27,11 @@ const TYPE_META: Record<string, { icon: string; label: string; color: string }> 
   message: { icon: "💬", label: "Message", color: "#334155" },
   choice: { icon: "🔀", label: "Menu", color: "#7c3aed" },
   capture: { icon: "✏️", label: "Ask & save", color: "#0891b2" },
+  captureFile: { icon: "📎", label: "Get a file", color: "#0e7490" },
+  image: { icon: "🖼", label: "Send image", color: "#9333ea" },
   answer: { icon: "📄", label: "Answer", color: "#2563eb" },
-  booking: { icon: "🔧", label: "Create booking", color: "#059669" },
+  slots: { icon: "📅", label: "Book a slot", color: "#0d9488" },
+  booking: { icon: "🔧", label: "CRM action", color: "#059669" },
   ai: { icon: "🤖", label: "AI answer", color: "#ea580c" },
   handoff: { icon: "🙋", label: "Hand off", color: "#d97706" },
   end: { icon: "⛔", label: "End", color: "#64748b" },
@@ -36,8 +40,11 @@ const TYPE_META: Record<string, { icon: string; label: string; color: string }> 
 function summary(n: FlowNode): string {
   if (n.type === "message" || n.type === "handoff") return n.text?.slice(0, 60) ?? "";
   if (n.type === "capture") return `“${n.text.slice(0, 40)}” → {{${n.variable}}}`;
+  if (n.type === "captureFile") return `Ask for a file → {{${n.variable}}}`;
+  if (n.type === "image") return n.url ? "Sends an image" : "(no image set)";
   if (n.type === "answer") return n.answerSource ? `Send ${n.answerSource}` : (n.text ?? "").slice(0, 50);
-  if (n.type === "booking") return "Logs a workshop booking";
+  if (n.type === "slots") return "Offers real open workshop slots";
+  if (n.type === "booking") return `Creates a ${n.action ?? "service"} in the CRM`;
   if (n.type === "ai") return "Chats, grounded in your prices & brief";
   if (n.type === "choice") return n.text.slice(0, 50);
   return "";
@@ -89,8 +96,11 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
     case "message": return { id, type, text: "Your message…" };
     case "choice": return { id, type, text: "Pick an option:", options: [{ id: "o1", label: "Option 1" }, { id: "o2", label: "Option 2" }] };
     case "capture": return { id, type, text: "What's your name?", variable: "name" };
+    case "captureFile": return { id, type, text: "Please send a photo 📷", variable: "photo" };
+    case "image": return { id, type, url: "" };
     case "answer": return { id, type, answerSource: "pricelist" };
-    case "booking": return { id, type, text: "Thanks — the team will confirm shortly." };
+    case "slots": return { id, type, text: "Here are our next open times — pick one:", noneText: "We're fully booked online — the team will call you. 📞" };
+    case "booking": return { id, type, action: "service", text: "Thanks — the team will confirm shortly." };
     case "ai": return { id, type };
     case "handoff": return { id, type, text: "Let me get a team member to help — one moment 🙌" };
     default: return { id, type: "end" };
@@ -283,9 +293,68 @@ function NodePanel({
         <>
           <div><label className="label">Question to ask</label>
             <textarea className="input" rows={3} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div>
-          <div><label className="label">Save answer as</label>
-            <input className="input" value={node.variable} onChange={(e) => onChange({ ...node, variable: e.target.value.replace(/\W/g, "") })} placeholder="name" />
-            <p className="text-xs text-slate-500 mt-1">Use it later as <code>{`{{${node.variable || "name"}}}`}</code>.</p></div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><label className="label">Save as</label>
+              <input className="input" value={node.variable} onChange={(e) => onChange({ ...node, variable: e.target.value.replace(/\W/g, "") })} placeholder="name" /></div>
+            <div><label className="label">Type</label>
+              <select className="input" value={node.format ?? "text"} onChange={(e) => onChange({ ...node, format: e.target.value === "text" ? undefined : (e.target.value as "email" | "phone" | "number" | "date") })}>
+                <option value="text">Text</option>
+                <option value="email">Email</option>
+                <option value="phone">Phone</option>
+                <option value="number">Number</option>
+                <option value="date">Date</option>
+              </select></div>
+          </div>
+          <p className="text-xs text-slate-500">Use it later as <code>{`{{${node.variable || "name"}}}`}</code>. Name / phone / email feed the CRM action &amp; booking.</p>
+        </>
+      )}
+
+      {node.type === "captureFile" && (
+        <>
+          <div><label className="label">What to ask for</label>
+            <textarea className="input" rows={2} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} placeholder="Please send a photo of the cart 📷" /></div>
+          <div><label className="label">Save file as</label>
+            <input className="input" value={node.variable} onChange={(e) => onChange({ ...node, variable: e.target.value.replace(/\W/g, "") })} placeholder="photo" />
+            <p className="text-xs text-slate-500 mt-1">The uploaded file is saved and linked on the lead/booking.</p></div>
+        </>
+      )}
+
+      {node.type === "image" && (
+        <>
+          <div>
+            <label className="label">Image</label>
+            <input className="input" value={node.url} onChange={(e) => onChange({ ...node, url: e.target.value })} placeholder="Paste an image URL, or upload →" />
+            <label className="btn-secondary btn-sm mt-1.5 inline-flex cursor-pointer">
+              ⬆ Upload
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={async (e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = "";
+                  if (!f) return;
+                  const fd = new FormData();
+                  fd.set("file", f);
+                  const url = await uploadCampaignImage(fd);
+                  if (url) onChange({ ...node, url });
+                }}
+              />
+            </label>
+          </div>
+          {node.url && <img src={node.url} alt="" className="rounded-lg max-h-32 border border-slate-800" />}
+          <div><label className="label">Caption (optional)</label>
+            <input className="input" value={node.caption ?? ""} onChange={(e) => onChange({ ...node, caption: e.target.value })} /></div>
+        </>
+      )}
+
+      {node.type === "slots" && (
+        <>
+          <div><label className="label">Prompt</label>
+            <textarea className="input" rows={2} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div>
+          <div><label className="label">If nothing&apos;s open</label>
+            <textarea className="input" rows={2} value={node.noneText ?? ""} onChange={(e) => onChange({ ...node, noneText: e.target.value })} /></div>
+          <p className="text-xs text-slate-500">Shows your real open workshop slots (from booking settings) as buttons and reserves the chosen one in the diary. The time lands in <code>{"{{slot}}"}</code>.</p>
         </>
       )}
 
@@ -311,8 +380,17 @@ function NodePanel({
         </p>
       )}
       {node.type === "booking" && (
-        <div><label className="label">Confirmation message</label>
-          <textarea className="input" rows={3} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div>
+        <>
+          <div><label className="label">What to create</label>
+            <select className="input" value={node.action ?? "service"} onChange={(e) => onChange({ ...node, action: e.target.value as "service" | "demo" | "lead" })}>
+              <option value="service">Service request (workshop)</option>
+              <option value="demo">Demo / test-drive (lead + test-drive activity)</option>
+              <option value="lead">Lead / enquiry</option>
+            </select>
+            <p className="text-xs text-slate-500 mt-1">Built from captured fields (name, phone, email, service, model). For a real dated service booking use the &quot;Book a slot&quot; node instead.</p></div>
+          <div><label className="label">Confirmation message</label>
+            <textarea className="input" rows={3} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div>
+        </>
       )}
 
       {node.type === "choice" && (
@@ -335,7 +413,7 @@ function NodePanel({
       )}
 
       {/* next target for linear nodes */}
-      {(node.type === "message" || node.type === "answer" || node.type === "capture" || node.type === "booking") && (
+      {(node.type === "message" || node.type === "answer" || node.type === "capture" || node.type === "captureFile" || node.type === "image" || node.type === "booking" || node.type === "slots") && (
         <div><label className="label">Then go to</label>
           <TargetPicker value={(node as { next?: string }).next} onPick={(v) => onChange({ ...node, next: v } as FlowNode)} /></div>
       )}

@@ -12,9 +12,11 @@ export async function saveBotSettings(formData: FormData) {
   const enabled = formData.get("enabled") === "on";
   const aiEnabled = formData.get("aiEnabled") === "on";
   const flowEnabled = formData.get("flowEnabled") === "on";
+  const dmEnabled = formData.get("dmEnabled") === "on";
   await putSetting("BOT_ENABLED", enabled ? "true" : "false");
   await putSetting("BOT_AI_ENABLED", aiEnabled ? "true" : "false");
   await putSetting("BOT_FLOW_ENABLED", flowEnabled ? "true" : "false");
+  await putSetting("BOT_DM_ENABLED", dmEnabled ? "true" : "false");
   await putSetting("BOT_AI_BRIEF", String(formData.get("brief") ?? "").trim());
   await putSetting(
     "BOT_HOURS",
@@ -55,4 +57,35 @@ export async function deleteFaq(id: string) {
 /** Whether a Whisper key is stored (for the settings UI, without revealing it). */
 export async function whisperConfigured(): Promise<boolean> {
   return Boolean(await getSetting("OPENAI_API_KEY"));
+}
+
+/** Connect a Telegram bot: save the token, register the webhook, enable it. */
+export async function connectTelegram(formData: FormData): Promise<void> {
+  await requireOwner();
+  const token = String(formData.get("token") ?? "").trim();
+  if (!token) return;
+  await putSetting("TELEGRAM_BOT_TOKEN", token);
+  const secret = crypto.randomBytes(16).toString("hex");
+  await putSetting("TELEGRAM_WEBHOOK_SECRET", secret);
+  const { setTelegramWebhook } = await import("@/lib/telegram");
+  const { appBaseUrl } = await import("@/lib/campaigns");
+  const res = await setTelegramWebhook(`${appBaseUrl()}/api/webhooks/telegram`, secret);
+  // Enabled once the webhook registers (works after deploy); token stays saved.
+  await putSetting("BOT_TG_ENABLED", res.ok ? "true" : "false");
+  revalidatePath("/settings");
+}
+
+export async function disconnectTelegram() {
+  await requireOwner();
+  const { deleteTelegramWebhook } = await import("@/lib/telegram");
+  await deleteTelegramWebhook();
+  await putSetting("BOT_TG_ENABLED", "false");
+  revalidatePath("/settings");
+}
+
+export async function telegramStatus(): Promise<{ connected: boolean; enabled: boolean }> {
+  return {
+    connected: Boolean(await getSetting("TELEGRAM_BOT_TOKEN")),
+    enabled: (await getSetting("BOT_TG_ENABLED")) === "true",
+  };
 }

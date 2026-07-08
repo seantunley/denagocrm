@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { getSetting } from "@/lib/settings";
 import { createIntakeLead } from "@/lib/leadIntake";
 import { recordInboundDm, recordDmEcho, type DmPlatform } from "@/lib/messenger";
+import { runDmFlow } from "@/lib/flowDm";
 
 /** Meta webhook verification handshake. */
 export async function GET(req: NextRequest) {
@@ -90,7 +91,11 @@ export async function POST(req: NextRequest) {
           }
           if (ev.message && (text || attachments.length > 0)) {
             const referral = ev.message.referral ?? ev.referral ?? ev.postback?.referral ?? null;
-            await recordInboundDm(platform, String(ev.sender?.id ?? ""), text, referral, attachments);
+            const senderId = String(ev.sender?.id ?? "");
+            await recordInboundDm(platform, senderId, text, referral, attachments);
+            // Drive the chatbot flow (quick-reply taps carry a payload)
+            const payload: string | undefined = ev.message.quick_reply?.payload;
+            if (text || payload) await runDmFlow(platform, senderId, text, payload);
           }
         } catch (e) {
           const { logError } = await import("@/lib/errorLog");

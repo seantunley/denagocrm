@@ -29,7 +29,7 @@ import PushToggle from "@/components/PushToggle";
 import SecurityPanel from "@/components/SecurityPanel";
 import OwnerUserControls from "@/components/OwnerUserControls";
 import { saveSessionPolicy } from "@/app/actions/security";
-import { saveBotSettings, addFaq, deleteFaq, whisperConfigured } from "@/app/actions/bot";
+import { saveBotSettings, addFaq, deleteFaq, whisperConfigured, connectTelegram, disconnectTelegram, telegramStatus } from "@/app/actions/bot";
 import { saveImapSettings } from "@/app/actions/emails";
 import { getBotFaqs } from "@/lib/botAi";
 import { clearErrorLog } from "@/app/actions/ai";
@@ -96,6 +96,7 @@ export default async function SettingsPage({
   const isOwner = isAdmin;
   const botFaqs = isAdmin ? await getBotFaqs() : [];
   const hasWhisper = isAdmin ? await whisperConfigured() : false;
+  const tg = isAdmin ? await telegramStatus() : { connected: false, enabled: false };
   const errorLogs = isAdmin && tab === "system"
     ? await basePrisma.errorLog.findMany({ orderBy: { createdAt: "desc" }, take: 100 })
     : [];
@@ -513,6 +514,22 @@ export default async function SettingsPage({
                 <a href="/bot-builder" className="btn-secondary btn-sm inline-flex mt-2">🎨 Open flow builder</a>
               </div>
 
+              <div className="border-t border-slate-800 pt-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium">Messenger &amp; Instagram DMs</p>
+                    <p className="text-xs text-slate-500">
+                      Run the same live flow on Facebook Messenger and Instagram DMs (uses your Meta
+                      connection). Menu options show as tappable quick replies.
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer shrink-0">
+                    <input type="checkbox" name="dmEnabled" defaultChecked={setting("BOT_DM_ENABLED") === "true"} className="h-4 w-4" />
+                    Enabled
+                  </label>
+                </div>
+              </div>
+
               <div className="border-t border-slate-800 pt-3 space-y-3">
                 <div className="flex items-center justify-between gap-4">
                   <div>
@@ -599,6 +616,26 @@ export default async function SettingsPage({
                   <button className="btn-primary btn-sm">Add pathway</button>
                 </form>
               </details>
+            </div>
+
+            <div className="px-5 py-4">
+              <p className="text-sm font-medium mb-1">
+                Telegram {tg.connected && <span className="text-emerald-400 text-xs">· connected{tg.enabled ? " & live" : ""}</span>}
+              </p>
+              <p className="text-xs text-slate-500 mb-2">
+                Create a bot with @BotFather on Telegram, paste the token here and Connect — it runs
+                the same live flow. (Registers once the app is deployed.)
+              </p>
+              {!tg.connected ? (
+                <form action={connectTelegram} className="flex gap-2">
+                  <input name="token" className="input flex-1" placeholder="123456789:ABCdef..." />
+                  <button className="btn-primary btn-sm shrink-0">Connect</button>
+                </form>
+              ) : (
+                <form action={disconnectTelegram}>
+                  <button className="btn-secondary btn-sm">Disconnect</button>
+                </form>
+              )}
             </div>
           </div>
         </div>

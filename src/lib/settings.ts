@@ -20,6 +20,8 @@ const SECRET_KEYS = new Set([
   "ANTHROPIC_API_KEY",
   "INTAKE_API_KEY",
   "OPENAI_API_KEY",
+  "TELEGRAM_BOT_TOKEN",
+  "TELEGRAM_WEBHOOK_SECRET",
 ]);
 
 const PREFIX = "enc:v1:";

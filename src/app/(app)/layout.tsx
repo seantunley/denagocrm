@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { logout } from "@/app/login/actions";
 import Nav from "@/components/Nav";
 import AppShell from "@/components/AppShell";
+import { APP_VERSION } from "@/lib/version";
 
 export default async function AppLayout({
   children,
@@ -58,6 +59,7 @@ export default async function AppLayout({
             Sign out
           </button>
         </form>
+        <p className="text-[10px] text-slate-600 mt-2">v{APP_VERSION}</p>
       </div>
     </>
   );

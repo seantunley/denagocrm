@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { getSetting } from "@/lib/settings";
 import { recordInboundWhatsApp, fetchWhatsAppMedia } from "@/lib/whatsapp";
 import { transcribeVoice } from "@/lib/transcribe";
+import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
 
 /** Meta webhook verification handshake (same flow as Lead Ads). */
@@ -69,6 +70,20 @@ export async function POST(req: NextRequest) {
           if (!id) continue;
           await recordInboundWhatsApp(from, profileName, `👆 ${title}`).catch(() => {});
           await runWhatsAppBot(from, { text: title, choiceId: id }).catch(() => {});
+        } else if (message.type === "image" || message.type === "document" || message.type === "video") {
+          // Inbound photo/file — save it and pass to the flow (capture-file node)
+          const media = message.image ?? message.document ?? message.video;
+          const caption: string = media?.caption ?? "";
+          let fileUrl: string | undefined;
+          if (media?.id) {
+            const dl = await fetchWhatsAppMedia(media.id).catch(() => null);
+            if (dl) {
+              const ext = dl.contentType.includes("pdf") ? "pdf" : dl.contentType.includes("png") ? "png" : dl.contentType.split("/")[1]?.slice(0, 4) || "bin";
+              fileUrl = await saveFile(dl.buffer, `whatsapp.${ext}`, dl.contentType).catch(() => undefined);
+            }
+          }
+          await recordInboundWhatsApp(from, profileName, `📎 ${caption || "[file]"}`).catch(() => {});
+          await runWhatsAppBot(from, { text: caption, fileUrl }).catch(() => {});
         } else if (message.type === "audio" || message.type === "voice") {
           // Voice note: download, transcribe, reply naturally, then hand off.
           const mediaId: string | undefined = message.audio?.id ?? message.voice?.id;

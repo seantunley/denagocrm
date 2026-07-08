@@ -66,6 +66,38 @@ export async function sendDirectMessage(
   return { ok: true };
 }
 
+/** Sends a DM with tappable quick-reply chips (menu options). */
+export async function sendDirectQuickReplies(
+  platform: DmPlatform,
+  recipientId: string,
+  text: string,
+  replies: { title: string; payload: string }[]
+): Promise<{ ok: boolean; error?: string }> {
+  const token = await getPageToken();
+  if (!token) return { ok: false, error: "Meta page token is not configured." };
+  const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      recipient: { id: recipientId },
+      messaging_type: "RESPONSE",
+      message: {
+        text,
+        quick_replies: replies.slice(0, 11).map((r) => ({
+          content_type: "text",
+          title: r.title.slice(0, 20),
+          payload: r.payload.slice(0, 1000),
+        })),
+      },
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    return { ok: false, error: err?.error?.message ?? `Send API error ${res.status}` };
+  }
+  return { ok: true };
+}
+
 /** Sends an image / audio / video / file attachment by URL. */
 export async function sendDirectAttachment(
   platform: DmPlatform,

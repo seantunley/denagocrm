@@ -6,11 +6,13 @@ import {
   sendWhatsAppText,
   sendWhatsAppButtons,
   sendWhatsAppList,
+  sendWhatsAppImage,
 } from "./whatsapp";
 import { generateBotReply, type BotMsg } from "./botAi";
 import { sendPushToAll } from "./push";
-import { logAudit } from "./audit";
 import { maybeAutoReply, botShouldPause } from "./bot";
+import { greetingVars } from "./flowSession";
+import { crmActions } from "./flowActions";
 import { runFlow, DEFAULT_FLOW, type Flow, type FlowInput, type FlowSession, type FlowCtx } from "./flow";
 
 const FLOW_MARKER = "🤖 Flow";
@@ -126,31 +128,10 @@ function buildCtx(digits: string, match: { contactId: string | null; leadId: str
       const ai = await generateBotReply({ history, customerName: name, isCustomer });
       return ai ?? { reply: "Let me get one of our team to help you with that — they'll be in touch shortly 👍", handoff: true };
     },
-    createBooking: async (vars) => {
-      const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
-      if (!firstUser) return;
-      const who = vars.name || "WhatsApp customer";
-      const summary = `Service request (WhatsApp) — ${who}${vars.service ? `: ${vars.service}` : ""}`;
-      await prisma.activity.create({
-        data: {
-          type: "todo",
-          category: "workshop",
-          summary,
-          note: [`From WhatsApp +${digits}`, vars.service ? `Needs: ${vars.service}` : null, vars.date ? `Preferred: ${vars.date}` : null].filter(Boolean).join("\n") || null,
-          dueDate: new Date(),
-          status: "planned",
-          contactId: match.contactId,
-          leadId: match.leadId,
-          assignedToId: firstUser.id,
-          createdById: firstUser.id,
-        },
-      });
-      await logAudit({ action: "bot.booking", summary, contactId: match.contactId, leadId: match.leadId, userName: "WhatsApp bot" });
-      await sendPushToAll({ title: "New booking request 🔧", body: `${who}${vars.service ? ` — ${vars.service}` : ""}`, url: match.contactId ? `/contacts/${match.contactId}` : match.leadId ? `/leads/${match.leadId}` : "/inbox" }, "bot_handoff").catch(() => {});
-    },
     handoff: async () => {
       await sendPushToAll({ title: "WhatsApp needs you 🙋", body: "The assistant handed a chat over to a human.", url: match.contactId ? `/contacts/${match.contactId}` : match.leadId ? `/leads/${match.leadId}` : "/inbox" }, "bot_handoff").catch(() => {});
     },
+    ...crmActions("whatsapp", { contactId: match.contactId, leadId: match.leadId }),
   };
 }
 
@@ -179,8 +160,13 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   if (existing?.status === "paused") return true; // waiting for a human after a handoff
 
   const restart = isRestart(input.text) && !input.choiceId;
+  let seed: Record<string, string> = {};
+  if (!existing || restart) {
+    const contact = match.contactId ? await prisma.contact.findUnique({ where: { id: match.contactId } }) : null;
+    seed = greetingVars(contact?.firstName ?? null);
+  }
   const session: FlowSession =
-    !existing || restart ? { nodeId: null, vars: {} } : { nodeId: existing.nodeId, vars: existing.vars };
+    !existing || restart ? { nodeId: null, vars: seed } : { nodeId: existing.nodeId, vars: existing.vars };
 
   const flow = await getActiveFlow();
   const result = await runFlow(flow, session, input, buildCtx(digits, match));
@@ -190,6 +176,9 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
     if (m.type === "text") {
       ok = (await sendWhatsAppText(digits, m.text)).ok;
       if (ok) await logOutbound(m.text, match.contactId, match.leadId, digits);
+    } else if (m.type === "image") {
+      ok = (await sendWhatsAppImage(digits, m.url, m.caption)).ok;
+      if (ok) await logOutbound(m.caption ? `🖼 ${m.caption}` : "🖼 [image]", match.contactId, match.leadId, digits);
     } else {
       // choice: buttons (≤3) or list (>3)
       const res =
