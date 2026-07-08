@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireCrm } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { runLeadAutomations } from "@/lib/automations";
 import { saveFile } from "@/lib/storage";
@@ -42,7 +42,7 @@ function pickFile(formData: FormData): File | null {
 
 /** Invoiced — the invoice document is mandatory. */
 export async function markInvoiced(quoteId: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrm();
   const quote = await prisma.quote.findUniqueOrThrow({ where: { id: quoteId }, include: { contact: true } });
   if (quote.status !== "accepted" || quote.invoicedAt) return;
   const file = pickFile(formData);
@@ -69,7 +69,7 @@ export async function markInvoiced(quoteId: string, formData: FormData) {
 
 /** Deposit paid — proof of payment is mandatory. */
 export async function markDepositPaid(quoteId: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrm();
   const quote = await prisma.quote.findUniqueOrThrow({ where: { id: quoteId } });
   if (!quote.invoicedAt || quote.depositPaidAt) return;
   const file = pickFile(formData);
@@ -96,7 +96,7 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
 
 /** Delivery scheduled — date required, document optional; lands on the workshop calendar. */
 export async function scheduleDelivery(quoteId: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrm();
   const quote = await prisma.quote.findUniqueOrThrow({
     where: { id: quoteId },
     include: { contact: true, lead: { include: { product: true } }, items: true },
@@ -147,7 +147,7 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
 
 /** Delivery photos — multiple, any time from scheduling onwards. */
 export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrm();
   const quote = await prisma.quote.findUniqueOrThrow({ where: { id: quoteId } });
   const files = formData.getAll("files").filter(
     (f): f is File => typeof f === "object" && (f as File).size > 0
@@ -180,7 +180,7 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
 
 /** Delivered — optional signed delivery note, then straight to vehicle registration. */
 export async function markDelivered(quoteId: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrm();
   const quote = await prisma.quote.findUniqueOrThrow({
     where: { id: quoteId },
     include: { lead: true },

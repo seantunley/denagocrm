@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { parseRands } from "@/lib/format";
@@ -24,7 +24,7 @@ function productData(formData: FormData) {
 }
 
 export async function createProduct(formData: FormData) {
-  await requireUser();
+  await requireOwner();
   const data = productData(formData);
   if (!data.name) throw new Error("Product name is required");
   const colors = String(formData.get("colors") ?? "")
@@ -39,7 +39,7 @@ export async function createProduct(formData: FormData) {
 }
 
 export async function updateProduct(id: string, formData: FormData) {
-  await requireUser();
+  await requireOwner();
   const data = productData(formData);
   if (!data.name) throw new Error("Product name is required");
   await prisma.product.update({ where: { id }, data });
@@ -48,7 +48,7 @@ export async function updateProduct(id: string, formData: FormData) {
 }
 
 export async function addProductColor(productId: string, formData: FormData) {
-  await requireUser();
+  await requireOwner();
   const name = String(formData.get("name") ?? "").trim();
   if (!name) return;
   await prisma.productColor.create({ data: { productId, name } });
@@ -56,14 +56,14 @@ export async function addProductColor(productId: string, formData: FormData) {
 }
 
 export async function deleteProductColor(id: string, productId: string, formData: FormData) {
-  await requireUser();
+  await requireOwner();
   void formData;
   await prisma.productColor.delete({ where: { id } });
   revalidatePath(`/products/${productId}`);
 }
 
 export async function deleteProduct(id: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireOwner();
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const product = await softDeleteRecord("product", id, reason, user.name);
   await logAudit({

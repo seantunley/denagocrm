@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addMonths } from "date-fns";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireWorkshop } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendReviewRequest } from "@/lib/reviewRequests";
 import { softDeleteRecord } from "@/lib/trash";
@@ -16,7 +16,7 @@ import { parseRands } from "@/lib/format";
  * dents, odometer). Filed on the job card and the customer.
  */
 export async function uploadJobCardPhotos(jobCardId: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireWorkshop();
   const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId } });
   const files = formData
     .getAll("files")
@@ -52,7 +52,7 @@ export async function uploadJobCardPhotos(jobCardId: string, formData: FormData)
 }
 
 export async function createJobCard(formData: FormData) {
-  const user = await requireUser();
+  const user = await requireWorkshop();
   const vehicleId = String(formData.get("vehicleId") ?? "");
   const description = String(formData.get("description") ?? "").trim();
   if (!vehicleId || !description) throw new Error("Vehicle and description are required");
@@ -87,7 +87,7 @@ export async function createJobCard(formData: FormData) {
 }
 
 export async function addJobCardItem(jobCardId: string, formData: FormData) {
-  await requireUser();
+  await requireWorkshop();
   const description = String(formData.get("description") ?? "").trim();
   if (!description) return;
   const qty = parseFloat(String(formData.get("qty") ?? "1")) || 1;
@@ -104,7 +104,7 @@ export async function addJobCardItem(jobCardId: string, formData: FormData) {
 }
 
 export async function deleteJobCardItem(id: string, jobCardId: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireWorkshop();
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const item = await prisma.jobCardItem.delete({ where: { id } });
   const jobCard = await prisma.jobCard.findUnique({ where: { id: jobCardId } });
@@ -118,7 +118,7 @@ export async function deleteJobCardItem(id: string, jobCardId: string, formData:
 }
 
 export async function setJobCardStatus(jobCardId: string, status: string) {
-  await requireUser();
+  await requireWorkshop();
   await prisma.jobCard.update({
     where: { id: jobCardId },
     data: { status, completedAt: status === "completed" ? new Date() : null },
@@ -132,7 +132,7 @@ export async function setJobCardStatus(jobCardId: string, status: string) {
  * next-due defaults come from the vehicle's service intervals.
  */
 export async function completeJobCard(jobCardId: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireWorkshop();
   const jobCard = await prisma.jobCard.findUniqueOrThrow({
     where: { id: jobCardId },
     include: { vehicle: true },
@@ -197,7 +197,7 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
 }
 
 export async function deleteJobCard(id: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireWorkshop();
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const jobCard = await softDeleteRecord("jobCard", id, reason, user.name);
   await logAudit({

@@ -1,7 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { revalidatePath } from "next/cache";
 
@@ -51,7 +51,7 @@ export async function importContacts(
   _prev: ImportState | undefined,
   formData: FormData
 ): Promise<ImportState> {
-  const user = await requireUser();
+  const user = await requireOwner();
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) return { error: "Choose a CSV file first." };
   if (file.size > 5 * 1024 * 1024) return { error: "File too large (max 5 MB)." };

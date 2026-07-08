@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireCrm } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 
@@ -19,7 +19,7 @@ export async function registerLibraryDocuments(
   nameOverride: string | null,
   files: UploadedFileMeta[]
 ) {
-  const user = await requireUser();
+  const user = await requireCrm();
   if (files.length === 0) return;
   const added: string[] = [];
   for (const f of files) {
@@ -62,7 +62,7 @@ export async function registerLibraryVersion(
   note: string | null,
   f: UploadedFileMeta
 ) {
-  const user = await requireUser();
+  const user = await requireCrm();
   const doc = await prisma.libraryDocument.findUniqueOrThrow({
     where: { id: documentId },
     include: { versions: { orderBy: { version: "desc" }, take: 1 } },
@@ -93,7 +93,7 @@ export async function registerLibraryVersion(
 }
 
 export async function deleteLibraryDocument(id: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrm();
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const doc = await softDeleteRecord("libraryDocument", id, reason, user.name);
   await logAudit({

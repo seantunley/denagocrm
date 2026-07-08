@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "./db";
 import { getSetting } from "./settings";
+import { hasModule, type ModuleId } from "./access";
 import {
   verifySession,
   signFreshSession,
@@ -32,6 +33,24 @@ export async function requireOwner() {
   if (user.role !== "owner") redirect("/");
   return user;
 }
+
+/**
+ * Module guard for server actions. Route gating in proxy.ts only covers page
+ * navigation; server actions dispatch by header regardless of URL, so each
+ * action must re-check the caller's modules server-side. Owners always pass.
+ * Soft-bounces to "/" (matching the route gate) rather than throwing.
+ */
+export async function requireAnyModule(...mods: ModuleId[]) {
+  const user = await requireUser();
+  if (user.role === "owner") return user;
+  if (!mods.some((m) => hasModule(user, m))) redirect("/");
+  return user;
+}
+export const requireCrm = () => requireAnyModule("crm");
+export const requireWorkshop = () => requireAnyModule("workshop");
+export const requireCrmOrWorkshop = () => requireAnyModule("crm", "workshop");
+export const requireInbox = () => requireAnyModule("inbox");
+export const requireOperational = () => requireAnyModule("crm", "workshop", "inbox");
 
 export async function getIdleMinutes(): Promise<number> {
   const raw = await getSetting("SESSION_IDLE_MINUTES");

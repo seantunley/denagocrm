@@ -3,7 +3,7 @@
 import crypto from "crypto";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireCrmOrWorkshop } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
 import { saveFile } from "@/lib/storage";
@@ -15,7 +15,7 @@ export async function signAsDealer(
   signatureDataUrl: string | null,
   saveForReuse: boolean
 ): Promise<{ ok?: boolean; error?: string }> {
-  const user = await requireUser();
+  const user = await requireCrmOrWorkshop();
   let ref: string | null;
   if (signatureDataUrl) {
     if (!signatureDataUrl.startsWith("data:image/png;base64,") || signatureDataUrl.length > 400_000) {
@@ -49,7 +49,7 @@ const BASE = "https://crm.denagocpt.co.za";
 
 /** Creates (or returns) the secure signing link for a quote/job card. */
 export async function enableSigning(kind: "quote" | "jobcard", id: string) {
-  const user = await requireUser();
+  const user = await requireCrmOrWorkshop();
   const token = crypto.randomBytes(28).toString("hex");
   if (kind === "quote") {
     const quote = await prisma.quote.findUniqueOrThrow({ where: { id } });
@@ -85,7 +85,7 @@ export async function enableSigning(kind: "quote" | "jobcard", id: string) {
 
 /** Kills an active signing link (wrong recipient, changed quote, etc.). */
 export async function revokeSigning(kind: "quote" | "jobcard", id: string) {
-  const user = await requireUser();
+  const user = await requireCrmOrWorkshop();
   if (kind === "quote") {
     const quote = await prisma.quote.findUniqueOrThrow({ where: { id } });
     if (!quote.signToken || quote.signedAt) return; // nothing to revoke / already signed
@@ -120,7 +120,7 @@ export async function revokeSigning(kind: "quote" | "jobcard", id: string) {
 
 /** Emails the signing link to the customer. */
 export async function emailSigningLink(kind: "quote" | "jobcard", id: string) {
-  const user = await requireUser();
+  const user = await requireCrmOrWorkshop();
   if (kind === "quote") {
     const quote = await prisma.quote.findUniqueOrThrow({
       where: { id },

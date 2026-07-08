@@ -11,7 +11,7 @@ import { PUSH_KINDS } from "@/lib/push";
 // ---- Pipeline stages ----
 
 export async function createStage(formData: FormData) {
-  await requireUser();
+  await requireOwner();
   const name = String(formData.get("name") ?? "").trim();
   if (!name) return;
   const max = await prisma.pipelineStage.aggregate({ _max: { order: true } });
@@ -27,7 +27,7 @@ export async function createStage(formData: FormData) {
 }
 
 export async function renameStage(id: string, formData: FormData) {
-  await requireUser();
+  await requireOwner();
   const name = String(formData.get("name") ?? "").trim();
   if (!name) return;
   await prisma.pipelineStage.update({
@@ -39,7 +39,7 @@ export async function renameStage(id: string, formData: FormData) {
 }
 
 export async function moveStage(id: string, direction: "up" | "down") {
-  await requireUser();
+  await requireOwner();
   const stages = await prisma.pipelineStage.findMany({ orderBy: { order: "asc" } });
   const idx = stages.findIndex((s) => s.id === id);
   const swapWith = direction === "up" ? idx - 1 : idx + 1;
@@ -59,7 +59,7 @@ export async function moveStage(id: string, direction: "up" | "down") {
 }
 
 export async function deleteStage(id: string, formData: FormData): Promise<void> {
-  await requireUser();
+  await requireOwner();
   void formData;
   const count = await prisma.lead.count({ where: { stageId: id } });
   if (count > 0) return; // stage still holds leads — refuse silently
@@ -112,7 +112,7 @@ export async function changeOwnPassword(
 }
 
 export async function saveQuoteDefaults(formData: FormData) {
-  await requireUser();
+  await requireOwner();
   const days = String(formData.get("validDays") ?? "").trim();
   const terms = String(formData.get("terms") ?? "").trim();
   await prisma.appSetting.upsert({
@@ -129,7 +129,7 @@ export async function saveQuoteDefaults(formData: FormData) {
 }
 
 export async function saveWorkshopSettings(formData: FormData) {
-  await requireUser();
+  await requireOwner();
   const days = formData.getAll("days").map(String).join(",");
   const entries: Record<string, string> = {
     BOOKING_SLOT_TIMES: String(formData.get("times") ?? "").trim() || "08:00,10:00,12:00,14:00",
@@ -178,7 +178,7 @@ export async function regenerateSetting(key: string) {
 
 /** Team-wide push toggles: unticked kinds are stored as disabled. */
 export async function saveNotificationPrefs(formData: FormData) {
-  await requireUser();
+  await requireOwner();
   const enabled = new Set(formData.getAll("kinds").map(String));
   const disabled = PUSH_KINDS.map((k) => k.id).filter((id) => !enabled.has(id));
   await putSetting("PUSH_DISABLED_KINDS", disabled.join(","));

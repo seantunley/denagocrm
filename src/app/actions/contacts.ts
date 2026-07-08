@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireCrmOrWorkshop } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { contactName } from "@/lib/format";
@@ -55,7 +55,7 @@ function parseTags(formData: FormData) {
 }
 
 export async function createContact(formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrmOrWorkshop();
   const data = contactData(formData);
   if (!data.firstName) throw new Error("Name is required");
   const tags = parseTags(formData);
@@ -82,7 +82,7 @@ export async function createContact(formData: FormData) {
 }
 
 export async function updateContact(id: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrmOrWorkshop();
   const data = contactData(formData);
   if (!data.firstName) throw new Error("Name is required");
   const tags = parseTags(formData);
@@ -111,7 +111,7 @@ export async function updateContact(id: string, formData: FormData) {
 }
 
 export async function deleteContact(id: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrmOrWorkshop();
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const contact = await softDeleteRecord("contact", id, reason, user.name);
   await logAudit({

@@ -27,7 +27,9 @@ export async function GET(req: NextRequest) {
   const data = await exportAllData();
   const stamp = new Date().toISOString().slice(0, 10);
   const blob = await put(`backups/denagocrm-${stamp}.json`, JSON.stringify(data), {
-    access: "public", // unguessable URL; contains no plaintext passwords (bcrypt hashes only)
+    // PRIVATE: the dump holds all customer PII (bcrypt/encrypted secrets aside)
+    // and must require authentication to read, not just an unguessable URL.
+    access: "private",
     contentType: "application/json",
     addRandomSuffix: false,
     allowOverwrite: true,

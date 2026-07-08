@@ -2,10 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireCrmOrWorkshop } from "@/lib/auth";
 
 export async function addCommunication(formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrmOrWorkshop();
   const str = (k: string) => {
     const v = String(formData.get(k) ?? "").trim();
     return v === "" ? null : v;
@@ -42,7 +42,7 @@ export async function addCommunication(formData: FormData) {
 }
 
 export async function deleteCommunication(id: string, path: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrmOrWorkshop();
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const comm = await prisma.communication.delete({ where: { id } });
   const { logAudit } = await import("@/lib/audit");

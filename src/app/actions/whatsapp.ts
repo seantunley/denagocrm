@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireInbox } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendWhatsAppText, waDigits } from "@/lib/whatsapp";
 
@@ -12,7 +12,7 @@ export async function sendWhatsAppMessage(
   _prev: WaState | undefined,
   formData: FormData
 ): Promise<WaState> {
-  const user = await requireUser();
+  const user = await requireInbox();
   const phone = String(formData.get("phone") ?? "").trim();
   const text = String(formData.get("text") ?? "").trim();
   const contactId = String(formData.get("contactId") ?? "").trim() || null;

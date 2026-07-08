@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireCrm } from "@/lib/auth";
 import { parseRands } from "@/lib/format";
 import { runLeadAutomations } from "@/lib/automations";
 import { recordReferral, markReferralEarned } from "@/lib/referrals";
@@ -46,7 +46,7 @@ async function buildTitle(data: { name: string; productId: string | null; color:
 }
 
 export async function createLead(formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrm();
   const data = leadData(formData);
   if (!data.name) throw new Error("Name is required");
   if (!data.stageId) {
@@ -110,7 +110,7 @@ export async function createLead(formData: FormData) {
 }
 
 export async function updateLead(id: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrm();
   const data = leadData(formData);
   if (!data.name) throw new Error("Name is required");
   const title = String(formData.get("title") ?? "").trim() || (await buildTitle(data));
@@ -132,7 +132,7 @@ export async function updateLead(id: string, formData: FormData) {
 }
 
 export async function moveLead(leadId: string, stageId: string) {
-  const user = await requireUser();
+  const user = await requireCrm();
   const lead = await prisma.lead.update({
     where: { id: leadId },
     data: { stageId, position: await nextPosition(stageId) },
@@ -151,7 +151,7 @@ export async function moveLead(leadId: string, stageId: string) {
 
 /** Marks a lead won and ensures it is linked to a contact (creating one if needed). */
 export async function markWon(leadId: string) {
-  const user = await requireUser();
+  const user = await requireCrm();
   const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
   let contactId = lead.contactId;
   if (!contactId) {
@@ -195,7 +195,7 @@ export async function markWon(leadId: string) {
 }
 
 export async function markLost(leadId: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrm();
   const reason = String(formData.get("lostReason") ?? "").trim();
   if (!reason) return; // a lost reason is mandatory
   const lead = await prisma.lead.update({
@@ -215,7 +215,7 @@ export async function markLost(leadId: string, formData: FormData) {
 }
 
 export async function reopenLead(leadId: string) {
-  const user = await requireUser();
+  const user = await requireCrm();
   const lead = await prisma.lead.update({
     where: { id: leadId },
     data: { status: "open", lostReason: null },
@@ -232,7 +232,7 @@ export async function reopenLead(leadId: string) {
 }
 
 export async function linkLeadToContact(leadId: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrm();
   const contactId = String(formData.get("contactId") ?? "");
   if (!contactId) return;
   const lead = await prisma.lead.update({
@@ -252,7 +252,7 @@ export async function linkLeadToContact(leadId: string, formData: FormData) {
 }
 
 export async function deleteLead(leadId: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrm();
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const lead = await softDeleteRecord("lead", leadId, reason, user.name);
   await logAudit({

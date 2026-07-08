@@ -2,10 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireCrm } from "@/lib/auth";
 
 export async function saveView(formData: FormData) {
-  await requireUser();
+  await requireCrm();
   const name = String(formData.get("name") ?? "").trim();
   const page = String(formData.get("page") ?? "").trim();
   const query = String(formData.get("query") ?? "").trim();
@@ -15,7 +15,7 @@ export async function saveView(formData: FormData) {
 }
 
 export async function deleteView(id: string, formData: FormData) {
-  await requireUser();
+  await requireCrm();
   void formData;
   const view = await prisma.savedView.delete({ where: { id } });
   revalidatePath(`/${view.page}/list`);

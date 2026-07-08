@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma, basePrisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireCrmOrWorkshop } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { contactName } from "@/lib/format";
 
@@ -12,7 +12,7 @@ import { contactName } from "@/lib/format";
  * details are filled in from the duplicates; duplicates go to the Trash.
  */
 export async function mergeContacts(keepId: string, otherIdsCsv: string) {
-  const user = await requireUser();
+  const user = await requireCrmOrWorkshop();
   const otherIds = otherIdsCsv.split(",").filter((id) => id && id !== keepId);
   if (otherIds.length === 0) return;
 

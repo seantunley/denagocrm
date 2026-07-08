@@ -2,11 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireCrmOrWorkshop } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 
 export async function scheduleActivity(formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrmOrWorkshop();
   const str = (k: string) => {
     const v = String(formData.get(k) ?? "").trim();
     return v === "" ? null : v;
@@ -52,7 +52,7 @@ export async function scheduleActivity(formData: FormData) {
 
 /** Marks done; an optional note is logged to the communications timeline (Odoo-chatter style). */
 export async function completeActivity(id: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrmOrWorkshop();
   const activity = await prisma.activity.update({
     where: { id },
     data: { status: "done", doneAt: new Date() },
@@ -85,7 +85,7 @@ export async function completeActivity(id: string, formData: FormData) {
 }
 
 export async function cancelActivity(id: string, revalidate: string) {
-  await requireUser();
+  await requireCrmOrWorkshop();
   await prisma.activity.update({
     where: { id },
     data: { status: "canceled" },
@@ -97,7 +97,7 @@ export async function cancelActivity(id: string, revalidate: string) {
 
 /** Edits a planned activity — same fields as scheduling, audit-logged. */
 export async function updateActivity(id: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrmOrWorkshop();
   const str = (k: string) => {
     const v = String(formData.get(k) ?? "").trim();
     return v === "" ? null : v;

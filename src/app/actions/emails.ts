@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { putSetting } from "@/lib/settings";
-import { requireUser } from "@/lib/auth";
+import { requireCrmOrWorkshop, requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
 import { buildSignature, buildEmailHtml, htmlToText } from "@/lib/signature";
@@ -16,7 +16,7 @@ export async function sendEmailAction(
   _prev: SendEmailState | undefined,
   formData: FormData
 ): Promise<SendEmailState> {
-  const user = await requireUser();
+  const user = await requireCrmOrWorkshop();
   const to = String(formData.get("to") ?? "").trim();
   const subject = String(formData.get("subject") ?? "").trim();
   const bodyHtml = String(formData.get("bodyHtml") ?? "").trim();
@@ -92,7 +92,7 @@ export async function sendEmailAction(
 export async function sendTestEmail(
   _prev: SendEmailState | undefined
 ): Promise<SendEmailState> {
-  const user = await requireUser();
+  const user = await requireOwner();
   const result = await sendEmail({
     to: user.email,
     subject: "Denago CRM test email",
@@ -106,7 +106,7 @@ export async function sendTestEmail(
 // ---- SMTP settings ----
 
 export async function saveSmtpSettings(formData: FormData) {
-  await requireUser();
+  await requireOwner();
   const entries: Record<string, string> = {
     SMTP_HOST: String(formData.get("host") ?? "").trim(),
     SMTP_PORT: String(formData.get("port") ?? "587").trim(),
@@ -122,7 +122,7 @@ export async function saveSmtpSettings(formData: FormData) {
 }
 
 export async function saveServiceReminderSettings(formData: FormData) {
-  await requireUser();
+  await requireOwner();
   const entries: Record<string, string> = {
     SERVICE_REMINDER_ENABLED: formData.get("enabled") === "on" ? "true" : "false",
     SERVICE_REMINDER_TEMPLATE_ID: String(formData.get("templateId") ?? "").trim(),
@@ -136,7 +136,7 @@ export async function saveServiceReminderSettings(formData: FormData) {
 // ---- Email templates ----
 
 export async function createTemplate(formData: FormData) {
-  await requireUser();
+  await requireOwner();
   const name = String(formData.get("name") ?? "").trim();
   const subject = String(formData.get("subject") ?? "").trim();
   const body = String(formData.get("body") ?? "").trim();
@@ -146,7 +146,7 @@ export async function createTemplate(formData: FormData) {
 }
 
 export async function updateTemplate(id: string, formData: FormData) {
-  await requireUser();
+  await requireOwner();
   const name = String(formData.get("name") ?? "").trim();
   const subject = String(formData.get("subject") ?? "").trim();
   const body = String(formData.get("body") ?? "").trim();
@@ -156,7 +156,7 @@ export async function updateTemplate(id: string, formData: FormData) {
 }
 
 export async function deleteTemplate(id: string, formData: FormData) {
-  await requireUser();
+  await requireOwner();
   void formData;
   await prisma.emailTemplate.delete({ where: { id } });
   revalidatePath("/settings");
@@ -164,7 +164,7 @@ export async function deleteTemplate(id: string, formData: FormData) {
 
 /** Incoming-mail (IMAP) credentials — password encrypted at rest. */
 export async function saveImapSettings(formData: FormData) {
-  await requireUser();
+  await requireOwner();
   const entries: Record<string, string> = {
     IMAP_HOST: String(formData.get("host") ?? "").trim(),
     IMAP_PORT: String(formData.get("port") ?? "993").trim(),

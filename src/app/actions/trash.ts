@@ -1,12 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireUser } from "@/lib/auth";
+import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { restoreRecord, TRASH_MODELS, type TrashModel } from "@/lib/trash";
 
 export async function restoreFromTrash(model: TrashModel, id: string) {
-  const user = await requireUser();
+  const user = await requireOwner();
   if (!TRASH_MODELS.includes(model)) return;
   const record = await restoreRecord(model, id);
   await logAudit({

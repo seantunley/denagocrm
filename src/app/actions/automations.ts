@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireOwner } from "@/lib/auth";
 
 function ruleData(formData: FormData) {
   const str = (k: string) => {
@@ -38,7 +38,7 @@ function ruleData(formData: FormData) {
 }
 
 export async function createAutomationRule(formData: FormData) {
-  await requireUser();
+  await requireOwner();
   const data = ruleData(formData);
   if (!data) return;
   await prisma.automationRule.create({ data });
@@ -46,7 +46,7 @@ export async function createAutomationRule(formData: FormData) {
 }
 
 export async function updateAutomationRule(id: string, formData: FormData) {
-  await requireUser();
+  await requireOwner();
   const data = ruleData(formData);
   if (!data) return;
   await prisma.automationRule.update({ where: { id }, data });
@@ -54,7 +54,7 @@ export async function updateAutomationRule(id: string, formData: FormData) {
 }
 
 export async function toggleAutomationRule(id: string) {
-  await requireUser();
+  await requireOwner();
   const rule = await prisma.automationRule.findUniqueOrThrow({ where: { id } });
   await prisma.automationRule.update({
     where: { id },
@@ -64,7 +64,7 @@ export async function toggleAutomationRule(id: string) {
 }
 
 export async function deleteAutomationRule(id: string, formData: FormData) {
-  await requireUser();
+  await requireOwner();
   void formData;
   await prisma.automationLog.deleteMany({ where: { ruleId: id } });
   await prisma.automationRule.delete({ where: { id } });

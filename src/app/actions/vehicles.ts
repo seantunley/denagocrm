@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireWorkshop } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendReviewRequest } from "@/lib/reviewRequests";
 import { softDeleteRecord } from "@/lib/trash";
@@ -35,7 +35,7 @@ function vehicleData(formData: FormData) {
 }
 
 export async function createVehicle(formData: FormData) {
-  const user = await requireUser();
+  const user = await requireWorkshop();
   const data = vehicleData(formData);
   if (!data.contactId) throw new Error("Customer is required");
   if (!data.model && data.productId) {
@@ -71,7 +71,7 @@ export async function createVehicle(formData: FormData) {
 }
 
 export async function updateVehicle(id: string, formData: FormData) {
-  await requireUser();
+  await requireWorkshop();
   const data = vehicleData(formData);
   if (!data.model) throw new Error("Model is required");
   await prisma.vehicle.update({ where: { id }, data });
@@ -81,7 +81,7 @@ export async function updateVehicle(id: string, formData: FormData) {
 }
 
 export async function deleteVehicle(id: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireWorkshop();
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const vehicle = await softDeleteRecord("vehicle", id, reason, user.name);
   await logAudit({
@@ -95,7 +95,7 @@ export async function deleteVehicle(id: string, formData: FormData) {
 }
 
 export async function addMileage(vehicleId: string, formData: FormData) {
-  await requireUser();
+  await requireWorkshop();
   const km = parseInt(String(formData.get("km") ?? ""), 10);
   if (isNaN(km) || km < 0) return;
   const note = String(formData.get("note") ?? "").trim() || null;
@@ -105,7 +105,7 @@ export async function addMileage(vehicleId: string, formData: FormData) {
 }
 
 export async function deleteMileage(id: string, vehicleId: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireWorkshop();
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const entry = await prisma.mileageLog.delete({ where: { id } });
   const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
@@ -119,7 +119,7 @@ export async function deleteMileage(id: string, vehicleId: string, formData: For
 }
 
 export async function addServiceRecord(vehicleId: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireWorkshop();
   const str = (k: string) => {
     const v = String(formData.get(k) ?? "").trim();
     return v === "" ? null : v;
@@ -163,7 +163,7 @@ export async function addServiceRecord(vehicleId: string, formData: FormData) {
 }
 
 export async function deleteServiceRecord(id: string, vehicleId: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireWorkshop();
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const record = await prisma.serviceRecord.delete({ where: { id } });
   const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });

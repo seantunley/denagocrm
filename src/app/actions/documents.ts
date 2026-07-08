@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireCrmOrWorkshop } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { saveFile } from "@/lib/storage";
@@ -10,7 +10,7 @@ import { saveFile } from "@/lib/storage";
 const MAX_SIZE = 25 * 1024 * 1024; // 25 MB
 
 export async function uploadDocument(formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrmOrWorkshop();
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) return;
   if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
@@ -47,7 +47,7 @@ export async function uploadDocument(formData: FormData) {
 }
 
 export async function deleteDocument(id: string, revalidate: string, formData: FormData) {
-  const user = await requireUser();
+  const user = await requireCrmOrWorkshop();
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   // soft delete: the stored file is kept until the trash purge
   const doc = await softDeleteRecord("document", id, reason, user.name);

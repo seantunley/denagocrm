@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireInbox } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendDirectMessage, sendDirectAttachment, type DmPlatform } from "@/lib/messenger";
 import { saveFile } from "@/lib/storage";
@@ -17,7 +17,7 @@ export async function sendDmReply(
   _prev: DmState | undefined,
   formData: FormData
 ): Promise<DmState> {
-  const user = await requireUser();
+  const user = await requireInbox();
   const contactId = String(formData.get("contactId") ?? "").trim();
   const text = String(formData.get("text") ?? "").trim();
   const file = formData.get("file") as File | null;
