@@ -18,6 +18,8 @@ import { redeemReferral } from "@/app/actions/referrals";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { formatDateTime } from "@/lib/format";
 import { requireUser } from "@/lib/auth";
+import { contactHealth } from "@/lib/healthData";
+import { healthColors, healthLabels } from "@/lib/health";
 import { isSmtpConfigured, renderTemplate, contactVars } from "@/lib/email";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
@@ -94,6 +96,7 @@ export default async function ContactDetailPage({
   // Research is stored on the contact itself (Research tab). Legacy research
   // notes (pre-migration) are still filtered out of the comms timeline.
   const comms = contact.communications.filter((c) => c.subject !== RESEARCH_SUBJECT);
+  const health = await contactHealth(contact.id);
 
   return (
     <div className="space-y-6">
@@ -101,6 +104,12 @@ export default async function ContactDetailPage({
         <div>
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-2xl font-bold">{contactName(contact)}</h1>
+            <span
+              className={`badge ${healthColors[health.tier]}`}
+              title={health.reasons.join(" · ") || "No signals yet"}
+            >
+              {healthLabels[health.tier]} · {health.score}
+            </span>
             {contact.tags.map((t) => (
               <span
                 key={t.id}

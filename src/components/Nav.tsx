@@ -32,6 +32,7 @@ function buildNav(mods: Set<string>, isAdmin: boolean) {
         { href: "/deliveries", label: "Deliveries", icon: "🚚" },
         { href: "/contacts", label: "Contacts", icon: "☰" },
         { href: "/fleets", label: "Fleets", icon: "🏨" },
+        { href: "/health", label: "Customer Health", icon: "❤️" },
         { href: "/activities", label: "Activities", icon: "✓" },
       ],
     });
