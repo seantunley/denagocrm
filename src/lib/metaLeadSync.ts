@@ -1,18 +1,9 @@
 import { prisma } from "@/lib/db";
 import { getSetting } from "@/lib/settings";
 import { createIntakeLead } from "@/lib/leadIntake";
+import { parseLeadFields, metaSource, type FieldData } from "@/lib/metaLead";
 
 const G = "https://graph.facebook.com/v21.0";
-
-type FieldData = { name: string; values: string[] };
-
-function pickField(fields: FieldData[], ...keys: string[]): string | null {
-  for (const key of keys) {
-    const f = fields.find((x) => x.name.toLowerCase().includes(key));
-    if (f && f.values[0]) return f.values[0];
-  }
-  return null;
-}
 
 /**
  * Polling fallback for Facebook Lead Ads: pulls leads straight from the
@@ -60,16 +51,15 @@ export async function syncFacebookLeads(): Promise<number> {
       for (const ld of leads.data ?? []) {
         const existing = await prisma.lead.findUnique({ where: { externalId: ld.id } });
         if (existing) continue;
-        const fields = ld.field_data ?? [];
-        const name = pickField(fields, "full_name", "full name", "name") ?? "Facebook lead";
+        const parsed = parseLeadFields(ld.field_data ?? []);
         await createIntakeLead({
-          name,
-          email: pickField(fields, "email"),
-          phone: pickField(fields, "phone"),
-          model: pickField(fields, "model", "product", "bike"),
-          color: pickField(fields, "colour", "color"),
-          message: pickField(fields, "message", "comment", "question"),
-          source: ld.platform?.toLowerCase().includes("instagram") ? "instagram" : "facebook",
+          name: parsed.name ?? "New lead",
+          email: parsed.email,
+          phone: parsed.phone,
+          model: parsed.model,
+          color: parsed.color,
+          message: parsed.message,
+          source: metaSource(ld.platform),
           externalId: ld.id,
           raw: ld,
         });
