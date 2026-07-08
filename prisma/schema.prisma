@@ -249,6 +249,17 @@ model Segment {
   createdAt DateTime @default(now())
 }
 
+/** A saved chatbot conversation flow (one can be marked active/live). */
+model BotFlow {
+  id         String   @id @default(cuid())
+  name       String
+  channel    String   @default("whatsapp")
+  active     Boolean  @default(false)
+  definition String // JSON { start, nodes, positions }
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt @default(now())
+}
+
 /** Live state of a customer's position in a chatbot flow. */
 model BotSession {
   id        String   @id @default(cuid())

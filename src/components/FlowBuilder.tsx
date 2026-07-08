@@ -97,7 +97,7 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
   }
 }
 
-export default function FlowBuilder({ initial }: { initial: FlowData }) {
+export default function FlowBuilder({ flowId, initial }: { flowId: string; initial: FlowData }) {
   const router = useRouter();
   const [start, setStart] = useState(initial.start);
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node<RFData>>(
@@ -169,7 +169,7 @@ export default function FlowBuilder({ initial }: { initial: FlowData }) {
       nodes[rn.id] = rn.data.flow;
       positions[rn.id] = rn.position;
     }
-    const res = await saveFlow(JSON.stringify({ start, nodes, positions }));
+    const res = await saveFlow(flowId, JSON.stringify({ start, nodes, positions }));
     setStatus(res.ok ? "Saved ✓" : res.error ?? "Error");
     if (res.ok) router.refresh();
   }
@@ -191,7 +191,7 @@ export default function FlowBuilder({ initial }: { initial: FlowData }) {
         {status && <span className="text-xs text-slate-400">{status}</span>}
         <button onClick={onSave} className="btn-primary btn-sm">Save flow</button>
         <button
-          onClick={async () => { if (confirm("Revert to the default flow? Your changes will be lost.")) { await resetFlow(); router.refresh(); } }}
+          onClick={async () => { if (confirm("Revert this flow to the default? Your changes will be lost.")) { await resetFlow(flowId); router.refresh(); } }}
           className="btn-secondary btn-sm"
         >
           Reset

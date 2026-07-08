@@ -23,10 +23,10 @@ export async function isFlowEnabled(): Promise<boolean> {
 }
 
 async function getActiveFlow(): Promise<Flow> {
-  const raw = await getSetting("BOT_FLOW");
-  if (raw) {
+  const row = await prisma.botFlow.findFirst({ where: { channel: "whatsapp", active: true } });
+  if (row) {
     try {
-      const f = JSON.parse(raw);
+      const f = JSON.parse(row.definition);
       if (f?.start && f?.nodes) return f as Flow;
     } catch {
       /* fall through to default */
