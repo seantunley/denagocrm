@@ -7,6 +7,7 @@ import { requireWorkshop } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendReviewRequest } from "@/lib/reviewRequests";
 import { triggerSurvey } from "@/lib/surveys";
+import { remindVehicleService } from "@/lib/serviceReminders";
 import { softDeleteRecord } from "@/lib/trash";
 
 function vehicleData(formData: FormData) {
@@ -71,6 +72,17 @@ export async function createVehicle(formData: FormData) {
   }
   revalidatePath("/vehicles");
   redirect(`/vehicles/${vehicle.id}`);
+}
+
+export type RemindResult = { ok: boolean; channel?: string; error?: string } | null;
+
+/** Send a service reminder for one vehicle from the Service Due worklist. */
+export async function remindService(_prev: RemindResult, formData: FormData): Promise<RemindResult> {
+  await requireWorkshop();
+  const vehicleId = String(formData.get("vehicleId") ?? "");
+  const res = await remindVehicleService(vehicleId);
+  revalidatePath("/service-due");
+  return res;
 }
 
 export async function updateVehicle(id: string, formData: FormData) {

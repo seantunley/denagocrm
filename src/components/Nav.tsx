@@ -57,6 +57,7 @@ function buildNav(mods: Set<string>, isAdmin: boolean) {
         // Contacts are shared with the workshop when CRM is off
         ...(!has("crm") ? [{ href: "/contacts", label: "Contacts", icon: "☰" }] : []),
         { href: "/vehicles", label: "Vehicles", icon: "⚡" },
+        { href: "/service-due", label: "Service Due", icon: "⏰" },
         { href: "/jobcards", label: "Job Cards", icon: "🔧" },
         { href: "/parts", label: "Parts", icon: "🔩" },
       ],
