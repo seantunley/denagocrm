@@ -45,6 +45,7 @@ function buildNav(mods: Set<string>, isAdmin: boolean) {
         ...(!has("crm") ? [{ href: "/contacts", label: "Contacts", icon: "☰" }] : []),
         { href: "/vehicles", label: "Vehicles", icon: "⚡" },
         { href: "/jobcards", label: "Job Cards", icon: "🔧" },
+        { href: "/parts", label: "Parts", icon: "🔩" },
         { href: "/workshop-calendar", label: "Workshop Cal", icon: "📅" },
       ],
     });

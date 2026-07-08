@@ -38,6 +38,7 @@ model User {
   activitiesCreated  Activity[]       @relation("ActivityCreator")
   libraryVersions    LibraryVersion[]
   quotesCreated      Quote[]          @relation("QuoteCreator")
+  jobCardsAsTech     JobCard[]        @relation("JobCardTechnician")
 }
 
 model AppSetting {
@@ -557,6 +558,8 @@ model JobCard {
   vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
   contactId String
   contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  technicianId String?
+  technician   User?   @relation("JobCardTechnician", fields: [technicianId], references: [id])
 
   items         JobCardItem[]
   serviceRecord ServiceRecord?
@@ -572,6 +575,25 @@ model JobCardItem {
 
   jobCardId String
   jobCard   JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  partId    String? // set when the line came from the parts catalogue (stock deducted)
+  part      Part?   @relation(fields: [partId], references: [id], onDelete: SetNull)
+}
+
+model Part {
+  id         String   @id @default(cuid())
+  name       String
+  sku        String?
+  priceCents Int      @default(0) // sell price
+  costCents  Int      @default(0) // cost price
+  stockQty   Int      @default(0)
+  reorderAt  Int? // low-stock threshold
+  location   String?
+  notes      String?
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  deletedAt  DateTime?
+
+  jobCardItems JobCardItem[]
 }
 
 // One-time codes for verifying vehicle owners on the public booking form.

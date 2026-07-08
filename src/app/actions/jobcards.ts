@@ -91,15 +91,25 @@ export async function addJobCardItem(jobCardId: string, formData: FormData) {
   const description = String(formData.get("description") ?? "").trim();
   if (!description) return;
   const qty = parseFloat(String(formData.get("qty") ?? "1")) || 1;
+  const kind = String(formData.get("kind") ?? "part");
+  const partId = String(formData.get("partId") ?? "").trim() || null;
   await prisma.jobCardItem.create({
     data: {
       jobCardId,
-      kind: String(formData.get("kind") ?? "part"),
+      kind,
       description,
       qty,
       unitPriceCents: parseRands(String(formData.get("unitPrice") ?? "")),
+      partId,
     },
   });
+  // Deduct catalogue-part usage from stock.
+  if (partId && kind === "part") {
+    await prisma.part.update({
+      where: { id: partId },
+      data: { stockQty: { decrement: Math.round(qty) } },
+    });
+  }
   revalidatePath(`/jobcards/${jobCardId}`);
 }
 
@@ -107,6 +117,13 @@ export async function deleteJobCardItem(id: string, jobCardId: string, formData:
   const user = await requireWorkshop();
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const item = await prisma.jobCardItem.delete({ where: { id } });
+  // Return catalogue-part stock when the line is removed.
+  if (item.partId && item.kind === "part") {
+    await prisma.part.update({
+      where: { id: item.partId },
+      data: { stockQty: { increment: Math.round(item.qty) } },
+    }).catch(() => {});
+  }
   const jobCard = await prisma.jobCard.findUnique({ where: { id: jobCardId } });
   await logAudit({
     action: "jobcard.item_deleted",
@@ -114,6 +131,13 @@ export async function deleteJobCardItem(id: string, jobCardId: string, formData:
     contactId: jobCard?.contactId,
     user,
   });
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+export async function setJobCardTechnician(jobCardId: string, formData: FormData) {
+  await requireWorkshop();
+  const technicianId = String(formData.get("technicianId") ?? "").trim() || null;
+  await prisma.jobCard.update({ where: { id: jobCardId }, data: { technicianId } });
   revalidatePath(`/jobcards/${jobCardId}`);
 }
 

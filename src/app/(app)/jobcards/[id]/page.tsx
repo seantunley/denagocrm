@@ -5,12 +5,14 @@ import {
   addJobCardItem,
   deleteJobCardItem,
   setJobCardStatus,
+  setJobCardTechnician,
   completeJobCard,
   deleteJobCard,
 } from "@/app/actions/jobcards";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import SigningBlock from "@/components/SigningBlock";
+import JobCardItemForm from "@/components/JobCardItemForm";
 import { uploadJobCardPhotos } from "@/app/actions/jobcards";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 
@@ -20,16 +22,21 @@ export default async function JobCardDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const jobCard = await prisma.jobCard.findUnique({
-    where: { id },
-    include: {
-      vehicle: true,
-      contact: true,
-      items: true,
-      serviceRecord: true,
-      documents: { where: { deletedAt: null }, include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
-    },
-  });
+  const [jobCard, parts, users] = await Promise.all([
+    prisma.jobCard.findUnique({
+      where: { id },
+      include: {
+        vehicle: true,
+        contact: true,
+        items: true,
+        technician: true,
+        serviceRecord: true,
+        documents: { where: { deletedAt: null }, include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
+      },
+    }),
+    prisma.part.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
+    prisma.user.findMany({ orderBy: { name: "asc" } }),
+  ]);
   if (!jobCard) notFound();
   const path = `/jobcards/${jobCard.id}`;
 
@@ -67,6 +74,7 @@ export default async function JobCardDetailPage({
             {" · opened "}
             {formatDate(jobCard.openedAt)}
             {jobCard.kmIn != null ? ` at ${jobCard.kmIn.toLocaleString()} km` : ""}
+            {jobCard.technician ? ` · 🔧 ${jobCard.technician.name}` : ""}
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -93,9 +101,23 @@ export default async function JobCardDetailPage({
         </div>
       </div>
 
-      <div className="card">
-        <h2 className="font-semibold mb-2">Work requested</h2>
-        <p className="text-sm text-slate-400 whitespace-pre-wrap">{jobCard.description}</p>
+      <div className="card flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="font-semibold mb-2">Work requested</h2>
+          <p className="text-sm text-slate-400 whitespace-pre-wrap">{jobCard.description}</p>
+        </div>
+        <form action={setJobCardTechnician.bind(null, jobCard.id)} className="shrink-0">
+          <label className="label">🔧 Technician</label>
+          <select name="technicianId" className="input min-w-44" defaultValue={jobCard.technicianId ?? ""}>
+            <option value="">Unassigned</option>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name}
+              </option>
+            ))}
+          </select>
+          <button className="btn-secondary btn-sm mt-2">Assign</button>
+        </form>
       </div>
 
       <div className="card">
@@ -203,33 +225,15 @@ export default async function JobCardDetailPage({
             </table>
 
             {jobCard.status !== "completed" && (
-              <form
+              <JobCardItemForm
                 action={addJobCardItem.bind(null, jobCard.id)}
-                className="grid grid-cols-12 gap-2 items-end rounded-lg bg-slate-800/40 p-3 border border-slate-800"
-              >
-                <div className="col-span-2">
-                  <label className="label">Type</label>
-                  <select name="kind" className="input">
-                    <option value="part">Part</option>
-                    <option value="labour">Labour</option>
-                  </select>
-                </div>
-                <div className="col-span-5">
-                  <label className="label">Description</label>
-                  <input name="description" className="input" required />
-                </div>
-                <div className="col-span-1">
-                  <label className="label">Qty</label>
-                  <input name="qty" className="input" defaultValue="1" inputMode="decimal" />
-                </div>
-                <div className="col-span-2">
-                  <label className="label">Unit (R)</label>
-                  <input name="unitPrice" className="input" inputMode="decimal" />
-                </div>
-                <div className="col-span-2">
-                  <button className="btn-primary w-full">Add</button>
-                </div>
-              </form>
+                parts={parts.map((p) => ({
+                  id: p.id,
+                  name: p.name,
+                  priceCents: p.priceCents,
+                  stockQty: p.stockQty,
+                }))}
+              />
             )}
 
             <div className="flex justify-end mt-4">
