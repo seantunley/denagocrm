@@ -510,6 +510,7 @@ export default async function SettingsPage({
                     Enabled
                   </label>
                 </div>
+                <a href="/bot-builder" className="btn-secondary btn-sm inline-flex mt-2">🎨 Open flow builder</a>
               </div>
 
               <div className="border-t border-slate-800 pt-3 space-y-3">
