@@ -578,6 +578,28 @@ model Vehicle {
   serviceRecords ServiceRecord[]
   jobCards       JobCard[]
   documents      Document[]
+  batteryChecks  BatteryCheck[]
+}
+
+// EV battery health snapshots — track state-of-health, voltage and charge
+// cycles over time so degradation is visible and replacement conversations
+// happen proactively (the battery is a cart's most expensive component).
+model BatteryCheck {
+  id            String   @id @default(cuid())
+  checkedAt     DateTime @default(now())
+  packSerial    String?
+  stateOfHealth Int? // % of original capacity
+  voltage       Float? // resting pack voltage
+  cycles        Int? // charge cycles
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  vehicleId    String
+  vehicle      Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  jobCardId    String?
+  recordedById String? // user who logged it (loose pointer)
+
+  @@index([vehicleId, checkedAt])
 }
 
 model MileageLog {

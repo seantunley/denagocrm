@@ -6,6 +6,8 @@ import {
   addMileage,
   addServiceRecord,
   deleteServiceRecord,
+  addBatteryCheck,
+  deleteBatteryCheck,
 } from "@/app/actions/vehicles";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import ConfirmDelete from "@/components/ConfirmDelete";
@@ -24,6 +26,7 @@ export default async function VehicleDetailPage({
       contact: true,
       product: true,
       mileageLogs: { orderBy: { recordedAt: "desc" } },
+      batteryChecks: { orderBy: { checkedAt: "desc" } },
       serviceRecords: {
         orderBy: { serviceDate: "desc" },
         include: { performedBy: true, jobCard: true },
@@ -252,6 +255,86 @@ export default async function VehicleDetailPage({
               </ul>
             )}
           </div>
+
+          {(() => {
+            const checks = vehicle.batteryChecks;
+            const latest = checks[0];
+            const sohColor = (s: number | null) =>
+              s == null
+                ? "bg-slate-800 text-slate-400"
+                : s >= 80
+                  ? "bg-emerald-500/15 text-emerald-300"
+                  : s >= 60
+                    ? "bg-amber-500/15 text-amber-300"
+                    : "bg-red-500/15 text-red-300";
+            return (
+              <div className="card">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="font-semibold">🔋 Battery health</h2>
+                  {latest?.stateOfHealth != null && (
+                    <span className={`badge ${sohColor(latest.stateOfHealth)}`}>
+                      {latest.stateOfHealth}% state of health
+                    </span>
+                  )}
+                </div>
+                <form
+                  action={addBatteryCheck.bind(null, vehicle.id)}
+                  className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4"
+                >
+                  <input type="number" name="stateOfHealth" className="input" placeholder="SoH %" min={0} max={100} />
+                  <input type="number" step="0.1" name="voltage" className="input" placeholder="Voltage" />
+                  <input type="number" name="cycles" className="input" placeholder="Cycles" />
+                  <input name="packSerial" className="input" placeholder="Pack serial" />
+                  <input name="notes" className="input col-span-2 sm:col-span-3" placeholder="Notes (optional)" />
+                  <button className="btn-primary btn-sm">Log check</button>
+                </form>
+                {checks.length === 0 ? (
+                  <p className="text-sm text-slate-400">
+                    No battery checks yet — log state-of-health at each service to build a trend.
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-slate-800">
+                    {checks.slice(0, 12).map((b, i) => {
+                      const prev = checks[i + 1];
+                      const delta =
+                        b.stateOfHealth != null && prev?.stateOfHealth != null
+                          ? b.stateOfHealth - prev.stateOfHealth
+                          : null;
+                      return (
+                        <li key={b.id} className="py-1.5 flex items-center gap-3 text-sm">
+                          <span className={`badge ${sohColor(b.stateOfHealth)} w-14 justify-center`}>
+                            {b.stateOfHealth != null ? `${b.stateOfHealth}%` : "—"}
+                          </span>
+                          {delta != null && delta !== 0 && (
+                            <span className={`text-xs ${delta < 0 ? "text-red-400" : "text-emerald-400"}`}>
+                              {delta < 0 ? "▼" : "▲"}
+                              {Math.abs(delta)}
+                            </span>
+                          )}
+                          <span className="text-slate-400 flex-1 truncate">
+                            {[
+                              b.voltage != null ? `${b.voltage}V` : null,
+                              b.cycles != null ? `${b.cycles} cyc` : null,
+                              b.packSerial,
+                              b.notes,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </span>
+                          <span className="text-xs text-slate-400">{formatDate(b.checkedAt)}</span>
+                          <form action={deleteBatteryCheck.bind(null, b.id)}>
+                            <button className="text-xs text-red-400 hover:text-red-300" title="Delete">
+                              ✕
+                            </button>
+                          </form>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            );
+          })()}
 
           <DocumentsPanel documents={vehicle.documents} vehicleId={vehicle.id} revalidate={path} />
 

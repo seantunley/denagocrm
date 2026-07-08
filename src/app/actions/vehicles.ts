@@ -74,6 +74,43 @@ export async function createVehicle(formData: FormData) {
   redirect(`/vehicles/${vehicle.id}`);
 }
 
+export async function addBatteryCheck(vehicleId: string, formData: FormData) {
+  const user = await requireWorkshop();
+  const num = (k: string) => {
+    const v = String(formData.get(k) ?? "").trim();
+    if (v === "") return null;
+    const n = Number(v);
+    return isNaN(n) ? null : n;
+  };
+  const soh = num("stateOfHealth");
+  const cycles = num("cycles");
+  const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
+  await prisma.batteryCheck.create({
+    data: {
+      vehicleId,
+      packSerial: String(formData.get("packSerial") ?? "").trim() || null,
+      stateOfHealth: soh != null ? Math.max(0, Math.min(100, Math.round(soh))) : null,
+      voltage: num("voltage"),
+      cycles: cycles != null ? Math.max(0, Math.round(cycles)) : null,
+      notes: String(formData.get("notes") ?? "").trim() || null,
+      recordedById: user.id,
+    },
+  });
+  await logAudit({
+    action: "battery.checked",
+    summary: `Logged a battery check on ${vehicle.model}${soh != null ? ` (${Math.round(soh)}% SoH)` : ""}`,
+    user,
+  });
+  revalidatePath(`/vehicles/${vehicleId}`);
+}
+
+export async function deleteBatteryCheck(id: string) {
+  await requireWorkshop();
+  const bc = await prisma.batteryCheck.findUnique({ where: { id } });
+  if (bc) await prisma.batteryCheck.delete({ where: { id } });
+  if (bc) revalidatePath(`/vehicles/${bc.vehicleId}`);
+}
+
 export type RemindResult = { ok: boolean; channel?: string; error?: string } | null;
 
 /** Send a service reminder for one vehicle from the Service Due worklist. */
