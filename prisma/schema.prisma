@@ -755,6 +755,7 @@ model Survey {
   questions   Json // [{id,type,label,required,options?,scale?}]
   active      Boolean   @default(true)
   trigger     String? // job_complete | delivery | won | null (manual send)
+  delayHours  Int       @default(0) // wait this many hours after the trigger before sending
   createdById String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -777,13 +778,15 @@ model SurveyResponse {
   jobCardId   String?
   name        String? // recipient name snapshot
   channel     String? // email | sms
-  answers     Json? // { questionId: value }
-  score       Int? // primary rating (1-5) or NPS (0-10), for rollups
-  comment     String? // free-text highlight
-  status      String    @default("sent") // sent | completed
-  sentAt      DateTime  @default(now())
-  completedAt DateTime?
+  answers      Json? // { questionId: value }
+  score        Int? // primary rating (1-5) or NPS (0-10), for rollups
+  comment      String? // free-text highlight
+  status       String    @default("sent") // scheduled | sent | completed | failed
+  scheduledFor DateTime? // set when a delay is configured; cron sends once due
+  sentAt       DateTime  @default(now())
+  completedAt  DateTime?
 
   @@index([surveyId, status])
   @@index([contactId])
+  @@index([status, scheduledFor])
 }

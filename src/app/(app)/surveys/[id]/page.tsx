@@ -82,7 +82,21 @@ export default async function SurveyEditorPage({
         </div>
       </div>
 
-      <SurveySendPanel surveyId={survey.id} autoNote={survey.trigger ? AUTO_NOTE[survey.trigger] : undefined} />
+      <SurveySendPanel
+        surveyId={survey.id}
+        autoNote={
+          survey.trigger
+            ? AUTO_NOTE[survey.trigger] +
+              (survey.delayHours > 0
+                ? ` It waits ${
+                    survey.delayHours % 24 === 0
+                      ? `${survey.delayHours / 24} day${survey.delayHours / 24 === 1 ? "" : "s"}`
+                      : `${survey.delayHours} hour${survey.delayHours === 1 ? "" : "s"}`
+                  } after the event before sending.`
+                : "")
+            : undefined
+        }
+      />
 
       <div>
         <h2 className="font-semibold mb-3">Questions</h2>
@@ -94,6 +108,7 @@ export default async function SurveyEditorPage({
             thankYou: survey.thankYou ?? "",
             active: survey.active,
             trigger: survey.trigger ?? "",
+            delayHours: survey.delayHours,
             questions,
           }}
         />

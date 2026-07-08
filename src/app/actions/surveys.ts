@@ -47,6 +47,7 @@ export async function saveSurvey(
     thankYou: string;
     active: boolean;
     trigger: string;
+    delayHours: number;
     questions: SurveyQuestion[];
   }
 ) {
@@ -59,6 +60,7 @@ export async function saveSurvey(
       thankYou: data.thankYou.trim() || null,
       active: data.active,
       trigger: data.trigger || null,
+      delayHours: Math.max(0, Math.round(data.delayHours) || 0),
       questions: data.questions as object,
     },
   });

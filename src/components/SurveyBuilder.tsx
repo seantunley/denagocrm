@@ -16,8 +16,15 @@ type Initial = {
   thankYou: string;
   active: boolean;
   trigger: string;
+  delayHours: number;
   questions: SurveyQuestion[];
 };
+
+// Present the stored hours as a friendly value + unit
+function splitDelay(hours: number): { value: number; unit: "hours" | "days" } {
+  if (hours > 0 && hours % 24 === 0) return { value: hours / 24, unit: "days" };
+  return { value: hours, unit: "hours" };
+}
 
 export default function SurveyBuilder({ survey }: { survey: Initial }) {
   const [title, setTitle] = useState(survey.title);
@@ -25,6 +32,9 @@ export default function SurveyBuilder({ survey }: { survey: Initial }) {
   const [thankYou, setThankYou] = useState(survey.thankYou);
   const [active, setActive] = useState(survey.active);
   const [trigger, setTrigger] = useState(survey.trigger);
+  const initialDelay = splitDelay(survey.delayHours);
+  const [delayValue, setDelayValue] = useState(initialDelay.value);
+  const [delayUnit, setDelayUnit] = useState<"hours" | "days">(initialDelay.unit);
   const [questions, setQuestions] = useState<SurveyQuestion[]>(survey.questions);
   const [newKind, setNewKind] = useState<SurveyQuestion["type"]>("rating");
   const [saved, setSaved] = useState(false);
@@ -53,9 +63,19 @@ export default function SurveyBuilder({ survey }: { survey: Initial }) {
     setSaved(false);
   }
 
+  const delayHours = delayUnit === "days" ? delayValue * 24 : delayValue;
+
   function save() {
     start(async () => {
-      await saveSurvey(survey.id, { title, intro, thankYou, active, trigger, questions });
+      await saveSurvey(survey.id, {
+        title,
+        intro,
+        thankYou,
+        active,
+        trigger,
+        delayHours,
+        questions,
+      });
       setSaved(true);
     });
   }
@@ -107,6 +127,39 @@ export default function SurveyBuilder({ survey }: { survey: Initial }) {
             </label>
           </div>
         </div>
+        {trigger && (
+          <div>
+            <label className="label">Send delay after the trigger</label>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="number"
+                min={0}
+                className="input !w-24"
+                value={delayValue}
+                onChange={(e) => {
+                  setDelayValue(Math.max(0, parseInt(e.target.value, 10) || 0));
+                  setSaved(false);
+                }}
+              />
+              <select
+                className="input !w-28"
+                value={delayUnit}
+                onChange={(e) => {
+                  setDelayUnit(e.target.value as "hours" | "days");
+                  setSaved(false);
+                }}
+              >
+                <option value="hours">hours</option>
+                <option value="days">days</option>
+              </select>
+              <span className="text-xs text-slate-500">
+                {delayHours === 0
+                  ? "Sends immediately when the event happens."
+                  : `Sends ${delayValue} ${delayUnit} after the event (e.g. a follow-up later).`}
+              </span>
+            </div>
+          </div>
+        )}
         <div>
           <label className="label">Intro message (shown on the form &amp; in the invite)</label>
           <textarea

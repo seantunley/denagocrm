@@ -12,6 +12,7 @@ import { logError } from "@/lib/errorLog";
 import { runAutoResearch } from "@/lib/ai";
 import { runActivityReminders } from "@/lib/activityReminders";
 import { runCampaignQueue } from "@/lib/campaigns";
+import { runSurveyQueue } from "@/lib/surveys";
 import { basePrisma } from "@/lib/db";
 
 /**
@@ -43,6 +44,7 @@ export async function GET(req: NextRequest) {
   const activityReminders = await runActivityReminders().catch((e) => { logError("activity-reminders", e); return -1; });
   const aiResearch = await runAutoResearch().catch((e) => { logError("ai-auto-research", e); return -1; });
   const campaignSent = await runCampaignQueue().catch((e) => { logError("campaign-queue", e); return -1; });
+  const surveysSent = await runSurveyQueue().catch((e) => { logError("survey-queue", e); return -1; });
   await basePrisma.errorLog
     .deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } } })
     .catch(() => {});
@@ -56,6 +58,7 @@ export async function GET(req: NextRequest) {
     inboundEmail,
     aiResearch,
     campaignSent,
+    surveysSent,
     activityReminders,
   });
 }
