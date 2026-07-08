@@ -11,7 +11,12 @@ function buildNav(mods: Set<string>, isAdmin: boolean) {
   const has = (m: string) => isAdmin || mods.has(m);
   const topLinks: NavLink[] = [
     { href: "/", label: "Dashboard", icon: "▦" },
-    ...(has("reports") ? [{ href: "/reports", label: "Reports", icon: "📊" }] : []),
+    ...(has("reports")
+      ? [
+          { href: "/reports", label: "Reports", icon: "📊" },
+          { href: "/targets", label: "Targets", icon: "🎯" },
+        ]
+      : []),
   ];
   const groups: NavGroup[] = [];
   if (has("inbox")) {

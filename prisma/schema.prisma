@@ -831,6 +831,18 @@ model SavedView {
   createdAt DateTime @default(now())
 }
 
+// Monthly business goals — actuals vs target on the KPI dashboard.
+model Target {
+  id        String   @id @default(cuid())
+  metric    String // leads | sales_value | deliveries | services
+  period    String // YYYY-MM
+  value     Int // target (a count, or cents for sales_value)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([metric, period])
+}
+
 // System errors that would otherwise vanish into serverless logs
 model ErrorLog {
   id        String   @id @default(cuid())
