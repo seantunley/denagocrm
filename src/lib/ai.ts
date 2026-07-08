@@ -144,6 +144,9 @@ export async function runAutoResearch(): Promise<number> {
     const result = await aiResearch({ name: lead.name, email: lead.email });
     if ("error" in result) continue;
     const researchedAt = new Date();
+    await prisma.researchNote.create({
+      data: { body: result.summary, leadId: lead.id, contactId: lead.contactId },
+    });
     await prisma.lead.update({
       where: { id: lead.id },
       data: { research: result.summary, researchedAt },

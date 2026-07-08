@@ -147,6 +147,7 @@ model Contact {
   activities     Activity[]
   tags           Tag[]
   quotes         Quote[]
+  researchNotes  ResearchNote[]
 }
 
 model Tag {
@@ -202,10 +203,25 @@ model Lead {
   communications Communication[]
   activities     Activity[]
   quotes         Quote[]
+  researchNotes  ResearchNote[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   referral  Referral?
+}
+
+model ResearchNote {
+  id        String   @id @default(cuid())
+  body      String
+  createdAt DateTime @default(now())
+
+  leadId    String?
+  lead      Lead?    @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@index([contactId])
 }
 
 model Activity {

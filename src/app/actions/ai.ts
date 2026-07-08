@@ -117,8 +117,11 @@ export async function researchRecord(
   const result = await aiResearch({ name, email });
   if ("error" in result) return { error: result.error };
 
-  // Stored on the record itself (its own Research tab), not as a timeline note.
+  // Appended to the record's research history + latest snapshot column.
   const researchedAt = new Date();
+  await prisma.researchNote.create({
+    data: { body: result.summary, leadId, contactId: resolvedContactId },
+  });
   if (leadId) {
     await prisma.lead.update({
       where: { id: leadId },

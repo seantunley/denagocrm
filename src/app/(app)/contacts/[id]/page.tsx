@@ -39,6 +39,7 @@ export default async function ContactDetailPage({
       communications: { include: { user: true }, orderBy: { occurredAt: "desc" } },
       documents: { where: { deletedAt: null }, include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
       activities: { include: { assignedTo: true }, orderBy: { dueDate: "asc" } },
+      researchNotes: { orderBy: { createdAt: "desc" } },
       tags: true,
       owner: true,
       createdBy: true,
@@ -308,29 +309,34 @@ export default async function ContactDetailPage({
               {
                 key: "research",
                 label: "Research",
-                count: contact.research ? 1 : 0,
+                count: contact.researchNotes.length,
                 content: (
                   <div className="card space-y-4">
                     <div className="flex items-center justify-between gap-3">
                       <h2 className="font-semibold">🔎 AI research</h2>
                       <ResearchButton contactId={contact.id} configured={aiOn} />
                     </div>
-                    {!contact.research ? (
+                    {contact.researchNotes.length === 0 ? (
                       <p className="text-sm text-slate-400">
                         No research yet. Use the Research button to generate a briefing on this
                         customer and the company behind the email.
                       </p>
                     ) : (
-                      <div>
-                        {contact.researchedAt && (
-                          <p className="text-xs text-slate-500 mb-1.5">
-                            {formatDateTime(contact.researchedAt)}
-                          </p>
-                        )}
-                        <p className="text-sm whitespace-pre-wrap leading-relaxed text-slate-200">
-                          {contact.research}
-                        </p>
-                      </div>
+                      <ul className="space-y-4">
+                        {contact.researchNotes.map((r) => (
+                          <li
+                            key={r.id}
+                            className="border-t border-slate-800 pt-4 first:border-0 first:pt-0"
+                          >
+                            <p className="text-xs text-slate-500 mb-1.5">
+                              {formatDateTime(r.createdAt)}
+                            </p>
+                            <p className="text-sm whitespace-pre-wrap leading-relaxed text-slate-200">
+                              {r.body}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
                     )}
                   </div>
                 ),
