@@ -292,6 +292,7 @@ model Lead {
   source     String  @default("manual") // manual | facebook | instagram | website
   color      String? // colour of interest for the product
   notes      String?
+  quantity   Int     @default(1) // number of carts wanted (drives the value)
   valueCents Int     @default(0)
   status     String  @default("open") // open | won | lost
   lostReason String?

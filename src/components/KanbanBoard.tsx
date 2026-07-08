@@ -23,6 +23,7 @@ export type KanbanLead = {
   title: string;
   name: string;
   valueCents: number;
+  quantity?: number;
   source: string;
   color: string | null;
   productName: string | null;
@@ -101,13 +102,23 @@ function LeadCard({ lead, dragging }: { lead: KanbanLead; dragging?: boolean }) 
         </p>
       )}
       <div className="flex items-center justify-between mt-1.5">
-        {lead.valueCents > 0 ? (
-          <p className="text-xs font-semibold text-emerald-400">
-            {formatZAR(lead.valueCents)}
-          </p>
-        ) : (
-          <span />
-        )}
+        <div className="flex items-center gap-1.5">
+          {lead.valueCents > 0 ? (
+            <p className="text-xs font-semibold text-emerald-400">
+              {formatZAR(lead.valueCents)}
+            </p>
+          ) : (
+            <span />
+          )}
+          {(lead.quantity ?? 1) > 1 && (
+            <span
+              className="rounded bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40 text-[10px] font-bold px-1.5 py-0.5 leading-none"
+              title={`${lead.quantity} units — bigger deal`}
+            >
+              ×{lead.quantity}
+            </span>
+          )}
+        </div>
         {lead.assignee && (
           <span
             className="h-5 w-5 rounded-full bg-orange-600/80 text-white text-[9px] font-bold flex items-center justify-center"

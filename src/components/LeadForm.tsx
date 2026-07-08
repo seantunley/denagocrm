@@ -22,6 +22,7 @@ type LeadDefaults = {
   stageId?: string;
   contactId?: string | null;
   notes?: string | null;
+  quantity?: number;
   assignedToId?: string | null;
 };
 
@@ -43,6 +44,7 @@ export default function LeadForm({
   users?: { id: string; name: string }[];
 }) {
   const [productId, setProductId] = useState(defaults.productId ?? "");
+  const [qty, setQty] = useState(Math.max(1, defaults.quantity ?? 1));
   const [value, setValue] = useState(
     defaults.valueCents ? String(defaults.valueCents / 100) : ""
   );
@@ -51,7 +53,16 @@ export default function LeadForm({
   function onProductChange(id: string) {
     setProductId(id);
     const p = products.find((x) => x.id === id);
-    if (p && p.basePriceCents > 0) setValue(String(p.basePriceCents / 100));
+    if (p && p.basePriceCents > 0) setValue(String((p.basePriceCents / 100) * qty));
+  }
+
+  function onQtyChange(raw: string) {
+    const n = Math.max(1, parseInt(raw, 10) || 1);
+    setQty(n);
+    // A selected product drives the total; qty multiplies its unit price.
+    if (product && product.basePriceCents > 0) {
+      setValue(String((product.basePriceCents / 100) * n));
+    }
   }
 
   return (
@@ -126,7 +137,21 @@ export default function LeadForm({
           )}
         </div>
         <div>
-          <label className="label">Estimated value (R)</label>
+          <label className="label">Quantity</label>
+          <input
+            name="quantity"
+            type="number"
+            min={1}
+            step={1}
+            className="input"
+            value={qty}
+            onChange={(e) => onQtyChange(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="label">
+            Estimated value (R){qty > 1 && product ? ` — ${qty} × unit` : ""}
+          </label>
           <input
             name="value"
             className="input"

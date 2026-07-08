@@ -24,6 +24,7 @@ function leadData(formData: FormData) {
     productId: str("productId"),
     color: str("color"),
     notes: str("notes"),
+    quantity: Math.max(1, parseInt(String(formData.get("quantity") ?? "1"), 10) || 1),
     valueCents: parseRands(str("value")),
     stageId: String(formData.get("stageId") ?? ""),
     contactId: str("contactId"),

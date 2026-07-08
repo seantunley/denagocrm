@@ -146,7 +146,11 @@ export default async function ReportsPage() {
             content: (
               <div className="space-y-4">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <StatCard label="Leads (90 days)" value={String(leads90.length)} />
+                  <StatCard
+                    label="Leads (90 days)"
+                    value={String(leads90.filter((l) => l.status !== "lost").length)}
+                    sub={lost90.length ? `${lost90.length} lost (in win rate)` : undefined}
+                  />
                   <StatCard
                     label="Win rate (90 days)"
                     value={winRate != null ? `${winRate}%` : "—"}

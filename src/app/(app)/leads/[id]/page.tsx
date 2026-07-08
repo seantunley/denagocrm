@@ -215,6 +215,7 @@ export default async function LeadDetailPage({
                           ["Phone", lead.phone],
                           ["Product", lead.product?.name],
                           ["Colour", lead.color],
+                          ["Quantity", lead.quantity > 1 ? String(lead.quantity) : null],
                           ["Value", lead.valueCents ? formatZAR(lead.valueCents) : null],
                           ["Assigned to", lead.assignedTo?.name],
                           ["Source", lead.source],

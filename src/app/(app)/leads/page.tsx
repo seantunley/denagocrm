@@ -47,6 +47,7 @@ export default async function LeadsPage() {
       title: l.title,
       name: l.name,
       valueCents: l.valueCents,
+      quantity: l.quantity,
       source: l.source,
       color: l.color,
       productName: l.product?.name ?? null,
