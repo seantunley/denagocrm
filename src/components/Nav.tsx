@@ -29,12 +29,20 @@ function buildNav(mods: Set<string>, isAdmin: boolean) {
         { href: "/leads", label: "Leads", icon: "◎" },
         { href: "/quotes", label: "Quotes", icon: "📄" },
         { href: "/deliveries", label: "Deliveries", icon: "🚚" },
-        { href: "/stock", label: "Stock", icon: "📦" },
         { href: "/contacts", label: "Contacts", icon: "☰" },
-        { href: "/campaigns", label: "Campaigns", icon: "📣" },
         { href: "/activities", label: "Activities", icon: "✓" },
         { href: "/calendar", label: "Calendar", icon: "📅" },
       ],
+    });
+    groups.push({
+      key: "marketing",
+      label: "Marketing",
+      links: [{ href: "/campaigns", label: "Campaigns", icon: "📣" }],
+    });
+    groups.push({
+      key: "stock",
+      label: "Stock",
+      links: [{ href: "/stock", label: "Stock", icon: "📦" }],
     });
   }
   if (has("workshop")) {
