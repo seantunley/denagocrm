@@ -573,6 +573,8 @@ model Vehicle {
   contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
   productId String?
   product   Product? @relation(fields: [productId], references: [id])
+  fleetId   String?
+  fleet     Fleet?   @relation(fields: [fleetId], references: [id], onDelete: SetNull)
 
   mileageLogs    MileageLog[]
   serviceRecords ServiceRecord[]
@@ -580,6 +582,23 @@ model Vehicle {
   documents      Document[]
   batteryChecks  BatteryCheck[]
   warrantyClaims WarrantyClaim[]
+
+  @@index([fleetId])
+}
+
+// A fleet / B2B account — an estate, golf course, resort or business that
+// owns many carts. Groups vehicles for a fleet-level service overview.
+model Fleet {
+  id          String    @id @default(cuid())
+  name        String
+  type        String? // estate | golf-course | resort | business | other
+  notes       String?
+  contactId   String? // primary contact / fleet manager
+  createdAt   DateTime  @default(now())
+  createdById String?
+  deletedAt   DateTime?
+
+  vehicles Vehicle[]
 }
 
 // A warranty claim against a cart. Lightweight workflow: open → approved/
