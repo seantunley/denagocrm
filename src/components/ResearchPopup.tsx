@@ -41,7 +41,7 @@ export default function ResearchPopup({
           onPointerDown={(e) => e.stopPropagation()}
         >
           <div
-            className="card w-full max-w-sm p-0 overflow-hidden"
+            className="card w-full max-w-2xl p-0 overflow-hidden"
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
           >
@@ -56,7 +56,7 @@ export default function ResearchPopup({
                 ✕
               </button>
             </div>
-            <div className="p-4 max-h-[60vh] overflow-y-auto">
+            <div className="p-5 max-h-[85vh] overflow-y-auto">
               <p className="text-sm whitespace-pre-wrap leading-relaxed text-slate-200">
                 {summary}
               </p>
