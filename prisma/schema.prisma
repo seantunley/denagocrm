@@ -579,6 +579,43 @@ model Vehicle {
   jobCards       JobCard[]
   documents      Document[]
   batteryChecks  BatteryCheck[]
+  warrantyClaims WarrantyClaim[]
+}
+
+// A warranty claim against a cart. Lightweight workflow: open → approved/
+// rejected → resolved, with a free-text resolution note.
+model WarrantyClaim {
+  id          String    @id @default(cuid())
+  status      String    @default("open") // open | approved | rejected | resolved
+  description String
+  resolution  String?
+  claimedAt   DateTime  @default(now())
+  resolvedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  vehicleId   String
+  vehicle     Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  contactId   String?
+  jobCardId   String?
+  createdById String?
+
+  @@index([status, claimedAt])
+  @@index([vehicleId])
+}
+
+// A recall or service bulletin for a cart model. Owners of matching carts can
+// be notified in one click.
+model Recall {
+  id          String    @id @default(cuid())
+  title       String
+  model       String // affected cart model (matches Vehicle.model)
+  description String
+  active      Boolean   @default(true)
+  notifiedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  createdById String?
+
+  @@index([active])
 }
 
 // EV battery health snapshots — track state-of-health, voltage and charge

@@ -49,6 +49,7 @@ export const ROUTE_GATES: { prefix: string; gate: ModuleId | "contacts" | "admin
   { prefix: "/contacts", gate: "contacts" },
   { prefix: "/vehicles", gate: "workshop" },
   { prefix: "/service-due", gate: "workshop" },
+  { prefix: "/warranty", gate: "workshop" },
   { prefix: "/jobcards", gate: "workshop" },
   { prefix: "/parts", gate: "workshop" },
   { prefix: "/workshop-calendar", gate: "workshop" },

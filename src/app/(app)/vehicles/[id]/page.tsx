@@ -11,8 +11,14 @@ import {
 } from "@/app/actions/vehicles";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import {
+  addWarrantyClaim,
+  setWarrantyClaimStatus,
+  deleteWarrantyClaim,
+} from "@/app/actions/warranty";
 import { contactName, formatDate, formatDateTime } from "@/lib/format";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
+import { computeWarranty, warrantyColors, warrantyLabels, claimColors, claimStatuses } from "@/lib/warranty";
 
 export default async function VehicleDetailPage({
   params,
@@ -27,6 +33,7 @@ export default async function VehicleDetailPage({
       product: true,
       mileageLogs: { orderBy: { recordedAt: "desc" } },
       batteryChecks: { orderBy: { checkedAt: "desc" } },
+      warrantyClaims: { orderBy: { claimedAt: "desc" } },
       serviceRecords: {
         orderBy: { serviceDate: "desc" },
         include: { performedBy: true, jobCard: true },
@@ -330,6 +337,79 @@ export default async function VehicleDetailPage({
                         </li>
                       );
                     })}
+                  </ul>
+                )}
+              </div>
+            );
+          })()}
+
+          {(() => {
+            const w = computeWarranty(vehicle);
+            const claims = vehicle.warrantyClaims;
+            return (
+              <div className="card">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="font-semibold">🛡️ Warranty</h2>
+                  <span className={`badge ${warrantyColors[w.status]}`}>
+                    {warrantyLabels[w.status]}
+                    {w.expiryDate ? ` · ${formatDate(w.expiryDate)}` : ""}
+                  </span>
+                </div>
+                <form action={addWarrantyClaim.bind(null, vehicle.id)} className="flex gap-2 mb-4">
+                  <input
+                    name="description"
+                    className="input flex-1"
+                    placeholder="Log a warranty claim (describe the fault)"
+                    required
+                  />
+                  <button className="btn-primary btn-sm">Log claim</button>
+                </form>
+                {claims.length === 0 ? (
+                  <p className="text-sm text-slate-400">No warranty claims.</p>
+                ) : (
+                  <ul className="divide-y divide-slate-800">
+                    {claims.map((c) => (
+                      <li key={c.id} className="py-2 text-sm">
+                        <div className="flex items-center gap-2">
+                          <span className={`badge ${claimColors[c.status]}`}>{c.status}</span>
+                          <span className="flex-1">{c.description}</span>
+                          <span className="text-xs text-slate-400">{formatDate(c.claimedAt)}</span>
+                        </div>
+                        {c.resolution && (
+                          <p className="text-xs text-slate-500 mt-1">Resolution: {c.resolution}</p>
+                        )}
+                        <div className="flex gap-2 mt-1.5 items-center">
+                          <form
+                            action={setWarrantyClaimStatus.bind(null, c.id)}
+                            className="flex gap-2 flex-1"
+                          >
+                            <select
+                              name="status"
+                              defaultValue={c.status}
+                              className="input !w-auto !py-1"
+                            >
+                              {claimStatuses.map((s) => (
+                                <option key={s} value={s}>
+                                  {s}
+                                </option>
+                              ))}
+                            </select>
+                            <input
+                              name="resolution"
+                              defaultValue={c.resolution ?? ""}
+                              className="input flex-1 !py-1"
+                              placeholder="Resolution note"
+                            />
+                            <button className="btn-secondary btn-sm">Update</button>
+                          </form>
+                          <form action={deleteWarrantyClaim.bind(null, c.id)}>
+                            <button className="text-xs text-red-400 hover:text-red-300" title="Delete">
+                              ✕
+                            </button>
+                          </form>
+                        </div>
+                      </li>
+                    ))}
                   </ul>
                 )}
               </div>
