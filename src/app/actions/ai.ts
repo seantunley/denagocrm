@@ -86,12 +86,12 @@ export async function clearErrorLog() {
 
 export type ResearchState = { summary?: string; error?: string };
 
-/** 🔎 Research this lead/contact — company + person synopsis, filed as a note. */
+/** 🔎 Research this lead/contact — company + person synopsis, stored on the record. */
 export async function researchRecord(
   _prev: ResearchState | undefined,
   formData: FormData
 ): Promise<ResearchState> {
-  const user = await requireOperational();
+  await requireOperational();
   const leadId = String(formData.get("leadId") ?? "").trim() || null;
   const contactId = String(formData.get("contactId") ?? "").trim() || null;
 
@@ -117,17 +117,20 @@ export async function researchRecord(
   const result = await aiResearch({ name, email });
   if ("error" in result) return { error: result.error };
 
-  await prisma.communication.create({
-    data: {
-      type: "note",
-      direction: null,
-      subject: "🔎 AI research",
-      body: result.summary,
-      leadId,
-      contactId: resolvedContactId,
-      userId: user.id,
-    },
-  });
+  // Stored on the record itself (its own Research tab), not as a timeline note.
+  const researchedAt = new Date();
+  if (leadId) {
+    await prisma.lead.update({
+      where: { id: leadId },
+      data: { research: result.summary, researchedAt },
+    });
+  }
+  if (resolvedContactId) {
+    await prisma.contact.update({
+      where: { id: resolvedContactId },
+      data: { research: result.summary, researchedAt },
+    });
+  }
   const { revalidatePath } = await import("next/cache");
   if (leadId) revalidatePath(`/leads/${leadId}`);
   if (resolvedContactId) revalidatePath(`/contacts/${resolvedContactId}`);

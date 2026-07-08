@@ -90,20 +90,9 @@ export default async function ContactDetailPage({
   const path = `/contacts/${contact.id}`;
   const aiOn = await isAiConfigured();
 
-  // AI research lives in its own tab, not mixed into the comms timeline.
-  // Gather it from this contact AND any of their leads, so research run on a
-  // lead still surfaces on the customer.
+  // Research is stored on the contact itself (Research tab). Legacy research
+  // notes (pre-migration) are still filtered out of the comms timeline.
   const comms = contact.communications.filter((c) => c.subject !== RESEARCH_SUBJECT);
-  const researchNotes = await prisma.communication.findMany({
-    where: {
-      subject: RESEARCH_SUBJECT,
-      OR: [
-        { contactId: contact.id },
-        { leadId: { in: contact.leads.map((l) => l.id) } },
-      ],
-    },
-    orderBy: { occurredAt: "desc" },
-  });
 
   return (
     <div className="space-y-6">
@@ -319,34 +308,29 @@ export default async function ContactDetailPage({
               {
                 key: "research",
                 label: "Research",
-                count: researchNotes.length,
+                count: contact.research ? 1 : 0,
                 content: (
                   <div className="card space-y-4">
                     <div className="flex items-center justify-between gap-3">
                       <h2 className="font-semibold">🔎 AI research</h2>
                       <ResearchButton contactId={contact.id} configured={aiOn} />
                     </div>
-                    {researchNotes.length === 0 ? (
+                    {!contact.research ? (
                       <p className="text-sm text-slate-400">
                         No research yet. Use the Research button to generate a briefing on this
                         customer and the company behind the email.
                       </p>
                     ) : (
-                      <ul className="space-y-4">
-                        {researchNotes.map((r) => (
-                          <li
-                            key={r.id}
-                            className="border-t border-slate-800 pt-4 first:border-0 first:pt-0"
-                          >
-                            <p className="text-xs text-slate-500 mb-1.5">
-                              {formatDateTime(r.occurredAt)}
-                            </p>
-                            <p className="text-sm whitespace-pre-wrap leading-relaxed text-slate-200">
-                              {r.body}
-                            </p>
-                          </li>
-                        ))}
-                      </ul>
+                      <div>
+                        {contact.researchedAt && (
+                          <p className="text-xs text-slate-500 mb-1.5">
+                            {formatDateTime(contact.researchedAt)}
+                          </p>
+                        )}
+                        <p className="text-sm whitespace-pre-wrap leading-relaxed text-slate-200">
+                          {contact.research}
+                        </p>
+                      </div>
                     )}
                   </div>
                 ),

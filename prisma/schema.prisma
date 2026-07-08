@@ -123,6 +123,8 @@ model Contact {
   postalCode    String?
   source        String?
   notes         String?
+  research      String? // latest AI research briefing (shown in the Research tab)
+  researchedAt  DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -178,6 +180,9 @@ model Lead {
   position   Int     @default(0)
   externalId String? @unique // e.g. Facebook leadgen_id
   raw        String? // raw intake payload (JSON string)
+
+  research     String? // latest AI research briefing (shown in the Research tab)
+  researchedAt DateTime?
 
   deletedAt     DateTime?
   deletedByName String?

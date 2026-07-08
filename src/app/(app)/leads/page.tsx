@@ -23,12 +23,6 @@ export default async function LeadsPage() {
               orderBy: { dueDate: "asc" },
               take: 1,
             },
-            communications: {
-              where: { subject: "🔎 AI research" },
-              orderBy: { occurredAt: "desc" },
-              take: 1,
-              select: { body: true },
-            },
           },
         },
       },
@@ -57,7 +51,7 @@ export default async function LeadsPage() {
       color: l.color,
       productName: l.product?.name ?? null,
       assignee: l.assignedTo?.name ?? null,
-      research: l.communications[0]?.body ?? null,
+      research: l.research,
       testDrive: (() => {
         const td = l.activities[0];
         if (!td) return null;

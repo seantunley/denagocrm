@@ -134,31 +134,26 @@ export async function runAutoResearch(): Promise<number> {
   if (!(await isAiConfigured())) return 0;
   const since = new Date(Date.now() - 48 * 60 * 60 * 1000);
   const leads = await prisma.lead.findMany({
-    where: { createdAt: { gte: since }, email: { not: null } },
+    where: { createdAt: { gte: since }, email: { not: null }, research: null },
     orderBy: { createdAt: "desc" },
     take: 20,
   });
-  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
-  if (!firstUser) return 0;
   let done = 0;
   for (const lead of leads) {
     if (done >= 5) break;
-    const existing = await prisma.communication.findFirst({
-      where: { leadId: lead.id, subject: "🔎 AI research" },
-    });
-    if (existing) continue;
     const result = await aiResearch({ name: lead.name, email: lead.email });
     if ("error" in result) continue;
-    await prisma.communication.create({
-      data: {
-        type: "note",
-        subject: "🔎 AI research",
-        body: result.summary,
-        leadId: lead.id,
-        contactId: lead.contactId,
-        userId: firstUser.id,
-      },
+    const researchedAt = new Date();
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: { research: result.summary, researchedAt },
     });
+    if (lead.contactId) {
+      await prisma.contact.update({
+        where: { id: lead.contactId },
+        data: { research: result.summary, researchedAt },
+      });
+    }
     done++;
   }
   return done;

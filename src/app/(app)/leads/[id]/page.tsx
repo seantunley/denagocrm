@@ -84,8 +84,8 @@ export default async function LeadDetailPage({
   const path = `/leads/${lead.id}`;
   const aiOn = await isAiConfigured();
 
-  // AI research lives in its own tab, not mixed into the comms timeline.
-  const researchNotes = lead.communications.filter((c) => c.subject === RESEARCH_SUBJECT);
+  // Research is stored on the lead itself (Research tab). Legacy research
+  // notes (pre-migration) are still filtered out of the comms timeline.
   const comms = lead.communications.filter((c) => c.subject !== RESEARCH_SUBJECT);
 
   const statusBadge =
@@ -381,34 +381,29 @@ export default async function LeadDetailPage({
               {
                 key: "research",
                 label: "Research",
-                count: researchNotes.length,
+                count: lead.research ? 1 : 0,
                 content: (
                   <div className="card space-y-4">
                     <div className="flex items-center justify-between gap-3">
                       <h2 className="font-semibold">🔎 AI research</h2>
                       <ResearchButton leadId={lead.id} configured={aiOn} />
                     </div>
-                    {researchNotes.length === 0 ? (
+                    {!lead.research ? (
                       <p className="text-sm text-slate-400">
                         No research yet. Use the Research button to generate a briefing on this
                         lead and the company behind the email.
                       </p>
                     ) : (
-                      <ul className="space-y-4">
-                        {researchNotes.map((r) => (
-                          <li
-                            key={r.id}
-                            className="border-t border-slate-800 pt-4 first:border-0 first:pt-0"
-                          >
-                            <p className="text-xs text-slate-500 mb-1.5">
-                              {formatDateTime(r.occurredAt)}
-                            </p>
-                            <p className="text-sm whitespace-pre-wrap leading-relaxed text-slate-200">
-                              {r.body}
-                            </p>
-                          </li>
-                        ))}
-                      </ul>
+                      <div>
+                        {lead.researchedAt && (
+                          <p className="text-xs text-slate-500 mb-1.5">
+                            {formatDateTime(lead.researchedAt)}
+                          </p>
+                        )}
+                        <p className="text-sm whitespace-pre-wrap leading-relaxed text-slate-200">
+                          {lead.research}
+                        </p>
+                      </div>
                     )}
                   </div>
                 ),

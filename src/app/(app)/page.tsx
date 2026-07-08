@@ -155,6 +155,7 @@ export default async function DashboardPage() {
       },
     }),
     prisma.communication.findMany({
+      where: { subject: { not: "🔎 AI research" } }, // legacy research notes are not comms
       take: 5,
       orderBy: { occurredAt: "desc" },
       include: { user: true, contact: true, lead: true },
