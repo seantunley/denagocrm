@@ -19,6 +19,7 @@ const SECRET_KEYS = new Set([
   "GOOGLE_PLACES_API_KEY",
   "ANTHROPIC_API_KEY",
   "INTAKE_API_KEY",
+  "OPENAI_API_KEY",
 ]);
 
 const PREFIX = "enc:v1:";

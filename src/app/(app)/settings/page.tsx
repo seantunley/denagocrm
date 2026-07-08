@@ -29,9 +29,9 @@ import PushToggle from "@/components/PushToggle";
 import SecurityPanel from "@/components/SecurityPanel";
 import OwnerUserControls from "@/components/OwnerUserControls";
 import { saveSessionPolicy } from "@/app/actions/security";
-import { saveBotSettings, addBotRule, deleteBotRule } from "@/app/actions/bot";
+import { saveBotSettings, addFaq, deleteFaq, whisperConfigured } from "@/app/actions/bot";
 import { saveImapSettings } from "@/app/actions/emails";
-import { getBotRules } from "@/lib/bot";
+import { getBotFaqs } from "@/lib/botAi";
 import { clearErrorLog } from "@/app/actions/ai";
 import { basePrisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
@@ -94,7 +94,8 @@ export default async function SettingsPage({
     }
   };
   const isOwner = isAdmin;
-  const botRules = isAdmin ? await getBotRules() : [];
+  const botFaqs = isAdmin ? await getBotFaqs() : [];
+  const hasWhisper = isAdmin ? await whisperConfigured() : false;
   const errorLogs = isAdmin && tab === "system"
     ? await basePrisma.errorLog.findMany({ orderBy: { createdAt: "desc" }, take: 100 })
     : [];
@@ -492,58 +493,91 @@ export default async function SettingsPage({
                   defaultValue={setting("BOT_AFTERHOURS_MSG") || "Thanks for your message! Our showroom is open Mon–Fri 08:00–17:00 — we'll get back to you first thing. For urgent matters call 073 789 3438."}
                 />
               </div>
+
+              <div className="border-t border-slate-800 pt-3 space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium">AI assistant (Claude)</p>
+                    <p className="text-xs text-slate-500">
+                      Holds a real conversation — grounded in your live models &amp; prices, hours and
+                      the brief below. Routes questions to your FAQ pathways for exact answers, and
+                      hands off to a human when someone wants to buy, book, complain or asks for a
+                      person. Needs the Anthropic key (Integrations tab).
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer shrink-0">
+                    <input type="checkbox" name="aiEnabled" defaultChecked={setting("BOT_AI_ENABLED") === "true"} className="h-4 w-4" />
+                    Enabled
+                  </label>
+                </div>
+                <div>
+                  <label className="label">About us / policies (the bot&apos;s brief)</label>
+                  <textarea
+                    name="brief"
+                    className="input"
+                    rows={5}
+                    defaultValue={setting("BOT_AI_BRIEF") || ""}
+                    placeholder="Anything the bot should know: what you sell, delivery areas & fees, warranty terms, finance options, service turnaround, location, tone. The bot will only state facts you give it here (plus live prices)."
+                  />
+                </div>
+                <div>
+                  <label className="label">Voice-note transcription key (OpenAI Whisper)</label>
+                  <input
+                    name="whisperKey"
+                    className="input"
+                    type="password"
+                    placeholder={hasWhisper ? "•••••••• (saved — leave blank to keep)" : "sk-… (optional — enables understanding voice notes)"}
+                  />
+                  <p className="text-xs text-slate-500 mt-1">
+                    Optional. Lets the bot understand WhatsApp voice notes (transcribe → reply → hand
+                    off). Without it, voice notes still get a friendly reply and a hand-off.
+                  </p>
+                </div>
+              </div>
+
               <button className="btn-primary btn-sm">Save bot settings</button>
             </form>
 
             <div className="px-5 py-4">
-              <p className="text-sm font-medium mb-1">Keyword rules</p>
+              <p className="text-sm font-medium mb-1">FAQ pathways</p>
               <p className="text-xs text-slate-500 mb-3">
-                If a message contains any keyword, the reply goes out instantly and is logged on
-                the customer&apos;s record.
+                Define proper, canonical answers for common questions. The assistant matches each
+                message to the right pathway and sends its exact answer. Price list and colours are
+                built in automatically from your products.
               </p>
               <ul className="space-y-2 mb-3">
-                {botRules.length === 0 && (
+                {botFaqs.length === 0 && (
                   <li className="text-xs text-slate-500">
-                    No rules yet — e.g. keywords “price, cost, how much” → reply with the price
-                    list link.
+                    No pathways yet — e.g. “asking about delivery / shipping” → your delivery areas
+                    and fees.
                   </li>
                 )}
-                {botRules.map((r) => (
-                  <li
-                    key={r.id}
-                    className="rounded-lg border border-slate-800 bg-slate-800/40 px-3 py-2 flex items-start gap-3"
-                  >
+                {botFaqs.map((f) => (
+                  <li key={f.id} className="rounded-lg border border-slate-800 bg-slate-800/40 px-3 py-2 flex items-start gap-3">
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold text-orange-300">{r.keywords}</p>
-                      <p className="text-xs text-slate-400 whitespace-pre-wrap">{r.reply}</p>
+                      <p className="text-xs font-semibold text-orange-300">
+                        {f.question}
+                        {f.handoff && <span className="ml-2 text-amber-400">→ hands off</span>}
+                      </p>
+                      <p className="text-xs text-slate-400 whitespace-pre-wrap">{f.answer}</p>
                     </div>
-                    <form action={deleteBotRule.bind(null, r.id)}>
-                      <button className="text-xs text-slate-600 hover:text-red-400 cursor-pointer">
-                        ✕
-                      </button>
+                    <form action={deleteFaq.bind(null, f.id)}>
+                      <button className="text-xs text-slate-600 hover:text-red-400 cursor-pointer">✕</button>
                     </form>
                   </li>
                 ))}
               </ul>
               <details className="rounded-lg border border-slate-800 bg-slate-800/40">
                 <summary className="px-3 py-2 text-sm font-medium cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
-                  + Add rule
+                  + Add pathway
                 </summary>
-                <form action={addBotRule} className="p-3 pt-1 space-y-2">
-                  <input
-                    name="keywords"
-                    className="input"
-                    required
-                    placeholder="Keywords, comma-separated — e.g. price, cost, how much"
-                  />
-                  <textarea
-                    name="reply"
-                    className="input"
-                    rows={3}
-                    required
-                    placeholder="Reply — e.g. You can view our full price list here: https://denagocpt.co.za/models — a team member will follow up shortly!"
-                  />
-                  <button className="btn-primary btn-sm">Add rule</button>
+                <form action={addFaq} className="p-3 pt-1 space-y-2">
+                  <input name="question" className="input" required placeholder="When the customer is… — e.g. asking about delivery, shipping, how they get the cart" />
+                  <textarea name="answer" className="input" rows={3} required placeholder="The exact answer to send — e.g. We deliver anywhere in the Western Cape. Delivery is free within 50km of Cape Town, then R15/km after that." />
+                  <label className="flex items-center gap-2 text-xs text-slate-300">
+                    <input type="checkbox" name="handoff" className="h-3.5 w-3.5" /> Hand off to a human after this answer
+                  </label>
+                  <button className="btn-primary btn-sm">Add pathway</button>
                 </form>
               </details>
             </div>

@@ -75,6 +75,34 @@ export async function sendWhatsAppText(
   return { ok: true };
 }
 
+/** Downloads a WhatsApp media object (e.g. a voice note) by its media id. */
+export async function fetchWhatsAppMedia(
+  mediaId: string
+): Promise<{ buffer: Buffer; contentType: string } | null> {
+  const token = await getSetting("WA_ACCESS_TOKEN");
+  if (!token) return null;
+  try {
+    const metaRes = await fetch(`${GRAPH}/${mediaId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!metaRes.ok) return null;
+    const meta = await metaRes.json();
+    if (!meta.url) return null;
+    const fileRes = await fetch(meta.url, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!fileRes.ok) return null;
+    return {
+      buffer: Buffer.from(await fileRes.arrayBuffer()),
+      contentType: meta.mime_type ?? fileRes.headers.get("content-type") ?? "audio/ogg",
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Logs an inbound WhatsApp message against the right customer record. */
 export async function recordInboundWhatsApp(
   fromDigits: string,

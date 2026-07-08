@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { getSetting } from "@/lib/settings";
-import { recordInboundWhatsApp } from "@/lib/whatsapp";
+import { recordInboundWhatsApp, fetchWhatsAppMedia } from "@/lib/whatsapp";
+import { transcribeVoice } from "@/lib/transcribe";
 import { maybeAutoReply } from "@/lib/bot";
 
 /** Meta webhook verification handshake (same flow as Lead Ads). */
@@ -51,12 +52,28 @@ export async function POST(req: NextRequest) {
       const value = change.value ?? {};
       const contactsMeta = value.contacts ?? [];
       for (const message of value.messages ?? []) {
-        if (message.type !== "text") continue; // v1: text messages
         const from: string = message.from;
         const profileName: string | null =
           contactsMeta.find((c: any) => c.wa_id === from)?.profile?.name ?? null;
-        await recordInboundWhatsApp(from, profileName, message.text?.body ?? "").catch(() => {});
-        await maybeAutoReply(from, message.text?.body ?? "").catch(() => {});
+
+        if (message.type === "text") {
+          const body = message.text?.body ?? "";
+          await recordInboundWhatsApp(from, profileName, body).catch(() => {});
+          await maybeAutoReply(from, body).catch(() => {});
+        } else if (message.type === "audio" || message.type === "voice") {
+          // Voice note: download, transcribe, reply naturally, then hand off.
+          const mediaId: string | undefined = message.audio?.id ?? message.voice?.id;
+          if (!mediaId) continue;
+          const media = await fetchWhatsAppMedia(mediaId).catch(() => null);
+          const transcript = media
+            ? await transcribeVoice(media.buffer, media.contentType).catch(() => null)
+            : null;
+          const logged = transcript ? `🎤 ${transcript}` : "🎤 [Voice note]";
+          await recordInboundWhatsApp(from, profileName, logged).catch(() => {});
+          await maybeAutoReply(from, transcript ?? "[The customer sent a voice note.]", {
+            voiceNote: true,
+          }).catch(() => {});
+        }
       }
     }
   }
