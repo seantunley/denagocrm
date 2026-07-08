@@ -30,6 +30,17 @@ function criteriaFromForm(formData: FormData): SegmentCriteria {
   };
 }
 
+/** Resolve criteria from either a saved segment (segmentId) or inline f_* fields. */
+async function criteriaFor(formData: FormData): Promise<{ criteria: SegmentCriteria; label: string }> {
+  const segmentId = str(formData.get("segmentId"));
+  if (segmentId) {
+    const seg = await prisma.segment.findUnique({ where: { id: segmentId } });
+    if (seg) return { criteria: JSON.parse(seg.criteria), label: seg.name };
+  }
+  const criteria = criteriaFromForm(formData);
+  return { criteria, label: await audienceLabel(criteria) };
+}
+
 async function audienceLabel(cr: SegmentCriteria): Promise<string> {
   const parts: string[] = [];
   if (cr.source) parts.push(`source: ${cr.source}`);
@@ -51,11 +62,12 @@ export async function uploadCampaignImage(formData: FormData): Promise<string | 
   return saveFile(buf, file.name, file.type);
 }
 
-/** Live recipient count for the composer's current audience + channel. */
+/** Live recipient count for a saved segment or inline criteria + channel. */
 export async function previewAudience(formData: FormData): Promise<{ count: number }> {
   await requireCrm();
   const channel = str(formData.get("channel")) || "email";
-  return { count: (await resolveContacts(criteriaFromForm(formData), channel)).length };
+  const { criteria } = await criteriaFor(formData);
+  return { count: (await resolveContacts(criteria, channel)).length };
 }
 
 export async function sendCampaignTest(
@@ -105,7 +117,7 @@ export async function sendCampaign(
   if (channel === "sms" && !(await isSmsConfigured()))
     return { error: "SMS isn't configured (Settings → Integrations)." };
 
-  const criteria = criteriaFromForm(formData);
+  const { criteria, label } = await criteriaFor(formData);
   const contacts = await resolveContacts(criteria, channel);
   if (contacts.length === 0) return { error: "No opted-in recipients match that audience." };
 
@@ -116,7 +128,7 @@ export async function sendCampaign(
       subject: channel === "email" ? subject : null,
       body: channel === "email" ? htmlToText(htmlBody) : smsBody,
       htmlBody: channel === "email" ? htmlBody : null,
-      audience: await audienceLabel(criteria),
+      audience: label,
       recipientCount: contacts.length,
       status: "queued",
       createdById: user.id,
@@ -150,5 +162,12 @@ export async function saveSegment(formData: FormData) {
 export async function deleteSegment(id: string) {
   await requireCrm();
   await prisma.segment.delete({ where: { id } });
+  revalidatePath("/campaigns");
+}
+
+/** Subscribe / unsubscribe a contact from marketing (Subscribers tab). */
+export async function setMarketingOptOut(contactId: string, optOut: boolean) {
+  await requireCrm();
+  await prisma.contact.update({ where: { id: contactId }, data: { marketingOptOut: optOut } });
   revalidatePath("/campaigns");
 }

@@ -143,6 +143,7 @@ export async function createTemplate(formData: FormData) {
   if (!name || !subject || !body) return;
   await prisma.emailTemplate.create({ data: { name, subject, body } });
   revalidatePath("/settings");
+  revalidatePath("/campaigns");
 }
 
 export async function updateTemplate(id: string, formData: FormData) {

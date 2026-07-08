@@ -52,9 +52,9 @@ export async function resolveContacts(criteria: SegmentCriteria, channel: string
       })
     );
   }
-  return channel === "sms"
-    ? list.filter((c) => c.whatsapp || c.phone)
-    : list.filter((c) => c.email);
+  if (channel === "sms") return list.filter((c) => c.whatsapp || c.phone);
+  if (channel === "email") return list.filter((c) => c.email);
+  return list; // "any" — matching opted-in contacts regardless of channel
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
