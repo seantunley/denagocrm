@@ -59,6 +59,17 @@ function buildNav(mods: Set<string>, isAdmin: boolean) {
       ],
     });
   }
+  if (isAdmin) {
+    groups.push({
+      key: "automation",
+      label: "Automation",
+      links: [
+        { href: "/automations", label: "Automations", icon: "⚡" },
+        { href: "/chatbot", label: "Chatbot", icon: "🤖" },
+        { href: "/bot-builder", label: "Flow builder", icon: "🎨" },
+      ],
+    });
+  }
   return { topLinks, groups };
 }
 
