@@ -133,6 +133,18 @@ export async function saveServiceReminderSettings(formData: FormData) {
   revalidatePath("/settings");
 }
 
+export async function saveLifecycleSettings(formData: FormData) {
+  await requireOwner();
+  const entries: Record<string, string> = {
+    LIFECYCLE_ANNIVERSARY_ENABLED: formData.get("anniversary") === "on" ? "true" : "false",
+    LIFECYCLE_WINBACK_ENABLED: formData.get("winback") === "on" ? "true" : "false",
+  };
+  for (const [key, value] of Object.entries(entries)) {
+    await putSetting(key, value);
+  }
+  revalidatePath("/settings");
+}
+
 // ---- Email templates ----
 
 export async function createTemplate(formData: FormData) {

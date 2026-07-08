@@ -18,6 +18,7 @@ import { AddUserForm, ChangePasswordForm } from "@/components/TeamForms";
 import {
   saveSmtpSettings,
   saveServiceReminderSettings,
+  saveLifecycleSettings,
   createTemplate,
   updateTemplate,
   deleteTemplate,
@@ -618,6 +619,45 @@ export default async function SettingsPage({
                     ))}
                   </select>
                 </div>
+                <button className="btn-primary">Save</button>
+              </form>
+            </Row>
+
+            <Row
+              title="Lifecycle journeys"
+              status={
+                setting("LIFECYCLE_ANNIVERSARY_ENABLED") === "true" ||
+                setting("LIFECYCLE_WINBACK_ENABLED") === "true" ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">On</span>
+                ) : (
+                  <span className="badge bg-slate-800 text-slate-400">Off</span>
+                )
+              }
+            >
+              <p className="text-xs text-slate-400 mb-4">
+                Automatic, self-throttled emails to cart owners. Anniversary wishes go out on the
+                purchase date each year; win-back reaches owners who haven&apos;t serviced or been in
+                touch for over a year. Requires SMTP.
+              </p>
+              <form action={saveLifecycleSettings} className="flex items-center gap-6 flex-wrap">
+                <label className="flex items-center gap-2 text-sm text-slate-300">
+                  <input
+                    type="checkbox"
+                    name="anniversary"
+                    defaultChecked={setting("LIFECYCLE_ANNIVERSARY_ENABLED") === "true"}
+                    className="h-4 w-4"
+                  />
+                  Purchase anniversary
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-300">
+                  <input
+                    type="checkbox"
+                    name="winback"
+                    defaultChecked={setting("LIFECYCLE_WINBACK_ENABLED") === "true"}
+                    className="h-4 w-4"
+                  />
+                  Win-back lapsed owners
+                </label>
                 <button className="btn-primary">Save</button>
               </form>
             </Row>
