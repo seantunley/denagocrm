@@ -14,7 +14,7 @@ export default async function LeadsPage() {
       include: {
         leads: {
           where: { status: "open", deletedAt: null },
-          orderBy: { position: "asc" },
+          orderBy: { createdAt: "desc" }, // newest leads on top of every column
           include: {
             product: true,
             assignedTo: true,
