@@ -178,7 +178,7 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
   revalidatePath(`/quotes/${quoteId}`);
 }
 
-/** Delivered — optional signed delivery note, then straight to vehicle registration. */
+/** Delivered — proof of delivery (driver, checklist, signature), then vehicle registration. */
 export async function markDelivered(quoteId: string, formData: FormData) {
   const user = await requireCrm();
   const quote = await prisma.quote.findUniqueOrThrow({
@@ -197,7 +197,46 @@ export async function markDelivered(quoteId: string, formData: FormData) {
       user.id
     );
   }
-  await prisma.quote.update({ where: { id: quoteId }, data: { deliveredAt: new Date() } });
+
+  // Proof of delivery: driver, handover checklist, captured signature
+  const deliveredByName = String(formData.get("deliveredByName") ?? "").trim() || null;
+  let deliveryChecklist: object | undefined;
+  try {
+    const parsed = JSON.parse(String(formData.get("checklist") ?? ""));
+    if (parsed && typeof parsed === "object") deliveryChecklist = parsed;
+  } catch {
+    /* no checklist submitted */
+  }
+  let deliverySignatureRef: string | null = null;
+  const sig = String(formData.get("signature") ?? "");
+  if (sig.startsWith("data:image/png;base64,")) {
+    const buf = Buffer.from(sig.split(",")[1], "base64");
+    if (buf.length > 0 && buf.length <= MAX_FILE) {
+      deliverySignatureRef = await saveFile(buf, `delivery-signature-Q${quote.number}.png`, "image/png");
+      await prisma.document.create({
+        data: {
+          fileName: `Delivery signature — Q-${quote.number}`,
+          storedName: deliverySignatureRef,
+          mimeType: "image/png",
+          sizeBytes: buf.length,
+          contactId: quote.contactId,
+          quoteId,
+          tag: "delivery-signature",
+          uploadedById: user.id,
+        },
+      });
+    }
+  }
+
+  await prisma.quote.update({
+    where: { id: quoteId },
+    data: {
+      deliveredAt: new Date(),
+      deliveredByName,
+      deliveryChecklist,
+      deliverySignatureRef,
+    },
+  });
   if (quote.leadId) await runLeadAutomations("delivered", quote.leadId).catch(() => {});
   await logAudit({
     action: "fulfilment.delivered",

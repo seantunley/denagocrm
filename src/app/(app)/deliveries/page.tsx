@@ -5,9 +5,9 @@ import {
   markInvoiced,
   markDepositPaid,
   scheduleDelivery,
-  markDelivered,
   uploadDeliveryPhotos,
 } from "@/app/actions/fulfilment";
+import ProofOfDelivery from "@/components/ProofOfDelivery";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 
 export const metadata = { title: "Deliveries — DenagoCRM" };
@@ -138,20 +138,12 @@ export default async function DeliveriesPage() {
                         </form>
                       )}
                       {col.key === "deliver" && (
-                        <form action={markDelivered.bind(null, q.id)} className="mt-2 space-y-1.5">
-                          <input
-                            type="file"
-                            name="file"
-                            accept=".pdf,image/*"
-                            className="block w-full text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0"
-                          />
-                          <button className="btn bg-emerald-700 text-white hover:bg-emerald-600 btn-sm w-full">
-                            ✓ Delivered → register vehicle
-                          </button>
-                          <p className="text-[10px] text-slate-500">
-                            Optional: attach the signed delivery note first.
+                        <div className="mt-2">
+                          <ProofOfDelivery quoteId={q.id} />
+                          <p className="text-[10px] text-slate-500 mt-1">
+                            Capture driver, handover checklist &amp; signature.
                           </p>
-                        </form>
+                        </div>
                       )}
                       {col.key === "deliver" && (
                         <form

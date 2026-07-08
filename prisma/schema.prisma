@@ -431,6 +431,9 @@ model Quote {
   depositPaidAt        DateTime?
   deliveryScheduledFor DateTime?
   deliveredAt          DateTime?
+  deliveredByName      String? // driver / who handed the cart over
+  deliveryChecklist    Json? // handover checklist { item: boolean }
+  deliverySignatureRef String? // stored PNG of the customer's on-handover signature
   dealerSignedAt       DateTime?
   dealerSignedByName   String?
   dealerSignatureRef   String?
