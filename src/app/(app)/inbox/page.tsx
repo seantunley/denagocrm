@@ -100,7 +100,7 @@ export default async function InboxPage() {
 
   return (
     <div className="space-y-5">
-      <AutoRefresh seconds={20} />
+      <AutoRefresh seconds={60} />
       <div>
         <h1 className="text-2xl font-bold">Social inbox</h1>
         <p className="text-sm text-slate-400 mt-1">

@@ -161,7 +161,7 @@ export async function saveMyProfile(formData: FormData) {
 // ---- Integration settings ----
 
 export async function saveSetting(formData: FormData) {
-  await requireUser();
+  await requireOwner(); // integration credentials — owner only
   const key = String(formData.get("key") ?? "");
   const value = String(formData.get("value") ?? "").trim();
   if (!key) return;
@@ -170,7 +170,7 @@ export async function saveSetting(formData: FormData) {
 }
 
 export async function regenerateSetting(key: string) {
-  await requireUser();
+  await requireOwner(); // rotates a secret — owner only
   const value = crypto.randomBytes(24).toString("hex");
   await putSetting(key, value);
   revalidatePath("/settings");

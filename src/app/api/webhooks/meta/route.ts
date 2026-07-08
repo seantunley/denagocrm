@@ -34,7 +34,7 @@ async function fetchLeadDetails(leadgenId: string, accessToken: string) {
     `https://graph.facebook.com/v21.0/${leadgenId}?fields=field_data,created_time,ad_name,form_id,platform&access_token=${encodeURIComponent(
       accessToken
     )}`,
-    { cache: "no-store" }
+    { cache: "no-store", signal: AbortSignal.timeout(10000) }
   );
   if (!res.ok) throw new Error(`Graph API ${res.status}: ${await res.text()}`);
   return res.json();
@@ -44,9 +44,14 @@ async function fetchLeadDetails(leadgenId: string, accessToken: string) {
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
 
-  // Verify Meta's payload signature when an app secret is configured
+  // Verify Meta's payload signature. Fail CLOSED: if no app secret is
+  // configured we cannot authenticate the sender, so we reject rather than
+  // trust an anonymous POST (which could forge leads/DMs or drive the bot).
   const appSecret = await getSetting("META_APP_SECRET");
-  if (appSecret) {
+  if (!appSecret) {
+    return NextResponse.json({ error: "Webhook not configured" }, { status: 503 });
+  }
+  {
     const signature = req.headers.get("x-hub-signature-256") ?? "";
     const expected =
       "sha256=" +

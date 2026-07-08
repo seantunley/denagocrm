@@ -24,7 +24,7 @@ export async function getDailyForecast(): Promise<Map<string, DayForecast>> {
   try {
     const res = await fetch(
       "https://api.open-meteo.com/v1/forecast?latitude=-33.925&longitude=18.48&daily=weather_code,temperature_2m_max,precipitation_probability_max&timezone=Africa%2FJohannesburg&forecast_days=14",
-      { cache: "no-store" }
+      { cache: "no-store", signal: AbortSignal.timeout(2500) }
     );
     if (!res.ok) return days;
     const j = await res.json();

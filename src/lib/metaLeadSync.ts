@@ -26,7 +26,7 @@ export async function syncFacebookLeads(): Promise<number> {
 
   const pagesRes = await fetch(
     `${G}/me/accounts?fields=id,name,access_token&access_token=${encodeURIComponent(token)}`,
-    { cache: "no-store" }
+    { cache: "no-store", signal: AbortSignal.timeout(10000) }
   );
   if (!pagesRes.ok) throw new Error(`me/accounts ${pagesRes.status}`);
   const pages: { data?: { id: string; name: string; access_token: string }[] } =
@@ -36,7 +36,7 @@ export async function syncFacebookLeads(): Promise<number> {
   for (const page of pages.data ?? []) {
     const formsRes = await fetch(
       `${G}/${page.id}/leadgen_forms?fields=id,name,status&limit=25&access_token=${encodeURIComponent(page.access_token)}`,
-      { cache: "no-store" }
+      { cache: "no-store", signal: AbortSignal.timeout(10000) }
     );
     if (!formsRes.ok) continue;
     const forms: { data?: { id: string; status: string }[] } = await formsRes.json();
@@ -44,7 +44,7 @@ export async function syncFacebookLeads(): Promise<number> {
     for (const form of forms.data ?? []) {
       const leadsRes = await fetch(
         `${G}/${form.id}/leads?fields=id,created_time,field_data,ad_name,platform&limit=100&access_token=${encodeURIComponent(page.access_token)}`,
-        { cache: "no-store" }
+        { cache: "no-store", signal: AbortSignal.timeout(10000) }
       );
       if (!leadsRes.ok) continue;
       const leads: {

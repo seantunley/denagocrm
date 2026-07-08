@@ -2,7 +2,6 @@ import Link from "next/link";
 import { subDays, addDays, startOfDay } from "date-fns";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
-import { runIdleAutomations } from "@/lib/automations";
 import { completeActivity } from "@/app/actions/activities";
 import { activityIcons } from "@/components/ActivityPanel";
 import Tabs from "@/components/Tabs";
@@ -120,9 +119,8 @@ export default async function DashboardPage() {
   const user = await requireUser();
   const showSales = hasModule(user, "crm");
   const showService = hasModule(user, "workshop");
-  try {
-    await runIdleAutomations();
-  } catch {}
+  // Idle-lead automations are owned by the 15-minute cron; don't block the
+  // dashboard (the most-hit, auto-refreshing page) on that scan.
 
   const now = new Date();
   const weekAgo = subDays(now, 7);
@@ -147,8 +145,14 @@ export default async function DashboardPage() {
     prisma.lead.count({ where: { createdAt: { gte: weekAgo } } }),
     prisma.quote.count({ where: { status: "accepted", deliveredAt: null, supersededAt: null } }),
     prisma.jobCard.count({ where: { status: { not: "completed" } } }),
+    // computeDue only needs the latest service record + latest mileage log,
+    // so don't haul every child row (mileageLogs grows fastest in the app).
     prisma.vehicle.findMany({
-      include: { contact: true, serviceRecords: true, mileageLogs: true },
+      include: {
+        contact: true,
+        serviceRecords: { orderBy: { serviceDate: "desc" }, take: 1 },
+        mileageLogs: { orderBy: { recordedAt: "desc" }, take: 1 },
+      },
     }),
     prisma.communication.findMany({
       take: 5,

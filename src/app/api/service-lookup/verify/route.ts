@@ -1,4 +1,4 @@
-import crypto from "crypto";
+import bcrypt from "bcryptjs";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma, basePrisma } from "@/lib/db";
@@ -66,8 +66,13 @@ export async function POST(req: NextRequest) {
     data: { attempts: { increment: 1 } },
   });
 
-  const codeHash = crypto.createHash("sha256").update(parsed.data.code).digest("hex");
-  if (codeHash !== challenge.codeHash) {
+  // Support both the new bcrypt hashes and any legacy SHA-256 rows still
+  // within their 10-minute window during the changeover.
+  const stored = challenge.codeHash;
+  const codeOk = stored.startsWith("$2")
+    ? await bcrypt.compare(parsed.data.code, stored)
+    : (await import("crypto")).createHash("sha256").update(parsed.data.code).digest("hex") === stored;
+  if (!codeOk) {
     return NextResponse.json(
       { error: "That code isn't right — please check and try again." },
       { status: 401, headers: corsHeaders }

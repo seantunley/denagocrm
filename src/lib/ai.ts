@@ -22,6 +22,7 @@ export async function aiCheckDraft(input: {
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
+      signal: AbortSignal.timeout(20000),
       headers: {
         "Content-Type": "application/json",
         "x-api-key": apiKey,
@@ -81,6 +82,7 @@ export async function aiResearch(input: {
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
+      signal: AbortSignal.timeout(45000),
       headers: {
         "Content-Type": "application/json",
         "x-api-key": apiKey,

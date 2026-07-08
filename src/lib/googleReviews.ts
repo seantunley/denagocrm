@@ -30,7 +30,7 @@ export async function syncGoogleReviews(): Promise<number> {
 
   const res = await fetch(
     `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}?fields=reviews&key=${encodeURIComponent(apiKey)}`,
-    { cache: "no-store" }
+    { cache: "no-store", signal: AbortSignal.timeout(10000) }
   );
   if (!res.ok) throw new Error(`Places API ${res.status}`);
   const json: {

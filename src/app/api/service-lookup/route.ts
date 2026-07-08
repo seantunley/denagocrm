@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import bcrypt from "bcryptjs";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma, basePrisma } from "@/lib/db";
@@ -85,7 +86,9 @@ export async function POST(req: NextRequest) {
   const phone = vehicle.contact.whatsapp ?? vehicle.contact.phone;
   const email = vehicle.contact.email;
   const code = crypto.randomInt(100000, 1000000).toString();
-  const codeHash = crypto.createHash("sha256").update(code).digest("hex");
+  // bcrypt, not plain SHA-256: a 6-digit code hashed with a fast unsalted
+  // digest is trivially reversible from a DB dump.
+  const codeHash = await bcrypt.hash(code, 10);
 
   let channel: "sms" | "email" | null = null;
   let target = "";

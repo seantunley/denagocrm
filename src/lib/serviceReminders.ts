@@ -19,8 +19,13 @@ export async function runServiceReminders(): Promise<number> {
   if (!template) return 0;
 
   const vehicles = await prisma.vehicle.findMany({
-    include: { contact: true, serviceRecords: true, mileageLogs: true },
+    include: {
+      contact: true,
+      serviceRecords: { orderBy: { serviceDate: "desc" }, take: 1 },
+      mileageLogs: { orderBy: { recordedAt: "desc" }, take: 1 },
+    },
   });
+  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
 
   let sent = 0;
   for (const vehicle of vehicles) {
@@ -57,7 +62,6 @@ export async function runServiceReminders(): Promise<number> {
     await prisma.serviceReminderLog.create({
       data: { vehicleId: vehicle.id, dueKey, sentTo: vehicle.contact.email },
     });
-    const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
     await prisma.communication.create({
       data: {
         type: "email",

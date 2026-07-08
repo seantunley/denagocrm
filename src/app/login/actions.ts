@@ -131,6 +131,11 @@ export async function verifySecondFactor(
 ): Promise<{ error?: string }> {
   const uid = await readPending();
   if (!uid) return { error: "Session expired — please sign in again." };
+  // Rate-limit the second factor too — the password step is limited but the
+  // 2FA code (6 digits) must not be freely brute-forceable.
+  if (isLockedOut("2fa:" + uid)) {
+    return { error: "Too many incorrect codes. Try again in 15 minutes." };
+  }
   const code = String(formData.get("code") ?? "").trim();
   const user = await prisma.user.findUnique({ where: { id: uid } });
   if (!user) return { error: "Session expired — please sign in again." };
@@ -165,7 +170,11 @@ export async function verifySecondFactor(
     }
   }
 
-  if (!ok) return { error: "That code isn't right. Try again, or use a backup code." };
+  if (!ok) {
+    recordFailure("2fa:" + uid);
+    return { error: "That code isn't right. Try again, or use a backup code." };
+  }
+  failedAttempts.delete("2fa:" + uid);
 
   await prisma.user.update({
     where: { id: user.id },

@@ -20,8 +20,13 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
 
+  // Fail CLOSED: without the app secret we cannot verify the sender, so an
+  // unauthenticated POST must not be able to drive the auto-reply bot.
   const appSecret = await getSetting("META_APP_SECRET");
-  if (appSecret) {
+  if (!appSecret) {
+    return NextResponse.json({ error: "Webhook not configured" }, { status: 503 });
+  }
+  {
     const signature = req.headers.get("x-hub-signature-256") ?? "";
     const expected =
       "sha256=" + crypto.createHmac("sha256", appSecret).update(rawBody, "utf8").digest("hex");

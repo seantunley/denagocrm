@@ -35,7 +35,15 @@ function encryptionKey(): Buffer | null {
 
 export function encryptValue(plain: string): string {
   const key = encryptionKey();
-  if (!key) return plain; // key not configured yet — store as-is rather than break
+  if (!key) {
+    // In production a missing/malformed key would silently store credentials
+    // in clear text — refuse instead. Locally (no key set) fall back so dev
+    // still works.
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("SETTINGS_ENCRYPTION_KEY missing/invalid — refusing to store a credential in clear text");
+    }
+    return plain;
+  }
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
   const enc = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
