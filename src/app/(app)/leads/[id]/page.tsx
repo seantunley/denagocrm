@@ -24,7 +24,9 @@ import { isAiConfigured } from "@/lib/ai";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { requireUser } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
-import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
+
+const RESEARCH_SUBJECT = "🔎 AI research";
 
 export default async function LeadDetailPage({
   params,
@@ -81,6 +83,10 @@ export default async function LeadDetailPage({
   }));
   const path = `/leads/${lead.id}`;
   const aiOn = await isAiConfigured();
+
+  // AI research lives in its own tab, not mixed into the comms timeline.
+  const researchNotes = lead.communications.filter((c) => c.subject === RESEARCH_SUBJECT);
+  const comms = lead.communications.filter((c) => c.subject !== RESEARCH_SUBJECT);
 
   const statusBadge =
     lead.status === "won"
@@ -335,7 +341,7 @@ export default async function LeadDetailPage({
               {
                 key: "comms",
                 label: "Communications",
-                count: lead.communications.length,
+                count: comms.length,
                 content: (
                   <>
                     <EmailComposer
@@ -353,7 +359,7 @@ export default async function LeadDetailPage({
                       contactId={lead.contactId ?? undefined}
                       configured={waConfigured}
                       revalidate={path}
-                      messages={lead.communications
+                      messages={comms
                         .filter((c) => c.type === "whatsapp")
                         .slice()
                         .reverse()
@@ -366,11 +372,46 @@ export default async function LeadDetailPage({
                         }))}
                     />
                     <CommsTimeline
-                      communications={lead.communications}
+                      communications={comms}
                       leadId={lead.id}
                       revalidate={path}
                     />
                   </>
+                ),
+              },
+              {
+                key: "research",
+                label: "Research",
+                count: researchNotes.length,
+                content: (
+                  <div className="card space-y-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <h2 className="font-semibold">🔎 AI research</h2>
+                      <ResearchButton leadId={lead.id} configured={aiOn} />
+                    </div>
+                    {researchNotes.length === 0 ? (
+                      <p className="text-sm text-slate-400">
+                        No research yet. Use the Research button to generate a briefing on this
+                        lead and the company behind the email.
+                      </p>
+                    ) : (
+                      <ul className="space-y-4">
+                        {researchNotes.map((r) => (
+                          <li
+                            key={r.id}
+                            className="border-t border-slate-800 pt-4 first:border-0 first:pt-0"
+                          >
+                            <p className="text-xs text-slate-500 mb-1.5">
+                              {formatDateTime(r.occurredAt)}
+                            </p>
+                            <p className="text-sm whitespace-pre-wrap leading-relaxed text-slate-200">
+                              {r.body}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 ),
               },
             ]}
@@ -381,7 +422,7 @@ export default async function LeadDetailPage({
           leadId={lead.id}
           revalidate={path}
           audit={audit}
-          communications={lead.communications}
+          communications={comms}
           creationNote={
             lead.notes
               ? {
