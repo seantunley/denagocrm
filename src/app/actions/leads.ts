@@ -10,6 +10,7 @@ import { recordReferral, markReferralEarned } from "@/lib/referrals";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { topPosition } from "@/lib/leadPos";
+import { triggerSurvey } from "@/lib/surveys";
 
 function leadData(formData: FormData) {
   const str = (k: string) => {
@@ -191,6 +192,8 @@ export async function markWon(leadId: string) {
     contactId,
     user,
   });
+  // Post-sale experience survey (self-throttled; won't clash with delivery)
+  await triggerSurvey("won", { contactId, leadId });
   revalidatePath("/leads");
   revalidatePath(`/leads/${leadId}`);
   redirect(`/contacts/${contactId}`);

@@ -743,3 +743,47 @@ model ErrorLog {
 
   @@index([createdAt])
 }
+
+// Customer feedback surveys — CSAT after a service, NPS, post-sale, or ad-hoc.
+// Questions are stored as JSON so new question types need no migration.
+model Survey {
+  id          String    @id @default(cuid())
+  title       String
+  type        String    @default("adhoc") // csat | sales | nps | adhoc
+  intro       String? // shown at the top of the form / in the invite
+  thankYou    String? // shown after submitting
+  questions   Json // [{id,type,label,required,options?,scale?}]
+  active      Boolean   @default(true)
+  trigger     String? // job_complete | delivery | won | null (manual send)
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  responses SurveyResponse[]
+
+  @@index([type, active])
+}
+
+// One invite/answer per recipient. contactId/leadId/jobCardId are loose
+// pointers (no FK) so this never complicates the core records.
+model SurveyResponse {
+  id          String    @id @default(cuid())
+  token       String    @unique @default(cuid()) // public, unguessable link
+  surveyId    String
+  survey      Survey    @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  contactId   String?
+  leadId      String?
+  jobCardId   String?
+  name        String? // recipient name snapshot
+  channel     String? // email | sms
+  answers     Json? // { questionId: value }
+  score       Int? // primary rating (1-5) or NPS (0-10), for rollups
+  comment     String? // free-text highlight
+  status      String    @default("sent") // sent | completed
+  sentAt      DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([surveyId, status])
+  @@index([contactId])
+}

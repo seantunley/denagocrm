@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { requireWorkshop } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendReviewRequest } from "@/lib/reviewRequests";
+import { triggerSurvey } from "@/lib/surveys";
 import { softDeleteRecord } from "@/lib/trash";
 
 function vehicleData(formData: FormData) {
@@ -65,6 +66,8 @@ export async function createVehicle(formData: FormData) {
   // New-cart delivery → ask for a Google review (only when ticked on the form)
   if (formData.get("newDelivery")) {
     await sendReviewRequest(vehicle.contactId, "delivery", vehicle.model).catch(() => {});
+    // …and an internal sales/delivery experience survey (self-throttled)
+    await triggerSurvey("delivery", { contactId: vehicle.contactId });
   }
   revalidatePath("/vehicles");
   redirect(`/vehicles/${vehicle.id}`);

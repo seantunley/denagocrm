@@ -37,7 +37,10 @@ function buildNav(mods: Set<string>, isAdmin: boolean) {
     groups.push({
       key: "marketing",
       label: "Marketing",
-      links: [{ href: "/campaigns", label: "Campaigns", icon: "📣" }],
+      links: [
+        { href: "/campaigns", label: "Campaigns", icon: "📣" },
+        { href: "/surveys", label: "Surveys", icon: "📝" },
+      ],
     });
     groups.push({
       key: "stock",

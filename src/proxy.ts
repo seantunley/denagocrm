@@ -20,6 +20,7 @@ const PUBLIC_PATHS = [
   "/api/track", // campaign open/click tracking
   "/api/unsubscribe", // one-click marketing unsubscribe
   "/portal", // customer portal has its own OTP session
+  "/s", // public survey response pages (token-gated)
   "/manifest.webmanifest",
   "/icons",
   "/sw.js",

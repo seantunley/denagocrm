@@ -7,6 +7,7 @@ import { prisma } from "@/lib/db";
 import { requireWorkshop } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendReviewRequest } from "@/lib/reviewRequests";
+import { triggerSurvey } from "@/lib/surveys";
 import { softDeleteRecord } from "@/lib/trash";
 import { saveFile } from "@/lib/storage";
 import { parseRands } from "@/lib/format";
@@ -214,6 +215,11 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
     "service",
     `the service on your ${jobCard.vehicle.model} (job card #${jobCard.number})`
   ).catch(() => {});
+  // Internal CSAT survey (measurable, lands on the timeline; self-throttled)
+  await triggerSurvey("job_complete", {
+    contactId: jobCard.contactId,
+    jobCardId: jobCard.id,
+  });
   revalidatePath("/jobcards");
   revalidatePath(`/jobcards/${jobCardId}`);
   revalidatePath(`/vehicles/${jobCard.vehicleId}`);
