@@ -91,8 +91,19 @@ export default async function ContactDetailPage({
   const aiOn = await isAiConfigured();
 
   // AI research lives in its own tab, not mixed into the comms timeline.
-  const researchNotes = contact.communications.filter((c) => c.subject === RESEARCH_SUBJECT);
+  // Gather it from this contact AND any of their leads, so research run on a
+  // lead still surfaces on the customer.
   const comms = contact.communications.filter((c) => c.subject !== RESEARCH_SUBJECT);
+  const researchNotes = await prisma.communication.findMany({
+    where: {
+      subject: RESEARCH_SUBJECT,
+      OR: [
+        { contactId: contact.id },
+        { leadId: { in: contact.leads.map((l) => l.id) } },
+      ],
+    },
+    orderBy: { occurredAt: "desc" },
+  });
 
   return (
     <div className="space-y-6">

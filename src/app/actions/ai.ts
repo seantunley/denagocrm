@@ -97,11 +97,14 @@ export async function researchRecord(
 
   let name = "";
   let email: string | null = null;
+  let resolvedContactId = contactId;
   if (leadId) {
     const l = await prisma.lead.findUnique({ where: { id: leadId } });
     if (!l) return { error: "Lead not found." };
     name = l.name;
     email = l.email;
+    // Link the research to the lead's contact too, so it shows on both.
+    resolvedContactId = contactId ?? l.contactId;
   } else if (contactId) {
     const c = await prisma.contact.findUnique({ where: { id: contactId } });
     if (!c) return { error: "Contact not found." };
@@ -121,11 +124,12 @@ export async function researchRecord(
       subject: "🔎 AI research",
       body: result.summary,
       leadId,
-      contactId,
+      contactId: resolvedContactId,
       userId: user.id,
     },
   });
   const { revalidatePath } = await import("next/cache");
-  revalidatePath(leadId ? `/leads/${leadId}` : `/contacts/${contactId}`);
+  if (leadId) revalidatePath(`/leads/${leadId}`);
+  if (resolvedContactId) revalidatePath(`/contacts/${resolvedContactId}`);
   return { summary: result.summary };
 }
