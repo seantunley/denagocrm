@@ -9,6 +9,7 @@ import { runLeadAutomations } from "@/lib/automations";
 import { recordReferral, markReferralEarned } from "@/lib/referrals";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
+import { topPosition } from "@/lib/leadPos";
 
 function leadData(formData: FormData) {
   const str = (k: string) => {
@@ -93,7 +94,7 @@ export async function createLead(formData: FormData) {
   }
 
   const lead = await prisma.lead.create({
-    data: { ...data, title, createdById: user.id, position: await nextPosition(data.stageId) },
+    data: { ...data, title, createdById: user.id, position: await topPosition(data.stageId) },
   });
   await logAudit({
     action: "lead.created",

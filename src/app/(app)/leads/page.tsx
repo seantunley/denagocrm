@@ -52,6 +52,7 @@ export default async function LeadsPage() {
       productName: l.product?.name ?? null,
       assignee: l.assignedTo?.name ?? null,
       research: l.research,
+      isNew: !l.viewedAt && l.createdAt.getTime() > Date.now() - 3 * 24 * 60 * 60 * 1000,
       testDrive: (() => {
         const td = l.activities[0];
         if (!td) return null;

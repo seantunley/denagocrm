@@ -50,6 +50,9 @@ export default async function LeadDetailPage({
     },
   });
   if (!lead) notFound();
+  if (!lead.viewedAt) {
+    await prisma.lead.update({ where: { id: lead.id }, data: { viewedAt: new Date() } }).catch(() => {});
+  }
   const [contacts, users, templates, smtpConfigured, audit, waConfigured, libraryDocuments, products, stages] = await Promise.all([
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
     prisma.user.findMany({ orderBy: { name: "asc" } }),

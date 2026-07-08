@@ -2,6 +2,7 @@ import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
+import { topPosition } from "./leadPos";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
@@ -200,6 +201,7 @@ export async function recordInboundWhatsApp(
           phone: "+" + fromDigits,
           source: "whatsapp",
           stageId: firstStage.id,
+          position: await topPosition(firstStage.id),
         },
       });
       leadId = lead.id;

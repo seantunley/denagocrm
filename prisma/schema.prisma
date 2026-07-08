@@ -301,6 +301,7 @@ model Lead {
 
   research     String? // latest AI research briefing (shown in the Research tab)
   researchedAt DateTime?
+  viewedAt     DateTime? // first time a staff member opened the lead
 
   deletedAt     DateTime?
   deletedByName String?

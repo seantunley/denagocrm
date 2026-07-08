@@ -1,5 +1,6 @@
 import { prisma } from "./db";
 import { logAudit } from "./audit";
+import { topPosition } from "./leadPos";
 import { sendPushToAll } from "./push";
 import { runLeadAutomations } from "./automations";
 
@@ -43,11 +44,6 @@ export async function createIntakeLead(input: IntakeLead) {
   const titleParts = [input.model, input.color].filter(Boolean);
   const title = titleParts.length > 0 ? titleParts.join(" – ") : input.name;
 
-  const max = await prisma.lead.aggregate({
-    where: { stageId: firstStage.id },
-    _max: { position: true },
-  });
-
   const lead = await prisma.lead.create({
     data: {
       title,
@@ -60,7 +56,7 @@ export async function createIntakeLead(input: IntakeLead) {
       valueCents,
       notes: input.message ?? null,
       stageId: firstStage.id,
-      position: (max._max.position ?? 0) + 1,
+      position: await topPosition(firstStage.id),
       externalId: input.externalId ?? null,
       raw: input.raw != null ? JSON.stringify(input.raw) : null,
     },

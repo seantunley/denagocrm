@@ -29,6 +29,7 @@ export type KanbanLead = {
   assignee: string | null;
   testDrive?: { when: string; weather: string | null; date: string } | null;
   research?: string | null;
+  isNew?: boolean;
 };
 
 function initials(name: string) {
@@ -80,6 +81,11 @@ function LeadCard({ lead, dragging }: { lead: KanbanLead; dragging?: boolean }) 
           href={`/leads/${lead.id}`}
           className="text-sm font-semibold text-slate-200 hover:text-orange-400 leading-snug"
         >
+          {lead.isNew && (
+            <span className="align-middle mr-1.5 rounded-full bg-emerald-500 text-white text-[9px] font-bold uppercase px-1.5 py-0.5 tracking-wide">
+              New
+            </span>
+          )}
           {lead.title}
         </Link>
         <div className="flex items-center gap-0.5 shrink-0 mt-0.5">
