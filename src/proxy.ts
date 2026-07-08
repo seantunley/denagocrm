@@ -17,6 +17,7 @@ const PUBLIC_PATHS = [
   "/api/service-lookup",
   "/sign",
   "/api/sign",
+  "/portal", // customer portal has its own OTP session
   "/manifest.webmanifest",
   "/icons",
   "/sw.js",

@@ -19,6 +19,7 @@ export const PUSH_KINDS = [
   { id: "dm", label: "Social DMs", desc: "New Messenger / Instagram message" },
   { id: "whatsapp", label: "WhatsApp messages", desc: "New inbound WhatsApp" },
   { id: "booking", label: "Service bookings", desc: "Online booking lands in the workshop diary" },
+  { id: "service_request", label: "Portal service requests", desc: "A customer requests a service from the portal" },
   { id: "quote_viewed", label: "Quote opened", desc: "Customer views their signing link" },
   { id: "quote_signed", label: "Quote / job card signed", desc: "Customer signs online" },
   { id: "quote_feedback", label: "Quote declined / changes", desc: "Customer declines or requests changes" },
