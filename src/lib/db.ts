@@ -48,6 +48,9 @@ function buildClient(base: PrismaClient) {
         async aggregate({ model, args, query }: any) {
           return query(addAliveFilter(model, args));
         },
+        async groupBy({ model, args, query }: any) {
+          return query(addAliveFilter(model, args));
+        },
       },
     },
   });
