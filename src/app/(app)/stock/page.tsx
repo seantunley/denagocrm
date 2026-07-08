@@ -1,0 +1,324 @@
+import Link from "next/link";
+import { prisma } from "@/lib/db";
+import ModalTrigger from "@/components/Modal";
+import { formatZAR } from "@/lib/format";
+import {
+  createPurchaseOrder,
+  receivePurchaseOrder,
+  cancelPurchaseOrder,
+  addStockUnit,
+  updateStockUnit,
+  reserveUnit,
+  releaseUnit,
+  markUnitSold,
+  deleteStockUnit,
+} from "@/app/actions/stock";
+
+const STATUS_BADGE: Record<string, string> = {
+  incoming: "bg-sky-500/15 text-sky-300",
+  available: "bg-emerald-500/15 text-emerald-300",
+  reserved: "bg-amber-500/15 text-amber-300",
+  sold: "bg-slate-700 text-slate-300",
+};
+const STATUS_LABEL: Record<string, string> = {
+  incoming: "On order",
+  available: "Available",
+  reserved: "Reserved",
+  sold: "Sold",
+};
+const FILTERS = ["all", "available", "incoming", "reserved", "sold"] as const;
+
+export default async function StockPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ status?: string }>;
+}) {
+  const { status } = await searchParams;
+  const filter = FILTERS.includes(status as (typeof FILTERS)[number]) ? status! : "all";
+
+  const [products, leads, units, openPos, counts] = await Promise.all([
+    prisma.product.findMany({ where: { active: true }, orderBy: { name: "asc" }, include: { colors: true } }),
+    prisma.lead.findMany({ where: { status: "open" }, orderBy: { createdAt: "desc" }, take: 300 }),
+    prisma.stockUnit.findMany({
+      where: filter === "all" ? {} : { status: filter },
+      orderBy: [{ status: "asc" }, { createdAt: "desc" }],
+      include: { product: true, reservedForLead: true, purchaseOrder: true },
+    }),
+    prisma.purchaseOrder.findMany({
+      where: { status: "ordered" },
+      orderBy: { orderedAt: "asc" },
+      include: { _count: { select: { units: true } }, units: { take: 1, include: { product: true } } },
+    }),
+    prisma.stockUnit.groupBy({ by: ["status"], _count: true }),
+  ]);
+
+  const countOf = (s: string) => counts.find((c) => c.status === s)?._count ?? 0;
+  const productOptions = products.map((p) => (
+    <option key={p.id} value={p.id}>
+      {p.name}
+    </option>
+  ));
+
+  const ProductSelect = () => (
+    <select name="productId" className="input" required defaultValue="">
+      <option value="" disabled>
+        Select model…
+      </option>
+      {productOptions}
+    </select>
+  );
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <h1 className="text-2xl font-bold">Stock</h1>
+        <div className="flex gap-2">
+          <ModalTrigger label="+ Purchase order" title="New purchase order">
+            <form action={createPurchaseOrder} className="card space-y-3">
+              <p className="text-sm text-slate-400">
+                Records carts on order. They arrive as <b>On order</b> stock; mark the order
+                received to move them to <b>Available</b>.
+              </p>
+              <div>
+                <label className="label">Model *</label>
+                <ProductSelect />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Colour</label>
+                  <input name="color" className="input" placeholder="e.g. Matte black" />
+                </div>
+                <div>
+                  <label className="label">Quantity *</label>
+                  <input name="qty" type="number" min="1" defaultValue="1" className="input" required />
+                </div>
+                <div>
+                  <label className="label">Unit cost (R)</label>
+                  <input name="cost" className="input" placeholder="0.00" />
+                </div>
+                <div>
+                  <label className="label">Expected date</label>
+                  <input name="expectedAt" type="date" className="input" />
+                </div>
+                <div>
+                  <label className="label">Supplier</label>
+                  <input name="supplier" className="input" defaultValue="Denago" />
+                </div>
+                <div>
+                  <label className="label">Order ref</label>
+                  <input name="reference" className="input" placeholder="Supplier PO no." />
+                </div>
+              </div>
+              <div>
+                <label className="label">Notes</label>
+                <input name="notes" className="input" />
+              </div>
+              <button className="btn-primary">Create order</button>
+            </form>
+          </ModalTrigger>
+          <ModalTrigger label="+ Add unit" title="Add stock unit" buttonClass="btn-secondary">
+            <form action={addStockUnit} className="card space-y-3">
+              <p className="text-sm text-slate-400">A cart already on the floor — added as available stock.</p>
+              <div>
+                <label className="label">Model *</label>
+                <ProductSelect />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Colour</label>
+                  <input name="color" className="input" />
+                </div>
+                <div>
+                  <label className="label">Serial / VIN</label>
+                  <input name="serial" className="input" />
+                </div>
+                <div>
+                  <label className="label">Cost (R)</label>
+                  <input name="cost" className="input" placeholder="0.00" />
+                </div>
+                <div>
+                  <label className="label">Notes</label>
+                  <input name="notes" className="input" />
+                </div>
+              </div>
+              <button className="btn-primary">Add to stock</button>
+            </form>
+          </ModalTrigger>
+        </div>
+      </div>
+
+      {/* Summary */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {(["available", "incoming", "reserved", "sold"] as const).map((s) => (
+          <Link
+            key={s}
+            href={`/stock?status=${s}`}
+            className="card p-4 hover:border-slate-700 transition-colors"
+          >
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              {STATUS_LABEL[s]}
+            </p>
+            <p className="text-2xl font-bold mt-1">{countOf(s)}</p>
+          </Link>
+        ))}
+      </div>
+
+      {/* Open purchase orders */}
+      {openPos.length > 0 && (
+        <div className="card p-0">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 px-4 pt-4">
+            On order
+          </p>
+          <ul className="divide-y divide-slate-800 mt-2">
+            {openPos.map((po) => (
+              <li key={po.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+                <span className="text-sm flex-1 min-w-0">
+                  <b>{po._count.units}×</b> {po.units[0]?.product.name ?? "unit"}
+                  {po.reference ? ` · ${po.reference}` : ""}
+                  {po.expectedAt ? (
+                    <span className="text-slate-400">
+                      {" "}· expected {po.expectedAt.toLocaleDateString("en-ZA")}
+                    </span>
+                  ) : null}
+                </span>
+                <form action={receivePurchaseOrder.bind(null, po.id)}>
+                  <button className="btn-primary btn-sm">Mark received</button>
+                </form>
+                <form action={cancelPurchaseOrder.bind(null, po.id)}>
+                  <button className="btn-secondary btn-sm">Cancel</button>
+                </form>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Filter chips */}
+      <div className="flex gap-2 flex-wrap">
+        {FILTERS.map((f) => (
+          <Link
+            key={f}
+            href={f === "all" ? "/stock" : `/stock?status=${f}`}
+            className={`badge ${
+              filter === f ? "bg-orange-600 text-white" : "bg-slate-800 text-slate-300"
+            }`}
+          >
+            {f === "all" ? "All" : STATUS_LABEL[f]}
+          </Link>
+        ))}
+      </div>
+
+      {/* Units table */}
+      <div className="card p-0 overflow-x-auto">
+        <table className="table-base">
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Colour</th>
+              <th>Serial / VIN</th>
+              <th>Status</th>
+              <th>Reserved / sold for</th>
+              <th>Cost</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {units.length === 0 && (
+              <tr>
+                <td colSpan={7} className="text-center text-slate-400 py-8">
+                  No stock here yet.
+                </td>
+              </tr>
+            )}
+            {units.map((u) => (
+              <tr key={u.id}>
+                <td className="font-medium">{u.product.name}</td>
+                <td>{u.color ?? "—"}</td>
+                <td className="text-slate-400">{u.serial ?? "—"}</td>
+                <td>
+                  <span className={`badge ${STATUS_BADGE[u.status]}`}>{STATUS_LABEL[u.status]}</span>
+                </td>
+                <td className="text-slate-400">
+                  {u.reservedForLead ? (
+                    <Link href={`/leads/${u.reservedForLead.id}`} className="text-orange-400 hover:underline">
+                      {u.reservedForLead.name}
+                    </Link>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                <td>{u.costCents ? formatZAR(u.costCents) : "—"}</td>
+                <td className="text-right">
+                  <ModalTrigger label="Manage" title={`${u.product.name}${u.serial ? ` · ${u.serial}` : ""}`} buttonClass="btn-secondary btn-sm">
+                    <div className="space-y-4">
+                      <form action={updateStockUnit.bind(null, u.id)} className="card space-y-3">
+                        <p className="font-semibold text-sm">Details</p>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="label">Serial / VIN</label>
+                            <input name="serial" className="input" defaultValue={u.serial ?? ""} />
+                          </div>
+                          <div>
+                            <label className="label">Colour</label>
+                            <input name="color" className="input" defaultValue={u.color ?? ""} />
+                          </div>
+                          <div>
+                            <label className="label">Cost (R)</label>
+                            <input name="cost" className="input" defaultValue={u.costCents ? (u.costCents / 100).toFixed(2) : ""} />
+                          </div>
+                          <div>
+                            <label className="label">Notes</label>
+                            <input name="notes" className="input" defaultValue={u.notes ?? ""} />
+                          </div>
+                        </div>
+                        <button className="btn-secondary btn-sm">Save details</button>
+                      </form>
+
+                      {u.status !== "sold" && (
+                        <form action={reserveUnit.bind(null, u.id)} className="card space-y-2">
+                          <p className="font-semibold text-sm">Reserve for a lead</p>
+                          <select name="leadId" className="input" required defaultValue="">
+                            <option value="" disabled>
+                              Select lead…
+                            </option>
+                            {leads.map((l) => (
+                              <option key={l.id} value={l.id}>
+                                {l.title} — {l.name}
+                              </option>
+                            ))}
+                          </select>
+                          <button className="btn-primary btn-sm">Reserve</button>
+                        </form>
+                      )}
+
+                      <div className="card space-y-2">
+                        <p className="font-semibold text-sm">Status</p>
+                        <div className="flex gap-2 flex-wrap">
+                          {u.status !== "available" && (
+                            <form action={releaseUnit.bind(null, u.id)}>
+                              <button className="btn-secondary btn-sm">Set available</button>
+                            </form>
+                          )}
+                          {u.status !== "sold" && (
+                            <form action={markUnitSold.bind(null, u.id)}>
+                              <button className="btn bg-emerald-700 text-white hover:bg-emerald-600 btn-sm">
+                                Mark sold
+                              </button>
+                            </form>
+                          )}
+                          <form action={deleteStockUnit.bind(null, u.id)}>
+                            <button className="btn-danger btn-sm">Remove</button>
+                          </form>
+                        </div>
+                      </div>
+                    </div>
+                  </ModalTrigger>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

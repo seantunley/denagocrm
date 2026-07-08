@@ -15,6 +15,8 @@ const SOFT_DELETE_MODELS = new Set([
   "Product",
   "LibraryDocument",
   "Quote",
+  "StockUnit",
+  "PurchaseOrder",
 ]);
 
 /* eslint-disable @typescript-eslint/no-explicit-any */

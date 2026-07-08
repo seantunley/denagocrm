@@ -92,9 +92,48 @@ model Product {
   deletedByName String?
   deleteReason  String?
 
-  colors   ProductColor[]
-  leads    Lead[]
-  vehicles Vehicle[]
+  colors     ProductColor[]
+  leads      Lead[]
+  vehicles   Vehicle[]
+  stockUnits StockUnit[]
+}
+
+model PurchaseOrder {
+  id         String      @id @default(cuid())
+  reference  String? // supplier's PO / order number
+  supplier   String      @default("Denago")
+  status     String      @default("ordered") // ordered | received | cancelled
+  orderedAt  DateTime    @default(now())
+  expectedAt DateTime?
+  notes      String?
+  createdAt  DateTime    @default(now())
+  deletedAt  DateTime?
+  units      StockUnit[]
+}
+
+model StockUnit {
+  id        String    @id @default(cuid())
+  productId String
+  product   Product   @relation(fields: [productId], references: [id])
+  color     String?
+  serial    String? // VIN / serial number
+  status    String    @default("incoming") // incoming | available | reserved | sold
+  costCents Int       @default(0)
+  notes     String?
+  createdAt DateTime  @default(now())
+  arrivedAt DateTime?
+  soldAt    DateTime?
+  deletedAt DateTime?
+
+  purchaseOrderId   String?
+  purchaseOrder     PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+  reservedForLeadId String?
+  reservedForLead   Lead?          @relation("StockReserved", fields: [reservedForLeadId], references: [id], onDelete: SetNull)
+  soldQuoteId       String?
+  soldQuote         Quote?         @relation("StockSold", fields: [soldQuoteId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([productId])
 }
 
 model ProductColor {
@@ -204,6 +243,7 @@ model Lead {
   activities     Activity[]
   quotes         Quote[]
   researchNotes  ResearchNote[]
+  reservedStock  StockUnit[]    @relation("StockReserved")
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -331,7 +371,8 @@ model Quote {
   createdById String?
   createdBy   User?    @relation("QuoteCreator", fields: [createdById], references: [id])
 
-  items QuoteItem[]
+  items     QuoteItem[]
+  soldStock StockUnit[] @relation("StockSold")
 }
 
 model QuoteItem {
