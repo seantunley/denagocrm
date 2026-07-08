@@ -26,12 +26,12 @@ function buildNav(mods: Set<string>, isAdmin: boolean) {
       key: "crm",
       label: "CRM",
       links: [
+        { href: "/calendar", label: "Calendar", icon: "📅" },
         { href: "/leads", label: "Leads", icon: "◎" },
         { href: "/quotes", label: "Quotes", icon: "📄" },
         { href: "/deliveries", label: "Deliveries", icon: "🚚" },
         { href: "/contacts", label: "Contacts", icon: "☰" },
         { href: "/activities", label: "Activities", icon: "✓" },
-        { href: "/calendar", label: "Calendar", icon: "📅" },
       ],
     });
     groups.push({
