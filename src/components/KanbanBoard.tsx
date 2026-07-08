@@ -16,6 +16,7 @@ import {
 import { moveLead } from "@/app/actions/leads";
 import { formatZAR } from "@/lib/format";
 import TestDriveWeather from "@/components/TestDriveWeather";
+import ResearchPopup from "@/components/ResearchPopup";
 
 export type KanbanLead = {
   id: string;
@@ -27,6 +28,7 @@ export type KanbanLead = {
   productName: string | null;
   assignee: string | null;
   testDrive?: { when: string; weather: string | null; date: string } | null;
+  research?: string | null;
 };
 
 function initials(name: string) {
@@ -80,9 +82,10 @@ function LeadCard({ lead, dragging }: { lead: KanbanLead; dragging?: boolean }) 
         >
           {lead.title}
         </Link>
-        <span title={lead.source} className="shrink-0 mt-0.5">
-          {sourceIcons[lead.source] ?? "•"}
-        </span>
+        <div className="flex items-center gap-0.5 shrink-0 mt-0.5">
+          {lead.research && <ResearchPopup summary={lead.research} name={lead.name} />}
+          <span title={lead.source}>{sourceIcons[lead.source] ?? "•"}</span>
+        </div>
       </div>
       <p className="text-xs text-slate-400 mt-1">{lead.name}</p>
       {lead.productName && (

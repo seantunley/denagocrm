@@ -121,7 +121,6 @@ export default async function ContactDetailPage({
           </p>
         </div>
         <div className="flex gap-2">
-          <ResearchButton contactId={contact.id} configured={aiOn} />
           <Link href={`/contacts/${contact.id}/edit`} className="btn-secondary">
             Edit
           </Link>

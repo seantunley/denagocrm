@@ -110,7 +110,6 @@ export default async function LeadDetailPage({
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <ResearchButton leadId={lead.id} configured={aiOn} />
           {lead.status === "open" && (
             <>
               <form action={createQuoteFromLead.bind(null, lead.id)}>
