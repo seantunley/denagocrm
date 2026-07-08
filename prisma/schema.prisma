@@ -39,6 +39,7 @@ model User {
   libraryVersions    LibraryVersion[]
   quotesCreated      Quote[]          @relation("QuoteCreator")
   jobCardsAsTech     JobCard[]        @relation("JobCardTechnician")
+  campaignsCreated   Campaign[]       @relation("CampaignCreator")
 }
 
 model AppSetting {
@@ -161,10 +162,11 @@ model Contact {
   city          String?
   province      String?
   postalCode    String?
-  source        String?
-  notes         String?
-  research      String? // latest AI research briefing (shown in the Research tab)
-  researchedAt  DateTime?
+  source          String?
+  notes           String?
+  marketingOptOut Boolean @default(false) // excluded from bulk campaigns
+  research        String? // latest AI research briefing (shown in the Research tab)
+  researchedAt    DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -195,6 +197,23 @@ model Tag {
   name     String    @unique
   color    String    @default("#64748b")
   contacts Contact[]
+}
+
+model Campaign {
+  id             String    @id @default(cuid())
+  name           String
+  channel        String // email | sms
+  subject        String?
+  body           String
+  audience       String // human-readable audience label
+  recipientCount Int       @default(0)
+  sentCount      Int       @default(0)
+  failedCount    Int       @default(0)
+  status         String    @default("draft") // draft | sent
+  createdAt      DateTime  @default(now())
+  sentAt         DateTime?
+  createdById    String?
+  createdBy      User?     @relation("CampaignCreator", fields: [createdById], references: [id])
 }
 
 model PipelineStage {

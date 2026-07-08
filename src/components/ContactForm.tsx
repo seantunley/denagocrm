@@ -16,6 +16,7 @@ type ContactDefaults = {
   notes?: string | null;
   tags?: string;
   ownerId?: string | null;
+  marketingOptOut?: boolean;
 };
 
 export default function ContactForm({
@@ -143,6 +144,10 @@ export default function ContactForm({
         <label className="label">Notes</label>
         <textarea name="notes" className="input" rows={3} defaultValue={defaults.notes ?? ""} />
       </div>
+      <label className="flex items-center gap-2 text-sm text-slate-300">
+        <input type="checkbox" name="marketingOptOut" defaultChecked={defaults.marketingOptOut ?? false} />
+        Opt out of marketing campaigns (exclude from bulk email / SMS)
+      </label>
       <DuplicateGuard />
       <button className="btn-primary">{submitLabel}</button>
     </form>

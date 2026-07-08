@@ -29,6 +29,7 @@ function contactData(formData: FormData) {
     source: str("source"),
     notes: str("notes"),
     ownerId: str("ownerId"),
+    marketingOptOut: formData.get("marketingOptOut") === "on",
   };
 }
 

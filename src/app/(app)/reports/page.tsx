@@ -19,31 +19,45 @@ export default async function ReportsPage() {
   const d90 = subDays(now, 90);
   const thisMonth = startOfMonth(now);
 
-  const [leads90, openLeads, stages, quotes, completedJobCards, wonAll] = await Promise.all([
-    prisma.lead.findMany({
-      where: { createdAt: { gte: d90 } },
-      include: { product: true },
-    }),
-    prisma.lead.findMany({ where: { status: "open" }, include: { stage: true } }),
-    prisma.pipelineStage.findMany({ orderBy: { order: "asc" } }),
-    prisma.quote.findMany({ include: { items: true } }),
-    prisma.jobCard.findMany({
-      where: { status: "completed", completedAt: { gte: subMonths(thisMonth, 5) } },
-      include: { items: true },
-    }),
-    prisma.lead.findMany({ where: { status: "won" }, include: { product: true } }),
-  ]);
+  const [leads90, openLeads, stages, quotes, completedJobCards, wonAll, srcTotals, srcWon] =
+    await Promise.all([
+      prisma.lead.findMany({
+        where: { createdAt: { gte: d90 } },
+        include: { product: true },
+      }),
+      prisma.lead.findMany({ where: { status: "open" }, include: { stage: true } }),
+      prisma.pipelineStage.findMany({ orderBy: { order: "asc" } }),
+      prisma.quote.findMany({ include: { items: true } }),
+      prisma.jobCard.findMany({
+        where: { status: "completed", completedAt: { gte: subMonths(thisMonth, 5) } },
+        include: { items: true },
+      }),
+      prisma.lead.findMany({ where: { status: "won" }, include: { product: true } }),
+      prisma.lead.groupBy({ by: ["source"], _count: true }),
+      prisma.lead.groupBy({
+        by: ["source"],
+        where: { status: "won" },
+        _count: true,
+        _sum: { valueCents: true },
+      }),
+    ]);
 
-  // Lead sources (90 days) with conversion
-  const sources = new Map<string, { total: number; won: number }>();
-  for (const l of leads90) {
-    const s = sources.get(l.source) ?? { total: 0, won: 0 };
-    s.total++;
-    if (l.status === "won") s.won++;
-    sources.set(l.source, s);
-  }
-  const sourceRows = [...sources.entries()].sort((a, b) => b[1].total - a[1].total);
-  const maxSource = Math.max(1, ...sourceRows.map(([, v]) => v.total));
+  // Source performance / ROI (all time): conversion + value per channel
+  const sourcePerf = srcTotals
+    .map((t) => {
+      const w = srcWon.find((x) => x.source === t.source);
+      const won = w?._count ?? 0;
+      const value = w?._sum.valueCents ?? 0;
+      return {
+        source: t.source,
+        total: t._count,
+        won,
+        conv: t._count > 0 ? Math.round((won / t._count) * 100) : 0,
+        value,
+        avg: won > 0 ? Math.round(value / won) : 0,
+      };
+    })
+    .sort((a, b) => b.value - a.value || b.total - a.total);
 
   // Pipeline by stage
   const stageRows = stages.map((s) => {
@@ -147,26 +161,52 @@ export default async function ReportsPage() {
                 </div>
 
                 <div className="grid lg:grid-cols-2 gap-4">
-                  <div className="card p-4">
+                  <div className="card p-4 lg:col-span-2">
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">
-                      Where leads come from (90 days)
+                      Lead source performance (all time)
                     </p>
-                    {sourceRows.length === 0 ? (
+                    {sourcePerf.length === 0 ? (
                       <p className="text-sm text-slate-400">No leads yet.</p>
                     ) : (
-                      <div className="space-y-2.5">
-                        {sourceRows.map(([source, v]) => (
-                          <div key={source}>
-                            <div className="flex justify-between text-sm mb-0.5">
-                              <span className="capitalize">{source}</span>
-                              <span className="text-slate-400 text-xs">
-                                {v.total} lead{v.total !== 1 ? "s" : ""}
-                                {v.won > 0 ? ` · ${v.won} won` : ""}
-                              </span>
-                            </div>
-                            <Bar value={v.total} max={maxSource} />
-                          </div>
-                        ))}
+                      <div className="overflow-x-auto">
+                        <table className="table-base">
+                          <thead>
+                            <tr>
+                              <th>Source</th>
+                              <th className="text-right">Leads</th>
+                              <th className="text-right">Won</th>
+                              <th className="text-right">Conversion</th>
+                              <th className="text-right">Sales value</th>
+                              <th className="text-right">Avg deal</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {sourcePerf.map((r) => (
+                              <tr key={r.source}>
+                                <td className="capitalize font-medium">{r.source}</td>
+                                <td className="text-right">{r.total}</td>
+                                <td className="text-right">{r.won}</td>
+                                <td className="text-right">
+                                  <span
+                                    className={
+                                      r.conv >= 30
+                                        ? "text-emerald-400"
+                                        : r.conv >= 10
+                                        ? "text-amber-400"
+                                        : "text-slate-400"
+                                    }
+                                  >
+                                    {r.conv}%
+                                  </span>
+                                </td>
+                                <td className="text-right">{r.value ? formatZAR(r.value) : "—"}</td>
+                                <td className="text-right text-slate-400">
+                                  {r.avg ? formatZAR(r.avg) : "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     )}
                   </div>
