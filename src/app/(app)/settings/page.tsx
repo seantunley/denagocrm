@@ -494,6 +494,24 @@ export default async function SettingsPage({
                 />
               </div>
 
+              <div className="border-t border-slate-800 pt-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium">Guided flow (menus) <span className="text-xs text-sky-400">beta</span></p>
+                    <p className="text-xs text-slate-500">
+                      New chats get a tappable menu — Prices, Book a service, Chat to us — that
+                      branches into your price list, a booking capture (logged in the workshop), or
+                      the AI assistant. A visual flow builder is coming; for now it runs a sensible
+                      default flow.
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer shrink-0">
+                    <input type="checkbox" name="flowEnabled" defaultChecked={setting("BOT_FLOW_ENABLED") === "true"} className="h-4 w-4" />
+                    Enabled
+                  </label>
+                </div>
+              </div>
+
               <div className="border-t border-slate-800 pt-3 space-y-3">
                 <div className="flex items-center justify-between gap-4">
                   <div>

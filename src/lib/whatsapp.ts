@@ -75,6 +75,67 @@ export async function sendWhatsAppText(
   return { ok: true };
 }
 
+async function sendInteractive(toDigits: string, interactive: unknown): Promise<{ ok: boolean; error?: string }> {
+  const [phoneNumberId, token] = await Promise.all([
+    getSetting("WA_PHONE_NUMBER_ID"),
+    getSetting("WA_ACCESS_TOKEN"),
+  ]);
+  if (!phoneNumberId || !token) return { ok: false, error: "WhatsApp is not configured." };
+  const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ messaging_product: "whatsapp", to: toDigits, type: "interactive", interactive }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    return { ok: false, error: err?.error?.message ?? `WhatsApp API error ${res.status}` };
+  }
+  return { ok: true };
+}
+
+/** Sends up to 3 tappable reply buttons. */
+export async function sendWhatsAppButtons(
+  toDigits: string,
+  body: string,
+  buttons: { id: string; title: string }[]
+) {
+  return sendInteractive(toDigits, {
+    type: "button",
+    body: { text: body.slice(0, 1024) },
+    action: {
+      buttons: buttons.slice(0, 3).map((b) => ({
+        type: "reply",
+        reply: { id: b.id.slice(0, 256), title: b.title.slice(0, 20) },
+      })),
+    },
+  });
+}
+
+/** Sends a tappable list (up to 10 rows) behind a menu button. */
+export async function sendWhatsAppList(
+  toDigits: string,
+  body: string,
+  buttonLabel: string,
+  rows: { id: string; title: string; description?: string }[]
+) {
+  return sendInteractive(toDigits, {
+    type: "list",
+    body: { text: body.slice(0, 1024) },
+    action: {
+      button: buttonLabel.slice(0, 20),
+      sections: [
+        {
+          rows: rows.slice(0, 10).map((r) => ({
+            id: r.id.slice(0, 200),
+            title: r.title.slice(0, 24),
+            ...(r.description ? { description: r.description.slice(0, 72) } : {}),
+          })),
+        },
+      ],
+    },
+  });
+}
+
 /** Downloads a WhatsApp media object (e.g. a voice note) by its media id. */
 export async function fetchWhatsAppMedia(
   mediaId: string

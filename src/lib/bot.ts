@@ -55,7 +55,7 @@ function cleanBody(body: string): string {
 }
 
 /** Pause the bot while a human is actively handling, or just after a handoff. */
-async function botShouldPause(contactId: string | null, leadId: string | null, digits: string): Promise<boolean> {
+export async function botShouldPause(contactId: string | null, leadId: string | null, digits: string): Promise<boolean> {
   const last = await prisma.communication.findFirst({
     where: { type: "whatsapp", direction: "outbound", OR: whereOr(contactId, leadId, digits) },
     orderBy: { occurredAt: "desc" },

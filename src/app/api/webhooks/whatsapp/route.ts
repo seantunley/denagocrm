@@ -3,7 +3,7 @@ import crypto from "crypto";
 import { getSetting } from "@/lib/settings";
 import { recordInboundWhatsApp, fetchWhatsAppMedia } from "@/lib/whatsapp";
 import { transcribeVoice } from "@/lib/transcribe";
-import { maybeAutoReply } from "@/lib/bot";
+import { runWhatsAppBot } from "@/lib/flowRun";
 
 /** Meta webhook verification handshake (same flow as Lead Ads). */
 export async function GET(req: NextRequest) {
@@ -59,7 +59,16 @@ export async function POST(req: NextRequest) {
         if (message.type === "text") {
           const body = message.text?.body ?? "";
           await recordInboundWhatsApp(from, profileName, body).catch(() => {});
-          await maybeAutoReply(from, body).catch(() => {});
+          await runWhatsAppBot(from, { text: body }).catch(() => {});
+        } else if (message.type === "interactive") {
+          // A tapped button or list option.
+          const btn = message.interactive?.button_reply;
+          const list = message.interactive?.list_reply;
+          const id: string = btn?.id ?? list?.id ?? "";
+          const title: string = btn?.title ?? list?.title ?? "";
+          if (!id) continue;
+          await recordInboundWhatsApp(from, profileName, `👆 ${title}`).catch(() => {});
+          await runWhatsAppBot(from, { text: title, choiceId: id }).catch(() => {});
         } else if (message.type === "audio" || message.type === "voice") {
           // Voice note: download, transcribe, reply naturally, then hand off.
           const mediaId: string | undefined = message.audio?.id ?? message.voice?.id;
@@ -70,7 +79,7 @@ export async function POST(req: NextRequest) {
             : null;
           const logged = transcript ? `🎤 ${transcript}` : "🎤 [Voice note]";
           await recordInboundWhatsApp(from, profileName, logged).catch(() => {});
-          await maybeAutoReply(from, transcript ?? "[The customer sent a voice note.]", {
+          await runWhatsAppBot(from, { text: transcript ?? "[The customer sent a voice note.]" }, {
             voiceNote: true,
           }).catch(() => {});
         }

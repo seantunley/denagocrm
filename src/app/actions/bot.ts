@@ -11,8 +11,10 @@ export async function saveBotSettings(formData: FormData) {
   const owner = await requireOwner();
   const enabled = formData.get("enabled") === "on";
   const aiEnabled = formData.get("aiEnabled") === "on";
+  const flowEnabled = formData.get("flowEnabled") === "on";
   await putSetting("BOT_ENABLED", enabled ? "true" : "false");
   await putSetting("BOT_AI_ENABLED", aiEnabled ? "true" : "false");
+  await putSetting("BOT_FLOW_ENABLED", flowEnabled ? "true" : "false");
   await putSetting("BOT_AI_BRIEF", String(formData.get("brief") ?? "").trim());
   await putSetting(
     "BOT_HOURS",

@@ -249,6 +249,20 @@ model Segment {
   createdAt DateTime @default(now())
 }
 
+/** Live state of a customer's position in a chatbot flow. */
+model BotSession {
+  id        String   @id @default(cuid())
+  channel   String   @default("whatsapp")
+  key       String // phone digits (or web visitor id)
+  nodeId    String? // current waiting node
+  vars      String   @default("{}") // captured variables, JSON
+  status    String   @default("active") // active | paused
+  updatedAt DateTime @updatedAt @default(now())
+  expiresAt DateTime
+
+  @@unique([channel, key])
+}
+
 model PipelineStage {
   id    String @id @default(cuid())
   name  String
