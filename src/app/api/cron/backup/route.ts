@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { put, list, del } from "@vercel/blob";
 import { exportAllData } from "@/lib/backup";
 import { purgeTrash } from "@/lib/trash";
-import { getSetting } from "@/lib/settings";
+import { getSetting, encryptValue } from "@/lib/settings";
 
 const KEEP = 30; // retain the last 30 daily backups
 
@@ -25,12 +25,16 @@ export async function GET(req: NextRequest) {
   }
 
   const data = await exportAllData();
+  const payload = JSON.stringify(data);
+  // The dump holds all customer PII. This Blob store is public, so instead of
+  // relying on an unguessable URL we AES-256-GCM encrypt the whole dump with
+  // SETTINGS_ENCRYPTION_KEY — a leaked URL is then useless without the key.
+  // Restore = download the .json.enc and run it back through decryptValue().
+  const encrypted = encryptValue(payload);
   const stamp = new Date().toISOString().slice(0, 10);
-  const blob = await put(`backups/denagocrm-${stamp}.json`, JSON.stringify(data), {
-    // PRIVATE: the dump holds all customer PII (bcrypt/encrypted secrets aside)
-    // and must require authentication to read, not just an unguessable URL.
-    access: "private",
-    contentType: "application/json",
+  const blob = await put(`backups/denagocrm-${stamp}.json.enc`, encrypted, {
+    access: "public",
+    contentType: "text/plain; charset=utf-8",
     addRandomSuffix: false,
     allowOverwrite: true,
   });
@@ -47,7 +51,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     backup: blob.pathname,
-    sizeBytes: JSON.stringify(data).length,
+    sizeBytes: payload.length,
     kept: Math.min(sorted.length, KEEP),
     pruned: stale.length,
     purgedTrash,

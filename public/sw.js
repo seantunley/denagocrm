@@ -10,7 +10,9 @@ self.addEventListener("push", (event) => {
     self.registration.showNotification(data.title || "Denago CRM", {
       body: data.body || "",
       icon: "/icons/icon-192.png",
-      badge: "/icons/icon-192.png",
+      // Android tints the badge to a flat silhouette from its alpha, so this
+      // must be a transparent D mark (a solid image renders as a white block).
+      badge: "/icons/badge-96.png",
       data: { url: data.url || "/" },
       vibrate: [100, 50, 100],
     })
