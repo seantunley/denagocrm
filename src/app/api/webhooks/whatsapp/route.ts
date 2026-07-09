@@ -5,6 +5,7 @@ import { recordInboundWhatsApp, fetchWhatsAppMedia } from "@/lib/whatsapp";
 import { transcribeVoice } from "@/lib/transcribe";
 import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
+import { logError } from "@/lib/errorLog";
 
 /** Meta webhook verification handshake (same flow as Lead Ads). */
 export async function GET(req: NextRequest) {
@@ -26,6 +27,7 @@ export async function POST(req: NextRequest) {
   // unauthenticated POST must not be able to drive the auto-reply bot.
   const appSecret = await getSetting("META_APP_SECRET");
   if (!appSecret) {
+    await logError("whatsapp-webhook", "POST received but META_APP_SECRET is not set — rejecting").catch(() => {});
     return NextResponse.json({ error: "Webhook not configured" }, { status: 503 });
   }
   {
@@ -35,7 +37,17 @@ export async function POST(req: NextRequest) {
     const valid =
       signature.length === expected.length &&
       crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
-    if (!valid) return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+    if (!valid) {
+      // Meta IS reaching us but the signature doesn't match — almost always a
+      // wrong/other-app META_APP_SECRET. Log so it's diagnosable in System Log.
+      await logError(
+        "whatsapp-webhook",
+        `Invalid signature — Meta delivered a webhook but META_APP_SECRET doesn't match (header ${
+          signature ? "present" : "MISSING"
+        }).`
+      ).catch(() => {});
+      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+    }
   }
 
   let body: unknown;
