@@ -54,7 +54,8 @@ export default function AppShell({
       </aside>
 
       <main className="lg:ml-56 p-4 pt-[4.5rem] lg:p-8 lg:pt-8">
-        <div className="mb-4">
+        {/* Hidden on phones — the strip is desk/wall-display furniture */}
+        <div className="mb-4 hidden sm:block">
           <ClockWeather />
         </div>
         {children}

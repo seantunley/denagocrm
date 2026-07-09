@@ -19,12 +19,11 @@ function describe(code: number): { icon: string; label: string } {
 const CITIES = [
   { flag: "/branding/flag-za.svg", name: "Cape Town", zone: "Africa/Johannesburg", lat: -33.925, lon: 18.48 },
   { flag: "/branding/flag-ru.svg", name: "Moscow", zone: "Europe/Moscow", lat: 55.751, lon: 37.618 },
-  { flag: "/branding/flag-nz.svg", name: "Auckland", zone: "Pacific/Auckland", lat: -36.848, lon: 174.763 },
 ];
 
 type Weather = { temp: number; code: number };
 
-/** Slim live clock + weather strip for Cape Town, Moscow & Auckland (Open-Meteo, no key needed). */
+/** Slim live clock + weather strip for Cape Town & Moscow (Open-Meteo, no key needed). */
 export default function ClockWeather() {
   const [now, setNow] = useState<Date | null>(null);
   const [weather, setWeather] = useState<(Weather | null)[]>(() => CITIES.map(() => null));
