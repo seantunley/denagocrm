@@ -152,6 +152,16 @@ export async function moveLead(leadId: string, stageId: string) {
   revalidatePath("/leads");
 }
 
+/** Mark a lead as opened (clears the NEW pill) and refresh the board. */
+export async function markLeadViewed(leadId: string) {
+  await requireCrm();
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { viewedAt: true } });
+  if (lead && !lead.viewedAt) {
+    await prisma.lead.update({ where: { id: leadId }, data: { viewedAt: new Date() } });
+    revalidatePath("/leads");
+  }
+}
+
 /** Marks a lead won and ensures it is linked to a contact (creating one if needed). */
 export async function markWon(leadId: string) {
   const user = await requireCrm();

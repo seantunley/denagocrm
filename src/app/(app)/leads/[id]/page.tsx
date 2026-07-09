@@ -16,6 +16,7 @@ import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
 import LeadTimeline from "@/components/LeadTimeline";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import MarkLeadViewed from "@/components/MarkLeadViewed";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
 import Tabs from "@/components/Tabs";
 import ModalTrigger from "@/components/Modal";
@@ -50,9 +51,7 @@ export default async function LeadDetailPage({
     },
   });
   if (!lead) notFound();
-  if (!lead.viewedAt) {
-    await prisma.lead.update({ where: { id: lead.id }, data: { viewedAt: new Date() } }).catch(() => {});
-  }
+  const alreadyViewed = !!lead.viewedAt;
   const [contacts, users, templates, smtpConfigured, audit, waConfigured, libraryDocuments, products, stages] = await Promise.all([
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
     prisma.user.findMany({ orderBy: { name: "asc" } }),
@@ -101,6 +100,7 @@ export default async function LeadDetailPage({
 
   return (
     <div className="space-y-6">
+      <MarkLeadViewed leadId={lead.id} viewed={alreadyViewed} />
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-3">
