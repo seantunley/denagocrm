@@ -1,4 +1,11 @@
-/* Denago CRM service worker — push notifications */
+/* Denago CRM service worker — push notifications (rev 2) */
+
+// Take over as soon as a new worker is deployed, instead of waiting for every
+// tab to close — otherwise notification icon/badge changes never reach an
+// installed PWA that's always open.
+self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+
 self.addEventListener("push", (event) => {
   let data = {};
   try {
