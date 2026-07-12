@@ -7,7 +7,7 @@ type NameCountRow = { name: string; count: bigint };
 
 async function count(query: Promise<CountRow[]>) {
   const rows = await query;
-  return Number(rows[0]?.count ?? 0n);
+  return Number(rows[0]?.count ?? BigInt(0));
 }
 
 async function main() {
