@@ -9,10 +9,20 @@ import {
   updateTeam,
   updateUserRoles,
 } from "@/app/actions/accessControl";
+import { revokeUserSessions, setUserDisabled } from "@/app/actions/security";
+import { formatDateTime } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-type UserRow = { id: string; name: string; email: string };
+type UserRow = {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  disabledAt: Date | null;
+  lastLoginAt: Date | null;
+  failedLoginCount: number;
+};
 type TeamRow = { id: string; name: string; description: string | null; active: boolean; managerId: string | null };
 type TeamMemberRow = { teamId: string; userId: string; userName: string; isManager: boolean };
 type RoleRow = { id: string; name: string; description: string | null; system: boolean };
@@ -28,9 +38,12 @@ export default async function AccessSettingsPage() {
     hasPermission(currentUser, "roles.view"),
     hasPermission(currentUser, "roles.manage"),
   ]);
+  const canManageSecurity = currentUser.role === "owner";
 
   const users = await basePrisma.$queryRaw<UserRow[]>`
-    SELECT "id", "name", "email" FROM "User" ORDER BY "name"
+    SELECT "id", "name", "email", "role", "disabledAt", "lastLoginAt", "failedLoginCount"
+    FROM "User"
+    ORDER BY "disabledAt" NULLS FIRST, "name"
   `;
   const teams = canViewTeams
     ? await basePrisma.$queryRaw<TeamRow[]>`
@@ -72,9 +85,50 @@ export default async function AccessSettingsPage() {
       <div>
         <h1 className="text-2xl font-bold">Teams, roles and permissions</h1>
         <p className="text-sm text-slate-400 mt-1">
-          Control team ownership and granular access while preserving the legacy owner safety override.
+          Granular access, team ownership, session revocation and user lifecycle controls.
         </p>
       </div>
+
+      {canManageSecurity && (
+        <section className="card p-0 overflow-x-auto">
+          <div className="px-4 py-3 border-b border-slate-800">
+            <h2 className="font-semibold">User security</h2>
+            <p className="text-xs text-slate-500 mt-1">Disabling a user or revoking sessions takes effect on their next request.</p>
+          </div>
+          <table className="table-base">
+            <thead><tr><th>User</th><th>Status</th><th>Last login</th><th>Failed logins</th><th></th></tr></thead>
+            <tbody>
+              {users.map((user) => (
+                <tr key={user.id}>
+                  <td>{user.name}<p className="text-xs text-slate-500">{user.email}</p></td>
+                  <td>
+                    <span className={`badge ${user.disabledAt ? "bg-red-500/15 text-red-300" : "bg-emerald-500/15 text-emerald-300"}`}>
+                      {user.disabledAt ? "Disabled" : "Active"}
+                    </span>
+                    {user.role === "owner" && <span className="badge bg-orange-500/15 text-orange-300 ml-2">Owner</span>}
+                  </td>
+                  <td className="text-sm text-slate-400">{user.lastLoginAt ? formatDateTime(user.lastLoginAt) : "Never"}</td>
+                  <td>{user.failedLoginCount}</td>
+                  <td>
+                    {user.id !== currentUser.id && (
+                      <div className="flex gap-2 justify-end">
+                        <form action={revokeUserSessions.bind(null, user.id)}>
+                          <button className="btn-secondary btn-sm">Revoke sessions</button>
+                        </form>
+                        <form action={setUserDisabled.bind(null, user.id, !user.disabledAt)}>
+                          <button className={user.disabledAt ? "btn-secondary btn-sm" : "btn-danger btn-sm"}>
+                            {user.disabledAt ? "Reactivate" : "Disable"}
+                          </button>
+                        </form>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
 
       {canViewTeams && (
         <>
@@ -82,21 +136,9 @@ export default async function AccessSettingsPage() {
             <section className="card space-y-4">
               <h2 className="font-semibold">Create team</h2>
               <form action={createTeam} className="grid md:grid-cols-4 gap-3 items-end">
-                <label className="space-y-1">
-                  <span className="text-xs text-slate-400">Name</span>
-                  <input name="name" className="input" required />
-                </label>
-                <label className="space-y-1">
-                  <span className="text-xs text-slate-400">Manager</span>
-                  <select name="managerId" className="input">
-                    <option value="">No manager</option>
-                    {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
-                  </select>
-                </label>
-                <label className="space-y-1">
-                  <span className="text-xs text-slate-400">Description</span>
-                  <input name="description" className="input" />
-                </label>
+                <label className="space-y-1"><span className="text-xs text-slate-400">Name</span><input name="name" className="input" required /></label>
+                <label className="space-y-1"><span className="text-xs text-slate-400">Manager</span><select name="managerId" className="input"><option value="">No manager</option>{users.filter((user) => !user.disabledAt).map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
+                <label className="space-y-1"><span className="text-xs text-slate-400">Description</span><input name="description" className="input" /></label>
                 <button className="btn-primary">Create</button>
               </form>
             </section>
@@ -105,56 +147,20 @@ export default async function AccessSettingsPage() {
           <div className="grid lg:grid-cols-2 gap-4">
             {teams.map((team) => (
               <section key={team.id} className="card space-y-4">
-                <div>
-                  <h2 className="font-semibold">{team.name}</h2>
-                  <p className="text-xs text-slate-500">{team.description || "No description"}</p>
-                  {!team.active && <span className="badge bg-slate-800 text-slate-400 mt-2">Inactive</span>}
-                </div>
-
+                <div><h2 className="font-semibold">{team.name}</h2><p className="text-xs text-slate-500">{team.description || "No description"}</p>{!team.active && <span className="badge bg-slate-800 text-slate-400 mt-2">Inactive</span>}</div>
                 {canManageTeams ? (
                   <form action={updateTeam.bind(null, team.id)} className="grid grid-cols-2 gap-2">
                     <input name="name" className="input" defaultValue={team.name} required />
-                    <select name="managerId" className="input" defaultValue={team.managerId ?? ""}>
-                      <option value="">No manager</option>
-                      {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
-                    </select>
+                    <select name="managerId" className="input" defaultValue={team.managerId ?? ""}><option value="">No manager</option>{users.filter((user) => !user.disabledAt).map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select>
                     <input name="description" className="input col-span-2" defaultValue={team.description ?? ""} />
-                    <label className="flex items-center gap-2 text-sm">
-                      <input type="checkbox" name="active" defaultChecked={team.active} /> Active
-                    </label>
+                    <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="active" defaultChecked={team.active} /> Active</label>
                     <button className="btn-secondary">Save team</button>
                   </form>
-                ) : (
-                  <p className="text-xs text-slate-500">Manager: {users.find((user) => user.id === team.managerId)?.name ?? "None"}</p>
-                )}
-
+                ) : <p className="text-xs text-slate-500">Manager: {users.find((user) => user.id === team.managerId)?.name ?? "None"}</p>}
                 <ul className="divide-y divide-slate-800">
-                  {membersFor(team.id).map((member) => (
-                    <li key={member.userId} className="py-2 flex items-center gap-2 text-sm">
-                      <span className="flex-1">
-                        {member.userName}
-                        {member.isManager && <span className="text-xs text-orange-400 ml-2">Manager</span>}
-                      </span>
-                      {canManageTeams && (
-                        <form action={removeTeamMember.bind(null, team.id, member.userId)}>
-                          <button className="text-xs text-red-400">Remove</button>
-                        </form>
-                      )}
-                    </li>
-                  ))}
+                  {membersFor(team.id).map((member) => <li key={member.userId} className="py-2 flex items-center gap-2 text-sm"><span className="flex-1">{member.userName}{member.isManager && <span className="text-xs text-orange-400 ml-2">Manager</span>}</span>{canManageTeams && <form action={removeTeamMember.bind(null, team.id, member.userId)}><button className="text-xs text-red-400">Remove</button></form>}</li>)}
                 </ul>
-
-                {canManageTeams && (
-                  <form action={addTeamMember.bind(null, team.id)} className="flex gap-2">
-                    <select name="userId" className="input">
-                      <option value="">Add member…</option>
-                      {users
-                        .filter((user) => !membersFor(team.id).some((member) => member.userId === user.id))
-                        .map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
-                    </select>
-                    <button className="btn-secondary">Add</button>
-                  </form>
-                )}
+                {canManageTeams && <form action={addTeamMember.bind(null, team.id)} className="flex gap-2"><select name="userId" className="input"><option value="">Add member…</option>{users.filter((candidate) => !candidate.disabledAt && !membersFor(team.id).some((member) => member.userId === candidate.id)).map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select><button className="btn-secondary">Add</button></form>}
               </section>
             ))}
           </div>
@@ -163,83 +169,20 @@ export default async function AccessSettingsPage() {
 
       {canViewRoles && (
         <>
-          {canManageRoles && (
-            <section className="card">
-              <h2 className="font-semibold mb-4">Create role</h2>
-              <form action={createRole} className="grid md:grid-cols-3 gap-3 items-end">
-                <input name="name" className="input" placeholder="Role name" required />
-                <input name="description" className="input" placeholder="Description" />
-                <button className="btn-primary">Create role</button>
-              </form>
-            </section>
-          )}
-
+          {canManageRoles && <section className="card"><h2 className="font-semibold mb-4">Create role</h2><form action={createRole} className="grid md:grid-cols-3 gap-3 items-end"><input name="name" className="input" placeholder="Role name" required /><input name="description" className="input" placeholder="Description" /><button className="btn-primary">Create role</button></form></section>}
           <div className="space-y-4">
             {roles.map((role) => (
               <section key={role.id} className="card">
-                <div className="mb-4">
-                  <h2 className="font-semibold">
-                    {role.name}
-                    {role.system && <span className="badge bg-slate-800 text-slate-300 ml-2">System</span>}
-                  </h2>
-                  <p className="text-xs text-slate-500">{role.description}</p>
-                </div>
+                <div className="mb-4"><h2 className="font-semibold">{role.name}{role.system && <span className="badge bg-slate-800 text-slate-300 ml-2">System</span>}</h2><p className="text-xs text-slate-500">{role.description}</p></div>
                 <form action={updateRolePermissions.bind(null, role.id)} className="space-y-4">
-                  {categories.map((category) => (
-                    <div key={category}>
-                      <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">{category}</p>
-                      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
-                        {permissions.filter((permission) => permission.category === category).map((permission) => (
-                          <label key={permission.key} className="rounded border border-slate-800 p-2 flex gap-2 text-sm">
-                            <input
-                              type="checkbox"
-                              name="permissions"
-                              value={permission.key}
-                              defaultChecked={rolePermissionSet.has(`${role.id}:${permission.key}`)}
-                              disabled={!canManageRoles}
-                            />
-                            <span>
-                              <strong>{permission.key}</strong>
-                              <span className="block text-xs text-slate-500">{permission.description}</span>
-                            </span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
+                  {categories.map((category) => <div key={category}><p className="text-xs uppercase tracking-wide text-slate-500 mb-2">{category}</p><div className="grid md:grid-cols-2 lg:grid-cols-3 gap-2">{permissions.filter((permission) => permission.category === category).map((permission) => <label key={permission.key} className="rounded border border-slate-800 p-2 flex gap-2 text-sm"><input type="checkbox" name="permissions" value={permission.key} defaultChecked={rolePermissionSet.has(`${role.id}:${permission.key}`)} disabled={!canManageRoles} /><span><strong>{permission.key}</strong><span className="block text-xs text-slate-500">{permission.description}</span></span></label>)}</div></div>)}
                   {canManageRoles && <button className="btn-secondary">Save permissions</button>}
                 </form>
               </section>
             ))}
           </div>
-
           <section className="card p-0 overflow-x-auto">
-            <table className="table-base">
-              <thead><tr><th>User</th><th>Assigned roles</th></tr></thead>
-              <tbody>
-                {users.map((user) => (
-                  <tr key={user.id}>
-                    <td>{user.name}<p className="text-xs text-slate-500">{user.email}</p></td>
-                    <td>
-                      <form action={updateUserRoles.bind(null, user.id)} className="flex flex-wrap gap-3 items-center">
-                        {roles.map((role) => (
-                          <label key={role.id} className="text-xs flex gap-1">
-                            <input
-                              type="checkbox"
-                              name="roles"
-                              value={role.id}
-                              defaultChecked={userRoleSet.has(`${user.id}:${role.id}`)}
-                              disabled={!canManageRoles}
-                            /> {role.name}
-                          </label>
-                        ))}
-                        {canManageRoles && <button className="btn-secondary btn-sm">Save</button>}
-                      </form>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <table className="table-base"><thead><tr><th>User</th><th>Assigned roles</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td>{user.name}<p className="text-xs text-slate-500">{user.email}</p>{user.disabledAt && <span className="text-xs text-red-400">Disabled</span>}</td><td><form action={updateUserRoles.bind(null, user.id)} className="flex flex-wrap gap-3 items-center">{roles.map((role) => <label key={role.id} className="text-xs flex gap-1"><input type="checkbox" name="roles" value={role.id} defaultChecked={userRoleSet.has(`${user.id}:${role.id}`)} disabled={!canManageRoles} /> {role.name}</label>)}{canManageRoles && <button className="btn-secondary btn-sm">Save</button>}</form></td></tr>)}</tbody></table>
           </section>
         </>
       )}
