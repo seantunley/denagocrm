@@ -19,6 +19,10 @@ import { RunBackupControl, VerifyBackupControl } from "@/components/BackupContro
 import { Button } from "@/components/ui/button";
 
 export const dynamic = "force-dynamic";
+// "Run backup now" invokes the backup route in-process via a server action, so
+// the route's own maxDuration does not apply — give this segment headroom for a
+// full export + asset snapshot so the on-demand run can't hit the default limit.
+export const maxDuration = 300;
 
 type BackupResult = {
   ok?: boolean;
