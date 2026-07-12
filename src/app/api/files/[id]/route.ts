@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
+import { canAccessDocument } from "@/lib/permissions";
 import { portalCanAccessDocument } from "@/lib/portalAccess";
 import { readFile } from "@/lib/storage";
 
@@ -10,8 +11,11 @@ export async function GET(
 ) {
   const { id } = await params;
   const user = await getCurrentUser();
+  const staffAllowed = user ? await canAccessDocument(user, id) : false;
   const portalAllowed = user ? false : await portalCanAccessDocument(id);
-  if (!user && !portalAllowed) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!staffAllowed && !portalAllowed) {
+    return NextResponse.json({ error: user ? "Forbidden" : "Unauthorized" }, { status: user ? 403 : 401 });
+  }
 
   const doc = await prisma.document.findUnique({ where: { id } });
   if (!doc || doc.deletedAt) return NextResponse.json({ error: "Not found" }, { status: 404 });
