@@ -59,7 +59,6 @@ function buildNav(mods: Set<string>, isAdmin: boolean) {
       label: "Workshop",
       links: [
         { href: "/workshop-calendar", label: "Workshop Cal", icon: "📅" },
-        // Contacts are shared with the workshop when CRM is off
         ...(!has("crm") ? [{ href: "/contacts", label: "Contacts", icon: "☰" }] : []),
         { href: "/vehicles", label: "Vehicles", icon: "⚡" },
         { href: "/service-due", label: "Service Due", icon: "⏰" },
@@ -74,7 +73,8 @@ function buildNav(mods: Set<string>, isAdmin: boolean) {
       key: "automation",
       label: "Automation",
       links: [
-        { href: "/automations", label: "Automations", icon: "⚡" },
+        { href: "/automations", label: "Legacy rules", icon: "⚡" },
+        { href: "/automations/journeys", label: "Marketing journeys", icon: "🧭" },
         { href: "/chatbot", label: "Chatbot", icon: "🤖" },
         { href: "/bot-builder", label: "Flow builder", icon: "🎨" },
       ],
@@ -82,7 +82,6 @@ function buildNav(mods: Set<string>, isAdmin: boolean) {
   }
   return { topLinks, groups };
 }
-
 
 const STORAGE_KEY = "denago-nav-collapsed";
 
@@ -123,8 +122,11 @@ export default function Nav({
     } catch {}
   }, []);
 
-  const isActive = (href: string) =>
-    href === "/" ? pathname === "/" : pathname.startsWith(href);
+  const isActive = (href: string) => {
+    if (href === "/") return pathname === "/";
+    if (href === "/automations") return pathname === "/automations";
+    return pathname.startsWith(href);
+  };
 
   function toggle(key: string) {
     setCollapsed((prev) => {
@@ -144,7 +146,6 @@ export default function Nav({
 
       {groups.map((group) => {
         const groupActive = group.links.some((l) => isActive(l.href));
-        // never hide the group that holds the current page
         const isCollapsed = collapsed[group.key] && !groupActive;
         return (
           <div key={group.key} className="pt-2">
@@ -153,11 +154,7 @@ export default function Nav({
               className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] font-bold uppercase tracking-widest text-slate-500 hover:text-slate-300 cursor-pointer"
             >
               {group.label}
-              <span
-                className={`text-[10px] transition-transform ${
-                  isCollapsed ? "-rotate-90" : ""
-                }`}
-              >
+              <span className={`text-[10px] transition-transform ${isCollapsed ? "-rotate-90" : ""}`}>
                 ▼
               </span>
             </button>
@@ -171,7 +168,6 @@ export default function Nav({
           </div>
         );
       })}
-
     </nav>
   );
 }
