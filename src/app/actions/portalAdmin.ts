@@ -74,19 +74,36 @@ type ProfileRequestRow = {
   status: string;
 };
 
+function optionalText(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  if (typeof value === "string") return value.slice(0, 500);
+  return undefined;
+}
+
 function profileData(changes: Record<string, unknown>): Prisma.ContactUpdateInput {
   const data: Prisma.ContactUpdateInput = {};
-  const firstName = changes.firstName;
-  if (firstName !== undefined) {
-    if (typeof firstName !== "string" || !firstName.trim()) throw new Error("First name cannot be blank");
-    data.firstName = firstName.slice(0, 200);
+  if (changes.firstName !== undefined) {
+    if (typeof changes.firstName !== "string" || !changes.firstName.trim()) {
+      throw new Error("First name cannot be blank");
+    }
+    data.firstName = changes.firstName.slice(0, 200);
   }
-  const optional = ["lastName", "phone", "whatsapp", "address", "suburb", "city", "province", "postalCode"] as const;
-  for (const key of optional) {
-    const value = changes[key];
-    if (value === null) data[key] = null;
-    else if (typeof value === "string") data[key] = value.slice(0, 500);
-  }
+  const lastName = optionalText(changes.lastName);
+  const phone = optionalText(changes.phone);
+  const whatsapp = optionalText(changes.whatsapp);
+  const address = optionalText(changes.address);
+  const suburb = optionalText(changes.suburb);
+  const city = optionalText(changes.city);
+  const province = optionalText(changes.province);
+  const postalCode = optionalText(changes.postalCode);
+  if (lastName !== undefined) data.lastName = lastName;
+  if (phone !== undefined) data.phone = phone;
+  if (whatsapp !== undefined) data.whatsapp = whatsapp;
+  if (address !== undefined) data.address = address;
+  if (suburb !== undefined) data.suburb = suburb;
+  if (city !== undefined) data.city = city;
+  if (province !== undefined) data.province = province;
+  if (postalCode !== undefined) data.postalCode = postalCode;
   return data;
 }
 
