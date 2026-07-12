@@ -8,20 +8,41 @@ import { contactName, formatDate } from "@/lib/format";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
+import {
+  getAccessibleContactIds,
+  getAccessibleVehicleIds,
+  hasPermission,
+  requireAnyPermission,
+} from "@/lib/permissions";
 
 export default async function VehiclesPage({
   searchParams,
 }: {
   searchParams: Promise<{ filter?: string }>;
 }) {
+  const user = await requireAnyPermission("vehicles.view_all", "vehicles.view_owned");
   const { filter } = await searchParams;
+  const [vehicleIds, contactIds, canManage] = await Promise.all([
+    getAccessibleVehicleIds(user),
+    getAccessibleContactIds(user),
+    hasPermission(user, "vehicles.manage"),
+  ]);
   const [vehicles, contacts, products] = await Promise.all([
     prisma.vehicle.findMany({
+      where: vehicleIds === null ? {} : { id: { in: vehicleIds } },
       orderBy: { createdAt: "desc" },
       include: { contact: true, serviceRecords: true, mileageLogs: true },
     }),
-    prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
-    prisma.product.findMany({ include: { colors: true }, orderBy: { name: "asc" } }),
+    canManage
+      ? prisma.contact.findMany({
+          where: contactIds === null ? {} : { id: { in: contactIds } },
+          orderBy: { firstName: "asc" },
+          take: 500,
+        })
+      : Promise.resolve([]),
+    canManage
+      ? prisma.product.findMany({ include: { colors: true }, orderBy: { name: "asc" } })
+      : Promise.resolve([]),
   ]);
 
   const rows = vehicles
@@ -32,26 +53,28 @@ export default async function VehiclesPage({
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Vehicle fleet" description={`${rows.length} vehicle${rows.length === 1 ? "" : "s"}${filter === "due" ? " due for attention" : " registered across your customer base"}.`}>
+      <PageHeader title="Vehicle fleet" description={`${rows.length} accessible vehicle${rows.length === 1 ? "" : "s"}${filter === "due" ? " due for attention" : " registered across your customer base"}.`}>
           <Link
             href={filter === "due" ? "/vehicles" : "/vehicles?filter=due"}
             className={buttonVariants({ variant: filter === "due" ? "default" : "outline", size: "sm" })}
           >
             <Clock3 className="size-4" />{filter === "due" ? "Showing due" : "Service due"}
           </Link>
-          <ModalTrigger label={<><Plus className="size-4" />Register vehicle</>} title="Register vehicle" buttonClass={buttonVariants({ size: "sm" })}>
-            <VehicleForm
-              action={createVehicle}
-              contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
-              products={products.map((p) => ({
-                id: p.id,
-                name: p.name,
-                colors: p.colors.map((c) => c.name),
-              }))}
-              submitLabel="Register vehicle"
-              showInitialKm
-            />
-          </ModalTrigger>
+          {canManage && (
+            <ModalTrigger label={<><Plus className="size-4" />Register vehicle</>} title="Register vehicle" buttonClass={buttonVariants({ size: "sm" })}>
+              <VehicleForm
+                action={createVehicle}
+                contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
+                products={products.map((p) => ({
+                  id: p.id,
+                  name: p.name,
+                  colors: p.colors.map((c) => c.name),
+                }))}
+                submitLabel="Register vehicle"
+                showInitialKm
+              />
+            </ModalTrigger>
+          )}
       </PageHeader>
 
       <div className="card p-0 overflow-x-auto">
@@ -71,7 +94,7 @@ export default async function VehiclesPage({
             {rows.length === 0 && (
               <tr>
                 <td colSpan={7} className="text-center text-slate-400 py-8">
-                  {filter === "due" ? "Nothing due for service." : "No vehicles registered yet."}
+                  {filter === "due" ? "Nothing due for service." : "No accessible vehicles."}
                 </td>
               </tr>
             )}
