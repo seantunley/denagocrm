@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import type { CSSProperties } from "react";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import PrintActions from "@/components/PrintActions";
@@ -26,6 +27,16 @@ export default async function JobCardPrintPage({
   });
   if (!jobCard) notFound();
   const tpl = await getDocTemplate("jobcard", tplId);
+  const accent = tpl.appearance.accentColor;
+  const compact = tpl.appearance.density === "compact";
+  const lightHeader = tpl.appearance.headerStyle === "light";
+  const accentHeader = tpl.appearance.headerStyle === "accent";
+  const pageStyle = {
+    "--doc-accent": accent,
+    fontFamily: tpl.appearance.typography === "classic"
+      ? "Georgia, 'Times New Roman', serif"
+      : "Arial, Helvetica, sans-serif",
+  } as CSSProperties;
 
   const partsTotal = jobCard.items
     .filter((i) => i.kind === "part")
@@ -52,9 +63,12 @@ export default async function JobCardPrintPage({
         @media print { * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; } }
       `}</style>
 
-      <div className="max-w-3xl mx-auto px-6 py-8 print:p-0 text-sm">
+      <div className={`max-w-3xl mx-auto print:p-0 text-sm ${compact ? "px-5 py-6" : "px-6 py-8"}`} style={pageStyle}>
         {/* Brand banner */}
-        <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
+        <div
+          className={`flex items-center justify-between rounded-xl px-7 ${compact ? "py-3.5" : "py-5"} ${lightHeader ? "border border-slate-200 bg-white" : accentHeader ? "" : "bg-[#020617]"}`}
+          style={accentHeader ? { backgroundColor: accent } : undefined}
+        >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={tpl.logoUrl ?? "/branding/denago-logo-email.png"}
@@ -62,8 +76,8 @@ export default async function JobCardPrintPage({
             className="h-11 w-auto object-contain"
           />
           <div className="text-right">
-            <p className="text-2xl font-semibold tracking-[-0.035em] tracking-widest text-white">JOB CARD</p>
-            <p className="text-lg font-bold text-orange-500">#{jobCard.number}</p>
+            <p className={`text-2xl font-semibold tracking-[-0.035em] tracking-widest ${lightHeader ? "text-slate-900" : "text-white"}`}>{tpl.documentTitle ?? "JOB CARD"}</p>
+            <p className="text-lg font-bold" style={{ color: lightHeader ? accent : accentHeader ? "white" : accent }}>#{jobCard.number}</p>
             <p className="text-xs text-slate-400 capitalize">{jobCard.status.replace("_", " ")}</p>
           </div>
         </div>
@@ -73,6 +87,7 @@ export default async function JobCardPrintPage({
             <span>{tpl.footerLines[1] ?? ""}</span>
           </div>
         )}
+        {tpl.intro && <p className="px-1 pb-2 text-xs italic text-slate-500">{tpl.intro}</p>}
 
         {/* Meta */}
         <div className="grid grid-cols-2 gap-6 py-5">
@@ -195,6 +210,13 @@ export default async function JobCardPrintPage({
           <div className="mb-6">
             <p className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Notes</p>
             <p className="whitespace-pre-wrap text-slate-600">{jobCard.notes}</p>
+          </div>
+        )}
+
+        {tpl.bodyText && (
+          <div className="mb-6 rounded-lg bg-slate-50 p-3">
+            {tpl.sectionHeading && <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">{tpl.sectionHeading}</p>}
+            <p className="whitespace-pre-wrap text-xs leading-5 text-slate-600">{tpl.bodyText}</p>
           </div>
         )}
 

@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import type { DocTemplate } from "@/lib/docTemplates";
 import { formatZAR } from "@/lib/format";
 
@@ -59,7 +60,7 @@ export function ItemsTable({
       </table>
       {showPrices && totalCents !== undefined && (
         <div className="flex justify-end mt-4 no-break">
-          <div className="rounded-lg bg-orange-600 text-white px-6 py-3 flex items-baseline gap-6">
+          <div className="rounded-lg bg-[var(--doc-accent)] text-white px-6 py-3 flex items-baseline gap-6">
             <span className="text-[11px] font-bold uppercase tracking-widest">{totalLabel}</span>
             <span className="text-2xl font-bold">{formatZAR(Math.round(totalCents))}</span>
           </div>
@@ -81,14 +82,12 @@ export function InfoBlock({
 }) {
   return (
     <div
-      className={`rounded-lg bg-slate-50 border-l-4 px-4 py-3 ${
-        accent ? "border-orange-600" : "border-slate-900"
-      }`}
+      className={`rounded-lg bg-slate-50 border-l-4 px-4 py-3 ${accent ? "" : "border-slate-900"}`}
+      style={accent ? { borderColor: "var(--doc-accent)" } : undefined}
     >
       <p
-        className={`text-[10px] font-bold uppercase tracking-widest mb-1.5 ${
-          accent ? "text-orange-600" : "text-slate-500"
-        }`}
+        className={`text-[10px] font-bold uppercase tracking-widest mb-1.5 ${accent ? "" : "text-slate-500"}`}
+        style={accent ? { color: "var(--doc-accent)" } : undefined}
       >
         {title}
       </p>
@@ -129,6 +128,16 @@ export default function PrintDocShell({
   const sigOn = tpl.sections.signatures !== false;
   const pos = tpl.signature.position;
   const rightLabel = tpl.signature.dealerCounterSign ? parties.right : null;
+  const accent = tpl.appearance.accentColor;
+  const compact = tpl.appearance.density === "compact";
+  const lightHeader = tpl.appearance.headerStyle === "light";
+  const accentHeader = tpl.appearance.headerStyle === "accent";
+  const pageStyle = {
+    "--doc-accent": accent,
+    fontFamily: tpl.appearance.typography === "classic"
+      ? "Georgia, 'Times New Roman', serif"
+      : "Arial, Helvetica, sans-serif",
+  } as CSSProperties;
 
   const line = (label: string) => (
     <div className="border-t-2 border-slate-900 pt-2 mt-14">
@@ -148,9 +157,17 @@ export default function PrintDocShell({
         }
       `}</style>
 
-      <div className="print-page max-w-3xl mx-auto px-6 py-8 print:p-0 text-sm text-slate-800 bg-white">
+      <div
+        className={`print-page max-w-3xl mx-auto print:p-0 text-sm text-slate-800 bg-white ${compact ? "px-5 py-6" : "px-6 py-8"}`}
+        style={pageStyle}
+      >
         {/* Brand banner */}
-        <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
+        <div
+          className={`flex items-center justify-between rounded-xl px-7 ${compact ? "py-3.5" : "py-5"} ${
+            lightHeader ? "border border-slate-200 bg-white" : accentHeader ? "" : "bg-[#020617]"
+          }`}
+          style={accentHeader ? { backgroundColor: accent } : undefined}
+        >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={tpl.logoUrl ?? "/branding/denago-logo-email.png"}
@@ -158,8 +175,10 @@ export default function PrintDocShell({
             className="h-11 w-auto object-contain"
           />
           <div className="text-right">
-            <p className="text-2xl font-bold tracking-widest text-white uppercase">{title}</p>
-            {number && <p className="text-lg font-bold text-orange-500">{number}</p>}
+            <p className={`text-2xl font-bold tracking-widest uppercase ${lightHeader ? "text-slate-900" : "text-white"}`}>
+              {tpl.documentTitle ?? title}
+            </p>
+            {number && <p className="text-lg font-bold" style={{ color: lightHeader ? accent : accentHeader ? "white" : accent }}>{number}</p>}
           </div>
         </div>
 
@@ -184,9 +203,9 @@ export default function PrintDocShell({
           {/* Template body text (clauses / waiver / banking details…) */}
           {showBody && (
             <div className="rounded-lg bg-slate-50 px-4 py-3 mt-8 no-break">
-              {bodyTitle && (
+              {(tpl.sectionHeading ?? bodyTitle) && (
                 <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1.5">
-                  {bodyTitle}
+                {tpl.sectionHeading ?? bodyTitle}
                 </p>
               )}
               <div className="text-xs text-slate-600 space-y-1 whitespace-pre-wrap leading-5">
@@ -220,7 +239,7 @@ export default function PrintDocShell({
 
           {/* Branded footer */}
           {tpl.sections.footer !== false && (
-            <div className="border-t-2 border-orange-600 pt-4 flex items-start justify-between gap-6 flex-wrap no-break">
+            <div className="border-t-2 pt-4 flex items-start justify-between gap-6 flex-wrap no-break" style={{ borderColor: accent }}>
               <div className="text-[10px] text-slate-500 leading-4">
                 <p className="font-bold text-slate-700 text-[11px]">
                   Denago Cape Town — Authorized Denago EV Dealer

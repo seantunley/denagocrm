@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import type { CSSProperties } from "react";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { defaultTemplate, type DocTemplate } from "@/lib/docTemplates";
 
@@ -27,6 +28,16 @@ export default function QuotePrintDoc({
         .filter(Boolean)
         .join(", ")
     : "";
+  const accent = tpl.appearance.accentColor;
+  const compact = tpl.appearance.density === "compact";
+  const lightHeader = tpl.appearance.headerStyle === "light";
+  const accentHeader = tpl.appearance.headerStyle === "accent";
+  const pageStyle = {
+    "--doc-accent": accent,
+    fontFamily: tpl.appearance.typography === "classic"
+      ? "Georgia, 'Times New Roman', serif"
+      : "Arial, Helvetica, sans-serif",
+  } as CSSProperties;
 
   return (
     <>
@@ -40,9 +51,12 @@ export default function QuotePrintDoc({
         }
       `}</style>
 
-      <div className="print-page max-w-3xl mx-auto px-6 py-8 print:p-0 text-sm text-slate-800">
+      <div className={`print-page max-w-3xl mx-auto print:p-0 text-sm text-slate-800 ${compact ? "px-5 py-6" : "px-6 py-8"}`} style={pageStyle}>
         {/* Brand banner */}
-        <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
+        <div
+          className={`flex items-center justify-between rounded-xl px-7 ${compact ? "py-3.5" : "py-5"} ${lightHeader ? "border border-slate-200 bg-white" : accentHeader ? "" : "bg-[#020617]"}`}
+          style={accentHeader ? { backgroundColor: accent } : undefined}
+        >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={tpl.logoUrl ?? "/branding/denago-logo-email.png"}
@@ -50,8 +64,8 @@ export default function QuotePrintDoc({
             className="h-11 w-auto object-contain"
           />
           <div className="text-right">
-            <p className="text-2xl font-bold tracking-widest text-white">QUOTATION</p>
-            <p className="text-lg font-bold text-orange-500">Q-{quote.number}</p>
+            <p className={`text-2xl font-bold tracking-widest ${lightHeader ? "text-slate-900" : "text-white"}`}>{tpl.documentTitle ?? "QUOTATION"}</p>
+            <p className="text-lg font-bold" style={{ color: lightHeader ? accent : accentHeader ? "white" : accent }}>Q-{quote.number}</p>
           </div>
         </div>
 
@@ -61,11 +75,12 @@ export default function QuotePrintDoc({
           {quote.validUntil && <span>Valid until: {formatDate(quote.validUntil)}</span>}
           {quote.createdBy && <span>Prepared by: {quote.createdBy.name}</span>}
         </div>
+        {tpl.intro && <p className="mb-4 px-1 text-xs italic text-slate-500">{tpl.intro}</p>}
 
         {/* Customer / vehicle blocks */}
         <div className="grid grid-cols-2 gap-4 mb-6">
-          <div className="rounded-lg bg-slate-50 border-l-4 border-orange-600 px-4 py-3">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-orange-600 mb-1.5">
+          <div className="rounded-lg bg-slate-50 border-l-4 px-4 py-3" style={{ borderColor: accent }}>
+            <p className="text-[10px] font-bold uppercase tracking-widest mb-1.5" style={{ color: accent }}>
               Prepared for
             </p>
             <p className="font-bold text-slate-900">{customerName}</p>
@@ -119,7 +134,7 @@ export default function QuotePrintDoc({
 
         {/* Total band */}
         <div className="flex justify-end mt-4 mb-10 no-break">
-          <div className="rounded-lg bg-orange-600 text-white px-6 py-3 flex items-baseline gap-6">
+          <div className="rounded-lg text-white px-6 py-3 flex items-baseline gap-6" style={{ backgroundColor: accent }}>
             <span className="text-[11px] font-bold uppercase tracking-widest">
               Total incl. VAT
             </span>
@@ -128,6 +143,14 @@ export default function QuotePrintDoc({
         </div>
 
         <div className="print-bottom">
+          {tpl.sections.body !== false && tpl.bodyText && (
+            <div className="mb-6 rounded-lg bg-slate-50 px-4 py-3 no-break">
+              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                {tpl.sectionHeading ?? "Additional information"}
+              </p>
+              <div className="whitespace-pre-wrap text-xs leading-5 text-slate-600">{tpl.bodyText}</div>
+            </div>
+          )}
           {tpl.sections.terms !== false && termsText && (
             <div className="rounded-lg bg-slate-50 px-4 py-3 mb-12 no-break">
               <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1.5">
@@ -219,7 +242,7 @@ export default function QuotePrintDoc({
 
           {/* Branded footer */}
           {tpl.sections.footer !== false && (
-            <div className="border-t-2 border-orange-600 pt-4 flex items-start justify-between gap-6 flex-wrap no-break">
+            <div className="border-t-2 pt-4 flex items-start justify-between gap-6 flex-wrap no-break" style={{ borderColor: accent }}>
               <div className="text-[10px] text-slate-500 leading-4">
                 <p className="font-bold text-slate-700 text-[11px]">
                   Denago Cape Town — Authorized Denago EV Dealer

@@ -28,10 +28,10 @@ export default async function StudioClausePage({ params }: { params: Promise<{ i
           className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" />
-          Document Studio
+          Custom documents
         </Link>
         <p className="text-sm text-muted-foreground">
-          Reusable clause — insert it into any template or document. It's copied in at insert
+          Reusable clause — insert it into any template or document. It is copied in at insert
           time, so editing this clause never changes existing documents.
         </p>
       </div>

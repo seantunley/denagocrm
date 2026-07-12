@@ -91,8 +91,17 @@ export async function updateDocTemplate(id: string, formData: FormData) {
   if (!isDocKey(rec.docType)) return;
   const key = rec.docType;
   const base = defaultTemplate(key);
+  const accentCandidate = String(formData.get("accentColor") ?? "").trim();
+  const accentColor = /^#[0-9a-f]{6}$/i.test(accentCandidate)
+    ? accentCandidate
+    : base.appearance.accentColor;
+  const headerCandidate = String(formData.get("headerStyle") ?? "");
+  const typographyCandidate = String(formData.get("typography") ?? "");
+  const densityCandidate = String(formData.get("density") ?? "");
   const config = {
     logoUrl: String(formData.get("logoUrl") ?? "").trim() || null,
+    documentTitle: String(formData.get("documentTitle") ?? "").trim() || null,
+    sectionHeading: String(formData.get("sectionHeading") ?? "").trim() || null,
     intro: String(formData.get("intro") ?? "").trim() || null,
     bodyText: String(formData.get("bodyText") ?? "").trim() || null,
     terms: String(formData.get("terms") ?? "").trim() || null,
@@ -108,6 +117,18 @@ export async function updateDocTemplate(id: string, formData: FormData) {
       position: String(formData.get("sigPosition") ?? base.signature.position),
       dealerCounterSign: formData.get("dealerCounterSign") === "on",
     },
+    appearance: {
+      accentColor,
+      headerStyle: ["dark", "light", "accent"].includes(headerCandidate)
+        ? headerCandidate
+        : base.appearance.headerStyle,
+      typography: ["modern", "classic"].includes(typographyCandidate)
+        ? typographyCandidate
+        : base.appearance.typography,
+      density: ["comfortable", "compact"].includes(densityCandidate)
+        ? densityCandidate
+        : base.appearance.density,
+    },
   };
   await prisma.docTemplateRecord.update({
     where: { id },
@@ -115,6 +136,7 @@ export async function updateDocTemplate(id: string, formData: FormData) {
   });
   await logAudit({ action: "doctemplate.saved", summary: `Updated ${DOC_DEFS[key].label} template “${rec.name}”`, user });
   revalidatePath(`/settings/documents/t/${id}`);
+  redirect(`/settings/documents/t/${id}?saved=1`);
 }
 
 export async function setDefaultDocTemplate(id: string) {

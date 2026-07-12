@@ -41,11 +41,12 @@ export default async function StudioTemplatePage({
           className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" />
-          Document Studio
+          Custom documents
         </Link>
         <p className="text-sm text-muted-foreground">
-          Template — insert merge fields where customer data should appear; publishing freezes a
-          version that new documents are generated from.
+          Free-form custom template — insert merge fields where customer data should appear.
+          Publishing freezes a version for new custom documents; this does not change CRM-generated
+          quotes, indemnities or job cards.
           {latest
             ? ` Currently published: v${latest.version} (${formatDateTime(latest.publishedAt)}).`
             : " Not published yet — documents will use the live draft."}

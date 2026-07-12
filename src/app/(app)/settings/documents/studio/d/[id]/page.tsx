@@ -38,7 +38,7 @@ export default async function StudioDocPage({ params }: { params: Promise<{ id: 
           className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" />
-          Document Studio
+          Custom documents
         </Link>
         <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           {final ? (

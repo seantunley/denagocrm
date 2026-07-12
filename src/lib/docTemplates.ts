@@ -12,15 +12,28 @@ export type DocKey =
   | "warranty-claim";
 
 export type SignaturePosition = "left-right" | "right-left" | "strip";
+export type HeaderStyle = "dark" | "light" | "accent";
+export type TypographyStyle = "modern" | "classic";
+export type DocumentDensity = "comfortable" | "compact";
+
+export type TemplateAppearance = {
+  accentColor: string;
+  headerStyle: HeaderStyle;
+  typography: TypographyStyle;
+  density: DocumentDensity;
+};
 
 export type DocTemplate = {
   logoUrl: string | null; // null = built-in Denago logo
+  documentTitle: string | null; // null = the document type's standard title
+  sectionHeading: string | null; // optional heading above the editable body copy
   intro: string | null; // line under the header
   bodyText: string | null; // the document's own text (indemnity terms, agreement clauses…)
   terms: string | null; // quote/invoice terms override
   footerLines: string[];
   sections: Record<string, boolean>;
   signature: { position: SignaturePosition; dealerCounterSign: boolean };
+  appearance: TemplateAppearance;
 };
 
 type DocDef = {
@@ -38,6 +51,7 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
     group: "Sales",
     description: "The quotation the customer receives, signs online and gets as a PDF.",
     sections: [
+      { id: "body", label: "Additional content" },
       { id: "terms", label: "Terms & conditions" },
       { id: "signatures", label: "Signature block" },
       { id: "footer", label: "Branded footer" },
@@ -146,6 +160,8 @@ export function defaultTemplate(key: DocKey): DocTemplate {
   const def = DOC_DEFS[key];
   return {
     logoUrl: null,
+    documentTitle: null,
+    sectionHeading: null,
     intro: def.defaultIntro ?? null,
     bodyText: def.defaultBody ?? null,
     terms: null,
@@ -155,6 +171,12 @@ export function defaultTemplate(key: DocKey): DocTemplate {
     ],
     sections: Object.fromEntries(def.sections.map((s) => [s.id, s.id !== "prices"])),
     signature: { position: "left-right", dealerCounterSign: true },
+    appearance: {
+      accentColor: "#ea580c",
+      headerStyle: "dark",
+      typography: "modern",
+      density: "comfortable",
+    },
   };
 }
 
@@ -169,6 +191,7 @@ export function mergeTemplate(key: DocKey, raw: unknown): DocTemplate {
       ...parsed,
       sections: { ...base.sections, ...(parsed.sections ?? {}) },
       signature: { ...base.signature, ...(parsed.signature ?? {}) },
+      appearance: { ...base.appearance, ...(parsed.appearance ?? {}) },
     };
   } catch {
     return base;
