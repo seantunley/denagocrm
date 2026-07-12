@@ -3,6 +3,7 @@ import { prisma } from "./db";
 import { logAudit } from "./audit";
 import { sendEmail, renderTemplate, leadVars } from "./email";
 import { sendPushToAll } from "./push";
+import { enrollJourneysForEvent } from "./marketingJourneys";
 
 export const LEAD_TRIGGERS = [
   "lead_created",
@@ -160,7 +161,7 @@ function conditionsHold(
   return true;
 }
 
-/** Fires event-based rules for a lead. */
+/** Fires legacy rules and enrols matching published multi-step journeys. */
 export async function runLeadAutomations(
   trigger: LeadTrigger,
   leadId: string,
@@ -182,14 +183,20 @@ export async function runLeadAutomations(
         await logRule(rule.id, lead.id, `error: ${err instanceof Error ? err.message : "unknown"}`);
       }
     }
+
+    await enrollJourneysForEvent(trigger, {
+      leadId: lead.id,
+      contactId: lead.contactId,
+      event: { stageId: lead.stageId, status: lead.status, source: lead.source },
+    });
   } catch {
-    // Automations must never break the main flow
+    // Automations and journeys must never break the primary CRM action.
   }
 }
 
 /**
- * Fires idle-lead rules: open leads untouched for N days.
- * Each rule fires at most once per lead. Returns how many rules fired.
+ * Fires legacy idle-lead rules. Multi-step idle journeys are evaluated by the
+ * durable journey queue so each published version can manage its own wait state.
  */
 export async function runIdleAutomations(): Promise<number> {
   let fired = 0;
