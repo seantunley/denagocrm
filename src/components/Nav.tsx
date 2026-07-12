@@ -21,15 +21,11 @@ function NavItem({ link, active, badge }: { link: NavLink; active: boolean; badg
           : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
       )}
     >
-      {active && (
-        <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary" />
-      )}
+      {active && <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary" />}
       <Icon
         className={cn(
           "size-[17px] shrink-0 transition-colors",
-          active
-            ? "text-primary"
-            : "text-muted-foreground group-hover:text-sidebar-accent-foreground"
+          active ? "text-primary" : "text-muted-foreground group-hover:text-sidebar-accent-foreground"
         )}
         strokeWidth={2}
       />
@@ -49,14 +45,15 @@ function NavItem({ link, active, badge }: { link: NavLink; active: boolean; badg
 export default function Nav({
   modules = "crm,workshop,reports,inbox",
   isAdmin = false,
+  permissions = [],
   badges = {},
 }: {
   modules?: string;
   isAdmin?: boolean;
-  /** href → count, e.g. { "/inbox": 2 } renders a pill on that item */
+  permissions?: string[];
   badges?: Record<string, number>;
 }) {
-  const { topLinks, groups } = buildNav(modules, isAdmin);
+  const { topLinks, groups } = buildNav(modules, isAdmin, permissions);
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
@@ -67,12 +64,11 @@ export default function Nav({
     } catch {}
   }, []);
 
-  const isActive = (href: string) =>
-    href === "/" ? pathname === "/" : pathname.startsWith(href);
+  const isActive = (href: string) => href === "/" ? pathname === "/" : pathname.startsWith(href);
 
   function toggle(key: string) {
-    setCollapsed((prev) => {
-      const next = { ...prev, [key]: !prev[key] };
+    setCollapsed((previous) => {
+      const next = { ...previous, [key]: !previous[key] };
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
       } catch {}
@@ -82,12 +78,12 @@ export default function Nav({
 
   return (
     <nav className="space-y-0.5">
-      {topLinks.map((l) => (
-        <NavItem key={l.href} link={l} active={isActive(l.href)} badge={badges[l.href]} />
+      {topLinks.map((link) => (
+        <NavItem key={link.href} link={link} active={isActive(link.href)} badge={badges[link.href]} />
       ))}
 
       {groups.map((group) => {
-        const groupActive = group.links.some((l) => isActive(l.href));
+        const groupActive = group.links.some((link) => isActive(link.href));
         const isCollapsed = collapsed[group.key] && !groupActive;
         return (
           <div key={group.key} className="pt-3">
@@ -95,18 +91,13 @@ export default function Nav({
               onClick={() => toggle(group.key)}
               className="group flex w-full items-center gap-1 px-2.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground/60 transition-colors hover:text-muted-foreground"
             >
-              <ChevronRight
-                className={cn(
-                  "size-3 transition-transform duration-200",
-                  isCollapsed ? "" : "rotate-90"
-                )}
-              />
+              <ChevronRight className={cn("size-3 transition-transform duration-200", isCollapsed ? "" : "rotate-90")} />
               {group.label}
             </button>
             {!isCollapsed && (
               <div className="space-y-0.5">
-                {group.links.map((l) => (
-                  <NavItem key={l.href} link={l} active={isActive(l.href)} badge={badges[l.href]} />
+                {group.links.map((link) => (
+                  <NavItem key={link.href} link={link} active={isActive(link.href)} badge={badges[link.href]} />
                 ))}
               </div>
             )}
