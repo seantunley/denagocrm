@@ -3,6 +3,10 @@
   "regions": ["fra1"],
   "crons": [
     {
+      "path": "/api/cron/journeys",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/automations",
       "schedule": "*/15 * * * *"
     },
