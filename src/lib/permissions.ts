@@ -3,39 +3,15 @@ import { basePrisma } from "./db";
 import { requireUser } from "./auth";
 
 export const PERMISSIONS = [
-  "pipelines.view",
-  "pipelines.manage",
-  "forecast.view",
-  "forecast.manage",
-  "leads.view_all",
-  "leads.view_owned",
-  "leads.create",
-  "leads.edit",
-  "leads.assign",
-  "leads.change_stage",
-  "leads.mark_won",
-  "leads.mark_lost",
-  "teams.view",
-  "teams.manage",
-  "roles.view",
-  "roles.manage",
-  "audit.view",
-  "audit.export",
-  "campaigns.manage",
-  "journeys.manage",
-  "workshop.manage",
-  "reports.view",
+  "pipelines.view", "pipelines.manage", "forecast.view", "forecast.manage",
+  "leads.view_all", "leads.view_owned", "leads.create", "leads.edit", "leads.assign",
+  "leads.change_stage", "leads.mark_won", "leads.mark_lost", "teams.view", "teams.manage",
+  "roles.view", "roles.manage", "audit.view", "audit.export", "campaigns.manage",
+  "journeys.manage", "workshop.manage", "reports.view",
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number];
-
-export type PermissionUser = {
-  id: string;
-  name: string;
-  email: string;
-  role: string;
-  modules: string;
-};
+export type PermissionUser = { id: string; name: string; email: string; role: string; modules: string };
 
 export async function getUserPermissions(userId: string): Promise<Set<string>> {
   const rows = await basePrisma.$queryRaw<Array<{ key: string }>>`
@@ -52,14 +28,15 @@ export async function hasPermission(user: PermissionUser, permission: Permission
   const permissions = await getUserPermissions(user.id);
   if (permissions.has(permission)) return true;
 
-  // Compatibility fallback during rollout: current members retain the module
-  // access they already had until explicit roles are reviewed in Settings.
+  // Narrow rollout compatibility: module access only preserves basic visibility
+  // and creation. Management, assignment, stage changes and governance require
+  // explicit roles from the new permission tables.
   const modules = new Set(user.modules.split(",").map((item) => item.trim()).filter(Boolean));
-  if (permission.startsWith("leads.") || permission.startsWith("pipelines.") || permission.startsWith("forecast.")) {
+  if (permission === "pipelines.view" || permission === "forecast.view" || permission === "leads.view_owned") {
     return modules.has("crm");
   }
+  if (permission === "leads.create") return modules.has("crm");
   if (permission === "reports.view") return modules.has("reports");
-  if (permission === "workshop.manage") return modules.has("workshop");
   return false;
 }
 
@@ -80,7 +57,7 @@ export async function canAccessLead(user: PermissionUser, leadId: string): Promi
   if (user.role === "owner") return true;
   const permissions = await getUserPermissions(user.id);
   if (permissions.has("leads.view_all")) return true;
-  if (!permissions.has("leads.view_owned") && !user.modules.split(",").includes("crm")) return false;
+  if (!permissions.has("leads.view_owned") && !(await hasPermission(user, "leads.view_owned"))) return false;
 
   const rows = await basePrisma.$queryRaw<Array<{ allowed: boolean }>>`
     SELECT EXISTS (
@@ -102,16 +79,8 @@ export async function requireLeadAccess(leadId: string, permission: PermissionKe
   return user;
 }
 
-export async function getAccessibleLeadScope(user: PermissionUser): Promise<{
-  viewAll: boolean;
-  userId: string;
-  teamIds: string[];
-}> {
+export async function getAccessibleLeadScope(user: PermissionUser): Promise<{ viewAll: boolean; userId: string; teamIds: string[] }> {
   if (user.role === "owner") return { viewAll: true, userId: user.id, teamIds: [] };
   const permissions = await getUserPermissions(user.id);
-  return {
-    viewAll: permissions.has("leads.view_all"),
-    userId: user.id,
-    teamIds: await getUserTeamIds(user.id),
-  };
+  return { viewAll: permissions.has("leads.view_all"), userId: user.id, teamIds: await getUserTeamIds(user.id) };
 }
