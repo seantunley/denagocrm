@@ -45,7 +45,7 @@ async function probe(path: string, init?: RequestInit): Promise<number> {
     const res = await fetch(`${APP_URL}${path}`, {
       ...init,
       cache: "no-store",
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(5000),
     });
     return res.status;
   } catch {
@@ -129,21 +129,26 @@ export async function runSecurityChecks(): Promise<RunbookRun> {
     { id: "cron", label: "Cron endpoint requires auth", path: "/api/cron/automations" },
     { id: "api-auth", label: "Internal API requires a session", path: "/api/quick-create" },
   ];
-  for (const s of surface) {
-    const status = await probe(s.path, s.init);
-    const blocked = status !== 200 && status !== -1;
-    add({
-      id: s.id,
-      group: "Surface exposure",
-      label: s.label,
-      status: status === -1 ? "warn" : blocked ? "pass" : "fail",
-      detail:
-        status === -1
-          ? "Endpoint unreachable from the server (could not probe)."
-          : `Unauthenticated request returned HTTP ${status}.`,
-      fix: blocked || status === -1 ? undefined : "This endpoint answered without authentication — investigate immediately.",
-    });
-  }
+  // Probe endpoints concurrently so the whole surface sweep stays within the
+  // function's time budget (serial probes could stack up to ~40s and get killed).
+  const surfaceResults = await Promise.all(
+    surface.map(async (s) => {
+      const status = await probe(s.path, s.init);
+      const blocked = status !== 200 && status !== -1;
+      return {
+        id: s.id,
+        group: "Surface exposure",
+        label: s.label,
+        status: status === -1 ? "warn" : blocked ? "pass" : "fail",
+        detail:
+          status === -1
+            ? "Endpoint unreachable from the server (could not probe)."
+            : `Unauthenticated request returned HTTP ${status}.`,
+        fix: blocked || status === -1 ? undefined : "This endpoint answered without authentication — investigate immediately.",
+      } as CheckResult;
+    })
+  );
+  surfaceResults.forEach(add);
 
   /* ── Data protection ────────────────────────────────────────── */
   const dbUrl = process.env.DATABASE_URL ?? "";

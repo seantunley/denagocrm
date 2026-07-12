@@ -4,7 +4,6 @@ import {
   ShieldCheck,
   ShieldAlert,
   ShieldX,
-  Play,
   Bot,
   DatabaseBackup,
 } from "lucide-react";
@@ -12,10 +11,13 @@ import { requireOwner } from "@/lib/auth";
 import { getLastRun, getHistory, type CheckResult } from "@/lib/securityRunbook";
 import { getAiHealth, getAiUsageThisMonth } from "@/lib/systemHealth";
 import { runSecurityNow } from "@/app/actions/runbook";
-import { Button } from "@/components/ui/button";
+import { RunButton } from "./RunButton";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
+// The runbook makes several live self-probes; give it headroom over Vercel's
+// short default so the sweep can finish and revalidate the page.
+export const maxDuration = 60;
 
 const STATUS = {
   pass: { icon: ShieldCheck, cls: "text-emerald-400", chip: "bg-emerald-500/10 text-emerald-300" },
@@ -76,10 +78,7 @@ export default async function SecurityPage() {
           </p>
         </div>
         <form action={runSecurityNow}>
-          <Button type="submit">
-            <Play className="size-4" />
-            Run checks now
-          </Button>
+          <RunButton />
         </form>
       </div>
 
