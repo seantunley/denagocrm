@@ -7,11 +7,12 @@ import { usePathname } from "next/navigation";
 type NavLink = { href: string; label: string; icon: string };
 type NavGroup = { key: string; label: string; links: NavLink[] };
 
-function buildNav(mods: Set<string>, isAdmin: boolean) {
-  const has = (module: string) => isAdmin || mods.has(module);
+function buildNav(mods: Set<string>, permissions: Set<string>, isAdmin: boolean) {
+  const hasModule = (module: string) => isAdmin || mods.has(module);
+  const can = (permission: string) => isAdmin || permissions.has(permission);
   const topLinks: NavLink[] = [
     { href: "/", label: "Dashboard", icon: "▦" },
-    ...(has("reports")
+    ...(hasModule("reports")
       ? [
           { href: "/reports", label: "Reports", icon: "📊" },
           { href: "/targets", label: "Targets", icon: "🎯" },
@@ -20,7 +21,7 @@ function buildNav(mods: Set<string>, isAdmin: boolean) {
   ];
   const groups: NavGroup[] = [];
 
-  if (has("inbox")) {
+  if (hasModule("inbox")) {
     groups.push({
       key: "social",
       label: "Social Media",
@@ -28,20 +29,21 @@ function buildNav(mods: Set<string>, isAdmin: boolean) {
     });
   }
 
-  if (has("crm")) {
-    groups.push({
-      key: "crm",
-      label: "CRM",
-      links: [
-        { href: "/calendar", label: "Calendar", icon: "📅" },
-        { href: "/leads", label: "Leads", icon: "◎" },
-        { href: "/forecast", label: "Forecast", icon: "📈" },
-        { href: "/quotes", label: "Quotes", icon: "📄" },
-        { href: "/deliveries", label: "Deliveries", icon: "🚚" },
-        { href: "/contacts", label: "Contacts", icon: "☰" },
-        { href: "/activities", label: "Activities", icon: "✓" },
-      ],
-    });
+  const crmLinks: NavLink[] = [];
+  if (hasModule("crm")) crmLinks.push({ href: "/calendar", label: "Calendar", icon: "📅" });
+  if (can("leads.view_all") || can("leads.view_owned")) crmLinks.push({ href: "/leads", label: "Leads", icon: "◎" });
+  if (can("forecast.view")) crmLinks.push({ href: "/forecast", label: "Forecast", icon: "📈" });
+  if (hasModule("crm")) {
+    crmLinks.push(
+      { href: "/quotes", label: "Quotes", icon: "📄" },
+      { href: "/deliveries", label: "Deliveries", icon: "🚚" },
+      { href: "/contacts", label: "Contacts", icon: "☰" },
+      { href: "/activities", label: "Activities", icon: "✓" }
+    );
+  }
+  if (crmLinks.length > 0) groups.push({ key: "crm", label: "CRM", links: crmLinks });
+
+  if (hasModule("crm")) {
     groups.push({
       key: "marketing",
       label: "Marketing",
@@ -57,13 +59,13 @@ function buildNav(mods: Set<string>, isAdmin: boolean) {
     });
   }
 
-  if (has("workshop")) {
+  if (hasModule("workshop")) {
     groups.push({
       key: "workshop",
       label: "Workshop",
       links: [
         { href: "/workshop-calendar", label: "Workshop Cal", icon: "📅" },
-        ...(!has("crm") ? [{ href: "/contacts", label: "Contacts", icon: "☰" }] : []),
+        ...(!hasModule("crm") ? [{ href: "/contacts", label: "Contacts", icon: "☰" }] : []),
         { href: "/vehicles", label: "Vehicles", icon: "⚡" },
         { href: "/service-due", label: "Service Due", icon: "⏰" },
         { href: "/warranty", label: "Warranty", icon: "🛡️" },
@@ -83,16 +85,13 @@ function buildNav(mods: Set<string>, isAdmin: boolean) {
         { href: "/bot-builder", label: "Flow builder", icon: "🎨" },
       ],
     });
-    groups.push({
-      key: "governance",
-      label: "Governance",
-      links: [
-        { href: "/settings/pipelines", label: "Sales pipelines", icon: "🧭" },
-        { href: "/settings/access", label: "Teams & roles", icon: "👥" },
-        { href: "/audit", label: "Audit events", icon: "🛡" },
-      ],
-    });
   }
+
+  const governanceLinks: NavLink[] = [];
+  if (can("pipelines.manage")) governanceLinks.push({ href: "/settings/pipelines", label: "Sales pipelines", icon: "🧭" });
+  if (can("teams.view") || can("roles.view")) governanceLinks.push({ href: "/settings/access", label: "Teams & roles", icon: "👥" });
+  if (can("audit.view")) governanceLinks.push({ href: "/audit", label: "Audit events", icon: "🛡" });
+  if (governanceLinks.length > 0) groups.push({ key: "governance", label: "Governance", links: governanceLinks });
 
   return { topLinks, groups };
 }
@@ -115,13 +114,16 @@ function NavItem({ link, active }: { link: NavLink; active: boolean }) {
 
 export default function Nav({
   modules = "crm,workshop,reports,inbox",
+  permissions = "",
   isAdmin = false,
 }: {
   modules?: string;
+  permissions?: string;
   isAdmin?: boolean;
 }) {
   const { topLinks, groups } = buildNav(
     new Set(modules.split(",").map((module) => module.trim()).filter(Boolean)),
+    new Set(permissions.split(",").map((permission) => permission.trim()).filter(Boolean)),
     isAdmin
   );
   const pathname = usePathname();
