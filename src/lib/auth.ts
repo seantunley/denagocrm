@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { hasModule, type ModuleId } from "./access";
+import { getUserSecurityState } from "./userSecurity";
 import {
   verifySession,
   signFreshSession,
@@ -17,7 +18,13 @@ export async function getCurrentUser() {
   if (!token) return null;
   const session = await verifySession(token);
   if (!session) return null;
-  const user = await prisma.user.findUnique({ where: { id: session.sub } });
+
+  const [user, security] = await Promise.all([
+    prisma.user.findUnique({ where: { id: session.sub } }),
+    getUserSecurityState(session.sub),
+  ]);
+  if (!user || !security || security.disabledAt) return null;
+  if (security.sessionVersion !== session.sv) return null;
   return user;
 }
 
@@ -27,25 +34,19 @@ export async function requireUser() {
   return user;
 }
 
-/** Owner-only guard for user management and security policy. */
 export async function requireOwner() {
   const user = await requireUser();
   if (user.role !== "owner") redirect("/");
   return user;
 }
 
-/**
- * Module guard for server actions. Route gating in proxy.ts only covers page
- * navigation; server actions dispatch by header regardless of URL, so each
- * action must re-check the caller's modules server-side. Owners always pass.
- * Soft-bounces to "/" (matching the route gate) rather than throwing.
- */
 export async function requireAnyModule(...mods: ModuleId[]) {
   const user = await requireUser();
   if (user.role === "owner") return user;
-  if (!mods.some((m) => hasModule(user, m))) redirect("/");
+  if (!mods.some((module) => hasModule(user, module))) redirect("/");
   return user;
 }
+
 export const requireCrm = () => requireAnyModule("crm");
 export const requireWorkshop = () => requireAnyModule("workshop");
 export const requireCrmOrWorkshop = () => requireAnyModule("crm", "workshop");
@@ -65,8 +66,13 @@ export async function createSessionCookie(user: {
   role: string;
   modules: string;
 }) {
+  const security = await getUserSecurityState(user.id);
+  if (!security || security.disabledAt) throw new Error("User is disabled or no longer exists");
   const idle = await getIdleMinutes();
-  const token = await signFreshSession(user, idle);
+  const token = await signFreshSession(
+    { ...user, sessionVersion: security.sessionVersion },
+    idle
+  );
   const store = await cookies();
   store.set(SESSION_COOKIE, token, sessionCookieOptions);
 }
