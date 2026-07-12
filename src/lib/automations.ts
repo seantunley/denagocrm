@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { addDays, subDays } from "date-fns";
 import { prisma } from "./db";
 import { logAudit } from "./audit";
@@ -22,6 +23,13 @@ type JourneyEventOptions = {
   eventKey?: string;
   payload?: Record<string, unknown>;
 };
+
+const SOURCE_GUARDED_EVENTS = new Set<LeadTrigger>([
+  "quote_signed",
+  "quote_declined",
+  "delivered",
+  "referral_earned",
+]);
 
 function loadLead(id: string) {
   return prisma.lead.findUnique({
@@ -163,12 +171,11 @@ async function queueAdvancedJourney(
   lead: LeadForRules,
   options: JourneyEventOptions
 ) {
-  const stateKey = options.eventKey ?? [
-    trigger,
-    lead.stageId,
-    lead.status,
-    lead.updatedAt.toISOString(),
-  ].join(":");
+  const stateKey = options.eventKey ?? (
+    SOURCE_GUARDED_EVENTS.has(trigger)
+      ? `${trigger}:${lead.id}:${crypto.randomUUID()}`
+      : [trigger, lead.stageId, lead.status, lead.updatedAt.toISOString()].join(":")
+  );
   await emitJourneyEvent({
     type: trigger,
     entityType: "lead",
