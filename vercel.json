@@ -1,5 +1,5 @@
 {
-  "buildCommand": "prisma generate && prisma migrate deploy && next build",
+  "buildCommand": "prisma generate --schema ./prisma && prisma migrate deploy --schema ./prisma && next build",
   "regions": ["fra1"],
   "crons": [
     {
