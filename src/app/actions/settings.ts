@@ -3,10 +3,12 @@
 import { revalidatePath } from "next/cache";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
-import { prisma } from "@/lib/db";
-import { requireUser, requireOwner } from "@/lib/auth";
+import { basePrisma, prisma } from "@/lib/db";
+import { createSessionCookie, requireUser, requireOwner } from "@/lib/auth";
 import { putSetting } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
+import { logAuditStrict } from "@/lib/audit";
+import { bumpUserSessionVersion } from "@/lib/userSecurity";
 
 // ---- Pipeline stages ----
 
@@ -41,17 +43,17 @@ export async function renameStage(id: string, formData: FormData) {
 export async function moveStage(id: string, direction: "up" | "down") {
   await requireOwner();
   const stages = await prisma.pipelineStage.findMany({ orderBy: { order: "asc" } });
-  const idx = stages.findIndex((s) => s.id === id);
-  const swapWith = direction === "up" ? idx - 1 : idx + 1;
-  if (idx < 0 || swapWith < 0 || swapWith >= stages.length) return;
+  const index = stages.findIndex((stage) => stage.id === id);
+  const swapWith = direction === "up" ? index - 1 : index + 1;
+  if (index < 0 || swapWith < 0 || swapWith >= stages.length) return;
   await prisma.$transaction([
     prisma.pipelineStage.update({
-      where: { id: stages[idx].id },
+      where: { id: stages[index].id },
       data: { order: stages[swapWith].order },
     }),
     prisma.pipelineStage.update({
       where: { id: stages[swapWith].id },
-      data: { order: stages[idx].order },
+      data: { order: stages[index].order },
     }),
   ]);
   revalidatePath("/settings");
@@ -62,7 +64,7 @@ export async function deleteStage(id: string, formData: FormData): Promise<void>
   await requireOwner();
   void formData;
   const count = await prisma.lead.count({ where: { stageId: id } });
-  if (count > 0) return; // stage still holds leads — refuse silently
+  if (count > 0) return;
   await prisma.pipelineStage.delete({ where: { id } });
   revalidatePath("/settings");
   revalidatePath("/leads");
@@ -72,23 +74,46 @@ export async function deleteStage(id: string, formData: FormData): Promise<void>
 
 export type FormState = { error?: string; ok?: string };
 
+function validPassword(password: string): boolean {
+  return password.length >= 12 && /[A-Za-z]/.test(password) && /\d/.test(password);
+}
+
 export async function createUser(
   _prev: FormState | undefined,
   formData: FormData
 ): Promise<FormState> {
-  await requireOwner(); // adding users is owner-only
+  const owner = await requireOwner();
   const name = String(formData.get("name") ?? "").trim();
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const password = String(formData.get("password") ?? "");
-  if (!name || !email || password.length < 8) {
-    return { error: "Name, email and a password of at least 8 characters are required." };
+  if (!name || !email || !validPassword(password)) {
+    return { error: "Name, email and a password of at least 12 characters containing letters and numbers are required." };
   }
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) return { error: "A user with that email already exists." };
-  await prisma.user.create({
-    data: { name, email, passwordHash: await bcrypt.hash(password, 10) },
+
+  const created = await prisma.user.create({
+    data: { name, email, passwordHash: await bcrypt.hash(password, 12) },
+  });
+  try {
+    await basePrisma.$executeRaw`
+      INSERT INTO "UserRole" ("userId", "roleId")
+      VALUES (${created.id}, 'role_sales_rep')
+      ON CONFLICT DO NOTHING
+    `;
+  } catch {
+    // Safe during a rolling deployment before the RBAC migration is applied.
+  }
+  await logAuditStrict({
+    action: "security.user_created",
+    summary: `Created user ${name}`,
+    entityType: "User",
+    entityId: created.id,
+    user: owner,
+    after: { name, email, role: "member", initialRbacRole: "role_sales_rep" },
   });
   revalidatePath("/settings");
+  revalidatePath("/settings/access");
   return { ok: `${name} added to the team.` };
 }
 
@@ -99,16 +124,34 @@ export async function changeOwnPassword(
   const user = await requireUser();
   const current = String(formData.get("current") ?? "");
   const next = String(formData.get("next") ?? "");
-  if (next.length < 8) return { error: "New password must be at least 8 characters." };
+  if (!validPassword(next)) {
+    return { error: "New password must be at least 12 characters and contain letters and numbers." };
+  }
+  if (await bcrypt.compare(next, user.passwordHash)) {
+    return { error: "Choose a password different from your current password." };
+  }
   if (!(await bcrypt.compare(current, user.passwordHash))) {
     return { error: "Current password is incorrect." };
   }
-  await prisma.user.update({
+
+  const updated = await prisma.user.update({
     where: { id: user.id },
-    data: { passwordHash: await bcrypt.hash(next, 10) },
+    data: {
+      passwordHash: await bcrypt.hash(next, 12),
+      passwordChangedAt: new Date(),
+    },
+  });
+  await bumpUserSessionVersion(user.id);
+  await createSessionCookie(updated);
+  await logAuditStrict({
+    action: "security.password_changed",
+    summary: "Password changed; all other sessions revoked",
+    entityType: "User",
+    entityId: user.id,
+    user,
   });
   revalidatePath("/settings");
-  return { ok: "Password updated." };
+  return { ok: "Password updated. Other signed-in devices have been signed out." };
 }
 
 export async function saveQuoteDefaults(formData: FormData) {
@@ -158,29 +201,21 @@ export async function saveMyProfile(formData: FormData) {
   revalidatePath("/settings");
 }
 
-// ---- Integration settings ----
+export async function saveNotificationPrefs(formData: FormData) {
+  const user = await requireUser();
+  const enabled = formData.getAll("enabled").map(String).filter((kind) => PUSH_KINDS.includes(kind));
+  await putSetting(`PUSH_PREFS_${user.id}`, enabled.join(","));
+  revalidatePath("/settings");
+}
 
-export async function saveSetting(formData: FormData) {
-  await requireOwner(); // integration credentials — owner only
-  const key = String(formData.get("key") ?? "");
-  const value = String(formData.get("value") ?? "").trim();
-  if (!key) return;
-  await putSetting(key, value); // credential keys are encrypted at rest
+export async function saveSetting(key: string, formData: FormData) {
+  await requireOwner();
+  await putSetting(key, String(formData.get("value") ?? ""));
   revalidatePath("/settings");
 }
 
 export async function regenerateSetting(key: string) {
-  await requireOwner(); // rotates a secret — owner only
-  const value = crypto.randomBytes(24).toString("hex");
-  await putSetting(key, value);
-  revalidatePath("/settings");
-}
-
-/** Team-wide push toggles: unticked kinds are stored as disabled. */
-export async function saveNotificationPrefs(formData: FormData) {
   await requireOwner();
-  const enabled = new Set(formData.getAll("kinds").map(String));
-  const disabled = PUSH_KINDS.map((k) => k.id).filter((id) => !enabled.has(id));
-  await putSetting("PUSH_DISABLED_KINDS", disabled.join(","));
+  await putSetting(key, crypto.randomBytes(32).toString("hex"));
   revalidatePath("/settings");
 }
