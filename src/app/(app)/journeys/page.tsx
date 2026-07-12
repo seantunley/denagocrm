@@ -11,6 +11,7 @@ import {
   saveJourneyDraft,
   setJourneyStatus,
 } from "@/app/actions/journeys";
+import { cancelJourneyRun, retryJourneyRun } from "@/app/actions/journeyRuns";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +32,8 @@ function defaultsFor(
 ): JourneyBuilderDefaults {
   const group = record(version.entryConditions);
   const conditions = Array.isArray(group.conditions)
-    ? group.conditions.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    ? group.conditions.filter((item): item is Record<string, unknown> =>
+        Boolean(item) && typeof item === "object" && !Array.isArray(item))
     : [];
   const find = (field: string) => conditions.find((condition) => condition.field === field)?.value;
   const minCents = Number(find("lead.valueCents"));
@@ -52,9 +54,17 @@ function triggerLabel(trigger: string) {
   return trigger.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function statusClass(status: string) {
+  if (status === "completed") return "bg-emerald-950 text-emerald-300";
+  if (status === "failed") return "bg-red-950 text-red-300";
+  if (status === "waiting") return "bg-blue-950 text-blue-300";
+  if (status === "cancelled") return "bg-slate-800 text-slate-400";
+  return "bg-slate-800 text-slate-300";
+}
+
 export default async function JourneysPage() {
   await requireOwner();
-  const [journeys, stages, users, templates, tags, segments, recentRuns] = await Promise.all([
+  const [journeys, stages, users, templates, tags, segments, recentRuns, lifecycleSettings] = await Promise.all([
     prisma.journey.findMany({
       where: { status: { not: "archived" } },
       orderBy: { updatedAt: "desc" },
@@ -73,8 +83,12 @@ export default async function JourneysPage() {
       take: 30,
       include: { journey: true, journeyVersion: true },
     }),
+    prisma.appSetting.findMany({
+      where: { key: { in: ["LIFECYCLE_ANNIVERSARY_ENABLED", "LIFECYCLE_WINBACK_ENABLED"] } },
+    }),
   ]);
   const options = { stages, users, templates, tags, segments };
+  const legacyLifecycleEnabled = lifecycleSettings.some((setting) => setting.value === "true");
 
   return (
     <div className="space-y-6">
@@ -95,11 +109,19 @@ export default async function JourneysPage() {
         </form>
       </div>
 
+      {legacyLifecycleEnabled && (
+        <div className="rounded-lg border border-amber-800/60 bg-amber-950/20 p-4 text-sm">
+          <p className="font-medium text-amber-300">Legacy lifecycle emails are still enabled</p>
+          <p className="text-slate-400 mt-1">
+            Disable the old anniversary and win-back toggles in Settings before activating equivalent
+            advanced journeys, otherwise customers could receive both versions.
+          </p>
+        </div>
+      )}
+
       <details className="card" open={journeys.length === 0}>
         <summary className="font-semibold cursor-pointer">+ Create a journey</summary>
-        <div className="mt-5">
-          <JourneyBuilder {...options} />
-        </div>
+        <div className="mt-5"><JourneyBuilder {...options} /></div>
       </details>
 
       <section className="space-y-3">
@@ -170,7 +192,7 @@ export default async function JourneysPage() {
         ) : (
           <div className="overflow-x-auto">
             <table className="table-base">
-              <thead><tr><th>Journey</th><th>Record</th><th>Version</th><th>Status</th><th>Current step</th><th>Started</th><th>Error</th></tr></thead>
+              <thead><tr><th>Journey</th><th>Record</th><th>Version</th><th>Status</th><th>Current step</th><th>Started</th><th>Error</th><th>Actions</th></tr></thead>
               <tbody>
                 {recentRuns.map((run) => (
                   <tr key={run.id}>
@@ -181,10 +203,20 @@ export default async function JourneysPage() {
                         : run.entityType}
                     </td>
                     <td>v{run.journeyVersion.version}</td>
-                    <td><span className={`badge ${run.status === "completed" ? "bg-emerald-950 text-emerald-300" : run.status === "failed" ? "bg-red-950 text-red-300" : run.status === "waiting" ? "bg-blue-950 text-blue-300" : "bg-slate-800 text-slate-300"}`}>{run.status}</span></td>
+                    <td><span className={`badge ${statusClass(run.status)}`}>{run.status}</span></td>
                     <td className="text-xs text-slate-400">{run.currentStepId ?? "—"}</td>
                     <td className="text-xs text-slate-400">{formatDateTime(run.createdAt)}</td>
                     <td className="text-xs text-red-300 max-w-64 truncate">{run.lastError ?? "—"}</td>
+                    <td>
+                      <div className="flex gap-2">
+                        {["failed", "cancelled"].includes(run.status) && (
+                          <form action={retryJourneyRun.bind(null, run.id)}><button className="btn-secondary btn-sm">Retry</button></form>
+                        )}
+                        {["queued", "running", "waiting"].includes(run.status) && (
+                          <form action={cancelJourneyRun.bind(null, run.id)}><button className="text-xs text-red-400">Cancel</button></form>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
