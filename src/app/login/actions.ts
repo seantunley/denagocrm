@@ -11,34 +11,34 @@ import { verifyTotp } from "@/lib/totp";
 import { decryptValue } from "@/lib/settings";
 import { sendEmail } from "@/lib/email";
 import { logAudit } from "@/lib/audit";
+import {
+  LOGIN_POLICY,
+  OTP_SEND_POLICY,
+  OTP_VERIFY_POLICY,
+  checkRateLimit,
+  clearRateLimit,
+  getRequestIp,
+  rateLimitKey,
+  registerRateLimitAttempt,
+} from "@/lib/rateLimit";
+import {
+  getUserSecurityState,
+  recordFailedLogin,
+  recordSuccessfulLogin,
+} from "@/lib/userSecurity";
 
-// Brute-force protection: max 5 failed attempts per account per 15 minutes.
-const WINDOW_MS = 15 * 60 * 1000;
-const MAX_ATTEMPTS = 5;
-const failedAttempts = new Map<string, { count: number; first: number }>();
-
-function isLockedOut(key: string): boolean {
-  const entry = failedAttempts.get(key);
-  if (!entry) return false;
-  if (Date.now() - entry.first > WINDOW_MS) {
-    failedAttempts.delete(key);
-    return false;
-  }
-  return entry.count >= MAX_ATTEMPTS;
-}
-function recordFailure(key: string) {
-  const entry = failedAttempts.get(key);
-  if (!entry || Date.now() - entry.first > WINDOW_MS) {
-    failedAttempts.set(key, { count: 1, first: Date.now() });
-  } else {
-    entry.count++;
-  }
-}
-
-// Short-lived signed cookie that proves "password OK, awaiting 2nd factor".
 const PENDING_COOKIE = "denago_2fa_pending";
-const pendingSecret = () =>
-  new TextEncoder().encode(process.env.SESSION_SECRET ?? "dev-secret-local-only");
+
+const pendingSecret = () => {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret || secret.length < 16) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("SESSION_SECRET is not set (or too short) in production.");
+    }
+    return new TextEncoder().encode("dev-secret-local-only");
+  }
+  return new TextEncoder().encode(secret);
+};
 
 async function issuePending(userId: string) {
   const token = await new SignJWT({ uid: userId })
@@ -55,6 +55,7 @@ async function issuePending(userId: string) {
     maxAge: 600,
   });
 }
+
 async function readPending(): Promise<string | null> {
   const store = await cookies();
   const token = store.get(PENDING_COOKIE)?.value;
@@ -76,15 +77,32 @@ export async function login(
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const password = String(formData.get("password") ?? "");
   if (!email || !password) return { error: "Email and password are required." };
-  if (isLockedOut(email)) return { error: "Too many failed attempts. Try again in 15 minutes." };
+
+  const ip = await getRequestIp();
+  const accountKey = rateLimitKey("staff-login-account", email);
+  const ipKey = rateLimitKey("staff-login-ip", ip);
+  const [accountState, ipState] = await Promise.all([
+    checkRateLimit(accountKey),
+    checkRateLimit(ipKey),
+  ]);
+  if (!accountState.allowed || !ipState.allowed) {
+    return { error: "Too many failed attempts. Try again later." };
+  }
 
   const user = await prisma.user.findUnique({ where: { email } });
-  if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
-    recordFailure(email);
+  const security = user ? await getUserSecurityState(user.id) : null;
+  const passwordOk = Boolean(user && security && !security.disabledAt && await bcrypt.compare(password, user.passwordHash));
+
+  if (!user || !passwordOk) {
+    await Promise.all([
+      registerRateLimitAttempt(accountKey, LOGIN_POLICY),
+      registerRateLimitAttempt(ipKey, LOGIN_POLICY),
+      user ? recordFailedLogin(user.id) : Promise.resolve(),
+    ]);
     return { error: "Invalid email or password." };
   }
-  failedAttempts.delete(email);
 
+  await clearRateLimit(accountKey);
   const hasTotp = Boolean(user.totpEnabledAt && user.totpSecret);
   if (hasTotp || user.emailOtpEnabled) {
     await issuePending(user.id);
@@ -95,13 +113,20 @@ export async function login(
     return { need2fa: true, methods };
   }
 
+  await recordSuccessfulLogin(user.id);
   await createSessionCookie(user);
   redirect("/");
 }
 
-async function sendLoginEmailCode(userId: string) {
+async function sendLoginEmailCode(userId: string): Promise<boolean> {
   const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user?.email) return;
+  const security = user ? await getUserSecurityState(user.id) : null;
+  if (!user?.email || !security || security.disabledAt) return false;
+
+  const key = rateLimitKey("staff-email-otp-send", userId);
+  const result = await registerRateLimitAttempt(key, OTP_SEND_POLICY);
+  if (!result.allowed) return false;
+
   const code = crypto.randomInt(100000, 1000000).toString();
   await prisma.user.update({
     where: { id: userId },
@@ -115,14 +140,16 @@ async function sendLoginEmailCode(userId: string) {
     subject: "Your Denago CRM sign-in code",
     text: `Your sign-in code is ${code}. It expires in 10 minutes. If this wasn't you, change your password.`,
   }).catch(() => {});
+  return true;
 }
 
-/** Request the email code from the 2FA screen. */
 export async function requestEmailCode(): Promise<{ ok?: boolean; error?: string }> {
   const uid = await readPending();
   if (!uid) return { error: "Session expired — please sign in again." };
-  await sendLoginEmailCode(uid);
-  return { ok: true };
+  const sent = await sendLoginEmailCode(uid);
+  return sent
+    ? { ok: true }
+    : { error: "A code was sent recently. Wait a few minutes before requesting another." };
 }
 
 export async function verifySecondFactor(
@@ -131,14 +158,19 @@ export async function verifySecondFactor(
 ): Promise<{ error?: string }> {
   const uid = await readPending();
   if (!uid) return { error: "Session expired — please sign in again." };
-  // Rate-limit the second factor too — the password step is limited but the
-  // 2FA code (6 digits) must not be freely brute-forceable.
-  if (isLockedOut("2fa:" + uid)) {
-    return { error: "Too many incorrect codes. Try again in 15 minutes." };
+
+  const ip = await getRequestIp();
+  const attemptKey = rateLimitKey("staff-2fa", `${uid}:${ip}`);
+  if (!(await checkRateLimit(attemptKey)).allowed) {
+    return { error: "Too many incorrect codes. Try again later." };
   }
+
   const code = String(formData.get("code") ?? "").trim();
   const user = await prisma.user.findUnique({ where: { id: uid } });
-  if (!user) return { error: "Session expired — please sign in again." };
+  const security = user ? await getUserSecurityState(user.id) : null;
+  if (!user || !security || security.disabledAt) {
+    return { error: "Session expired — please sign in again." };
+  }
 
   let ok = false;
   if (user.totpEnabledAt && user.totpSecret) {
@@ -152,9 +184,9 @@ export async function verifySecondFactor(
   if (!ok && user.totpBackupCodes) {
     const codes: string[] = JSON.parse(user.totpBackupCodes);
     const normalized = code.toUpperCase().replace(/\s/g, "");
-    for (let i = 0; i < codes.length; i++) {
-      if (await bcrypt.compare(normalized, codes[i])) {
-        codes.splice(i, 1);
+    for (let index = 0; index < codes.length; index++) {
+      if (await bcrypt.compare(normalized, codes[index])) {
+        codes.splice(index, 1);
         await prisma.user.update({
           where: { id: user.id },
           data: { totpBackupCodes: JSON.stringify(codes) },
@@ -171,15 +203,22 @@ export async function verifySecondFactor(
   }
 
   if (!ok) {
-    recordFailure("2fa:" + uid);
+    await Promise.all([
+      registerRateLimitAttempt(attemptKey, OTP_VERIFY_POLICY),
+      recordFailedLogin(user.id),
+    ]);
     return { error: "That code isn't right. Try again, or use a backup code." };
   }
-  failedAttempts.delete("2fa:" + uid);
 
+  await Promise.all([
+    clearRateLimit(attemptKey),
+    clearRateLimit(rateLimitKey("staff-email-otp-send", user.id)),
+  ]);
   await prisma.user.update({
     where: { id: user.id },
     data: { loginOtpHash: null, loginOtpExpires: null },
   });
+  await recordSuccessfulLogin(user.id);
   const store = await cookies();
   store.delete(PENDING_COOKIE);
   await createSessionCookie(user);
