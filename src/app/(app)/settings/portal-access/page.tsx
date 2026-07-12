@@ -1,5 +1,5 @@
 import { basePrisma, prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import {
   grantPortalAccess,
   revokePortalAccess,
@@ -35,7 +35,7 @@ function RoleSelect() {
 }
 
 export default async function PortalAccessPage() {
-  await requireOwner();
+  await requirePermission("portal_access.manage");
   const [contacts, fleets, grants, profileRequests] = await Promise.all([
     prisma.contact.findMany({ where: { deletedAt: null }, orderBy: [{ company: "asc" }, { firstName: "asc" }], take: 2000 }),
     prisma.fleet.findMany({ where: { deletedAt: null }, orderBy: { name: "asc" } }),
