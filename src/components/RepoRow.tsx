@@ -25,8 +25,8 @@ export type RepoDoc = {
   sizeKB: number;
   tag: string | null;
   createdAt: string;
-  filedOn: string | null; // "Contact · Gavin Tagg" etc.
-  superseded: boolean; // an older version
+  filedOn: string | null;
+  superseded: boolean;
   uploadedBy: string;
 };
 
@@ -41,7 +41,15 @@ const TAGS = ["", "invoice", "pop", "delivery-note", "delivery-photo", "delivery
 const input =
   "w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20";
 
-export default function RepoRow({ doc, targets }: { doc: RepoDoc; targets: MoveTargets }) {
+export default function RepoRow({
+  doc,
+  targets,
+  canManage = true,
+}: {
+  doc: RepoDoc;
+  targets: MoveTargets;
+  canManage?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const Icon = doc.mimeType.startsWith("image/")
     ? ImageIcon
@@ -90,7 +98,7 @@ export default function RepoRow({ doc, targets }: { doc: RepoDoc; targets: MoveT
       >
         <ExternalLink className="size-4" />
       </a>
-      {!doc.superseded && (
+      {canManage && !doc.superseded && (
         <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
           <Settings2 className="size-3.5" />
           Manage
@@ -108,9 +116,9 @@ export default function RepoRow({ doc, targets }: { doc: RepoDoc; targets: MoveT
             <div className="flex gap-2">
               <input name="fileName" defaultValue={doc.fileName} className={input} required />
               <select name="tag" defaultValue={doc.tag ?? ""} className={`${input} !w-40`}>
-                {TAGS.map((t) => (
-                  <option key={t} value={t}>
-                    {t || "— no tag —"}
+                {TAGS.map((tag) => (
+                  <option key={tag} value={tag}>
+                    {tag || "— no tag —"}
                   </option>
                 ))}
               </select>
@@ -123,28 +131,20 @@ export default function RepoRow({ doc, targets }: { doc: RepoDoc; targets: MoveT
               Move to a different record
             </label>
             <select name="target" className={input} defaultValue="">
-              <option value="" disabled>
-                Choose destination…
-              </option>
+              <option value="" disabled>Choose destination…</option>
               <optgroup label="Customers">
-                {targets.contacts.map((c) => (
-                  <option key={c.id} value={`contact:${c.id}`}>
-                    {c.label}
-                  </option>
+                {targets.contacts.map((contact) => (
+                  <option key={contact.id} value={`contact:${contact.id}`}>{contact.label}</option>
                 ))}
               </optgroup>
               <optgroup label="Vehicles">
-                {targets.vehicles.map((v) => (
-                  <option key={v.id} value={`vehicle:${v.id}`}>
-                    {v.label}
-                  </option>
+                {targets.vehicles.map((vehicle) => (
+                  <option key={vehicle.id} value={`vehicle:${vehicle.id}`}>{vehicle.label}</option>
                 ))}
               </optgroup>
               <optgroup label="Quotes">
-                {targets.quotes.map((q) => (
-                  <option key={q.id} value={`quote:${q.id}`}>
-                    {q.label}
-                  </option>
+                {targets.quotes.map((quote) => (
+                  <option key={quote.id} value={`quote:${quote.id}`}>{quote.label}</option>
                 ))}
               </optgroup>
             </select>
