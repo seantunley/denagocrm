@@ -3,10 +3,10 @@ import { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { contactName, formatZAR } from "@/lib/format";
+import { getAccessibleDocumentIds } from "@/lib/documentAccess";
 import {
   getAccessibleCaseIds,
   getAccessibleContactIds,
-  getAccessibleDocumentIds,
   getAccessibleJobCardIds,
   getAccessibleLeadIds,
   getAccessibleQuoteIds,
@@ -57,6 +57,9 @@ export default async function SearchPage({
   const contains = { contains: term, mode: "insensitive" as const };
   const asNumber = parseInt(term.replace(/^[qQcC]-?/, ""), 10);
   const scoped = (ids: string[] | null) => ids === null ? {} : { id: { in: ids } };
+  const caseNumberCondition = Number.isNaN(asNumber)
+    ? Prisma.empty
+    : Prisma.sql`OR c."number" = ${BigInt(asNumber)}`;
 
   const casesPromise: Promise<CaseSearchRow[]> = caseIds !== null && caseIds.length === 0
     ? Promise.resolve([])
@@ -70,7 +73,7 @@ export default async function SearchPage({
           AND (
             c."subject" ILIKE ${`%${term}%`}
             OR c."description" ILIKE ${`%${term}%`}
-            OR (${Number.isNaN(asNumber) ? null : BigInt(asNumber)}::bigint IS NOT NULL AND c."number" = ${Number.isNaN(asNumber) ? null : BigInt(asNumber)}::bigint)
+            ${caseNumberCondition}
           )
         ORDER BY c."updatedAt" DESC
         LIMIT 20
@@ -121,9 +124,12 @@ export default async function SearchPage({
       : prisma.quote.findMany({
           where: {
             ...scoped(quoteIds),
-            ...(isNaN(asNumber)
-              ? { OR: [{ contact: { firstName: contains } }, { contact: { lastName: contains } }, { lead: { title: contains } }] }
-              : { OR: [{ number: asNumber }, { contact: { firstName: contains } }, { contact: { lastName: contains } }] }),
+            OR: [
+              ...(isNaN(asNumber) ? [] : [{ number: asNumber }]),
+              { contact: { firstName: contains } },
+              { contact: { lastName: contains } },
+              { lead: { title: contains } },
+            ],
           },
           include: { contact: true, lead: true },
           take: 20,
