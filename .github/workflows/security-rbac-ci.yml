@@ -3,7 +3,7 @@ name: Security and RBAC validation
 on:
   push:
     branches:
-      - agent/security-rbac-complete
+      - agent/platform-wide-rbac
   pull_request:
     paths:
       - "src/lib/auth.ts"
@@ -11,14 +11,23 @@ on:
       - "src/lib/rateLimit.ts"
       - "src/lib/userSecurity.ts"
       - "src/lib/permissions.ts"
+      - "src/lib/documentAccess.ts"
+      - "src/lib/activityAccess.ts"
       - "src/lib/audit.ts"
-      - "src/app/actions/accessControl.ts"
-      - "src/app/actions/security.ts"
-      - "src/app/actions/settings.ts"
-      - "src/app/login/actions.ts"
-      - "src/app/actions/portal.ts"
+      - "src/lib/access.ts"
+      - "src/app/actions/**"
+      - "src/app/(app)/**"
+      - "src/app/api/files/**"
+      - "src/components/AppShell.tsx"
+      - "src/components/Nav.tsx"
+      - "src/components/nav-config.ts"
+      - "src/components/CommandMenu.tsx"
+      - "src/components/QuickActions.tsx"
+      - "src/components/CalendarView.tsx"
+      - "src/components/RepoRow.tsx"
       - "prisma/**"
       - "scripts/test-security.ts"
+      - "scripts/test-rbac.ts"
       - "scripts/verify-governance.ts"
       - "package.json"
       - "package-lock.json"
@@ -31,7 +40,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16-alpine
@@ -95,3 +104,6 @@ jobs:
 
       - name: Run security integration tests
         run: npm run test:security
+
+      - name: Run platform RBAC integration tests
+        run: npm run test:rbac
