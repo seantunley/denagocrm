@@ -43,7 +43,7 @@ export async function getPortalScope(): Promise<PortalScope | null> {
 
   const linkedFleets = await basePrisma.$queryRaw<Array<{ id: string }>>`
     SELECT "id" FROM "Fleet"
-    WHERE "deletedAt" IS NULL AND "contactId" IN (${Array.from(contactIds)})
+    WHERE "deletedAt" IS NULL AND "contactId" = ANY(${[...contactIds]}::text[])
   `;
   for (const fleet of linkedFleets) {
     fleetIds.add(fleet.id);
@@ -52,8 +52,8 @@ export async function getPortalScope(): Promise<PortalScope | null> {
 
   return {
     viewerContactId: contact.id,
-    contactIds: Array.from(contactIds),
-    fleetIds: Array.from(fleetIds),
+    contactIds: [...contactIds],
+    fleetIds: [...fleetIds],
     roleByContactId,
     roleByFleetId,
   };
@@ -78,10 +78,10 @@ export async function portalCanAccessVehicle(vehicleId: string): Promise<boolean
       SELECT 1 FROM "Vehicle" v
       WHERE v."id" = ${vehicleId} AND v."deletedAt" IS NULL
         AND (
-          v."contactId" IN (${scope.contactIds})
-          OR (v."fleetId" IS NOT NULL AND v."fleetId" IN (${scope.fleetIds}))
+          v."contactId" = ANY(${scope.contactIds}::text[])
+          OR (v."fleetId" IS NOT NULL AND v."fleetId" = ANY(${scope.fleetIds}::text[]))
         )
-    ) AS allowed
+    ) AS "allowed"
   `;
   return Boolean(rows[0]?.allowed);
 }
@@ -93,8 +93,25 @@ export async function portalCanAccessQuote(quoteId: string): Promise<boolean> {
     SELECT EXISTS (
       SELECT 1 FROM "Quote" q
       WHERE q."id" = ${quoteId} AND q."deletedAt" IS NULL
-        AND q."contactId" IN (${scope.contactIds})
-    ) AS allowed
+        AND q."contactId" = ANY(${scope.contactIds}::text[])
+    ) AS "allowed"
+  `;
+  return Boolean(rows[0]?.allowed);
+}
+
+export async function portalCanAccessCase(caseId: string): Promise<boolean> {
+  const scope = await getPortalScope();
+  if (!scope) return false;
+  const rows = await basePrisma.$queryRaw<Array<{ allowed: boolean }>>`
+    SELECT EXISTS (
+      SELECT 1 FROM "CustomerCase" c
+      LEFT JOIN "Vehicle" v ON v."id" = c."vehicleId"
+      WHERE c."id" = ${caseId}
+        AND (
+          c."contactId" = ANY(${scope.contactIds}::text[])
+          OR (v."fleetId" IS NOT NULL AND v."fleetId" = ANY(${scope.fleetIds}::text[]))
+        )
+    ) AS "allowed"
   `;
   return Boolean(rows[0]?.allowed);
 }
@@ -110,12 +127,12 @@ export async function portalCanAccessDocument(documentId: string): Promise<boole
       LEFT JOIN "Quote" q ON q."id" = d."quoteId"
       WHERE d."id" = ${documentId} AND d."deletedAt" IS NULL
         AND (
-          d."contactId" IN (${scope.contactIds})
-          OR v."contactId" IN (${scope.contactIds})
-          OR (v."fleetId" IS NOT NULL AND v."fleetId" IN (${scope.fleetIds}))
-          OR q."contactId" IN (${scope.contactIds})
+          d."contactId" = ANY(${scope.contactIds}::text[])
+          OR v."contactId" = ANY(${scope.contactIds}::text[])
+          OR (v."fleetId" IS NOT NULL AND v."fleetId" = ANY(${scope.fleetIds}::text[]))
+          OR q."contactId" = ANY(${scope.contactIds}::text[])
         )
-    ) AS allowed
+    ) AS "allowed"
   `;
   return Boolean(rows[0]?.allowed);
 }
