@@ -2,9 +2,9 @@ import Link from "next/link";
 import { FileText, Search, Settings2, Upload } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { contactName, formatDate } from "@/lib/format";
+import { getAccessibleDocumentIds } from "@/lib/documentAccess";
 import {
   getAccessibleContactIds,
-  getAccessibleDocumentIds,
   getAccessibleQuoteIds,
   getAccessibleVehicleIds,
   hasPermission,
@@ -66,32 +66,42 @@ export default async function DocumentsPage({
     : [];
   const quoteNumbers = new Map(docQuotes.map((quote) => [quote.id, quote.number]));
 
-  const [contacts, vehicles, quotes] = canManage
-    ? await Promise.all([
-        prisma.contact.findMany({
-          where: contactIds === null ? {} : { id: { in: contactIds } },
-          orderBy: { firstName: "asc" },
-          take: 500,
-        }),
-        prisma.vehicle.findMany({
-          where: vehicleIds === null ? {} : { id: { in: vehicleIds } },
-          include: { contact: true },
-          orderBy: { model: "asc" },
-          take: 500,
-        }),
-        prisma.quote.findMany({
-          where: {
-            AND: [
-              { supersededAt: null },
-              ...(quoteIds === null ? [] : [{ id: { in: quoteIds } }]),
-            ],
-          },
-          include: { contact: true },
-          orderBy: { createdAt: "desc" },
-          take: 250,
-        }),
-      ])
-    : [[], [], []];
+  const [contacts, vehicles, quotes] = await Promise.all([
+    prisma.contact.findMany({
+      where: !canManage
+        ? { id: { in: [] } }
+        : contactIds === null
+          ? {}
+          : { id: { in: contactIds } },
+      orderBy: { firstName: "asc" },
+      take: 500,
+    }),
+    prisma.vehicle.findMany({
+      where: !canManage
+        ? { id: { in: [] } }
+        : vehicleIds === null
+          ? {}
+          : { id: { in: vehicleIds } },
+      include: { contact: true },
+      orderBy: { model: "asc" },
+      take: 500,
+    }),
+    prisma.quote.findMany({
+      where: {
+        AND: [
+          { supersededAt: null },
+          ...(!canManage
+            ? [{ id: { in: [] as string[] } }]
+            : quoteIds === null
+              ? []
+              : [{ id: { in: quoteIds } }]),
+        ],
+      },
+      include: { contact: true },
+      orderBy: { createdAt: "desc" },
+      take: 250,
+    }),
+  ]);
 
   const targets: MoveTargets = {
     contacts: contacts.map((contact) => ({ id: contact.id, label: contactName(contact) })),
@@ -132,7 +142,7 @@ export default async function DocumentsPage({
         description={`${rows.length} accessible file${rows.length === 1 ? "" : "s"}. Downloads and management actions are checked again on the server.`}
       >
         {canTemplates && (
-          <Link href="/settings/documents" className={buttonVariants({ variant: "outline", size: "sm" })}>
+          <Link href="/document-studio" className={buttonVariants({ variant: "outline", size: "sm" })}>
             <Settings2 className="size-4" />
             Templates & Studio
           </Link>
@@ -147,10 +157,7 @@ export default async function DocumentsPage({
             <Input name="q" defaultValue={q ?? ""} placeholder="Search document names…" className="pl-9" />
           </div>
           <Button variant="secondary" type="submit">Search</Button>
-          <Link
-            href={versions === "all" ? "/documents" : "/documents?versions=all"}
-            className={buttonVariants({ variant: "outline", size: "default" })}
-          >
+          <Link href={versions === "all" ? "/documents" : "/documents?versions=all"} className={buttonVariants({ variant: "outline", size: "default" })}>
             {versions === "all" ? "Current versions" : "Version history"}
           </Link>
         </form>
@@ -159,10 +166,7 @@ export default async function DocumentsPage({
           <form action={uploadDocument} className="flex items-center gap-2 rounded-lg border border-border bg-card p-2">
             <input type="hidden" name="revalidate" value="/documents" />
             <input type="file" name="file" required className="max-w-56 text-xs text-muted-foreground" />
-            <Button size="sm" type="submit">
-              <Upload className="size-4" />
-              Upload
-            </Button>
+            <Button size="sm" type="submit"><Upload className="size-4" />Upload</Button>
           </form>
         )}
       </div>
@@ -175,9 +179,7 @@ export default async function DocumentsPage({
           </div>
         ) : (
           <ul className="divide-y divide-border/50">
-            {rows.map((doc) => (
-              <RepoRow key={doc.id} doc={doc} targets={targets} canManage={canManage} />
-            ))}
+            {rows.map((doc) => <RepoRow key={doc.id} doc={doc} targets={targets} canManage={canManage} />)}
           </ul>
         )}
       </div>
