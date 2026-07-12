@@ -116,7 +116,7 @@ export function buildNav(
   if (can("audit.view")) governanceLinks.push({ href: "/audit", label: "Audit log", icon: ScrollText });
   if (can("pipelines.view", "pipelines.manage")) governanceLinks.push({ href: "/settings/pipelines", label: "Pipelines", icon: GitBranch });
   if (can("roles.view", "roles.manage", "teams.view", "teams.manage")) governanceLinks.push({ href: "/settings/access", label: "Access & roles", icon: ShieldEllipsis });
-  if (can("document_templates.manage")) governanceLinks.push({ href: "/settings/documents", label: "Document Studio", icon: FileText });
+  if (can("document_templates.manage")) governanceLinks.push({ href: "/document-studio", label: "Document Studio", icon: FileText });
   if (governanceLinks.length) groups.push({ key: "governance", label: "Governance", links: governanceLinks });
 
   return { topLinks, groups };
