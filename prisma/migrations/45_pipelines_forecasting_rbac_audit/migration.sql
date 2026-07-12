@@ -32,6 +32,10 @@ ALTER TABLE "PipelineStage" ALTER COLUMN "pipelineId" SET NOT NULL;
 ALTER TABLE "PipelineStage"
   ADD CONSTRAINT "PipelineStage_pipelineId_fkey" FOREIGN KEY ("pipelineId")
   REFERENCES "SalesPipeline"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "PipelineStage"
+  ADD CONSTRAINT "PipelineStage_probability_check" CHECK ("defaultProbability" BETWEEN 0 AND 100);
+ALTER TABLE "PipelineStage"
+  ADD CONSTRAINT "PipelineStage_closed_status_check" CHECK ("closedStatus" IS NULL OR "closedStatus" IN ('won','lost'));
 DROP INDEX IF EXISTS "PipelineStage_order_key";
 CREATE UNIQUE INDEX "PipelineStage_pipelineId_order_key" ON "PipelineStage"("pipelineId", "order");
 CREATE INDEX "PipelineStage_pipelineId_idx" ON "PipelineStage"("pipelineId");
@@ -101,11 +105,11 @@ ALTER TABLE "UserRole" ADD CONSTRAINT "UserRole_roleId_fkey" FOREIGN KEY ("roleI
 INSERT INTO "Role" ("id", "name", "description", "system") VALUES
   ('role_crm_admin', 'CRM administrator', 'Full CRM administration excluding infrastructure secrets', true),
   ('role_sales_manager', 'Sales manager', 'Manage teams, pipelines, forecasts and all sales records', true),
-  ('role_sales_rep', 'Sales representative', 'Manage assigned sales records and activities', true),
+  ('role_sales_rep', 'Sales representative', 'Manage assigned and team sales records', true),
   ('role_marketing', 'Marketing user', 'Manage campaigns, journeys and marketing audiences', true),
   ('role_workshop_manager', 'Workshop manager', 'Manage workshop operations', true),
   ('role_technician', 'Technician', 'Work assigned workshop jobs', true),
-  ('role_auditor', 'Read-only auditor', 'Read reports and audit history', true)
+  ('role_auditor', 'Read-only auditor', 'Read reports, forecasts and immutable audit history', true)
 ON CONFLICT DO NOTHING;
 
 INSERT INTO "Permission" ("key", "description", "category") VALUES
@@ -116,11 +120,15 @@ INSERT INTO "Permission" ("key", "description", "category") VALUES
   ('leads.view_all', 'View all leads', 'CRM'),
   ('leads.view_owned', 'View owned and team leads', 'CRM'),
   ('leads.create', 'Create leads', 'CRM'),
-  ('leads.edit', 'Edit leads', 'CRM'),
-  ('leads.assign', 'Assign leads', 'CRM'),
-  ('leads.change_stage', 'Move leads between stages', 'CRM'),
+  ('leads.edit', 'Edit lead details', 'CRM'),
+  ('leads.assign', 'Assign leads to users and teams', 'CRM'),
+  ('leads.change_stage', 'Move leads between stages in the same pipeline', 'CRM'),
+  ('leads.change_pipeline', 'Move leads to a different sales pipeline', 'CRM'),
   ('leads.mark_won', 'Mark leads won', 'CRM'),
   ('leads.mark_lost', 'Mark leads lost', 'CRM'),
+  ('leads.reopen', 'Reopen won or lost leads', 'CRM'),
+  ('leads.link_contact', 'Link or change the customer on a lead', 'CRM'),
+  ('leads.delete', 'Move leads to Trash', 'CRM'),
   ('teams.view', 'View teams', 'Administration'),
   ('teams.manage', 'Create teams and manage membership', 'Administration'),
   ('roles.view', 'View roles and permissions', 'Administration'),
@@ -141,24 +149,42 @@ INSERT INTO "RolePermission" ("roleId", "permissionKey") VALUES
   ('role_sales_manager', 'forecast.view'), ('role_sales_manager', 'forecast.manage'),
   ('role_sales_manager', 'leads.view_all'), ('role_sales_manager', 'leads.create'),
   ('role_sales_manager', 'leads.edit'), ('role_sales_manager', 'leads.assign'),
-  ('role_sales_manager', 'leads.change_stage'), ('role_sales_manager', 'leads.mark_won'),
-  ('role_sales_manager', 'leads.mark_lost'), ('role_sales_manager', 'teams.view'),
+  ('role_sales_manager', 'leads.change_stage'), ('role_sales_manager', 'leads.change_pipeline'),
+  ('role_sales_manager', 'leads.mark_won'), ('role_sales_manager', 'leads.mark_lost'),
+  ('role_sales_manager', 'leads.reopen'), ('role_sales_manager', 'leads.link_contact'),
+  ('role_sales_manager', 'leads.delete'), ('role_sales_manager', 'teams.view'),
+  ('role_sales_manager', 'teams.manage'), ('role_sales_manager', 'roles.view'),
   ('role_sales_manager', 'reports.view'),
   ('role_sales_rep', 'pipelines.view'), ('role_sales_rep', 'forecast.view'),
   ('role_sales_rep', 'leads.view_owned'), ('role_sales_rep', 'leads.create'),
   ('role_sales_rep', 'leads.edit'), ('role_sales_rep', 'leads.change_stage'),
   ('role_sales_rep', 'leads.mark_won'), ('role_sales_rep', 'leads.mark_lost'),
+  ('role_sales_rep', 'leads.reopen'), ('role_sales_rep', 'leads.link_contact'),
   ('role_marketing', 'campaigns.manage'), ('role_marketing', 'journeys.manage'),
   ('role_marketing', 'reports.view'),
   ('role_workshop_manager', 'workshop.manage'), ('role_workshop_manager', 'reports.view'),
   ('role_technician', 'workshop.manage'),
   ('role_auditor', 'audit.view'), ('role_auditor', 'reports.view'),
-  ('role_auditor', 'pipelines.view'), ('role_auditor', 'forecast.view')
+  ('role_auditor', 'pipelines.view'), ('role_auditor', 'forecast.view'),
+  ('role_auditor', 'leads.view_all')
 ON CONFLICT DO NOTHING;
 
--- Preserve access: owners become CRM administrators; current members become sales representatives.
+-- Preserve access without granting sales rights to workshop-only users.
 INSERT INTO "UserRole" ("userId", "roleId")
-SELECT "id", CASE WHEN "role" = 'owner' THEN 'role_crm_admin' ELSE 'role_sales_rep' END FROM "User"
+SELECT "id", 'role_crm_admin' FROM "User" WHERE "role" = 'owner'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO "UserRole" ("userId", "roleId")
+SELECT "id", 'role_sales_rep' FROM "User"
+WHERE "role" <> 'owner'
+  AND (',' || REPLACE("modules", ' ', '') || ',') LIKE '%,crm,%'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO "UserRole" ("userId", "roleId")
+SELECT "id", 'role_technician' FROM "User"
+WHERE "role" <> 'owner'
+  AND (',' || REPLACE("modules", ' ', '') || ',') LIKE '%,workshop,%'
+  AND (',' || REPLACE("modules", ' ', '') || ',') NOT LIKE '%,crm,%'
 ON CONFLICT DO NOTHING;
 
 ALTER TABLE "Lead" ADD COLUMN "pipelineId" TEXT;
@@ -197,6 +223,12 @@ BEGIN
   ELSIF NEW."status" = 'lost' THEN
     NEW."forecastCategory" := 'omitted'; NEW."probability" := 0;
     NEW."lostAt" := COALESCE(NEW."lostAt", CURRENT_TIMESTAMP);
+  ELSIF NEW."status" = 'open' THEN
+    NEW."wonAt" := NULL; NEW."lostAt" := NULL;
+    IF NEW."forecastCategory" IN ('closed','omitted') THEN
+      NEW."forecastCategory" := 'pipeline';
+      NEW."probability" := COALESCE(stage_probability, 10);
+    END IF;
   END IF;
   RETURN NEW;
 END;
@@ -219,7 +251,11 @@ CREATE TABLE "ForecastSnapshot" (
   "capturedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "ForecastSnapshot_pkey" PRIMARY KEY ("id")
 );
+ALTER TABLE "ForecastSnapshot" ADD CONSTRAINT "ForecastSnapshot_pipelineId_fkey" FOREIGN KEY ("pipelineId") REFERENCES "SalesPipeline"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "ForecastSnapshot" ADD CONSTRAINT "ForecastSnapshot_teamId_fkey" FOREIGN KEY ("teamId") REFERENCES "Team"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "ForecastSnapshot" ADD CONSTRAINT "ForecastSnapshot_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 CREATE INDEX "ForecastSnapshot_period_idx" ON "ForecastSnapshot"("period", "capturedAt");
+CREATE INDEX "ForecastSnapshot_scope_idx" ON "ForecastSnapshot"("pipelineId", "teamId", "userId", "capturedAt");
 
 CREATE TABLE "AuditEvent" (
   "id" TEXT NOT NULL,
