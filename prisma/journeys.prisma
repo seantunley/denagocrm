@@ -55,6 +55,7 @@ model JourneyEvent {
   error       String?
   dedupeKey   String    @unique
   createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   @@index([status, availableAt])
   @@index([type, status])
