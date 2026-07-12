@@ -65,6 +65,7 @@ async function processOneRun(runId: string) {
   const definition = parseJourneyDefinition(run.journeyVersion.definition);
   let currentStepId = run.currentStepId;
   let context = run.context as unknown as JourneyContext;
+  const visited = new Set<string>();
 
   try {
     for (let count = 0; count < MAX_STEPS_PER_TICK; count++) {
@@ -88,6 +89,11 @@ async function processOneRun(runId: string) {
         });
         return true;
       }
+
+      if (visited.has(step.id)) {
+        throw new Error(`Journey cycle detected at step ${step.id}`);
+      }
+      visited.add(step.id);
 
       await updateStepLog({
         runId: run.id,
@@ -144,15 +150,7 @@ async function processOneRun(runId: string) {
       });
     }
 
-    await prisma.journeyRun.update({
-      where: { id: run.id },
-      data: {
-        status: "queued",
-        nextRunAt: new Date(Date.now() + 60_000),
-        currentStepId,
-      },
-    });
-    return true;
+    throw new Error(`Journey exceeded ${MAX_STEPS_PER_TICK} immediate steps without waiting`);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown journey run error";
     if (currentStepId) {
