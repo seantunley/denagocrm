@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { basePrisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
+import { hasModule } from "@/lib/access";
 import { readFile } from "@/lib/storage";
 
 type UploadRow = {
@@ -15,7 +16,14 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const user = await getCurrentUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const allowed = Boolean(user) && (
+    user!.role === "owner"
+    || hasModule(user!, "crm")
+    || hasModule(user!, "workshop")
+    || hasModule(user!, "inbox")
+  );
+  if (!allowed) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   const { id } = await params;
   const rows = await basePrisma.$queryRaw<UploadRow[]>`
     SELECT "id", "fileName", "storedName", "mimeType"
