@@ -1,25 +1,18 @@
 import "server-only";
 import { prisma } from "./db";
 
+const SOCIAL_CHANNELS = ["whatsapp", "messenger", "instagram"];
+
 /**
- * Threads waiting on a reply — same definition as the Social Inbox "All" tab:
- * group messages into conversations, count those whose newest message is
+ * Threads waiting on a reply — social conversations whose most recent message is
  * inbound. Powers the sidebar badge.
+ *
+ * Reads the maintained Conversation projection (`lastDirection`, kept current on
+ * every message) with an indexed COUNT, instead of scanning the last 400 messages
+ * and grouping them in JavaScript on every protected navigation.
  */
 export async function awaitingReplyCount(): Promise<number> {
-  const comms = await prisma.communication.findMany({
-    where: { type: { in: ["whatsapp", "messenger", "instagram"] } },
-    orderBy: { occurredAt: "desc" },
-    take: 400,
-    select: { contactId: true, leadId: true, type: true, direction: true },
+  return prisma.conversation.count({
+    where: { channel: { in: SOCIAL_CHANNELS }, lastDirection: "inbound" },
   });
-  const seen = new Set<string>();
-  let awaiting = 0;
-  for (const c of comms) {
-    const key = c.contactId ? `c:${c.contactId}:${c.type}` : c.leadId ? `l:${c.leadId}:${c.type}` : null;
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    if (c.direction === "inbound") awaiting += 1; // newest in thread is theirs
-  }
-  return awaiting;
 }

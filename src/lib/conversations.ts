@@ -67,7 +67,11 @@ export async function bumpConversation(
     where: { id: conversationId },
     select: { firstResponseAt: true, lastInboundAt: true },
   });
-  const data: Record<string, unknown> = { lastMessageAt: when, messageCount: { increment: 1 } };
+  const data: Record<string, unknown> = {
+    lastMessageAt: when,
+    lastDirection: inbound ? "inbound" : "outbound",
+    messageCount: { increment: 1 },
+  };
   if (inbound) {
     data.unread = true;
     data.lastInboundAt = when;
