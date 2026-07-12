@@ -2,8 +2,6 @@ import { SignJWT, jwtVerify } from "jose";
 
 const secret = () => {
   const s = process.env.SESSION_SECRET;
-  // Never fall back to a known value in production — that would let anyone
-  // forge a valid session cookie.
   if (!s || s.length < 16) {
     if (process.env.NODE_ENV === "production") {
       throw new Error("SESSION_SECRET is not set (or too short) in production.");
@@ -13,7 +11,7 @@ const secret = () => {
   return new TextEncoder().encode(s);
 };
 
-export const ABSOLUTE_SESSION_HOURS = 72; // hard re-login cap regardless of activity
+export const ABSOLUTE_SESSION_HOURS = 72;
 export const DEFAULT_IDLE_MINUTES = 60;
 
 export type SessionPayload = {
@@ -21,15 +19,22 @@ export type SessionPayload = {
   name: string;
   email: string;
   role: string;
-  mods: string; // module claims, csv
-  idle: number; // idle-timeout minutes baked in at login
-  la: number; // last-active unix seconds
-  abs: number; // absolute expiry unix seconds (login + 72h, never extended)
+  mods: string;
+  sv: number; // database session version; incrementing it revokes every older session
+  idle: number;
+  la: number;
+  abs: number;
 };
 
-/** Issues a fresh session at login: 72h absolute cap, chosen idle window. */
 export async function signFreshSession(
-  user: { id: string; name: string; email: string; role: string; modules: string },
+  user: {
+    id: string;
+    name: string;
+    email: string;
+    role: string;
+    modules: string;
+    sessionVersion: number;
+  },
   idleMinutes: number
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
@@ -40,13 +45,13 @@ export async function signFreshSession(
     email: user.email,
     role: user.role,
     mods: user.modules,
+    sv: user.sessionVersion,
     idle: idleMinutes,
     la: now,
     abs,
   });
 }
 
-/** Re-signs an existing session with a refreshed last-active, same absolute cap. */
 export async function refreshSession(payload: SessionPayload): Promise<string> {
   return signWith({ ...payload, la: Math.floor(Date.now() / 1000) });
 }
@@ -55,7 +60,7 @@ async function signWith(payload: SessionPayload): Promise<string> {
   return new SignJWT({ ...payload })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
-    .setExpirationTime(payload.abs) // absolute cap; jose rejects once passed
+    .setExpirationTime(payload.abs)
     .sign(secret());
 }
 
@@ -64,26 +69,28 @@ export type VerifyResult =
   | { status: "expired" }
   | { status: "invalid" };
 
-/** Verifies a session, enforcing the idle timeout on top of the absolute cap. */
 export async function verifySessionFull(token: string): Promise<VerifyResult> {
   try {
     const { payload } = await jwtVerify(token, secret());
-    if (typeof payload.sub !== "string" || typeof payload.la !== "number") {
+    if (
+      typeof payload.sub !== "string" ||
+      typeof payload.la !== "number" ||
+      typeof payload.sv !== "number"
+    ) {
       return { status: "invalid" };
     }
     const p = payload as unknown as SessionPayload;
     const now = Math.floor(Date.now() / 1000);
-    if (p.idle && now - p.la > p.idle * 60) return { status: "expired" }; // idle timeout
+    if (p.idle && now - p.la > p.idle * 60) return { status: "expired" };
     return { status: "ok", payload: p, needsRefresh: now - p.la > 120 };
   } catch {
-    return { status: "expired" }; // includes absolute-cap expiry
+    return { status: "expired" };
   }
 }
 
-/** Lightweight verify used by server components (no refresh concern). */
 export async function verifySession(token: string): Promise<SessionPayload | null> {
-  const r = await verifySessionFull(token);
-  return r.status === "ok" ? r.payload : null;
+  const result = await verifySessionFull(token);
+  return result.status === "ok" ? result.payload : null;
 }
 
 export const SESSION_COOKIE = "denago_session";
