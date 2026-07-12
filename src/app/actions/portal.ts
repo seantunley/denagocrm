@@ -9,12 +9,20 @@ import { getPortalContact, setPortalCookie, clearPortalCookie } from "@/lib/port
 import { sendPushToAll } from "@/lib/push";
 import { logAudit } from "@/lib/audit";
 import { contactName } from "@/lib/format";
+import {
+  OTP_SEND_POLICY,
+  OTP_VERIFY_POLICY,
+  checkRateLimit,
+  clearRateLimit,
+  getRequestIp,
+  rateLimitKey,
+  registerRateLimitAttempt,
+} from "@/lib/rateLimit";
 
 export type PortalAuthState = { ok?: boolean; sent?: boolean; error?: string };
-const str = (v: FormDataEntryValue | null) => String(v ?? "").trim();
-const normEmail = (e: string) => e.trim().toLowerCase();
+const str = (value: FormDataEntryValue | null) => String(value ?? "").trim();
+const normEmail = (email: string) => email.trim().toLowerCase();
 
-/** Step 1: email a 6-digit login code to a known customer. */
 export async function requestPortalOtp(
   _prev: PortalAuthState | undefined,
   formData: FormData
@@ -23,13 +31,15 @@ export async function requestPortalOtp(
   if (!email || !email.includes("@")) return { error: "Enter your email address." };
   if (!(await isSmtpConfigured())) return { error: "The customer portal isn't available right now." };
 
-  // Generic response either way — don't reveal whether an email is on file.
   const generic: PortalAuthState = { sent: true };
-
-  const recent = await prisma.otpChallenge.count({
-    where: { purpose: "portal", key: email, createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) } },
-  });
-  if (recent >= 5) return generic;
+  const ip = await getRequestIp();
+  const accountKey = rateLimitKey("portal-otp-send-account", email);
+  const ipKey = rateLimitKey("portal-otp-send-ip", ip);
+  const [accountLimit, ipLimit] = await Promise.all([
+    registerRateLimitAttempt(accountKey, OTP_SEND_POLICY),
+    registerRateLimitAttempt(ipKey, OTP_SEND_POLICY),
+  ]);
+  if (!accountLimit.allowed || !ipLimit.allowed) return generic;
 
   const contact = await prisma.contact.findFirst({
     where: { email: { equals: email, mode: "insensitive" }, deletedAt: null },
@@ -55,7 +65,6 @@ export async function requestPortalOtp(
   return generic;
 }
 
-/** Step 2: verify the code and open a portal session. */
 export async function verifyPortalOtp(
   _prev: PortalAuthState | undefined,
   formData: FormData
@@ -64,6 +73,12 @@ export async function verifyPortalOtp(
   const code = str(formData.get("code"));
   if (!/^\d{6}$/.test(code)) return { error: "Enter the 6-digit code." };
 
+  const ip = await getRequestIp();
+  const verifyKey = rateLimitKey("portal-otp-verify", `${email}:${ip}`);
+  if (!(await checkRateLimit(verifyKey)).allowed) {
+    return { error: "Too many incorrect codes. Request a new code later." };
+  }
+
   const challenge = await prisma.otpChallenge.findFirst({
     where: { purpose: "portal", key: email, verifiedAt: null, expiresAt: { gt: new Date() } },
     orderBy: { createdAt: "desc" },
@@ -71,16 +86,25 @@ export async function verifyPortalOtp(
   if (!challenge || challenge.attempts >= 5) {
     return { error: "That code has expired — request a new one." };
   }
-  await prisma.otpChallenge.update({ where: { id: challenge.id }, data: { attempts: { increment: 1 } } });
+  await prisma.otpChallenge.update({
+    where: { id: challenge.id },
+    data: { attempts: { increment: 1 } },
+  });
   if (!(await bcrypt.compare(code, challenge.codeHash))) {
+    await registerRateLimitAttempt(verifyKey, OTP_VERIFY_POLICY);
     return { error: "That code isn't right — check and try again." };
   }
+
   const contact = await prisma.contact.findFirst({
     where: { email: { equals: email, mode: "insensitive" }, deletedAt: null },
   });
   if (!contact) return { error: "We couldn't find your account." };
 
-  await prisma.otpChallenge.update({ where: { id: challenge.id }, data: { verifiedAt: new Date() } });
+  await Promise.all([
+    prisma.otpChallenge.update({ where: { id: challenge.id }, data: { verifiedAt: new Date() } }),
+    clearRateLimit(verifyKey),
+    clearRateLimit(rateLimitKey("portal-otp-send-account", email)),
+  ]);
   await setPortalCookie(contact.id, email);
   redirect("/portal");
 }
@@ -90,7 +114,6 @@ export async function portalLogout() {
   redirect("/portal/login");
 }
 
-/** A customer requests a service booking from inside the portal. */
 export async function requestService(
   _prev: { ok?: string; error?: string } | undefined,
   formData: FormData
@@ -106,8 +129,11 @@ export async function requestService(
 
   let vehicleLabel = "a vehicle";
   if (vehicleId) {
-    const v = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
-    if (v) vehicleLabel = v.model + (v.regNumber ? ` (${v.regNumber})` : "");
+    const vehicle = await prisma.vehicle.findFirst({
+      where: { id: vehicleId, contactId: contact.id, deletedAt: null },
+    });
+    if (!vehicle) return { error: "That vehicle is not available in your portal." };
+    vehicleLabel = vehicle.model + (vehicle.regNumber ? ` (${vehicle.regNumber})` : "");
   }
   const due = preferred ? new Date(`${preferred}T00:00:00+02:00`) : new Date();
 
@@ -116,9 +142,7 @@ export async function requestService(
       type: "todo",
       category: "workshop",
       summary: `Service request from ${contactName(contact)} — ${vehicleLabel}`,
-      note: [preferred ? `Preferred date: ${preferred}` : null, notes || null]
-        .filter(Boolean)
-        .join("\n") || null,
+      note: [preferred ? `Preferred date: ${preferred}` : null, notes || null].filter(Boolean).join("\n") || null,
       dueDate: due,
       status: "planned",
       contactId: contact.id,
@@ -130,9 +154,7 @@ export async function requestService(
     data: {
       type: "note",
       subject: "🔧 Service request (portal)",
-      body: `${contactName(contact)} requested a service for ${vehicleLabel}.${
-        preferred ? ` Preferred date: ${preferred}.` : ""
-      }${notes ? `\n\n${notes}` : ""}`,
+      body: `${contactName(contact)} requested a service for ${vehicleLabel}.${preferred ? ` Preferred date: ${preferred}.` : ""}${notes ? `\n\n${notes}` : ""}`,
       contactId: contact.id,
       userId: firstUser.id,
     },
