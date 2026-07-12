@@ -83,6 +83,12 @@ export async function syncInboundEmail(): Promise<number> {
               subject: parsed.subject ?? "(no subject)",
               body,
               occurredAt: parsed.date ?? new Date(),
+              // Email threading (shared inbox): keep the provider headers so replies chain.
+              messageId: parsed.messageId ?? null,
+              inReplyTo: parsed.inReplyTo ?? null,
+              references: Array.isArray(parsed.references)
+                ? parsed.references.join(" ")
+                : parsed.references ?? null,
               contactId: contact?.id ?? lead?.contactId ?? null,
               leadId: lead?.id ?? null,
               userId: firstUser.id,

@@ -183,6 +183,7 @@ model Contact {
 
   leads             Lead[]
   communications    Communication[]
+  conversations     Conversation[]
   referralsMade     Referral[]      @relation("ReferralsMade")
   referredIn        Referral[]      @relation("ReferredIn")
   documents         Document[]
@@ -341,6 +342,7 @@ model Lead {
   createdBy    User?         @relation("LeadCreator", fields: [createdById], references: [id])
 
   communications Communication[]
+  conversations  Conversation[]
   activities     Activity[]
   quotes         Quote[]
   researchNotes  ResearchNote[]
@@ -544,12 +546,50 @@ model Communication {
   occurredAt     DateTime @default(now())
   createdAt      DateTime @default(now())
 
+  // Shared-inbox threading (Phase 1)
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  messageId      String? // provider Message-ID (email) / platform message id
+  inReplyTo      String? // email In-Reply-To header
+  references     String? // email References chain (space-separated Message-IDs)
+  readAt         DateTime? // when staff first opened the conversation carrying this inbound message
+
   contactId String?
   contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
   leadId    String?
   lead      Lead?    @relation(fields: [leadId], references: [id], onDelete: Cascade)
   userId    String
   user      User     @relation(fields: [userId], references: [id])
+
+  @@index([conversationId])
+  @@index([messageId])
+}
+
+/// A shared-inbox conversation: groups related messages with a contact (or lead)
+/// on a single channel. Foundation for assignment, unread and SLA reporting.
+model Conversation {
+  id              String    @id @default(cuid())
+  channel         String // email | whatsapp | messenger | instagram | call | note | other
+  subject         String?
+  status          String    @default("open") // open | snoozed | closed
+  unread          Boolean   @default(false) // has un-opened inbound messages
+  lastMessageAt   DateTime  @default(now())
+  lastInboundAt   DateTime?
+  firstResponseAt DateTime? // first outbound after an inbound — foundation for response-time reporting
+  messageCount    Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  contactId String?
+  contact   Contact?        @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  leadId    String?
+  lead      Lead?           @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  messages  Communication[]
+
+  @@index([status, lastMessageAt])
+  @@index([unread, lastMessageAt])
+  @@index([contactId])
+  @@index([leadId])
 }
 
 model Document {
