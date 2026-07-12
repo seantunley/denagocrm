@@ -1,7 +1,7 @@
 /**
- * Legacy module flags remain for screens that have not yet moved to the
- * database-backed permission catalogue. Migrated routes are intentionally
- * absent and enforce access in server layouts/actions instead.
+ * Legacy module flags remain only for screens that have not yet moved to the
+ * database-backed permission catalogue. Migrated routes enforce access in
+ * server layouts and mutations, avoiding two conflicting authorization systems.
  */
 export const MODULES = [
   { id: "crm", label: "CRM", desc: "Legacy fallback for remaining CRM screens" },
@@ -25,16 +25,9 @@ export function canSeeContacts(user: { role: string; modules: string }): boolean
   return hasModule(user, "crm") || hasModule(user, "workshop");
 }
 
-/**
- * Only non-migrated or deliberately owner-only surfaces remain here. All core
- * CRM, document, case, marketing, workshop, reporting and inbox routes now use
- * database-backed permission layouts and record scopes.
- */
+/** Only non-migrated or deliberately owner-only surfaces remain here. */
 export const ROUTE_GATES: { prefix: string; gate: ModuleId | "contacts" | "admin" }[] = [
-  { prefix: "/stock", gate: "crm" },
-  { prefix: "/referrals", gate: "crm" },
   { prefix: "/health", gate: "crm" },
-  { prefix: "/automations", gate: "admin" },
   { prefix: "/chatbot", gate: "admin" },
   { prefix: "/bot-builder", gate: "admin" },
   { prefix: "/products", gate: "admin" },
