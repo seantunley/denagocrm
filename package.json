@@ -11,7 +11,9 @@
     "prisma:validate": "prisma validate --schema ./prisma",
     "prisma:generate": "prisma generate --schema ./prisma",
     "prisma:migrate": "prisma migrate deploy --schema ./prisma",
-    "verify:governance": "tsx scripts/verify-governance.ts"
+    "verify:governance": "tsx scripts/verify-governance.ts",
+    "test:security": "tsx scripts/test-security.ts",
+    "validate:security": "npm run prisma:validate && npm run prisma:generate && npm run typecheck && npm run lint && npm run build && npm run verify:governance && npm run test:security"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
