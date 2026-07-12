@@ -25,6 +25,7 @@ const SECRET_KEYS = new Set([
 ]);
 
 const PREFIX = "enc:v1:";
+const BINARY_MAGIC = Buffer.from("DCRMBAK2");
 
 function encryptionKey(): Buffer | null {
   const hex = process.env.SETTINGS_ENCRYPTION_KEY;
@@ -36,12 +37,15 @@ function encryptionKey(): Buffer | null {
   }
 }
 
+function requireEncryptionKey(): Buffer {
+  const key = encryptionKey();
+  if (!key) throw new Error("SETTINGS_ENCRYPTION_KEY missing/invalid");
+  return key;
+}
+
 export function encryptValue(plain: string): string {
   const key = encryptionKey();
   if (!key) {
-    // In production a missing/malformed key would silently store credentials
-    // in clear text — refuse instead. Locally (no key set) fall back so dev
-    // still works.
     if (process.env.NODE_ENV === "production") {
       throw new Error("SETTINGS_ENCRYPTION_KEY missing/invalid — refusing to store a credential in clear text");
     }
@@ -55,10 +59,7 @@ export function encryptValue(plain: string): string {
 
 export function decryptValue(stored: string): string {
   if (!stored.startsWith(PREFIX)) return stored;
-  const key = encryptionKey();
-  if (!key) {
-    throw new Error("SETTINGS_ENCRYPTION_KEY missing but an encrypted setting exists");
-  }
+  const key = requireEncryptionKey();
   const [iv, tag, data] = stored.slice(PREFIX.length).split(":");
   const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "base64"));
   decipher.setAuthTag(Buffer.from(tag, "base64"));
@@ -66,6 +67,29 @@ export function decryptValue(stored: string): string {
     decipher.update(Buffer.from(data, "base64")),
     decipher.final(),
   ]).toString("utf8");
+}
+
+/** Binary AES-256-GCM envelope used for uploaded-file snapshots. */
+export function encryptBytes(plain: Buffer): Buffer {
+  const key = requireEncryptionKey();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const encrypted = Buffer.concat([cipher.update(plain), cipher.final()]);
+  return Buffer.concat([BINARY_MAGIC, iv, cipher.getAuthTag(), encrypted]);
+}
+
+export function decryptBytes(stored: Buffer): Buffer {
+  if (!stored.subarray(0, BINARY_MAGIC.length).equals(BINARY_MAGIC)) {
+    throw new Error("Unsupported binary backup envelope");
+  }
+  const key = requireEncryptionKey();
+  const offset = BINARY_MAGIC.length;
+  const iv = stored.subarray(offset, offset + 12);
+  const tag = stored.subarray(offset + 12, offset + 28);
+  const encrypted = stored.subarray(offset + 28);
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]);
 }
 
 export function isSecretSettingKey(key: string): boolean {
@@ -78,7 +102,7 @@ export async function getSetting(key: string): Promise<string | null> {
   try {
     return decryptValue(row.value);
   } catch {
-    return null; // encrypted value but no key in this environment — treat as unset
+    return null;
   }
 }
 
