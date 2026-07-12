@@ -20,6 +20,13 @@ export default async function PortalDocumentsPage() {
   if (!contact) redirect("/portal/login");
   const scope = await requirePortalScope();
 
+  const quoteIds = (
+    await prisma.quote.findMany({
+      where: { contactId: { in: scope.contactIds }, deletedAt: null },
+      select: { id: true },
+    })
+  ).map((quote) => quote.id);
+
   const [vehicles, documents, uploads, cases] = await Promise.all([
     prisma.vehicle.findMany({
       where: {
@@ -38,7 +45,7 @@ export default async function PortalDocumentsPage() {
           { contactId: { in: scope.contactIds } },
           { vehicle: { contactId: { in: scope.contactIds } } },
           ...(scope.fleetIds.length ? [{ vehicle: { fleetId: { in: scope.fleetIds } } }] : []),
-          { quoteId: { not: null }, quoteId: { in: (await prisma.quote.findMany({ where: { contactId: { in: scope.contactIds }, deletedAt: null }, select: { id: true } })).map((quote) => quote.id) } },
+          ...(quoteIds.length ? [{ quoteId: { in: quoteIds } }] : []),
         ],
       },
       orderBy: { createdAt: "desc" },
