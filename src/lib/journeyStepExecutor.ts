@@ -4,6 +4,7 @@ import { sendEmail, renderTemplate } from "./email";
 import { sendSms } from "./sms";
 import { sendPushToAll } from "./push";
 import { logAudit } from "./audit";
+import { emitJourneyEvent } from "./journeyEvents";
 import { JourneyContext, journeyTemplateVars } from "./journeyContext";
 import {
   evaluateConditions,
@@ -95,7 +96,7 @@ export async function executeJourneyStep(args: {
   journeyName: string;
   runId: string;
 }): Promise<StepResult> {
-  const { step, context, category, journeyName } = args;
+  const { step, context, category, journeyName, runId } = args;
   const vars = journeyTemplateVars(context);
   const { leadId, contactId } = ids(context);
 
@@ -208,6 +209,13 @@ export async function executeJourneyStep(args: {
       await prisma.lead.update({
         where: { id: leadId },
         data: { stageId, position: (max._max.position ?? 0) + 1 },
+      });
+      await emitJourneyEvent({
+        type: "stage_entered",
+        entityType: "lead",
+        entityId: leadId,
+        payload: { stageId, sourceRunId: runId, sourceStepId: step.id },
+        dedupeKey: `journey-stage:${runId}:${step.id}:${stageId}`,
       });
       return { status: "completed", note: "Lead moved to configured stage" };
     }
