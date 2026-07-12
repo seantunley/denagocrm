@@ -41,13 +41,16 @@ export type PermissionUser = {
   modules: string;
 };
 
+const RBAC_UNAVAILABLE = "__rbac_unavailable__";
+
 function moduleSet(user: PermissionUser) {
   return new Set(user.modules.split(",").map((item) => item.trim()).filter(Boolean));
 }
 
 /**
- * Explicit role permissions are authoritative. The module fallback is only used
- * for users who have not yet been assigned any new RBAC role during rollout.
+ * Explicit role permissions are authoritative. The legacy module fallback is
+ * only used for users who genuinely have no RBAC role yet during rollout.
+ * Database/query failures return a sentinel and therefore fail closed.
  */
 export async function getUserPermissions(userId: string): Promise<Set<string>> {
   try {
@@ -59,8 +62,7 @@ export async function getUserPermissions(userId: string): Promise<Set<string>> {
     `;
     return new Set(rows.map((row) => row.key));
   } catch {
-    // Allows a rolling deployment to render safely before the migration has run.
-    return new Set();
+    return new Set([RBAC_UNAVAILABLE]);
   }
 }
 
@@ -87,6 +89,7 @@ function legacyModuleAllows(user: PermissionUser, permission: PermissionKey): bo
 export async function hasPermission(user: PermissionUser, permission: PermissionKey): Promise<boolean> {
   if (user.role === "owner") return true;
   const permissions = await getUserPermissions(user.id);
+  if (permissions.has(RBAC_UNAVAILABLE)) return false;
   if (permissions.size > 0) return permissions.has(permission);
   return legacyModuleAllows(user, permission);
 }
@@ -122,6 +125,7 @@ export async function getUserTeamIds(userId: string): Promise<string[]> {
 }
 
 async function canViewOwnedRecords(user: PermissionUser, permissions: Set<string>) {
+  if (permissions.has(RBAC_UNAVAILABLE)) return false;
   if (permissions.size > 0) return permissions.has("leads.view_owned");
   return moduleSet(user).has("crm");
 }
@@ -129,6 +133,7 @@ async function canViewOwnedRecords(user: PermissionUser, permissions: Set<string
 export async function canAccessLead(user: PermissionUser, leadId: string): Promise<boolean> {
   if (user.role === "owner") return true;
   const permissions = await getUserPermissions(user.id);
+  if (permissions.has(RBAC_UNAVAILABLE)) return false;
   if (permissions.has("leads.view_all")) return true;
   if (!(await canViewOwnedRecords(user, permissions))) return false;
 
@@ -173,6 +178,9 @@ export async function getAccessibleLeadScope(user: PermissionUser): Promise<{
     return { viewAll: true, viewOwned: true, userId: user.id, teamIds: [] };
   }
   const permissions = await getUserPermissions(user.id);
+  if (permissions.has(RBAC_UNAVAILABLE)) {
+    return { viewAll: false, viewOwned: false, userId: user.id, teamIds: [] };
+  }
   const viewAll = permissions.has("leads.view_all");
   const viewOwned = viewAll || await canViewOwnedRecords(user, permissions);
   return {
