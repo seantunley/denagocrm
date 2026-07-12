@@ -14,13 +14,6 @@ import {
 } from "@/components/ui/command";
 import { buildNav } from "@/components/nav-config";
 
-const QUICK_ACTIONS = [
-  { href: "/leads/new", label: "New lead", icon: Plus },
-  { href: "/contacts/new", label: "New contact", icon: Plus },
-  { href: "/jobcards/new", label: "New job card", icon: Plus },
-  { href: "/search", label: "Search everything", icon: Search },
-];
-
 export function openCommandMenu() {
   window.dispatchEvent(new Event("denago:open-command"));
 }
@@ -28,19 +21,29 @@ export function openCommandMenu() {
 export default function CommandMenu({
   modules,
   isAdmin,
+  permissions = [],
 }: {
   modules: string;
   isAdmin: boolean;
+  permissions?: string[];
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const { topLinks, groups } = buildNav(modules, isAdmin);
+  const { topLinks, groups } = buildNav(modules, isAdmin, permissions);
+  const granted = new Set(permissions);
+  const can = (...keys: string[]) => isAdmin || keys.some((key) => granted.has(key));
+  const quickActions = [
+    ...(can("leads.create") ? [{ href: "/leads/new", label: "New lead", icon: Plus }] : []),
+    ...(can("contacts.create") ? [{ href: "/contacts/new", label: "New contact", icon: Plus }] : []),
+    ...(can("jobcards.manage") ? [{ href: "/jobcards/new", label: "New job card", icon: Plus }] : []),
+    { href: "/search", label: "Search accessible records", icon: Search },
+  ];
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.key === "k" || e.key === "K") && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        setOpen((o) => !o);
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.key === "k" || event.key === "K") && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        setOpen((current) => !current);
       }
     };
     const onOpen = () => setOpen(true);
@@ -64,10 +67,10 @@ export default function CommandMenu({
         <CommandEmpty>No results found.</CommandEmpty>
 
         <CommandGroup heading="Quick actions">
-          {QUICK_ACTIONS.map((a) => (
-            <CommandItem key={a.href} value={`action ${a.label}`} onSelect={() => go(a.href)}>
-              <a.icon className="size-4 text-muted-foreground" />
-              {a.label}
+          {quickActions.map((action) => (
+            <CommandItem key={action.href} value={`action ${action.label}`} onSelect={() => go(action.href)}>
+              <action.icon className="size-4 text-muted-foreground" />
+              {action.label}
             </CommandItem>
           ))}
         </CommandGroup>
@@ -75,20 +78,20 @@ export default function CommandMenu({
         <CommandSeparator />
 
         <CommandGroup heading="Go to">
-          {topLinks.map((l) => (
-            <CommandItem key={l.href} value={`page ${l.label}`} onSelect={() => go(l.href)}>
-              <l.icon className="size-4 text-muted-foreground" />
-              {l.label}
+          {topLinks.map((link) => (
+            <CommandItem key={link.href} value={`page ${link.label}`} onSelect={() => go(link.href)}>
+              <link.icon className="size-4 text-muted-foreground" />
+              {link.label}
             </CommandItem>
           ))}
         </CommandGroup>
 
         {groups.map((group) => (
           <CommandGroup key={group.key} heading={group.label}>
-            {group.links.map((l) => (
-              <CommandItem key={l.href} value={`${group.label} ${l.label}`} onSelect={() => go(l.href)}>
-                <l.icon className="size-4 text-muted-foreground" />
-                {l.label}
+            {group.links.map((link) => (
+              <CommandItem key={link.href} value={`${group.label} ${link.label}`} onSelect={() => go(link.href)}>
+                <link.icon className="size-4 text-muted-foreground" />
+                {link.label}
               </CommandItem>
             ))}
           </CommandGroup>
