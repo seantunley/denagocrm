@@ -63,8 +63,9 @@ async function snapshotAssets(refs: AssetReference[]): Promise<AssetSnapshot[]> 
   const snapshots: AssetSnapshot[] = [];
 
   for (const asset of refs) {
+    const identity = { kind: asset.kind, sourceRef: asset.ref };
     if (!isSupportedAssetRef(asset.ref)) {
-      snapshots.push({ ...asset, status: "skipped", error: "Unsupported asset reference" });
+      snapshots.push({ ...identity, status: "skipped", error: "Unsupported asset reference" });
       continue;
     }
 
@@ -74,7 +75,7 @@ async function snapshotAssets(refs: AssetReference[]): Promise<AssetSnapshot[]> 
       const backupPath = `${ASSET_PREFIX}${digest}.bin.enc`;
 
       if (existing.has(backupPath)) {
-        snapshots.push({ ...asset, status: "existing", backupPath, sha256: digest, sizeBytes: plain.length });
+        snapshots.push({ ...identity, status: "existing", backupPath, sha256: digest, sizeBytes: plain.length });
         continue;
       }
 
@@ -86,15 +87,19 @@ async function snapshotAssets(refs: AssetReference[]): Promise<AssetSnapshot[]> 
         allowOverwrite: false,
       });
 
-      const downloaded = Buffer.from(await (await fetch(blob.url, { cache: "no-store" })).arrayBuffer());
+      const verificationResponse = await fetch(blob.url, { cache: "no-store" });
+      if (!verificationResponse.ok) {
+        throw new Error(`Asset verification download failed: ${verificationResponse.status}`);
+      }
+      const downloaded = Buffer.from(await verificationResponse.arrayBuffer());
       const verified = decryptBytes(downloaded);
       if (sha256(verified) !== digest) throw new Error("Asset verification checksum mismatch");
 
       existing.add(backupPath);
-      snapshots.push({ ...asset, status: "created", backupPath, sha256: digest, sizeBytes: plain.length });
+      snapshots.push({ ...identity, status: "created", backupPath, sha256: digest, sizeBytes: plain.length });
     } catch (error) {
       snapshots.push({
-        ...asset,
+        ...identity,
         status: "failed",
         error: error instanceof Error ? error.message : "Unknown asset backup error",
       });
@@ -145,6 +150,8 @@ export async function GET(req: NextRequest) {
 
     const assets = await snapshotAssets(portable.assetReferences);
     const failedAssets = assets.filter((asset) => asset.status === "failed");
+    const skippedAssets = assets.filter((asset) => asset.status === "skipped");
+    const degradedAssets = [...failedAssets, ...skippedAssets];
     const packagePayload = JSON.stringify({ portable, assets });
     const encrypted = encryptValue(packagePayload);
     const stamp = startedAt.toISOString().replace(/[:.]/g, "-");
@@ -170,9 +177,13 @@ export async function GET(req: NextRequest) {
     const stale = sorted.slice(DATABASE_KEEP);
     for (const old of stale) await del(old.url).catch(() => {});
 
-    const purgedTrash = await purgeTrash().catch(() => -1);
+    // Never permanently delete Trash records unless both the logical export and
+    // every referenced asset were backed up successfully.
+    const purgedTrash = degradedAssets.length === 0
+      ? await purgeTrash().catch(() => -1)
+      : 0;
     const result = {
-      ok: failedAssets.length === 0,
+      ok: degradedAssets.length === 0,
       completedAt: new Date().toISOString(),
       durationMs: Date.now() - startedAt.getTime(),
       databaseBackup: blob.pathname,
@@ -183,16 +194,17 @@ export async function GET(req: NextRequest) {
         referenced: assets.length,
         created: assets.filter((asset) => asset.status === "created").length,
         existing: assets.filter((asset) => asset.status === "existing").length,
-        skipped: assets.filter((asset) => asset.status === "skipped").length,
+        skipped: skippedAssets.length,
         failed: failedAssets.length,
       },
       databaseBackupsKept: Math.min(sorted.length, DATABASE_KEEP),
       databaseBackupsPruned: stale.length,
+      trashPurgeSkipped: degradedAssets.length > 0,
       purgedTrash,
     };
     await recordResult(result);
 
-    return NextResponse.json(result, { status: failedAssets.length ? 207 : 200 });
+    return NextResponse.json(result, { status: degradedAssets.length ? 207 : 200 });
   } catch (error) {
     const result = {
       ok: false,
