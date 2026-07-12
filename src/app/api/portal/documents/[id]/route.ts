@@ -15,10 +15,11 @@ export async function GET(
   if (!document) return NextResponse.json({ error: "Not found" }, { status: 404 });
   try {
     const bytes = await readFile(document.storedName);
-    return new NextResponse(bytes, {
+    return new NextResponse(new Uint8Array(bytes), {
       headers: {
-        "content-type": document.mimeType || "application/octet-stream",
+        "content-type": "application/octet-stream",
         "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(document.fileName)}`,
+        "content-length": String(bytes.length),
         "cache-control": "private, no-store",
         "x-content-type-options": "nosniff",
       },
