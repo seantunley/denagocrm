@@ -22,6 +22,11 @@ import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { prisma } from "@/lib/db";
 import { contactName, formatDate } from "@/lib/format";
+import {
+  getAccessibleContactIds,
+  hasPermission,
+  requireAnyPermission,
+} from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 
 function initials(name: string) {
@@ -39,19 +44,31 @@ export default async function ContactsPage({
 }: {
   searchParams: Promise<{ q?: string; view?: string }>;
 }) {
+  const user = await requireAnyPermission("contacts.view_all", "contacts.view_owned");
   const { q, view } = await searchParams;
   const cards = view !== "list";
-  const where = q
+  const [accessibleIds, canCreate, canMerge] = await Promise.all([
+    getAccessibleContactIds(user),
+    hasPermission(user, "contacts.create"),
+    hasPermission(user, "contacts.merge"),
+  ]);
+  const searchWhere = q
     ? {
         OR: [
-          { firstName: { contains: q } },
-          { lastName: { contains: q } },
-          { company: { contains: q } },
-          { email: { contains: q } },
-          { phone: { contains: q } },
+          { firstName: { contains: q, mode: "insensitive" as const } },
+          { lastName: { contains: q, mode: "insensitive" as const } },
+          { company: { contains: q, mode: "insensitive" as const } },
+          { email: { contains: q, mode: "insensitive" as const } },
+          { phone: { contains: q, mode: "insensitive" as const } },
         ],
       }
     : {};
+  const where = {
+    AND: [
+      ...(accessibleIds === null ? [] : [{ id: { in: accessibleIds } }]),
+      searchWhere,
+    ],
+  };
 
   const [contacts, users] = await Promise.all([
     prisma.contact.findMany({
@@ -69,7 +86,7 @@ export default async function ContactsPage({
       },
       take: 200,
     }),
-    prisma.user.findMany({ orderBy: { name: "asc" } }),
+    canCreate ? prisma.user.findMany({ orderBy: { name: "asc" } }) : Promise.resolve([]),
   ]);
 
   const vehicleCount = contacts.reduce((total, contact) => total + contact._count.vehicles, 0);
@@ -84,29 +101,35 @@ export default async function ContactsPage({
         description={
           q
             ? `${contacts.length} result${contacts.length === 1 ? "" : "s"} for “${q}”`
-            : "Your complete view of every customer, company and conversation."
+            : accessibleIds === null
+              ? "Your complete view of every customer, company and conversation."
+              : "Customers assigned to you or your teams."
         }
       >
-        <Link href="/duplicates" className={buttonVariants({ variant: "outline", size: "sm" })}>
-          <Merge className="size-4" />
-          Duplicates
-        </Link>
-        <ModalTrigger
-          label={
-            <>
-              <Plus className="size-4" />
-              New contact
-            </>
-          }
-          title="New contact"
-          buttonClass={buttonVariants({ size: "sm" })}
-        >
-          <ContactForm
-            action={createContact}
-            submitLabel="Create contact"
-            users={users.map((user) => ({ id: user.id, name: user.name }))}
-          />
-        </ModalTrigger>
+        {canMerge && (
+          <Link href="/duplicates" className={buttonVariants({ variant: "outline", size: "sm" })}>
+            <Merge className="size-4" />
+            Duplicates
+          </Link>
+        )}
+        {canCreate && (
+          <ModalTrigger
+            label={
+              <>
+                <Plus className="size-4" />
+                New contact
+              </>
+            }
+            title="New contact"
+            buttonClass={buttonVariants({ size: "sm" })}
+          >
+            <ContactForm
+              action={createContact}
+              submitLabel="Create contact"
+              users={users.map((item) => ({ id: item.id, name: item.name }))}
+            />
+          </ModalTrigger>
+        )}
       </PageHeader>
 
       <section className="relative overflow-hidden rounded-2xl border border-white/[0.07] bg-card shadow-sm">
