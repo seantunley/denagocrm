@@ -42,15 +42,16 @@ export type PermissionUser = {
 };
 
 const RBAC_UNAVAILABLE = "__rbac_unavailable__";
+const RBAC_ROLE_ASSIGNED = "__rbac_role_assigned__";
 
 function moduleSet(user: PermissionUser) {
   return new Set(user.modules.split(",").map((item) => item.trim()).filter(Boolean));
 }
 
 /**
- * Explicit role permissions are authoritative. The legacy module fallback is
- * only used for users who genuinely have no RBAC role yet during rollout.
- * Database/query failures return a sentinel and therefore fail closed.
+ * Explicit role permissions are authoritative. A role-assignment sentinel keeps
+ * an intentionally empty role from falling back to broader legacy module access.
+ * Database/query failures return a different sentinel and fail closed.
  */
 export async function getUserPermissions(userId: string): Promise<Set<string>> {
   try {
@@ -59,11 +60,18 @@ export async function getUserPermissions(userId: string): Promise<Set<string>> {
       FROM "UserRole" ur
       JOIN "RolePermission" rp ON rp."roleId" = ur."roleId"
       WHERE ur."userId" = ${userId}
+      UNION
+      SELECT ${RBAC_ROLE_ASSIGNED} AS key
+      WHERE EXISTS (SELECT 1 FROM "UserRole" ur WHERE ur."userId" = ${userId})
     `;
     return new Set(rows.map((row) => row.key));
   } catch {
     return new Set([RBAC_UNAVAILABLE]);
   }
+}
+
+function hasExplicitRole(permissions: Set<string>) {
+  return permissions.has(RBAC_ROLE_ASSIGNED);
 }
 
 function legacyModuleAllows(user: PermissionUser, permission: PermissionKey): boolean {
@@ -90,7 +98,7 @@ export async function hasPermission(user: PermissionUser, permission: Permission
   if (user.role === "owner") return true;
   const permissions = await getUserPermissions(user.id);
   if (permissions.has(RBAC_UNAVAILABLE)) return false;
-  if (permissions.size > 0) return permissions.has(permission);
+  if (hasExplicitRole(permissions)) return permissions.has(permission);
   return legacyModuleAllows(user, permission);
 }
 
@@ -126,7 +134,7 @@ export async function getUserTeamIds(userId: string): Promise<string[]> {
 
 async function canViewOwnedRecords(user: PermissionUser, permissions: Set<string>) {
   if (permissions.has(RBAC_UNAVAILABLE)) return false;
-  if (permissions.size > 0) return permissions.has("leads.view_owned");
+  if (hasExplicitRole(permissions)) return permissions.has("leads.view_owned");
   return moduleSet(user).has("crm");
 }
 
