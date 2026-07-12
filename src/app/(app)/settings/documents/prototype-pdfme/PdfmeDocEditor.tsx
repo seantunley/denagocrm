@@ -3,30 +3,30 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, LoaderCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { deliveryNoteTemplate, deliveryNoteSample } from "./docTemplate";
+import { cn } from "@/lib/utils";
+import { DOC_TEMPLATES, DOC_KEYS } from "./docTemplate";
 
-// Structural type only — importing a type from "@pdfme/ui" pulls its heavy,
+// Structural type only — importing a type from "@pdfme/ui" would pull its heavy,
 // browser-only graph (clawpdf/pdfium) into this module's static graph, so we
-// keep every @pdfme reference inside the effect/handler instead.
+// keep every @pdfme reference inside the effect / handler instead.
 type PdfDesigner = {
   getTemplate: () => import("@pdfme/common").Template;
   destroy: () => void;
 };
 
-/**
- * PROTOTYPE editor: mounts the pdfme drag-drop Designer for a Delivery Note.
- * pdfme is browser-only, so every pdfme module is imported dynamically inside
- * the effect / handler (never at module top level) to keep it out of SSR.
- */
-export function DeliveryNoteDesigner() {
+export function PdfmeDocEditor() {
   const containerRef = useRef<HTMLDivElement>(null);
   const designerRef = useRef<PdfDesigner | null>(null);
+  const [active, setActive] = useState<string>(DOC_KEYS[0]);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // (Re)mount the Designer whenever the selected document changes.
   useEffect(() => {
     let cancelled = false;
+    setReady(false);
+    setError(null);
     (async () => {
       try {
         const [{ Designer }, schemas] = await Promise.all([
@@ -34,9 +34,10 @@ export function DeliveryNoteDesigner() {
           import("@pdfme/schemas"),
         ]);
         if (cancelled || !containerRef.current) return;
+        designerRef.current?.destroy();
         designerRef.current = new Designer({
           domContainer: containerRef.current,
-          template: deliveryNoteTemplate,
+          template: DOC_TEMPLATES[active].template,
           plugins: {
             Text: schemas.text,
             Table: schemas.table,
@@ -56,7 +57,7 @@ export function DeliveryNoteDesigner() {
       designerRef.current?.destroy();
       designerRef.current = null;
     };
-  }, []);
+  }, [active]);
 
   async function generatePdf() {
     if (!designerRef.current) return;
@@ -67,11 +68,10 @@ export function DeliveryNoteDesigner() {
         import("@pdfme/generator"),
         import("@pdfme/schemas"),
       ]);
-      // Use whatever the user has just designed on screen, merged with mock data.
       const template = designerRef.current.getTemplate();
       const pdf = await generate({
         template,
-        inputs: [deliveryNoteSample],
+        inputs: [DOC_TEMPLATES[active].sample],
         plugins: {
           text: schemas.text,
           table: schemas.table,
@@ -93,9 +93,22 @@ export function DeliveryNoteDesigner() {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-xs text-muted-foreground">
-          Drag fields, edit text inline, resize — then generate the real PDF with mock data.
-        </p>
+        {/* Document switcher — each is a real current template converted to pdfme */}
+        <div className="inline-flex rounded-lg border border-border p-0.5">
+          {DOC_KEYS.map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setActive(key)}
+              className={cn(
+                "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                active === key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {DOC_TEMPLATES[key].label}
+            </button>
+          ))}
+        </div>
         <Button type="button" onClick={generatePdf} disabled={!ready || busy}>
           {busy ? <LoaderCircle className="size-4 animate-spin" /> : <Download className="size-4" />}
           {busy ? "Generating…" : "Generate PDF (mock data)"}
@@ -113,9 +126,7 @@ export function DeliveryNoteDesigner() {
         ref={containerRef}
         className="min-h-[75vh] overflow-hidden rounded-xl border border-border bg-white"
       />
-      {!ready && !error && (
-        <p className="text-xs text-muted-foreground">Loading the editor…</p>
-      )}
+      {!ready && !error && <p className="text-xs text-muted-foreground">Loading the editor…</p>}
     </div>
   );
 }

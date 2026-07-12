@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ArrowLeft, FlaskConical } from "lucide-react";
 import { requireOwner } from "@/lib/auth";
-import { DeliveryNoteDesigner } from "./DeliveryNoteDesigner";
+import { PdfmeDocEditor } from "./PdfmeDocEditor";
 
 export const dynamic = "force-dynamic";
 
@@ -19,8 +19,9 @@ export default async function PdfmePrototypePage() {
           Document editor prototype — pdfme
         </h1>
         <p className="mt-0.5 max-w-3xl text-sm text-muted-foreground">
-          A spike to feel a real drag-drop WYSIWYG editor on a Delivery Note. This is throwaway —
-          it does not touch your live templates or any customer data.
+          A spike to feel a real drag-drop WYSIWYG editor on your actual documents — switch between
+          the Delivery Note and Quotation (both converted from the live layouts). Throwaway; it does
+          not touch your live templates or any customer data.
         </p>
       </div>
 
@@ -37,7 +38,7 @@ export default async function PdfmePrototypePage() {
         </p>
       </div>
 
-      <DeliveryNoteDesigner />
+      <PdfmeDocEditor />
     </div>
   );
 }

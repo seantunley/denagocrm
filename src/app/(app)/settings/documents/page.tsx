@@ -510,6 +510,22 @@ export default async function DocumentsHubPage({
         </p>
       </div>
 
+      <div className="rounded-xl border border-primary/25 bg-primary/[0.06] px-4 py-3">
+        <p className="text-sm">
+          <span className="mr-2">🧪</span>
+          <span className="font-semibold text-foreground">New editor prototypes</span>
+          <span className="text-muted-foreground"> — drag-drop WYSIWYG spikes (mock data, throwaway). Compare the two approaches:</span>
+        </p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Link href="/settings/documents/prototype-pdfme" className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/15">
+            pdfme — ready-made designer (Delivery Note & Quotation) →
+          </Link>
+          <Link href="/settings/documents/prototype-puck" className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/15">
+            Puck — HTML blocks, keeps your PDF engine (Delivery Note) →
+          </Link>
+        </div>
+      </div>
+
       <Tabs
         initialKey={tab}
         tabs={[
