@@ -194,12 +194,11 @@ export async function updateUserRoles(userId: string, formData: FormData) {
   const actor = await requirePermission("roles.manage");
   await validUserId(userId);
   const requested = [...new Set(formData.getAll("roles").map(String))];
-  const validRoles = requested.length
-    ? await basePrisma.$queryRaw<Array<{ id: string }>>`
-        SELECT "id" FROM "Role" WHERE "id" IN (${requested})
-      `
-    : [];
-  const validRoleIds = validRoles.map((role) => role.id);
+  const allRoles = await basePrisma.$queryRaw<Array<{ id: string }>>`
+    SELECT "id" FROM "Role"
+  `;
+  const validRoleSet = new Set(allRoles.map((role) => role.id));
+  const validRoleIds = requested.filter((roleId) => validRoleSet.has(roleId));
   const before = await basePrisma.$queryRaw<Array<{ roleId: string }>>`
     SELECT "roleId" FROM "UserRole" WHERE "userId" = ${userId} ORDER BY "roleId"
   `;
