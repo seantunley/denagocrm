@@ -7,11 +7,14 @@ import JourneyBuilder, { type JourneyBuilderDefaults } from "@/components/Journe
 import {
   installJourneyTemplates,
   publishJourney,
-  runJourneyNow,
   saveJourneyDraft,
   setJourneyStatus,
 } from "@/app/actions/journeys";
-import { cancelJourneyRun, retryJourneyRun } from "@/app/actions/journeyRuns";
+import {
+  cancelJourneyRun,
+  retryJourneyRun,
+  runJourneyNowAction,
+} from "@/app/actions/journeyRuns";
 
 export const dynamic = "force-dynamic";
 
@@ -159,7 +162,7 @@ export default async function JourneysPage() {
                     <form action={setJourneyStatus.bind(null, journey.id, "active")}><button className="btn-secondary btn-sm">Resume</button></form>
                   ) : null}
                   {journey.status === "active" && ["lead_idle", "contact_segment", "purchase_anniversary", "win_back"].includes(published?.trigger ?? "") && (
-                    <form action={runJourneyNow.bind(null, journey.id)}><button className="btn-secondary btn-sm">Enroll now</button></form>
+                    <form action={runJourneyNowAction.bind(null, journey.id)}><button className="btn-secondary btn-sm">Enroll now</button></form>
                   )}
                   <form action={setJourneyStatus.bind(null, journey.id, "archived")}><button className="text-xs text-red-400 px-2 py-1">Archive</button></form>
                 </div>
@@ -212,7 +215,7 @@ export default async function JourneysPage() {
                         {["failed", "cancelled"].includes(run.status) && (
                           <form action={retryJourneyRun.bind(null, run.id)}><button className="btn-secondary btn-sm">Retry</button></form>
                         )}
-                        {["queued", "running", "waiting"].includes(run.status) && (
+                        {["queued", "waiting"].includes(run.status) && (
                           <form action={cancelJourneyRun.bind(null, run.id)}><button className="text-xs text-red-400">Cancel</button></form>
                         )}
                       </div>
