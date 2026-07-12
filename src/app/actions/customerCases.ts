@@ -3,8 +3,8 @@
 import crypto from "crypto";
 import { revalidatePath } from "next/cache";
 import { basePrisma } from "@/lib/db";
-import { requireOperational } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { requireCaseAccess } from "@/lib/permissions";
 
 const text = (formData: FormData, key: string) => String(formData.get(key) ?? "").trim();
 
@@ -16,7 +16,7 @@ async function notifyCustomer(contactId: string, title: string, body: string, hr
 }
 
 export async function replyToCustomerCase(caseId: string, formData: FormData) {
-  const user = await requireOperational();
+  const user = await requireCaseAccess(caseId, "cases.reply");
   const body = text(formData, "body");
   if (body.length < 2) throw new Error("Message is required");
   const rows = await basePrisma.$queryRaw<Array<{ contactId: string; number: bigint; status: string }>>`
@@ -50,7 +50,7 @@ export async function replyToCustomerCase(caseId: string, formData: FormData) {
 }
 
 export async function updateCustomerCaseStatus(caseId: string, formData: FormData) {
-  const user = await requireOperational();
+  const user = await requireCaseAccess(caseId, "cases.manage");
   const status = text(formData, "status");
   const allowed = new Set(["new", "open", "waiting_customer", "waiting_internal", "resolved", "closed", "cancelled"]);
   if (!allowed.has(status)) throw new Error("Invalid case status");
