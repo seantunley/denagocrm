@@ -30,6 +30,7 @@ function buildNav(mods: Set<string>, isAdmin: boolean) {
         { href: "/deliveries", label: "Deliveries", icon: "🚚" },
         { href: "/contacts", label: "Contacts", icon: "☰" },
         { href: "/activities", label: "Activities", icon: "✓" },
+        { href: "/cases", label: "Customer Cases", icon: "🎫" },
       ],
     });
     groups.push({ key: "marketing", label: "Marketing", links: [{ href: "/campaigns", label: "Campaigns", icon: "📣" }, { href: "/surveys", label: "Surveys", icon: "📝" }] });
