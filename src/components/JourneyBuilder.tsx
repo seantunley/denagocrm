@@ -37,13 +37,32 @@ const stepLabels: Record<string, string> = {
   stop: "Stop journey",
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function cleanSteps(defaults?: JourneyBuilderDefaults["definition"]): BuilderStep[] {
   const existing = (defaults?.steps ?? []).filter(
     (step) => step.config?.systemGenerated !== true
   );
-  return existing.length
-    ? existing.map((step) => ({ id: step.id, type: step.type, config: { ...step.config } }))
-    : [{ id: "step_1", type: "create_activity", config: { activityType: "call", dueDays: 0 } }];
+  if (existing.length === 0) {
+    return [{ id: "step_1", type: "create_activity", config: { activityType: "call", dueDays: 0 } }];
+  }
+  return existing.map((step) => {
+    const config = { ...step.config };
+    if (step.type === "condition" && isRecord(config.condition)) {
+      const group = config.condition;
+      const first = Array.isArray(group.conditions) && isRecord(group.conditions[0])
+        ? group.conditions[0]
+        : null;
+      if (first) {
+        config.field = first.field;
+        config.operator = first.operator;
+        config.value = first.value;
+      }
+    }
+    return { id: step.id, type: step.type, config };
+  });
 }
 
 export default function JourneyBuilder({
