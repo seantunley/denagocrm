@@ -13,8 +13,12 @@ export const PERMISSIONS = [
   "leads.edit",
   "leads.assign",
   "leads.change_stage",
+  "leads.change_pipeline",
   "leads.mark_won",
   "leads.mark_lost",
+  "leads.reopen",
+  "leads.link_contact",
+  "leads.delete",
   "teams.view",
   "teams.manage",
   "roles.view",
@@ -37,30 +41,54 @@ export type PermissionUser = {
   modules: string;
 };
 
+function moduleSet(user: PermissionUser) {
+  return new Set(user.modules.split(",").map((item) => item.trim()).filter(Boolean));
+}
+
+/**
+ * Explicit role permissions are authoritative. The module fallback is only used
+ * for users who have not yet been assigned any new RBAC role during rollout.
+ */
 export async function getUserPermissions(userId: string): Promise<Set<string>> {
-  const rows = await basePrisma.$queryRaw<Array<{ key: string }>>`
-    SELECT DISTINCT rp."permissionKey" AS key
-    FROM "UserRole" ur
-    JOIN "RolePermission" rp ON rp."roleId" = ur."roleId"
-    WHERE ur."userId" = ${userId}
-  `;
-  return new Set(rows.map((row) => row.key));
+  try {
+    const rows = await basePrisma.$queryRaw<Array<{ key: string }>>`
+      SELECT DISTINCT rp."permissionKey" AS key
+      FROM "UserRole" ur
+      JOIN "RolePermission" rp ON rp."roleId" = ur."roleId"
+      WHERE ur."userId" = ${userId}
+    `;
+    return new Set(rows.map((row) => row.key));
+  } catch {
+    // Allows a rolling deployment to render safely before the migration has run.
+    return new Set();
+  }
+}
+
+function legacyModuleAllows(user: PermissionUser, permission: PermissionKey): boolean {
+  const modules = moduleSet(user);
+  const crmFallback = new Set<PermissionKey>([
+    "pipelines.view",
+    "forecast.view",
+    "leads.view_owned",
+    "leads.create",
+    "leads.edit",
+    "leads.change_stage",
+    "leads.mark_won",
+    "leads.mark_lost",
+    "leads.reopen",
+    "leads.link_contact",
+  ]);
+  if (crmFallback.has(permission)) return modules.has("crm");
+  if (permission === "reports.view") return modules.has("reports");
+  if (permission === "workshop.manage") return modules.has("workshop");
+  return false;
 }
 
 export async function hasPermission(user: PermissionUser, permission: PermissionKey): Promise<boolean> {
   if (user.role === "owner") return true;
   const permissions = await getUserPermissions(user.id);
-  if (permissions.has(permission)) return true;
-
-  // Compatibility fallback during rollout: current members retain the module
-  // access they already had until explicit roles are reviewed in Settings.
-  const modules = new Set(user.modules.split(",").map((item) => item.trim()).filter(Boolean));
-  if (permission.startsWith("leads.") || permission.startsWith("pipelines.") || permission.startsWith("forecast.")) {
-    return modules.has("crm");
-  }
-  if (permission === "reports.view") return modules.has("reports");
-  if (permission === "workshop.manage") return modules.has("workshop");
-  return false;
+  if (permissions.size > 0) return permissions.has(permission);
+  return legacyModuleAllows(user, permission);
 }
 
 export async function requirePermission(permission: PermissionKey): Promise<PermissionUser> {
@@ -69,31 +97,64 @@ export async function requirePermission(permission: PermissionKey): Promise<Perm
   return user;
 }
 
+export async function requireAnyPermission(...permissions: PermissionKey[]): Promise<PermissionUser> {
+  const user = await requireUser();
+  const checks = await Promise.all(permissions.map((permission) => hasPermission(user, permission)));
+  if (!checks.some(Boolean)) redirect("/");
+  return user;
+}
+
 export async function getUserTeamIds(userId: string): Promise<string[]> {
-  const rows = await basePrisma.$queryRaw<Array<{ teamId: string }>>`
-    SELECT "teamId" FROM "TeamMember" WHERE "userId" = ${userId}
-  `;
-  return rows.map((row) => row.teamId);
+  try {
+    const rows = await basePrisma.$queryRaw<Array<{ teamId: string }>>`
+      SELECT DISTINCT scope."teamId"
+      FROM (
+        SELECT tm."teamId" FROM "TeamMember" tm WHERE tm."userId" = ${userId}
+        UNION
+        SELECT t."id" AS "teamId" FROM "Team" t
+        WHERE t."managerId" = ${userId} AND t."active" = true AND t."deletedAt" IS NULL
+      ) scope
+    `;
+    return rows.map((row) => row.teamId);
+  } catch {
+    return [];
+  }
+}
+
+async function canViewOwnedRecords(user: PermissionUser, permissions: Set<string>) {
+  if (permissions.size > 0) return permissions.has("leads.view_owned");
+  return moduleSet(user).has("crm");
 }
 
 export async function canAccessLead(user: PermissionUser, leadId: string): Promise<boolean> {
   if (user.role === "owner") return true;
   const permissions = await getUserPermissions(user.id);
   if (permissions.has("leads.view_all")) return true;
-  if (!permissions.has("leads.view_owned") && !user.modules.split(",").includes("crm")) return false;
+  if (!(await canViewOwnedRecords(user, permissions))) return false;
 
   const rows = await basePrisma.$queryRaw<Array<{ allowed: boolean }>>`
     SELECT EXISTS (
       SELECT 1 FROM "Lead" l
       WHERE l."id" = ${leadId}
+        AND l."deletedAt" IS NULL
         AND (
           l."assignedToId" = ${user.id}
           OR l."createdById" = ${user.id}
-          OR l."teamId" IN (SELECT tm."teamId" FROM "TeamMember" tm WHERE tm."userId" = ${user.id})
+          OR l."teamId" IN (
+            SELECT tm."teamId" FROM "TeamMember" tm WHERE tm."userId" = ${user.id}
+            UNION
+            SELECT t."id" FROM "Team" t WHERE t."managerId" = ${user.id} AND t."deletedAt" IS NULL
+          )
         )
     ) AS allowed
   `;
   return Boolean(rows[0]?.allowed);
+}
+
+export async function requireLeadReadAccess(leadId: string): Promise<PermissionUser> {
+  const user = await requireAnyPermission("leads.view_all", "leads.view_owned");
+  if (!(await canAccessLead(user, leadId))) redirect("/leads");
+  return user;
 }
 
 export async function requireLeadAccess(leadId: string, permission: PermissionKey): Promise<PermissionUser> {
@@ -104,14 +165,42 @@ export async function requireLeadAccess(leadId: string, permission: PermissionKe
 
 export async function getAccessibleLeadScope(user: PermissionUser): Promise<{
   viewAll: boolean;
+  viewOwned: boolean;
   userId: string;
   teamIds: string[];
 }> {
-  if (user.role === "owner") return { viewAll: true, userId: user.id, teamIds: [] };
+  if (user.role === "owner") {
+    return { viewAll: true, viewOwned: true, userId: user.id, teamIds: [] };
+  }
   const permissions = await getUserPermissions(user.id);
+  const viewAll = permissions.has("leads.view_all");
+  const viewOwned = viewAll || await canViewOwnedRecords(user, permissions);
   return {
-    viewAll: permissions.has("leads.view_all"),
+    viewAll,
+    viewOwned,
     userId: user.id,
-    teamIds: await getUserTeamIds(user.id),
+    teamIds: viewOwned ? await getUserTeamIds(user.id) : [],
   };
+}
+
+/** Null means unrestricted; an array is the complete accessible lead ID set. */
+export async function getAccessibleLeadIds(user: PermissionUser): Promise<string[] | null> {
+  const scope = await getAccessibleLeadScope(user);
+  if (scope.viewAll) return null;
+  if (!scope.viewOwned) return [];
+  const rows = await basePrisma.$queryRaw<Array<{ id: string }>>`
+    SELECT l."id"
+    FROM "Lead" l
+    WHERE l."deletedAt" IS NULL
+      AND (
+        l."assignedToId" = ${scope.userId}
+        OR l."createdById" = ${scope.userId}
+        OR l."teamId" IN (
+          SELECT tm."teamId" FROM "TeamMember" tm WHERE tm."userId" = ${scope.userId}
+          UNION
+          SELECT t."id" FROM "Team" t WHERE t."managerId" = ${scope.userId} AND t."deletedAt" IS NULL
+        )
+      )
+  `;
+  return rows.map((row) => row.id);
 }
