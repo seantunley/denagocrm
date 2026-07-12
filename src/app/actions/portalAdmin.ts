@@ -1,6 +1,7 @@
 "use server";
 
 import crypto from "crypto";
+import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
 import { requireOwner } from "@/lib/auth";
@@ -73,15 +74,19 @@ type ProfileRequestRow = {
   status: string;
 };
 
-function profileData(changes: Record<string, unknown>) {
-  const allowed = ["firstName", "lastName", "phone", "whatsapp", "address", "suburb", "city", "province", "postalCode"] as const;
-  const data: Partial<Record<(typeof allowed)[number], string | null>> = {};
-  for (const key of allowed) {
+function profileData(changes: Record<string, unknown>): Prisma.ContactUpdateInput {
+  const data: Prisma.ContactUpdateInput = {};
+  const firstName = changes.firstName;
+  if (firstName !== undefined) {
+    if (typeof firstName !== "string" || !firstName.trim()) throw new Error("First name cannot be blank");
+    data.firstName = firstName.slice(0, 200);
+  }
+  const optional = ["lastName", "phone", "whatsapp", "address", "suburb", "city", "province", "postalCode"] as const;
+  for (const key of optional) {
     const value = changes[key];
     if (value === null) data[key] = null;
     else if (typeof value === "string") data[key] = value.slice(0, 500);
   }
-  if (data.firstName !== undefined && !data.firstName?.trim()) throw new Error("First name cannot be blank");
   return data;
 }
 
