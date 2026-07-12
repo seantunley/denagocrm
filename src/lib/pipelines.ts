@@ -46,10 +46,11 @@ export type ForecastLeadRow = {
 };
 
 export async function listSalesPipelines(activeOnly = false): Promise<SalesPipelineRow[]> {
+  if (activeOnly) return listActiveSalesPipelines();
   return basePrisma.$queryRaw<SalesPipelineRow[]>`
     SELECT "id", "name", "description", "type", "active", "isDefault", "createdAt", "updatedAt"
     FROM "SalesPipeline"
-    WHERE "deletedAt" IS NULL ${activeOnly ? basePrisma.$queryRawUnsafe("AND \"active\" = true") : basePrisma.$queryRawUnsafe("")}
+    WHERE "deletedAt" IS NULL
     ORDER BY "isDefault" DESC, "name" ASC
   `;
 }
@@ -133,7 +134,9 @@ export async function addPipelineStage(input: {
   closedStatus?: string | null;
 }) {
   const rows = await basePrisma.$queryRaw<Array<{ nextOrder: number }>>`
-    SELECT COALESCE(MAX("order"), -1) + 1 AS "nextOrder" FROM "PipelineStage" WHERE "pipelineId" = ${input.pipelineId}
+    SELECT COALESCE(MAX("order"), -1) + 1 AS "nextOrder"
+    FROM "PipelineStage"
+    WHERE "pipelineId" = ${input.pipelineId}
   `;
   const id = crypto.randomUUID();
   await basePrisma.$executeRaw`
@@ -182,14 +185,17 @@ export async function reorderPipelineStages(pipelineId: string, stageIds: string
 export async function archivePipeline(id: string) {
   const rows = await basePrisma.$queryRaw<Array<{ isDefault: boolean; leadCount: bigint }>>`
     SELECT p."isDefault", COUNT(l."id") AS "leadCount"
-    FROM "SalesPipeline" p LEFT JOIN "Lead" l ON l."pipelineId" = p."id" AND l."deletedAt" IS NULL
-    WHERE p."id" = ${id} GROUP BY p."isDefault"
+    FROM "SalesPipeline" p
+    LEFT JOIN "Lead" l ON l."pipelineId" = p."id" AND l."deletedAt" IS NULL
+    WHERE p."id" = ${id}
+    GROUP BY p."isDefault"
   `;
   if (!rows[0]) throw new Error("Pipeline not found");
   if (rows[0].isDefault) throw new Error("The default pipeline cannot be archived");
   if (Number(rows[0].leadCount) > 0) throw new Error("Move or close all leads before archiving this pipeline");
   await basePrisma.$executeRaw`
-    UPDATE "SalesPipeline" SET "active" = false, "deletedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
+    UPDATE "SalesPipeline"
+    SET "active" = false, "deletedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
     WHERE "id" = ${id}
   `;
 }
@@ -235,7 +241,10 @@ export function summarizeForecast(leads: ForecastLeadRow[]) {
     commitValueCents: sum(leads.filter((lead) => lead.forecastCategory === "commit")),
     bestCaseValueCents: sum(leads.filter((lead) => lead.forecastCategory === "best_case")),
     pipelineValueCents: sum(leads.filter((lead) => lead.forecastCategory === "pipeline")),
-    estimatedMarginCents: leads.reduce((total, lead) => total + Math.max(0, lead.valueCents - (lead.estimatedCostCents ?? lead.valueCents)), 0),
+    estimatedMarginCents: leads.reduce(
+      (total, lead) => total + Math.max(0, lead.valueCents - (lead.estimatedCostCents ?? lead.valueCents)),
+      0
+    ),
   };
 }
 
@@ -266,15 +275,16 @@ export async function captureForecastSnapshot(input: {
 }) {
   const leads = await listForecastLeads(input);
   const summary = summarizeForecast(leads);
+  const snapshotId = crypto.randomUUID();
   await basePrisma.$executeRaw`
     INSERT INTO "ForecastSnapshot" (
       "id", "period", "pipelineId", "teamId", "userId", "openValueCents", "weightedValueCents",
       "commitValueCents", "bestCaseValueCents", "opportunityCount"
     ) VALUES (
-      ${crypto.randomUUID()}, ${input.period}, ${input.pipelineId ?? null}, ${input.teamId ?? null}, ${input.userId ?? null},
+      ${snapshotId}, ${input.period}, ${input.pipelineId ?? null}, ${input.teamId ?? null}, ${input.userId ?? null},
       ${BigInt(summary.openValueCents)}, ${BigInt(summary.weightedValueCents)}, ${BigInt(summary.commitValueCents)},
       ${BigInt(summary.bestCaseValueCents)}, ${summary.count}
     )
   `;
-  return summary;
+  return { id: snapshotId, ...summary };
 }
