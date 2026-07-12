@@ -43,6 +43,7 @@ async function main() {
     SELECT u."name", COUNT(ur."roleId") AS count
     FROM "User" u LEFT JOIN "UserRole" ur ON ur."userId" = u."id"
     WHERE u."role" <> 'owner'
+      AND u."disabledAt" IS NULL
       AND (
         (',' || REPLACE(u."modules", ' ', '') || ',') LIKE '%,crm,%'
         OR (',' || REPLACE(u."modules", ' ', '') || ',') LIKE '%,workshop,%'
@@ -51,7 +52,7 @@ async function main() {
     HAVING COUNT(ur."roleId") = 0
   `;
   if (unassignedModuleUsers.length > 0) {
-    failures.push(`Users with CRM/workshop modules but no RBAC role: ${unassignedModuleUsers.map((row) => row.name).join(", ")}`);
+    failures.push(`Active users with CRM/workshop modules but no RBAC role: ${unassignedModuleUsers.map((row) => row.name).join(", ")}`);
   }
 
   const auditTriggers = await count(prisma.$queryRaw<CountRow[]>`
@@ -66,6 +67,56 @@ async function main() {
   `);
   if (leadSyncTrigger !== 1) failures.push("Lead pipeline/forecast synchronization trigger is missing");
 
+  const securityColumns = await count(prisma.$queryRaw<CountRow[]>`
+    SELECT COUNT(*) AS count
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'User'
+      AND column_name IN ('sessionVersion', 'disabledAt', 'lastLoginAt', 'failedLoginCount')
+  `);
+  if (securityColumns !== 4) failures.push(`Expected four User security columns; found ${securityColumns}`);
+
+  const limiterTable = await count(prisma.$queryRaw<CountRow[]>`
+    SELECT COUNT(*) AS count
+    FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'SecurityRateLimit'
+  `);
+  if (limiterTable !== 1) failures.push("SecurityRateLimit table is missing");
+
+  const activeGovernanceAdmins = await count(prisma.$queryRaw<CountRow[]>`
+    SELECT COUNT(DISTINCT u."id") AS count
+    FROM "User" u
+    WHERE u."disabledAt" IS NULL
+      AND (
+        u."role" = 'owner'
+        OR EXISTS (
+          SELECT 1 FROM "UserRole" ur
+          JOIN "RolePermission" rp ON rp."roleId" = ur."roleId"
+          WHERE ur."userId" = u."id" AND rp."permissionKey" = 'roles.manage'
+        )
+      )
+  `);
+  if (activeGovernanceAdmins < 1) failures.push("No active governance administrator remains");
+
+  const requiredAdminPermissions = [
+    "roles.view",
+    "roles.manage",
+    "teams.view",
+    "teams.manage",
+    "audit.view",
+    "audit.export",
+  ];
+  const missingAdminPermissions = await prisma.$queryRaw<Array<{ permissionKey: string }>>`
+    SELECT required."permissionKey"
+    FROM UNNEST(${requiredAdminPermissions}::text[]) AS required("permissionKey")
+    WHERE NOT EXISTS (
+      SELECT 1 FROM "RolePermission" rp
+      WHERE rp."roleId" = 'role_crm_admin' AND rp."permissionKey" = required."permissionKey"
+    )
+  `;
+  if (missingAdminPermissions.length) {
+    failures.push(`CRM administrator is missing protected permissions: ${missingAdminPermissions.map((item) => item.permissionKey).join(", ")}`);
+  }
+
   const emptyActivePipelines = await prisma.$queryRaw<NameCountRow[]>`
     SELECT p."name", COUNT(s."id") AS count
     FROM "SalesPipeline" p LEFT JOIN "PipelineStage" s ON s."pipelineId" = p."id" AND s."isClosed" = false
@@ -75,6 +126,13 @@ async function main() {
   `;
   for (const pipeline of emptyActivePipelines) warnings.push(`Active pipeline “${pipeline.name}” has no open stage`);
 
+  const disabledTeamManagers = await prisma.$queryRaw<Array<{ name: string }>>`
+    SELECT t."name"
+    FROM "Team" t JOIN "User" u ON u."id" = t."managerId"
+    WHERE t."deletedAt" IS NULL AND t."active" = true AND u."disabledAt" IS NOT NULL
+  `;
+  for (const team of disabledTeamManagers) warnings.push(`Active team “${team.name}” has a disabled manager`);
+
   const summary = {
     activeDefaults,
     leadStageMismatches,
@@ -83,6 +141,10 @@ async function main() {
     usersMissingRoles: unassignedModuleUsers.length,
     auditTriggers,
     leadSyncTrigger,
+    securityColumns,
+    limiterTable,
+    activeGovernanceAdmins,
+    missingAdminPermissions: missingAdminPermissions.length,
     warnings,
   };
 
@@ -91,7 +153,7 @@ async function main() {
     console.error("Governance verification failed:\n- " + failures.join("\n- "));
     process.exitCode = 1;
   } else {
-    console.log("Governance verification passed.");
+    console.log("Governance and security verification passed.");
   }
 }
 
