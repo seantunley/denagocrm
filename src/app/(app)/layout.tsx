@@ -1,68 +1,19 @@
-import Link from "next/link";
 import { requireUser } from "@/lib/auth";
-import { logout } from "@/app/login/actions";
-import Nav from "@/components/Nav";
+import { awaitingReplyCount } from "@/lib/inboxCount";
 import AppShell from "@/components/AppShell";
-import { APP_VERSION } from "@/lib/version";
 
 export default async function AppLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   const user = await requireUser();
+  const inboxWaiting = await awaitingReplyCount().catch(() => 0);
 
-  const sidebar = (
-    <>
-      <div className="px-4 py-5">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src="/branding/denago-cape-town-logo.png"
-          alt="Denago Cape Town CRM"
-          className="h-8 w-auto object-contain"
-        />
-      </div>
-      <div className="px-3 pb-2">
-        <form action="/search">
-          <input
-            name="q"
-            className="input py-1.5 text-xs"
-            placeholder="🔍 Search everything…"
-          />
-        </form>
-      </div>
-      <div className="flex-1 px-3 overflow-y-auto">
-        <Nav modules={user.modules} isAdmin={user.role === "owner"} />
-      </div>
-      <div className="px-4 py-4 border-t border-slate-800">
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-sm text-slate-300 font-medium truncate">{user.name}</p>
-          <div className="flex items-center gap-1 shrink-0">
-            {user.role === "owner" && (
-            <Link
-              href="/trash"
-              title="Trash"
-              className="rounded-lg px-2 py-1 text-slate-400 hover:bg-slate-800 hover:text-white"
-            >
-              🗑
-            </Link>
-            )}
-            <Link
-              href="/settings"
-              title="Settings"
-              className="rounded-lg px-2 py-1 text-slate-400 hover:bg-slate-800 hover:text-white"
-            >
-              ⚙
-            </Link>
-          </div>
-        </div>
-        <form action={logout}>
-          <button className="text-xs text-slate-500 hover:text-slate-300 mt-1 cursor-pointer">
-            Sign out
-          </button>
-        </form>
-        <p className="text-[10px] text-slate-600 mt-2">v{APP_VERSION}</p>
-      </div>
-    </>
+  return (
+    <AppShell
+      user={{ name: user.name, role: user.role, modules: user.modules }}
+      inboxWaiting={inboxWaiting}
+    >
+      {children}
+    </AppShell>
   );
-
-  return <AppShell sidebar={sidebar}>{children}</AppShell>;
 }

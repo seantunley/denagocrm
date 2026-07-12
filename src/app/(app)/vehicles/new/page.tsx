@@ -17,7 +17,7 @@ export default async function NewVehiclePage({
 
   return (
     <div className="space-y-5">
-      <h1 className="text-2xl font-bold">Register vehicle</h1>
+      <h1 className="text-2xl font-semibold tracking-[-0.035em]">Register vehicle</h1>
       <VehicleForm
         action={createVehicle}
         contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}

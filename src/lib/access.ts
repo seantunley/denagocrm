@@ -13,7 +13,7 @@ export const MODULES = [
 export type ModuleId = (typeof MODULES)[number]["id"];
 
 export function parseModules(csv: string | null | undefined): Set<string> {
-  return new Set((csv ?? "").split(",").map((s) => s.trim()).filter(Boolean));
+  return new Set((csv ?? "").split(",").map((item) => item.trim()).filter(Boolean));
 }
 
 export function hasModule(
@@ -29,9 +29,12 @@ export function canSeeContacts(user: { role: string; modules: string }): boolean
   return hasModule(user, "crm") || hasModule(user, "workshop");
 }
 
-/** First route prefix match wins. "contacts" = crm OR workshop; "admin" = owners. */
+/**
+ * First route prefix match wins. Lead pages are intentionally absent: their
+ * pages, layouts and server actions use database-backed granular RBAC and record
+ * scopes. Legacy modules remain module-gated until migrated in later releases.
+ */
 export const ROUTE_GATES: { prefix: string; gate: ModuleId | "contacts" | "admin" }[] = [
-  { prefix: "/leads", gate: "crm" },
   { prefix: "/quotes", gate: "crm" },
   { prefix: "/deliveries", gate: "crm" },
   { prefix: "/stock", gate: "crm" },
@@ -49,6 +52,7 @@ export const ROUTE_GATES: { prefix: string; gate: ModuleId | "contacts" | "admin
   { prefix: "/products", gate: "admin" },
   { prefix: "/library", gate: "crm" },
   { prefix: "/contacts", gate: "contacts" },
+  { prefix: "/cases", gate: "contacts" },
   { prefix: "/vehicles", gate: "workshop" },
   { prefix: "/service-due", gate: "workshop" },
   { prefix: "/warranty", gate: "workshop" },
@@ -66,7 +70,7 @@ export function routeAllowed(
   claims: { role: string; modules: string }
 ): boolean {
   const rule = ROUTE_GATES.find(
-    (r) => pathname === r.prefix || pathname.startsWith(r.prefix + "/")
+    (item) => pathname === item.prefix || pathname.startsWith(item.prefix + "/")
   );
   if (!rule) return true;
   if (claims.role === "owner") return true;

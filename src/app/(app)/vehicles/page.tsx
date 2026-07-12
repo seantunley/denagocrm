@@ -1,10 +1,13 @@
 import Link from "next/link";
+import { Clock3, Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import ModalTrigger from "@/components/Modal";
 import VehicleForm from "@/components/VehicleForm";
 import { createVehicle } from "@/app/actions/vehicles";
 import { contactName, formatDate } from "@/lib/format";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
+import { PageHeader } from "@/components/page-header";
+import { buttonVariants } from "@/components/ui/button";
 
 export default async function VehiclesPage({
   searchParams,
@@ -29,16 +32,14 @@ export default async function VehiclesPage({
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <h1 className="text-2xl font-bold">Vehicles</h1>
-        <div className="flex gap-2">
+      <PageHeader title="Vehicle fleet" description={`${rows.length} vehicle${rows.length === 1 ? "" : "s"}${filter === "due" ? " due for attention" : " registered across your customer base"}.`}>
           <Link
             href={filter === "due" ? "/vehicles" : "/vehicles?filter=due"}
-            className={filter === "due" ? "btn-primary" : "btn-secondary"}
+            className={buttonVariants({ variant: filter === "due" ? "default" : "outline", size: "sm" })}
           >
-            {filter === "due" ? "Showing due only" : "Show due for service"}
+            <Clock3 className="size-4" />{filter === "due" ? "Showing due" : "Service due"}
           </Link>
-          <ModalTrigger label="+ Register vehicle" title="Register vehicle">
+          <ModalTrigger label={<><Plus className="size-4" />Register vehicle</>} title="Register vehicle" buttonClass={buttonVariants({ size: "sm" })}>
             <VehicleForm
               action={createVehicle}
               contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
@@ -51,8 +52,7 @@ export default async function VehiclesPage({
               showInitialKm
             />
           </ModalTrigger>
-        </div>
-      </div>
+      </PageHeader>
 
       <div className="card p-0 overflow-x-auto">
         <table className="table-base">

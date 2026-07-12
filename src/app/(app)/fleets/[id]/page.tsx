@@ -56,7 +56,7 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
           ← Fleets
         </Link>
         <div className="flex flex-wrap items-center gap-3 mt-1">
-          <h1 className="text-2xl font-bold">{fleet.name}</h1>
+          <h1 className="text-2xl font-semibold tracking-[-0.035em]">{fleet.name}</h1>
           {fleet.type && <span className="badge bg-orange-600/15 text-orange-300 capitalize">{fleet.type}</span>}
         </div>
         {primary && (

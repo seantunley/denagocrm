@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { PackagePlus, ShoppingCart } from "lucide-react";
 import { prisma } from "@/lib/db";
 import ModalTrigger from "@/components/Modal";
 import { formatZAR } from "@/lib/format";
@@ -13,6 +14,8 @@ import {
   markUnitSold,
   deleteStockUnit,
 } from "@/app/actions/stock";
+import { PageHeader } from "@/components/page-header";
+import { buttonVariants } from "@/components/ui/button";
 
 const STATUS_BADGE: Record<string, string> = {
   incoming: "bg-sky-500/15 text-sky-300",
@@ -27,6 +30,15 @@ const STATUS_LABEL: Record<string, string> = {
   sold: "Sold",
 };
 const FILTERS = ["all", "available", "incoming", "reserved", "sold"] as const;
+
+function ProductSelect({ products }: { products: { id: string; name: string }[] }) {
+  return (
+    <select name="productId" className="input" required defaultValue="">
+      <option value="" disabled>Select model…</option>
+      {products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
+    </select>
+  );
+}
 
 export default async function StockPage({
   searchParams,
@@ -53,27 +65,10 @@ export default async function StockPage({
   ]);
 
   const countOf = (s: string) => counts.find((c) => c.status === s)?._count ?? 0;
-  const productOptions = products.map((p) => (
-    <option key={p.id} value={p.id}>
-      {p.name}
-    </option>
-  ));
-
-  const ProductSelect = () => (
-    <select name="productId" className="input" required defaultValue="">
-      <option value="" disabled>
-        Select model…
-      </option>
-      {productOptions}
-    </select>
-  );
-
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <h1 className="text-2xl font-bold">Stock</h1>
-        <div className="flex gap-2">
-          <ModalTrigger label="+ Purchase order" title="New purchase order">
+      <PageHeader title="Stock" description={`${countOf("available")} available · ${countOf("incoming")} incoming · ${countOf("reserved")} reserved`}>
+          <ModalTrigger label={<><ShoppingCart className="size-4" />Purchase order</>} title="New purchase order" buttonClass={buttonVariants({ size: "sm" })}>
             <form action={createPurchaseOrder} className="card space-y-3">
               <p className="text-sm text-slate-400">
                 Records carts on order. They arrive as <b>On order</b> stock; mark the order
@@ -81,7 +76,7 @@ export default async function StockPage({
               </p>
               <div>
                 <label className="label">Model *</label>
-                <ProductSelect />
+                <ProductSelect products={products} />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -116,12 +111,12 @@ export default async function StockPage({
               <button className="btn-primary">Create order</button>
             </form>
           </ModalTrigger>
-          <ModalTrigger label="+ Add unit" title="Add stock unit" buttonClass="btn-secondary">
+          <ModalTrigger label={<><PackagePlus className="size-4" />Add unit</>} title="Add stock unit" buttonClass={buttonVariants({ variant: "outline", size: "sm" })}>
             <form action={addStockUnit} className="card space-y-3">
               <p className="text-sm text-slate-400">A cart already on the floor — added as available stock.</p>
               <div>
                 <label className="label">Model *</label>
-                <ProductSelect />
+                <ProductSelect products={products} />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -144,8 +139,7 @@ export default async function StockPage({
               <button className="btn-primary">Add to stock</button>
             </form>
           </ModalTrigger>
-        </div>
-      </div>
+      </PageHeader>
 
       {/* Summary */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -158,7 +152,7 @@ export default async function StockPage({
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
               {STATUS_LABEL[s]}
             </p>
-            <p className="text-2xl font-bold mt-1">{countOf(s)}</p>
+            <p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{countOf(s)}</p>
           </Link>
         ))}
       </div>

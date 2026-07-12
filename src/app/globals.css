@@ -1,24 +1,133 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Design tokens — Linear-style dark, Denago orange accent.
+   New (shadcn/Radix) components consume these via @theme mappings below.
+   The legacy .btn/.card/.input utilities further down stay intact so pages
+   not yet migrated keep rendering during the redesign.
+   ──────────────────────────────────────────────────────────────────────── */
+:root {
+  --radius: 0.625rem;
+
+  --background: oklch(0.171 0.0045 264);
+  --foreground: oklch(0.968 0.002 264);
+
+  --card: oklch(0.204 0.0045 264);
+  --card-foreground: oklch(0.968 0.002 264);
+
+  --popover: oklch(0.223 0.005 264);
+  --popover-foreground: oklch(0.968 0.002 264);
+
+  --primary: oklch(0.672 0.186 41.5);
+  --primary-foreground: oklch(0.99 0 0);
+
+  --secondary: oklch(0.246 0.005 264);
+  --secondary-foreground: oklch(0.968 0.002 264);
+
+  --muted: oklch(0.246 0.005 264);
+  --muted-foreground: oklch(0.664 0.012 264);
+
+  --accent: oklch(0.272 0.006 264);
+  --accent-foreground: oklch(0.98 0.002 264);
+
+  --destructive: oklch(0.618 0.21 24.5);
+  --destructive-foreground: oklch(0.99 0 0);
+
+  --success: oklch(0.7 0.14 162);
+  --warning: oklch(0.79 0.15 78);
+
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.672 0.186 41.5 / 60%);
+
+  --sidebar: oklch(0.151 0.004 264);
+  --sidebar-foreground: oklch(0.86 0.006 264);
+  --sidebar-primary: oklch(0.672 0.186 41.5);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.246 0.006 264);
+  --sidebar-accent-foreground: oklch(0.98 0.002 264);
+  --sidebar-border: oklch(1 0 0 / 7%);
+  --sidebar-ring: oklch(0.672 0.186 41.5 / 60%);
+
+  --chart-1: oklch(0.672 0.186 41.5);
+  --chart-2: oklch(0.65 0.15 248);
+  --chart-3: oklch(0.72 0.14 162);
+  --chart-4: oklch(0.7 0.16 302);
+  --chart-5: oklch(0.79 0.15 78);
+}
 
 @theme inline {
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
 }
 
 @layer base {
   :root {
     color-scheme: dark;
   }
-  /* Dark html too: if anything ever overflows the body, the exposed area
-     must not flash white */
   html {
-    @apply bg-slate-950;
+    background: var(--background);
   }
   body {
-    @apply bg-slate-950 text-slate-100 antialiased;
+    @apply text-foreground antialiased;
+    background: var(--background);
     /* Long unbroken strings (URLs, VINs, tokens) wrap instead of dragging
        the whole page sideways on phones */
     overflow-wrap: anywhere;
+  }
+  /* Native <select> popups: the control's translucent bg-white/[0.04] makes
+     Chromium/Windows render the option list on white (unreadable). Force an
+     opaque dark surface on the options themselves so every dropdown list is
+     legible, without changing the frosted look of the closed control. */
+  select option,
+  select optgroup {
+    background-color: #22252a; /* hex fallback: native controls may not parse oklch */
+    background-color: var(--popover);
+    color: #f4f5f6;
+    color: var(--popover-foreground);
   }
 }
 
@@ -32,17 +141,23 @@
 }
 
 @layer components {
+  .login-input {
+    @apply w-full rounded-xl border border-white/10 bg-white/[0.045] px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-600 hover:border-white/15 focus:border-orange-500/60 focus:bg-white/[0.06] focus:ring-4 focus:ring-orange-500/10;
+  }
+  .login-submit {
+    @apply flex h-12 w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-orange-600 px-4 text-sm font-semibold text-white shadow-[0_12px_35px_rgba(234,88,12,0.22)] transition hover:bg-orange-500 hover:shadow-[0_15px_40px_rgba(234,88,12,0.3)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-500/25 disabled:cursor-wait disabled:opacity-60;
+  }
   .btn,
   .btn-primary,
   .btn-secondary,
   .btn-danger {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-all cursor-pointer outline-none focus-visible:ring-4 focus-visible:ring-orange-500/15 disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-primary {
-    @apply bg-orange-600 text-white hover:bg-orange-500;
+    @apply bg-orange-600 text-white shadow-[0_8px_24px_rgba(234,88,12,0.16)] hover:bg-orange-500 hover:-translate-y-px hover:shadow-[0_10px_28px_rgba(234,88,12,0.24)];
   }
   .btn-secondary {
-    @apply bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700;
+    @apply bg-white/[0.045] text-slate-200 border border-white/10 shadow-sm hover:bg-white/[0.075] hover:border-white/15;
   }
   .btn-danger {
     @apply bg-red-700 text-white hover:bg-red-600;
@@ -51,16 +166,16 @@
     @apply px-2.5 py-1 text-xs;
   }
   .input {
-    @apply w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20;
+    @apply w-full rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 hover:border-white/15 focus:border-orange-500/60 focus:bg-white/[0.055] focus:ring-4 focus:ring-orange-500/10;
   }
   .label {
-    @apply block text-xs font-semibold text-slate-400 mb-1 uppercase tracking-wide;
+    @apply block text-[11px] font-semibold text-slate-400 mb-1.5 uppercase tracking-[0.1em];
   }
   .card {
     /* min-w-0: cards live inside grids/flex rows — without it a long
        unbroken line inside sets the card's minimum width and drags the
        whole page sideways on phones */
-    @apply rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-sm min-w-0;
+    @apply rounded-2xl border border-white/[0.075] bg-card p-5 shadow-sm min-w-0;
   }
   .badge {
     @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;
@@ -69,14 +184,67 @@
     @apply w-full text-sm;
   }
   .table-base th {
-    @apply text-left text-xs font-semibold uppercase tracking-wide text-slate-400 px-3 py-2 border-b border-slate-700;
+    @apply bg-white/[0.02] text-left text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 px-4 py-3 border-b border-white/[0.07];
   }
   .table-base td {
-    @apply px-3 py-2.5 border-b border-slate-800;
+    @apply px-4 py-3 border-b border-white/[0.065];
   }
   .table-base tbody tr:hover {
-    @apply bg-slate-800/40;
+    @apply bg-white/[0.025];
   }
+}
+
+/* Error shake — attach .animate-shake to a form/dialog on validation failure */
+@keyframes denago-shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-4px); }
+  40%, 60% { transform: translateX(4px); }
+}
+.animate-shake {
+  animation: denago-shake 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-shake { animation: none; }
+}
+
+/* Internal workspace contract. Bespoke modules keep their layouts while
+   inheriting the same hierarchy, rhythm, depth and interaction language. */
+.denago-workspace {
+  isolation: isolate;
+}
+.denago-workspace h1 {
+  font-size: 1.75rem;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+.denago-workspace h2,
+.denago-workspace h3 {
+  letter-spacing: -0.015em;
+}
+.denago-workspace > * {
+  animation: workspace-enter 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.denago-workspace :is(.card, [data-slot="card"], table, details) {
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+.denago-workspace :is(.card, [data-slot="card"]):hover {
+  border-color: color-mix(in oklab, var(--border), white 5%);
+}
+.denago-workspace table {
+  font-variant-numeric: tabular-nums;
+}
+.denago-workspace :is(a, button, input, select, textarea):focus-visible {
+  outline: none;
+}
+@keyframes workspace-enter {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .denago-workspace > * { animation: none; }
 }
 
 /* Phones: never let a rogue element drag the whole page sideways —
@@ -86,6 +254,77 @@
   body,
   main {
     overflow-x: clip;
+  }
+}
+
+/* Phone layout contract: controls fill available width, dense data remains
+   deliberately scrollable, and overlays behave like reachable bottom sheets. */
+@media (max-width: 639px) {
+  .denago-workspace {
+    font-size: 0.9375rem;
+  }
+  .denago-workspace h1 {
+    font-size: 1.5rem;
+    line-height: 1.2;
+  }
+  .denago-workspace .card {
+    padding: 1rem;
+    border-radius: 0.875rem;
+  }
+  .denago-workspace .card.p-0 {
+    padding: 0;
+  }
+  .denago-workspace :is(input, select, textarea).input:is(.w-28, .w-32, .w-36, .w-40, .w-44, .w-64, .min-w-44, .min-w-48, .min-w-56, .min-w-64) {
+    width: 100%;
+    min-width: 0;
+  }
+  .denago-workspace :is(.min-w-48, .min-w-56, .min-w-64) {
+    min-width: 0;
+  }
+  [data-slot="page-header-actions"] {
+    width: 100%;
+  }
+  [data-slot="page-header-actions"] > :is(a, button, form) {
+    flex: 1 1 auto;
+  }
+  [data-slot="page-header-actions"] > form > button {
+    width: 100%;
+  }
+  .denago-workspace form.flex:has(> .input),
+  .denago-workspace form.flex:has(> div > .input) {
+    flex-wrap: wrap;
+  }
+  .denago-workspace form.grid.grid-cols-2,
+  .denago-workspace .card form .grid.grid-cols-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .denago-workspace .grid.grid-cols-3,
+  .denago-workspace .grid.grid-cols-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .denago-workspace .card:has(> table),
+  .denago-workspace .card:has(> .table-base) {
+    overflow-x: auto;
+  }
+  .denago-workspace .table-base {
+    min-width: 680px;
+  }
+  .denago-workspace .table-base th,
+  .denago-workspace .table-base td {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+  .denago-workspace :is(.btn, .btn-primary, .btn-secondary, .btn-danger) {
+    min-height: 2.5rem;
+  }
+  [data-slot="dialog-content"] {
+    top: auto;
+    bottom: 0;
+    max-height: calc(100dvh - 1rem);
+    max-width: 100%;
+    transform: translateX(-50%);
+    border-radius: 1rem 1rem 0 0;
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
   }
 }
 

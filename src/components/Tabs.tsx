@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import { cn } from "@/lib/utils";
 
 export type TabDef = {
   key: string;
@@ -9,31 +10,35 @@ export type TabDef = {
   content: ReactNode;
 };
 
-export default function Tabs({ tabs }: { tabs: TabDef[] }) {
-  const [active, setActive] = useState(tabs[0]?.key);
+export default function Tabs({ tabs, initialKey }: { tabs: TabDef[]; initialKey?: string }) {
+  const [active, setActive] = useState(
+    initialKey && tabs.some((t) => t.key === initialKey) ? initialKey : tabs[0]?.key
+  );
 
   return (
     <div>
-      <div className="flex gap-1 border-b border-slate-800 mb-5 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className="mb-5 flex w-fit max-w-full gap-1 overflow-x-auto overflow-y-hidden rounded-xl border border-border bg-card/70 p-1 shadow-sm [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {tabs.map((t) => (
           <button
             key={t.key}
             type="button"
             onClick={() => setActive(t.key)}
-            className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 -mb-px cursor-pointer select-none transition-colors ${
+            className={cn(
+              "select-none whitespace-nowrap rounded-lg px-3.5 py-2 text-[13px] font-medium transition-all",
               active === t.key
-                ? "border-orange-500 text-orange-400"
-                : "border-transparent text-slate-400 hover:text-slate-200"
-            }`}
+                ? "bg-white/[0.07] text-foreground shadow-sm"
+                : "text-muted-foreground hover:bg-white/[0.035] hover:text-foreground"
+            )}
           >
             {t.label}
             {typeof t.count === "number" && t.count > 0 && (
               <span
-                className={`ml-1.5 rounded-full px-1.5 py-0.5 text-xs ${
+                className={cn(
+                  "ml-1.5 rounded-full px-1.5 py-0.5 text-[11px] tabular-nums",
                   active === t.key
-                    ? "bg-orange-500/15 text-orange-300"
-                    : "bg-slate-800 text-slate-300"
-                }`}
+                    ? "bg-primary/15 text-primary"
+                    : "bg-muted text-muted-foreground"
+                )}
               >
                 {t.count}
               </span>

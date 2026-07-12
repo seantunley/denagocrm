@@ -32,7 +32,7 @@ export default async function ReferralsPage() {
   return (
     <div className="space-y-4 max-w-4xl">
       <div>
-        <h1 className="text-2xl font-bold">Referrals</h1>
+        <h1 className="text-2xl font-semibold tracking-[-0.035em]">Referrals</h1>
         <p className="text-sm text-slate-400 mt-1">
           Every customer has a unique code (on their contact page). When a referred deal is won
           the fee becomes due here — redeem it with a note of what was given.

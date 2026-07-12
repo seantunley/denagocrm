@@ -3,101 +3,45 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-
-type NavLink = { href: string; label: string; icon: string };
-type NavGroup = { key: string; label: string; links: NavLink[] };
-
-function buildNav(mods: Set<string>, isAdmin: boolean) {
-  const has = (m: string) => isAdmin || mods.has(m);
-  const topLinks: NavLink[] = [
-    { href: "/", label: "Dashboard", icon: "▦" },
-    ...(has("reports")
-      ? [
-          { href: "/reports", label: "Reports", icon: "📊" },
-          { href: "/targets", label: "Targets", icon: "🎯" },
-        ]
-      : []),
-  ];
-  const groups: NavGroup[] = [];
-  if (has("inbox")) {
-    groups.push({
-      key: "social",
-      label: "Social Media",
-      links: [{ href: "/inbox", label: "Social Inbox", icon: "💬" }],
-    });
-  }
-  if (has("crm")) {
-    groups.push({
-      key: "crm",
-      label: "CRM",
-      links: [
-        { href: "/calendar", label: "Calendar", icon: "📅" },
-        { href: "/leads", label: "Leads", icon: "◎" },
-        { href: "/quotes", label: "Quotes", icon: "📄" },
-        { href: "/deliveries", label: "Deliveries", icon: "🚚" },
-        { href: "/contacts", label: "Contacts", icon: "☰" },
-        { href: "/activities", label: "Activities", icon: "✓" },
-      ],
-    });
-    groups.push({
-      key: "marketing",
-      label: "Marketing",
-      links: [
-        { href: "/campaigns", label: "Campaigns", icon: "📣" },
-        { href: "/surveys", label: "Surveys", icon: "📝" },
-      ],
-    });
-    groups.push({
-      key: "stock",
-      label: "Stock",
-      links: [{ href: "/stock", label: "Stock", icon: "📦" }],
-    });
-  }
-  if (has("workshop")) {
-    groups.push({
-      key: "workshop",
-      label: "Workshop",
-      links: [
-        { href: "/workshop-calendar", label: "Workshop Cal", icon: "📅" },
-        // Contacts are shared with the workshop when CRM is off
-        ...(!has("crm") ? [{ href: "/contacts", label: "Contacts", icon: "☰" }] : []),
-        { href: "/vehicles", label: "Vehicles", icon: "⚡" },
-        { href: "/service-due", label: "Service Due", icon: "⏰" },
-        { href: "/warranty", label: "Warranty", icon: "🛡️" },
-        { href: "/jobcards", label: "Job Cards", icon: "🔧" },
-        { href: "/parts", label: "Parts", icon: "🔩" },
-      ],
-    });
-  }
-  if (isAdmin) {
-    groups.push({
-      key: "automation",
-      label: "Automation",
-      links: [
-        { href: "/automations", label: "Automations", icon: "⚡" },
-        { href: "/chatbot", label: "Chatbot", icon: "🤖" },
-        { href: "/bot-builder", label: "Flow builder", icon: "🎨" },
-      ],
-    });
-  }
-  return { topLinks, groups };
-}
-
+import { ChevronRight } from "lucide-react";
+import { buildNav, type NavLink } from "@/components/nav-config";
+import { cn } from "@/lib/utils";
 
 const STORAGE_KEY = "denago-nav-collapsed";
 
-function NavItem({ link, active }: { link: NavLink; active: boolean }) {
+function NavItem({ link, active, badge }: { link: NavLink; active: boolean; badge?: number }) {
+  const Icon = link.icon;
   return (
     <Link
       href={link.href}
-      className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+      className={cn(
+        "group relative flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] font-medium transition-colors",
         active
-          ? "bg-orange-600 text-white"
-          : "text-slate-300 hover:bg-slate-800 hover:text-white"
-      }`}
+          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+          : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+      )}
     >
-      <span className="w-4 text-center">{link.icon}</span>
-      {link.label}
+      {active && (
+        <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary" />
+      )}
+      <Icon
+        className={cn(
+          "size-[17px] shrink-0 transition-colors",
+          active
+            ? "text-primary"
+            : "text-muted-foreground group-hover:text-sidebar-accent-foreground"
+        )}
+        strokeWidth={2}
+      />
+      <span className="truncate">{link.label}</span>
+      {typeof badge === "number" && badge > 0 && (
+        <span
+          className="ml-auto inline-flex min-w-[18px] items-center justify-center rounded-full bg-primary px-1.5 py-px text-[10px] font-bold tabular-nums text-primary-foreground"
+          title={`${badge} waiting for a reply`}
+        >
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
     </Link>
   );
 }
@@ -105,14 +49,14 @@ function NavItem({ link, active }: { link: NavLink; active: boolean }) {
 export default function Nav({
   modules = "crm,workshop,reports,inbox",
   isAdmin = false,
+  badges = {},
 }: {
   modules?: string;
   isAdmin?: boolean;
+  /** href → count, e.g. { "/inbox": 2 } renders a pill on that item */
+  badges?: Record<string, number>;
 }) {
-  const { topLinks, groups } = buildNav(
-    new Set(modules.split(",").map((m) => m.trim()).filter(Boolean)),
-    isAdmin
-  );
+  const { topLinks, groups } = buildNav(modules, isAdmin);
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
@@ -137,41 +81,38 @@ export default function Nav({
   }
 
   return (
-    <nav className="space-y-1">
+    <nav className="space-y-0.5">
       {topLinks.map((l) => (
-        <NavItem key={l.href} link={l} active={isActive(l.href)} />
+        <NavItem key={l.href} link={l} active={isActive(l.href)} badge={badges[l.href]} />
       ))}
 
       {groups.map((group) => {
         const groupActive = group.links.some((l) => isActive(l.href));
-        // never hide the group that holds the current page
         const isCollapsed = collapsed[group.key] && !groupActive;
         return (
-          <div key={group.key} className="pt-2">
+          <div key={group.key} className="pt-3">
             <button
               onClick={() => toggle(group.key)}
-              className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] font-bold uppercase tracking-widest text-slate-500 hover:text-slate-300 cursor-pointer"
+              className="group flex w-full items-center gap-1 px-2.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground/60 transition-colors hover:text-muted-foreground"
             >
+              <ChevronRight
+                className={cn(
+                  "size-3 transition-transform duration-200",
+                  isCollapsed ? "" : "rotate-90"
+                )}
+              />
               {group.label}
-              <span
-                className={`text-[10px] transition-transform ${
-                  isCollapsed ? "-rotate-90" : ""
-                }`}
-              >
-                ▼
-              </span>
             </button>
             {!isCollapsed && (
               <div className="space-y-0.5">
                 {group.links.map((l) => (
-                  <NavItem key={l.href} link={l} active={isActive(l.href)} />
+                  <NavItem key={l.href} link={l} active={isActive(l.href)} badge={badges[l.href]} />
                 ))}
               </div>
             )}
           </div>
         );
       })}
-
     </nav>
   );
 }

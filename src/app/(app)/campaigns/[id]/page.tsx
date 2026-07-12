@@ -8,7 +8,7 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
   return (
     <div className="card">
       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="text-2xl font-bold mt-1">{value}</p>
+      <p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{value}</p>
       {sub && <p className="text-xs text-slate-500">{sub}</p>}
     </div>
   );
@@ -42,7 +42,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           ← Campaigns
         </Link>
         <div className="flex items-center gap-3 mt-1 flex-wrap">
-          <h1 className="text-2xl font-bold">{campaign.name}</h1>
+          <h1 className="text-2xl font-semibold tracking-[-0.035em]">{campaign.name}</h1>
           <span className="badge bg-slate-800 text-slate-300 uppercase">{campaign.channel}</span>
           <span className="badge bg-slate-800 text-slate-300">{campaign.status}</span>
         </div>

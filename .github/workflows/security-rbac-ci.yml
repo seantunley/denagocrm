@@ -1,0 +1,97 @@
+name: Security and RBAC validation
+
+on:
+  push:
+    branches:
+      - agent/security-rbac-complete
+  pull_request:
+    paths:
+      - "src/lib/auth.ts"
+      - "src/lib/session.ts"
+      - "src/lib/rateLimit.ts"
+      - "src/lib/userSecurity.ts"
+      - "src/lib/permissions.ts"
+      - "src/lib/audit.ts"
+      - "src/app/actions/accessControl.ts"
+      - "src/app/actions/security.ts"
+      - "src/app/actions/settings.ts"
+      - "src/app/login/actions.ts"
+      - "src/app/actions/portal.ts"
+      - "prisma/**"
+      - "scripts/test-security.ts"
+      - "scripts/verify-governance.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/security-rbac-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: denago
+          POSTGRES_PASSWORD: denago_test_password
+          POSTGRES_DB: denagocrm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U denago -d denagocrm_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://denago:denago_test_password@localhost:5432/denagocrm_test?schema=public
+      DATABASE_URL_UNPOOLED: postgresql://denago:denago_test_password@localhost:5432/denagocrm_test?schema=public
+      SESSION_SECRET: ci-session-secret-at-least-thirty-two-characters
+      RATE_LIMIT_PEPPER: ci-rate-limit-pepper-at-least-thirty-two-characters
+      SETTINGS_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      CRON_SECRET: ci-cron-secret
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      NODE_ENV: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate Prisma schema
+        run: npm run prisma:validate
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      - name: Apply migrations to isolated PostgreSQL
+        run: npm run prisma:migrate
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Production build
+        env:
+          NODE_ENV: production
+        run: npm run build
+
+      - name: Verify governance invariants
+        run: npm run verify:governance
+
+      - name: Run security integration tests
+        run: npm run test:security

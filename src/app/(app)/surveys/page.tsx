@@ -9,6 +9,7 @@ import {
   npsFromScores,
   surveyTypeLabel,
 } from "@/lib/surveyTypes";
+import { PageHeader } from "@/components/page-header";
 
 export const dynamic = "force-dynamic";
 
@@ -59,13 +60,7 @@ export default async function SurveysPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Surveys &amp; feedback</h1>
-        <p className="text-sm text-slate-400 mt-0.5">
-          Measure satisfaction — CSAT after a service, NPS loyalty, post-sale and ad-hoc surveys.
-          Answers land on the customer&apos;s timeline.
-        </p>
-      </div>
+      <PageHeader title="Surveys & feedback" description={`${totalCompleted} responses · ${responseRate}% response rate · CSAT, NPS and post-sale feedback.`} />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard label="Responses" value={String(totalCompleted)} sub={`${responseRate}% response rate`} />

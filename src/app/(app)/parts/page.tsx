@@ -1,7 +1,10 @@
 import { prisma } from "@/lib/db";
+import { Plus } from "lucide-react";
 import ModalTrigger from "@/components/Modal";
 import { formatZAR } from "@/lib/format";
 import { createPart, updatePart, adjustPartStock, deletePart } from "@/app/actions/parts";
+import { PageHeader } from "@/components/page-header";
+import { buttonVariants } from "@/components/ui/button";
 
 function PartFields({ p }: { p?: { name: string; sku: string | null; priceCents: number; costCents: number; reorderAt: number | null; location: string | null; notes: string | null; stockQty?: number } }) {
   return (
@@ -55,20 +58,14 @@ export default async function PartsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold">Parts</h1>
-          {lowCount > 0 && (
-            <p className="text-sm text-amber-400 mt-0.5">⚠ {lowCount} part{lowCount > 1 ? "s" : ""} at or below reorder level</p>
-          )}
-        </div>
-        <ModalTrigger label="+ New part" title="New part">
+      <PageHeader title="Parts" description={lowCount > 0 ? `${lowCount} part${lowCount === 1 ? "" : "s"} at or below reorder level` : "Workshop parts inventory is healthy."}>
+        <ModalTrigger label={<><Plus className="size-4" />New part</>} title="New part" buttonClass={buttonVariants({ size: "sm" })}>
           <form action={createPart} className="card space-y-3">
             <PartFields />
             <button className="btn-primary">Add part</button>
           </form>
         </ModalTrigger>
-      </div>
+      </PageHeader>
 
       <div className="card p-0 overflow-x-auto">
         <table className="table-base">

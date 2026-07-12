@@ -28,6 +28,7 @@ import ConfirmDelete from "@/components/ConfirmDelete";
 import ImportContactsForm from "@/components/ImportContactsForm";
 import PushToggle from "@/components/PushToggle";
 import SecurityPanel from "@/components/SecurityPanel";
+import PasskeyManager from "@/components/PasskeyManager";
 import OwnerUserControls from "@/components/OwnerUserControls";
 import { saveSessionPolicy } from "@/app/actions/security";
 import { saveImapSettings } from "@/app/actions/emails";
@@ -42,21 +43,61 @@ import AutomationsPage from "../automations/page";
 import ProductsPage from "../products/page";
 import LibraryPage from "../library/page";
 
-const TABS = [
-  { key: "pipeline", label: "Pipeline" },
-  { key: "account", label: "My Account" },
-  { key: "team", label: "Team" },
-  { key: "notifications", label: "Notifications" },
-  { key: "email", label: "Email" },
-  { key: "quotes", label: "Quotes" },
-  { key: "workshop", label: "Workshop" },
-  { key: "automations", label: "Automations" },
-  { key: "products", label: "Products" },
-  { key: "library", label: "Library" },
-  { key: "integrations", label: "Integrations" },
-  { key: "import", label: "Import" },
-  { key: "system", label: "System Log" },
-] as const;
+/**
+ * Grouped settings IA — related blocks live together instead of one long
+ * flat tab row. Keys are unchanged so existing content blocks (and any old
+ * ?tab= links) keep working.
+ */
+type SettingsTab = { key: string; label: string; href?: string };
+
+const NAV_GROUPS: { label: string; items: SettingsTab[] }[] = [
+  {
+    label: "You",
+    items: [
+      { key: "account", label: "My Account" },
+      { key: "notifications", label: "Notifications" },
+    ],
+  },
+  {
+    label: "CRM",
+    items: [
+      { key: "pipeline", label: "Pipeline" },
+      { key: "quotes", label: "Quotes" },
+      { key: "import", label: "Import" },
+    ],
+  },
+  {
+    label: "Workshop",
+    items: [{ key: "workshop", label: "Bookings & slots" }],
+  },
+  {
+    label: "Catalog",
+    items: [
+      { key: "products", label: "Products" },
+      { key: "library", label: "Library" },
+    ],
+  },
+  {
+    label: "Comms & Marketing",
+    items: [
+      { key: "email", label: "Email" },
+      { key: "automations", label: "Automations" },
+    ],
+  },
+  {
+    label: "Organisation",
+    items: [
+      { key: "team", label: "Team" },
+      { key: "documents", label: "Documents", href: "/settings/documents" },
+      { key: "security", label: "Security", href: "/settings/security" },
+      { key: "sessions", label: "Sessions & devices", href: "/settings/sessions" },
+      { key: "integrations", label: "Integrations" },
+      { key: "system", label: "System Log" },
+    ],
+  },
+];
+
+const TABS: SettingsTab[] = NAV_GROUPS.flatMap((g) => g.items);
 
 export default async function SettingsPage({
   searchParams,
@@ -93,28 +134,88 @@ export default async function SettingsPage({
   };
   const isOwner = isAdmin;
   const errorLogs = isAdmin && tab === "system"
-    ? await basePrisma.errorLog.findMany({ orderBy: { createdAt: "desc" }, take: 100 })
+    ? await basePrisma.errorLog.findMany({ orderBy: { createdAt: "desc" }, take: 500 })
+    : [];
+  // Collapse identical errors (same scope + message) into one row with an
+  // occurrence count and first/last-seen, so a crash-loop is one line, not 200.
+  const errorGroups = (() => {
+    const map = new Map<
+      string,
+      { scope: string; message: string; count: number; first: Date; last: Date; stack: string | null; context: string | null }
+    >();
+    // Signature groups near-identical crash-loops (same opening) while keeping
+    // genuinely different errors apart (e.g. two distinct prisma calls).
+    const signature = (msg: string) => msg.replace(/\s+/g, " ").trim().slice(0, 100);
+    for (const e of errorLogs) {
+      const key = `${e.scope}::${signature(e.message)}`;
+      const g = map.get(key);
+      if (!g) {
+        map.set(key, { scope: e.scope, message: e.message, count: 1, first: e.createdAt, last: e.createdAt, stack: e.stack, context: e.context });
+      } else {
+        g.count += 1;
+        if (e.createdAt < g.first) g.first = e.createdAt;
+        // errorLogs is newest-first, so the first-seen entry per key holds the latest stack
+      }
+    }
+    return [...map.values()].sort((a, b) => b.last.getTime() - a.last.getTime());
+  })();
+  const errorStats = {
+    total: errorLogs.length,
+    distinct: errorGroups.length,
+    last24h: errorLogs.filter((e) => e.createdAt.getTime() > Date.now() - 86_400_000).length,
+  };
+  const myPasskeys = tab === "account"
+    ? await prisma.passkey.findMany({
+        where: { userId: currentUser.id },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, nickname: true, createdAt: true, lastUsedAt: true },
+      })
     : [];
 
-  return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Settings</h1>
+  const visibleGroups = NAV_GROUPS.map((g) => ({
+    ...g,
+    items: g.items.filter((i) => visibleTabs.some((t) => t.key === i.key)),
+  })).filter((g) => g.items.length > 0);
 
-      <div className="flex gap-1 border-b border-slate-800 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {visibleTabs.map((t) => (
-          <Link
-            key={t.key}
-            href={`/settings?tab=${t.key}`}
-            className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 -mb-px transition-colors ${
-              tab === t.key
-                ? "border-orange-500 text-orange-400"
-                : "border-transparent text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            {t.label}
-          </Link>
-        ))}
+  return (
+    <div className="space-y-5">
+      <div>
+        <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
+        <p className="mt-0.5 text-sm text-muted-foreground">
+          Workspace configuration, grouped by area.
+        </p>
       </div>
+
+      <div className="flex flex-col gap-6 lg:flex-row">
+        {/* Grouped sub-nav: sidebar on desktop, scrolling strip on mobile */}
+        <aside className="shrink-0 lg:w-52">
+          <nav className="flex gap-4 overflow-x-auto pb-1 [scrollbar-width:none] lg:flex-col lg:gap-4 lg:overflow-visible [&::-webkit-scrollbar]:hidden">
+            {visibleGroups.map((g) => (
+              <div key={g.label} className="shrink-0">
+                <p className="mb-1 px-2 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+                  {g.label}
+                </p>
+                <div className="flex gap-0.5 lg:flex-col">
+                  {g.items.map((t) => (
+                    <Link
+                      key={t.key}
+                      href={t.href ?? `/settings?tab=${t.key}`}
+                      className={`whitespace-nowrap rounded-md px-2 py-[6px] text-[13px] font-medium transition-colors ${
+                        tab === t.key
+                          ? "bg-accent text-accent-foreground"
+                          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                      }`}
+                    >
+                      {t.label}
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </nav>
+        </aside>
+
+        <div className="min-w-0 flex-1 space-y-6">
 
       {tab === "pipeline" && (
         <div className="card">
@@ -215,6 +316,34 @@ export default async function SettingsPage({
                 <SecurityPanel
                   totpEnabled={Boolean(currentUser.totpEnabledAt)}
                   emailOtpEnabled={currentUser.emailOtpEnabled}
+                />
+              </div>
+            </details>
+
+            <details>
+              <summary className="flex items-center justify-between gap-4 px-5 py-4 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                <span className="text-sm font-medium flex items-center gap-2">
+                  Passkeys
+                  {myPasskeys.length > 0 ? (
+                    <span className="badge bg-emerald-500/15 text-emerald-300">
+                      {myPasskeys.length}
+                    </span>
+                  ) : (
+                    <span className="badge bg-slate-800 text-slate-400">None</span>
+                  )}
+                </span>
+                <span className="btn-secondary btn-sm">
+                  {myPasskeys.length > 0 ? "Manage" : "Set up"}
+                </span>
+              </summary>
+              <div className="px-5 pb-5">
+                <PasskeyManager
+                  passkeys={myPasskeys.map((p) => ({
+                    id: p.id,
+                    nickname: p.nickname,
+                    createdAt: p.createdAt.toISOString(),
+                    lastUsedAt: p.lastUsedAt ? p.lastUsedAt.toISOString() : null,
+                  }))}
                 />
               </div>
             </details>
@@ -421,11 +550,12 @@ export default async function SettingsPage({
       )}
 
       {tab === "system" && (
-        <div className="max-w-3xl space-y-4">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm text-slate-400">
-              System errors from syncs, webhooks, email/SMS and unhandled crashes. Auto-purged
-              after 30 days. A push fires on the first error in any 30-minute window.
+        <div className="w-full space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-sm text-slate-400 max-w-2xl">
+              System errors from syncs, webhooks, email/SMS and unhandled crashes. Identical errors
+              are grouped. Auto-purged after 30 days; a push fires on the first error in any
+              30-minute window.
             </p>
             {errorLogs.length > 0 && (
               <form action={clearErrorLog}>
@@ -433,29 +563,79 @@ export default async function SettingsPage({
               </form>
             )}
           </div>
-          <div className="card p-0 divide-y divide-slate-800">
-            {errorLogs.length === 0 ? (
+
+          {errorLogs.length > 0 && (
+            <div className="grid grid-cols-3 gap-3">
+              <div className="card py-3">
+                <p className="text-xs uppercase tracking-wide text-slate-400">Events</p>
+                <p className="text-2xl font-semibold tracking-[-0.03em] mt-0.5">{errorStats.total}</p>
+              </div>
+              <div className="card py-3">
+                <p className="text-xs uppercase tracking-wide text-slate-400">Distinct issues</p>
+                <p className="text-2xl font-semibold tracking-[-0.03em] mt-0.5">{errorStats.distinct}</p>
+              </div>
+              <div className="card py-3">
+                <p className="text-xs uppercase tracking-wide text-slate-400">Last 24h</p>
+                <p className={`text-2xl font-semibold tracking-[-0.03em] mt-0.5 ${errorStats.last24h > 0 ? "text-amber-300" : ""}`}>
+                  {errorStats.last24h}
+                </p>
+              </div>
+            </div>
+          )}
+
+          <div className="card p-0 overflow-x-auto">
+            {errorGroups.length === 0 ? (
               <p className="text-sm text-slate-400 p-5">No errors on record. 🎉</p>
             ) : (
-              errorLogs.map((e) => (
-                <details key={e.id}>
-                  <summary className="px-4 py-2.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden flex items-baseline gap-2">
-                    <span className="badge bg-red-500/15 text-red-300 shrink-0">{e.scope}</span>
-                    <span className="text-sm truncate flex-1">{e.message}</span>
-                    <span className="text-[11px] text-slate-500 shrink-0">
-                      {formatDateTime(e.createdAt)}
-                    </span>
-                  </summary>
-                  <div className="px-4 pb-3">
-                    {e.context && <p className="text-xs text-slate-400 mb-1">{e.context}</p>}
-                    {e.stack && (
-                      <pre className="text-[10px] text-slate-500 whitespace-pre-wrap max-h-40 overflow-y-auto">
-                        {e.stack}
-                      </pre>
-                    )}
-                  </div>
-                </details>
-              ))
+              <table className="table-base min-w-[720px]">
+                <thead>
+                  <tr>
+                    <th className="w-32">Scope</th>
+                    <th>Error</th>
+                    <th className="text-right w-20">Count</th>
+                    <th className="w-40">Last seen</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {errorGroups.map((g) => (
+                    <tr key={`${g.scope}::${g.message}`} className="align-top">
+                      <td className="w-32">
+                        <span className="badge bg-red-500/15 text-red-300">{g.scope}</span>
+                      </td>
+                      <td>
+                        <details>
+                          <summary className="cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-sm text-slate-200 hover:text-white">
+                            {g.message}
+                          </summary>
+                          <div className="mt-2 space-y-1">
+                            <p className="text-[11px] text-slate-500">
+                              {g.count > 1
+                                ? `${g.count} occurrences · first ${formatDateTime(g.first)} · last ${formatDateTime(g.last)}`
+                                : formatDateTime(g.last)}
+                            </p>
+                            {g.context && <p className="text-xs text-slate-400">{g.context}</p>}
+                            {g.stack && (
+                              <pre className="text-[10px] text-slate-500 whitespace-pre-wrap max-h-40 overflow-y-auto rounded bg-black/20 p-2">
+                                {g.stack}
+                              </pre>
+                            )}
+                          </div>
+                        </details>
+                      </td>
+                      <td className="text-right w-20">
+                        {g.count > 1 ? (
+                          <span className="badge bg-amber-500/15 text-amber-300 tabular-nums">×{g.count}</span>
+                        ) : (
+                          <span className="text-slate-500 tabular-nums">1</span>
+                        )}
+                      </td>
+                      <td className="w-40 text-[11px] text-slate-400 whitespace-nowrap">
+                        {relTime(g.last)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </div>
         </div>
@@ -1144,8 +1324,20 @@ export default async function SettingsPage({
           </div>
         </div>
       )}
+        </div>
+      </div>
     </div>
   );
+}
+
+/** Compact "3h ago" style relative time for the system log. */
+function relTime(d: Date): string {
+  const mins = Math.round((Date.now() - d.getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 48) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
 }
 
 /** One settings row: label + status left, action button right, form folds out below. */

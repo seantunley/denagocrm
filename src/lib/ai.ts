@@ -1,6 +1,7 @@
 import { getSetting } from "./settings";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
+import { recordAiUsage } from "./systemHealth";
 
 export async function isAiConfigured(): Promise<boolean> {
   return Boolean(await getSetting("ANTHROPIC_API_KEY"));
@@ -49,6 +50,7 @@ export async function aiCheckDraft(input: {
       return { error: `AI check failed (${res.status}).` };
     }
     const json = await res.json();
+    void recordAiUsage(json.usage);
     const content: string = json.content?.[0]?.text ?? "{}";
     const match = content.match(/\{[\s\S]*\}/);
     const parsed = JSON.parse(match ? match[0] : "{}");
@@ -112,6 +114,7 @@ export async function aiResearch(input: {
       return { error: `Research failed (${res.status}).` };
     }
     const json = await res.json();
+    void recordAiUsage(json.usage);
     const summary = (json.content ?? [])
       .filter((b: { type: string }) => b.type === "text")
       .map((b: { text: string }) => b.text)

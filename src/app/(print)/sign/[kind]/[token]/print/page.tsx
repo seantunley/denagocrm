@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import QuotePrintDoc from "@/components/print/QuotePrintDoc";
+import { getDocTemplate } from "@/lib/docTemplateStore";
 
 export const metadata = { robots: { index: false } };
 
@@ -22,5 +23,5 @@ export default async function TokenPrintPage({
   });
   if (!quote) notFound();
 
-  return <QuotePrintDoc quote={quote} />;
+  return <QuotePrintDoc quote={quote} template={await getDocTemplate("quote")} />;
 }

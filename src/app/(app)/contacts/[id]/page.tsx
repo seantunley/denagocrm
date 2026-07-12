@@ -106,7 +106,7 @@ export default async function ContactDetailPage({
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-bold">{contactName(contact)}</h1>
+            <h1 className="text-2xl font-semibold tracking-[-0.035em]">{contactName(contact)}</h1>
             <span
               className={`badge ${healthColors[health.tier]}`}
               title={health.reasons.join(" · ") || "No signals yet"}
@@ -364,7 +364,7 @@ export default async function ContactDetailPage({
                         {contact.firstName}&apos;s referral code
                       </p>
                       <div className="flex items-center gap-2">
-                        <code className="text-xl font-bold tracking-widest text-orange-400 bg-slate-800 rounded-lg px-4 py-2">
+                        <code className="text-xl font-semibold tracking-[-0.025em] tracking-widest text-orange-400 bg-slate-800 rounded-lg px-4 py-2">
                           {referralCode}
                         </code>
                         <CopyButton text={referralCode} />

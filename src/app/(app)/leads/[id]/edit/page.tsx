@@ -25,7 +25,7 @@ export default async function EditLeadPage({
 
   return (
     <div className="space-y-5">
-      <h1 className="text-2xl font-bold">Edit lead</h1>
+      <h1 className="text-2xl font-semibold tracking-[-0.035em]">Edit lead</h1>
       <LeadForm
         action={updateLead.bind(null, lead.id)}
         products={products.map((p) => ({

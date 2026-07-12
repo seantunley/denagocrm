@@ -1,345 +1,360 @@
-import { subDays, subMonths, startOfMonth, format } from "date-fns";
+import {
+  addDays,
+  differenceInCalendarDays,
+  format,
+  startOfMonth,
+  startOfQuarter,
+  startOfYear,
+  subDays,
+  subMonths,
+} from "date-fns";
+import { TrendingDown, TrendingUp } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
-import Tabs from "@/components/Tabs";
-import { formatZAR, formatZARCompact } from "@/lib/format";
+import { formatZARCompact } from "@/lib/format";
+import { PageHeader } from "@/components/page-header";
+import ReportFilters from "@/components/reports/ReportFilters";
+import {
+  ChartCard,
+  TrendChart,
+  FunnelChart,
+  SourcesChart,
+  TeamChart,
+  ServiceChart,
+  type TrendPoint,
+  type FunnelRow,
+  type SourceRow,
+  type TeamRow,
+  type ServicePoint,
+} from "@/components/reports/ReportCharts";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
-function Bar({ value, max, color = "bg-orange-600" }: { value: number; max: number; color?: string }) {
-  const pct = max > 0 ? Math.max(2, Math.round((value / max) * 100)) : 0;
+export const dynamic = "force-dynamic";
+
+/* ── date range from the URL ──────────────────────────────────────── */
+
+function resolveRange(params: Record<string, string | undefined>) {
+  const now = new Date();
+  const range = params.range ?? "mtd";
+  let from: Date;
+  let to = now;
+  switch (range) {
+    case "30d": from = subDays(now, 30); break;
+    case "qtr": from = startOfQuarter(now); break;
+    case "ytd": from = startOfYear(now); break;
+    case "12m": from = subMonths(now, 12); break;
+    case "custom": {
+      const f = params.from ? new Date(params.from) : startOfMonth(now);
+      const t = params.to ? addDays(new Date(params.to), 1) : now;
+      from = isNaN(f.getTime()) ? startOfMonth(now) : f;
+      to = isNaN(t.getTime()) ? now : t;
+      break;
+    }
+    default: from = startOfMonth(now);
+  }
+  const lengthMs = Math.max(86400000, to.getTime() - from.getTime());
+  const prevFrom = new Date(from.getTime() - lengthMs);
+  return { from, to, prevFrom, prevTo: from };
+}
+
+/* ── time buckets for trend charts ────────────────────────────────── */
+
+type Bucket = { start: Date; end: Date; label: string };
+
+function makeBuckets(from: Date, to: Date): Bucket[] {
+  const days = Math.max(1, differenceInCalendarDays(to, from));
+  const stepDays = days <= 31 ? 1 : days <= 126 ? 7 : 30.44;
+  const fmt = days <= 126 ? "d MMM" : "MMM yy";
+  const buckets: Bucket[] = [];
+  let cursor = from;
+  while (cursor < to) {
+    const end = new Date(Math.min(cursor.getTime() + stepDays * 86400000, to.getTime()));
+    buckets.push({ start: cursor, end, label: format(cursor, fmt) });
+    cursor = end;
+  }
+  return buckets;
+}
+
+const countIn = (buckets: Bucket[], dates: Date[]) =>
+  buckets.map((b) => dates.filter((d) => d >= b.start && d < b.end).length);
+
+/* ── source palette ───────────────────────────────────────────────── */
+
+const SOURCE_COLORS: Record<string, string> = {
+  facebook: "var(--chart-2)",
+  instagram: "var(--chart-4)",
+  website: "var(--chart-1)",
+  whatsapp: "var(--chart-3)",
+  referral: "var(--chart-5)",
+  manual: "oklch(0.55 0.01 264)",
+};
+
+/* ── stat card with delta ─────────────────────────────────────────── */
+
+function StatCard({
+  label,
+  value,
+  delta,
+  compare,
+}: {
+  label: string;
+  value: string;
+  delta: number | null;
+  compare: string;
+}) {
+  const up = (delta ?? 0) >= 0;
   return (
-    <div className="h-2.5 rounded-full bg-slate-800 overflow-hidden">
-      <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+    <div className="min-w-0 rounded-xl border border-border bg-card p-4 shadow-sm">
+      <p className="truncate text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        {label}
+      </p>
+      <div className="mt-1 flex items-baseline justify-between gap-2">
+        <p className="truncate text-2xl font-semibold tabular-nums text-foreground">{value}</p>
+        {delta !== null && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className={cn(
+                  "flex shrink-0 cursor-default items-center gap-0.5 rounded-md px-1.5 py-0.5 text-xs font-medium tabular-nums",
+                  up ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
+                )}
+              >
+                {up ? <TrendingUp className="size-3" /> : <TrendingDown className="size-3" />}
+                {Math.abs(delta)}%
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>vs previous period ({compare})</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
     </div>
   );
 }
 
-export default async function ReportsPage() {
+const pct = (cur: number, prev: number): number | null =>
+  prev === 0 ? (cur > 0 ? 100 : null) : Math.round(((cur - prev) / prev) * 100);
+
+/* ── page ─────────────────────────────────────────────────────────── */
+
+export default async function ReportsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | undefined>>;
+}) {
   await requireUser();
-  const now = new Date();
-  const d90 = subDays(now, 90);
-  const thisMonth = startOfMonth(now);
+  const params = await searchParams;
+  const { from, to, prevFrom, prevTo } = resolveRange(params);
 
-  const [leads90, openLeads, stages, quotes, completedJobCards, wonAll, srcTotals, srcWon] =
-    await Promise.all([
-      prisma.lead.findMany({
-        where: { createdAt: { gte: d90 } },
-        include: { product: true },
-      }),
-      prisma.lead.findMany({ where: { status: "open" }, include: { stage: true } }),
-      prisma.pipelineStage.findMany({ orderBy: { order: "asc" } }),
-      prisma.quote.findMany({ include: { items: true } }),
-      prisma.jobCard.findMany({
-        where: { status: "completed", completedAt: { gte: subMonths(thisMonth, 5) } },
-        include: { items: true },
-      }),
-      prisma.lead.findMany({ where: { status: "won" }, include: { product: true } }),
-      prisma.lead.groupBy({ by: ["source"], _count: true }),
-      prisma.lead.groupBy({
-        by: ["source"],
-        where: { status: "won" },
-        _count: true,
-        _sum: { valueCents: true },
-      }),
-    ]);
+  // Lead-level filters shared by every lead query
+  const leadFilter = {
+    ...(params.user ? { assignedToId: params.user } : {}),
+    ...(params.product ? { productId: params.product } : {}),
+    ...(params.source ? { source: params.source } : {}),
+  };
 
-  // Source performance / ROI (all time): conversion + value per channel
-  const sourcePerf = srcTotals
-    .map((t) => {
-      const w = srcWon.find((x) => x.source === t.source);
-      const won = w?._count ?? 0;
-      const value = w?._sum.valueCents ?? 0;
-      return {
-        source: t.source,
-        total: t._count,
-        won,
-        conv: t._count > 0 ? Math.round((won / t._count) * 100) : 0,
-        value,
-        avg: won > 0 ? Math.round(value / won) : 0,
-      };
-    })
-    .sort((a, b) => b.value - a.value || b.total - a.total);
+  const [
+    leadsInRange,
+    prevLeads,
+    wonInRange,
+    prevWon,
+    lostInRange,
+    prevLost,
+    openLeads,
+    jobsInRange,
+    users,
+    products,
+    allSources,
+  ] = await Promise.all([
+    prisma.lead.findMany({
+      where: { ...leadFilter, createdAt: { gte: from, lt: to } },
+      select: { createdAt: true, source: true, status: true },
+    }),
+    prisma.lead.findMany({
+      where: { ...leadFilter, createdAt: { gte: prevFrom, lt: prevTo } },
+      select: { createdAt: true },
+    }),
+    // Won date isn't stored separately; updatedAt is when the deal was marked won.
+    prisma.lead.findMany({
+      where: { ...leadFilter, status: "won", updatedAt: { gte: from, lt: to } },
+      select: {
+        updatedAt: true,
+        valueCents: true,
+        source: true,
+        assignedTo: { select: { name: true } },
+      },
+    }),
+    prisma.lead.findMany({
+      where: { ...leadFilter, status: "won", updatedAt: { gte: prevFrom, lt: prevTo } },
+      select: { valueCents: true },
+    }),
+    prisma.lead.count({
+      where: { ...leadFilter, status: "lost", updatedAt: { gte: from, lt: to } },
+    }),
+    prisma.lead.count({
+      where: { ...leadFilter, status: "lost", updatedAt: { gte: prevFrom, lt: prevTo } },
+    }),
+    prisma.lead.findMany({
+      where: { ...leadFilter, status: "open" },
+      select: {
+        valueCents: true,
+        stage: { select: { id: true, name: true, color: true, order: true } },
+      },
+    }),
+    prisma.jobCard.findMany({
+      where: { status: "completed", completedAt: { gte: from, lt: to } },
+      select: { completedAt: true },
+    }),
+    prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    prisma.product.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    prisma.lead.groupBy({ by: ["source"] }),
+  ]);
 
-  // Pipeline by stage
-  const stageRows = stages.map((s) => {
-    const inStage = openLeads.filter((l) => l.stageId === s.id);
+  /* Trend */
+  const buckets = makeBuckets(from, to);
+  const prevBuckets = makeBuckets(prevFrom, prevTo);
+  const leadCounts = countIn(buckets, leadsInRange.map((l) => l.createdAt));
+  const prevCounts = countIn(prevBuckets, prevLeads.map((l) => l.createdAt));
+  const trend: TrendPoint[] = buckets.map((b, i) => {
+    const wonHere = wonInRange.filter((w) => w.updatedAt >= b.start && w.updatedAt < b.end);
     return {
-      name: s.name,
-      color: s.color,
-      count: inStage.length,
-      value: inStage.reduce((sum, l) => sum + l.valueCents, 0),
+      label: b.label,
+      leads: leadCounts[i],
+      won: wonHere.length,
+      wonValue: Math.round(wonHere.reduce((s, w) => s + w.valueCents, 0) / 100),
+      prevLeads: prevCounts[i] ?? null,
     };
   });
-  const maxStage = Math.max(1, ...stageRows.map((r) => r.value));
 
-  // Won / lost
-  const won90 = leads90.filter((l) => l.status === "won");
-  const lost90 = leads90.filter((l) => l.status === "lost");
-  const closed90 = won90.length + lost90.length;
-  const winRate = closed90 > 0 ? Math.round((won90.length / closed90) * 100) : null;
-  const wonValue90 = won90.reduce((s, l) => s + l.valueCents, 0);
-
-  const lostReasons = new Map<string, number>();
-  for (const l of lost90) {
-    const r = l.lostReason?.trim() || "No reason recorded";
-    lostReasons.set(r, (lostReasons.get(r) ?? 0) + 1);
+  /* Funnel (current pipeline, date-independent) */
+  const stageMap = new Map<string, FunnelRow & { order: number }>();
+  for (const l of openLeads) {
+    const cur =
+      stageMap.get(l.stage.id) ??
+      { name: l.stage.name, count: 0, value: 0, color: l.stage.color, order: l.stage.order };
+    cur.count += 1;
+    cur.value += Math.round(l.valueCents / 100);
+    stageMap.set(l.stage.id, cur);
   }
-  const lostRows = [...lostReasons.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
+  const funnel = [...stageMap.values()].sort((a, b) => a.order - b.order);
 
-  // Sales by model (all time, won leads)
-  const byModel = new Map<string, { count: number; value: number }>();
-  for (const l of wonAll) {
-    const key = l.product?.name ?? "Other / unspecified";
-    const m = byModel.get(key) ?? { count: 0, value: 0 };
-    m.count++;
-    m.value += l.valueCents;
-    byModel.set(key, m);
+  /* Sources */
+  const srcMap = new Map<string, SourceRow>();
+  for (const l of leadsInRange) {
+    const cur =
+      srcMap.get(l.source) ??
+      { name: l.source, leads: 0, won: 0, color: SOURCE_COLORS[l.source] ?? "var(--chart-5)" };
+    cur.leads += 1;
+    if (l.status === "won") cur.won += 1;
+    srcMap.set(l.source, cur);
   }
-  const modelRows = [...byModel.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, 8);
-  const maxModel = Math.max(1, ...modelRows.map(([, v]) => v.count));
+  const sources = [...srcMap.values()].sort((a, b) => b.leads - a.leads);
 
-  // Quotes — superseded versions don't count; only the latest of each chain
-  const quoteCounts = { draft: 0, sent: 0, accepted: 0, declined: 0 };
-  let acceptedValue = 0;
-  for (const q of quotes) {
-    if (q.supersededAt) continue;
-    quoteCounts[q.status as keyof typeof quoteCounts] =
-      (quoteCounts[q.status as keyof typeof quoteCounts] ?? 0) + 1;
-    if (q.status === "accepted")
-      acceptedValue += q.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+  /* Team */
+  const teamMap = new Map<string, TeamRow>();
+  for (const w of wonInRange) {
+    const name = w.assignedTo?.name ?? "Unassigned";
+    const cur = teamMap.get(name) ?? { name, won: 0, wonValue: 0 };
+    cur.won += 1;
+    cur.wonValue += Math.round(w.valueCents / 100);
+    teamMap.set(name, cur);
   }
-  const decided = quoteCounts.accepted + quoteCounts.declined;
-  const quoteRate = decided > 0 ? Math.round((quoteCounts.accepted / decided) * 100) : null;
+  const team = [...teamMap.values()].sort((a, b) => b.wonValue - a.wonValue);
 
-  // Workshop revenue by month (last 6 months)
-  const workshopMonths: { label: string; value: number; count: number }[] = [];
-  for (let i = 5; i >= 0; i--) {
-    const mStart = subMonths(thisMonth, i);
-    const mEnd = subMonths(thisMonth, i - 1);
-    const inMonth = completedJobCards.filter(
-      (j) => j.completedAt && j.completedAt >= mStart && j.completedAt < mEnd
-    );
-    workshopMonths.push({
-      label: format(mStart, "MMM"),
-      count: inMonth.length,
-      value: inMonth.reduce(
-        (s, j) => s + j.items.reduce((si, it) => si + it.qty * it.unitPriceCents, 0),
-        0
-      ),
-    });
-  }
-  const maxWorkshop = Math.max(1, ...workshopMonths.map((m) => m.value));
+  /* Service */
+  const service: ServicePoint[] = buckets.map((b) => ({
+    label: b.label,
+    services: jobsInRange.filter((j) => j.completedAt! >= b.start && j.completedAt! < b.end).length,
+  }));
 
-  const workshopRevenue6mo = workshopMonths.reduce((s2, m) => s2 + m.value, 0);
-  const workshopJobs6mo = workshopMonths.reduce((s2, m) => s2 + m.count, 0);
-  const avgJobValue = workshopJobs6mo > 0 ? workshopRevenue6mo / workshopJobs6mo : 0;
-  const thisMonthShop = workshopMonths[workshopMonths.length - 1];
+  /* Stats + deltas */
+  const wonValue = wonInRange.reduce((s, w) => s + w.valueCents, 0);
+  const prevWonValue = prevWon.reduce((s, w) => s + w.valueCents, 0);
+  const closed = wonInRange.length + lostInRange;
+  const prevClosed = prevWon.length + prevLost;
+  const winRate = closed ? Math.round((wonInRange.length / closed) * 100) : 0;
+  const prevWinRate = prevClosed ? Math.round((prevWon.length / prevClosed) * 100) : 0;
+  const compare = `${format(prevFrom, "d MMM")} – ${format(prevTo, "d MMM")}`;
+  const filtered = !!(params.user || params.product || params.source);
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Reports</h1>
-
-      <Tabs
-        tabs={[
-          {
-            key: "sales",
-            label: "Sales",
-            content: (
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <StatCard
-                    label="Leads (90 days)"
-                    value={String(leads90.filter((l) => l.status !== "lost").length)}
-                    sub={lost90.length ? `${lost90.length} lost (in win rate)` : undefined}
-                  />
-                  <StatCard
-                    label="Win rate (90 days)"
-                    value={winRate != null ? `${winRate}%` : "—"}
-                    sub={`${won90.length} won · ${lost90.length} lost`}
-                  />
-                  <StatCard label="Sales value (90 days)" value={formatZARCompact(wonValue90)} />
-                  <StatCard
-                    label="Quote acceptance"
-                    value={quoteRate != null ? `${quoteRate}%` : "—"}
-                    sub={`${quoteCounts.accepted} accepted · ${formatZAR(Math.round(acceptedValue))}`}
-                  />
-                </div>
-
-                <div className="grid lg:grid-cols-2 gap-4">
-                  <div className="card p-4 lg:col-span-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">
-                      Lead source performance (all time)
-                    </p>
-                    {sourcePerf.length === 0 ? (
-                      <p className="text-sm text-slate-400">No leads yet.</p>
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <table className="table-base">
-                          <thead>
-                            <tr>
-                              <th>Source</th>
-                              <th className="text-right">Leads</th>
-                              <th className="text-right">Won</th>
-                              <th className="text-right">Conversion</th>
-                              <th className="text-right">Sales value</th>
-                              <th className="text-right">Avg deal</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {sourcePerf.map((r) => (
-                              <tr key={r.source}>
-                                <td className="capitalize font-medium">{r.source}</td>
-                                <td className="text-right">{r.total}</td>
-                                <td className="text-right">{r.won}</td>
-                                <td className="text-right">
-                                  <span
-                                    className={
-                                      r.conv >= 30
-                                        ? "text-emerald-400"
-                                        : r.conv >= 10
-                                        ? "text-amber-400"
-                                        : "text-slate-400"
-                                    }
-                                  >
-                                    {r.conv}%
-                                  </span>
-                                </td>
-                                <td className="text-right">{r.value ? formatZAR(r.value) : "—"}</td>
-                                <td className="text-right text-slate-400">
-                                  {r.avg ? formatZAR(r.avg) : "—"}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="card p-4">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">
-                      Open pipeline by stage
-                    </p>
-                    <div className="space-y-2.5">
-                      {stageRows.map((r) => (
-                        <div key={r.name}>
-                          <div className="flex justify-between text-sm mb-0.5">
-                            <span className="flex items-center gap-2">
-                              <span
-                                className="h-2 w-2 rounded-full"
-                                style={{ backgroundColor: r.color }}
-                              />
-                              {r.name}
-                            </span>
-                            <span className="text-slate-400 text-xs">
-                              {r.count} · {formatZAR(r.value)}
-                            </span>
-                          </div>
-                          <Bar value={r.value} max={maxStage} />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="card p-4">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">
-                      Sales by model (all time)
-                    </p>
-                    {modelRows.length === 0 ? (
-                      <p className="text-sm text-slate-400">No sales recorded yet.</p>
-                    ) : (
-                      <div className="space-y-2.5">
-                        {modelRows.map(([model, v]) => (
-                          <div key={model}>
-                            <div className="flex justify-between text-sm mb-0.5">
-                              <span className="truncate">{model}</span>
-                              <span className="text-slate-400 text-xs">
-                                {v.count} · {formatZAR(v.value)}
-                              </span>
-                            </div>
-                            <Bar value={v.count} max={maxModel} color="bg-emerald-600" />
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="card p-4">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">
-                      Why leads are lost (90 days)
-                    </p>
-                    {lostRows.length === 0 ? (
-                      <p className="text-sm text-slate-400">No lost leads — long may it last.</p>
-                    ) : (
-                      <ul>
-                        {lostRows.map(([reason, count]) => (
-                          <li
-                            key={reason}
-                            className="flex justify-between text-sm border-b border-slate-800/60 py-1.5 last:border-0"
-                          >
-                            <span className="truncate">{reason}</span>
-                            <span className="text-slate-400 ml-4">{count}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ),
-          },
-          {
-            key: "service",
-            label: "Service",
-            content: (
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <StatCard
-                    label="Workshop revenue (6 mo)"
-                    value={formatZARCompact(Math.round(workshopRevenue6mo))}
-                  />
-                  <StatCard label="Jobs completed (6 mo)" value={String(workshopJobs6mo)} />
-                  <StatCard label="Avg job value" value={formatZARCompact(Math.round(avgJobValue))} />
-                  <StatCard
-                    label="This month"
-                    value={formatZARCompact(Math.round(thisMonthShop?.value ?? 0))}
-                    sub={`${thisMonthShop?.count ?? 0} job${(thisMonthShop?.count ?? 0) !== 1 ? "s" : ""} completed`}
-                  />
-                </div>
-
-                <div className="card p-4 max-w-3xl">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">
-                    Workshop revenue by month
-                  </p>
-                  <div className="space-y-2.5">
-                    {workshopMonths.map((mo) => (
-                      <div key={mo.label}>
-                        <div className="flex justify-between text-sm mb-0.5">
-                          <span>{mo.label}</span>
-                          <span className="text-slate-400 text-xs">
-                            {mo.count} job{mo.count !== 1 ? "s" : ""} ·{" "}
-                            {formatZAR(Math.round(mo.value))}
-                          </span>
-                        </div>
-                        <Bar value={mo.value} max={maxWorkshop} color="bg-blue-600" />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ),
-          },
-        ]}
+      <PageHeader
+        title="Reports"
+        description={`${format(from, "d MMM yyyy")} – ${format(to, "d MMM yyyy")}`}
       />
-    </div>
-  );
-}
 
-function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="card min-w-0">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 truncate">{label}</p>
-      <p className="text-2xl font-bold mt-1 truncate" title={value}>{value}</p>
-      {sub && <p className="text-xs text-slate-500">{sub}</p>}
+      <ReportFilters
+        options={{ users, products, sources: allSources.map((s) => s.source).sort() }}
+      />
+
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatCard
+          label="New leads"
+          value={String(leadsInRange.length)}
+          delta={pct(leadsInRange.length, prevLeads.length)}
+          compare={compare}
+        />
+        <StatCard
+          label="Deals won"
+          value={String(wonInRange.length)}
+          delta={pct(wonInRange.length, prevWon.length)}
+          compare={compare}
+        />
+        <StatCard
+          label="Won value"
+          value={formatZARCompact(wonValue)}
+          delta={pct(wonValue, prevWonValue)}
+          compare={compare}
+        />
+        <StatCard
+          label="Win rate"
+          value={`${winRate}%`}
+          delta={prevClosed || closed ? winRate - prevWinRate : null}
+          compare={compare}
+        />
+      </div>
+
+      <ChartCard
+        title="Sales trend"
+        subtitle="New leads (line) and won deal value (bars) — dashed line is the previous period"
+      >
+        <TrendChart data={trend} />
+      </ChartCard>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <ChartCard
+          title="Pipeline right now"
+          subtitle={
+            filtered
+              ? "Open leads by stage (filters applied — date range doesn't apply here)"
+              : "Open leads by stage (date range doesn't apply here)"
+          }
+        >
+          <FunnelChart data={funnel} />
+        </ChartCard>
+        <ChartCard title="Lead sources" subtitle="Share of leads in period, with win rate per channel">
+          <SourcesChart data={sources} />
+        </ChartCard>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <ChartCard title="Team performance" subtitle="Value of deals won in period, per team member">
+          {team.length ? (
+            <TeamChart data={team} />
+          ) : (
+            <p className="py-8 text-center text-xs text-muted-foreground/70">
+              No deals won in this period.
+            </p>
+          )}
+        </ChartCard>
+        <ChartCard
+          title="Workshop"
+          subtitle="Job cards completed per period (team/product filters don't apply)"
+        >
+          <ServiceChart data={service} />
+        </ChartCard>
+      </div>
     </div>
   );
 }

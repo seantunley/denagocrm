@@ -1,65 +1,203 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import Image from "next/image";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
+import {
+  Menu,
+  Search,
+  Settings,
+  Trash2,
+  LogOut,
+  ChevronsUpDown,
+} from "lucide-react";
+import Nav from "@/components/Nav";
 import ClockWeather from "@/components/ClockWeather";
+import CommandMenu, { openCommandMenu } from "@/components/CommandMenu";
+import QuickActions from "@/components/QuickActions";
+import QuickCreateDialog from "@/components/QuickCreateDialog";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { logout } from "@/app/login/actions";
+import { APP_VERSION } from "@/lib/version";
 
-export default function AppShell({
-  sidebar,
-  children,
-}: {
-  sidebar: ReactNode;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  const pathname = usePathname();
+type ShellUser = { name: string; role: string; modules: string };
 
-  // close the drawer on navigation
-  useEffect(() => setOpen(false), [pathname]);
+function initials(name: string) {
+  return name
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase() ?? "")
+    .join("");
+}
 
+function SidebarInner({ user, inboxWaiting = 0 }: { user: ShellUser; inboxWaiting?: number }) {
+  const isOwner = user.role === "owner";
   return (
-    <div className="min-h-screen">
-      {/* Mobile top bar */}
-      <header className="lg:hidden fixed top-0 inset-x-0 z-40 flex items-center gap-3 bg-slate-900 border-b border-slate-800 px-4 h-14">
-        <button
-          onClick={() => setOpen(true)}
-          aria-label="Open menu"
-          className="text-slate-200 text-2xl leading-none cursor-pointer"
-        >
-          ☰
-        </button>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+    <div className="relative flex h-full flex-col overflow-hidden bg-sidebar">
+      <div className="pointer-events-none absolute -left-28 top-24 size-64 rounded-full bg-orange-500/[0.055] blur-3xl" />
+      {/* Brand */}
+      <div className="flex h-16 items-center border-b border-sidebar-border px-4">
+        <Image
           src="/branding/denago-cape-town-logo.png"
           alt="Denago Cape Town"
+          width={230}
+          height={58}
+          className="h-8 w-auto object-contain"
+        />
+      </div>
+
+      {/* Command trigger + quick actions */}
+      <div className="relative space-y-2 px-3 pt-3">
+        <button
+          onClick={openCommandMenu}
+          className="flex w-full items-center gap-2 rounded-md border border-sidebar-border bg-sidebar-accent/40 px-2.5 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+        >
+          <Search className="size-4" />
+          <span className="flex-1 text-left">Search…</span>
+          <kbd className="rounded border border-sidebar-border bg-background/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            ⌘K
+          </kbd>
+        </button>
+        <QuickActions modules={user.modules} isAdmin={isOwner} />
+      </div>
+
+      {/* Nav */}
+      <div className="relative flex-1 overflow-y-auto px-3 py-3">
+        <Nav modules={user.modules} isAdmin={isOwner} badges={{ "/inbox": inboxWaiting }} />
+      </div>
+
+      {/* User */}
+      <div className="border-t border-sidebar-border p-3">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent">
+              <Avatar className="size-7 rounded-md">
+                <AvatarFallback className="rounded-md bg-primary/15 text-[11px] font-semibold text-primary">
+                  {initials(user.name)}
+                </AvatarFallback>
+              </Avatar>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[13px] font-medium text-sidebar-foreground">
+                  {user.name}
+                </p>
+                <p className="truncate text-[11px] capitalize text-muted-foreground">
+                  {user.role}
+                </p>
+              </div>
+              <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" side="top" className="w-[13.5rem]">
+            <DropdownMenuLabel className="text-muted-foreground">
+              v{APP_VERSION}
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link href="/settings">
+                <Settings className="size-4" />
+                Settings
+              </Link>
+            </DropdownMenuItem>
+            {isOwner && (
+              <DropdownMenuItem asChild>
+                <Link href="/trash">
+                  <Trash2 className="size-4" />
+                  Trash
+                </Link>
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={() => logout()}>
+              <LogOut className="size-4" />
+              Sign out
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </div>
+  );
+}
+
+export default function AppShell({
+  user,
+  inboxWaiting = 0,
+  children,
+}: {
+  user: ShellUser;
+  inboxWaiting?: number;
+  children: ReactNode;
+}) {
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const pathname = usePathname();
+
+  return (
+    <TooltipProvider delayDuration={250}>
+    <div className="min-h-screen">
+      <CommandMenu modules={user.modules} isAdmin={user.role === "owner"} />
+      <QuickCreateDialog />
+      <Toaster />
+
+      {/* Mobile top bar */}
+      <header className="fixed inset-x-0 top-0 z-40 flex h-14 items-center gap-3 border-b border-sidebar-border bg-sidebar/90 px-4 backdrop-blur-xl lg:hidden">
+        <button
+          onClick={() => setMobileOpen(true)}
+          aria-label="Open menu"
+          className="-ml-2 flex size-10 items-center justify-center rounded-lg text-sidebar-foreground transition hover:bg-sidebar-accent"
+        >
+          <Menu className="size-5" />
+        </button>
+        <Image
+          src="/branding/denago-cape-town-logo.png"
+          alt="Denago Cape Town"
+          width={230}
+          height={58}
           className="h-6 w-auto object-contain"
         />
+        <button
+          onClick={openCommandMenu}
+          aria-label="Search"
+          className="-mr-2 ml-auto flex size-10 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-sidebar-accent hover:text-foreground"
+        >
+          <Search className="size-5" />
+        </button>
       </header>
 
-      {/* Drawer overlay (mobile) */}
-      {open && (
-        <div
-          className="lg:hidden fixed inset-0 z-40 bg-black/60"
-          onClick={() => setOpen(false)}
-        />
-      )}
+      {/* Mobile drawer */}
+      <Sheet key={pathname} open={mobileOpen} onOpenChange={setMobileOpen}>
+        <SheetContent side="left" className="w-72 border-sidebar-border p-0">
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
+          <SidebarInner user={user} inboxWaiting={inboxWaiting} />
+        </SheetContent>
+      </Sheet>
 
-      {/* Sidebar: static on desktop, slide-in drawer on mobile */}
-      <aside
-        className={`fixed inset-y-0 left-0 z-50 w-64 lg:w-56 bg-slate-900 border-r border-slate-800 flex flex-col transform transition-transform duration-200 lg:translate-x-0 ${
-          open ? "translate-x-0" : "-translate-x-full"
-        }`}
-      >
-        {sidebar}
+      {/* Desktop sidebar */}
+      <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 border-r border-sidebar-border lg:flex lg:flex-col">
+        <SidebarInner user={user} inboxWaiting={inboxWaiting} />
       </aside>
 
-      <main className="lg:ml-56 p-4 pt-[4.5rem] lg:p-8 lg:pt-8">
-        {/* Hidden on phones — the strip is desk/wall-display furniture */}
-        <div className="mb-4 hidden sm:block">
-          <ClockWeather />
+      <main className="relative lg:pl-60">
+        <div className="pointer-events-none fixed inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(circle_at_65%_0%,rgba(249,115,22,.045),transparent_42%)] lg:left-60" />
+        <div className="denago-workspace mx-auto max-w-[1800px] p-4 pt-[4.5rem] lg:p-7 lg:pt-6">
+          {/* Desktop-only furniture — takes real estate on phones */}
+          <div className="mb-5 hidden lg:block">
+            <ClockWeather />
+          </div>
+          {children}
         </div>
-        {children}
       </main>
     </div>
+    </TooltipProvider>
   );
 }

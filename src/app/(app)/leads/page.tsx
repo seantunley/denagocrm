@@ -1,11 +1,14 @@
 import Link from "next/link";
+import { Plus, List, Trophy } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { getDailyForecast } from "@/lib/weather";
 import KanbanBoard, { type KanbanStage } from "@/components/KanbanBoard";
 import ModalTrigger from "@/components/Modal";
 import LeadForm from "@/components/LeadForm";
+import { PageHeader } from "@/components/page-header";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { createLead } from "@/app/actions/leads";
-import { contactName } from "@/lib/format";
+import { contactName, formatZAR } from "@/lib/format";
 
 export default async function LeadsPage() {
   const [stages, products, contacts, users] = await Promise.all([
@@ -23,6 +26,7 @@ export default async function LeadsPage() {
               orderBy: { dueDate: "asc" },
               take: 1,
             },
+            _count: { select: { activities: { where: { status: "planned" } } } },
           },
         },
       },
@@ -50,10 +54,13 @@ export default async function LeadsPage() {
       quantity: l.quantity,
       source: l.source,
       color: l.color,
+      productId: l.productId,
       productName: l.product?.name ?? null,
       assignee: l.assignedTo?.name ?? null,
       research: l.research,
       isNew: !l.viewedAt && l.createdAt.getTime() > Date.now() - 3 * 24 * 60 * 60 * 1000,
+      noNextStep: l._count.activities === 0,
+      ageDays: Math.floor((Date.now() - l.stageEnteredAt.getTime()) / 86400000),
       testDrive: (() => {
         const td = l.activities[0];
         if (!td) return null;
@@ -72,33 +79,59 @@ export default async function LeadsPage() {
     })),
   }));
 
+  const openCount = boardStages.reduce((n, s) => n + s.leads.length, 0);
+  const totalOpenValue = boardStages.reduce(
+    (n, s) => n + s.leads.reduce((a, l) => a + l.valueCents, 0),
+    0
+  );
+
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <h1 className="text-2xl font-bold">Leads pipeline</h1>
-        <div className="flex gap-2">
-          <Link href="/leads/closed" className="btn-secondary">
+      <PageHeader
+        title="Leads"
+        description={`${openCount} open · ${formatZAR(totalOpenValue)} in pipeline`}
+      >
+        <Button asChild variant="ghost" size="sm">
+          <Link href="/leads/closed">
+            <Trophy className="size-4" />
             Won / Lost
           </Link>
-          <a href="/leads/list" className="btn-secondary">☰ List view</a>
-          <ModalTrigger label="+ New lead" title="New lead">
-            <LeadForm
-              action={createLead}
-              products={products.map((p) => ({
-                id: p.id,
-                name: p.name,
-                basePriceCents: p.basePriceCents,
-                colors: p.colors.map((c) => c.name),
-              }))}
-              stages={stages.map((s) => ({ id: s.id, name: s.name }))}
-              contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
-              users={users.map((u) => ({ id: u.id, name: u.name }))}
-              submitLabel="Create lead"
-            />
-          </ModalTrigger>
-        </div>
-      </div>
-      <KanbanBoard stages={boardStages} />
+        </Button>
+        <Button asChild variant="outline" size="sm">
+          <Link href="/leads/list">
+            <List className="size-4" />
+            List view
+          </Link>
+        </Button>
+        <ModalTrigger
+          label={
+            <>
+              <Plus className="size-4" />
+              New lead
+            </>
+          }
+          title="New lead"
+          buttonClass={buttonVariants({ size: "sm" })}
+        >
+          <LeadForm
+            action={createLead}
+            products={products.map((p) => ({
+              id: p.id,
+              name: p.name,
+              basePriceCents: p.basePriceCents,
+              colors: p.colors.map((c) => c.name),
+            }))}
+            stages={stages.map((s) => ({ id: s.id, name: s.name }))}
+            contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
+            users={users.map((u) => ({ id: u.id, name: u.name }))}
+            submitLabel="Create lead"
+          />
+        </ModalTrigger>
+      </PageHeader>
+      <KanbanBoard
+        stages={boardStages}
+        products={products.map((p) => ({ id: p.id, name: p.name }))}
+      />
     </div>
   );
 }

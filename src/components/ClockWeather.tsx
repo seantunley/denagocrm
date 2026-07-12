@@ -23,14 +23,18 @@ const CITIES = [
 
 type Weather = { temp: number; code: number };
 
-/** Slim live clock + weather strip for Cape Town & Moscow (Open-Meteo, no key needed). */
+const block =
+  "flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 shadow-sm";
+
+/** Compact desk strip: date, then a block per city (time + weather). */
 export default function ClockWeather() {
   const [now, setNow] = useState<Date | null>(null);
   const [weather, setWeather] = useState<(Weather | null)[]>(() => CITIES.map(() => null));
 
   useEffect(() => {
     setNow(new Date());
-    const t = setInterval(() => setNow(new Date()), 1000);
+    // No seconds shown — a minute tick is enough and keeps the page calm
+    const t = setInterval(() => setNow(new Date()), 30_000);
 
     const load = () =>
       Promise.all(
@@ -55,50 +59,47 @@ export default function ClockWeather() {
   }, []);
 
   return (
-    <div className="card px-4 py-2.5 flex items-center gap-x-4 gap-y-1 flex-wrap">
-      <p className="text-sm text-slate-400">
-        {now
-          ? now.toLocaleDateString("en-ZA", {
-              weekday: "long",
-              day: "numeric",
-              month: "long",
-              year: "numeric",
-              timeZone: "Africa/Johannesburg",
-            })
-          : "…"}
-      </p>
+    <div className="flex flex-wrap items-center gap-2">
+      {/* Date */}
+      <div className={block}>
+        <span className="text-[13px] font-medium text-muted-foreground">
+          {now
+            ? now.toLocaleDateString("en-ZA", {
+                weekday: "long",
+                day: "numeric",
+                month: "long",
+                year: "numeric",
+                timeZone: "Africa/Johannesburg",
+              })
+            : "…"}
+        </span>
+      </div>
+
+      {/* One block per city */}
       {CITIES.map((c, i) => {
         const wx = weather[i] ? describe(weather[i]!.code) : null;
         return (
-          <p
-            key={c.name}
-            className="text-sm text-slate-300 flex items-center whitespace-nowrap"
-            title={c.name}
-          >
-            <span className="text-slate-600 mr-4 select-none hidden sm:inline" aria-hidden>
-              |
-            </span>
+          <div key={c.name} className={block} title={c.name}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={c.flag} alt="" className="h-3.5 w-auto rounded-[2px] mr-1.5" />
-            <span className="text-slate-400 mr-2">{c.name}</span>
-            <span className="font-bold text-lg text-white tabular-nums">
+            <img src={c.flag} alt="" className="h-3.5 w-auto rounded-[2px]" />
+            <span className="text-xs text-muted-foreground">{c.name}</span>
+            <span className="text-[15px] font-semibold tabular-nums text-foreground">
               {now
                 ? now.toLocaleTimeString("en-ZA", {
                     hour: "2-digit",
                     minute: "2-digit",
-                    second: "2-digit",
                     timeZone: c.zone,
                   })
                 : "…"}
             </span>
             {wx && weather[i] && (
-              <>
-                <span className="text-base ml-2.5 mr-1">{wx.icon}</span>
-                <span className="font-semibold text-white">{weather[i]!.temp}°C</span>
-                <span className="text-slate-400 ml-1.5">{wx.label}</span>
-              </>
+              <span className="flex items-center gap-1 border-l border-border pl-2 text-xs text-muted-foreground">
+                <span className="text-sm leading-none">{wx.icon}</span>
+                <span className="font-medium text-foreground">{weather[i]!.temp}°</span>
+                {wx.label}
+              </span>
             )}
-          </p>
+          </div>
         );
       })}
     </div>

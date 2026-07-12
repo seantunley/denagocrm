@@ -3,16 +3,41 @@
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/db";
+import { revalidatePath } from "next/cache";
+import { basePrisma, prisma } from "@/lib/db";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
 import { getPortalContact, setPortalCookie, clearPortalCookie } from "@/lib/portal";
+import { portalCanAccessVehicle, requirePortalScope } from "@/lib/portalAccess";
 import { sendPushToAll } from "@/lib/push";
 import { logAudit } from "@/lib/audit";
 import { contactName } from "@/lib/format";
+import { saveFile } from "@/lib/storage";
+import {
+  OTP_SEND_POLICY,
+  OTP_VERIFY_POLICY,
+  checkRateLimit,
+  clearRateLimit,
+  getRequestIp,
+  rateLimitKey,
+  registerRateLimitAttempt,
+} from "@/lib/rateLimit";
 
 export type PortalAuthState = { ok?: boolean; sent?: boolean; error?: string };
-const str = (v: FormDataEntryValue | null) => String(v ?? "").trim();
-const normEmail = (e: string) => e.trim().toLowerCase();
+const str = (value: FormDataEntryValue | null) => String(value ?? "").trim();
+const normEmail = (email: string) => email.trim().toLowerCase();
+const MAX_UPLOAD = 10 * 1024 * 1024;
+const ALLOWED_UPLOADS = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp", "text/plain"]);
+
+async function firstStaffUser() {
+  return prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+}
+
+async function createPortalNotification(contactId: string, title: string, body: string, href?: string, kind = "info") {
+  await basePrisma.$executeRaw`
+    INSERT INTO "PortalNotification" ("id", "contactId", "title", "body", "href", "kind")
+    VALUES (${crypto.randomUUID()}, ${contactId}, ${title}, ${body}, ${href ?? null}, ${kind})
+  `;
+}
 
 /** Step 1: email a 6-digit login code to a known customer. */
 export async function requestPortalOtp(
@@ -23,13 +48,15 @@ export async function requestPortalOtp(
   if (!email || !email.includes("@")) return { error: "Enter your email address." };
   if (!(await isSmtpConfigured())) return { error: "The customer portal isn't available right now." };
 
-  // Generic response either way — don't reveal whether an email is on file.
   const generic: PortalAuthState = { sent: true };
-
-  const recent = await prisma.otpChallenge.count({
-    where: { purpose: "portal", key: email, createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) } },
-  });
-  if (recent >= 5) return generic;
+  const ip = await getRequestIp();
+  const accountKey = rateLimitKey("portal-otp-send-account", email);
+  const ipKey = rateLimitKey("portal-otp-send-ip", ip);
+  const [accountLimit, ipLimit] = await Promise.all([
+    registerRateLimitAttempt(accountKey, OTP_SEND_POLICY),
+    registerRateLimitAttempt(ipKey, OTP_SEND_POLICY),
+  ]);
+  if (!accountLimit.allowed || !ipLimit.allowed) return generic;
 
   const contact = await prisma.contact.findFirst({
     where: { email: { equals: email, mode: "insensitive" }, deletedAt: null },
@@ -64,23 +91,34 @@ export async function verifyPortalOtp(
   const code = str(formData.get("code"));
   if (!/^\d{6}$/.test(code)) return { error: "Enter the 6-digit code." };
 
+  const ip = await getRequestIp();
+  const verifyKey = rateLimitKey("portal-otp-verify", `${email}:${ip}`);
+  if (!(await checkRateLimit(verifyKey)).allowed) {
+    return { error: "Too many incorrect codes. Request a new code later." };
+  }
+
   const challenge = await prisma.otpChallenge.findFirst({
     where: { purpose: "portal", key: email, verifiedAt: null, expiresAt: { gt: new Date() } },
     orderBy: { createdAt: "desc" },
   });
-  if (!challenge || challenge.attempts >= 5) {
-    return { error: "That code has expired — request a new one." };
-  }
+  if (!challenge || challenge.attempts >= 5) return { error: "That code has expired — request a new one." };
+
   await prisma.otpChallenge.update({ where: { id: challenge.id }, data: { attempts: { increment: 1 } } });
   if (!(await bcrypt.compare(code, challenge.codeHash))) {
+    await registerRateLimitAttempt(verifyKey, OTP_VERIFY_POLICY);
     return { error: "That code isn't right — check and try again." };
   }
+
   const contact = await prisma.contact.findFirst({
     where: { email: { equals: email, mode: "insensitive" }, deletedAt: null },
   });
   if (!contact) return { error: "We couldn't find your account." };
 
-  await prisma.otpChallenge.update({ where: { id: challenge.id }, data: { verifiedAt: new Date() } });
+  await Promise.all([
+    prisma.otpChallenge.update({ where: { id: challenge.id }, data: { verifiedAt: new Date() } }),
+    clearRateLimit(verifyKey),
+    clearRateLimit(rateLimitKey("portal-otp-send-account", email)),
+  ]);
   await setPortalCookie(contact.id, email);
   redirect("/portal");
 }
@@ -90,7 +128,7 @@ export async function portalLogout() {
   redirect("/portal/login");
 }
 
-/** A customer requests a service booking from inside the portal. */
+/** Customer service booking; vehicle ownership is verified server-side. */
 export async function requestService(
   _prev: { ok?: string; error?: string } | undefined,
   formData: FormData
@@ -101,13 +139,14 @@ export async function requestService(
   const preferred = str(formData.get("preferred"));
   const notes = str(formData.get("notes"));
 
-  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
-  if (!firstUser) return { error: "Couldn't submit right now — please phone us." };
+  if (vehicleId && !(await portalCanAccessVehicle(vehicleId))) return { error: "That vehicle is not available in your portal." };
+  const staff = await firstStaffUser();
+  if (!staff) return { error: "Couldn't submit right now — please phone us." };
 
   let vehicleLabel = "a vehicle";
   if (vehicleId) {
-    const v = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
-    if (v) vehicleLabel = v.model + (v.regNumber ? ` (${v.regNumber})` : "");
+    const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
+    if (vehicle) vehicleLabel = vehicle.model + (vehicle.regNumber ? ` (${vehicle.regNumber})` : "");
   }
   const due = preferred ? new Date(`${preferred}T00:00:00+02:00`) : new Date();
 
@@ -116,41 +155,156 @@ export async function requestService(
       type: "todo",
       category: "workshop",
       summary: `Service request from ${contactName(contact)} — ${vehicleLabel}`,
-      note: [preferred ? `Preferred date: ${preferred}` : null, notes || null]
-        .filter(Boolean)
-        .join("\n") || null,
+      note: [preferred ? `Preferred date: ${preferred}` : null, notes || null].filter(Boolean).join("\n") || null,
       dueDate: due,
       status: "planned",
       contactId: contact.id,
-      assignedToId: firstUser.id,
-      createdById: firstUser.id,
+      assignedToId: staff.id,
+      createdById: staff.id,
     },
   });
   await prisma.communication.create({
     data: {
       type: "note",
       subject: "🔧 Service request (portal)",
-      body: `${contactName(contact)} requested a service for ${vehicleLabel}.${
-        preferred ? ` Preferred date: ${preferred}.` : ""
-      }${notes ? `\n\n${notes}` : ""}`,
+      body: `${contactName(contact)} requested a service for ${vehicleLabel}.${preferred ? ` Preferred date: ${preferred}.` : ""}${notes ? `\n\n${notes}` : ""}`,
       contactId: contact.id,
-      userId: firstUser.id,
+      userId: staff.id,
     },
   });
-  await logAudit({
-    action: "portal.service_request",
-    summary: `Service request from ${contactName(contact)} for ${vehicleLabel}`,
-    contactId: contact.id,
-    userName: "Customer portal",
-  });
-  await sendPushToAll(
-    {
-      title: "New service request",
-      body: `${contactName(contact)} — ${vehicleLabel}`,
-      url: `/contacts/${contact.id}`,
-    },
-    "service_request"
-  ).catch(() => {});
-
+  await createPortalNotification(contact.id, "Service request received", `We received your service request for ${vehicleLabel}.`, "/portal#cases", "service");
+  await logAudit({ action: "portal.service_request", summary: `Service request from ${contactName(contact)} for ${vehicleLabel}`, contactId: contact.id, userName: "Customer portal" });
+  await sendPushToAll({ title: "New service request", body: `${contactName(contact)} — ${vehicleLabel}`, url: `/contacts/${contact.id}` }, "service_request").catch(() => {});
+  revalidatePath("/portal");
   return { ok: "Thanks! We've received your request and will be in touch to confirm." };
+}
+
+export async function submitPortalCase(formData: FormData) {
+  const scope = await requirePortalScope();
+  const contact = await getPortalContact();
+  if (!contact) redirect("/portal/login");
+  const subject = str(formData.get("subject"));
+  const description = str(formData.get("description"));
+  const type = str(formData.get("type")) || "support";
+  const vehicleId = str(formData.get("vehicleId")) || null;
+  if (!subject || !description) throw new Error("Subject and description are required");
+  if (vehicleId && !(await portalCanAccessVehicle(vehicleId))) throw new Error("Vehicle access denied");
+
+  const id = crypto.randomUUID();
+  await basePrisma.$executeRaw`
+    INSERT INTO "CustomerCase" ("id", "subject", "description", "type", "contactId", "vehicleId")
+    VALUES (${id}, ${subject}, ${description}, ${type}, ${scope.viewerContactId}, ${vehicleId})
+  `;
+  await createPortalNotification(scope.viewerContactId, "Support request created", subject, "/portal#cases", "case");
+  await logAudit({ action: "portal.case_created", summary: `Portal case created: ${subject}`, contactId: scope.viewerContactId, entityType: "CustomerCase", entityId: id, userName: "Customer portal" });
+  await sendPushToAll({ title: "New portal support case", body: `${contactName(contact)} — ${subject}`, url: `/contacts/${contact.id}` }, "portal_case").catch(() => {});
+  revalidatePath("/portal");
+}
+
+export async function submitPortalWarrantyClaim(formData: FormData) {
+  const scope = await requirePortalScope();
+  const contact = await getPortalContact();
+  if (!contact) redirect("/portal/login");
+  const vehicleId = str(formData.get("vehicleId"));
+  const description = str(formData.get("description"));
+  if (!vehicleId || !description) throw new Error("Vehicle and description are required");
+  if (!(await portalCanAccessVehicle(vehicleId))) throw new Error("Vehicle access denied");
+
+  const claim = await prisma.warrantyClaim.create({
+    data: { vehicleId, contactId: scope.viewerContactId, description, createdById: null },
+  });
+  const caseId = crypto.randomUUID();
+  await basePrisma.$executeRaw`
+    INSERT INTO "CustomerCase" ("id", "subject", "description", "type", "priority", "contactId", "vehicleId", "warrantyClaimId")
+    VALUES (${caseId}, ${"Warranty claim"}, ${description}, ${"warranty"}, ${"high"}, ${scope.viewerContactId}, ${vehicleId}, ${claim.id})
+  `;
+  await createPortalNotification(scope.viewerContactId, "Warranty claim submitted", "Your warranty request has been sent to our team.", "/portal#cases", "warranty");
+  await logAudit({ action: "portal.warranty_claim_created", summary: "Warranty claim submitted through portal", contactId: scope.viewerContactId, entityType: "WarrantyClaim", entityId: claim.id, userName: "Customer portal" });
+  await sendPushToAll({ title: "New warranty claim", body: `${contactName(contact)} submitted a warranty claim`, url: `/vehicles/${vehicleId}` }, "warranty").catch(() => {});
+  revalidatePath("/portal");
+}
+
+export async function requestPortalProfileChange(formData: FormData) {
+  const scope = await requirePortalScope();
+  const changes = {
+    phone: str(formData.get("phone")) || null,
+    whatsapp: str(formData.get("whatsapp")) || null,
+    address: str(formData.get("address")) || null,
+    suburb: str(formData.get("suburb")) || null,
+    city: str(formData.get("city")) || null,
+    province: str(formData.get("province")) || null,
+    postalCode: str(formData.get("postalCode")) || null,
+  };
+  const note = str(formData.get("note")) || null;
+  const id = crypto.randomUUID();
+  await basePrisma.$executeRaw`
+    INSERT INTO "PortalProfileChangeRequest" ("id", "contactId", "changes", "note")
+    VALUES (${id}, ${scope.viewerContactId}, ${JSON.stringify(changes)}::jsonb, ${note})
+  `;
+  await createPortalNotification(scope.viewerContactId, "Profile update requested", "We received your profile and address changes.", "/portal#profile", "profile");
+  await logAudit({ action: "portal.profile_change_requested", summary: "Customer requested profile changes", contactId: scope.viewerContactId, entityType: "PortalProfileChangeRequest", entityId: id, after: changes, userName: "Customer portal" });
+  revalidatePath("/portal");
+}
+
+export async function updatePortalPreferences(formData: FormData) {
+  const scope = await requirePortalScope();
+  const emailServiceUpdates = formData.get("emailServiceUpdates") === "on";
+  const smsServiceUpdates = formData.get("smsServiceUpdates") === "on";
+  const emailMarketing = formData.get("emailMarketing") === "on";
+
+  await basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`
+      INSERT INTO "PortalPreference" ("contactId", "emailServiceUpdates", "smsServiceUpdates", "emailMarketing", "updatedAt")
+      VALUES (${scope.viewerContactId}, ${emailServiceUpdates}, ${smsServiceUpdates}, ${emailMarketing}, CURRENT_TIMESTAMP)
+      ON CONFLICT ("contactId") DO UPDATE SET
+        "emailServiceUpdates" = EXCLUDED."emailServiceUpdates",
+        "smsServiceUpdates" = EXCLUDED."smsServiceUpdates",
+        "emailMarketing" = EXCLUDED."emailMarketing",
+        "updatedAt" = CURRENT_TIMESTAMP
+    `;
+    await tx.contact.update({ where: { id: scope.viewerContactId }, data: { marketingOptOut: !emailMarketing } });
+    await tx.consentRecord.create({ data: { contactId: scope.viewerContactId, type: "marketing", granted: emailMarketing, source: "portal", note: "Updated in customer portal" } });
+  });
+  await logAudit({ action: "portal.preferences_updated", summary: "Customer updated portal communication preferences", contactId: scope.viewerContactId, after: { emailServiceUpdates, smsServiceUpdates, emailMarketing }, userName: "Customer portal" });
+  revalidatePath("/portal");
+}
+
+export async function uploadPortalDocument(formData: FormData) {
+  const scope = await requirePortalScope();
+  const vehicleId = str(formData.get("vehicleId")) || null;
+  if (vehicleId && !(await portalCanAccessVehicle(vehicleId))) throw new Error("Vehicle access denied");
+  const value = formData.get("file");
+  if (!(value instanceof File) || value.size === 0) throw new Error("Choose a file");
+  if (value.size > MAX_UPLOAD) throw new Error("File is too large");
+  if (!ALLOWED_UPLOADS.has(value.type)) throw new Error("Unsupported file type");
+
+  const staff = await firstStaffUser();
+  if (!staff) throw new Error("No staff account is available to file the document");
+  const buffer = Buffer.from(await value.arrayBuffer());
+  const storedName = await saveFile(buffer, value.name, value.type);
+  const doc = await prisma.document.create({
+    data: {
+      fileName: value.name,
+      storedName,
+      mimeType: value.type,
+      sizeBytes: value.size,
+      contactId: scope.viewerContactId,
+      vehicleId,
+      tag: "portal-upload",
+      uploadedById: staff.id,
+    },
+  });
+  await createPortalNotification(scope.viewerContactId, "Document uploaded", `${value.name} was uploaded securely.`, "/portal#documents", "document");
+  await logAudit({ action: "portal.document_uploaded", summary: `Customer uploaded ${value.name}`, contactId: scope.viewerContactId, entityType: "Document", entityId: doc.id, userName: "Customer portal", metadata: { mimeType: value.type, sizeBytes: value.size } });
+  revalidatePath("/portal");
+}
+
+export async function markPortalNotificationRead(id: string, formData: FormData) {
+  void formData;
+  const scope = await requirePortalScope();
+  await basePrisma.$executeRaw`
+    UPDATE "PortalNotification" SET "readAt" = CURRENT_TIMESTAMP
+    WHERE "id" = ${id} AND "contactId" = ${scope.viewerContactId}
+  `;
+  revalidatePath("/portal");
 }

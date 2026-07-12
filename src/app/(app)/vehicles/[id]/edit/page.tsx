@@ -19,7 +19,7 @@ export default async function EditVehiclePage({
 
   return (
     <div className="space-y-5">
-      <h1 className="text-2xl font-bold">Edit {vehicle.model}</h1>
+      <h1 className="text-2xl font-semibold tracking-[-0.035em]">Edit {vehicle.model}</h1>
       <VehicleForm
         action={updateVehicle.bind(null, vehicle.id)}
         contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}

@@ -2,6 +2,7 @@ import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { formatZAR } from "@/lib/format";
 import { saveTargets } from "@/app/actions/targets";
+import { PageHeader } from "@/components/page-header";
 
 export const dynamic = "force-dynamic";
 
@@ -42,12 +43,7 @@ export default async function TargetsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Targets — {monthName}</h1>
-        <p className="text-sm text-slate-400 mt-0.5">
-          This month&apos;s goals and how you&apos;re tracking against them.
-        </p>
-      </div>
+      <PageHeader title={`Targets — ${monthName}`} description="This month’s goals and live progress across sales and service." />
 
       <div className="grid sm:grid-cols-2 gap-4">
         {METRICS.map((m) => {
@@ -66,7 +62,7 @@ export default async function TargetsPage() {
                   </span>
                 )}
               </div>
-              <p className="text-2xl font-bold mt-1">
+              <p className="text-2xl font-semibold tracking-[-0.035em] mt-1">
                 {fmt(actual)}
                 {target > 0 && (
                   <span className="text-sm text-slate-500 font-normal"> / {fmt(target)}</span>

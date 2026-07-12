@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import {
@@ -10,6 +11,8 @@ import AutomationRuleForm from "@/components/AutomationRuleForm";
 import ModalTrigger from "@/components/Modal";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { formatDateTime } from "@/lib/format";
+import { PageHeader } from "@/components/page-header";
+import { buttonVariants } from "@/components/ui/button";
 
 export default async function AutomationsPage() {
   await requireUser();
@@ -52,22 +55,15 @@ export default async function AutomationsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold">Automations</h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Rules fire on lead events, quote signing/declining, deliveries, referrals and idle
-            leads — with optional source/value conditions.
-          </p>
-        </div>
-        <ModalTrigger label="+ New automation" title="New automation">
+      <PageHeader title="Automations" description={`${rules.length} workflow rule${rules.length === 1 ? "" : "s"} · Lead, quote, delivery and referral triggers.`}>
+        <ModalTrigger label={<><Plus className="size-4" />New automation</>} title="New automation" buttonClass={buttonVariants({ size: "sm" })}>
           <AutomationRuleForm
             stages={stages.map((s) => ({ id: s.id, name: s.name }))}
             users={users.map((u) => ({ id: u.id, name: u.name }))}
             templates={templates.map((t) => ({ id: t.id, name: t.name }))}
           />
         </ModalTrigger>
-      </div>
+      </PageHeader>
 
       <div className="card">
         <h2 className="font-semibold mb-4">Rules</h2>

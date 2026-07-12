@@ -11,6 +11,7 @@ import {
   createQuoteRevision,
 } from "@/app/actions/quotes";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import QuoteVersions from "@/components/QuoteVersions";
 import { uploadDeliveryPhotos } from "@/app/actions/fulfilment";
 import SigningBlock from "@/components/SigningBlock";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
@@ -29,7 +30,7 @@ type FamilyQuote = {
   supersededAt: Date | null;
   declineReason: string | null;
   createdAt: Date;
-  items: { qty: number; unitPriceCents: number }[];
+  items: { qty: number; unitPriceCents: number; description: string }[];
 };
 
 /** All versions of a quote: walk up to the root, then collect descendants. */
@@ -60,7 +61,7 @@ async function getQuoteFamily(start: {
         supersededAt: true,
         declineReason: true,
         createdAt: true,
-        items: { select: { qty: true, unitPriceCents: true } },
+        items: { select: { qty: true, unitPriceCents: true, description: true } },
         revisions: { select: { id: true } },
       },
       orderBy: { createdAt: "asc" },
@@ -109,7 +110,7 @@ export default async function QuoteDetailPage({
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold">Quote Q-{quote.number}</h1>
+            <h1 className="text-2xl font-semibold tracking-[-0.035em]">Quote Q-{quote.number}</h1>
             <span className={`badge ${statusBadge[quote.status] ?? statusBadge.draft}`}>
               {quote.status}
             </span>
@@ -139,6 +140,16 @@ export default async function QuoteDetailPage({
           <Link href={`/quotes/${quote.id}/print`} className="btn-secondary">
             🖨 Print / PDF
           </Link>
+          {quote.status === "accepted" && (
+            <>
+              <Link href={`/quotes/${quote.id}/invoice`} className="btn-secondary" target="_blank">
+                🧾 Invoice
+              </Link>
+              <Link href={`/quotes/${quote.id}/agreement`} className="btn-secondary" target="_blank">
+                📜 Sales agreement
+              </Link>
+            </>
+          )}
           {canRevise && (
             <form action={createQuoteRevision.bind(null, quote.id)}>
               <button
@@ -214,40 +225,25 @@ export default async function QuoteDetailPage({
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">
             Version history
           </p>
-          <div className="flex items-center gap-2 flex-wrap">
-            {family.map((f, idx) => {
-              const fTotal = f.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
-              const current = f.id === quote.id;
-              return (
-                <div key={f.id} className="flex items-center gap-2">
-                  {idx > 0 && <span className="text-slate-600">→</span>}
-                  <Link
-                    href={`/quotes/${f.id}`}
-                    className={`rounded-lg border px-3 py-2 text-xs leading-5 transition-colors ${
-                      current
-                        ? "border-orange-500 bg-orange-500/10"
-                        : "border-slate-700 hover:border-slate-500"
-                    }`}
-                  >
-                    <span className="font-semibold text-slate-200">Q-{f.number}</span>{" "}
-                    <span className="text-slate-400">{formatZAR(Math.round(fTotal))}</span>{" "}
-                    <span
-                      className={`badge ${
-                        f.supersededAt
-                          ? "bg-slate-800 text-slate-400"
-                          : statusBadge[f.status] ?? statusBadge.draft
-                      }`}
-                    >
-                      {f.supersededAt ? "superseded" : f.status}
-                    </span>
-                    {f.declineReason && (
-                      <span className="block text-slate-500 mt-0.5">“{f.declineReason}”</span>
-                    )}
-                  </Link>
-                </div>
-              );
-            })}
-          </div>
+          <QuoteVersions
+            currentId={quote.id}
+            versions={family.map((f) => ({
+              id: f.id,
+              number: f.number,
+              status: f.status,
+              superseded: Boolean(f.supersededAt),
+              createdAt: formatDate(f.createdAt),
+              declineReason: f.declineReason,
+              totalZAR: formatZAR(
+                f.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0)
+              ),
+              items: f.items.map((i) => ({
+                qty: i.qty,
+                description: i.description,
+                priceZAR: formatZAR(i.qty * i.unitPriceCents),
+              })),
+            }))}
+          />
         </div>
       )}
 

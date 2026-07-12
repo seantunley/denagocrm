@@ -23,8 +23,8 @@ export function AddUserForm() {
         name="password"
         type="password"
         className="input"
-        placeholder="Password (min 8 characters)"
-        minLength={8}
+        placeholder="Password (12+ characters, letters and numbers)"
+        minLength={12}
         required
       />
       <Feedback state={state} />
@@ -54,9 +54,9 @@ export function ChangePasswordForm() {
         name="next"
         type="password"
         className="input"
-        placeholder="New password (min 8 characters)"
+        placeholder="New password (12+ characters, letters and numbers)"
         autoComplete="new-password"
-        minLength={8}
+        minLength={12}
         required
       />
       <Feedback state={state} />

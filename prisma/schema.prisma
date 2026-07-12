@@ -18,6 +18,8 @@ model User {
   totpSecret        String? // encrypted TOTP secret
   totpEnabledAt     DateTime?
   totpBackupCodes   String? // JSON array of bcrypt-hashed one-time backup codes
+  sessions          UserSession[]
+  passkeys          Passkey[]
   emailOtpEnabled   Boolean   @default(false)
   loginOtpHash      String? // hashed email login code
   loginOtpExpires   DateTime?
@@ -321,6 +323,7 @@ model Lead {
   research     String? // latest AI research briefing (shown in the Research tab)
   researchedAt DateTime?
   viewedAt     DateTime? // first time a staff member opened the lead
+  stageEnteredAt DateTime @default(now()) // when it landed in the current stage (stale-age flag)
 
   deletedAt     DateTime?
   deletedByName String?
@@ -569,6 +572,7 @@ model Document {
   jobCard      JobCard? @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
   quoteId      String? // fulfilment paperwork (invoice, proof of payment, delivery note)
   tag          String? // invoice | pop | delivery-note
+  replacedById String? // newer version of this file (repository versioning)
   uploadedById String
   uploadedBy   User     @relation(fields: [uploadedById], references: [id])
 }
@@ -900,4 +904,115 @@ model SurveyResponse {
   @@index([surveyId, status])
   @@index([contactId])
   @@index([status, scheduledFor])
+}
+
+// One row per signed-in device — powers the device log and remote sign-out.
+model UserSession {
+  id           String    @id @default(cuid())
+  jti          String    @unique // matches the jti claim inside the JWT
+  platform     String    @default("web") // web | pwa (installed app, 7-day session)
+  ip           String?
+  userAgent    String?
+  createdAt    DateTime  @default(now())
+  lastActiveAt DateTime  @default(now())
+  revokedAt    DateTime?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+}
+
+// Named, editable document templates — many per type, one default per type.
+model DocTemplateRecord {
+  id        String    @id @default(cuid())
+  docType   String // quote | jobcard | delivery
+  name      String
+  isDefault Boolean   @default(false)
+  config    Json // logo, footer, terms, sections, signature, accent…
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([docType, isDefault])
+}
+
+// ── Document Studio: free-form BlockNote documents ──────────────────
+// Templates hold draft JSON; publishing snapshots an immutable version.
+model CustomDocTemplate {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  draftJson   Json // current editable BlockNote content
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  versions  CustomDocVersion[]
+  instances DocInstance[]
+}
+
+model CustomDocVersion {
+  id          String   @id @default(cuid())
+  version     Int
+  contentJson Json // immutable snapshot
+  publishedAt DateTime @default(now())
+  publishedBy String?
+
+  templateId String
+  template   CustomDocTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, version])
+}
+
+// A generated document: owns an editable copy + the resolved-data snapshot.
+model DocInstance {
+  id           String    @id @default(cuid())
+  title        String
+  status       String    @default("draft") // draft | final
+  contentJson  Json // editable copy (tokens resolved at creation)
+  snapshotJson Json? // resolved CRM data at generation time
+  contactId    String?
+  leadId       String?
+  quoteId      String?
+  pdfDocId     String? // Document row of the last generated PDF
+  createdById  String?
+  finalizedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  templateVersionId String?
+  templateId        String?
+  template          CustomDocTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  @@index([status, updatedAt])
+}
+
+// Reusable clauses — inserted BY VALUE into documents (no dependency graph).
+model ReusableBlock {
+  id          String    @id @default(cuid())
+  name        String
+  category    String?
+  contentJson Json
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+}
+
+// WebAuthn passkeys — biometric / device sign-in (Phase 2 auth).
+model Passkey {
+  id           String    @id @default(cuid())
+  credentialId String    @unique // base64url credential ID
+  publicKey    Bytes // COSE public key
+  counter      BigInt    @default(0)
+  transports   String? // csv: internal,hybrid,usb…
+  nickname     String? // "Sean's iPhone"
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

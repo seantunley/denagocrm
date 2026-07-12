@@ -78,7 +78,7 @@ export default async function HealthPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-bold">Customer health</h1>
+        <h1 className="text-2xl font-semibold tracking-[-0.035em]">Customer health</h1>
         <p className="text-sm text-slate-400 mt-0.5">
           A blended score from ownership, service recency, survey sentiment, referrals and open
           issues — so you know who to look after and who to win back.

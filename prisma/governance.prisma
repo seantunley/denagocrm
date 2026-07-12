@@ -1,0 +1,125 @@
+/// Sales pipeline container. Existing PipelineStage rows are linked by the
+/// pipelineId column added in migration 45; the legacy model remains in schema.prisma.
+model SalesPipeline {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  type        String   @default("sales")
+  active      Boolean  @default(true)
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+}
+
+model Team {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  active      Boolean  @default(true)
+  managerId   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  members TeamMember[]
+
+  @@index([managerId])
+}
+
+model TeamMember {
+  id        String   @id @default(cuid())
+  teamId    String
+  userId    String
+  isManager Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@index([userId])
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  system      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  permissions RolePermission[]
+  users       UserRole[]
+}
+
+model Permission {
+  key         String @id
+  description String
+  category    String
+
+  roles RolePermission[]
+}
+
+model RolePermission {
+  roleId        String
+  permissionKey String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionKey], references: [key], onDelete: Cascade)
+
+  @@id([roleId, permissionKey])
+}
+
+model UserRole {
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+}
+
+model ForecastSnapshot {
+  id                   String   @id @default(cuid())
+  period               String
+  pipelineId           String?
+  teamId               String?
+  userId               String?
+  openValueCents       BigInt
+  weightedValueCents   BigInt
+  commitValueCents     BigInt
+  bestCaseValueCents   BigInt
+  opportunityCount     Int
+  capturedAt           DateTime @default(now())
+
+  @@index([period, capturedAt])
+  @@index([pipelineId, teamId, userId, capturedAt])
+}
+
+/// Professional append-only audit stream. Database triggers reject UPDATE and DELETE.
+model AuditEvent {
+  id                String   @id @default(cuid())
+  actorUserId       String?
+  actorName         String
+  actorType         String   @default("user")
+  eventType         String
+  entityType        String?
+  entityId          String?
+  summary           String
+  beforeJson        Json?
+  afterJson         Json?
+  changedFieldsJson Json?
+  source            String   @default("app")
+  ipAddress         String?
+  userAgent         String?
+  correlationId     String?
+  metadata          Json?
+  createdAt         DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([entityType, entityId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([eventType, createdAt])
+}

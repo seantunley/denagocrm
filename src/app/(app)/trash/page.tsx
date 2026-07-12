@@ -69,7 +69,7 @@ export default async function TrashPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold">🗑 Trash</h1>
+        <h1 className="text-2xl font-semibold tracking-[-0.035em]">🗑 Trash</h1>
         <p className="text-sm text-slate-400 mt-1">
           Deleted items are kept for {TRASH_RETENTION_DAYS} days, then removed permanently.
         </p>

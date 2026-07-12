@@ -1,8 +1,11 @@
 import Link from "next/link";
+import { Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import ModalTrigger from "@/components/Modal";
 import ProductForm from "@/components/ProductForm";
 import { formatZAR } from "@/lib/format";
+import { PageHeader } from "@/components/page-header";
+import { buttonVariants } from "@/components/ui/button";
 
 export default async function ProductsPage() {
   const products = await prisma.product.findMany({
@@ -12,12 +15,11 @@ export default async function ProductsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Products</h1>
-        <ModalTrigger label="+ New product" title="New product">
+      <PageHeader title="Product catalogue" description={`${products.filter((product) => product.active).length} active Denago models`}>
+        <ModalTrigger label={<><Plus className="size-4" />New product</>} title="New product" buttonClass={buttonVariants({ size: "sm" })}>
           <ProductForm />
         </ModalTrigger>
-      </div>
+      </PageHeader>
 
       <div className="card p-0 overflow-x-auto">
         <table className="table-base">

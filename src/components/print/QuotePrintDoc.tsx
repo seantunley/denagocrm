@@ -1,14 +1,24 @@
 import type { Prisma } from "@prisma/client";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { defaultTemplate, type DocTemplate } from "@/lib/docTemplates";
 
 export type QuoteForPrint = Prisma.QuoteGetPayload<{
   include: { items: true; lead: { include: { product: true } }; contact: true; createdBy: true };
 }>;
 
 /** The branded quotation document — used by the internal print page, the
- *  public signing print page, and the signed-PDF renderer. */
-export default function QuotePrintDoc({ quote }: { quote: QuoteForPrint }) {
+ *  public signing print page, and the signed-PDF renderer. Layout knobs
+ *  (logo, terms, signatures, footer) come from the Documents template. */
+export default function QuotePrintDoc({
+  quote,
+  template,
+}: {
+  quote: QuoteForPrint;
+  template?: DocTemplate;
+}) {
+  const tpl = template ?? defaultTemplate("quote");
   const total = quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+  const termsText = tpl.terms ?? quote.terms;
   const customerName = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
   const phone = quote.contact?.phone ?? quote.lead?.phone;
   const email = quote.contact?.email ?? quote.lead?.email;
@@ -35,7 +45,7 @@ export default function QuotePrintDoc({ quote }: { quote: QuoteForPrint }) {
         <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src="/branding/denago-logo-email.png"
+            src={tpl.logoUrl ?? "/branding/denago-logo-email.png"}
             alt="Denago Cape Town EV"
             className="h-11 w-auto object-contain"
           />
@@ -118,13 +128,13 @@ export default function QuotePrintDoc({ quote }: { quote: QuoteForPrint }) {
         </div>
 
         <div className="print-bottom">
-          {quote.terms && (
+          {tpl.sections.terms !== false && termsText && (
             <div className="rounded-lg bg-slate-50 px-4 py-3 mb-12 no-break">
               <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1.5">
                 Terms
               </p>
               <ul className="text-xs text-slate-600 space-y-1 list-disc pl-4">
-                {quote.terms
+                {termsText
                   .split(/\r?\n/)
                   .map((line) => line.replace(/^[\s•\-*]+/, "").trim())
                   .filter(Boolean)
@@ -135,68 +145,98 @@ export default function QuotePrintDoc({ quote }: { quote: QuoteForPrint }) {
             </div>
           )}
 
-          {/* Signatures — customer left, Denago right */}
-          <div className="grid grid-cols-2 gap-12 mt-14 mb-12 no-break">
-            <div>
-              {quote.signedAt ? (
-                <>
-                  {quote.signatureRef?.startsWith("http") && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={quote.signatureRef} alt="Customer signature" className="h-14 w-auto mb-1" />
+          {/* Signatures — position + dealer box come from the template.
+              A signed quote ALWAYS shows the signature evidence. */}
+          {(tpl.sections.signatures !== false || quote.signedAt) &&
+            (() => {
+              const customerBlock = (
+                <div>
+                  {quote.signedAt ? (
+                    <>
+                      {quote.signatureRef?.startsWith("http") && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={quote.signatureRef} alt="Customer signature" className="h-14 w-auto mb-1" />
+                      )}
+                      <div className="border-t-2 border-slate-900 pt-2">
+                        <p className="text-xs text-slate-600">
+                          Accepted — signed electronically by <b>{quote.signedByName}</b> on{" "}
+                          {formatDate(quote.signedAt)}
+                          {quote.signerIp ? ` · IP ${quote.signerIp}` : ""} · ECT Act, 2002
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="border-t-2 border-slate-900 pt-2 mt-14">
+                      <p className="text-xs text-slate-500">Accepted — customer signature &amp; date</p>
+                    </div>
                   )}
-                  <div className="border-t-2 border-slate-900 pt-2">
-                    <p className="text-xs text-slate-600">
-                      Accepted — signed electronically by <b>{quote.signedByName}</b> on{" "}
-                      {formatDate(quote.signedAt)}
-                      {quote.signerIp ? ` · IP ${quote.signerIp}` : ""} · ECT Act, 2002
-                    </p>
-                  </div>
-                </>
-              ) : (
-                <div className="border-t-2 border-slate-900 pt-2 mt-14">
-                  <p className="text-xs text-slate-500">Accepted — customer signature &amp; date</p>
                 </div>
-              )}
-            </div>
-            <div>
-              {quote.dealerSignedAt ? (
-                <>
-                  {quote.dealerSignatureRef?.startsWith("http") && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={quote.dealerSignatureRef} alt="Denago signature" className="h-14 w-auto mb-1" />
+              );
+              const dealerBlock =
+                tpl.signature.dealerCounterSign || quote.dealerSignedAt ? (
+                  <div>
+                    {quote.dealerSignedAt ? (
+                      <>
+                        {quote.dealerSignatureRef?.startsWith("http") && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={quote.dealerSignatureRef} alt="Denago signature" className="h-14 w-auto mb-1" />
+                        )}
+                        <div className="border-t-2 border-slate-900 pt-2">
+                          <p className="text-xs text-slate-600">
+                            For Denago Cape Town — <b>{quote.dealerSignedByName}</b>,{" "}
+                            {formatDate(quote.dealerSignedAt)}
+                          </p>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="border-t-2 border-slate-900 pt-2 mt-14">
+                        <p className="text-xs text-slate-500">Denago Cape Town &amp; date</p>
+                      </div>
+                    )}
+                  </div>
+                ) : null;
+              const pos = tpl.signature.position;
+              const cls =
+                pos === "strip" || !dealerBlock
+                  ? "grid grid-cols-1 gap-8 mt-14 mb-12 no-break"
+                  : "grid grid-cols-2 gap-12 mt-14 mb-12 no-break";
+              return (
+                <div className={cls}>
+                  {pos === "right-left" && dealerBlock ? (
+                    <>
+                      {dealerBlock}
+                      {customerBlock}
+                    </>
+                  ) : (
+                    <>
+                      {customerBlock}
+                      {dealerBlock}
+                    </>
                   )}
-                  <div className="border-t-2 border-slate-900 pt-2">
-                    <p className="text-xs text-slate-600">
-                      For Denago Cape Town — <b>{quote.dealerSignedByName}</b>,{" "}
-                      {formatDate(quote.dealerSignedAt)}
-                    </p>
-                  </div>
-                </>
-              ) : (
-                <div className="border-t-2 border-slate-900 pt-2 mt-14">
-                  <p className="text-xs text-slate-500">Denago Cape Town &amp; date</p>
                 </div>
-              )}
-            </div>
-          </div>
+              );
+            })()}
 
           {/* Branded footer */}
-          <div className="border-t-2 border-orange-600 pt-4 flex items-start justify-between gap-6 flex-wrap no-break">
-            <div className="text-[10px] text-slate-500 leading-4">
-              <p className="font-bold text-slate-700 text-[11px]">
-                Denago Cape Town — Authorized Denago EV Dealer
-              </p>
-              <p>Unit 55, M5 Freeway Business Park, Maitland, Cape Town · 073 789 3438</p>
-              <p>sales@denagocpt.co.za · denagocpt.co.za</p>
+          {tpl.sections.footer !== false && (
+            <div className="border-t-2 border-orange-600 pt-4 flex items-start justify-between gap-6 flex-wrap no-break">
+              <div className="text-[10px] text-slate-500 leading-4">
+                <p className="font-bold text-slate-700 text-[11px]">
+                  Denago Cape Town — Authorized Denago EV Dealer
+                </p>
+                {tpl.footerLines.map((line, i) => (
+                  <p key={i}>{line}</p>
+                ))}
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/branding/social-facebook.png" alt="Facebook" className="h-5 w-5" />
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/branding/social-instagram.png" alt="Instagram" className="h-5 w-5" />
+                <span className="text-[10px] text-slate-500">@denago_capetown</span>
+              </div>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/branding/social-facebook.png" alt="Facebook" className="h-5 w-5" />
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/branding/social-instagram.png" alt="Instagram" className="h-5 w-5" />
-              <span className="text-[10px] text-slate-500">@denago_capetown</span>
-            </div>
-          </div>
+          )}
         </div>
       </div>
     </>

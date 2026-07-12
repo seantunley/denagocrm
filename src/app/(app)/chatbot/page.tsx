@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import Link from "next/link";
 import { requireOwner } from "@/lib/auth";
 import { decryptValue } from "@/lib/settings";
 import { getBotFaqs } from "@/lib/botAi";
@@ -11,6 +12,7 @@ import {
   disconnectTelegram,
   telegramStatus,
 } from "@/app/actions/bot";
+import { PageHeader } from "@/components/page-header";
 
 export default async function ChatbotSettingsPage() {
   await requireOwner();
@@ -31,13 +33,7 @@ export default async function ChatbotSettingsPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-bold">Chatbot</h1>
-        <p className="text-sm text-slate-400 mt-0.5">
-          Answers customers on WhatsApp, Messenger, Instagram and Telegram — running the flow you
-          design in the visual builder, with an AI assistant for open questions.
-        </p>
-      </div>
+      <PageHeader title="Chatbot" description="Automated customer conversations across WhatsApp, Messenger, Instagram and Telegram." />
 
       <div className="max-w-3xl space-y-4">
         <form action={saveBotSettings} className="space-y-4">
@@ -57,7 +53,7 @@ export default async function ChatbotSettingsPage() {
           <div className="card space-y-3">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Where it runs &amp; how</p>
-              <a href="/bot-builder" className="btn-secondary btn-sm">🎨 Flow builder</a>
+              <Link href="/bot-builder" className="btn-secondary btn-sm">Flow builder</Link>
             </div>
             <label className="flex items-center justify-between gap-4 cursor-pointer">
               <span>

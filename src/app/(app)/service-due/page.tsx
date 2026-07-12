@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
 import { contactName, formatDate } from "@/lib/format";
 import ServiceReminderButton from "@/components/ServiceReminderButton";
+import { PageHeader } from "@/components/page-header";
 
 export const dynamic = "force-dynamic";
 
@@ -32,13 +33,7 @@ export default async function ServiceDuePage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Service due</h1>
-        <p className="text-sm text-slate-400 mt-0.5">
-          Carts due or overdue for a service. Book them in or send a reminder — the nightly job
-          also emails customers automatically once per due cycle.
-        </p>
-      </div>
+      <PageHeader title="Service due" description={`${overdue} overdue · ${soon} due soon · Book workshop time or send a customer reminder.`} />
 
       <div className="grid grid-cols-3 gap-3">
         <div className="card">

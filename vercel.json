@@ -1,7 +1,13 @@
 {
-  "buildCommand": "prisma generate && prisma migrate deploy && next build",
-  "regions": ["fra1"],
+  "buildCommand": "prisma generate --schema ./prisma && prisma migrate deploy --schema ./prisma && next build",
+  "regions": [
+    "fra1"
+  ],
   "crons": [
+    {
+      "path": "/api/cron/journeys",
+      "schedule": "*/5 * * * *"
+    },
     {
       "path": "/api/cron/automations",
       "schedule": "*/15 * * * *"
@@ -9,6 +15,10 @@
     {
       "path": "/api/cron/backup",
       "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/security",
+      "schedule": "0 6 1 * *"
     }
   ]
 }

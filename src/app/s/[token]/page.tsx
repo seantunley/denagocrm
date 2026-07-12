@@ -43,7 +43,7 @@ export default async function SurveyPublicPage({
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">{survey.title}</h1>
+      <h1 className="text-2xl font-semibold tracking-[-0.035em]">{survey.title}</h1>
       <SurveyForm
         token={token}
         intro={intro}

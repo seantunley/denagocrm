@@ -188,7 +188,7 @@ export default function FlowBuilder({ flowId, initial }: { flowId: string; initi
   const nodeOptions = rfNodes.map((n) => ({ id: n.id, label: `${TYPE_META[n.data.flow.type].icon} ${summary(n.data.flow).slice(0, 24) || n.data.flow.type}` }));
 
   return (
-    <div className="flex flex-col" style={{ height: "calc(100vh - 8rem)" }}>
+    <div className="flex min-h-[720px] flex-col md:h-[calc(100dvh-8rem)] md:min-h-0">
       {/* toolbar */}
       <div className="flex items-center gap-2 flex-wrap pb-3">
         <span className="text-xs text-slate-400 mr-1">Add:</span>
@@ -208,8 +208,8 @@ export default function FlowBuilder({ flowId, initial }: { flowId: string; initi
         </button>
       </div>
 
-      <div className="flex-1 flex gap-3 min-h-0">
-        <div className="flex-1 rounded-xl border border-slate-800 overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 md:flex-row">
+        <div className="min-h-96 flex-1 overflow-hidden rounded-xl border border-slate-800">
           <ReactFlow
             nodes={rfNodes}
             edges={edges}
@@ -227,7 +227,7 @@ export default function FlowBuilder({ flowId, initial }: { flowId: string; initi
         </div>
 
         {/* config panel */}
-        <div className="w-72 shrink-0 card overflow-y-auto">
+        <div className="card max-h-80 w-full shrink-0 overflow-y-auto md:max-h-none md:w-72">
           {!selected ? (
             <p className="text-sm text-slate-400">
               Click a node to edit it. Drag from a node&apos;s right dot to another node to connect
@@ -257,6 +257,19 @@ function clearRefs(n: FlowNode, removedId: string): FlowNode {
   return nn.next === removedId ? ({ ...n, next: undefined } as FlowNode) : n;
 }
 
+function TargetPicker({ value, onPick, nodeOptions }: {
+  value?: string;
+  onPick: (value?: string) => void;
+  nodeOptions: { id: string; label: string }[];
+}) {
+  return (
+    <select className="input btn-sm" value={value ?? ""} onChange={(event) => onPick(event.target.value || undefined)}>
+      <option value="">— (ends here) —</option>
+      {nodeOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+    </select>
+  );
+}
+
 function NodePanel({
   node, isStart, nodeOptions, onChange, onDelete, onMakeStart,
 }: {
@@ -268,13 +281,6 @@ function NodePanel({
   onMakeStart: () => void;
 }) {
   const meta = TYPE_META[node.type];
-  const TargetPicker = ({ value, onPick }: { value?: string; onPick: (v?: string) => void }) => (
-    <select className="input btn-sm" value={value ?? ""} onChange={(e) => onPick(e.target.value || undefined)}>
-      <option value="">— (ends here) —</option>
-      {nodeOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-    </select>
-  );
-
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -404,7 +410,7 @@ function NodePanel({
                 <input className="input btn-sm flex-1" value={o.label} onChange={(e) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, label: e.target.value } : x) })} />
                 <button onClick={() => onChange({ ...node, options: node.options.filter((x) => x.id !== o.id) })} className="text-slate-500 hover:text-red-400 text-sm px-1">✕</button>
               </div>
-              <TargetPicker value={o.next} onPick={(v) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, next: v } : x) })} />
+               <TargetPicker nodeOptions={nodeOptions} value={o.next} onPick={(v) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, next: v } : x) })} />
               {i === 2 && node.options.length > 3 && <p className="text-[10px] text-amber-400">WhatsApp shows &gt;3 options as a list.</p>}
             </div>
           ))}
@@ -415,11 +421,11 @@ function NodePanel({
       {/* next target for linear nodes */}
       {(node.type === "message" || node.type === "answer" || node.type === "capture" || node.type === "captureFile" || node.type === "image" || node.type === "booking" || node.type === "slots") && (
         <div><label className="label">Then go to</label>
-          <TargetPicker value={(node as { next?: string }).next} onPick={(v) => onChange({ ...node, next: v } as FlowNode)} /></div>
+          <TargetPicker nodeOptions={nodeOptions} value={(node as { next?: string }).next} onPick={(v) => onChange({ ...node, next: v } as FlowNode)} /></div>
       )}
       {node.type === "ai" && (
         <div><label className="label">On hand-off, go to</label>
-          <TargetPicker value={node.handoffNext} onPick={(v) => onChange({ ...node, handoffNext: v })} /></div>
+          <TargetPicker nodeOptions={nodeOptions} value={node.handoffNext} onPick={(v) => onChange({ ...node, handoffNext: v })} /></div>
       )}
 
       {!isStart && <button onClick={onDelete} className="btn-danger btn-sm w-full">Delete node</button>}

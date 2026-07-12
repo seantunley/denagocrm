@@ -3,14 +3,18 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import PrintActions from "@/components/PrintActions";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { getDocTemplate } from "@/lib/docTemplateStore";
 
 export default async function JobCardPrintPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ tpl?: string }>;
 }) {
   await requireUser();
   const { id } = await params;
+  const { tpl: tplId } = await searchParams;
   const jobCard = await prisma.jobCard.findUnique({
     where: { id },
     include: {
@@ -21,6 +25,7 @@ export default async function JobCardPrintPage({
     },
   });
   if (!jobCard) notFound();
+  const tpl = await getDocTemplate("jobcard", tplId);
 
   const partsTotal = jobCard.items
     .filter((i) => i.kind === "part")
@@ -52,20 +57,22 @@ export default async function JobCardPrintPage({
         <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src="/branding/denago-logo-email.png"
+            src={tpl.logoUrl ?? "/branding/denago-logo-email.png"}
             alt="Denago Cape Town EV"
             className="h-11 w-auto object-contain"
           />
           <div className="text-right">
-            <p className="text-2xl font-bold tracking-widest text-white">JOB CARD</p>
+            <p className="text-2xl font-semibold tracking-[-0.035em] tracking-widest text-white">JOB CARD</p>
             <p className="text-lg font-bold text-orange-500">#{jobCard.number}</p>
             <p className="text-xs text-slate-400 capitalize">{jobCard.status.replace("_", " ")}</p>
           </div>
         </div>
-        <div className="flex justify-between items-center px-1 py-3 text-xs text-slate-500">
-          <span>Unit 55, M5 Freeway Business Park, Maitland, Cape Town</span>
-          <span>073 789 3438 · sales@denagocpt.co.za</span>
-        </div>
+        {tpl.sections.footer !== false && (
+          <div className="flex justify-between items-center px-1 py-3 text-xs text-slate-500">
+            <span>{tpl.footerLines[0] ?? ""}</span>
+            <span>{tpl.footerLines[1] ?? ""}</span>
+          </div>
+        )}
 
         {/* Meta */}
         <div className="grid grid-cols-2 gap-6 py-5">
@@ -206,18 +213,24 @@ export default async function JobCardPrintPage({
               </p>
             </div>
           </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-10 pt-10">
-            <div>
-              <div className="border-t border-slate-900 pt-1.5">
-                <p className="text-xs text-slate-600">Technician signature · Date</p>
+        ) : tpl.sections.signatures === false ? null : (
+          <div
+            className={
+              tpl.signature.position === "strip"
+                ? "grid grid-cols-1 gap-8 pt-10"
+                : "grid grid-cols-2 gap-10 pt-10"
+            }
+          >
+            {(tpl.signature.position === "right-left"
+              ? ["Customer signature · Date", "Technician signature · Date"]
+              : ["Technician signature · Date", "Customer signature · Date"]
+            ).map((labelText) => (
+              <div key={labelText}>
+                <div className="border-t border-slate-900 pt-1.5">
+                  <p className="text-xs text-slate-600">{labelText}</p>
+                </div>
               </div>
-            </div>
-            <div>
-              <div className="border-t border-slate-900 pt-1.5">
-                <p className="text-xs text-slate-600">Customer signature · Date</p>
-              </div>
-            </div>
+            ))}
           </div>
         )}
 

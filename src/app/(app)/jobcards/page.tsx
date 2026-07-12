@@ -1,8 +1,11 @@
 import Link from "next/link";
+import { Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import ModalTrigger from "@/components/Modal";
 import JobCardForm from "@/components/JobCardForm";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { PageHeader } from "@/components/page-header";
+import { buttonVariants } from "@/components/ui/button";
 
 const statusBadge: Record<string, string> = {
   open: "bg-slate-800 text-slate-400",
@@ -26,9 +29,8 @@ export default async function JobCardsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Job cards</h1>
-        <ModalTrigger label="+ New job card" title="New job card">
+      <PageHeader title="Workshop jobs" description={`${jobCards.filter((job) => job.status !== "completed").length} active · ${jobCards.length} recent job cards`}>
+        <ModalTrigger label={<><Plus className="size-4" />New job card</>} title="New job card" buttonClass={buttonVariants({ size: "sm" })}>
           <JobCardForm
             vehicles={vehicles.map((v) => ({
               id: v.id,
@@ -36,7 +38,7 @@ export default async function JobCardsPage() {
             }))}
           />
         </ModalTrigger>
-      </div>
+      </PageHeader>
 
       <div className="card p-0 overflow-x-auto">
         <table className="table-base">

@@ -35,7 +35,7 @@ export default async function DuplicatesPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold">Duplicate contacts</h1>
+        <h1 className="text-2xl font-semibold tracking-[-0.035em]">Duplicate contacts</h1>
         <p className="text-sm text-slate-400 mt-1">
           Contacts sharing the same email or phone number. Choose which one to keep — all leads,
           vehicles, job cards and history move across, and the duplicates go to the Trash.

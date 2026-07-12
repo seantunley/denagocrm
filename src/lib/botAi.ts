@@ -1,3 +1,4 @@
+import { recordAiUsage } from "./systemHealth";
 import { getSetting } from "./settings";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
@@ -138,6 +139,7 @@ ${input.voiceNote ? "- This message arrived as a VOICE NOTE (transcribed). Reply
       return null;
     }
     const json = await res.json();
+    void recordAiUsage(json.usage);
     const text: string = json.content?.[0]?.text ?? "{}";
     const m = text.match(/\{[\s\S]*\}/);
     const parsed = JSON.parse(m ? m[0] : "{}");

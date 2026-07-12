@@ -1,61 +1,39 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
-/**
- * Standard capture-form popup. The trigger button opens an overlay modal;
- * `children` (usually a form) is server-rendered and passed in as a slot.
- */
+/** Accessible capture-form dialog with the legacy trigger API. */
 export default function ModalTrigger({
   label,
   title,
   buttonClass = "btn-primary",
   children,
 }: {
-  label: string;
+  label: ReactNode;
   title: string;
   buttonClass?: string;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    document.addEventListener("keydown", onKey);
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = "";
-    };
-  }, [open]);
-
   return (
-    <>
-      <button onClick={() => setOpen(true)} className={buttonClass}>
-        {label}
-      </button>
-
-      {open && (
-        <div
-          className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 p-4 pt-10 overflow-y-auto"
-          onPointerDown={(e) => e.target === e.currentTarget && setOpen(false)}
-        >
-          <div className="w-full max-w-2xl pb-10">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-xl font-bold text-white">{title}</h2>
-              <button
-                onClick={() => setOpen(false)}
-                className="text-slate-400 hover:text-white text-2xl leading-none cursor-pointer"
-                aria-label="Close"
-              >
-                ×
-              </button>
-            </div>
-            {children}
-          </div>
+    <Dialog>
+      <DialogTrigger asChild>
+        <button className={buttonClass}>{label}</button>
+      </DialogTrigger>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] gap-0 overflow-y-auto rounded-2xl border-white/10 bg-[#111412] p-0 shadow-[0_30px_100px_rgba(0,0,0,.65)] sm:max-w-2xl">
+        <DialogHeader className="sticky top-0 z-10 border-b border-white/[0.07] bg-[#111412]/95 px-6 py-5 backdrop-blur-xl">
+          <DialogTitle className="text-xl tracking-tight">{title}</DialogTitle>
+        </DialogHeader>
+        <div className="p-5 sm:p-6 [&>.card]:border-0 [&>.card]:bg-transparent [&>.card]:p-0 [&>.card]:shadow-none">
+          {children}
         </div>
-      )}
-    </>
+      </DialogContent>
+    </Dialog>
   );
 }

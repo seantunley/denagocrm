@@ -10,6 +10,7 @@ import { isSmsConfigured } from "@/lib/sms";
 import { resolveContacts, type SegmentCriteria } from "@/lib/campaigns";
 import { deleteSegment, setMarketingOptOut } from "@/app/actions/campaigns";
 import { contactName, formatDateTime } from "@/lib/format";
+import { PageHeader } from "@/components/page-header";
 
 // First send batch runs inside the send action — give it room.
 export const maxDuration = 60;
@@ -169,8 +170,8 @@ export default async function CampaignsPage() {
   const subscribers = (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subscribed</p><p className="text-2xl font-bold mt-1">{reachable}</p></div>
-        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Unsubscribed</p><p className="text-2xl font-bold mt-1">{optedOut}</p></div>
+        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subscribed</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{reachable}</p></div>
+        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Unsubscribed</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{optedOut}</p></div>
       </div>
       <p className="text-xs text-slate-500">
         Subscribers are customers who haven&apos;t opted out. They&apos;re the base every campaign
@@ -228,12 +229,12 @@ export default async function CampaignsPage() {
   const analytics = (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Campaigns</p><p className="text-2xl font-bold mt-1">{agg._count}</p></div>
-        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Messages sent</p><p className="text-2xl font-bold mt-1">{totalSent}</p></div>
-        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Avg open rate</p><p className="text-2xl font-bold mt-1">{openRate}%</p></div>
-        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Avg click rate</p><p className="text-2xl font-bold mt-1">{clickRate}%</p></div>
-        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subscribers</p><p className="text-2xl font-bold mt-1">{reachable}</p></div>
-        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Unsubscribed</p><p className="text-2xl font-bold mt-1">{optedOut}</p></div>
+        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Campaigns</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{agg._count}</p></div>
+        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Messages sent</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{totalSent}</p></div>
+        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Avg open rate</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{openRate}%</p></div>
+        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Avg click rate</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{clickRate}%</p></div>
+        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subscribers</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{reachable}</p></div>
+        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Unsubscribed</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{optedOut}</p></div>
       </div>
       <p className="text-xs text-slate-500">
         Open rates are approximate (mail privacy features auto-load or block the tracking pixel).
@@ -263,12 +264,7 @@ export default async function CampaignsPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-bold">Campaigns</h1>
-        <p className="text-sm text-slate-400 mt-0.5">
-          Email &amp; SMS marketing — audiences, templates, sending and analytics.
-        </p>
-      </div>
+      <PageHeader title="Campaigns" description={`${campaigns.length} campaigns · ${reachable} reachable subscribers · Email and SMS performance.`} />
       <Tabs
         tabs={[
           { key: "new", label: "New campaign", content: newCampaign },

@@ -1,9 +1,12 @@
 import Link from "next/link";
+import { UserRound, UsersRound } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { completeActivity, cancelActivity } from "@/app/actions/activities";
 import { activityIcons } from "@/components/ActivityPanel";
-import { contactName, formatDate, formatDue } from "@/lib/format";
+import { contactName, formatDue } from "@/lib/format";
+import { PageHeader } from "@/components/page-header";
+import { buttonVariants } from "@/components/ui/button";
 
 export default async function ActivitiesPage({
   searchParams,
@@ -44,17 +47,14 @@ export default async function ActivitiesPage({
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <h1 className="text-2xl font-bold">Activities</h1>
-        <div className="flex gap-2">
-          <Link href="/activities" className={mine ? "btn-primary" : "btn-secondary"}>
-            Mine
+      <PageHeader title="Activities" description={`${activities.length} planned follow-up${activities.length === 1 ? "" : "s"}${mine ? " assigned to you" : " across the team"}.`}>
+          <Link href="/activities" className={buttonVariants({ variant: mine ? "default" : "outline", size: "sm" })}>
+            <UserRound className="size-4" />Mine
           </Link>
-          <Link href="/activities?who=all" className={!mine ? "btn-primary" : "btn-secondary"}>
-            Everyone
+          <Link href="/activities?who=all" className={buttonVariants({ variant: !mine ? "default" : "outline", size: "sm" })}>
+            <UsersRound className="size-4" />Everyone
           </Link>
-        </div>
-      </div>
+      </PageHeader>
 
       {activities.length === 0 && (
         <div className="card text-center py-10">

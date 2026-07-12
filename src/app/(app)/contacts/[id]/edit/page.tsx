@@ -21,7 +21,7 @@ export default async function EditContactPage({
 
   return (
     <div className="space-y-5">
-      <h1 className="text-2xl font-bold">Edit {contactName(contact)}</h1>
+      <h1 className="text-2xl font-semibold tracking-[-0.035em]">Edit {contactName(contact)}</h1>
       <ContactForm
         action={updateContact.bind(null, contact.id)}
         defaults={{ ...contact, tags: contact.tags.map((t) => t.name).join(", ") }}

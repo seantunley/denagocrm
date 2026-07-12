@@ -21,6 +21,9 @@ export const PUSH_KINDS = [
   { id: "bot_handoff", label: "Bot hand-offs", desc: "The WhatsApp assistant hands a chat to a human" },
   { id: "booking", label: "Service bookings", desc: "Online booking lands in the workshop diary" },
   { id: "service_request", label: "Portal service requests", desc: "A customer requests a service from the portal" },
+  { id: "portal_case", label: "Support cases", desc: "A customer opens or replies to a support case in the portal" },
+  { id: "warranty", label: "Warranty claims", desc: "A customer lodges a warranty claim from the portal" },
+  { id: "portal_profile", label: "Profile change requests", desc: "A customer requests a change to their contact details" },
   { id: "quote_viewed", label: "Quote opened", desc: "Customer views their signing link" },
   { id: "quote_signed", label: "Quote / job card signed", desc: "Customer signs online" },
   { id: "quote_feedback", label: "Quote declined / changes", desc: "Customer declines or requests changes" },
@@ -28,6 +31,8 @@ export const PUSH_KINDS = [
   { id: "email_in", label: "Email replies", desc: "A customer replies to an email (IMAP)" },
   { id: "referral", label: "Referral fees", desc: "A referred deal is won — fee due" },
   { id: "system_error", label: "System errors", desc: "Something in the CRM failed (throttled to 1/30min)" },
+  { id: "security", label: "Security & AI health", desc: "Monthly runbook results and AI/billing problems — route to whoever owns security" },
+  { id: "backup", label: "Backup failures", desc: "The nightly backup missed its window (throttled to 1/day)" },
   { id: "activity_reminder", label: "Meeting reminders", desc: "An hour before timed meetings/test drives — tap opens Google Maps" },
 ] as const;
 

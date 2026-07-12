@@ -5,6 +5,7 @@ import { contactName, formatDate } from "@/lib/format";
 import { computeWarranty, warrantyColors, warrantyLabels, claimColors } from "@/lib/warranty";
 import { createRecall, deleteRecall } from "@/app/actions/warranty";
 import RecallNotifyButton from "@/components/RecallNotifyButton";
+import { PageHeader } from "@/components/page-header";
 
 export const dynamic = "force-dynamic";
 
@@ -33,12 +34,7 @@ export default async function WarrantyPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold">Warranty &amp; recalls</h1>
-        <p className="text-sm text-slate-400 mt-0.5">
-          Expiring warranties, open claims, and recall / service bulletins.
-        </p>
-      </div>
+      <PageHeader title="Warranty & recalls" description={`${expiring.length} expiring · ${claims.length} open claims · ${recalls.length} recall bulletins`} />
 
       {/* Expiring warranties */}
       <section className="space-y-3">
@@ -103,12 +99,13 @@ export default async function WarrantyPage() {
                 <th>Fault</th>
                 <th>Status</th>
                 <th>Opened</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
               {claims.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="text-center text-slate-400 py-6">
+                  <td colSpan={6} className="text-center text-slate-400 py-6">
                     No open claims.
                   </td>
                 </tr>
@@ -128,6 +125,11 @@ export default async function WarrantyPage() {
                     <span className={`badge ${claimColors[c.status]}`}>{c.status}</span>
                   </td>
                   <td className="text-slate-400">{formatDate(c.claimedAt)}</td>
+                  <td className="text-right">
+                    <a href={`/warranty/${c.id}/print`} target="_blank" rel="noreferrer" className="text-xs text-orange-400 hover:underline">
+                      Print claim
+                    </a>
+                  </td>
                 </tr>
               ))}
             </tbody>

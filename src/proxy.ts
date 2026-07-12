@@ -10,6 +10,7 @@ import {
 // /api/cron authenticates itself with the intake API key
 const PUBLIC_PATHS = [
   "/login",
+  "/api/auth/passkey/auth", // passkey (WebAuthn) login options + verify — pre-session
   "/api/webhooks",
   "/api/intake",
   "/api/cron",
@@ -20,6 +21,7 @@ const PUBLIC_PATHS = [
   "/api/track", // campaign open/click tracking
   "/api/unsubscribe", // one-click marketing unsubscribe
   "/portal", // customer portal has its own OTP session
+  "/api/portal", // portal document/upload routes self-check the portal session
   "/s", // public survey response pages (token-gated)
   "/manifest.webmanifest",
   "/icons",

@@ -24,7 +24,7 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
       <div>
         <Link href="/bot-builder" className="text-sm text-orange-400 hover:underline">← All flows</Link>
         <div className="flex items-center gap-3 mt-1 flex-wrap">
-          <h1 className="text-2xl font-bold">{row.name}</h1>
+          <h1 className="text-2xl font-semibold tracking-[-0.035em]">{row.name}</h1>
           {row.active && <span className="badge bg-emerald-500/15 text-emerald-300">Live</span>}
         </div>
         <p className="text-sm text-slate-400 mt-0.5">

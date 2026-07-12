@@ -1,0 +1,158 @@
+"use server";
+
+import crypto from "crypto";
+import { Prisma } from "@prisma/client";
+import { revalidatePath } from "next/cache";
+import { basePrisma, prisma } from "@/lib/db";
+import { requireOwner } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
+
+const text = (formData: FormData, key: string) => String(formData.get(key) ?? "").trim();
+
+export async function grantPortalAccess(formData: FormData) {
+  const user = await requireOwner();
+  const viewerContactId = text(formData, "viewerContactId");
+  const targetType = text(formData, "targetType");
+  const targetId = text(formData, "targetId");
+  const role = text(formData, "role") || "viewer";
+  if (!viewerContactId || !targetId || !["contact", "fleet"].includes(targetType)) {
+    throw new Error("Viewer and target are required");
+  }
+  if (!["viewer", "manager", "owner"].includes(role)) throw new Error("Invalid portal role");
+
+  const id = crypto.randomUUID();
+  if (targetType === "contact") {
+    await basePrisma.$executeRaw`
+      INSERT INTO "PortalAccessGrant" ("id", "viewerContactId", "grantedContactId", "role", "createdById")
+      VALUES (${id}, ${viewerContactId}, ${targetId}, ${role}, ${user.id})
+      ON CONFLICT ("viewerContactId", "grantedContactId") WHERE "grantedContactId" IS NOT NULL
+      DO UPDATE SET "active" = true, "role" = EXCLUDED."role", "createdById" = EXCLUDED."createdById"
+    `;
+  } else {
+    await basePrisma.$executeRaw`
+      INSERT INTO "PortalAccessGrant" ("id", "viewerContactId", "fleetId", "role", "createdById")
+      VALUES (${id}, ${viewerContactId}, ${targetId}, ${role}, ${user.id})
+      ON CONFLICT ("viewerContactId", "fleetId") WHERE "fleetId" IS NOT NULL
+      DO UPDATE SET "active" = true, "role" = EXCLUDED."role", "createdById" = EXCLUDED."createdById"
+    `;
+  }
+  await logAudit({
+    action: "portal.access_granted",
+    summary: `Granted ${role} portal access to ${targetType} ${targetId}`,
+    contactId: viewerContactId,
+    user,
+    entityType: "PortalAccessGrant",
+    entityId: id,
+  });
+  revalidatePath("/settings/portal-access");
+}
+
+export async function revokePortalAccess(id: string, formData: FormData) {
+  void formData;
+  const user = await requireOwner();
+  const rows = await basePrisma.$queryRaw<Array<{ viewerContactId: string }>>`
+    SELECT "viewerContactId" FROM "PortalAccessGrant" WHERE "id" = ${id} LIMIT 1
+  `;
+  await basePrisma.$executeRaw`
+    UPDATE "PortalAccessGrant" SET "active" = false WHERE "id" = ${id}
+  `;
+  await logAudit({
+    action: "portal.access_revoked",
+    summary: "Revoked portal access grant",
+    contactId: rows[0]?.viewerContactId ?? null,
+    user,
+    entityType: "PortalAccessGrant",
+    entityId: id,
+  });
+  revalidatePath("/settings/portal-access");
+}
+
+type ProfileRequestRow = {
+  id: string;
+  contactId: string;
+  changes: Record<string, unknown>;
+  status: string;
+};
+
+function optionalText(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  if (typeof value === "string") return value.slice(0, 500);
+  return undefined;
+}
+
+function profileData(changes: Record<string, unknown>): Prisma.ContactUpdateInput {
+  const data: Prisma.ContactUpdateInput = {};
+  if (changes.firstName !== undefined) {
+    if (typeof changes.firstName !== "string" || !changes.firstName.trim()) {
+      throw new Error("First name cannot be blank");
+    }
+    data.firstName = changes.firstName.slice(0, 200);
+  }
+  const lastName = optionalText(changes.lastName);
+  const phone = optionalText(changes.phone);
+  const whatsapp = optionalText(changes.whatsapp);
+  const address = optionalText(changes.address);
+  const suburb = optionalText(changes.suburb);
+  const city = optionalText(changes.city);
+  const province = optionalText(changes.province);
+  const postalCode = optionalText(changes.postalCode);
+  if (lastName !== undefined) data.lastName = lastName;
+  if (phone !== undefined) data.phone = phone;
+  if (whatsapp !== undefined) data.whatsapp = whatsapp;
+  if (address !== undefined) data.address = address;
+  if (suburb !== undefined) data.suburb = suburb;
+  if (city !== undefined) data.city = city;
+  if (province !== undefined) data.province = province;
+  if (postalCode !== undefined) data.postalCode = postalCode;
+  return data;
+}
+
+export async function reviewPortalProfileRequest(
+  id: string,
+  decision: "approved" | "rejected",
+  formData: FormData
+) {
+  const user = await requireOwner();
+  const reviewNote = text(formData, "reviewNote") || null;
+  const rows = await basePrisma.$queryRaw<ProfileRequestRow[]>`
+    SELECT "id", "contactId", "changes", "status"
+    FROM "PortalProfileChangeRequest" WHERE "id" = ${id} LIMIT 1
+  `;
+  const request = rows[0];
+  if (!request) throw new Error("Profile request not found");
+  if (request.status !== "pending") throw new Error("Profile request has already been reviewed");
+
+  const before = await prisma.contact.findUniqueOrThrow({ where: { id: request.contactId } });
+  const changes = profileData(request.changes);
+  await basePrisma.$transaction(async (tx) => {
+    if (decision === "approved") {
+      await tx.contact.update({ where: { id: request.contactId }, data: changes });
+    }
+    await tx.$executeRaw`
+      UPDATE "PortalProfileChangeRequest"
+      SET "status" = ${decision}, "reviewNote" = ${reviewNote}, "reviewedAt" = CURRENT_TIMESTAMP, "reviewedById" = ${user.id}
+      WHERE "id" = ${id} AND "status" = 'pending'
+    `;
+    await tx.$executeRaw`
+      INSERT INTO "PortalNotification" ("id", "contactId", "title", "body", "href", "kind")
+      VALUES (
+        ${crypto.randomUUID()}, ${request.contactId},
+        ${decision === "approved" ? "Profile update approved" : "Profile update needs attention"},
+        ${decision === "approved" ? "Your requested profile changes have been applied." : reviewNote || "Your requested profile changes were not applied."},
+        '/portal/profile', 'profile'
+      )
+    `;
+  });
+  await logAudit({
+    action: `portal.profile_change_${decision}`,
+    summary: `Portal profile request ${decision}`,
+    contactId: request.contactId,
+    user,
+    entityType: "PortalProfileChangeRequest",
+    entityId: id,
+    before,
+    after: decision === "approved" ? changes : { decision, reviewNote },
+  });
+  revalidatePath("/settings/portal-access");
+  revalidatePath(`/contacts/${request.contactId}`);
+}

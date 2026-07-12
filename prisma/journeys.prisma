@@ -1,0 +1,112 @@
+/// Versioned multi-step marketing journeys and CRM automations.
+/// Kept in a separate Prisma schema file so the domain can evolve independently.
+model Journey {
+  id            String   @id @default(cuid())
+  name          String
+  description   String?
+  category      String   @default("automation") // automation | marketing
+  status        String   @default("draft") // draft | active | paused | archived
+  activeVersion Int?
+  createdById   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  versions JourneyVersion[]
+  runs     JourneyRun[]
+  events   JourneyEvent[]
+
+  @@index([status, category])
+}
+
+model JourneyVersion {
+  id              String    @id @default(cuid())
+  journeyId       String
+  journey         Journey   @relation(fields: [journeyId], references: [id], onDelete: Cascade)
+  version         Int
+  state           String    @default("draft") // draft | published | retired
+  trigger         String
+  triggerConfig   Json?
+  entryConditions Json?
+  definition      Json
+  createdById     String?
+  createdAt       DateTime  @default(now())
+  publishedAt     DateTime?
+
+  runs JourneyRun[]
+
+  @@unique([journeyId, version])
+  @@index([journeyId, state])
+  @@index([trigger, state])
+}
+
+/// Durable incoming event. Events are intentionally small and provider-neutral.
+model JourneyEvent {
+  id          String    @id @default(cuid())
+  journeyId   String?
+  journey     Journey?  @relation(fields: [journeyId], references: [id], onDelete: Cascade)
+  type        String
+  entityType  String // lead | contact
+  entityId    String
+  payload     Json?
+  status      String    @default("pending") // pending | processing | processed | failed
+  attempts    Int       @default(0)
+  availableAt DateTime  @default(now())
+  processedAt DateTime?
+  error       String?
+  dedupeKey   String    @unique
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([status, availableAt])
+  @@index([type, status])
+  @@index([journeyId, status])
+}
+
+/// A run is pinned to an immutable published version.
+model JourneyRun {
+  id               String         @id @default(cuid())
+  journeyId        String
+  journey          Journey        @relation(fields: [journeyId], references: [id], onDelete: Cascade)
+  journeyVersionId String
+  journeyVersion   JourneyVersion @relation(fields: [journeyVersionId], references: [id], onDelete: Restrict)
+  status           String         @default("queued") // queued | running | waiting | completed | failed | cancelled
+  entityType       String
+  entityId         String
+  leadId           String?
+  contactId        String?
+  currentStepId    String?
+  context          Json
+  nextRunAt        DateTime       @default(now())
+  attempts         Int            @default(0)
+  lastError        String?
+  idempotencyKey   String         @unique
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  stepLogs JourneyStepLog[]
+
+  @@index([status, nextRunAt])
+  @@index([journeyId, status])
+  @@index([entityType, entityId])
+  @@index([leadId])
+  @@index([contactId])
+}
+
+model JourneyStepLog {
+  id          String     @id @default(cuid())
+  runId       String
+  run         JourneyRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  stepId      String
+  stepType    String
+  status      String // running | completed | skipped | failed
+  note        String?
+  output      Json?
+  startedAt   DateTime   @default(now())
+  completedAt DateTime?
+
+  @@unique([runId, stepId])
+  @@index([runId, startedAt])
+  @@index([status, startedAt])
+}

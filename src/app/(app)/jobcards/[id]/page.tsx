@@ -60,7 +60,7 @@ export default async function JobCardDetailPage({
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold">Job card #{jobCard.number}</h1>
+            <h1 className="text-2xl font-semibold tracking-[-0.035em]">Job card #{jobCard.number}</h1>
             <span className={`badge ${statusBadge}`}>{jobCard.status.replace("_", " ")}</span>
           </div>
           <p className="text-sm text-slate-400 mt-0.5">
@@ -81,6 +81,11 @@ export default async function JobCardDetailPage({
           <Link href={`/jobcards/${jobCard.id}/print`} className="btn-secondary">
             🖨 Print
           </Link>
+          {jobCard.status === "completed" && (
+            <Link href={`/jobcards/${jobCard.id}/service-report`} className="btn-secondary" target="_blank">
+              📋 Service report
+            </Link>
+          )}
           {jobCard.status === "open" && (
             <form action={setJobCardStatus.bind(null, jobCard.id, "in_progress")}>
               <button className="btn bg-amber-500 text-white hover:bg-amber-600">

@@ -1,18 +1,57 @@
 import Link from "next/link";
-import { subDays, addDays, startOfDay } from "date-fns";
+import { subDays, addDays, startOfDay, startOfMonth, subMonths } from "date-fns";
+import {
+  SquareKanban,
+  CircleDollarSign,
+  Truck,
+  Wrench,
+  Clock4,
+  CarFront,
+  Phone,
+  Mail,
+  MessageCircle,
+  Car,
+  Users,
+  Check,
+  TriangleAlert,
+  ArrowRight,
+  type LucideIcon,
+} from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
-import { completeActivity } from "@/app/actions/activities";
-import { activityIcons } from "@/components/ActivityPanel";
+import { getAiHealth } from "@/lib/systemHealth";
+import { getLastRun } from "@/lib/securityRunbook";
+import { CompleteActivityButton, FollowUpPrompts } from "@/components/proactive/NextStep";
 import Tabs from "@/components/Tabs";
 import { hasModule } from "@/lib/access";
-import { formatZAR, formatZARCompact, formatDate, formatDateTime, contactName } from "@/lib/format";
+import { formatZARCompact, formatDate, formatDateTime, contactName } from "@/lib/format";
+import { computeDue, dueLabels, dueColors } from "@/lib/serviceDue";
+import { cn } from "@/lib/utils";
+import {
+  Stagger,
+  StaggerItem,
+  StatSparkCard,
+  PipelineSnapshot,
+  TargetRings,
+  type SparkStat,
+  type PipeSeg,
+  type RingDef,
+} from "@/components/dashboard/widgets";
 
 const timeOf = (d: Date) =>
   d.getUTCHours() !== 0 || d.getUTCMinutes() !== 0
     ? d.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Johannesburg" })
     : null;
-import { computeDue, dueLabels, dueColors } from "@/lib/serviceDue";
+
+/* ── agenda / list building blocks (server-rendered) ─────────────── */
+
+const ACTIVITY_ICONS: Record<string, LucideIcon> = {
+  call: Phone,
+  email: Mail,
+  whatsapp: MessageCircle,
+  meeting: Users,
+  test_drive: Car,
+};
 
 type DashActivity = {
   id: string;
@@ -25,113 +64,153 @@ type DashActivity = {
   contact: { id: string; firstName: string; lastName: string | null; isCompany: boolean; company: string | null } | null;
 };
 
-function ActivityBlock({
+function SectionCard({
   title,
-  items,
-  emptyText,
-  highlightOverdue,
+  action,
+  children,
 }: {
   title: string;
-  items: DashActivity[];
-  emptyText: string;
-  highlightOverdue?: boolean;
+  action?: { href: string; label: string };
+  children: React.ReactNode;
 }) {
-  const startOfToday = startOfDay(new Date());
   return (
-    <div className="card p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{title}</p>
-      {items.length === 0 ? (
-        <p className="text-xs text-slate-500">{emptyText}</p>
-      ) : (
-        <ul className="divide-y divide-slate-800/60">
-          {items.map((a) => {
-            const overdue = highlightOverdue && a.dueDate < startOfToday;
-            const who = a.lead ? (
-              <Link href={`/leads/${a.lead.id}`} className="text-orange-400 hover:underline">
-                {a.lead.name}
-              </Link>
-            ) : a.contact ? (
-              <Link href={`/contacts/${a.contact.id}`} className="text-orange-400 hover:underline">
-                {contactName(a.contact)}
-              </Link>
-            ) : null;
-            return (
-              <li key={a.id} className="py-1.5 flex items-center gap-2">
-                <span className="w-5 text-center text-sm shrink-0">
-                  {a.category === "workshop" ? "🔧" : activityIcons[a.type] ?? "☑️"}
-                </span>
-                <p className="flex-1 min-w-0 truncate text-sm">
-                  {overdue && <span className="text-red-400">⚠ </span>}
-                  {timeOf(a.dueDate) && (
-                    <span className="font-semibold text-orange-300">{timeOf(a.dueDate)} </span>
-                  )}
-                  {a.summary}
-                  <span className="text-[11px] text-slate-500">
-                    {" — "}
-                    {who ?? "general"} · {a.assignedTo.name.split(" ")[0]}
-                    {overdue && <span className="text-red-400"> · {formatDate(a.dueDate)}</span>}
-                  </span>
-                </p>
-                <form action={completeActivity.bind(null, a.id)} className="shrink-0">
-                  <input type="hidden" name="revalidate" value="/" />
-                  <button
-                    className="text-slate-500 hover:text-emerald-400 text-sm cursor-pointer px-1"
-                    title="Mark done"
-                  >
-                    ✓
-                  </button>
-                </form>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+    <div className="min-w-0 rounded-xl border border-border bg-card p-4 shadow-sm">
+      <div className="mb-2 flex items-center justify-between">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          {title}
+        </p>
+        {action && (
+          <Link
+            href={action.href}
+            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+          >
+            {action.label}
+            <ArrowRight className="size-3" />
+          </Link>
+        )}
+      </div>
+      {children}
     </div>
   );
 }
 
-function StatStrip({
-  stats,
-}: {
-  stats: { label: string; value: string; href: string; icon?: string }[];
-}) {
+function ActivityRow({ a, highlightOverdue }: { a: DashActivity; highlightOverdue?: boolean }) {
+  const startOfToday = startOfDay(new Date());
+  const overdue = highlightOverdue && a.dueDate < startOfToday;
+  const Icon = a.category === "workshop" ? Wrench : ACTIVITY_ICONS[a.type] ?? Check;
+  const who = a.lead ? (
+    <Link href={`/leads/${a.lead.id}`} className="text-primary hover:underline">
+      {a.lead.name}
+    </Link>
+  ) : a.contact ? (
+    <Link href={`/contacts/${a.contact.id}`} className="text-primary hover:underline">
+      {contactName(a.contact)}
+    </Link>
+  ) : null;
   return (
-    <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-      {stats.map((s) => (
-        <Link
-          key={s.label}
-          href={s.href}
-          className="card hover:border-orange-600/60 transition-colors min-w-0"
-        >
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 truncate">
-            {s.label}
-          </p>
-          <p className="text-2xl font-bold mt-1 truncate" title={s.value}>
-            {s.value}
-          </p>
-        </Link>
-      ))}
-    </div>
+    <li className="group flex items-center gap-2.5 py-1.5">
+      <span
+        className={cn(
+          "flex size-6 shrink-0 items-center justify-center rounded-md",
+          overdue ? "bg-destructive/15 text-destructive" : "bg-muted text-muted-foreground"
+        )}
+      >
+        {overdue ? <TriangleAlert className="size-3.5" /> : <Icon className="size-3.5" />}
+      </span>
+      <p className="min-w-0 flex-1 truncate text-[13px] text-foreground">
+        {timeOf(a.dueDate) && (
+          <span className="font-semibold tabular-nums text-primary">{timeOf(a.dueDate)} </span>
+        )}
+        {a.summary}
+        <span className="text-[11px] text-muted-foreground">
+          {" — "}
+          {who ?? "general"} · {a.assignedTo.name.split(" ")[0]}
+          {overdue && <span className="text-destructive"> · {formatDate(a.dueDate)}</span>}
+        </span>
+      </p>
+      <span className="shrink-0">
+        <CompleteActivityButton activityId={a.id} />
+      </span>
+    </li>
   );
 }
+
+/** Today + tomorrow merged into one card with day dividers — no empty panels. */
+function AgendaCard({
+  today,
+  tomorrow,
+  action,
+}: {
+  today: DashActivity[];
+  tomorrow: DashActivity[];
+  action?: { href: string; label: string };
+}) {
+  const DayLabel = ({ children }: { children: React.ReactNode }) => (
+    <p className="pb-0.5 pt-2.5 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground/60 first:pt-0">
+      {children}
+    </p>
+  );
+  return (
+    <SectionCard title="Agenda" action={action}>
+      <DayLabel>Today</DayLabel>
+      {today.length === 0 ? (
+        <p className="py-1 text-xs text-muted-foreground/60">Nothing due today.</p>
+      ) : (
+        <ul className="divide-y divide-border/50">
+          {today.map((a) => (
+            <ActivityRow key={a.id} a={a} highlightOverdue />
+          ))}
+        </ul>
+      )}
+      <DayLabel>Tomorrow</DayLabel>
+      {tomorrow.length === 0 ? (
+        <p className="py-1 text-xs text-muted-foreground/60">Nothing planned yet.</p>
+      ) : (
+        <ul className="divide-y divide-border/50">
+          {tomorrow.map((a) => (
+            <ActivityRow key={a.id} a={a} />
+          ))}
+        </ul>
+      )}
+    </SectionCard>
+  );
+}
+
+/* ── helpers ──────────────────────────────────────────────────────── */
+
+/** Daily counts (index 0 = 1st of the month) for sparklines. */
+function dailySeries(dates: Date[], daysInSeries: number, value?: (i: number) => number) {
+  const out = new Array(Math.max(2, daysInSeries)).fill(0);
+  dates.forEach((d, i) => {
+    const idx = d.getDate() - 1;
+    if (idx >= 0 && idx < out.length) out[idx] += value ? value(i) : 1;
+  });
+  return out;
+}
+
+const pctDelta = (cur: number, prev: number): number | null =>
+  prev === 0 ? (cur > 0 ? 100 : null) : Math.round(((cur - prev) / prev) * 100);
+
+/* ── page ─────────────────────────────────────────────────────────── */
 
 export default async function DashboardPage() {
   const user = await requireUser();
   const showSales = hasModule(user, "crm");
   const showService = hasModule(user, "workshop");
-  // Idle-lead automations are owned by the 15-minute cron; don't block the
-  // dashboard (the most-hit, auto-refreshing page) on that scan.
 
   const now = new Date();
-  const weekAgo = subDays(now, 7);
   const todayStart = startOfDay(now);
   const tomorrowStart = addDays(todayStart, 1);
   const dayAfterStart = addDays(todayStart, 2);
+  const monthStart = startOfMonth(now);
+  const prevMonthStart = startOfMonth(subMonths(now, 1));
+  // same-days window of last month, for honest deltas mid-month
+  const prevSameDay = new Date(prevMonthStart.getTime() + (now.getTime() - monthStart.getTime()));
+  const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
   const [
     openLeads,
     openValue,
-    newThisWeek,
     awaitingDelivery,
     openJobCards,
     vehicles,
@@ -139,14 +218,23 @@ export default async function DashboardPage() {
     recentLeads,
     todayAll,
     tomorrowAll,
+    leadsMTD,
+    prevLeadsCount,
+    wonMTD,
+    prevWon,
+    deliveriesMTD,
+    servicesMTD,
+    prevServices,
+    targets,
+    openByStage,
+    myOverdue,
+    noNextLeads,
+    staleQuotes,
   ] = await Promise.all([
     prisma.lead.count({ where: { status: "open" } }),
     prisma.lead.aggregate({ where: { status: "open" }, _sum: { valueCents: true } }),
-    prisma.lead.count({ where: { createdAt: { gte: weekAgo } } }),
     prisma.quote.count({ where: { status: "accepted", deliveredAt: null, supersededAt: null } }),
     prisma.jobCard.count({ where: { status: { not: "completed" } } }),
-    // computeDue only needs the latest service record + latest mileage log,
-    // so don't haul every child row (mileageLogs grows fastest in the app).
     prisma.vehicle.findMany({
       include: {
         contact: true,
@@ -155,7 +243,7 @@ export default async function DashboardPage() {
       },
     }),
     prisma.communication.findMany({
-      where: { subject: { not: "🔎 AI research" } }, // legacy research notes are not comms
+      where: { subject: { not: "🔎 AI research" } },
       take: 5,
       orderBy: { occurredAt: "desc" },
       include: { user: true, contact: true, lead: true },
@@ -166,7 +254,7 @@ export default async function DashboardPage() {
       include: { product: true, stage: true },
     }),
     prisma.activity.findMany({
-      where: { status: "planned", dueDate: { lt: tomorrowStart } }, // incl. overdue
+      where: { status: "planned", dueDate: { lt: tomorrowStart } },
       orderBy: { dueDate: "asc" },
       include: { lead: true, contact: true, assignedTo: true },
       take: 20,
@@ -176,6 +264,59 @@ export default async function DashboardPage() {
       orderBy: { dueDate: "asc" },
       include: { lead: true, contact: true, assignedTo: true },
       take: 20,
+    }),
+    prisma.lead.findMany({
+      where: { createdAt: { gte: monthStart } },
+      select: { createdAt: true },
+    }),
+    prisma.lead.count({ where: { createdAt: { gte: prevMonthStart, lt: prevSameDay } } }),
+    // updatedAt ≈ when the deal was marked won
+    prisma.lead.findMany({
+      where: { status: "won", updatedAt: { gte: monthStart } },
+      select: { updatedAt: true, valueCents: true },
+    }),
+    prisma.lead.findMany({
+      where: { status: "won", updatedAt: { gte: prevMonthStart, lt: prevSameDay } },
+      select: { valueCents: true },
+    }),
+    prisma.quote.count({ where: { deliveredAt: { gte: monthStart } } }),
+    prisma.jobCard.findMany({
+      where: { status: "completed", completedAt: { gte: monthStart } },
+      select: { completedAt: true },
+    }),
+    prisma.jobCard.count({
+      where: { status: "completed", completedAt: { gte: prevMonthStart, lt: prevSameDay } },
+    }),
+    prisma.target.findMany({ where: { period } }),
+    prisma.lead.findMany({
+      where: { status: "open" },
+      select: { valueCents: true, stage: { select: { id: true, name: true, color: true, order: true } } },
+    }),
+    // My overdue items — the on-open "did this happen?" queue (capped client-side)
+    prisma.activity.findMany({
+      where: { status: "planned", dueDate: { lt: todayStart }, assignedToId: user.id },
+      orderBy: { dueDate: "asc" },
+      take: 3,
+      include: { lead: true },
+    }),
+    // Attention: open leads with nothing planned — the #1 cause of pipeline rot
+    prisma.lead.findMany({
+      where: { status: "open", activities: { none: { status: "planned" } } },
+      select: { id: true, name: true, stage: { select: { name: true, color: true } } },
+      orderBy: { createdAt: "asc" },
+      take: 5,
+    }),
+    // Attention: quotes sent but unsigned for 3+ days — time to call
+    prisma.quote.findMany({
+      where: {
+        status: "sent",
+        supersededAt: null,
+        signedAt: null,
+        createdAt: { lt: subDays(now, 3) },
+      },
+      select: { id: true, number: true, createdAt: true, lead: { select: { name: true } }, contact: { select: { firstName: true, lastName: true, isCompany: true, company: true } } },
+      orderBy: { createdAt: "asc" },
+      take: 5,
     }),
   ]);
 
@@ -189,8 +330,177 @@ export default async function DashboardPage() {
     .filter((x) => x.due.status === "overdue" || x.due.status === "due_soon")
     .sort((a, b) => (a.due.status === "overdue" ? -1 : 1) - (b.due.status === "overdue" ? -1 : 1));
 
+  // One chronological feed: new leads + logged communications together
+  const feed = [
+    ...recentLeads.map((l) => ({ kind: "lead" as const, when: l.createdAt, lead: l })),
+    ...recentComms.map((c) => ({ kind: "comm" as const, when: c.occurredAt, comm: c })),
+  ]
+    .sort((a, b) => b.when.getTime() - a.when.getTime())
+    .slice(0, 8);
+
+  /* Sparkline + stat data (this month) */
+  const daysSoFar = now.getDate();
+  const wonValueMTD = wonMTD.reduce((s, w) => s + w.valueCents, 0);
+  const prevWonValue = prevWon.reduce((s, w) => s + w.valueCents, 0);
+
+  const salesStats: { stat: SparkStat; icon: React.ReactNode }[] = [
+    {
+      icon: <SquareKanban />,
+      stat: {
+        label: "New leads (month)",
+        value: leadsMTD.length,
+        delta: pctDelta(leadsMTD.length, prevLeadsCount),
+        href: "/leads",
+        spark: dailySeries(leadsMTD.map((l) => l.createdAt), daysSoFar),
+      },
+    },
+    {
+      icon: <CircleDollarSign />,
+      stat: {
+        label: "Won value (month)",
+        value: Math.round(wonValueMTD / 100),
+        display: "zar",
+        delta: pctDelta(wonValueMTD, prevWonValue),
+        href: "/reports",
+        spark: dailySeries(wonMTD.map((w) => w.updatedAt), daysSoFar, (i) =>
+          Math.round(wonMTD[i].valueCents / 100)
+        ),
+      },
+    },
+    {
+      icon: <SquareKanban />,
+      stat: {
+        label: "Open leads",
+        value: openLeads,
+        delta: null,
+        href: "/leads",
+        spark: dailySeries(leadsMTD.map((l) => l.createdAt), daysSoFar),
+      },
+    },
+    {
+      icon: <Truck />,
+      stat: { label: "To deliver", value: awaitingDelivery, delta: null, href: "/deliveries", spark: [] },
+    },
+  ];
+
+  const serviceStats: { stat: SparkStat; icon: React.ReactNode }[] = [
+    {
+      icon: <Wrench />,
+      stat: { label: "Open job cards", value: openJobCards, delta: null, href: "/jobcards", spark: [] },
+    },
+    {
+      icon: <Check />,
+      stat: {
+        label: "Services (month)",
+        value: servicesMTD.length,
+        delta: pctDelta(servicesMTD.length, prevServices),
+        href: "/jobcards",
+        spark: dailySeries(servicesMTD.map((j) => j.completedAt!), daysSoFar),
+      },
+    },
+    {
+      icon: <Clock4 />,
+      stat: {
+        label: "Service due",
+        value: dueVehicles.length,
+        delta: null,
+        href: "/service-due",
+        spark: [],
+        tone: dueVehicles.length > 0 ? "warn" : "default",
+      },
+    },
+    {
+      icon: <CarFront />,
+      stat: { label: "Fleet", value: vehicles.length, delta: null, href: "/vehicles", spark: [] },
+    },
+  ];
+
+  /* Pipeline snapshot */
+  const segMap = new Map<string, PipeSeg & { order: number }>();
+  for (const l of openByStage) {
+    const cur =
+      segMap.get(l.stage.id) ??
+      { name: l.stage.name, color: l.stage.color, count: 0, value: 0, order: l.stage.order };
+    cur.count += 1;
+    cur.value += l.valueCents;
+    segMap.set(l.stage.id, cur);
+  }
+  const segments = [...segMap.values()].sort((a, b) => a.order - b.order);
+
+  /* Target rings */
+  const tMap = new Map(targets.map((t) => [t.metric, t.value]));
+  const rings: RingDef[] = [
+    { label: "Leads", actual: leadsMTD.length, target: tMap.get("leads") ?? 0, display: "int", color: "var(--chart-2)" },
+    { label: "Sales", actual: Math.round(wonValueMTD / 100), target: Math.round((tMap.get("sales_value") ?? 0) / 100), display: "zar", color: "var(--chart-1)" },
+    { label: "Deliveries", actual: deliveriesMTD, target: tMap.get("deliveries") ?? 0, display: "int", color: "var(--chart-3)" },
+    { label: "Services", actual: servicesMTD.length, target: tMap.get("services") ?? 0, display: "int", color: "var(--chart-4)" },
+  ];
+
+  // Proactive system alerts — problems surface HERE before customers notice
+  const [aiHealth, lastSecurity] = await Promise.all([getAiHealth(), getLastRun()]);
+  const systemAlerts: { text: string; href: string }[] = [];
+  if (aiHealth && ["billing", "auth", "error"].includes(aiHealth.status)) {
+    systemAlerts.push({ text: `AI assistant problem: ${aiHealth.detail}`, href: "/settings/security" });
+  }
+  if (user.role === "owner" && lastSecurity && lastSecurity.failed > 0) {
+    systemAlerts.push({
+      text: `Security runbook: ${lastSecurity.failed} check(s) failing`,
+      href: "/settings/security",
+    });
+  }
+
+  const hour = Number(
+    now.toLocaleString("en-ZA", { hour: "2-digit", hour12: false, timeZone: "Africa/Johannesburg" })
+  );
+  const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const firstName = user.name.split(/\s+/)[0];
+  const dueTodayCount = todayAll.length;
+
+  const statGrid = (stats: { stat: SparkStat; icon: React.ReactNode }[]) => (
+    <Stagger className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      {stats.map(({ stat, icon }) => (
+        <StaggerItem key={stat.label}>
+          <StatSparkCard stat={stat} icon={icon} />
+        </StaggerItem>
+      ))}
+    </Stagger>
+  );
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
+      <FollowUpPrompts
+        prompts={myOverdue.map((a) => ({
+          id: a.id,
+          type: a.type,
+          summary: a.summary,
+          dueLabel: formatDate(a.dueDate),
+          leadId: a.leadId,
+          leadName: a.lead?.name ?? null,
+        }))}
+      />
+      {systemAlerts.map((a) => (
+        <Link
+          key={a.text}
+          href={a.href}
+          className="flex items-center gap-2.5 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-[13px] font-medium text-red-200 transition-colors hover:bg-red-500/15"
+        >
+          <TriangleAlert className="size-4 shrink-0 text-red-400" />
+          <span className="min-w-0 flex-1 truncate">{a.text}</span>
+          <ArrowRight className="size-4 shrink-0 text-red-400" />
+        </Link>
+      ))}
+
+      <div>
+        <h1 className="text-xl font-semibold tracking-tight text-foreground">
+          {greeting}, {firstName}
+        </h1>
+        <p className="mt-0.5 text-sm text-muted-foreground">
+          {dueTodayCount === 0
+            ? "Nothing on the agenda today — a clean slate."
+            : `${dueTodayCount} ${dueTodayCount === 1 ? "item" : "items"} on today's agenda.`}
+        </p>
+      </div>
+
       <Tabs
         tabs={[
           ...(showSales ? [{
@@ -199,118 +509,160 @@ export default async function DashboardPage() {
             count: salesToday.length,
             content: (
               <div className="space-y-4">
-                <StatStrip
-                  stats={[
-                    { label: "Open leads", value: String(openLeads), href: "/leads", icon: "◎" },
-                    {
-                      label: "Pipeline",
-                      value: formatZARCompact(openValue._sum.valueCents ?? 0),
-                      href: "/leads",
-                      icon: "💰",
-                    },
-                    { label: "New (7d)", value: String(newThisWeek), href: "/leads", icon: "✨" },
-                    {
-                      label: "To deliver",
-                      value: String(awaitingDelivery),
-                      href: "/deliveries",
-                      icon: "🚚",
-                    },
-                  ]}
-                />
-                <div className="grid lg:grid-cols-2 gap-4 items-start">
-                  <ActivityBlock
-                    title="Today"
-                    items={salesToday}
-                    emptyText="Nothing due today."
-                    highlightOverdue
-                  />
-                  <ActivityBlock
-                    title="Tomorrow"
-                    items={salesTomorrow}
-                    emptyText="Nothing planned yet."
-                  />
-                </div>
-                <div className="grid lg:grid-cols-2 gap-4 items-start">
-                  <div className="card p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                        Latest leads
-                      </p>
-                      <Link href="/leads" className="text-xs text-orange-400 hover:underline">
-                        Pipeline →
-                      </Link>
-                    </div>
-                    <ul className="divide-y divide-slate-800/60">
-                      {recentLeads.length === 0 && (
-                        <li className="py-1.5 text-xs text-slate-500">No leads yet.</li>
-                      )}
-                      {recentLeads.map((l) => (
-                        <li key={l.id} className="py-1.5 flex items-center gap-2">
-                          <p className="flex-1 min-w-0 truncate text-sm">
-                            <Link
-                              href={`/leads/${l.id}`}
-                              className="font-medium text-orange-400 hover:underline"
-                            >
-                              {l.name}
-                            </Link>
-                            <span className="text-[11px] text-slate-500">
-                              {" — "}
-                              {l.product ? `${l.product.name} · ` : ""}
-                              {l.source} · {formatDate(l.createdAt)}
-                            </span>
-                          </p>
-                          <span
-                            className="badge text-white shrink-0"
-                            style={{ backgroundColor: l.stage.color }}
-                          >
-                            {l.status === "open" ? l.stage.name : l.status}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                {statGrid(salesStats)}
 
-                  <div className="card p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                        Recent communications
+                <div className="grid items-stretch gap-4 lg:grid-cols-3">
+                  <div className="min-w-0 rounded-xl border border-border bg-card p-4 shadow-sm lg:col-span-2">
+                    <div className="mb-3 flex items-center justify-between">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        Pipeline snapshot
                       </p>
-                      <Link href="/inbox" className="text-xs text-orange-400 hover:underline">
-                        Inbox →
+                      <Link
+                        href="/leads"
+                        className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                      >
+                        Board
+                        <ArrowRight className="size-3" />
                       </Link>
                     </div>
-                    <ul className="divide-y divide-slate-800/60">
-                      {recentComms.length === 0 && (
-                        <li className="py-1.5 text-xs text-slate-500">Nothing logged yet.</li>
+                    <PipelineSnapshot
+                      segments={segments}
+                      totalValue={formatZARCompact(openValue._sum.valueCents ?? 0)}
+                    />
+                  </div>
+                  <div className="min-w-0 rounded-xl border border-border bg-card p-4 shadow-sm">
+                    <div className="mb-3 flex items-center justify-between">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        Month targets
+                      </p>
+                      <Link
+                        href="/targets"
+                        className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                      >
+                        Targets
+                        <ArrowRight className="size-3" />
+                      </Link>
+                    </div>
+                    <TargetRings rings={rings} />
+                  </div>
+                </div>
+
+                <div className="grid items-start gap-4 lg:grid-cols-2">
+                  <AgendaCard
+                    today={salesToday}
+                    tomorrow={salesTomorrow}
+                    action={{ href: "/calendar", label: "Calendar" }}
+                  />
+
+                  <div className="space-y-4">
+                  <SectionCard title="Needs attention" action={{ href: "/leads", label: "Board" }}>
+                    {noNextLeads.length === 0 && staleQuotes.length === 0 ? (
+                      <p className="py-2 text-xs text-muted-foreground/70">
+                        All clear — every open lead has a next step. 🎉
+                      </p>
+                    ) : (
+                      <ul className="divide-y divide-border/50">
+                        {noNextLeads.map((l) => (
+                          <li key={l.id} className="flex items-center gap-2.5 py-1.5">
+                            <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-red-500/10 text-red-300">
+                              <TriangleAlert className="size-3.5" />
+                            </span>
+                            <p className="min-w-0 flex-1 truncate text-[13px]">
+                              <Link href={`/leads/${l.id}`} className="font-medium text-foreground hover:text-primary">
+                                {l.name}
+                              </Link>
+                              <span className="text-[11px] text-muted-foreground"> — no next step planned</span>
+                            </p>
+                            <span className="badge shrink-0 text-white" style={{ backgroundColor: l.stage.color }}>
+                              {l.stage.name}
+                            </span>
+                          </li>
+                        ))}
+                        {staleQuotes.map((q) => (
+                          <li key={q.id} className="flex items-center gap-2.5 py-1.5">
+                            <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-amber-500/10 text-amber-300">
+                              <Clock4 className="size-3.5" />
+                            </span>
+                            <p className="min-w-0 flex-1 truncate text-[13px]">
+                              <Link href={`/quotes/${q.id}`} className="font-medium text-foreground hover:text-primary">
+                                Q-{q.number}
+                              </Link>
+                              <span className="text-[11px] text-muted-foreground">
+                                {` — ${q.lead?.name ?? (q.contact ? contactName(q.contact) : "customer")} · sent ${formatDate(q.createdAt)}, still unsigned — call them`}
+                              </span>
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </SectionCard>
+
+                  <SectionCard title="Latest activity" action={{ href: "/leads", label: "Pipeline" }}>
+                    <ul className="divide-y divide-border/50">
+                      {feed.length === 0 && (
+                        <li className="py-2 text-xs text-muted-foreground/70">Nothing yet.</li>
                       )}
-                      {recentComms.map((c) => (
-                        <li key={c.id} className="py-1.5 text-sm truncate">
-                          <span className="capitalize font-medium">{c.type}</span>
-                          {" — "}
-                          {c.contact ? (
-                            <Link
-                              href={`/contacts/${c.contact.id}`}
-                              className="text-orange-400 hover:underline"
+                      {feed.map((f) =>
+                        f.kind === "lead" ? (
+                          <li key={`l-${f.lead.id}`} className="flex items-center gap-2 py-1.5">
+                            <span className="size-1.5 shrink-0 rounded-full bg-primary" />
+                            <p className="min-w-0 flex-1 truncate text-[13px]">
+                              <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                                Lead ·{" "}
+                              </span>
+                              <Link
+                                href={`/leads/${f.lead.id}`}
+                                className="font-medium text-foreground hover:text-primary"
+                              >
+                                {f.lead.name}
+                              </Link>
+                              <span className="text-[11px] text-muted-foreground">
+                                {" — "}
+                                {f.lead.product ? `${f.lead.product.name} · ` : ""}
+                                {f.lead.source} · {formatDate(f.lead.createdAt)}
+                              </span>
+                            </p>
+                            <span
+                              className="badge shrink-0 text-white"
+                              style={{ backgroundColor: f.lead.stage.color }}
                             >
-                              {contactName(c.contact)}
-                            </Link>
-                          ) : c.lead ? (
-                            <Link
-                              href={`/leads/${c.lead.id}`}
-                              className="text-orange-400 hover:underline"
-                            >
-                              {c.lead.name}
-                            </Link>
-                          ) : (
-                            "—"
-                          )}
-                          <span className="text-[11px] text-slate-500">
-                            {" · "}
-                            {c.body.slice(0, 60)} · {formatDateTime(c.occurredAt)}
-                          </span>
-                        </li>
-                      ))}
+                              {f.lead.status === "open" ? f.lead.stage.name : f.lead.status}
+                            </span>
+                          </li>
+                        ) : (
+                          <li key={`c-${f.comm.id}`} className="flex items-center gap-2 py-1.5">
+                            <span className="size-1.5 shrink-0 rounded-full bg-sky-400" />
+                            <p className="min-w-0 flex-1 truncate text-[13px]">
+                              <span className="text-[11px] capitalize uppercase tracking-wide text-muted-foreground">
+                                {f.comm.type} ·{" "}
+                              </span>
+                              {f.comm.contact ? (
+                                <Link
+                                  href={`/contacts/${f.comm.contact.id}`}
+                                  className="font-medium text-foreground hover:text-primary"
+                                >
+                                  {contactName(f.comm.contact)}
+                                </Link>
+                              ) : f.comm.lead ? (
+                                <Link
+                                  href={`/leads/${f.comm.lead.id}`}
+                                  className="font-medium text-foreground hover:text-primary"
+                                >
+                                  {f.comm.lead.name}
+                                </Link>
+                              ) : (
+                                "—"
+                              )}
+                              <span className="text-[11px] text-muted-foreground">
+                                {" · "}
+                                {f.comm.body.slice(0, 56)} · {formatDateTime(f.comm.occurredAt)}
+                              </span>
+                            </p>
+                          </li>
+                        )
+                      )}
                     </ul>
+                  </SectionCard>
                   </div>
                 </div>
               </div>
@@ -322,60 +674,25 @@ export default async function DashboardPage() {
             count: shopToday.length + dueVehicles.length,
             content: (
               <div className="space-y-4">
-                <StatStrip
-                  stats={[
-                    {
-                      label: "Open job cards",
-                      value: String(openJobCards),
-                      href: "/jobcards",
-                      icon: "🔧",
-                    },
-                    {
-                      label: "Service due",
-                      value: String(dueVehicles.length),
-                      href: "/vehicles",
-                      icon: "⚠️",
-                    },
-                    { label: "Fleet", value: String(vehicles.length), href: "/vehicles", icon: "⚡" },
-                    { label: "Workshop cal", value: "→", href: "/workshop-calendar", icon: "📅" },
-                  ]}
-                />
-                <div className="grid lg:grid-cols-2 gap-4 items-start">
-                  <ActivityBlock
-                    title="Today in the workshop"
-                    items={shopToday}
-                    emptyText="No bookings today."
-                    highlightOverdue
+                {statGrid(serviceStats)}
+                <div className="grid items-start gap-4 lg:grid-cols-2">
+                  <AgendaCard
+                    today={shopToday}
+                    tomorrow={shopTomorrow}
+                    action={{ href: "/workshop-calendar", label: "Calendar" }}
                   />
-                  <ActivityBlock
-                    title="Tomorrow in the workshop"
-                    items={shopTomorrow}
-                    emptyText="No bookings tomorrow."
-                  />
-                </div>
-                <div className="card p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      Vehicles due for service
-                    </p>
-                    <Link href="/vehicles" className="text-xs text-orange-400 hover:underline">
-                      All vehicles →
-                    </Link>
-                  </div>
-                  <ul className="divide-y divide-slate-800/60">
+                  <SectionCard title="Vehicles due for service" action={{ href: "/service-due", label: "Service due" }}>
+                  <ul className="divide-y divide-border/60">
                     {dueVehicles.length === 0 && (
-                      <li className="py-1.5 text-xs text-slate-500">Nothing due. 🎉</li>
+                      <li className="py-2 text-xs text-muted-foreground/70">Nothing due. 🎉</li>
                     )}
                     {dueVehicles.slice(0, 10).map(({ vehicle, due }) => (
-                      <li key={vehicle.id} className="py-1.5 flex items-center gap-2">
-                        <p className="flex-1 min-w-0 truncate text-sm">
-                          <Link
-                            href={`/vehicles/${vehicle.id}`}
-                            className="font-medium text-orange-400 hover:underline"
-                          >
+                      <li key={vehicle.id} className="flex items-center gap-2 py-2">
+                        <p className="min-w-0 flex-1 truncate text-[13px]">
+                          <Link href={`/vehicles/${vehicle.id}`} className="font-medium text-foreground hover:text-primary">
                             {vehicle.model}
                           </Link>
-                          <span className="text-[11px] text-slate-500">
+                          <span className="text-[11px] text-muted-foreground">
                             {" — "}
                             {contactName(vehicle.contact)}
                             {due.nextDueDate ? ` · due ${formatDate(due.nextDueDate)}` : ""}
@@ -388,6 +705,7 @@ export default async function DashboardPage() {
                       </li>
                     ))}
                   </ul>
+                  </SectionCard>
                 </div>
               </div>
             ),

@@ -1,9 +1,12 @@
 import Link from "next/link";
+import { Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import ModalTrigger from "@/components/Modal";
 import { createQuoteForContact } from "@/app/actions/quotes";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { PageHeader } from "@/components/page-header";
+import { buttonVariants } from "@/components/ui/button";
 
 const statusBadge: Record<string, string> = {
   draft: "bg-slate-800 text-slate-300",
@@ -16,6 +19,9 @@ export default async function QuotesPage() {
   await requireUser();
   const [quotes, contacts, products] = await Promise.all([
     prisma.quote.findMany({
+      // Only the current head of each revision chain — old versions live in
+      // the quote's Versions panel, not the list.
+      where: { supersededAt: null },
       orderBy: { createdAt: "desc" },
       include: { items: true, lead: true, contact: true, createdBy: true },
       take: 200,
@@ -26,15 +32,8 @@ export default async function QuotesPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold">Quotes</h1>
-          <p className="text-sm text-slate-400 mt-1">
-            New quotes for existing customers start here; quotes for open deals start from the
-            lead&apos;s page. Signing or accepting a quote wins its lead automatically.
-          </p>
-        </div>
-        <ModalTrigger label="+ New quote" title="New quote for a customer">
+      <PageHeader title="Quotes" description={`${quotes.length} current quotes · Create, send and track every customer proposal.`}>
+        <ModalTrigger label={<><Plus className="size-4" />New quote</>} title="New quote for a customer" buttonClass={buttonVariants({ size: "sm" })}>
           <form action={createQuoteForContact} className="card space-y-4">
             <div>
               <label className="label">Customer *</label>
@@ -63,7 +62,7 @@ export default async function QuotesPage() {
             <button className="btn-primary">Create quote</button>
           </form>
         </ModalTrigger>
-      </div>
+      </PageHeader>
 
       <div className="card p-0 overflow-x-auto">
         <table className="table-base">

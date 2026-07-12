@@ -3,10 +3,10 @@ import { prisma, basePrisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import InboxReply from "@/components/InboxReply";
 import AutoRefresh from "@/components/AutoRefresh";
-import { isAiConfigured } from "@/lib/ai";
 import Tabs from "@/components/Tabs";
 import RowModal from "@/components/RowModal";
 import { contactName, formatDateTime } from "@/lib/format";
+import { PageHeader } from "@/components/page-header";
 
 export const metadata = { title: "Social inbox — DenagoCRM" };
 
@@ -31,7 +31,6 @@ const CHANNEL_META: Record<string, { label: string; icon: React.ReactNode }> = {
 export default async function InboxPage() {
   await requireUser();
 
-  const aiOn = await isAiConfigured();
   const [comms, reviews, placeId] = await Promise.all([
     prisma.communication.findMany({
       where: { type: { in: ["whatsapp", "messenger", "instagram"] } },
@@ -101,13 +100,7 @@ export default async function InboxPage() {
   return (
     <div className="space-y-5">
       <AutoRefresh seconds={60} />
-      <div>
-        <h1 className="text-2xl font-bold">Social inbox</h1>
-        <p className="text-sm text-slate-400 mt-1">
-          Every WhatsApp, Messenger and Instagram conversation, tied to the customer&apos;s
-          record — reply without leaving the CRM. New Google reviews land here too.
-        </p>
-      </div>
+      <PageHeader title="Social inbox" description={`${threadList.filter((thread) => thread.awaiting).length} awaiting reply · WhatsApp, Messenger, Instagram and Google reviews.`} />
 
       <Tabs
         tabs={[

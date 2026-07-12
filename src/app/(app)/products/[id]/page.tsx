@@ -23,7 +23,7 @@ export default async function ProductDetailPage({
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">{product.name}</h1>
+        <h1 className="text-2xl font-semibold tracking-[-0.035em]">{product.name}</h1>
         <ConfirmDelete
           action={deleteProduct.bind(null, product.id)}
           title={`Delete product ${product.name}?`}

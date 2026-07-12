@@ -226,7 +226,7 @@ export default async function SignPage({
       <div className="flex justify-end mb-6">
         <div className="rounded-lg bg-orange-600 text-white px-5 py-2.5 flex items-baseline gap-4">
           <span className="text-[10px] font-bold uppercase tracking-widest">Total incl. VAT</span>
-          <span className="text-xl font-bold">{formatZAR(Math.round(total))}</span>
+          <span className="text-xl font-semibold tracking-[-0.025em]">{formatZAR(Math.round(total))}</span>
         </div>
       </div>
 

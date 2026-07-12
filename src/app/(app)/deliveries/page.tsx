@@ -9,6 +9,7 @@ import {
 } from "@/app/actions/fulfilment";
 import ProofOfDelivery from "@/components/ProofOfDelivery";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { PageHeader } from "@/components/page-header";
 
 export const metadata = { title: "Deliveries — DenagoCRM" };
 
@@ -42,13 +43,7 @@ export default async function DeliveriesPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-bold">Deliveries</h1>
-        <p className="text-sm text-slate-400 mt-1">
-          Every signed quote moves left to right: invoice → deposit → schedule → delivered.
-          Paperwork uploads at each step and files onto the customer automatically.
-        </p>
-      </div>
+      <PageHeader title="Deliveries" description={`${quotes.length} active handover${quotes.length === 1 ? "" : "s"} · Invoice, deposit, scheduling and delivery in one flow.`} />
 
       <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4 items-start">
         {columns.map((col) => {
@@ -136,6 +131,16 @@ export default async function DeliveriesPage() {
                           />
                           <button className="btn-primary btn-sm w-full">🚚 Schedule delivery</button>
                         </form>
+                      )}
+                      {(col.key === "schedule" || col.key === "deliver") && (
+                        <a
+                          href={`/quotes/${q.id}/delivery-note`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-2 block text-xs text-orange-400 hover:underline"
+                        >
+                          🧾 Print delivery note
+                        </a>
                       )}
                       {col.key === "deliver" && (
                         <div className="mt-2">

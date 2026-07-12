@@ -1,0 +1,160 @@
+import { prisma } from "./db";
+import { contactName } from "./format";
+
+export type JourneyEntityType = "lead" | "contact";
+
+export type JourneyContext = Record<string, unknown> & {
+  event: Record<string, unknown>;
+  lead: Record<string, unknown> | null;
+  contact: Record<string, unknown> | null;
+};
+
+function compactContact(contact: {
+  id: string;
+  firstName: string;
+  lastName: string | null;
+  company: string | null;
+  email: string | null;
+  phone: string | null;
+  whatsapp: string | null;
+  source: string | null;
+  province: string | null;
+  marketingOptOut: boolean;
+  ownerId: string | null;
+  tags: Array<{ id: string; name: string }>;
+  vehicles: Array<{ id: string; model: string; purchaseDate: Date | null }>;
+}) {
+  return {
+    id: contact.id,
+    firstName: contact.firstName,
+    lastName: contact.lastName,
+    name: contactName(contact),
+    company: contact.company,
+    email: contact.email,
+    phone: contact.phone,
+    whatsapp: contact.whatsapp,
+    source: contact.source,
+    province: contact.province,
+    marketingOptOut: contact.marketingOptOut,
+    ownerId: contact.ownerId,
+    tags: contact.tags.map((tag) => tag.id),
+    tagNames: contact.tags.map((tag) => tag.name),
+    hasVehicle: contact.vehicles.length > 0,
+    vehicles: contact.vehicles.map((vehicle) => ({
+      id: vehicle.id,
+      model: vehicle.model,
+      purchaseDate: vehicle.purchaseDate?.toISOString() ?? null,
+    })),
+  };
+}
+
+export async function loadJourneyContext(
+  entityType: JourneyEntityType,
+  entityId: string,
+  event: Record<string, unknown> = {}
+): Promise<JourneyContext | null> {
+  if (entityType === "lead") {
+    const lead = await prisma.lead.findUnique({
+      where: { id: entityId },
+      include: {
+        stage: true,
+        product: true,
+        assignedTo: true,
+        contact: {
+          include: {
+            tags: { select: { id: true, name: true } },
+            vehicles: {
+              where: { deletedAt: null },
+              select: { id: true, model: true, purchaseDate: true },
+            },
+          },
+        },
+      },
+    });
+    if (!lead) return null;
+    const contact = lead.contact ? compactContact(lead.contact) : null;
+    return {
+      event,
+      lead: {
+        id: lead.id,
+        title: lead.title,
+        name: lead.name,
+        email: lead.email,
+        phone: lead.phone,
+        source: lead.source,
+        status: lead.status,
+        valueCents: lead.valueCents,
+        quantity: lead.quantity,
+        stageId: lead.stageId,
+        stageName: lead.stage.name,
+        productId: lead.productId,
+        productName: lead.product?.name ?? null,
+        assignedToId: lead.assignedToId,
+        assignedToName: lead.assignedTo?.name ?? null,
+        contactId: lead.contactId,
+        updatedAt: lead.updatedAt.toISOString(),
+      },
+      contact,
+    };
+  }
+
+  const contact = await prisma.contact.findUnique({
+    where: { id: entityId },
+    include: {
+      tags: { select: { id: true, name: true } },
+      vehicles: {
+        where: { deletedAt: null },
+        select: { id: true, model: true, purchaseDate: true },
+      },
+      leads: {
+        where: { deletedAt: null },
+        orderBy: { updatedAt: "desc" },
+        take: 1,
+        include: { stage: true, product: true, assignedTo: true },
+      },
+    },
+  });
+  if (!contact) return null;
+  const latestLead = contact.leads[0];
+  return {
+    event,
+    contact: compactContact(contact),
+    lead: latestLead
+      ? {
+          id: latestLead.id,
+          title: latestLead.title,
+          name: latestLead.name,
+          email: latestLead.email,
+          phone: latestLead.phone,
+          source: latestLead.source,
+          status: latestLead.status,
+          valueCents: latestLead.valueCents,
+          quantity: latestLead.quantity,
+          stageId: latestLead.stageId,
+          stageName: latestLead.stage.name,
+          productId: latestLead.productId,
+          productName: latestLead.product?.name ?? null,
+          assignedToId: latestLead.assignedToId,
+          assignedToName: latestLead.assignedTo?.name ?? null,
+          contactId: latestLead.contactId,
+          updatedAt: latestLead.updatedAt.toISOString(),
+        }
+      : null,
+  };
+}
+
+export function journeyTemplateVars(context: JourneyContext): Record<string, string> {
+  const lead = (context.lead ?? {}) as Record<string, unknown>;
+  const contact = (context.contact ?? {}) as Record<string, unknown>;
+  const firstName = String(contact.firstName ?? String(lead.name ?? "").split(/\s+/)[0] ?? "there");
+  return {
+    first_name: firstName || "there",
+    name: String(contact.name ?? lead.name ?? "Customer"),
+    email: String(contact.email ?? lead.email ?? ""),
+    phone: String(contact.phone ?? contact.whatsapp ?? lead.phone ?? ""),
+    model: String(lead.productName ?? "Denago vehicle"),
+    stage: String(lead.stageName ?? ""),
+    value: String(Math.round(Number(lead.valueCents ?? 0) / 100)),
+    company: String(contact.company ?? ""),
+  };
+}

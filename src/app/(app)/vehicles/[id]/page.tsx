@@ -51,7 +51,7 @@ export default async function VehicleDetailPage({
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold">
+            <h1 className="text-2xl font-semibold tracking-[-0.035em]">
               {vehicle.model}
               {vehicle.color ? ` — ${vehicle.color}` : ""}
             </h1>
@@ -86,7 +86,7 @@ export default async function VehicleDetailPage({
       <div className="grid md:grid-cols-4 gap-4">
         <div className="card">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Current km</p>
-          <p className="text-xl font-bold mt-1">
+          <p className="text-xl font-semibold tracking-[-0.025em] mt-1">
             {due.currentKm != null ? `${due.currentKm.toLocaleString()} km` : "—"}
           </p>
         </div>
@@ -94,7 +94,7 @@ export default async function VehicleDetailPage({
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
             Next service due
           </p>
-          <p className="text-xl font-bold mt-1">{formatDate(due.nextDueDate)}</p>
+          <p className="text-xl font-semibold tracking-[-0.025em] mt-1">{formatDate(due.nextDueDate)}</p>
           {due.daysRemaining != null && (
             <p className="text-xs text-slate-400">
               {due.daysRemaining >= 0 ? `in ${due.daysRemaining} days` : `${-due.daysRemaining} days overdue`}
@@ -103,7 +103,7 @@ export default async function VehicleDetailPage({
         </div>
         <div className="card">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Due at</p>
-          <p className="text-xl font-bold mt-1">
+          <p className="text-xl font-semibold tracking-[-0.025em] mt-1">
             {due.nextDueKm != null ? `${due.nextDueKm.toLocaleString()} km` : "—"}
           </p>
           {due.kmRemaining != null && (

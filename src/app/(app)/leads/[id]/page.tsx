@@ -104,7 +104,7 @@ export default async function LeadDetailPage({
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold">{lead.title}</h1>
+            <h1 className="text-2xl font-semibold tracking-[-0.035em]">{lead.title}</h1>
             <span className={`badge ${statusBadge}`}>
               {lead.status === "open" ? lead.stage.name : lead.status.toUpperCase()}
             </span>
@@ -150,6 +150,14 @@ export default async function LeadDetailPage({
               <button className="btn-secondary">Reopen</button>
             </form>
           )}
+          <Link
+            href={`/leads/${lead.id}/indemnity`}
+            target="_blank"
+            className="btn-secondary"
+            title="Print a test-drive indemnity for this customer to sign"
+          >
+            🚗 Indemnity
+          </Link>
           <ConfirmDelete
             action={deleteLead.bind(null, lead.id)}
             title={`Delete lead “${lead.title}”?`}

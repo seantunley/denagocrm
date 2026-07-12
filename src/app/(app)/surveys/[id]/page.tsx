@@ -57,7 +57,7 @@ export default async function SurveyEditorPage({
           ← Surveys
         </Link>
         <div className="flex flex-wrap items-center gap-3 mt-1">
-          <h1 className="text-2xl font-bold">{survey.title}</h1>
+          <h1 className="text-2xl font-semibold tracking-[-0.035em]">{survey.title}</h1>
           <span className="badge bg-orange-600/15 text-orange-300">
             {surveyTypeLabel(survey.type)}
           </span>
@@ -67,18 +67,18 @@ export default async function SurveyEditorPage({
       <div className="grid grid-cols-3 gap-3">
         <div className="card">
           <p className="text-xs uppercase tracking-wide text-slate-400">Sent</p>
-          <p className="text-2xl font-bold mt-1">{live.length}</p>
+          <p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{live.length}</p>
         </div>
         <div className="card">
           <p className="text-xs uppercase tracking-wide text-slate-400">Responses</p>
-          <p className="text-2xl font-bold mt-1">
+          <p className="text-2xl font-semibold tracking-[-0.035em] mt-1">
             {completed.length}
             <span className="text-sm text-slate-500 font-normal"> · {rate}%</span>
           </p>
         </div>
         <div className="card">
           <p className="text-xs uppercase tracking-wide text-slate-400">{summaryStat.label}</p>
-          <p className="text-2xl font-bold mt-1">{summaryStat.value}</p>
+          <p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{summaryStat.value}</p>
         </div>
       </div>
 

@@ -3,6 +3,7 @@ import { requireCrm } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
 import { createFleet } from "@/app/actions/fleets";
+import { PageHeader } from "@/components/page-header";
 
 export const dynamic = "force-dynamic";
 
@@ -20,13 +21,7 @@ export default async function FleetsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Fleets</h1>
-        <p className="text-sm text-slate-400 mt-0.5">
-          Group many carts under one account — estates, golf courses, resorts and businesses — for a
-          fleet-level service view.
-        </p>
-      </div>
+      <PageHeader title="Fleets" description={`${fleets.length} managed fleet${fleets.length === 1 ? "" : "s"} · Estates, golf courses, resorts and business accounts.`} />
 
       <div className="card">
         <h2 className="font-semibold mb-3">New fleet</h2>

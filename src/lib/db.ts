@@ -20,6 +20,9 @@ const SOFT_DELETE_MODELS = new Set([
   "Part",
   "Survey",
   "Fleet",
+  "CustomDocTemplate",
+  "DocInstance",
+  "ReusableBlock",
 ]);
 
 /* eslint-disable @typescript-eslint/no-explicit-any */

@@ -125,7 +125,7 @@ export default async function LibraryPage({
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold">Document library</h1>
+          <h1 className="text-2xl font-semibold tracking-[-0.035em]">Document library</h1>
           <p className="text-sm text-slate-400 mt-1">
             Brochures, price lists and spec sheets — versioned, so everyone always uses the
             latest. Attach them to emails straight from any lead or contact.

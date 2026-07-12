@@ -16,7 +16,7 @@ export default async function NewJobCardPage({
 
   return (
     <div className="space-y-5 max-w-xl">
-      <h1 className="text-2xl font-bold">New job card</h1>
+      <h1 className="text-2xl font-semibold tracking-[-0.035em]">New job card</h1>
       <JobCardForm
         vehicles={vehicles.map((v) => ({
           id: v.id,

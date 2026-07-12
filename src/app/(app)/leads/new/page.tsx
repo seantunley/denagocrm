@@ -17,7 +17,7 @@ export default async function NewLeadPage() {
 
   return (
     <div className="space-y-5">
-      <h1 className="text-2xl font-bold">New lead</h1>
+      <h1 className="text-2xl font-semibold tracking-[-0.035em]">New lead</h1>
       <LeadForm
         action={createLead}
         products={products.map((p) => ({
