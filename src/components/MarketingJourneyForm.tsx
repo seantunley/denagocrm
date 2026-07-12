@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { JOURNEY_TRIGGERS, type JourneyDefinition, type JourneyTrigger } from "@/lib/marketingJourneys";
+import { JOURNEY_TRIGGERS, type JourneyDefinition, type JourneyTrigger } from "@/lib/marketingJourneyClient";
 
 const LABELS: Record<JourneyTrigger, string> = {
   lead_created: "New lead created",
