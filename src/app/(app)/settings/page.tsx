@@ -90,6 +90,7 @@ const NAV_GROUPS: { label: string; items: SettingsTab[] }[] = [
       { key: "team", label: "Team" },
       { key: "documents", label: "Documents", href: "/settings/documents" },
       { key: "security", label: "Security", href: "/settings/security" },
+      { key: "backups", label: "Backup & recovery", href: "/settings/backup-recovery" },
       { key: "sessions", label: "Sessions & devices", href: "/settings/sessions" },
       { key: "integrations", label: "Integrations" },
       { key: "system", label: "System Log" },
