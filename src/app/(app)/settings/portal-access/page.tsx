@@ -16,6 +16,10 @@ type GrantRow = {
   createdAt: Date;
 };
 
+function RoleSelect() {
+  return <select name="role" className="input"><option value="viewer">Viewer</option><option value="manager">Manager</option><option value="owner">Owner</option></select>;
+}
+
 export default async function PortalAccessPage() {
   await requireOwner();
   const [contacts, fleets, grants] = await Promise.all([
@@ -38,16 +42,28 @@ export default async function PortalAccessPage() {
       ORDER BY g."active" DESC, g."createdAt" DESC
     `,
   ]);
+  const portalUsers = contacts.filter((contact) => contact.email);
 
   return <div className="space-y-6">
-    <div><h1 className="text-2xl font-bold">Customer portal access</h1><p className="text-sm text-slate-400 mt-1">Grant a customer access to another contact record or a fleet account.</p></div>
+    <div><h1 className="text-2xl font-bold">Customer portal access</h1><p className="text-sm text-slate-400 mt-1">Grant a signed-in contact access to another customer/account or to a fleet.</p></div>
 
-    <form action={grantPortalAccess} className="card grid md:grid-cols-5 gap-3 items-end">
-      <label className="space-y-1 md:col-span-2"><span className="text-xs text-slate-400">Portal user</span><select name="viewerContactId" className="input" required><option value="">Choose contact</option>{contacts.filter((contact) => contact.email).map((contact) => <option key={contact.id} value={contact.id}>{contactName(contact)} · {contact.email}</option>)}</select></label>
-      <label className="space-y-1"><span className="text-xs text-slate-400">Target type</span><select name="targetType" className="input" required><option value="contact">Contact/account</option><option value="fleet">Fleet</option></select></label>
-      <label className="space-y-1"><span className="text-xs text-slate-400">Target ID</span><select name="targetId" className="input" required><option value="">Choose target</option><optgroup label="Contacts and accounts">{contacts.map((contact) => <option key={`contact-${contact.id}`} value={contact.id}>{contactName(contact)}</option>)}</optgroup><optgroup label="Fleets">{fleets.map((fleet) => <option key={`fleet-${fleet.id}`} value={fleet.id}>{fleet.name}</option>)}</optgroup></select></label>
-      <div className="space-y-1"><label className="text-xs text-slate-400">Role</label><div className="flex gap-2"><select name="role" className="input"><option value="viewer">Viewer</option><option value="manager">Manager</option><option value="owner">Owner</option></select><button className="btn-primary">Grant</button></div></div>
-    </form>
+    <div className="grid lg:grid-cols-2 gap-4">
+      <form action={grantPortalAccess} className="card space-y-3">
+        <input type="hidden" name="targetType" value="contact" />
+        <h2 className="font-semibold">Grant contact/account access</h2>
+        <select name="viewerContactId" className="input" required><option value="">Portal user</option>{portalUsers.map((contact) => <option key={contact.id} value={contact.id}>{contactName(contact)} · {contact.email}</option>)}</select>
+        <select name="targetId" className="input" required><option value="">Contact or account to expose</option>{contacts.map((contact) => <option key={contact.id} value={contact.id}>{contactName(contact)}</option>)}</select>
+        <div className="flex gap-2"><RoleSelect /><button className="btn-primary">Grant access</button></div>
+      </form>
+
+      <form action={grantPortalAccess} className="card space-y-3">
+        <input type="hidden" name="targetType" value="fleet" />
+        <h2 className="font-semibold">Grant fleet access</h2>
+        <select name="viewerContactId" className="input" required><option value="">Portal user</option>{portalUsers.map((contact) => <option key={contact.id} value={contact.id}>{contactName(contact)} · {contact.email}</option>)}</select>
+        <select name="targetId" className="input" required><option value="">Fleet to expose</option>{fleets.map((fleet) => <option key={fleet.id} value={fleet.id}>{fleet.name}</option>)}</select>
+        <div className="flex gap-2"><RoleSelect /><button className="btn-primary">Grant access</button></div>
+      </form>
+    </div>
 
     <div className="card p-0 overflow-x-auto"><table className="table-base"><thead><tr><th>Portal user</th><th>Target</th><th>Role</th><th>Status</th><th>Granted</th><th></th></tr></thead><tbody>{grants.length === 0 && <tr><td colSpan={6} className="text-center py-8 text-slate-400">No delegated portal access grants.</td></tr>}{grants.map((grant) => <tr key={grant.id}><td>{grant.viewerName}</td><td>{grant.targetName}<p className="text-xs text-slate-500 capitalize">{grant.targetType}</p></td><td className="capitalize">{grant.role}</td><td><span className={`badge ${grant.active ? "bg-emerald-500/15 text-emerald-300" : "bg-slate-800 text-slate-500"}`}>{grant.active ? "Active" : "Revoked"}</span></td><td>{formatDateTime(grant.createdAt)}</td><td>{grant.active && <form action={revokePortalAccess.bind(null, grant.id)}><button className="text-red-400 text-sm">Revoke</button></form>}</td></tr>)}</tbody></table></div>
   </div>;
