@@ -50,6 +50,22 @@ ALTER TABLE "CustomerCase" ADD CONSTRAINT "CustomerCase_contactId_fkey" FOREIGN 
 ALTER TABLE "CustomerCase" ADD CONSTRAINT "CustomerCase_vehicleId_fkey" FOREIGN KEY ("vehicleId") REFERENCES "Vehicle"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 ALTER TABLE "CustomerCase" ADD CONSTRAINT "CustomerCase_assignedToId_fkey" FOREIGN KEY ("assignedToId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
+CREATE TABLE "CustomerCaseMessage" (
+  "id" TEXT NOT NULL,
+  "caseId" TEXT NOT NULL,
+  "contactId" TEXT,
+  "userId" TEXT,
+  "direction" TEXT NOT NULL DEFAULT 'customer',
+  "body" TEXT NOT NULL,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "readAt" TIMESTAMP(3),
+  CONSTRAINT "CustomerCaseMessage_pkey" PRIMARY KEY ("id")
+);
+CREATE INDEX "CustomerCaseMessage_case_created_idx" ON "CustomerCaseMessage"("caseId", "createdAt");
+ALTER TABLE "CustomerCaseMessage" ADD CONSTRAINT "CustomerCaseMessage_caseId_fkey" FOREIGN KEY ("caseId") REFERENCES "CustomerCase"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "CustomerCaseMessage" ADD CONSTRAINT "CustomerCaseMessage_contactId_fkey" FOREIGN KEY ("contactId") REFERENCES "Contact"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "CustomerCaseMessage" ADD CONSTRAINT "CustomerCaseMessage_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
 CREATE TABLE "PortalNotification" (
   "id" TEXT NOT NULL,
   "contactId" TEXT NOT NULL,
@@ -78,3 +94,37 @@ CREATE TABLE "PortalProfileChangeRequest" (
 CREATE INDEX "PortalProfileChangeRequest_contact_idx" ON "PortalProfileChangeRequest"("contactId", "status", "createdAt");
 ALTER TABLE "PortalProfileChangeRequest" ADD CONSTRAINT "PortalProfileChangeRequest_contactId_fkey" FOREIGN KEY ("contactId") REFERENCES "Contact"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "PortalProfileChangeRequest" ADD CONSTRAINT "PortalProfileChangeRequest_reviewedById_fkey" FOREIGN KEY ("reviewedById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+CREATE TABLE "PortalPreference" (
+  "contactId" TEXT NOT NULL,
+  "serviceReminders" BOOLEAN NOT NULL DEFAULT true,
+  "portalNotifications" BOOLEAN NOT NULL DEFAULT true,
+  "marketingEmail" BOOLEAN NOT NULL DEFAULT true,
+  "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "PortalPreference_pkey" PRIMARY KEY ("contactId")
+);
+ALTER TABLE "PortalPreference" ADD CONSTRAINT "PortalPreference_contactId_fkey" FOREIGN KEY ("contactId") REFERENCES "Contact"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+CREATE TABLE "PortalUpload" (
+  "id" TEXT NOT NULL,
+  "contactId" TEXT NOT NULL,
+  "caseId" TEXT,
+  "vehicleId" TEXT,
+  "fileName" TEXT NOT NULL,
+  "storedName" TEXT NOT NULL,
+  "mimeType" TEXT NOT NULL,
+  "sizeBytes" INTEGER NOT NULL,
+  "status" TEXT NOT NULL DEFAULT 'received',
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "PortalUpload_pkey" PRIMARY KEY ("id")
+);
+CREATE INDEX "PortalUpload_contact_created_idx" ON "PortalUpload"("contactId", "createdAt");
+ALTER TABLE "PortalUpload" ADD CONSTRAINT "PortalUpload_contactId_fkey" FOREIGN KEY ("contactId") REFERENCES "Contact"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "PortalUpload" ADD CONSTRAINT "PortalUpload_caseId_fkey" FOREIGN KEY ("caseId") REFERENCES "CustomerCase"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "PortalUpload" ADD CONSTRAINT "PortalUpload_vehicleId_fkey" FOREIGN KEY ("vehicleId") REFERENCES "Vehicle"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+INSERT INTO "PortalAccessGrant" ("id", "viewerContactId", "fleetId", "role", "active")
+SELECT 'fleet-manager-' || f."id", f."contactId", f."id", 'manager', true
+FROM "Fleet" f
+WHERE f."deletedAt" IS NULL AND f."contactId" IS NOT NULL
+ON CONFLICT DO NOTHING;
