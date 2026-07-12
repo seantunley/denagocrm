@@ -86,7 +86,17 @@ jobs:
         run: npm run prisma:generate
 
       - name: Apply migrations to isolated PostgreSQL
-        run: npm run prisma:migrate
+        run: |
+          set -o pipefail
+          npm run prisma:migrate 2>&1 | tee migration.log
+
+      - name: Upload migration diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-log
+          path: migration.log
+          if-no-files-found: ignore
 
       - name: Type check
         run: npm run typecheck
