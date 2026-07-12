@@ -45,6 +45,7 @@ CREATE TABLE "JourneyEvent" (
     "error" TEXT,
     "dedupeKey" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "JourneyEvent_pkey" PRIMARY KEY ("id")
 );
