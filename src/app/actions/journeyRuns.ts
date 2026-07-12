@@ -4,6 +4,19 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import {
+  enrollJourneyNow,
+  processJourneyEvents,
+  processJourneyRuns,
+} from "@/lib/journeys";
+
+export async function runJourneyNowAction(journeyId: string) {
+  await requireOwner();
+  await enrollJourneyNow(journeyId);
+  await processJourneyEvents(100);
+  await processJourneyRuns(50);
+  revalidatePath("/journeys");
+}
 
 export async function retryJourneyRun(runId: string) {
   const user = await requireOwner();
@@ -46,18 +59,20 @@ export async function cancelJourneyRun(runId: string) {
     where: { id: runId },
     include: { journey: true },
   });
-  if (!["queued", "waiting", "running"].includes(run.status)) {
-    throw new Error("This journey run can no longer be cancelled");
+  if (!["queued", "waiting"].includes(run.status)) {
+    throw new Error("Only queued or waiting journey runs can be cancelled safely");
   }
 
-  await prisma.journeyRun.update({
-    where: { id: runId },
+  const cancelled = await prisma.journeyRun.updateMany({
+    where: { id: runId, status: { in: ["queued", "waiting"] } },
     data: {
       status: "cancelled",
       completedAt: new Date(),
       lastError: "Cancelled by an administrator",
     },
   });
+  if (cancelled.count === 0) throw new Error("The journey run started before it could be cancelled");
+
   await logAudit({
     action: "journey.run_cancelled",
     summary: `Cancelled journey “${run.journey.name}” run ${run.id.slice(-8)}`,
