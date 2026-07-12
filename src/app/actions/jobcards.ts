@@ -4,20 +4,19 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addMonths } from "date-fns";
 import { prisma } from "@/lib/db";
-import { requireWorkshop } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendReviewRequest } from "@/lib/reviewRequests";
 import { triggerSurvey } from "@/lib/surveys";
 import { softDeleteRecord } from "@/lib/trash";
 import { saveFile } from "@/lib/storage";
 import { parseRands } from "@/lib/format";
+import {
+  requireJobCardAccess,
+  requireVehicleAccess,
+} from "@/lib/permissions";
 
-/**
- * Check-in photos: condition of the cart BEFORE work starts (scratches,
- * dents, odometer). Filed on the job card and the customer.
- */
 export async function uploadJobCardPhotos(jobCardId: string, formData: FormData) {
-  const user = await requireWorkshop();
+  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
   const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId } });
   const files = formData
     .getAll("files")
@@ -53,10 +52,10 @@ export async function uploadJobCardPhotos(jobCardId: string, formData: FormData)
 }
 
 export async function createJobCard(formData: FormData) {
-  const user = await requireWorkshop();
   const vehicleId = String(formData.get("vehicleId") ?? "");
   const description = String(formData.get("description") ?? "").trim();
   if (!vehicleId || !description) throw new Error("Vehicle and description are required");
+  const user = await requireVehicleAccess(vehicleId, "jobcards.manage");
 
   const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
   const kmInRaw = String(formData.get("kmIn") ?? "").trim();
@@ -70,6 +69,7 @@ export async function createJobCard(formData: FormData) {
       contactId: vehicle.contactId,
       description,
       kmIn: kmIn != null && !isNaN(kmIn) ? kmIn : null,
+      technicianId: user.id,
     },
   });
   if (jobCard.kmIn != null) {
@@ -88,7 +88,7 @@ export async function createJobCard(formData: FormData) {
 }
 
 export async function addJobCardItem(jobCardId: string, formData: FormData) {
-  await requireWorkshop();
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
   const description = String(formData.get("description") ?? "").trim();
   if (!description) return;
   const qty = parseFloat(String(formData.get("qty") ?? "1")) || 1;
@@ -104,7 +104,6 @@ export async function addJobCardItem(jobCardId: string, formData: FormData) {
       partId,
     },
   });
-  // Deduct catalogue-part usage from stock.
   if (partId && kind === "part") {
     await prisma.part.update({
       where: { id: partId },
@@ -115,10 +114,9 @@ export async function addJobCardItem(jobCardId: string, formData: FormData) {
 }
 
 export async function deleteJobCardItem(id: string, jobCardId: string, formData: FormData) {
-  const user = await requireWorkshop();
+  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const item = await prisma.jobCardItem.delete({ where: { id } });
-  // Return catalogue-part stock when the line is removed.
   if (item.partId && item.kind === "part") {
     await prisma.part.update({
       where: { id: item.partId },
@@ -136,14 +134,16 @@ export async function deleteJobCardItem(id: string, jobCardId: string, formData:
 }
 
 export async function setJobCardTechnician(jobCardId: string, formData: FormData) {
-  await requireWorkshop();
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
   const technicianId = String(formData.get("technicianId") ?? "").trim() || null;
   await prisma.jobCard.update({ where: { id: jobCardId }, data: { technicianId } });
   revalidatePath(`/jobcards/${jobCardId}`);
 }
 
 export async function setJobCardStatus(jobCardId: string, status: string) {
-  await requireWorkshop();
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const allowed = new Set(["open", "in_progress", "completed"]);
+  if (!allowed.has(status)) throw new Error("Invalid job card status");
   await prisma.jobCard.update({
     where: { id: jobCardId },
     data: { status, completedAt: status === "completed" ? new Date() : null },
@@ -152,12 +152,8 @@ export async function setJobCardStatus(jobCardId: string, status: string) {
   revalidatePath(`/jobcards/${jobCardId}`);
 }
 
-/**
- * Completes a job card and writes the service record in one go —
- * next-due defaults come from the vehicle's service intervals.
- */
 export async function completeJobCard(jobCardId: string, formData: FormData) {
-  const user = await requireWorkshop();
+  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
   const jobCard = await prisma.jobCard.findUniqueOrThrow({
     where: { id: jobCardId },
     include: { vehicle: true },
@@ -209,13 +205,11 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
     contactId: jobCard.contactId,
     user,
   });
-  // Happy moment → ask for a Google review (self-throttled, best effort)
   await sendReviewRequest(
     jobCard.contactId,
     "service",
     `the service on your ${jobCard.vehicle.model} (job card #${jobCard.number})`
   ).catch(() => {});
-  // Internal CSAT survey (measurable, lands on the timeline; self-throttled)
   await triggerSurvey("job_complete", {
     contactId: jobCard.contactId,
     jobCardId: jobCard.id,
@@ -227,7 +221,7 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
 }
 
 export async function deleteJobCard(id: string, formData: FormData) {
-  const user = await requireWorkshop();
+  const user = await requireJobCardAccess(id, "jobcards.manage");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const jobCard = await softDeleteRecord("jobCard", id, reason, user.name);
   await logAudit({
