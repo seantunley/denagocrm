@@ -1,13 +1,13 @@
 /**
- * Module gating. Admins (role "owner") see everything; everyone else gets the
- * modules ticked on their user. Module claims ride in the session JWT, so a
- * change takes effect at the user's next sign-in (72h max).
+ * Legacy module flags remain for screens that have not yet moved to the
+ * database-backed permission catalogue. Migrated routes are intentionally
+ * absent and enforce access in server layouts/actions instead.
  */
 export const MODULES = [
-  { id: "crm", label: "CRM", desc: "Leads, quotes, deliveries, referrals, activities, calendar" },
-  { id: "workshop", label: "Workshop", desc: "Vehicles, job cards, workshop calendar" },
-  { id: "reports", label: "Reports", desc: "Sales & service reporting" },
-  { id: "inbox", label: "Social Inbox", desc: "WhatsApp / Messenger / Instagram conversations" },
+  { id: "crm", label: "CRM", desc: "Legacy fallback for remaining CRM screens" },
+  { id: "workshop", label: "Workshop", desc: "Legacy fallback for remaining workshop screens" },
+  { id: "reports", label: "Reports", desc: "Legacy fallback for remaining reporting screens" },
+  { id: "inbox", label: "Social Inbox", desc: "Legacy fallback for social integrations" },
 ] as const;
 
 export type ModuleId = (typeof MODULES)[number]["id"];
@@ -16,52 +16,28 @@ export function parseModules(csv: string | null | undefined): Set<string> {
   return new Set((csv ?? "").split(",").map((item) => item.trim()).filter(Boolean));
 }
 
-export function hasModule(
-  user: { role: string; modules: string },
-  module: ModuleId
-): boolean {
+export function hasModule(user: { role: string; modules: string }, module: ModuleId): boolean {
   if (user.role === "owner") return true;
   return parseModules(user.modules).has(module);
 }
 
-/** Contacts are shared: anyone with CRM or Workshop can see them. */
 export function canSeeContacts(user: { role: string; modules: string }): boolean {
   return hasModule(user, "crm") || hasModule(user, "workshop");
 }
 
 /**
- * First route prefix match wins. Lead pages are intentionally absent: their
- * pages, layouts and server actions use database-backed granular RBAC and record
- * scopes. Legacy modules remain module-gated until migrated in later releases.
+ * Only non-migrated or deliberately owner-only surfaces remain here. All core
+ * CRM, document, case, marketing, workshop, reporting and inbox routes now use
+ * database-backed permission layouts and record scopes.
  */
 export const ROUTE_GATES: { prefix: string; gate: ModuleId | "contacts" | "admin" }[] = [
-  { prefix: "/quotes", gate: "crm" },
-  { prefix: "/deliveries", gate: "crm" },
   { prefix: "/stock", gate: "crm" },
   { prefix: "/referrals", gate: "crm" },
-  { prefix: "/fleets", gate: "crm" },
   { prefix: "/health", gate: "crm" },
-  { prefix: "/campaigns", gate: "crm" },
-  { prefix: "/surveys", gate: "crm" },
-  { prefix: "/activities", gate: "crm" },
-  { prefix: "/calendar", gate: "crm" },
-  { prefix: "/duplicates", gate: "crm" },
   { prefix: "/automations", gate: "admin" },
   { prefix: "/chatbot", gate: "admin" },
   { prefix: "/bot-builder", gate: "admin" },
   { prefix: "/products", gate: "admin" },
-  { prefix: "/library", gate: "crm" },
-  { prefix: "/contacts", gate: "contacts" },
-  { prefix: "/cases", gate: "contacts" },
-  { prefix: "/vehicles", gate: "workshop" },
-  { prefix: "/service-due", gate: "workshop" },
-  { prefix: "/warranty", gate: "workshop" },
-  { prefix: "/jobcards", gate: "workshop" },
-  { prefix: "/parts", gate: "workshop" },
-  { prefix: "/workshop-calendar", gate: "workshop" },
-  { prefix: "/reports", gate: "reports" },
-  { prefix: "/targets", gate: "reports" },
-  { prefix: "/inbox", gate: "inbox" },
   { prefix: "/trash", gate: "admin" },
 ];
 
