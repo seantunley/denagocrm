@@ -31,7 +31,7 @@ export async function sendDmReply(
   if (!recipientId) return { error: "This contact has no Messenger/Instagram identity." };
 
   let attachmentUrl: string | null = null;
-  let attachmentType: string | null = null;
+  let attachmentType: "image" | "audio" | "video" | "file" | null = null;
   if (hasFile) {
     if (file.size > 4 * 1024 * 1024) {
       return { error: "File too big — 4MB max here. For larger files, share a Library link instead." };

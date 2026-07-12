@@ -58,9 +58,9 @@ export default async function DocumentStudioPage() {
 
       <div className="space-y-6">
         {DOC_GROUPS.map((group) => (
-          <section key={group.label} className="rounded-xl border border-border bg-card p-4 shadow-sm">
+          <section key={group.name} className="rounded-xl border border-border bg-card p-4 shadow-sm">
             <div className="mb-3">
-              <h3 className="text-sm font-semibold text-foreground">{group.label}</h3>
+              <h3 className="text-sm font-semibold text-foreground">{group.name}</h3>
               <p className="text-xs text-muted-foreground">Templates below feed directly into the matching CRM print/PDF route.</p>
             </div>
             <div className="grid gap-4 xl:grid-cols-2">
