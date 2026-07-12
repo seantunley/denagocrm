@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { basePrisma } from "./db";
 
 export type UserSecurityState = {
@@ -14,7 +15,9 @@ const DEFAULT_STATE: UserSecurityState = {
   failedLoginCount: 0,
 };
 
-export async function getUserSecurityState(userId: string): Promise<UserSecurityState | null> {
+// Request-memoised: read the row once per request even when getCurrentUser and
+// direct callers both ask. Request-scoped, so changes apply on the next request.
+export const getUserSecurityState = cache(async (userId: string): Promise<UserSecurityState | null> => {
   try {
     const rows = await basePrisma.$queryRaw<UserSecurityState[]>`
       SELECT "sessionVersion", "disabledAt", "lastLoginAt", "failedLoginCount"
@@ -31,7 +34,7 @@ export async function getUserSecurityState(userId: string): Promise<UserSecurity
     `;
     return rows[0] ? DEFAULT_STATE : null;
   }
-}
+});
 
 export async function bumpUserSessionVersion(userId: string): Promise<number> {
   const rows = await basePrisma.$queryRaw<Array<{ sessionVersion: number }>>`

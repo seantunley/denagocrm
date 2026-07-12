@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies, headers } from "next/headers";
 import crypto from "crypto";
 import { redirect } from "next/navigation";
@@ -13,7 +14,14 @@ import {
   DEFAULT_IDLE_MINUTES,
 } from "./session";
 
-export async function getCurrentUser() {
+/**
+ * Resolve the signed-in user for the current request. Wrapped in React
+ * `cache()` so the session-registry, user and security-state lookups run once
+ * per request even though the layout, nested layouts and page all call it.
+ * The cache is request-scoped, so role/account/password changes still take
+ * effect on the very next request.
+ */
+export const getCurrentUser = cache(async () => {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
@@ -42,7 +50,7 @@ export async function getCurrentUser() {
   if (!user || !security || security.disabledAt) return null;
   if (security.sessionVersion !== session.sv) return null;
   return user;
-}
+});
 
 export async function requireUser() {
   const user = await getCurrentUser();
