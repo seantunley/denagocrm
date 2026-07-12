@@ -42,16 +42,12 @@ export type PermissionUser = {
 };
 
 const RBAC_UNAVAILABLE = "__rbac_unavailable__";
-const RBAC_ROLE_ASSIGNED = "__rbac_role_assigned__";
-
-function moduleSet(user: PermissionUser) {
-  return new Set(user.modules.split(",").map((item) => item.trim()).filter(Boolean));
-}
+const RBAC_INITIALIZED = "__rbac_initialized__";
 
 /**
- * Explicit role permissions are authoritative. A role-assignment sentinel keeps
- * an intentionally empty role from falling back to broader legacy module access.
- * Database/query failures return a different sentinel and fail closed.
+ * Once the migration has created the Role table, RBAC is authoritative for the
+ * new guarded functionality. A user with no role therefore has no permission.
+ * Query/storage failures return a different sentinel and fail closed.
  */
 export async function getUserPermissions(userId: string): Promise<Set<string>> {
   try {
@@ -61,8 +57,8 @@ export async function getUserPermissions(userId: string): Promise<Set<string>> {
       JOIN "RolePermission" rp ON rp."roleId" = ur."roleId"
       WHERE ur."userId" = ${userId}
       UNION
-      SELECT ${RBAC_ROLE_ASSIGNED} AS key
-      WHERE EXISTS (SELECT 1 FROM "UserRole" ur WHERE ur."userId" = ${userId})
+      SELECT ${RBAC_INITIALIZED} AS key
+      WHERE EXISTS (SELECT 1 FROM "Role" LIMIT 1)
     `;
     return new Set(rows.map((row) => row.key));
   } catch {
@@ -70,36 +66,12 @@ export async function getUserPermissions(userId: string): Promise<Set<string>> {
   }
 }
 
-function hasExplicitRole(permissions: Set<string>) {
-  return permissions.has(RBAC_ROLE_ASSIGNED);
-}
-
-function legacyModuleAllows(user: PermissionUser, permission: PermissionKey): boolean {
-  const modules = moduleSet(user);
-  const crmFallback = new Set<PermissionKey>([
-    "pipelines.view",
-    "forecast.view",
-    "leads.view_owned",
-    "leads.create",
-    "leads.edit",
-    "leads.change_stage",
-    "leads.mark_won",
-    "leads.mark_lost",
-    "leads.reopen",
-    "leads.link_contact",
-  ]);
-  if (crmFallback.has(permission)) return modules.has("crm");
-  if (permission === "reports.view") return modules.has("reports");
-  if (permission === "workshop.manage") return modules.has("workshop");
-  return false;
-}
-
 export async function hasPermission(user: PermissionUser, permission: PermissionKey): Promise<boolean> {
   if (user.role === "owner") return true;
   const permissions = await getUserPermissions(user.id);
   if (permissions.has(RBAC_UNAVAILABLE)) return false;
-  if (hasExplicitRole(permissions)) return permissions.has(permission);
-  return legacyModuleAllows(user, permission);
+  if (!permissions.has(RBAC_INITIALIZED)) return false;
+  return permissions.has(permission);
 }
 
 export async function requirePermission(permission: PermissionKey): Promise<PermissionUser> {
@@ -132,18 +104,12 @@ export async function getUserTeamIds(userId: string): Promise<string[]> {
   }
 }
 
-async function canViewOwnedRecords(user: PermissionUser, permissions: Set<string>) {
-  if (permissions.has(RBAC_UNAVAILABLE)) return false;
-  if (hasExplicitRole(permissions)) return permissions.has("leads.view_owned");
-  return moduleSet(user).has("crm");
-}
-
 export async function canAccessLead(user: PermissionUser, leadId: string): Promise<boolean> {
   if (user.role === "owner") return true;
   const permissions = await getUserPermissions(user.id);
-  if (permissions.has(RBAC_UNAVAILABLE)) return false;
+  if (permissions.has(RBAC_UNAVAILABLE) || !permissions.has(RBAC_INITIALIZED)) return false;
   if (permissions.has("leads.view_all")) return true;
-  if (!(await canViewOwnedRecords(user, permissions))) return false;
+  if (!permissions.has("leads.view_owned")) return false;
 
   const rows = await basePrisma.$queryRaw<Array<{ allowed: boolean }>>`
     SELECT EXISTS (
@@ -186,11 +152,11 @@ export async function getAccessibleLeadScope(user: PermissionUser): Promise<{
     return { viewAll: true, viewOwned: true, userId: user.id, teamIds: [] };
   }
   const permissions = await getUserPermissions(user.id);
-  if (permissions.has(RBAC_UNAVAILABLE)) {
+  if (permissions.has(RBAC_UNAVAILABLE) || !permissions.has(RBAC_INITIALIZED)) {
     return { viewAll: false, viewOwned: false, userId: user.id, teamIds: [] };
   }
   const viewAll = permissions.has("leads.view_all");
-  const viewOwned = viewAll || await canViewOwnedRecords(user, permissions);
+  const viewOwned = viewAll || permissions.has("leads.view_owned");
   return {
     viewAll,
     viewOwned,
