@@ -47,14 +47,8 @@ export async function moveStage(id: string, direction: "up" | "down") {
   const swapWith = direction === "up" ? index - 1 : index + 1;
   if (index < 0 || swapWith < 0 || swapWith >= stages.length) return;
   await prisma.$transaction([
-    prisma.pipelineStage.update({
-      where: { id: stages[index].id },
-      data: { order: stages[swapWith].order },
-    }),
-    prisma.pipelineStage.update({
-      where: { id: stages[swapWith].id },
-      data: { order: stages[index].order },
-    }),
+    prisma.pipelineStage.update({ where: { id: stages[index].id }, data: { order: stages[swapWith].order } }),
+    prisma.pipelineStage.update({ where: { id: stages[swapWith].id }, data: { order: stages[index].order } }),
   ]);
   revalidatePath("/settings");
   revalidatePath("/leads");
@@ -136,10 +130,7 @@ export async function changeOwnPassword(
 
   const updated = await prisma.user.update({
     where: { id: user.id },
-    data: {
-      passwordHash: await bcrypt.hash(next, 12),
-      passwordChangedAt: new Date(),
-    },
+    data: { passwordHash: await bcrypt.hash(next, 12), passwordChangedAt: new Date() },
   });
   await bumpUserSessionVersion(user.id);
   await createSessionCookie(updated);
@@ -158,16 +149,8 @@ export async function saveQuoteDefaults(formData: FormData) {
   await requireOwner();
   const days = String(formData.get("validDays") ?? "").trim();
   const terms = String(formData.get("terms") ?? "").trim();
-  await prisma.appSetting.upsert({
-    where: { key: "QUOTE_VALID_DAYS" },
-    update: { value: days || "7" },
-    create: { key: "QUOTE_VALID_DAYS", value: days || "7" },
-  });
-  await prisma.appSetting.upsert({
-    where: { key: "QUOTE_TERMS" },
-    update: { value: terms },
-    create: { key: "QUOTE_TERMS", value: terms },
-  });
+  await prisma.appSetting.upsert({ where: { key: "QUOTE_VALID_DAYS" }, update: { value: days || "7" }, create: { key: "QUOTE_VALID_DAYS", value: days || "7" } });
+  await prisma.appSetting.upsert({ where: { key: "QUOTE_TERMS" }, update: { value: terms }, create: { key: "QUOTE_TERMS", value: terms } });
   revalidatePath("/settings");
 }
 
@@ -181,11 +164,7 @@ export async function saveWorkshopSettings(formData: FormData) {
     BOOKING_HORIZON_DAYS: String(formData.get("horizon") ?? "30").trim() || "30",
   };
   for (const [key, value] of Object.entries(entries)) {
-    await prisma.appSetting.upsert({
-      where: { key },
-      update: { value },
-      create: { key, value },
-    });
+    await prisma.appSetting.upsert({ where: { key }, update: { value }, create: { key, value } });
   }
   revalidatePath("/settings");
 }
@@ -194,28 +173,32 @@ export async function saveMyProfile(formData: FormData) {
   const user = await requireUser();
   const mobile = String(formData.get("mobile") ?? "").trim() || null;
   const signatureHtml = String(formData.get("signatureHtml") ?? "").trim() || null;
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { mobile, signatureHtml },
-  });
+  await prisma.user.update({ where: { id: user.id }, data: { mobile, signatureHtml } });
   revalidatePath("/settings");
 }
 
-export async function saveNotificationPrefs(formData: FormData) {
-  const user = await requireUser();
-  const enabled = formData.getAll("enabled").map(String).filter((kind) => PUSH_KINDS.includes(kind));
-  await putSetting(`PUSH_PREFS_${user.id}`, enabled.join(","));
-  revalidatePath("/settings");
-}
+// ---- Integration settings ----
 
-export async function saveSetting(key: string, formData: FormData) {
+export async function saveSetting(formData: FormData) {
   await requireOwner();
-  await putSetting(key, String(formData.get("value") ?? ""));
+  const key = String(formData.get("key") ?? "");
+  const value = String(formData.get("value") ?? "").trim();
+  if (!key) return;
+  await putSetting(key, value);
   revalidatePath("/settings");
 }
 
 export async function regenerateSetting(key: string) {
   await requireOwner();
-  await putSetting(key, crypto.randomBytes(32).toString("hex"));
+  const value = crypto.randomBytes(24).toString("hex");
+  await putSetting(key, value);
+  revalidatePath("/settings");
+}
+
+export async function saveNotificationPrefs(formData: FormData) {
+  await requireOwner();
+  const enabled = new Set(formData.getAll("kinds").map(String));
+  const disabled = PUSH_KINDS.map((kind) => kind.id).filter((id) => !enabled.has(id));
+  await putSetting("PUSH_DISABLED_KINDS", disabled.join(","));
   revalidatePath("/settings");
 }
