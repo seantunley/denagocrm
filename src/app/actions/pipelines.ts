@@ -38,6 +38,15 @@ function validDateInput(raw: string | null) {
   return date;
 }
 
+function forecastMonth(period: string) {
+  if (!/^\d{4}-\d{2}$/.test(period)) throw new Error("Forecast period must be YYYY-MM");
+  const [year, month] = period.split("-").map(Number);
+  return {
+    closeFrom: new Date(Date.UTC(year, month - 1, 1)),
+    closeTo: new Date(Date.UTC(year, month, 1)),
+  };
+}
+
 export async function createSalesPipeline(formData: FormData) {
   const user = await requirePermission("pipelines.manage");
   const name = str(formData, "name");
@@ -182,12 +191,16 @@ export async function saveLeadForecast(leadId: string, formData: FormData) {
   if ((before[0].teamId ?? null) !== teamId && !(await hasPermission(user, "leads.assign"))) {
     throw new Error("You do not have permission to change the lead team");
   }
+  const forecastCategory = str(formData, "forecastCategory") ?? "pipeline";
+  if (!["pipeline", "best_case", "commit", "omitted"].includes(forecastCategory)) {
+    throw new Error("Invalid forecast category for an open lead");
+  }
   const estimatedCost = str(formData, "estimatedCost");
   const after = {
     probability: int(formData, "probability", 10),
-    forecastCategory: str(formData, "forecastCategory") ?? "pipeline",
+    forecastCategory,
     expectedCloseDate: validDateInput(str(formData, "expectedCloseDate")),
-    estimatedCostCents: estimatedCost ? parseRands(estimatedCost) : null,
+    estimatedCostCents: estimatedCost ? Math.max(0, parseRands(estimatedCost)) : null,
     teamId,
   };
   await updateLeadForecast(leadId, after);
@@ -225,11 +238,14 @@ export async function snapshotForecast(formData: FormData) {
     if (!teamId) userId = user.id;
   }
 
+  const month = forecastMonth(period);
   const input = {
     period,
     pipelineId: str(formData, "pipelineId"),
     teamId,
     userId,
+    closeFrom: month.closeFrom,
+    closeTo: month.closeTo,
   };
   const result = await captureForecastSnapshot(input);
   await logAuditStrict({
@@ -237,7 +253,7 @@ export async function snapshotForecast(formData: FormData) {
     summary: `Captured forecast snapshot for ${period}`,
     entityType: "ForecastSnapshot",
     user,
-    after: { ...input, ...result },
+    after: { period, pipelineId: input.pipelineId, teamId, userId, ...result },
   });
   revalidatePath("/forecast");
 }
