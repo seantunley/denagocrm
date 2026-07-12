@@ -5,9 +5,18 @@ import { revalidatePath } from "next/cache";
 import { basePrisma } from "@/lib/db";
 import { PERMISSIONS, requirePermission } from "@/lib/permissions";
 import { logAuditStrict } from "@/lib/audit";
+import { bumpUserSessionVersion } from "@/lib/userSecurity";
 
 const value = (formData: FormData, key: string) => String(formData.get(key) ?? "").trim();
 const permissionSet = new Set<string>(PERMISSIONS);
+const REQUIRED_ADMIN_PERMISSIONS = new Set([
+  "roles.view",
+  "roles.manage",
+  "teams.view",
+  "teams.manage",
+  "audit.view",
+  "audit.export",
+]);
 
 async function validUserId(userId: string | null) {
   if (!userId) return null;
@@ -16,6 +25,39 @@ async function validUserId(userId: string | null) {
   `;
   if (!rows[0]) throw new Error("Selected user does not exist");
   return userId;
+}
+
+async function otherGovernanceAdminCount(excludedUserId?: string, excludedRoleId?: string): Promise<number> {
+  const rows = await basePrisma.$queryRaw<Array<{ count: bigint }>>`
+    SELECT COUNT(DISTINCT u."id")::bigint AS count
+    FROM "User" u
+    WHERE u."disabledAt" IS NULL
+      AND (${excludedUserId ?? null}::text IS NULL OR u."id" <> ${excludedUserId ?? null})
+      AND (
+        u."role" = 'owner'
+        OR EXISTS (
+          SELECT 1
+          FROM "UserRole" ur
+          JOIN "RolePermission" rp ON rp."roleId" = ur."roleId"
+          WHERE ur."userId" = u."id"
+            AND rp."permissionKey" = 'roles.manage'
+            AND (${excludedRoleId ?? null}::text IS NULL OR ur."roleId" <> ${excludedRoleId ?? null})
+        )
+      )
+  `;
+  return Number(rows[0]?.count ?? 0);
+}
+
+async function roleIdsGrantAdmin(roleIds: string[]): Promise<boolean> {
+  if (roleIds.length === 0) return false;
+  const rows = await basePrisma.$queryRaw<Array<{ allowed: boolean }>>`
+    SELECT EXISTS (
+      SELECT 1 FROM "RolePermission"
+      WHERE "roleId" = ANY(${roleIds}::text[])
+        AND "permissionKey" = 'roles.manage'
+    ) AS allowed
+  `;
+  return Boolean(rows[0]?.allowed);
 }
 
 export async function createTeam(formData: FormData) {
@@ -160,15 +202,30 @@ export async function createRole(formData: FormData) {
 
 export async function updateRolePermissions(roleId: string, formData: FormData) {
   const user = await requirePermission("roles.manage");
-  const role = await basePrisma.$queryRaw<Array<{ id: string; name: string }>>`
-    SELECT "id", "name" FROM "Role" WHERE "id" = ${roleId} LIMIT 1
+  const roles = await basePrisma.$queryRaw<Array<{ id: string; name: string; system: boolean }>>`
+    SELECT "id", "name", "system" FROM "Role" WHERE "id" = ${roleId} LIMIT 1
   `;
-  if (!role[0]) throw new Error("Role not found");
+  const role = roles[0];
+  if (!role) throw new Error("Role not found");
   const before = await basePrisma.$queryRaw<Array<{ permissionKey: string }>>`
     SELECT "permissionKey" FROM "RolePermission" WHERE "roleId" = ${roleId} ORDER BY "permissionKey"
   `;
+  const beforeKeys = before.map((item) => item.permissionKey);
   const permissions = [...new Set(formData.getAll("permissions").map(String))]
     .filter((permission) => permissionSet.has(permission));
+
+  if (roleId === "role_crm_admin") {
+    const missing = [...REQUIRED_ADMIN_PERMISSIONS].filter((permission) => !permissions.includes(permission));
+    if (missing.length) throw new Error(`CRM administrator must retain: ${missing.join(", ")}`);
+  }
+  if (beforeKeys.includes("roles.manage") && !permissions.includes("roles.manage")) {
+    const remaining = await otherGovernanceAdminCount(undefined, roleId);
+    if (remaining < 1) throw new Error("This change would remove the last governance administrator");
+  }
+
+  const assignedUsers = await basePrisma.$queryRaw<Array<{ userId: string }>>`
+    SELECT "userId" FROM "UserRole" WHERE "roleId" = ${roleId}
+  `;
   await basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`DELETE FROM "RolePermission" WHERE "roleId" = ${roleId}`;
     for (const permission of permissions) {
@@ -177,14 +234,21 @@ export async function updateRolePermissions(roleId: string, formData: FormData) 
         VALUES (${roleId}, ${permission}) ON CONFLICT DO NOTHING
       `;
     }
+    if (assignedUsers.length) {
+      await tx.$executeRaw`
+        UPDATE "User"
+        SET "sessionVersion" = "sessionVersion" + 1
+        WHERE "id" = ANY(${assignedUsers.map((item) => item.userId)}::text[])
+      `;
+    }
   });
   await logAuditStrict({
     action: "role.permissions_updated",
-    summary: `Updated permissions for role “${role[0].name}”`,
+    summary: `Updated permissions for role “${role.name}”; affected sessions revoked`,
     entityType: "Role",
     entityId: roleId,
     user,
-    before: { permissions: before.map((item) => item.permissionKey) },
+    before: { permissions: beforeKeys },
     after: { permissions },
   });
   revalidatePath("/settings/access");
@@ -194,14 +258,25 @@ export async function updateUserRoles(userId: string, formData: FormData) {
   const actor = await requirePermission("roles.manage");
   await validUserId(userId);
   const requested = [...new Set(formData.getAll("roles").map(String))];
-  const allRoles = await basePrisma.$queryRaw<Array<{ id: string }>>`
-    SELECT "id" FROM "Role"
-  `;
+  const allRoles = await basePrisma.$queryRaw<Array<{ id: string }>>`SELECT "id" FROM "Role"`;
   const validRoleSet = new Set(allRoles.map((role) => role.id));
   const validRoleIds = requested.filter((roleId) => validRoleSet.has(roleId));
   const before = await basePrisma.$queryRaw<Array<{ roleId: string }>>`
     SELECT "roleId" FROM "UserRole" WHERE "userId" = ${userId} ORDER BY "roleId"
   `;
+  const targetRows = await basePrisma.$queryRaw<Array<{ role: string; disabledAt: Date | null }>>`
+    SELECT "role", "disabledAt" FROM "User" WHERE "id" = ${userId} LIMIT 1
+  `;
+  const target = targetRows[0];
+  if (!target) throw new Error("User not found");
+
+  const hadAdmin = target.role === "owner" || await roleIdsGrantAdmin(before.map((item) => item.roleId));
+  const keepsAdmin = target.role === "owner" || await roleIdsGrantAdmin(validRoleIds);
+  if (hadAdmin && !keepsAdmin && !target.disabledAt) {
+    const remaining = await otherGovernanceAdminCount(userId);
+    if (remaining < 1) throw new Error("This change would remove the last governance administrator");
+  }
+
   await basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`DELETE FROM "UserRole" WHERE "userId" = ${userId}`;
     for (const roleId of validRoleIds) {
@@ -209,10 +284,13 @@ export async function updateUserRoles(userId: string, formData: FormData) {
         INSERT INTO "UserRole" ("userId", "roleId") VALUES (${userId}, ${roleId}) ON CONFLICT DO NOTHING
       `;
     }
+    await tx.$executeRaw`
+      UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1 WHERE "id" = ${userId}
+    `;
   });
   await logAuditStrict({
     action: "user.roles_updated",
-    summary: "Updated user roles",
+    summary: "Updated user roles; active sessions revoked",
     entityType: "User",
     entityId: userId,
     user: actor,
@@ -220,4 +298,6 @@ export async function updateUserRoles(userId: string, formData: FormData) {
     after: { roles: validRoleIds },
   });
   revalidatePath("/settings/access");
+  revalidatePath("/settings");
+  await bumpUserSessionVersion(actor.id).catch(() => {});
 }
