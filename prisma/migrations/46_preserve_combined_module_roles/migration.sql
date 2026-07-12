@@ -16,3 +16,9 @@ FROM "User"
 WHERE "role" <> 'owner'
   AND (',' || REPLACE("modules", ' ', '') || ',') LIKE '%,crm,%'
 ON CONFLICT DO NOTHING;
+
+-- Read-only auditors may export the filtered, non-payload CSV view. The full
+-- before/after JSON remains visible only inside the authenticated audit screen.
+INSERT INTO "RolePermission" ("roleId", "permissionKey")
+VALUES ('role_auditor', 'audit.export')
+ON CONFLICT DO NOTHING;
