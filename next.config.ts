@@ -1,6 +1,14 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  turbopack: {
+    resolveAlias: {
+      // pdfme's PDF renderer (clawpdf/pdfium) references Node's `module`
+      // builtin behind a runtime Node-only guard. Stub it for the browser so
+      // Turbopack can bundle it; the guarded code never runs client-side.
+      module: { browser: "./src/stubs/empty.ts" },
+    },
+  },
   async headers() {
     return [
       {
