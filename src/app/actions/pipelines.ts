@@ -1,7 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requirePermission, requireLeadAccess } from "@/lib/permissions";
+import {
+  getAccessibleLeadScope,
+  hasPermission,
+  requireLeadAccess,
+  requirePermission,
+} from "@/lib/permissions";
 import {
   addPipelineStage,
   archivePipeline,
@@ -24,6 +29,14 @@ const int = (formData: FormData, key: string, fallback = 0) => {
   const value = parseInt(String(formData.get(key) ?? ""), 10);
   return Number.isFinite(value) ? value : fallback;
 };
+
+function validDateInput(raw: string | null) {
+  if (!raw) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) throw new Error("Expected close date is invalid");
+  const date = new Date(`${raw}T12:00:00+02:00`);
+  if (Number.isNaN(date.getTime())) throw new Error("Expected close date is invalid");
+  return date;
+}
 
 export async function createSalesPipeline(formData: FormData) {
   const user = await requirePermission("pipelines.manage");
@@ -52,6 +65,7 @@ export async function editSalesPipeline(id: string, formData: FormData) {
   const before = await basePrisma.$queryRaw<Array<Record<string, unknown>>>`
     SELECT * FROM "SalesPipeline" WHERE "id" = ${id} LIMIT 1
   `;
+  if (!before[0]) throw new Error("Pipeline not found");
   const name = str(formData, "name");
   if (!name) throw new Error("Pipeline name is required");
   const after = {
@@ -73,13 +87,14 @@ export async function editSalesPipeline(id: string, formData: FormData) {
   });
   revalidatePath("/settings/pipelines");
   revalidatePath("/leads");
+  revalidatePath("/forecast");
 }
 
 export async function createSalesPipelineStage(pipelineId: string, formData: FormData) {
   const user = await requirePermission("pipelines.manage");
   const name = str(formData, "name");
   if (!name) throw new Error("Stage name is required");
-  const stageId = await addPipelineStage({
+  const after = {
     pipelineId,
     name,
     color: str(formData, "color") ?? "#64748b",
@@ -87,17 +102,19 @@ export async function createSalesPipelineStage(pipelineId: string, formData: For
     staleAfterDays: str(formData, "staleAfterDays") ? int(formData, "staleAfterDays") : null,
     isClosed: bool(formData, "isClosed"),
     closedStatus: str(formData, "closedStatus"),
-  });
+  };
+  const stageId = await addPipelineStage(after);
   await logAuditStrict({
     action: "pipeline.stage_created",
     summary: `Created stage “${name}”`,
     entityType: "PipelineStage",
     entityId: stageId,
     user,
-    after: { pipelineId, name },
+    after,
   });
   revalidatePath("/settings/pipelines");
   revalidatePath("/leads");
+  revalidatePath("/forecast");
 }
 
 export async function editSalesPipelineStage(id: string, formData: FormData) {
@@ -105,6 +122,7 @@ export async function editSalesPipelineStage(id: string, formData: FormData) {
   const before = await basePrisma.$queryRaw<Array<Record<string, unknown>>>`
     SELECT * FROM "PipelineStage" WHERE "id" = ${id} LIMIT 1
   `;
+  if (!before[0]) throw new Error("Pipeline stage not found");
   const name = str(formData, "name");
   if (!name) throw new Error("Stage name is required");
   const after = {
@@ -127,6 +145,7 @@ export async function editSalesPipelineStage(id: string, formData: FormData) {
   });
   revalidatePath("/settings/pipelines");
   revalidatePath("/leads");
+  revalidatePath("/forecast");
 }
 
 export async function archiveSalesPipeline(id: string, formData: FormData) {
@@ -135,10 +154,11 @@ export async function archiveSalesPipeline(id: string, formData: FormData) {
   const before = await basePrisma.$queryRaw<Array<Record<string, unknown>>>`
     SELECT * FROM "SalesPipeline" WHERE "id" = ${id} LIMIT 1
   `;
+  if (!before[0]) throw new Error("Pipeline not found");
   await archivePipeline(id);
   await logAuditStrict({
     action: "pipeline.archived",
-    summary: `Archived sales pipeline “${String(before[0]?.name ?? id)}”`,
+    summary: `Archived sales pipeline “${String(before[0].name ?? id)}”`,
     entityType: "SalesPipeline",
     entityId: id,
     user,
@@ -147,21 +167,28 @@ export async function archiveSalesPipeline(id: string, formData: FormData) {
   });
   revalidatePath("/settings/pipelines");
   revalidatePath("/leads");
+  revalidatePath("/forecast");
 }
 
 export async function saveLeadForecast(leadId: string, formData: FormData) {
   const user = await requireLeadAccess(leadId, "forecast.manage");
   const before = await basePrisma.$queryRaw<Array<Record<string, unknown>>>`
     SELECT "probability", "forecastCategory", "expectedCloseDate", "estimatedCostCents", "teamId"
-    FROM "Lead" WHERE "id" = ${leadId} LIMIT 1
+    FROM "Lead" WHERE "id" = ${leadId} AND "deletedAt" IS NULL LIMIT 1
   `;
-  const closeDate = str(formData, "expectedCloseDate");
+  if (!before[0]) throw new Error("Lead not found");
+
+  const teamId = str(formData, "teamId");
+  if ((before[0].teamId ?? null) !== teamId && !(await hasPermission(user, "leads.assign"))) {
+    throw new Error("You do not have permission to change the lead team");
+  }
+  const estimatedCost = str(formData, "estimatedCost");
   const after = {
     probability: int(formData, "probability", 10),
     forecastCategory: str(formData, "forecastCategory") ?? "pipeline",
-    expectedCloseDate: closeDate ? new Date(`${closeDate}T12:00:00+02:00`) : null,
-    estimatedCostCents: parseRands(str(formData, "estimatedCost")),
-    teamId: str(formData, "teamId"),
+    expectedCloseDate: validDateInput(str(formData, "expectedCloseDate")),
+    estimatedCostCents: estimatedCost ? parseRands(estimatedCost) : null,
+    teamId,
   };
   await updateLeadForecast(leadId, after);
   await logAuditStrict({
@@ -175,17 +202,34 @@ export async function saveLeadForecast(leadId: string, formData: FormData) {
     after,
   });
   revalidatePath("/forecast");
+  revalidatePath("/leads");
   revalidatePath(`/leads/${leadId}`);
 }
 
 export async function snapshotForecast(formData: FormData) {
   const user = await requirePermission("forecast.manage");
+  const scope = await getAccessibleLeadScope(user);
   const period = str(formData, "period") ?? new Date().toISOString().slice(0, 7);
+  const requestedTeamId = str(formData, "teamId");
+  const requestedUserId = str(formData, "userId");
+
+  let teamId = requestedTeamId;
+  let userId = requestedUserId;
+  if (!scope.viewAll) {
+    if (teamId && !scope.teamIds.includes(teamId)) {
+      throw new Error("You cannot snapshot a team outside your access scope");
+    }
+    if (userId && userId !== user.id) {
+      throw new Error("You cannot snapshot another user's forecast");
+    }
+    if (!teamId) userId = user.id;
+  }
+
   const input = {
     period,
     pipelineId: str(formData, "pipelineId"),
-    teamId: str(formData, "teamId"),
-    userId: str(formData, "userId"),
+    teamId,
+    userId,
   };
   const result = await captureForecastSnapshot(input);
   await logAuditStrict({
