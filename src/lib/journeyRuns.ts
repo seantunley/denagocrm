@@ -55,7 +55,6 @@ async function processOneRun(runId: string) {
     where: { id: run.id, status: { in: ["queued", "waiting"] }, nextRunAt: { lte: new Date() } },
     data: {
       status: "running",
-      attempts: { increment: 1 },
       startedAt: run.startedAt ?? new Date(),
       lastError: null,
     },
@@ -77,6 +76,7 @@ async function processOneRun(runId: string) {
             status: "completed",
             currentStepId: null,
             completedAt: new Date(),
+            attempts: 0,
             context: context as Prisma.InputJsonValue,
           },
         });
@@ -131,6 +131,7 @@ async function processOneRun(runId: string) {
             status: "waiting",
             currentStepId: nextStepId,
             nextRunAt: result.nextRunAt ?? new Date(Date.now() + 60_000),
+            attempts: 0,
             context: context as Prisma.InputJsonValue,
           },
         });
@@ -146,7 +147,7 @@ async function processOneRun(runId: string) {
       if (refreshed) context = refreshed;
       await prisma.journeyRun.update({
         where: { id: run.id },
-        data: { currentStepId, context: context as Prisma.InputJsonValue },
+        data: { currentStepId, attempts: 0, context: context as Prisma.InputJsonValue },
       });
     }
 
@@ -165,11 +166,13 @@ async function processOneRun(runId: string) {
         });
       }
     }
-    const retry = run.attempts + 1 < MAX_RUN_ATTEMPTS;
+    const attempts = run.attempts + 1;
+    const retry = attempts < MAX_RUN_ATTEMPTS;
     await prisma.journeyRun.update({
       where: { id: run.id },
       data: {
         status: retry ? "queued" : "failed",
+        attempts,
         nextRunAt: retry ? new Date(Date.now() + 5 * 60_000) : run.nextRunAt,
         lastError: message.slice(0, 1000),
       },
