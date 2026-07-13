@@ -10,9 +10,9 @@ const PORTAL_NAV = [
 
 export default function PortalLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#090b0a] text-slate-100">
-      <div className="pointer-events-none fixed -right-48 -top-56 size-[600px] rounded-full bg-orange-600/[0.08] blur-[120px]" />
-      <header className="sticky top-0 z-20 border-b border-white/[0.07] bg-black/20 backdrop-blur-xl">
+    <div className="portal-shell relative min-h-screen overflow-hidden bg-[#090b0a] text-slate-100">
+      <div className="portal-shell-ambient pointer-events-none fixed -right-48 -top-56 size-[600px] rounded-full bg-orange-600/[0.08] blur-[120px]" />
+      <header className="portal-header sticky top-0 z-20 border-b border-white/[0.07] bg-black/20 backdrop-blur-xl">
         <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
           <Link href="/portal" aria-label="Customer portal home">
             <Image
@@ -37,7 +37,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
           ))}
         </nav>
       </header>
-      <main className="relative max-w-4xl mx-auto px-4 py-8 sm:py-12">{children}</main>
+      <main className="portal-main relative mx-auto max-w-4xl px-4 py-8 sm:py-12">{children}</main>
     </div>
   );
 }
