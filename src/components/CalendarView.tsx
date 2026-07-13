@@ -47,13 +47,24 @@ export default async function CalendarView({
 
   const todayStart = startOfDay(new Date());
   const events: (CalendarEvent & { dueDate: Date })[] = activities.map((a) => {
-    const time = format(a.dueDate, "HH:mm");
+    // Servers run in UTC; times MUST be rendered in SA time (UTC+2) or they show
+    // two hours early. Date-only items are stored at UTC midnight — detect that
+    // in UTC (not SA time) so all-day items still render with no clock time.
+    const dateOnly = a.dueDate.getUTCHours() === 0 && a.dueDate.getUTCMinutes() === 0;
+    const time = dateOnly
+      ? null
+      : a.dueDate.toLocaleTimeString("en-ZA", {
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+          timeZone: "Africa/Johannesburg",
+        });
     return {
       id: a.id,
       dueDate: a.dueDate,
       href: a.lead ? `/leads/${a.lead.id}` : a.contact ? `/contacts/${a.contact.id}` : "/activities",
       summary: a.summary,
-      time: time === "00:00" ? null : time,
+      time,
       status: a.status,
       overdue: a.status === "planned" && a.dueDate < todayStart,
       type: a.type,
@@ -64,7 +75,12 @@ export default async function CalendarView({
       assignee: a.assignedTo.name,
       location: a.location,
       note: a.note,
-      dateLabel: format(a.dueDate, "EEE d MMM"),
+      dateLabel: a.dueDate.toLocaleDateString("en-ZA", {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+        timeZone: "Africa/Johannesburg",
+      }),
     };
   });
 
