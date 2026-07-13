@@ -210,9 +210,9 @@ function overlayFieldHtml(f: OverlayField, recipientColor: string, margin: numbe
   return `<div style="position:absolute;left:${f.anchor.x - margin}px;top:${f.anchor.y - margin}px;width:${f.width}px;height:${f.height}px;border:1.5px dashed ${recipientColor};border-radius:4px;background:${recipientColor}14;display:flex;align-items:center;justify-content:center;font-size:9pt;color:${recipientColor};font-weight:600">${esc(label)}</div>`;
 }
 
-function pageHtml(page: DocumentPage, doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string, isLast?: boolean): string {
+function pageHtml(page: DocumentPage, doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string, isLast?: boolean, hideOverlays?: boolean): string {
   const rows = page.rows.map((r) => rowHtml(r, ctx, doc.style, logoDataUri)).join("");
-  const fields = page.overlayFields.map((f) => {
+  const fields = hideOverlays ? "" : page.overlayFields.map((f) => {
     const rc = doc.recipients.find((r) => r.id === f.recipientId)?.color ?? "#2563eb";
     return overlayFieldHtml(f, rc, doc.style.margin);
   }).join("");
@@ -244,12 +244,13 @@ export function renderEmailHtml(doc: DocumentModel, ctx: RenderCtx, logoDataUri?
   </body></html>`;
 }
 
-export function renderDocumentHtml(doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string): string {
+export function renderDocumentHtml(doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string, opts?: { hideOverlays?: boolean; appendHtml?: string }): string {
   const font = fontStack(doc.style.fontFamily);
   const m = doc.style.margin;
   const header = doc.header.length ? doc.header.map((b) => blockHtml(b, ctx, doc.style, logoDataUri)).join("") : "";
   const footer = doc.footer.length ? doc.footer.map((b) => blockHtml(b, ctx, doc.style, logoDataUri)).join("") : "";
-  const body = doc.pages.map((p, i) => pageHtml(p, doc, ctx, logoDataUri, i === doc.pages.length - 1)).join("");
+  const lastIdx = doc.pages.length - 1;
+  const body = doc.pages.map((p, i) => pageHtml(p, doc, ctx, logoDataUri, i === lastIdx && !opts?.appendHtml, opts?.hideOverlays)).join("") + (opts?.appendHtml ?? "");
   const pageCss = doc.style.pageSize === "A4" ? "A4" : "letter";
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     @page { size: ${pageCss}; margin: ${m}px; }

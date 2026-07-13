@@ -9,8 +9,10 @@ import { documentSchema, parseDocument } from "@/lib/doceditor/model";
 import { blankDocument, standardQuoteTemplate } from "@/lib/doceditor/factory";
 import { generateDocEditorPdf } from "@/lib/doceditor/generate";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
-import { getSigningAdapter, type SendResult } from "@/lib/doceditor/signing";
+import { createSignatureRequestFromDoc } from "@/lib/signing/service";
 import { saveFile } from "@/lib/storage";
+
+type SignPrepResult = { ok: boolean; requestId?: string; message: string };
 
 const BASE = "/settings/documents/builder";
 
@@ -55,19 +57,20 @@ export async function generateDocEditorDocument(formData: FormData) {
 }
 
 /**
- * Prepare a document for signing: seal + file the PDF, then hand recipients/fields
- * to the signing adapter (see @/lib/doceditor/signing). Returns the adapter result.
+ * Prepare a document for signing: generate + file the unsigned PDF, then create a
+ * SignatureRequest envelope (recipients, per-recipient tokens, placed fields, audit).
+ * Dispatch (email/WhatsApp) happens from the signing hub in a later phase.
  */
-export async function sendDocForSigning(templateId: string, quoteId?: string | null): Promise<SendResult> {
+export async function sendDocForSigning(templateId: string, quoteId?: string | null, jobCardId?: string | null): Promise<SignPrepResult> {
   const user = await requireOwner();
   const tpl = await getBuilderTemplate(templateId);
-  if (!tpl) return { ok: false, provider: "", message: "Template not found" };
+  if (!tpl) return { ok: false, message: "Template not found" };
   const doc = parseDocument(tpl.data);
-  if (!doc) return { ok: false, provider: "", message: "This document is empty." };
+  if (!doc) return { ok: false, message: "This document is empty." };
+  if (doc.recipients.length === 0) return { ok: false, message: "Add at least one recipient (and signature fields) to the template first." };
 
-  // Unsigned PDF — the signing flow seals it only after a recipient signs.
-  const res = await generateDocEditorPdf({ templateId, quoteId });
-  if (!res) return { ok: false, provider: "", message: "Could not generate the PDF." };
+  const res = await generateDocEditorPdf({ templateId, quoteId, jobCardId });
+  if (!res) return { ok: false, message: "Could not generate the PDF." };
 
   const storedName = await saveFile(res.buffer, `${res.title}.pdf`, "application/pdf");
   const document = await prisma.document.create({
@@ -76,13 +79,32 @@ export async function sendDocForSigning(templateId: string, quoteId?: string | n
       quoteId: res.quoteId, jobCardId: res.jobCardId, contactId: res.contactId, tag: "for-signing", uploadedById: user.id,
     },
   });
-  const fields = doc.pages.flatMap((p, pi) => p.overlayFields.map((f) => ({
-    kind: f.kind, recipientId: f.recipientId, page: pi, x: f.anchor.x, y: f.anchor.y, width: f.width, height: f.height, required: f.required, label: f.label,
-  })));
-  const result = await getSigningAdapter().send({ title: res.title, pdf: res.buffer, documentId: document.id, recipients: doc.recipients, fields });
-  await logAudit({ action: "doceditor.sign", summary: `Prepared “${res.title}” for signing via ${result.provider}`, entityType: "Document", entityId: document.id, user });
+
+  const created = await createSignatureRequestFromDoc({
+    doc,
+    title: res.title,
+    unsignedPdfRef: storedName,
+    source: { documentId: document.id, quoteId: res.quoteId, jobCardId: res.jobCardId, contactId: res.contactId, templateId },
+    createdById: user.id,
+  });
+  await logAudit({ action: "doceditor.sign", summary: `Prepared “${res.title}” for signing`, entityType: "SignatureRequest", entityId: created.id, user });
   revalidatePath(BASE);
-  return result;
+  return { ok: true, requestId: created.id, message: `Signature request created — ${created.recipients} recipient(s), ${created.fields} field(s). Open the Signatures hub to send it.` };
+}
+
+/**
+ * Form action for the quote/job-card pages: create a signing request from a
+ * template + record and jump to the Signatures hub (where you review and send).
+ */
+export async function requestSignatureForRecord(formData: FormData) {
+  await requireOwner();
+  const templateId = String(formData.get("templateId") ?? "").trim();
+  const quoteId = String(formData.get("quoteId") ?? "").trim() || null;
+  const jobCardId = String(formData.get("jobCardId") ?? "").trim() || null;
+  if (!templateId) return;
+  const res = await sendDocForSigning(templateId, quoteId, jobCardId);
+  if (res.ok && res.requestId) redirect(`/signatures/${res.requestId}`);
+  redirect("/signatures"); // template had no recipients/fields — hub explains next steps
 }
 
 /** Create a template pre-built as the branded "Standard" quotation, then open it. */

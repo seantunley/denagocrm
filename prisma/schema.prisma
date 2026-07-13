@@ -975,6 +975,119 @@ model DocBuilderVersion {
   @@index([templateId, version])
 }
 
+// ── E-signing: unified signature-request hub (all document types) ────
+// An envelope wrapping any PDF: recipients act on placed fields; every action is
+// logged to SignatureEvent (ECTA-grade audit). Sequential or parallel ordering.
+model SignatureRequest {
+  id      String @id @default(cuid())
+  title   String
+  status  String @default("draft") // draft|sent|viewed|in_progress|completed|declined|expired|voided
+  ordering String @default("parallel") // parallel|sequential
+
+  // Source of the document (any/all may be null; the PDF to sign is unsignedPdfRef)
+  documentId String?
+  quoteId    String?
+  jobCardId  String?
+  contactId  String?
+  templateId String? // DocBuilderTemplate it was generated from, if any
+
+  snapshotJson   Json? // frozen resolved document at send time (what the signer sees)
+  unsignedPdfRef String? // storage ref of the PDF sent for signing
+  signedPdfRef   String? // storage ref of the sealed, completed PDF
+  signedPdfHash  String? // sha-256 of the completed PDF
+  signedDocId    String? // Document row of the filed, completed PDF
+
+  message     String? // note shown to recipients
+  createdById String?
+  sentAt      DateTime?
+  completedAt DateTime?
+  declinedAt  DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  recipients SignatureRecipient[]
+  fields     SignatureField[]
+  events     SignatureEvent[]
+
+  @@index([status, updatedAt])
+  @@index([quoteId])
+  @@index([jobCardId])
+  @@index([contactId])
+}
+
+model SignatureRecipient {
+  id        String           @id @default(cuid())
+  requestId String
+  request   SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  name  String
+  email String?
+  phone String? // for WhatsApp / SMS
+  role  String  @default("signer") // signer|approver|viewer
+  order Int     @default(0) // signing order for sequential
+  color String  @default("#2563eb")
+
+  token  String @unique // per-recipient signing token (hex)
+  status String @default("pending") // pending|sent|viewed|signed|declined
+
+  signedAt        DateTime?
+  signedName      String?
+  signatureRef    String? // PNG of their drawn/typed signature
+  viewedAt        DateTime?
+  declinedAt      DateTime?
+  declineReason   String?
+  signerIp        String?
+  signerUserAgent String?
+  remindedAt      DateTime?
+
+  fields SignatureField[]
+
+  @@index([requestId, order])
+}
+
+model SignatureField {
+  id        String           @id @default(cuid())
+  requestId String
+  request   SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  recipientId String?
+  recipient   SignatureRecipient? @relation(fields: [recipientId], references: [id], onDelete: SetNull)
+
+  kind     String // signature|initials|date|text|checkbox|radio|dropdown|attachment|stamp
+  page     Int
+  x        Float
+  y        Float
+  width    Float
+  height   Float
+  required Boolean @default(true)
+  label    String  @default("")
+
+  value    String? // captured text / signature ref / "true"
+  filledAt DateTime?
+
+  @@index([requestId])
+}
+
+// Append-only audit trail — never updated or deleted.
+model SignatureEvent {
+  id        String           @id @default(cuid())
+  requestId String
+  request   SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  recipientId String?
+  type        String // created|sent|delivered|opened|viewed|field_filled|signed|declined|completed|reminded|downloaded|voided
+  actor       String // "Denago: <name>" | recipient name | "system"
+  channel     String? // email|whatsapp|sms|in_person|web
+  ip          String?
+  userAgent   String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([requestId, createdAt])
+}
+
 // ── Document Studio: free-form BlockNote documents ──────────────────
 // Templates hold draft JSON; publishing snapshots an immutable version.
 model CustomDocTemplate {

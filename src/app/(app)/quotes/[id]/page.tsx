@@ -14,7 +14,7 @@ import ConfirmDelete from "@/components/ConfirmDelete";
 import QuoteVersions from "@/components/QuoteVersions";
 import { uploadDeliveryPhotos } from "@/app/actions/fulfilment";
 import { listBuilderTemplates } from "@/lib/docbuilder/store";
-import { generateDocEditorDocument } from "@/app/actions/doceditor";
+import { generateDocEditorDocument, requestSignatureForRecord } from "@/app/actions/doceditor";
 import SigningBlock from "@/components/SigningBlock";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 
@@ -168,6 +168,9 @@ export default async function QuoteDetailPage({
               </select>
               <button className="btn-secondary" title="Generate this builder document for the quote and file it in the repository">
                 📄 Generate
+              </button>
+              <button formAction={requestSignatureForRecord} className="btn-secondary" title="Create a signing request from this template + quote">
+                ✍ Send for signing
               </button>
             </form>
           )}
