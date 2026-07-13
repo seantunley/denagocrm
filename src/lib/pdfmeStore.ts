@@ -20,9 +20,13 @@ export type PdfmeTemplateRow = {
  */
 export async function ensurePdfmeSeeded(): Promise<void> {
   try {
-    const existing = await prisma.pdfmeTemplate.count();
-    if (existing > 0) return;
+    // Seed one starter template per doc type, idempotently: any seed whose key
+    // has no template yet is created (so newly-added doc types appear on next
+    // load without duplicating types the user has already customised).
+    const present = await prisma.pdfmeTemplate.findMany({ select: { key: true } });
+    const seededKeys = new Set(present.map((t) => t.key));
     for (const seed of PDFME_SEEDS) {
+      if (seededKeys.has(seed.key)) continue;
       await prisma.pdfmeTemplate.create({
         data: {
           key: seed.key,
