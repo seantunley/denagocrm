@@ -2,6 +2,7 @@ import Link from "next/link";
 import { prisma, basePrisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import InboxReply from "@/components/InboxReply";
+import ConversationCollab, { type CollabNote } from "@/components/ConversationCollab";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import RowModal from "@/components/RowModal";
@@ -9,6 +10,8 @@ import { contactName, formatDateTime } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 
 export const metadata = { title: "Social inbox — DenagoCRM" };
+
+const DRAFT_LOCK_MS = 5 * 60 * 1000;
 
 const CHANNEL_META: Record<string, { label: string; icon: React.ReactNode }> = {
   whatsapp: {
@@ -28,95 +31,126 @@ const CHANNEL_META: Record<string, { label: string; icon: React.ReactNode }> = {
   },
 };
 
-export default async function InboxPage() {
-  await requireUser();
+type ConvChannel = "whatsapp" | "messenger" | "instagram";
 
-  const [comms, reviews, placeId] = await Promise.all([
-    prisma.communication.findMany({
-      where: { type: { in: ["whatsapp", "messenger", "instagram"] } },
-      orderBy: { occurredAt: "desc" },
-      take: 400,
-      include: { contact: true, lead: true },
+type ConvView = {
+  id: string;
+  name: string;
+  href: string | null;
+  channel: ConvChannel;
+  contactId: string | null;
+  leadId: string | null;
+  phone: string | null;
+  awaiting: boolean;
+  unread: boolean;
+  lastAt: Date;
+  assignee: { id: string; name: string } | null;
+  messages: {
+    id: string;
+    direction: string | null;
+    body: string;
+    attachmentUrl: string | null;
+    attachmentType: string | null;
+  }[];
+  notes: CollabNote[];
+  myDraft: string;
+  draftLockedBy: string | null;
+};
+
+export default async function InboxPage() {
+  const me = await requireUser();
+
+  const [conversations, staff, reviews, placeId] = await Promise.all([
+    prisma.conversation.findMany({
+      where: { channel: { in: ["whatsapp", "messenger", "instagram"] }, status: { not: "closed" } },
+      orderBy: { lastMessageAt: "desc" },
+      take: 200,
+      include: {
+        contact: true,
+        lead: true,
+        assignedTo: { select: { id: true, name: true } },
+        messages: { orderBy: { occurredAt: "desc" }, take: 10 },
+        notes: { orderBy: { createdAt: "desc" }, include: { author: { select: { name: true } } } },
+        draft: { include: { owner: { select: { id: true, name: true } } } },
+      },
     }),
+    prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
     basePrisma.googleReview.findMany({ orderBy: { publishedAt: "desc" }, take: 10 }),
     prisma.appSetting.findUnique({ where: { key: "GOOGLE_PLACE_ID" } }),
   ]);
 
-  type Thread = {
-    key: string;
-    name: string;
-    href: string | null;
-    channel: "whatsapp" | "messenger" | "instagram";
-    contactId: string | null;
-    leadId: string | null;
-    phone: string | null;
-    awaiting: boolean;
-    lastAt: Date;
-    messages: {
-      id: string;
-      direction: string | null;
-      body: string;
-      at: Date;
-      attachmentUrl: string | null;
-      attachmentType: string | null;
-    }[];
-  };
+  const now = Date.now();
+  const list: ConvView[] = conversations.map((c) => {
+    const draftMine = c.draft && c.draft.ownerId === me.id;
+    const draftRecent = c.draft && now - c.draft.updatedAt.getTime() < DRAFT_LOCK_MS;
+    return {
+      id: c.id,
+      name: c.contact ? contactName(c.contact) : c.lead?.name ?? "Unknown",
+      href: c.contactId ? `/contacts/${c.contactId}` : c.leadId ? `/leads/${c.leadId}` : null,
+      channel: c.channel as ConvChannel,
+      contactId: c.contactId,
+      leadId: c.leadId,
+      phone: c.contact?.whatsapp ?? c.contact?.phone ?? c.lead?.phone ?? null,
+      awaiting: c.lastDirection === "inbound",
+      unread: c.unread,
+      lastAt: c.lastMessageAt,
+      assignee: c.assignedTo ? { id: c.assignedTo.id, name: c.assignedTo.name } : null,
+      messages: c.messages.map((m) => ({
+        id: m.id,
+        direction: m.direction,
+        body: m.body,
+        attachmentUrl: m.attachmentUrl,
+        attachmentType: m.attachmentType,
+      })),
+      notes: c.notes.map((n) => ({
+        id: n.id,
+        authorName: n.author.name,
+        body: n.body,
+        createdAt: formatDateTime(n.createdAt),
+      })),
+      myDraft: draftMine ? c.draft!.body : "",
+      draftLockedBy: c.draft && !draftMine && draftRecent ? c.draft.owner.name : null,
+    };
+  });
 
-  const threads = new Map<string, Thread>();
-  for (const c of comms) {
-    const key = c.contactId ? `c:${c.contactId}:${c.type}` : c.leadId ? `l:${c.leadId}:${c.type}` : null;
-    if (!key) continue;
-    let t = threads.get(key);
-    if (!t) {
-      t = {
-        key,
-        name: c.contact ? contactName(c.contact) : c.lead?.name ?? "Unknown",
-        href: c.contactId ? `/contacts/${c.contactId}` : c.leadId ? `/leads/${c.leadId}` : null,
-        channel: c.type as Thread["channel"],
-        contactId: c.contactId,
-        leadId: c.leadId,
-        phone: c.contact?.whatsapp ?? c.contact?.phone ?? c.lead?.phone ?? null,
-        awaiting: c.direction === "inbound", // comms are sorted desc: first seen = newest
-        lastAt: c.occurredAt,
-        messages: [],
-      };
-      threads.set(key, t);
-    }
-    if (t.messages.length < 8) {
-      t.messages.push({
-        id: c.id,
-        direction: c.direction,
-        body: c.body,
-        at: c.occurredAt,
-        attachmentUrl: c.attachmentUrl,
-        attachmentType: c.attachmentType,
-      });
-    }
-  }
-  const threadList = [...threads.values()].sort(
+  const sorted = [...list].sort(
     (a, b) => Number(b.awaiting) - Number(a.awaiting) || b.lastAt.getTime() - a.lastAt.getTime()
   );
+  const awaitingCount = sorted.filter((t) => t.awaiting).length;
+  const byChannel = (ch: ConvChannel) => sorted.filter((t) => t.channel === ch);
 
   return (
     <div className="space-y-5">
       <AutoRefresh seconds={60} />
-      <PageHeader title="Social inbox" description={`${threadList.filter((thread) => thread.awaiting).length} awaiting reply · WhatsApp, Messenger, Instagram and Google reviews.`} />
+      <PageHeader
+        title="Social inbox"
+        description={`${awaitingCount} awaiting reply · WhatsApp, Messenger, Instagram and Google reviews.`}
+      />
 
       <Tabs
         tabs={[
           {
             key: "all",
             label: "All",
-            count: threadList.filter((t) => t.awaiting).length,
-            content: <ThreadList list={threadList} empty="No conversations yet. WhatsApp chats appear once the number is connected; Messenger and Instagram DMs flow for app admins now and for everyone once Meta approves the messaging permissions." />,
+            count: awaitingCount,
+            content: (
+              <ConversationList
+                list={sorted}
+                staff={staff}
+                meName={me.name}
+                empty="No conversations yet. WhatsApp chats appear once the number is connected; Messenger and Instagram DMs flow for app admins now and for everyone once Meta approves the messaging permissions."
+              />
+            ),
           },
           {
             key: "whatsapp",
             label: "WhatsApp",
-            count: threadList.filter((t) => t.channel === "whatsapp" && t.awaiting).length,
+            count: byChannel("whatsapp").filter((t) => t.awaiting).length,
             content: (
-              <ThreadList
-                list={threadList.filter((t) => t.channel === "whatsapp")}
+              <ConversationList
+                list={byChannel("whatsapp")}
+                staff={staff}
+                meName={me.name}
                 empty="No WhatsApp conversations yet — they start once the WhatsApp Business number is connected in Settings → Integrations."
               />
             ),
@@ -124,10 +158,12 @@ export default async function InboxPage() {
           {
             key: "messenger",
             label: "Messenger",
-            count: threadList.filter((t) => t.channel === "messenger" && t.awaiting).length,
+            count: byChannel("messenger").filter((t) => t.awaiting).length,
             content: (
-              <ThreadList
-                list={threadList.filter((t) => t.channel === "messenger")}
+              <ConversationList
+                list={byChannel("messenger")}
+                staff={staff}
+                meName={me.name}
                 empty="No Messenger conversations yet."
               />
             ),
@@ -135,10 +171,12 @@ export default async function InboxPage() {
           {
             key: "instagram",
             label: "Instagram",
-            count: threadList.filter((t) => t.channel === "instagram" && t.awaiting).length,
+            count: byChannel("instagram").filter((t) => t.awaiting).length,
             content: (
-              <ThreadList
-                list={threadList.filter((t) => t.channel === "instagram")}
+              <ConversationList
+                list={byChannel("instagram")}
+                staff={staff}
+                meName={me.name}
                 empty="No Instagram DMs yet — they flow once the Instagram account is linked to the page and Meta approves messaging."
               />
             ),
@@ -187,27 +225,17 @@ export default async function InboxPage() {
   );
 }
 
-type ThreadForList = {
-  key: string;
-  name: string;
-  href: string | null;
-  channel: "whatsapp" | "messenger" | "instagram";
-  contactId: string | null;
-  leadId: string | null;
-  phone: string | null;
-  awaiting: boolean;
-  lastAt: Date;
-  messages: {
-    id: string;
-    direction: string | null;
-    body: string;
-    at: Date;
-    attachmentUrl: string | null;
-    attachmentType: string | null;
-  }[];
-};
-
-function ThreadList({ list, empty }: { list: ThreadForList[]; empty: string }) {
+function ConversationList({
+  list,
+  staff,
+  meName,
+  empty,
+}: {
+  list: ConvView[];
+  staff: { id: string; name: string }[];
+  meName: string;
+  empty: string;
+}) {
   if (list.length === 0) {
     return <div className="card max-w-2xl text-sm text-slate-400">{empty}</div>;
   }
@@ -216,33 +244,41 @@ function ThreadList({ list, empty }: { list: ThreadForList[]; empty: string }) {
       {list.map((t) => {
         const meta = CHANNEL_META[t.channel];
         const last = t.messages[0];
-        const preview = last
-          ? `${last.direction === "outbound" ? "You: " : ""}${last.body}`
-          : "";
+        const preview = last ? `${last.direction === "outbound" ? "You: " : ""}${last.body}` : "";
         return (
           <RowModal
-            key={t.key}
+            key={t.id}
             row={
               <div className="flex items-center gap-3">
-                <span className="shrink-0">{meta.icon}</span>
+                <span className="relative shrink-0">
+                  {meta.icon}
+                  {t.unread && (
+                    <span className="absolute -right-1 -top-1 size-2 rounded-full bg-orange-500 ring-2 ring-[#111412]" />
+                  )}
+                </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium truncate">
+                  <p className={`truncate text-sm ${t.unread ? "font-semibold" : "font-medium"}`}>
                     {t.name}
-                    <span className="text-xs text-slate-500 font-normal ml-2">{meta.label}</span>
+                    <span className="ml-2 text-xs font-normal text-slate-500">{meta.label}</span>
                   </p>
-                  <p className="text-xs text-slate-400 truncate">{preview}</p>
+                  <p className="truncate text-xs text-slate-400">{preview}</p>
                 </div>
-                <div className="text-right shrink-0">
+                <div className="shrink-0 text-right">
                   {t.awaiting && (
                     <span className="badge bg-amber-500/15 text-amber-300">awaiting reply</span>
                   )}
-                  <p className="text-[11px] text-slate-500 mt-0.5">{formatDateTime(t.lastAt)}</p>
+                  {t.assignee ? (
+                    <p className="mt-0.5 text-[11px] text-slate-400">▸ {t.assignee.name}</p>
+                  ) : (
+                    <p className="mt-0.5 text-[11px] text-slate-600">unassigned</p>
+                  )}
+                  <p className="mt-0.5 text-[11px] text-slate-500">{formatDateTime(t.lastAt)}</p>
                 </div>
               </div>
             }
           >
             <div className="card">
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex flex-wrap items-center gap-2">
                 {meta.icon}
                 {t.href ? (
                   <Link href={t.href} className="font-semibold text-orange-400 hover:underline">
@@ -252,10 +288,9 @@ function ThreadList({ list, empty }: { list: ThreadForList[]; empty: string }) {
                   <span className="font-semibold">{t.name}</span>
                 )}
                 <span className="text-xs text-slate-500">{meta.label}</span>
-                <span className="text-[11px] text-slate-500 ml-auto">
-                  {formatDateTime(t.lastAt)}
-                </span>
+                <span className="ml-auto text-[11px] text-slate-500">{formatDateTime(t.lastAt)}</span>
               </div>
+
               <div className="mt-3 space-y-1">
                 {[...t.messages].reverse().map((m) => (
                   <div
@@ -290,12 +325,25 @@ function ThreadList({ list, empty }: { list: ThreadForList[]; empty: string }) {
                   </div>
                 ))}
               </div>
+
+              <ConversationCollab
+                conversationId={t.id}
+                staff={staff}
+                assignedToId={t.assignee?.id ?? null}
+                notes={t.notes}
+                unread={t.unread}
+                meName={meName}
+              />
+
               <InboxReply
                 channel={t.channel}
                 contactId={t.contactId}
                 leadId={t.leadId}
                 phone={t.phone}
                 revalidate="/inbox"
+                conversationId={t.id}
+                initialDraft={t.myDraft}
+                draftLockedBy={t.draftLockedBy}
               />
             </div>
           </RowModal>

@@ -1,9 +1,10 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useActionState } from "react";
 import { sendWhatsAppMessage, type WaState } from "@/app/actions/whatsapp";
 import { sendDmReply, type DmState } from "@/app/actions/messenger";
+import { saveConversationDraft, discardConversationDraft } from "@/app/actions/conversations";
 import AiCheckButton from "@/components/AiCheckButton";
 
 const QUICK_EMOJI = ["😀", "👍", "🙏", "🎉", "🔥", "❤️", "😂", "👌", "🚗", "⚡"];
@@ -16,6 +17,9 @@ export default function InboxReply({
   phone,
   revalidate,
   aiConfigured = false,
+  conversationId = null,
+  initialDraft = "",
+  draftLockedBy = null,
 }: {
   channel: "whatsapp" | "messenger" | "instagram";
   contactId?: string | null;
@@ -23,6 +27,11 @@ export default function InboxReply({
   phone?: string | null;
   revalidate: string;
   aiConfigured?: boolean;
+  /** When set, the reply text is auto-saved as a shared draft (with collision detection). */
+  conversationId?: string | null;
+  initialDraft?: string;
+  /** Name of another staff member already drafting a reply here (server-detected on load). */
+  draftLockedBy?: string | null;
 }) {
   const [waState, waAction] = useActionState<WaState | undefined, FormData>(
     sendWhatsAppMessage,
@@ -38,6 +47,38 @@ export default function InboxReply({
   const [fileName, setFileName] = useState("");
   const [showEmoji, setShowEmoji] = useState(false);
   const canAttach = channel !== "whatsapp"; // WhatsApp media send comes later
+
+  // Shared draft: autosave the in-progress reply so teammates see it and we can
+  // warn on collision. Debounced; a collision means someone else is drafting.
+  const [draftState, setDraftState] = useState<"idle" | "saving" | "saved">("idle");
+  const [lockedBy, setLockedBy] = useState<string | null>(draftLockedBy);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function onDraftInput() {
+    if (!conversationId) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    setDraftState("saving");
+    saveTimer.current = setTimeout(async () => {
+      const body = textRef.current?.value ?? "";
+      const res = await saveConversationDraft(conversationId, body);
+      if ("collision" in res) {
+        setLockedBy(res.collision.ownerName);
+        setDraftState("idle");
+      } else {
+        setLockedBy(null);
+        setDraftState("saved");
+      }
+    }, 700);
+  }
+
+  // On a successful send, clear the shared draft.
+  useEffect(() => {
+    if (state?.ok && conversationId) {
+      void discardConversationDraft(conversationId);
+      if (textRef.current) textRef.current.value = "";
+      setDraftState("idle");
+    }
+  }, [state?.ok, conversationId]);
 
   function addEmoji(e: string) {
     const el = textRef.current;
@@ -66,6 +107,8 @@ export default function InboxReply({
           ref={textRef}
           name="text"
           rows={1}
+          defaultValue={initialDraft}
+          onInput={onDraftInput}
           className="input flex-1 py-1.5 text-sm resize-none"
           placeholder={`Reply via ${channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : "Messenger"}…`}
         />
@@ -104,13 +147,24 @@ export default function InboxReply({
         <button className="btn-primary btn-sm">Send</button>
       </div>
 
-      <div className="mt-1">
+      <div className="mt-1 flex items-center gap-2">
         <AiCheckButton
           getDraft={() => textRef.current?.value ?? ""}
           contactId={contactId}
           leadId={leadId}
           configured={aiConfigured}
         />
+        {conversationId && lockedBy && (
+          <span className="text-[11px] text-amber-300" title="Their draft is protected — yours won't overwrite it">
+            ✋ {lockedBy} is also replying
+          </span>
+        )}
+        {conversationId && !lockedBy && draftState === "saving" && (
+          <span className="text-[11px] text-slate-500">saving draft…</span>
+        )}
+        {conversationId && !lockedBy && draftState === "saved" && (
+          <span className="text-[11px] text-slate-500">draft saved</span>
+        )}
       </div>
 
       {(showEmoji || fileName || state?.error || state?.ok) && (
