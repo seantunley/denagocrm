@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import {
@@ -38,10 +37,8 @@ import { formatDateTime } from "@/lib/format";
 import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { decryptValue } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
-import { formatDate } from "@/lib/format";
-import AutomationsPage from "../automations/page";
-import ProductsPage from "../products/page";
-import LibraryPage from "../library/page";
+import { PageHeader } from "@/components/page-header";
+import SettingsNav from "@/components/SettingsNav";
 
 /**
  * Grouped settings IA — related blocks live together instead of one long
@@ -73,15 +70,15 @@ const NAV_GROUPS: { label: string; items: SettingsTab[] }[] = [
   {
     label: "Catalog",
     items: [
-      { key: "products", label: "Products" },
-      { key: "library", label: "Library" },
+      { key: "products", label: "Products", href: "/products" },
+      { key: "library", label: "Library", href: "/library" },
     ],
   },
   {
     label: "Comms & Marketing",
     items: [
       { key: "email", label: "Email" },
-      { key: "automations", label: "Automations" },
+      { key: "automations", label: "Automations", href: "/automations" },
     ],
   },
   {
@@ -110,7 +107,7 @@ export default async function SettingsPage({
   // Non-admins get exactly one tab: their own account
   const visibleTabs = isAdmin ? TABS : TABS.filter((t) => t.key === "account");
   const { tab: rawTab } = await searchParams;
-  const tab = visibleTabs.some((t) => t.key === rawTab)
+  const tab = rawTab && visibleTabs.some((t) => t.key === rawTab && !t.href)
     ? rawTab
     : isAdmin
     ? "pipeline"
@@ -160,10 +157,12 @@ export default async function SettingsPage({
     }
     return [...map.values()].sort((a, b) => b.last.getTime() - a.last.getTime());
   })();
+  const last24hCutoff = new Date();
+  last24hCutoff.setHours(last24hCutoff.getHours() - 24);
   const errorStats = {
     total: errorLogs.length,
     distinct: errorGroups.length,
-    last24h: errorLogs.filter((e) => e.createdAt.getTime() > Date.now() - 86_400_000).length,
+    last24h: errorLogs.filter((e) => e.createdAt > last24hCutoff).length,
   };
   const myPasskeys = tab === "account"
     ? await prisma.passkey.findMany({
@@ -180,41 +179,13 @@ export default async function SettingsPage({
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
-        <p className="mt-0.5 text-sm text-muted-foreground">
-          Workspace configuration, grouped by area.
-        </p>
-      </div>
+      <PageHeader
+        title="Settings"
+        description="Manage your workspace, team, communication channels and operational preferences."
+      />
 
       <div className="flex flex-col gap-6 lg:flex-row">
-        {/* Grouped sub-nav: sidebar on desktop, scrolling strip on mobile */}
-        <aside className="shrink-0 lg:w-52">
-          <nav className="flex gap-4 overflow-x-auto pb-1 [scrollbar-width:none] lg:flex-col lg:gap-4 lg:overflow-visible [&::-webkit-scrollbar]:hidden">
-            {visibleGroups.map((g) => (
-              <div key={g.label} className="shrink-0">
-                <p className="mb-1 px-2 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-                  {g.label}
-                </p>
-                <div className="flex gap-0.5 lg:flex-col">
-                  {g.items.map((t) => (
-                    <Link
-                      key={t.key}
-                      href={t.href ?? `/settings?tab=${t.key}`}
-                      className={`whitespace-nowrap rounded-md px-2 py-[6px] text-[13px] font-medium transition-colors ${
-                        tab === t.key
-                          ? "bg-accent text-accent-foreground"
-                          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-                      }`}
-                    >
-                      {t.label}
-                    </Link>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </nav>
-        </aside>
+        <SettingsNav groups={visibleGroups} current={tab} />
 
         <div className="min-w-0 flex-1 space-y-6">
 
@@ -1039,10 +1010,6 @@ export default async function SettingsPage({
           </div>
         </div>
       )}
-
-      {tab === "automations" && <AutomationsPage />}
-      {tab === "products" && <ProductsPage />}
-      {tab === "library" && <LibraryPage />}
 
       {tab === "integrations" && (
         <div className="max-w-3xl">

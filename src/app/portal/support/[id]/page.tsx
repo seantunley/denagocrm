@@ -1,9 +1,12 @@
 import { notFound, redirect } from "next/navigation";
+import Link from "next/link";
+import { ArrowLeft, MessageCircle, Send } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { getPortalContact } from "@/lib/portal";
 import { portalCanAccessCase } from "@/lib/portalAccess";
 import { PortalCaseMessageForm } from "@/components/PortalExpansionForms";
 import { formatDateTime } from "@/lib/format";
+import { PortalPageHeader, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 
 type CaseRow = {
   id: string;
@@ -48,21 +51,18 @@ export default async function PortalCasePage({ params }: { params: Promise<{ id:
   `;
 
   return (
-    <div className="space-y-6">
-      <div>
-        <p className="text-xs text-slate-500">Case C-{item.number.toString()}</p>
-        <h1 className="text-2xl font-bold mt-1">{item.subject}</h1>
-        <p className="text-sm text-slate-400 mt-1">{item.type} · {item.priority} · {item.status}</p>
-      </div>
-      <section className="card">
+    <div className="space-y-8">
+      <Link href="/portal/support" className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 transition-colors hover:text-white"><ArrowLeft className="size-3.5" />All support requests</Link>
+      <PortalPageHeader eyebrow={`Case C-${item.number.toString()}`} title={item.subject} description={`${item.type} · ${item.priority} priority`} action={<StatusPill tone={['closed', 'resolved'].includes(item.status) ? 'success' : item.status === 'cancelled' ? 'danger' : 'info'}>{item.status.replaceAll('_', ' ')}</StatusPill>} />
+      <Surface className="p-5 sm:p-6">
         <p className="text-sm whitespace-pre-wrap">{item.description}</p>
         <p className="text-xs text-slate-500 mt-3">Opened {formatDateTime(item.createdAt)}</p>
-      </section>
+      </Surface>
       <section className="space-y-3">
-        <h2 className="font-semibold">Conversation</h2>
+        <SectionHeading title="Conversation" description="Messages between you and the Denago team." action={<MessageCircle className="size-5 text-muted-foreground" />} />
         <div className="space-y-3">
           {messages.map((message) => (
-            <div key={message.id} className={`rounded-xl p-4 max-w-3xl ${message.direction === "staff" ? "bg-slate-800" : "bg-orange-950/40 border border-orange-900/50 ml-auto"}`}>
+            <div key={message.id} className={`max-w-3xl rounded-2xl border p-4 shadow-sm ${message.direction === "staff" ? "border-white/[0.07] bg-white/[0.045]" : "ml-auto border-orange-500/20 bg-orange-500/[0.08]"}`}>
               <p className="text-xs font-semibold text-slate-400 mb-1">{message.direction === "staff" ? "Denago Cape Town" : "You"}</p>
               <p className="text-sm whitespace-pre-wrap">{message.body}</p>
               <p className="text-[11px] text-slate-500 mt-2">{formatDateTime(message.createdAt)}</p>
@@ -71,10 +71,10 @@ export default async function PortalCasePage({ params }: { params: Promise<{ id:
         </div>
       </section>
       {!['closed', 'cancelled'].includes(item.status) && (
-        <section className="card space-y-3">
-          <h2 className="font-semibold">Reply</h2>
+        <Surface className="space-y-4 p-5 sm:p-6">
+          <SectionHeading title="Reply" description="Continue the conversation securely through your portal." action={<Send className="size-5 text-primary" />} />
           <PortalCaseMessageForm caseId={item.id} />
-        </section>
+        </Surface>
       )}
     </div>
   );

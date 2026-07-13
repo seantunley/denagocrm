@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { Bell, CarFront, FileCheck2, Headphones, LogOut } from "lucide-react";
 import { basePrisma, prisma } from "@/lib/db";
 import { getPortalContact } from "@/lib/portal";
 import { requirePortalScope } from "@/lib/portalAccess";
@@ -8,6 +9,8 @@ import ServiceRequestForm from "@/components/ServiceRequestForm";
 import { computeDue, dueLabels, dueColors } from "@/lib/serviceDue";
 import { computeWarranty, warrantyLabels, warrantyColors } from "@/lib/warranty";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
+import { Button } from "@/components/ui/button";
+import { Eyebrow, MetricCard } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
 
@@ -93,20 +96,24 @@ export default async function PortalHome() {
   const unreadNotifications = notifications.filter((notification) => !notification.readAt).length;
 
   return (
-    <div className="space-y-8">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+    <div className="space-y-10">
+      <div className="relative overflow-hidden rounded-3xl border border-white/[0.08] bg-gradient-to-br from-white/[0.055] to-white/[0.025] px-5 py-7 shadow-[0_24px_80px_rgba(0,0,0,.22)] sm:px-8 sm:py-9">
+        <div className="pointer-events-none absolute -right-16 -top-20 size-64 rounded-full bg-orange-500/[0.09] blur-3xl" />
+        <div className="relative flex flex-wrap items-start justify-between gap-5">
         <div>
-          <h1 className="text-2xl font-semibold tracking-[-0.035em]">Hello, {contact.firstName}</h1>
-          <p className="text-sm text-slate-400 mt-1">Vehicles, service, warranty, quotes, deliveries, documents and support in one place.</p>
+          <Eyebrow>Your Denago garage</Eyebrow>
+          <h1 className="mt-2 text-3xl font-semibold tracking-[-0.045em] sm:text-4xl">Hello, {contact.firstName}</h1>
+          <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">Everything about your vehicles, service, warranty, quotes and deliveries—kept together and easy to follow.</p>
         </div>
-        <form action={portalLogout}><button className="btn-secondary btn-sm">Sign out</button></form>
+          <form action={portalLogout}><Button variant="outline" size="sm" className="border-white/10 bg-white/[0.035]"><LogOut className="size-3.5" />Sign out</Button></form>
+        </div>
       </div>
 
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="card"><p className="text-xs text-slate-500">Vehicles</p><p className="text-2xl font-bold mt-1">{vehicles.length}</p></div>
-        <div className="card"><p className="text-xs text-slate-500">Quotes to review</p><p className="text-2xl font-bold mt-1">{unsignedQuotes.length}</p></div>
-        <Link href="/portal/support" className="card hover:border-orange-700"><p className="text-xs text-slate-500">Open support cases</p><p className="text-2xl font-bold mt-1">{Number(caseCounts[0]?.openCount ?? 0)}</p></Link>
-        <div className="card"><p className="text-xs text-slate-500">Unread notifications</p><p className="text-2xl font-bold mt-1">{unreadNotifications}</p></div>
+        <MetricCard icon={CarFront} label="Vehicles" value={vehicles.length} detail="In your garage" accent />
+        <MetricCard icon={FileCheck2} label="Quotes to review" value={unsignedQuotes.length} detail={unsignedQuotes.length ? "Awaiting your decision" : "You're up to date"} accent={unsignedQuotes.length > 0} />
+        <Link href="/portal/support" className="rounded-2xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-500/15"><MetricCard icon={Headphones} label="Open support" value={Number(caseCounts[0]?.openCount ?? 0)} detail="View conversations" /></Link>
+        <MetricCard icon={Bell} label="Unread updates" value={unreadNotifications} detail={unreadNotifications ? "New since your last visit" : "Nothing new"} />
       </section>
 
       {(accessibleContacts.length > 1 || fleets.length > 0) && (
@@ -140,8 +147,8 @@ export default async function PortalHome() {
 
       {notifications.length > 0 && (
         <section className="space-y-3">
-          <h2 className="font-semibold">Notifications</h2>
-          <div className="card p-0 divide-y divide-slate-800">
+          <div><Eyebrow>Latest activity</Eyebrow><h2 className="mt-1 text-lg font-semibold">Notifications</h2></div>
+          <div className="card p-0 divide-y divide-border">
             {notifications.map((notification) => (
               <div key={notification.id} className={`px-4 py-3 flex gap-3 ${notification.readAt ? "opacity-70" : ""}`}>
                 <div className="flex-1 min-w-0">
@@ -160,7 +167,7 @@ export default async function PortalHome() {
       )}
 
       <section className="space-y-3">
-        <h2 className="font-semibold">Vehicles, service and warranty</h2>
+        <div><Eyebrow>Your garage</Eyebrow><h2 className="mt-1 text-lg font-semibold">Vehicles, service and warranty</h2></div>
         {vehicles.length === 0 ? (
           <div className="card text-sm text-slate-400">No carts are currently available in your portal.</div>
         ) : vehicles.map((vehicle) => {
@@ -204,8 +211,8 @@ export default async function PortalHome() {
 
       {quotes.length > 0 && (
         <section className="space-y-3">
-          <h2 className="font-semibold">Quotes and delivery</h2>
-          <div className="card p-0 divide-y divide-slate-800">
+        <div><Eyebrow>Purchases</Eyebrow><h2 className="mt-1 text-lg font-semibold">Quotes and delivery</h2></div>
+          <div className="card p-0 divide-y divide-border">
             {quotes.map((quote) => {
               const total = quote.items.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
               const canSign = quote.signToken && !quote.signedAt && quote.status !== "declined";
@@ -222,7 +229,7 @@ export default async function PortalHome() {
 
       <section className="grid lg:grid-cols-2 gap-4">
         <div className="space-y-3">
-          <h2 className="font-semibold">Book a service</h2>
+          <div><Eyebrow>Workshop</Eyebrow><h2 className="mt-1 text-lg font-semibold">Book a service</h2></div>
           <div className="card"><ServiceRequestForm vehicles={vehicles.map((vehicle) => ({ id: vehicle.id, label: `${vehicle.model}${vehicle.regNumber ? ` (${vehicle.regNumber})` : ""}` }))} /></div>
         </div>
         <div className="card flex flex-col justify-between gap-4">
