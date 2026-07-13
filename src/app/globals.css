@@ -389,3 +389,16 @@ input[type="number"] {
   -moz-appearance: textfield;
   appearance: textfield;
 }
+
+/* react-moveable: the doc-editor overlay/floating layers are pointer-events:none
+   so clicks pass through to flow content. Force the moveable control handles to be
+   interactive so resize/drag handles work inside those layers. */
+.moveable-control-box {
+  pointer-events: none;
+}
+.moveable-control-box .moveable-control,
+.moveable-control-box .moveable-line,
+.moveable-control-box .moveable-area,
+.moveable-control-box .moveable-direction {
+  pointer-events: auto !important;
+}

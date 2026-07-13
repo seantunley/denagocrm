@@ -510,6 +510,17 @@ export default async function DocumentsHubPage({
         </p>
       </div>
 
+      <Link
+        href="/settings/documents/builder"
+        className="flex items-center justify-between rounded-xl border border-primary/25 bg-primary/[0.06] px-4 py-3 transition-colors hover:bg-primary/10"
+      >
+        <div>
+          <p className="text-sm font-semibold text-foreground">✨ Document Builder</p>
+          <p className="text-xs text-muted-foreground">Drag-and-drop blocks → flowing, multi-page, sealed PDFs. Your documents, your control.</p>
+        </div>
+        <span className="text-sm text-primary">Open →</span>
+      </Link>
+
       <Tabs
         initialKey={tab}
         tabs={[

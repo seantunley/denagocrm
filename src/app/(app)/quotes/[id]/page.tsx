@@ -13,6 +13,8 @@ import {
 import ConfirmDelete from "@/components/ConfirmDelete";
 import QuoteVersions from "@/components/QuoteVersions";
 import { uploadDeliveryPhotos } from "@/app/actions/fulfilment";
+import { listBuilderTemplates } from "@/lib/docbuilder/store";
+import { generateDocEditorDocument } from "@/app/actions/doceditor";
 import SigningBlock from "@/components/SigningBlock";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 
@@ -90,6 +92,7 @@ export default async function QuoteDetailPage({
     },
   });
   if (!quote) notFound();
+  const builderDocs = (await listBuilderTemplates()).filter((t) => t.key === "quote");
   const family = await getQuoteFamily(quote);
   const deliveryPhotos =
     quote.status === "accepted"
@@ -149,6 +152,24 @@ export default async function QuoteDetailPage({
                 📜 Sales agreement
               </Link>
             </>
+          )}
+          {builderDocs.length > 0 && (
+            <form action={generateDocEditorDocument} className="flex items-center gap-1">
+              <input type="hidden" name="quoteId" value={quote.id} />
+              <select
+                name="templateId"
+                defaultValue={builderDocs[0].id}
+                className="rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground"
+                title="Builder template"
+              >
+                {builderDocs.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+              <button className="btn-secondary" title="Generate this builder document for the quote and file it in the repository">
+                📄 Generate
+              </button>
+            </form>
           )}
           {canRevise && (
             <form action={createQuoteRevision.bind(null, quote.id)}>

@@ -97,8 +97,16 @@ export async function renderInstanceHtml(instance: {
 </body></html>`;
 }
 
+export type HtmlPdfOptions = {
+  /** Repeating header/footer templates (Puppeteer syntax: use classes like
+   *  pageNumber/totalPages). When set, margins must leave room for them. */
+  headerTemplate?: string;
+  footerTemplate?: string;
+  margin?: { top?: string; bottom?: string; left?: string; right?: string };
+};
+
 /** HTML → PDF buffer. Serverless Chromium on Vercel, local Chrome in dev. */
-export async function htmlToPdf(html: string): Promise<Buffer> {
+export async function htmlToPdf(html: string, opts?: HtmlPdfOptions): Promise<Buffer> {
   const puppeteer = await import("puppeteer-core");
   let browser;
   if (process.env.VERCEL) {
@@ -124,7 +132,19 @@ export async function htmlToPdf(html: string): Promise<Buffer> {
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "load", timeout: 30000 });
-    const pdf = await page.pdf({ format: "A4", printBackground: true });
+    const useFrame = Boolean(opts?.headerTemplate || opts?.footerTemplate);
+    const pdf = await page.pdf({
+      format: "A4",
+      printBackground: true,
+      ...(useFrame
+        ? {
+            displayHeaderFooter: true,
+            headerTemplate: opts?.headerTemplate ?? "<span></span>",
+            footerTemplate: opts?.footerTemplate ?? "<span></span>",
+            margin: opts?.margin ?? { top: "26mm", bottom: "20mm", left: "0", right: "0" },
+          }
+        : {}),
+    });
     return Buffer.from(pdf);
   } finally {
     await browser.close();

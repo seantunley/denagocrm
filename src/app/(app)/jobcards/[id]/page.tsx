@@ -12,6 +12,8 @@ import {
 import DocumentsPanel from "@/components/DocumentsPanel";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import SigningBlock from "@/components/SigningBlock";
+import { listBuilderTemplates } from "@/lib/docbuilder/store";
+import { generateDocEditorDocument } from "@/app/actions/doceditor";
 import JobCardItemForm from "@/components/JobCardItemForm";
 import { uploadJobCardPhotos } from "@/app/actions/jobcards";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
@@ -38,6 +40,7 @@ export default async function JobCardDetailPage({
     prisma.user.findMany({ orderBy: { name: "asc" } }),
   ]);
   if (!jobCard) notFound();
+  const builderDocs = (await listBuilderTemplates()).filter((t) => t.key === "jobcard" || t.key === "service-report");
   const path = `/jobcards/${jobCard.id}`;
 
   const partsTotal = jobCard.items
@@ -85,6 +88,24 @@ export default async function JobCardDetailPage({
             <Link href={`/jobcards/${jobCard.id}/service-report`} className="btn-secondary" target="_blank">
               📋 Service report
             </Link>
+          )}
+          {builderDocs.length > 0 && (
+            <form action={generateDocEditorDocument} className="flex items-center gap-1">
+              <input type="hidden" name="jobCardId" value={jobCard.id} />
+              <select
+                name="templateId"
+                defaultValue={builderDocs[0].id}
+                className="rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground"
+                title="Builder template"
+              >
+                {builderDocs.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+              <button className="btn-secondary" title="Generate this builder document for the job card and file it">
+                📄 Generate
+              </button>
+            </form>
           )}
           {jobCard.status === "open" && (
             <form action={setJobCardStatus.bind(null, jobCard.id, "in_progress")}>
