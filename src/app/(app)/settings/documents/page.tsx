@@ -21,6 +21,8 @@ import { prisma } from "@/lib/db";
 import { contactName, formatDate } from "@/lib/format";
 import { DOC_DEFS, DOC_GROUPS, type DocKey } from "@/lib/docTemplates";
 import { ensureSeeded, listTemplates } from "@/lib/docTemplateStore";
+import { ensurePdfmeSeeded, listPdfmeTemplates } from "@/lib/pdfmeStore";
+import { PDFME_SEEDS } from "@/lib/pdfmeSeeds";
 import {
   uploadRepoDocument,
   createDocTemplate,
@@ -33,6 +35,11 @@ import {
   createReusableBlock,
   createDocInstance,
 } from "@/app/actions/studio";
+import {
+  createPdfmeTemplate,
+  setDefaultPdfmeTemplate,
+  deletePdfmeTemplate,
+} from "@/app/actions/pdfmeDocs";
 import RepoRow, { type RepoDoc, type MoveTargets } from "@/components/RepoRow";
 import Tabs from "@/components/Tabs";
 import { Button } from "@/components/ui/button";
@@ -57,6 +64,7 @@ export default async function DocumentsHubPage({
 }) {
   await requireOwner();
   await ensureSeeded();
+  await ensurePdfmeSeeded();
   const { q, tag, kind, versions, tab } = await searchParams;
 
   const where = {
@@ -119,6 +127,15 @@ export default async function DocumentsHubPage({
   const templatesByType = Object.fromEntries(
     (Object.keys(DOC_DEFS) as DocKey[]).map((k, i) => [k, templateLists[i]])
   );
+
+  // pdfme Designer templates, grouped by doc type for the Designer tab.
+  const pdfmeTemplates = await listPdfmeTemplates();
+  const pdfmeByKey = new Map<string, typeof pdfmeTemplates>();
+  for (const t of pdfmeTemplates) {
+    (pdfmeByKey.get(t.key) ?? pdfmeByKey.set(t.key, []).get(t.key)!).push(t);
+  }
+  const pdfmeKeys = [...pdfmeByKey.keys()].sort();
+  const keyLabel = (k: string) => (DOC_DEFS as Record<string, { label: string }>)[k]?.label ?? k;
 
   const docQuoteIds = [...new Set(docs.map((d) => d.quoteId).filter((x): x is string => !!x))];
   const docQuotes = docQuoteIds.length
@@ -438,6 +455,105 @@ export default async function DocumentsHubPage({
     </div>
   );
 
+  const designerTab = (
+    <div className="space-y-6">
+      <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
+        <p className="mb-1 text-sm font-semibold text-foreground">Document Designer (pdfme)</p>
+        <p className="mb-3 text-xs text-muted-foreground">
+          Drag-and-drop, pixel-accurate PDF layouts. Start from a Denago layout or blank, design
+          it, and <strong>Save</strong> — your changes persist. This editor is separate from and
+          does not affect the live customer print &amp; signing flow.
+        </p>
+        <form action={createPdfmeTemplate} className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <input name="name" required placeholder="New template name…" className={`${input} xl:col-span-2`} />
+          <select name="key" className={input} defaultValue="quote">
+            {(Object.keys(DOC_DEFS) as DocKey[]).map((k) => (
+              <option key={k} value={k}>
+                {DOC_DEFS[k].label}
+              </option>
+            ))}
+          </select>
+          <select name="baseId" className={input} defaultValue="">
+            <option value="">Blank A4</option>
+            {PDFME_SEEDS.map((s) => (
+              <option key={s.key} value={`seed:${s.key}`}>
+                Start from {s.name}
+              </option>
+            ))}
+            {pdfmeTemplates.map((t) => (
+              <option key={t.id} value={t.id}>
+                Copy “{t.name}”
+              </option>
+            ))}
+          </select>
+          <Button type="submit" className="sm:col-span-2 xl:col-span-4 justify-self-start">
+            <Plus className="size-4" />
+            Create template
+          </Button>
+        </form>
+      </div>
+
+      {pdfmeKeys.length === 0 ? (
+        <p className="rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground shadow-sm">
+          No designer templates yet — create one above.
+        </p>
+      ) : (
+        pdfmeKeys.map((key) => (
+          <section key={key} className="space-y-3">
+            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {keyLabel(key)}
+            </h2>
+            <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
+              <ul className="divide-y divide-border/50">
+                {(pdfmeByKey.get(key) ?? []).map((t) => (
+                  <li key={t.id} className="flex items-center gap-2 py-2">
+                    <p className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
+                      <Link href={`/settings/documents/designer/${t.id}`} className="hover:text-primary">
+                        {t.name}
+                      </Link>
+                      {t.isDefault && (
+                        <span className="ml-2 inline-flex items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                          <Star className="size-2.5" />
+                          Default
+                        </span>
+                      )}
+                      <span className="ml-2 text-[11px] font-normal text-muted-foreground">
+                        edited {formatDate(t.updatedAt)}
+                      </span>
+                    </p>
+                    <Button asChild variant="outline" size="sm" title="Open the designer">
+                      <Link href={`/settings/documents/designer/${t.id}`}>
+                        <PenLine className="size-3.5" />
+                        Edit
+                      </Link>
+                    </Button>
+                    {!t.isDefault && (
+                      <form action={setDefaultPdfmeTemplate.bind(null, t.id)}>
+                        <Button variant="ghost" size="sm" title="Make default for this type">
+                          <Star className="size-3.5" />
+                        </Button>
+                      </form>
+                    )}
+                    <form action={deletePdfmeTemplate.bind(null, t.id)}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-red-400 hover:text-red-300"
+                        title="Delete"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </form>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </section>
+        ))
+      )}
+    </div>
+  );
+
   const repositoryTab = (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -510,26 +626,11 @@ export default async function DocumentsHubPage({
         </p>
       </div>
 
-      <div className="rounded-xl border border-primary/25 bg-primary/[0.06] px-4 py-3">
-        <p className="text-sm">
-          <span className="mr-2">🧪</span>
-          <span className="font-semibold text-foreground">New editor prototypes</span>
-          <span className="text-muted-foreground"> — drag-drop WYSIWYG spikes (mock data, throwaway). Compare the two approaches:</span>
-        </p>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <Link href="/settings/documents/prototype-pdfme" className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/15">
-            pdfme — ready-made designer (Delivery Note & Quotation) →
-          </Link>
-          <Link href="/settings/documents/prototype-puck" className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/15">
-            Puck — HTML blocks, keeps your PDF engine (Delivery Note) →
-          </Link>
-        </div>
-      </div>
-
       <Tabs
         initialKey={tab}
         tabs={[
           { key: "templates", label: "Templates", content: templatesTab },
+          { key: "designer", label: "Designer", count: pdfmeTemplates.length, content: designerTab },
           { key: "studio", label: "Studio", count: studioDocs.length, content: studioTab },
           { key: "repository", label: "Repository", count: rows.length, content: repositoryTab },
         ]}

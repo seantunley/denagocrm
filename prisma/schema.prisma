@@ -937,6 +937,24 @@ model DocTemplateRecord {
   @@index([docType, isDefault])
 }
 
+// pdfme drag-drop templates — stores a pdfme Template (basePdf + schemas) plus
+// sample inputs for preview. Additive and self-contained: the live print/signing
+// pipeline (print routes + signedPdf) is untouched by this editor.
+model PdfmeTemplate {
+  id          String    @id @default(cuid())
+  key         String // doc type: quote | delivery | invoice | agreement | …
+  name        String
+  isDefault   Boolean   @default(false)
+  schema      Json // the pdfme Template { basePdf, schemas }
+  sample      Json // sample inputs for preview, keyed by field name
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  @@index([key, isDefault])
+}
+
 // ── Document Studio: free-form BlockNote documents ──────────────────
 // Templates hold draft JSON; publishing snapshots an immutable version.
 model CustomDocTemplate {

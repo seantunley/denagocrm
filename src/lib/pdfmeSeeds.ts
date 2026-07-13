@@ -1,15 +1,14 @@
 import { BLANK_PDF, type Template } from "@pdfme/common";
 
 /**
- * PROTOTYPE — current CRM documents rebuilt as pdfme templates so we can feel
- * the drag-drop editor on the REAL layouts. Values are mock (no customer data),
- * supplied at generate time via each doc's `sample`, keyed by field name — in a
- * real integration those named inputs come from the CRM record.
+ * The live CRM documents rebuilt as pdfme templates, used to seed the Designer
+ * so it opens with real Denago layouts rather than a blank page. Field values
+ * here are the preview/sample inputs (keyed by field name) — swap them for CRM
+ * data when generating against a real record.
  *
- * NOTE: this file is deliberately NOT named template.ts — that is a reserved
- * Next App Router filename (a route Template wrapper).
- *
- * Coordinates are millimetres on a blank A4 (210 × 297).
+ * Coordinates are millimetres on a blank A4 (210 × 297). Kept in @/lib (not
+ * under a route) so both the seeder and any generator can import it, and NOT
+ * named template.ts — that is a reserved Next App Router filename.
  */
 
 const ink = "#020617";
@@ -17,11 +16,17 @@ const muted = "#64748b";
 const accent = "#ea580c";
 const line = "#e2e8f0";
 
-type PdfmeDoc = { label: string; template: Template; sample: Record<string, string> };
+export type PdfmeSeed = {
+  key: string;
+  name: string;
+  template: Template;
+  sample: Record<string, string>;
+};
 
 /* ── Delivery Note ─────────────────────────────────────────── */
-const deliveryNote: PdfmeDoc = {
-  label: "Delivery Note",
+const deliveryNote: PdfmeSeed = {
+  key: "delivery",
+  name: "Delivery Note",
   template: {
     basePdf: BLANK_PDF,
     schemas: [
@@ -71,8 +76,9 @@ const deliveryNote: PdfmeDoc = {
 };
 
 /* ── Quotation (converted from the live QuotePrintDoc layout) ── */
-const quotation: PdfmeDoc = {
-  label: "Quotation",
+const quotation: PdfmeSeed = {
+  key: "quote",
+  name: "Quotation",
   template: {
     basePdf: BLANK_PDF,
     schemas: [
@@ -137,9 +143,7 @@ const quotation: PdfmeDoc = {
   },
 };
 
-export const DOC_TEMPLATES: Record<string, PdfmeDoc> = {
-  delivery: deliveryNote,
-  quote: quotation,
-};
+/** Blank A4 starter, offered when creating a template from scratch. */
+export const BLANK_TEMPLATE: Template = { basePdf: BLANK_PDF, schemas: [[]] };
 
-export const DOC_KEYS = Object.keys(DOC_TEMPLATES);
+export const PDFME_SEEDS: PdfmeSeed[] = [quotation, deliveryNote];
