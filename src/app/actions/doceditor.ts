@@ -36,10 +36,9 @@ export async function generateDocEditorDocument(formData: FormData) {
   const templateId = String(formData.get("templateId") ?? "").trim();
   const quoteId = String(formData.get("quoteId") ?? "").trim() || undefined;
   const jobCardId = String(formData.get("jobCardId") ?? "").trim() || undefined;
-  const sign = formData.get("sign") === "on";
   if (!templateId) return;
 
-  const res = await generateDocEditorPdf({ templateId, quoteId, jobCardId, sign });
+  const res = await generateDocEditorPdf({ templateId, quoteId, jobCardId });
   if (!res) return;
 
   const storedName = await saveFile(res.buffer, `${res.title}.pdf`, "application/pdf");
@@ -66,7 +65,8 @@ export async function sendDocForSigning(templateId: string, quoteId?: string | n
   const doc = parseDocument(tpl.data);
   if (!doc) return { ok: false, provider: "", message: "This document is empty." };
 
-  const res = await generateDocEditorPdf({ templateId, quoteId, sign: true });
+  // Unsigned PDF — the signing flow seals it only after a recipient signs.
+  const res = await generateDocEditorPdf({ templateId, quoteId });
   if (!res) return { ok: false, provider: "", message: "Could not generate the PDF." };
 
   const storedName = await saveFile(res.buffer, `${res.title}.pdf`, "application/pdf");

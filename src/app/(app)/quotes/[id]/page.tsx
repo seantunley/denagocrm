@@ -153,7 +153,7 @@ export default async function QuoteDetailPage({
               </Link>
             </>
           )}
-          {builderDocs.length > 0 && (
+          {builderDocs.length > 0 && currentUser.role === "owner" && (
             <form action={generateDocEditorDocument} className="flex items-center gap-1">
               <input type="hidden" name="quoteId" value={quote.id} />
               <select

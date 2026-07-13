@@ -1,16 +1,14 @@
 import { renderToBuffer } from "@react-pdf/renderer";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
-import { contactName, formatDate } from "@/lib/format";
-import QuoteDoc, { type SignedInfo } from "@/lib/pdf/QuoteDoc";
-import { sealPdf } from "@/lib/pdf/seal";
+import { requireOwner } from "@/lib/auth";
+import QuoteDoc from "@/lib/pdf/QuoteDoc";
 
 // react-pdf renders in Node (no browser) — keep this handler on the Node runtime.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  await requireUser();
+  await requireOwner();
   const { id } = await ctx.params;
   const { searchParams } = new URL(req.url);
   // ?demo=N repeats the real line items N times to demonstrate multi-page flow.
@@ -29,29 +27,14 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
         )
       : quote.items;
 
-  // ?sign=1 → render a signed document (signature evidence + certificate page)
-  // and apply a real PKCS#7 seal.
-  const doSign = searchParams.get("sign") === "1";
-  let signed: SignedInfo | undefined;
-  if (doSign) {
-    const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "102.65.14.203 (demo)";
-    signed = {
-      name: quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "Customer",
-      email: quote.contact?.email ?? quote.lead?.email ?? "",
-      ip,
-      date: formatDate(new Date()),
-    };
-  }
-
-  let buf: Buffer = Buffer.from(await renderToBuffer(<QuoteDoc quote={{ ...quote, items }} signed={signed} />));
-  if (doSign) {
-    buf = await sealPdf(buf, { reason: `Signed quotation Q-${quote.number}`, name: "Denago Cape Town" });
-  }
+  // Unsigned preview only. A signed/sealed PDF is produced solely by the real
+  // signing flow after a recipient actually signs — never fabricated here.
+  const buf = Buffer.from(await renderToBuffer(<QuoteDoc quote={{ ...quote, items }} />));
 
   return new Response(new Uint8Array(buf), {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `inline; filename="quote-${quote.number}${doSign ? "-signed" : ""}.pdf"`,
+      "Content-Disposition": `inline; filename="quote-${quote.number}.pdf"`,
     },
   });
 }

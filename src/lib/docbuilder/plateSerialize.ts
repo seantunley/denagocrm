@@ -10,7 +10,7 @@ type SlateText = { text?: string; bold?: boolean; italic?: boolean; underline?: 
 type SlateNode = SlateText & { type?: string; token?: string; align?: string; children?: SlateNode[] };
 
 function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 /** Friendly label for a merge token, e.g. "customer.name" → "Customer name". */

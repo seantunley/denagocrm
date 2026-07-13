@@ -17,7 +17,8 @@ import { evaluateCondition } from "@/lib/docbuilder/expr";
 export type RenderCtx = { tokens: Record<string, string>; items: { cells: { value: string }[] }[]; vars: Record<string, unknown> } | null;
 
 function esc(s: unknown): string {
-  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Attribute-safe: also escape quotes so values interpolated into style/src/attr can't break out.
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 function nl2br(s: string): string { return esc(s).replace(/\n/g, "<br/>"); }
 /** Resolve {{tokens}} in a plain string field against the bound record (kept literal for sample data). */
@@ -124,7 +125,7 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       return wrap(plateToHtmlBody(block.value as never[], ctx as never));
     case "image": {
       const src = String(block.src || "").trim();
-      if (!src || !/^(https?:|data:image\/)/i.test(src)) return "";
+      if (!src || !/^(https:|data:image\/)/i.test(src)) return "";
       return wrap(`<img src="${esc(src)}" alt="${esc(block.alt)}" style="width:${Math.max(5, Math.min(100, block.widthPct))}%;height:auto;${block.rounded ? "border-radius:8px;" : ""}"/>`);
     }
     case "divider":

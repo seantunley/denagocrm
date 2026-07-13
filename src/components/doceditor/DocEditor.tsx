@@ -28,6 +28,7 @@ export function DocEditor({ id, initialDoc, quotes }: { id: string; initialDoc: 
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [quoteId, setQuoteId] = useState("");
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveChain = useRef<Promise<void>>(Promise.resolve());
 
   // initial load
   useEffect(() => { load(initialDoc); }, [load, initialDoc]);
@@ -36,10 +37,18 @@ export function DocEditor({ id, initialDoc, quotes }: { id: string; initialDoc: 
   useEffect(() => {
     if (!doc || !dirty) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      setSaveState("saving");
-      const res = await saveDocEditor(id, doc);
-      if (res.ok) { markSaved(); setSaveState("saved"); } else { setSaveState("idle"); }
+    const snapshot = doc; // exact content this save persists (commit() makes a new ref on every edit)
+    saveTimer.current = setTimeout(() => {
+      // Chain saves so they never run out of order or clobber a newer write.
+      saveChain.current = saveChain.current.then(async () => {
+        try {
+          setSaveState("saving");
+          const res = await saveDocEditor(id, snapshot);
+          // Only clear "dirty" if no newer edit landed while this save was in flight.
+          if (res.ok && useEditor.getState().doc === snapshot) { markSaved(); setSaveState("saved"); }
+          else if (!res.ok) setSaveState("idle");
+        } catch { setSaveState("idle"); }
+      });
     }, 1200);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
   }, [doc, dirty, id, markSaved]);

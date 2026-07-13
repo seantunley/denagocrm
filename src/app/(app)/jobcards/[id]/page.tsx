@@ -9,6 +9,7 @@ import {
   completeJobCard,
   deleteJobCard,
 } from "@/app/actions/jobcards";
+import { requireUser } from "@/lib/auth";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import SigningBlock from "@/components/SigningBlock";
@@ -40,6 +41,7 @@ export default async function JobCardDetailPage({
     prisma.user.findMany({ orderBy: { name: "asc" } }),
   ]);
   if (!jobCard) notFound();
+  const currentUser = await requireUser();
   const builderDocs = (await listBuilderTemplates()).filter((t) => t.key === "jobcard" || t.key === "service-report");
   const path = `/jobcards/${jobCard.id}`;
 
@@ -89,7 +91,7 @@ export default async function JobCardDetailPage({
               📋 Service report
             </Link>
           )}
-          {builderDocs.length > 0 && (
+          {builderDocs.length > 0 && currentUser.role === "owner" && (
             <form action={generateDocEditorDocument} className="flex items-center gap-1">
               <input type="hidden" name="jobCardId" value={jobCard.id} />
               <select

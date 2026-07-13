@@ -8,9 +8,10 @@ import { plainAddPlaceholder } from "@signpdf/placeholder-plain";
  * can detect tampering: change one byte after sealing and the signature reports
  * invalid. This is the OpenSign lesson made in-house.
  *
- * The certificate here is self-signed and generated per request purely to prove
- * the mechanism. In production it becomes a single persistent P12 held as a
- * secret (or a CA-issued cert), so signatures chain to a trusted identity.
+ * The signing identity comes from getSigner(): the configured P12 secret in
+ * production (BUILDER_SIGN_P12_BASE64/_PASSPHRASE) so signatures chain to a
+ * trusted identity, or a cached self-signed cert otherwise (mechanism still
+ * tamper-evident, validity "unknown"). Not generated per request.
  */
 
 const PASSPHRASE = "denago-spike";
@@ -28,7 +29,10 @@ function getSigner(): { p12: Buffer; passphrase: string } {
   return { p12: makeSelfSignedP12(), passphrase: PASSPHRASE };
 }
 
+let selfSignedCache: Buffer | null = null;
+
 function makeSelfSignedP12(): Buffer {
+  if (selfSignedCache) return selfSignedCache;
   const keys = forge.pki.rsa.generateKeyPair(2048);
   const cert = forge.pki.createCertificate();
   cert.publicKey = keys.publicKey;
@@ -46,7 +50,8 @@ function makeSelfSignedP12(): Buffer {
   cert.sign(keys.privateKey, forge.md.sha256.create());
   const asn1 = forge.pkcs12.toPkcs12Asn1(keys.privateKey, [cert], PASSPHRASE, { algorithm: "3des" });
   const der = forge.asn1.toDer(asn1).getBytes();
-  return Buffer.from(der, "binary");
+  selfSignedCache = Buffer.from(der, "binary");
+  return selfSignedCache;
 }
 
 export async function sealPdf(
@@ -60,6 +65,7 @@ export async function sealPdf(
     name: meta.name,
     location: meta.location ?? "Cape Town, ZA",
   });
-  const signer = new P12Signer(makeSelfSignedP12(), { passphrase: PASSPHRASE });
+  const { p12, passphrase } = getSigner();
+  const signer = new P12Signer(p12, { passphrase });
   return new SignPdf().sign(withPlaceholder, signer);
 }

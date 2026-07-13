@@ -96,9 +96,6 @@ export default async function BuilderIndexPage() {
               <option key={q.id} value={q.id}>Q-{q.number}{q.contact ? ` — ${contactName(q.contact)}` : ""}</option>
             ))}
           </select>
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <input type="checkbox" name="sign" className="size-3.5" /> Seal it
-          </label>
           <Button type="submit">
             <FileDown className="size-4" />
             Generate &amp; file

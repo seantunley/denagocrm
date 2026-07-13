@@ -5,7 +5,6 @@ import { prisma } from "@/lib/db";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
 import { htmlToPdf } from "@/lib/customDocs";
-import { sealPdf } from "@/lib/pdf/seal";
 import { parseDocument, type DocumentModel } from "./model";
 import { renderDocumentHtml, renderEmailHtml, type RenderCtx } from "./serialize";
 
@@ -46,15 +45,18 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
   return { doc, ctx, title, quoteId: qId, jobCardId: jId, contactId };
 }
 
-/** Render a doc-editor template to a multi-page PDF, optionally bound to a quote or job card, seal-optional. */
+/**
+ * Render a doc-editor template to a multi-page (unsigned) PDF, optionally bound
+ * to a quote or job card. Sealing/tamper-proofing happens only in the signing
+ * flow after a recipient actually signs — never here.
+ */
 export async function generateDocEditorPdf(opts: {
-  templateId: string; quoteId?: string | null; jobCardId?: string | null; sign?: boolean;
+  templateId: string; quoteId?: string | null; jobCardId?: string | null;
 }): Promise<{ buffer: Buffer; title: string; quoteId: string | null; jobCardId: string | null; contactId: string | null } | null> {
   const r = await resolve(opts.templateId, opts.quoteId, opts.jobCardId);
   if (!r) return null;
   const html = renderDocumentHtml(r.doc, r.ctx, logoDataUri());
-  let buffer = await htmlToPdf(html);
-  if (opts.sign) buffer = await sealPdf(buffer, { reason: `Signed document: ${r.title}`, name: "Denago Cape Town" });
+  const buffer = await htmlToPdf(html);
   return { buffer, title: r.title, quoteId: r.quoteId, jobCardId: r.jobCardId, contactId: r.contactId };
 }
 

@@ -105,6 +105,16 @@ export type HtmlPdfOptions = {
   margin?: { top?: string; bottom?: string; left?: string; right?: string };
 };
 
+/** Block localhost + private / link-local IP literals to prevent SSRF from image URLs. */
+function isBlockedHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h === "::1" || h.endsWith(".localhost")) return true;
+  if (/^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h)) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(h)) return true;
+  if (/^(0\.|::$|fc|fd)/.test(h)) return true; // 0.0.0.0, unspecified, unique-local IPv6
+  return false;
+}
+
 /** HTML → PDF buffer. Serverless Chromium on Vercel, local Chrome in dev. */
 export async function htmlToPdf(html: string, opts?: HtmlPdfOptions): Promise<Buffer> {
   const puppeteer = await import("puppeteer-core");
@@ -131,6 +141,19 @@ export async function htmlToPdf(html: string, opts?: HtmlPdfOptions): Promise<Bu
   }
   try {
     const page = await browser.newPage();
+    // Harden: templates are untrusted content. No scripting, and only allow
+    // data: URIs and https to public hosts (blocks SSRF to internal addresses).
+    await page.setJavaScriptEnabled(false);
+    await page.setRequestInterception(true);
+    page.on("request", (r) => {
+      const url = r.url();
+      if (url.startsWith("data:")) return void r.continue();
+      try {
+        const u = new URL(url);
+        if (u.protocol !== "https:" || isBlockedHost(u.hostname)) return void r.abort();
+        return void r.continue();
+      } catch { return void r.abort(); }
+    });
     await page.setContent(html, { waitUntil: "load", timeout: 30000 });
     const useFrame = Boolean(opts?.headerTemplate || opts?.footerTemplate);
     const pdf = await page.pdf({
