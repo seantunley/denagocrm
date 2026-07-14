@@ -84,6 +84,11 @@ jobs:
         # real environments apply migrations manually, so this only affects CI.
         run: npx prisma db push --schema ./prisma --skip-generate --accept-data-loss
 
+      - name: Seed baseline data
+        # governance + security checks assert on baseline rows (default pipeline,
+        # admins, roles). db push gives an empty schema, so seed before them.
+        run: npm run seed
+
       - name: Type check
         run: npm run typecheck
 
