@@ -18,6 +18,8 @@ const PUBLIC_PATHS = [
   "/api/service-lookup",
   "/sign",
   "/api/sign",
+  "/signing", // e-signing hub: per-recipient tokenised public signing pages
+  "/api/signing",
   "/api/track", // campaign open/click tracking
   "/api/unsubscribe", // one-click marketing unsubscribe
   "/portal", // customer portal has its own OTP session

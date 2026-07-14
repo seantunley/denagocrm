@@ -14,7 +14,7 @@ import DocumentsPanel from "@/components/DocumentsPanel";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import SigningBlock from "@/components/SigningBlock";
 import { listBuilderTemplates } from "@/lib/docbuilder/store";
-import { generateDocEditorDocument } from "@/app/actions/doceditor";
+import { generateDocEditorDocument, requestSignatureForRecord } from "@/app/actions/doceditor";
 import JobCardItemForm from "@/components/JobCardItemForm";
 import { uploadJobCardPhotos } from "@/app/actions/jobcards";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
@@ -106,6 +106,9 @@ export default async function JobCardDetailPage({
               </select>
               <button className="btn-secondary" title="Generate this builder document for the job card and file it">
                 📄 Generate
+              </button>
+              <button formAction={requestSignatureForRecord} className="btn-secondary" title="Create a signing request from this template + job card">
+                ✍ Send for signing
               </button>
             </form>
           )}
