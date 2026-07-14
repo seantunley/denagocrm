@@ -94,7 +94,8 @@ jobs:
       - name: Seed baseline data
         # governance + security checks also assert on a default pipeline + admin
         # user, which the seed provides on top of the migration-seeded RBAC rows.
-        run: npm run seed
+        # `seed` lives under package.json#prisma.seed, so invoke via prisma.
+        run: npx prisma db seed
 
       - name: Type check
         run: npm run typecheck
