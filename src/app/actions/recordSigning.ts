@@ -21,7 +21,7 @@ import { advanceWorkflow } from "@/lib/signflow/runtime";
  */
 
 type Kind = "quote" | "jobcard";
-type Result = { ok: boolean; requestId?: string; error?: string; notified?: number; signFirstUrl?: string };
+type Result = { ok: boolean; requestId?: string; error?: string; notified?: number; signFirstUrl?: string; modal?: boolean };
 
 function recordPath(kind: Kind, id: string): string {
   return kind === "quote" ? `/quotes/${id}` : `/jobcards/${id}`;
@@ -92,6 +92,14 @@ export async function startRecordSigning(kind: Kind, id: string, workflowId?: st
     }
     await prisma.signatureRequest.update({ where: { id: created.id }, data: { workflowGraphJson: env.frozen as object, currentNodeId: null } });
     await advanceWorkflow(created.id);
+    // If the first internal step is a signer (usually the Denago rep = the sender),
+    // pop them straight into signing in-context; if it's someone else's approval, the hub.
+    const after = await prisma.signatureRequest.findUnique({ where: { id: created.id }, select: { currentNodeId: true } });
+    const curNode = after?.currentNodeId ? env.frozen.graph.nodes[after.currentNodeId] : undefined;
+    if (curNode?.type === "signer") {
+      const rec = await prisma.signatureRecipient.findFirst({ where: { requestId: created.id, nodeId: curNode.id } });
+      if (rec) return { ok: true, requestId: created.id, signFirstUrl: `/signatures/${created.id}/sign/${rec.id}`, modal: true };
+    }
     return { ok: true, requestId: created.id, signFirstUrl: `/signatures/${created.id}` };
   }
 
@@ -106,7 +114,7 @@ export async function startRecordSigning(kind: Kind, id: string, workflowId?: st
   // Denago rep straight to their signing surface.
   if (env.cosign) {
     const denago = await prisma.signatureRecipient.findFirst({ where: { requestId: created.id, order: 0 } });
-    return { ok: true, requestId: created.id, signFirstUrl: denago ? `/signatures/${created.id}/sign/${denago.id}` : undefined };
+    return { ok: true, requestId: created.id, signFirstUrl: denago ? `/signatures/${created.id}/sign/${denago.id}` : undefined, modal: true };
   }
 
   // Single-signer flow (job cards, assigned templates): dispatch to the customer now.

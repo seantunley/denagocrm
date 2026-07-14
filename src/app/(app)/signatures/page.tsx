@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { formatDate } from "@/lib/format";
+import { ApprovalActions } from "./ApprovalActions";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,7 @@ const STATUS_STYLE: Record<string, string> = {
   declined: "bg-red-500/15 text-red-300",
   expired: "bg-slate-600/30 text-slate-400",
   voided: "bg-slate-600/30 text-slate-400",
+  rejected: "bg-rose-500/15 text-rose-300",
 };
 
 function median(nums: number[]): number | null {
@@ -30,6 +32,13 @@ export default async function SignaturesPage() {
     orderBy: { updatedAt: "desc" },
     take: 200,
     include: { recipients: true },
+  });
+
+  const pendingApprovals = await prisma.approvalStep.findMany({
+    where: { status: "pending", request: { deletedAt: null, status: { notIn: ["voided", "completed", "rejected", "declined"] } } },
+    include: { request: { select: { id: true, title: true } } },
+    orderBy: { createdAt: "asc" },
+    take: 100,
   });
 
   const total = requests.length;
@@ -59,6 +68,23 @@ export default async function SignaturesPage() {
         <div className={stat}><div className="text-2xl font-bold text-foreground">{completionRate}%</div><div className="text-xs text-muted-foreground">Completion</div></div>
         <div className={stat}><div className="text-2xl font-bold text-foreground">{medHours == null ? "—" : medHours < 1 ? `${Math.round(medHours * 60)}m` : `${medHours.toFixed(1)}h`}</div><div className="text-xs text-muted-foreground">Median time</div></div>
       </div>
+
+      {pendingApprovals.length > 0 && (
+        <div className={`${card} border-amber-500/30 bg-amber-500/[0.06]`}>
+          <h2 className="mb-2 text-sm font-semibold text-amber-200">🛡 Pending approvals ({pendingApprovals.length})</h2>
+          <ul className="divide-y divide-border/50">
+            {pendingApprovals.map((s) => (
+              <li key={s.id} className="flex flex-wrap items-center gap-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <Link href={`/signatures/${s.request.id}`} className="truncate text-[13px] font-medium text-foreground hover:text-primary">{s.request.title}</Link>
+                  <div className="text-[11px] text-muted-foreground">{s.label} · requested {formatDate(s.createdAt)}{s.assigneeName ? ` · ${s.assigneeName}` : ""}</div>
+                </div>
+                <ApprovalActions stepId={s.id} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className={card}>
         {requests.length === 0 ? (
