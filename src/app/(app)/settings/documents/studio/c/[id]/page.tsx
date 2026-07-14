@@ -31,7 +31,7 @@ export default async function StudioClausePage({ params }: { params: Promise<{ i
           Document Studio
         </Link>
         <p className="text-sm text-muted-foreground">
-          Reusable clause — insert it into any template or document. It's copied in at insert
+          Reusable clause — insert it into any template or document. It&apos;s copied in at insert
           time, so editing this clause never changes existing documents.
         </p>
       </div>
