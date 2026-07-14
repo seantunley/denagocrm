@@ -1,11 +1,11 @@
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, MessageCircle, Send } from "lucide-react";
+import { ArrowLeft, Download, MessageCircle, Paperclip, Send } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { getPortalContact } from "@/lib/portal";
 import { portalCanAccessCase } from "@/lib/portalAccess";
 import { PortalCaseMessageForm } from "@/components/PortalExpansionForms";
-import { formatDateTime } from "@/lib/format";
+import { formatDate, formatDateTime } from "@/lib/format";
 import { PortalPageHeader, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 
 type CaseRow = {
@@ -24,6 +24,13 @@ type MessageRow = {
   body: string;
   createdAt: Date;
 };
+type UploadRow = {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: Date;
+};
 
 export default async function PortalCasePage({ params }: { params: Promise<{ id: string }> }) {
   const contact = await getPortalContact();
@@ -31,15 +38,20 @@ export default async function PortalCasePage({ params }: { params: Promise<{ id:
   const { id } = await params;
   if (!(await portalCanAccessCase(id))) notFound();
 
-  const [cases, messages] = await Promise.all([
+  const [cases, messages, uploads] = await Promise.all([
     basePrisma.$queryRaw<CaseRow[]>`
       SELECT "id", "number", "subject", "description", "type", "priority", "status", "createdAt"
       FROM "CustomerCase" WHERE "id" = ${id} LIMIT 1
     `,
     basePrisma.$queryRaw<MessageRow[]>`
       SELECT "id", "direction", "body", "createdAt"
-      FROM "CustomerCaseMessage" WHERE "caseId" = ${id}
+      FROM "CustomerCaseMessage" WHERE "caseId" = ${id} AND "type" IN ('customer', 'staff')
       ORDER BY "createdAt" ASC
+    `,
+    basePrisma.$queryRaw<UploadRow[]>`
+      SELECT "id", "fileName", "mimeType", "sizeBytes", "createdAt"
+      FROM "PortalUpload" WHERE "caseId" = ${id}
+      ORDER BY "createdAt" DESC
     `,
   ]);
   const item = cases[0];
@@ -70,6 +82,23 @@ export default async function PortalCasePage({ params }: { params: Promise<{ id:
           ))}
         </div>
       </section>
+      {uploads.length > 0 && (
+        <section className="space-y-3">
+          <SectionHeading title="Attachments" description="Files attached to this support request." action={<Paperclip className="size-5 text-muted-foreground" />} />
+          <Surface className="divide-y divide-border">
+            {uploads.map((upload) => (
+              <a key={upload.id} href={`/api/portal/uploads/${upload.id}`} className="group flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-white/[0.025] sm:px-5">
+                <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-white/[0.07] bg-white/[0.035] text-slate-400"><Paperclip className="size-4" /></span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">{upload.fileName}</p>
+                  <p className="text-xs text-slate-400">{(upload.sizeBytes / 1024).toFixed(0)} KB · {formatDate(upload.createdAt)}</p>
+                </div>
+                <Download className="size-4 shrink-0 text-slate-500 transition-colors group-hover:text-orange-400" />
+              </a>
+            ))}
+          </Surface>
+        </section>
+      )}
       {!['closed', 'cancelled'].includes(item.status) && (
         <Surface className="space-y-4 p-5 sm:p-6">
           <SectionHeading title="Reply" description="Continue the conversation securely through your portal." action={<Send className="size-5 text-primary" />} />

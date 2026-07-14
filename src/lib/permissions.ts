@@ -14,6 +14,7 @@ export const PERMISSIONS = [
   "documents.view_all", "documents.view_owned", "documents.upload", "documents.manage",
   "document_templates.manage",
   "cases.view_all", "cases.view_owned", "cases.reply", "cases.manage",
+  "cases.assign", "cases.create",
   "campaigns.view", "campaigns.manage", "surveys.view", "surveys.manage",
   "vehicles.view_all", "vehicles.view_owned", "vehicles.manage",
   "jobcards.view_all", "jobcards.view_owned", "jobcards.manage",
@@ -366,14 +367,18 @@ export async function getAccessibleCaseIds(user: PermissionUser): Promise<string
   if (contactIds === null) return null;
   // vehicleIds === null means the user can see ALL vehicles, so every vehicle-linked
   // case is accessible — not `= ANY([])`, which would drop them all.
+  // A ticket is "owned" if it belongs to an accessible contact/vehicle OR is
+  // assigned to this agent (so an agent always sees their own queue).
   const rows = vehicleIds === null
     ? await basePrisma.$queryRaw<Array<{ id: string }>>`
         SELECT c."id" FROM "CustomerCase" c
-        WHERE c."contactId" = ANY(${contactIds}::text[]) OR c."vehicleId" IS NOT NULL`
+        WHERE c."contactId" = ANY(${contactIds}::text[]) OR c."vehicleId" IS NOT NULL
+           OR c."assignedToId" = ${user.id}`
     : await basePrisma.$queryRaw<Array<{ id: string }>>`
         SELECT c."id" FROM "CustomerCase" c
         WHERE c."contactId" = ANY(${contactIds}::text[])
-           OR (c."vehicleId" IS NOT NULL AND c."vehicleId" = ANY(${vehicleIds}::text[]))`;
+           OR (c."vehicleId" IS NOT NULL AND c."vehicleId" = ANY(${vehicleIds}::text[]))
+           OR c."assignedToId" = ${user.id}`;
   return rows.map((row) => row.id);
 }
 

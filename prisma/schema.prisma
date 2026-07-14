@@ -1458,8 +1458,14 @@ model PortalAccessGrant {
   @@index([viewerContactId, active])
 }
 
+// ── Support ticketing (help desk) ───────────────────────────────────────────
+// CustomerCase / CustomerCaseMessage were originally raw-SQL tables (migration
+// 50). They are modelled here for typed access; relations are kept WITHIN the
+// ticketing tables only, so Contact/Vehicle/User stay untouched (their FKs are
+// scalar). Extended by migration 65_support_ticketing.
+
 model CustomerCase {
-  id              String    @id
+  id              String    @id @default(cuid())
   number          BigInt    @unique @default(autoincrement())
   subject         String
   description     String
@@ -1472,24 +1478,39 @@ model CustomerCase {
   vehicleId       String?
   warrantyClaimId String?
   assignedToId    String?
+  mailboxId       String?
+  firstResponseAt DateTime?
+  lastReplyAt     DateTime?
+  lastReplyBy     String?
+  snoozedUntil    DateTime?
   createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @default(now())
+  updatedAt       DateTime  @default(now()) @updatedAt
   resolvedAt      DateTime?
   closedAt        DateTime?
 
+  mailbox  SupportMailbox?       @relation(fields: [mailboxId], references: [id], onDelete: SetNull)
+  messages CustomerCaseMessage[]
+  tags     CustomerCaseTag[]
+
   @@index([contactId, status, createdAt])
   @@index([vehicleId, createdAt])
+  @@index([mailboxId, status, updatedAt])
+  @@index([assignedToId, status])
 }
 
 model CustomerCaseMessage {
-  id        String    @id
+  id        String    @id @default(cuid())
   caseId    String
   contactId String?
   userId    String?
   direction String    @default("customer")
+  type      String    @default("message") // customer | staff | note | event
   body      String
+  meta      Json?
   createdAt DateTime  @default(now())
   readAt    DateTime?
+
+  case CustomerCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId, createdAt])
 }
@@ -1545,4 +1566,55 @@ model PortalUpload {
   createdAt  DateTime @default(now())
 
   @@index([contactId, createdAt])
+}
+
+model SupportMailbox {
+  id               String   @id @default(cuid())
+  name             String
+  slug             String   @unique
+  color            String   @default("#ea580c")
+  email            String?
+  signature        String?
+  autoReplyEnabled Boolean  @default(false)
+  autoReplyBody    String?
+  sortOrder        Int      @default(0)
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @default(now()) @updatedAt
+
+  cases        CustomerCase[]
+  cannedReplies CannedReply[]
+}
+
+model SupportTag {
+  id        String            @id @default(cuid())
+  name      String
+  slug      String            @unique
+  color     String            @default("#64748b")
+  createdAt DateTime          @default(now())
+  cases     CustomerCaseTag[]
+}
+
+model CustomerCaseTag {
+  caseId String
+  tagId  String
+  case   CustomerCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  tag    SupportTag   @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([caseId, tagId])
+  @@index([tagId])
+}
+
+model CannedReply {
+  id          String   @id @default(cuid())
+  mailboxId   String?
+  title       String
+  body        String
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+
+  mailbox SupportMailbox? @relation(fields: [mailboxId], references: [id], onDelete: SetNull)
+
+  @@index([mailboxId])
 }
