@@ -1,6 +1,7 @@
 import { uploadDocument, deleteDocument } from "@/app/actions/documents";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { formatDate } from "@/lib/format";
+import { FileText, Upload } from "lucide-react";
 
 function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -31,11 +32,14 @@ export default function DocumentsPanel({
 }) {
   return (
     <div className="card">
-      <h2 className="font-semibold mb-4">Documents</h2>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h2 className="font-semibold">Documents</h2>
+        <FileText className="size-4 text-primary" />
+      </div>
 
       <form
         action={uploadDocument}
-        className="flex items-center gap-3 mb-4 rounded-lg bg-slate-800/40 p-3 border border-slate-800"
+        className="mb-4 grid gap-2 rounded-xl border border-border bg-muted/20 p-3"
       >
         {contactId && <input type="hidden" name="contactId" value={contactId} />}
         {vehicleId && <input type="hidden" name="vehicleId" value={vehicleId} />}
@@ -45,9 +49,9 @@ export default function DocumentsPanel({
           type="file"
           name="file"
           required
-          className="text-sm flex-1 file:mr-3 file:cursor-pointer file:rounded-lg file:border file:border-slate-700 file:bg-slate-900 file:px-2.5 file:py-1 file:text-xs file:font-medium file:text-slate-300"
+          className="min-w-0 w-full text-xs text-muted-foreground file:mr-3 file:cursor-pointer file:rounded-md file:border file:border-border file:bg-background file:px-2.5 file:py-1.5 file:text-xs file:font-medium file:text-foreground"
         />
-        <button className="btn-primary btn-sm">Upload</button>
+        <button className="btn-primary btn-sm w-full"><Upload className="size-4" />Upload document</button>
       </form>
 
       {documents.length === 0 ? (
@@ -56,7 +60,7 @@ export default function DocumentsPanel({
         <ul className="divide-y divide-slate-800">
           {documents.map((d) => (
             <li key={d.id} className="flex items-center gap-3 py-2 group">
-              <span>📄</span>
+              <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-muted/30 text-muted-foreground"><FileText className="size-3.5" /></span>
               <div className="flex-1 min-w-0">
                 <a
                   href={`/api/files/${d.id}`}
