@@ -88,6 +88,7 @@ export default function QuickCreateDialog() {
                 contacts={options.contacts}
                 users={options.users}
                 submitLabel="Create lead"
+                variant="dialog"
               />
             )}
 
