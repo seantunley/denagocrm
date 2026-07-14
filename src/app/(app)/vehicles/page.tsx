@@ -72,6 +72,7 @@ export default async function VehiclesPage({
                 }))}
                 submitLabel="Register vehicle"
                 showInitialKm
+                variant="dialog"
               />
             </ModalTrigger>
           )}

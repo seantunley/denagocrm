@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
@@ -27,6 +28,7 @@ export async function createPart(formData: FormData) {
     },
   });
   revalidatePath("/parts");
+  redirect("/parts");
 }
 
 export async function updatePart(id: string, formData: FormData) {
