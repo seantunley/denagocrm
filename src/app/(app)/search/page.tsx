@@ -2,6 +2,7 @@ import Link from "next/link";
 import {
   ArrowRight,
   CarFront,
+  Compass,
   FileText,
   Package,
   Search,
@@ -18,6 +19,7 @@ import { PageHeader } from "@/components/page-header";
 import { EmptyState, Surface } from "@/components/visual-system";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { getSearchDestinations, matchSearchDestinations } from "@/lib/search-destinations";
 
 function SearchBar({ term = "" }: { term?: string }) {
   return (
@@ -30,7 +32,7 @@ function SearchBar({ term = "" }: { term?: string }) {
             defaultValue={term}
             autoFocus={!term}
             className="h-11 rounded-xl bg-background/50 pl-10"
-            placeholder="Search customers, leads, vehicles, quotes, job cards or products"
+            placeholder="Search pages, settings, customers, vehicles, quotes or job cards"
           />
         </div>
         <Button className="h-11 rounded-xl px-5">Search</Button>
@@ -97,7 +99,7 @@ export default async function SearchPage({
 }: {
   searchParams: Promise<{ q?: string }>;
 }) {
-  await requireUser();
+  const currentUser = await requireUser();
   const { q } = await searchParams;
   const term = (q ?? "").trim();
 
@@ -109,7 +111,7 @@ export default async function SearchPage({
         <EmptyState
           icon={Search}
           title="One search, every module"
-          description="Try a customer name, email address, phone number, VIN, registration, lead, Q-number, job card or product."
+          description="Try a page or setting such as Library, or search by customer, email, phone, VIN, registration, Q-number or job card."
         />
       </div>
     );
@@ -117,6 +119,13 @@ export default async function SearchPage({
 
   const contains = { contains: term, mode: "insensitive" as const };
   const asNumber = parseInt(term.replace(/^[qQ]-?/, ""), 10);
+  const destinations = matchSearchDestinations(
+    term,
+    getSearchDestinations({
+      modules: currentUser.modules,
+      isAdmin: currentUser.role === "owner",
+    }),
+  );
 
   const [contacts, leads, vehicles, jobCards, quotes, products] = await Promise.all([
     prisma.contact.findMany({
@@ -146,7 +155,7 @@ export default async function SearchPage({
     prisma.product.findMany({ where: { name: contains }, take: 10 }),
   ]);
 
-  const total = contacts.length + leads.length + vehicles.length + jobCards.length + quotes.length + products.length;
+  const total = destinations.length + contacts.length + leads.length + vehicles.length + jobCards.length + quotes.length + products.length;
 
   return (
     <div className="space-y-6">
@@ -160,12 +169,24 @@ export default async function SearchPage({
         <EmptyState
           icon={SearchX}
           title="Nothing matched this search"
-          description="Check the spelling or try a broader name, phone number, VIN, registration, Q-number or job-card number."
+          description="Check the spelling or try a page, setting, broader name, phone number, VIN, registration, Q-number or job-card number."
           action={<Button asChild variant="outline" size="sm"><Link href="/search">Clear search</Link></Button>}
         />
       )}
 
       <div className="grid gap-4 xl:grid-cols-2">
+        <ResultSection title="Pages & settings" icon={Compass} count={destinations.length}>
+          {destinations.map((item) => (
+            <ResultRow
+              key={item.href}
+              href={item.href}
+              title={item.label}
+              meta={item.group}
+              badge={<span className="rounded-md border border-border bg-background/50 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Page</span>}
+            />
+          ))}
+        </ResultSection>
+
         <ResultSection title="Customers" icon={UsersRound} count={contacts.length}>
           {contacts.map((item) => <ResultRow key={item.id} href={`/contacts/${item.id}`} title={contactName(item)} meta={[item.email, item.phone, item.city].filter(Boolean).join(" · ") || "No contact details"} />)}
         </ResultSection>

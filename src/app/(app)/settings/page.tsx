@@ -39,64 +39,13 @@ import { decryptValue } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
 import { PageHeader } from "@/components/page-header";
 import SettingsNav from "@/components/SettingsNav";
+import { SETTINGS_NAV_GROUPS, SETTINGS_NAV_ITEMS } from "@/lib/settings-navigation";
 
 /**
  * Grouped settings IA — related blocks live together instead of one long
  * flat tab row. Keys are unchanged so existing content blocks (and any old
  * ?tab= links) keep working.
  */
-type SettingsTab = { key: string; label: string; href?: string };
-
-const NAV_GROUPS: { label: string; items: SettingsTab[] }[] = [
-  {
-    label: "You",
-    items: [
-      { key: "account", label: "My Account" },
-      { key: "notifications", label: "Notifications" },
-    ],
-  },
-  {
-    label: "CRM",
-    items: [
-      { key: "pipeline", label: "Pipeline" },
-      { key: "quotes", label: "Quotes" },
-      { key: "import", label: "Import" },
-    ],
-  },
-  {
-    label: "Workshop",
-    items: [{ key: "workshop", label: "Bookings & slots" }],
-  },
-  {
-    label: "Catalog",
-    items: [
-      { key: "products", label: "Products", href: "/products" },
-      { key: "library", label: "Library", href: "/library" },
-    ],
-  },
-  {
-    label: "Comms & Marketing",
-    items: [
-      { key: "email", label: "Email" },
-      { key: "automations", label: "Automations", href: "/automations" },
-    ],
-  },
-  {
-    label: "Organisation",
-    items: [
-      { key: "team", label: "Team" },
-      { key: "documents", label: "Documents", href: "/settings/documents" },
-      { key: "security", label: "Security", href: "/settings/security" },
-      { key: "backups", label: "Backup & recovery", href: "/settings/backup-recovery" },
-      { key: "sessions", label: "Sessions & devices", href: "/settings/sessions" },
-      { key: "integrations", label: "Integrations" },
-      { key: "system", label: "System Log" },
-    ],
-  },
-];
-
-const TABS: SettingsTab[] = NAV_GROUPS.flatMap((g) => g.items);
-
 export default async function SettingsPage({
   searchParams,
 }: {
@@ -105,7 +54,9 @@ export default async function SettingsPage({
   const currentUser = await requireUser();
   const isAdmin = currentUser.role === "owner";
   // Non-admins get exactly one tab: their own account
-  const visibleTabs = isAdmin ? TABS : TABS.filter((t) => t.key === "account");
+  const visibleTabs = isAdmin
+    ? SETTINGS_NAV_ITEMS
+    : SETTINGS_NAV_ITEMS.filter((item) => item.key === "account");
   const { tab: rawTab } = await searchParams;
   const tab = rawTab && visibleTabs.some((t) => t.key === rawTab && !t.href)
     ? rawTab
@@ -172,7 +123,7 @@ export default async function SettingsPage({
       })
     : [];
 
-  const visibleGroups = NAV_GROUPS.map((g) => ({
+  const visibleGroups = SETTINGS_NAV_GROUPS.map((g) => ({
     ...g,
     items: g.items.filter((i) => visibleTabs.some((t) => t.key === i.key)),
   })).filter((g) => g.items.length > 0);

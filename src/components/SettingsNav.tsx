@@ -4,13 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-type SettingsItem = { key: string; label: string; href?: string };
-type SettingsGroup = { label: string; items: SettingsItem[] };
-
-function destination(item: SettingsItem) {
-  return item.href ?? `/settings?tab=${item.key}`;
-}
+import { settingsDestination, type SettingsGroup } from "@/lib/settings-navigation";
 
 export default function SettingsNav({ groups, current }: { groups: SettingsGroup[]; current: string }) {
   const router = useRouter();
@@ -22,13 +16,13 @@ export default function SettingsNav({ groups, current }: { groups: SettingsGroup
         <label htmlFor="settings-section" className="label">Settings section</label>
         <select
           id="settings-section"
-          value={currentItem ? destination(currentItem) : "/settings"}
+          value={currentItem ? settingsDestination(currentItem) : "/settings"}
           onChange={(event) => router.push(event.target.value)}
           className="input h-11 appearance-none pr-10"
         >
           {groups.map((group) => (
             <optgroup key={group.label} label={group.label}>
-              {group.items.map((item) => <option key={item.key} value={destination(item)}>{item.label}</option>)}
+              {group.items.map((item) => <option key={item.key} value={settingsDestination(item)}>{item.label}</option>)}
             </optgroup>
           ))}
         </select>
@@ -45,7 +39,7 @@ export default function SettingsNav({ groups, current }: { groups: SettingsGroup
               {group.items.map((item) => (
                 <Link
                   key={item.key}
-                  href={destination(item)}
+                  href={settingsDestination(item)}
                   aria-current={current === item.key ? "page" : undefined}
                   className={cn(
                     "whitespace-nowrap rounded-md px-2 py-[6px] text-[13px] font-medium transition-colors",
