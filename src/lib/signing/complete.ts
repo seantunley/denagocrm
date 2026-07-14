@@ -2,7 +2,7 @@ import "server-only";
 import crypto from "crypto";
 import { prisma } from "@/lib/db";
 import { parseDocument } from "@/lib/doceditor/model";
-import { renderDocumentHtml } from "@/lib/doceditor/serialize";
+import { renderDocumentHtml, type StampField } from "@/lib/doceditor/serialize";
 import { htmlToPdf } from "@/lib/customDocs";
 import { sealPdf } from "@/lib/pdf/seal";
 import { saveFile, readFile } from "@/lib/storage";
@@ -58,7 +58,23 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     rows.push({ name: r.signedName || r.name, role: r.role, signedAt: r.signedAt, signerIp: r.signerIp, img: await sigImg(r.signatureRef) });
   }
 
-  const html = renderDocumentHtml(doc, ctx, logoDataUri(), { hideOverlays: true, appendHtml: certificateHtml(req.title, req.id, rows) });
+  // Stamp each signed field into the document at the exact spot it was placed.
+  const nameByRecipient = new Map(req.recipients.map((r) => [r.id, r.signedName || r.name]));
+  const fieldRows = await prisma.signatureField.findMany({ where: { requestId, filledAt: { not: null } } });
+  const stampedFields: StampField[] = [];
+  for (const f of fieldRows) {
+    const base = { page: f.page, x: f.x, y: f.y, width: f.width, height: f.height, kind: f.kind };
+    if (f.kind === "signature" || f.kind === "initials" || f.kind === "stamp") {
+      const img = await sigImg(f.value); // f.value is a stored file ref for image fields
+      if (img) stampedFields.push({ ...base, image: img, label: f.recipientId ? nameByRecipient.get(f.recipientId) : "" });
+    } else if (f.kind === "checkbox") {
+      stampedFields.push({ ...base, text: f.value === "true" ? "✓" : "" });
+    } else {
+      stampedFields.push({ ...base, text: f.value ?? "" });
+    }
+  }
+
+  const html = renderDocumentHtml(doc, ctx, logoDataUri(), { hideOverlays: true, stampedFields, appendHtml: certificateHtml(req.title, req.id, rows) });
   let pdf = await htmlToPdf(html);
   pdf = await sealPdf(pdf, { reason: `Signed: ${req.title}`, name: "Denago Cape Town" });
   const hash = crypto.createHash("sha256").update(pdf).digest("hex");
