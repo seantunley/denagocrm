@@ -12,6 +12,7 @@ import { createSignatureRequestFromDoc } from "@/lib/signing/service";
 import { dispatchRequest } from "@/lib/signing/dispatch";
 import { logSignEvent } from "@/lib/signing/events";
 import { activeRecordRequest } from "@/lib/signing/record";
+import { advanceWorkflow } from "@/lib/signflow/runtime";
 
 /**
  * Record-level entry points into the unified signing hub. These sit on the quote /
@@ -81,9 +82,21 @@ export async function startRecordSigning(kind: Kind, id: string, workflowId?: st
   await logAudit({ action: "signing.send", summary: `Sent “${env.title}” (${env.refLabel}) for signing`, entityType: "SignatureRequest", entityId: created.id, user });
   revalidatePath(recordPath(kind, id));
 
-  // Workflow-driven send: the chain can be arbitrary (managers, finance, external
-  // approvers), so route the owner to the hub to review recipients, fill any
-  // "choose at send" contacts, and dispatch.
+  // Approval workflow: freeze the graph, link each doc-signer recipient to its
+  // node, and start the interpreter — which materialises + notifies the FIRST
+  // internal step and gates the customer until the whole internal chain is done.
+  if (env.frozen && env.signers) {
+    const recips = await prisma.signatureRecipient.findMany({ where: { requestId: created.id }, orderBy: { order: "asc" } });
+    for (let i = 0; i < env.signers.length && i < recips.length; i++) {
+      await prisma.signatureRecipient.update({ where: { id: recips[i].id }, data: { nodeId: env.signers[i].nodeId } });
+    }
+    await prisma.signatureRequest.update({ where: { id: created.id }, data: { workflowGraphJson: env.frozen as object, currentNodeId: null } });
+    await advanceWorkflow(created.id);
+    return { ok: true, requestId: created.id, signFirstUrl: `/signatures/${created.id}` };
+  }
+
+  // Workflow-driven send (no approvals/branches): static chain — route the owner to
+  // the hub to review recipients, fill any "choose at send" contacts, and dispatch.
   if (env.signers) {
     return { ok: true, requestId: created.id, signFirstUrl: `/signatures/${created.id}` };
   }

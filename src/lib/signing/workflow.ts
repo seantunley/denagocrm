@@ -2,11 +2,14 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { completeSignatureRequest } from "./complete";
 import { notifyNextInSequence } from "./dispatch";
+import { advanceWorkflow } from "@/lib/signflow/runtime";
 
 /** Called after a recipient signs: complete the request if everyone's done, else advance. */
 export async function advanceAfterSignature(requestId: string): Promise<void> {
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } });
   if (!req) return;
+  // Interpreter-driven workflows (approvals / branches) advance node-by-node.
+  if (req.workflowGraphJson) { await advanceWorkflow(requestId); return; }
   const signers = req.recipients.filter((r) => r.role !== "viewer");
   const allSigned = signers.length > 0 && signers.every((r) => r.status === "signed");
   if (allSigned) { await completeSignatureRequest(requestId); return; }
