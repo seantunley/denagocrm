@@ -937,6 +937,44 @@ model DocTemplateRecord {
   @@index([docType, isDefault])
 }
 
+// Block-based document builder: a Puck document tree (blocks + root props) that
+// renders to a flowing, multi-page PDF via react-pdf. This is the "control your
+// own documents" editor — additive; the live print/signing pipeline is untouched.
+model DocBuilderTemplate {
+  id              String    @id @default(cuid())
+  name            String
+  key             String // doc type: quote | invoice | agreement | … | custom
+  data            Json // Puck document data ({ content, root, zones }) — the working draft
+  isDefault       Boolean   @default(false)
+  status          String    @default("draft") // draft | published
+  publishedVersion Int? // version number currently published (null = never published)
+  createdById     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  versions DocBuilderVersion[]
+
+  @@index([key, isDefault])
+}
+
+// Immutable snapshot of a builder template's JSON at publish time. Restore copies
+// a version's data back onto the working draft; publish snapshots the draft.
+model DocBuilderVersion {
+  id          String   @id @default(cuid())
+  version     Int
+  data        Json // immutable Puck document snapshot
+  label       String?
+  publishedAt DateTime @default(now())
+  publishedBy String?
+
+  templateId String
+  template   DocBuilderTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, version])
+  @@index([templateId, version])
+}
+
 // ── Document Studio: free-form BlockNote documents ──────────────────
 // Templates hold draft JSON; publishing snapshots an immutable version.
 model CustomDocTemplate {
