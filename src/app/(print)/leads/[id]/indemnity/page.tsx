@@ -25,7 +25,7 @@ export default async function IndemnityPrintPage({
 
   return (
     <>
-      <PrintActions backHref={`/leads/${lead.id}`} />
+      <PrintActions backHref={`/leads/${lead.id}`} backLabel="Back to lead" />
       <PrintDocShell
         template={tpl}
         title="Test-drive indemnity"

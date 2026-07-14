@@ -9,6 +9,12 @@ import { sendEmail } from "@/lib/email";
 import { saveFile } from "@/lib/storage";
 import { contactName } from "@/lib/format";
 
+// NOTE: New signing runs through the unified hub (see @/app/actions/recordSigning
+// and @/lib/signing/*). `signAsDealer` below is still live — Denago's countersignature
+// is a pre-send gate for quotes. The link-issuance actions (`enableSigning`,
+// `emailSigningLink`, `revokeSigning`) and the /sign/[kind]/[token] routes are
+// DEPRECATED: no new links are issued, but existing outstanding links keep working.
+
 /** Denago countersigns a quote (required before it can go to the customer). */
 export async function signAsDealer(
   quoteId: string,
