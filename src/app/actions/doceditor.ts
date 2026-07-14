@@ -92,21 +92,6 @@ export async function sendDocForSigning(templateId: string, quoteId?: string | n
   return { ok: true, requestId: created.id, message: `Signature request created — ${created.recipients} recipient(s), ${created.fields} field(s). Open the Signatures hub to send it.` };
 }
 
-/**
- * Form action for the quote/job-card pages: create a signing request from a
- * template + record and jump to the Signatures hub (where you review and send).
- */
-export async function requestSignatureForRecord(formData: FormData) {
-  await requireOwner();
-  const templateId = String(formData.get("templateId") ?? "").trim();
-  const quoteId = String(formData.get("quoteId") ?? "").trim() || null;
-  const jobCardId = String(formData.get("jobCardId") ?? "").trim() || null;
-  if (!templateId) return;
-  const res = await sendDocForSigning(templateId, quoteId, jobCardId);
-  if (res.ok && res.requestId) redirect(`/signatures/${res.requestId}`);
-  redirect("/signatures"); // template had no recipients/fields — hub explains next steps
-}
-
 /** Create a template pre-built as the branded "Standard" quotation, then open it. */
 export async function createStandardQuoteTemplate() {
   const user = await requireOwner();

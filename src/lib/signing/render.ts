@@ -3,8 +3,10 @@ import fs from "fs";
 import path from "path";
 import { prisma } from "@/lib/db";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
-import { parseDocument } from "@/lib/doceditor/model";
-import { renderDocumentHtml, type RenderCtx } from "@/lib/doceditor/serialize";
+import { parseDocument, type DocumentModel } from "@/lib/doceditor/model";
+import { renderDocumentHtml, renderSigningSheets, type RenderCtx, type StampField } from "@/lib/doceditor/serialize";
+import { htmlToPdf } from "@/lib/customDocs";
+import { readFile } from "@/lib/storage";
 import type { SignatureRequest } from "@prisma/client";
 
 let logoCache: string | null | undefined;
@@ -41,6 +43,50 @@ export async function renderRequestDocHtml(req: Pick<SignatureRequest, "snapshot
   if (!doc) return "<p style='padding:24px;color:#64748b'>This document is unavailable.</p>";
   const ctx = await bindCtx(req.quoteId, req.jobCardId);
   return renderDocumentHtml(doc, ctx, logoDataUri());
+}
+
+/** Render a bound document to an unsigned print-ready PDF (overlay fields hidden). */
+export async function renderEnvelopePdf(doc: DocumentModel, quoteId: string | null, jobCardId: string | null): Promise<Buffer> {
+  const ctx = await bindCtx(quoteId, jobCardId);
+  const html = renderDocumentHtml(doc, ctx, logoDataUri(), { hideOverlays: true });
+  return htmlToPdf(html);
+}
+
+async function fieldImg(ref: string | null): Promise<string | null> {
+  if (!ref) return null;
+  if (ref.startsWith("http") || ref.startsWith("data:")) return ref;
+  try { const buf = await readFile(ref); return `data:image/png;base64,${buf.toString("base64")}`; } catch { return null; }
+}
+
+/**
+ * Fields already completed by OTHER recipients, as read-only stamps — so the
+ * current signer sees (e.g.) Denago's signature already on the document before
+ * adding their own.
+ */
+export async function signedFieldStamps(requestId: string, excludeRecipientId: string): Promise<StampField[]> {
+  const rows = await prisma.signatureField.findMany({ where: { requestId, filledAt: { not: null } } });
+  const out: StampField[] = [];
+  for (const f of rows) {
+    if (f.recipientId === excludeRecipientId) continue; // the current signer fills their own
+    const base = { page: f.page, x: f.x, y: f.y, width: f.width, height: f.height, kind: f.kind };
+    if (f.kind === "signature" || f.kind === "initials" || f.kind === "stamp") {
+      const img = await fieldImg(f.value);
+      if (img) out.push({ ...base, image: img });
+    } else if (f.kind === "checkbox") {
+      out.push({ ...base, text: f.value === "true" ? "✓" : "" });
+    } else {
+      out.push({ ...base, text: f.value ?? "" });
+    }
+  }
+  return out;
+}
+
+/** Interactive per-page sheets for the signing surface, bound to the record. */
+export async function renderRequestSigningSheets(req: Pick<SignatureRequest, "snapshotJson" | "quoteId" | "jobCardId">): Promise<{ width: number; height: number; margin: number; css: string; pages: string[] }> {
+  const doc = parseDocument(req.snapshotJson);
+  if (!doc) return { width: 794, height: 1123, margin: 40, css: "", pages: ["<div style='padding:24px;color:#64748b'>This document is unavailable.</div>"] };
+  const ctx = await bindCtx(req.quoteId, req.jobCardId);
+  return renderSigningSheets(doc, ctx, logoDataUri());
 }
 
 export { logoDataUri };

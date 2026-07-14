@@ -210,19 +210,45 @@ function overlayFieldHtml(f: OverlayField, recipientColor: string, margin: numbe
   return `<div style="position:absolute;left:${f.anchor.x - margin}px;top:${f.anchor.y - margin}px;width:${f.width}px;height:${f.height}px;border:1.5px dashed ${recipientColor};border-radius:4px;background:${recipientColor}14;display:flex;align-items:center;justify-content:center;font-size:9pt;color:${recipientColor};font-weight:600">${esc(label)}</div>`;
 }
 
-function pageHtml(page: DocumentPage, doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string, isLast?: boolean, hideOverlays?: boolean): string {
+/** A signed field to stamp into the finished PDF at its exact placed position. */
+export type StampField = {
+  page: number; x: number; y: number; width: number; height: number;
+  kind: string; image?: string; text?: string; label?: string;
+};
+
+/** Render one signed field at its placed coordinates (no dashed placeholder). */
+function stampFieldHtml(s: StampField, margin: number): string {
+  const left = s.x - margin, top = s.y - margin;
+  const pos = `position:absolute;left:${left}px;top:${top}px;width:${s.width}px;height:${s.height}px;`;
+  if ((s.kind === "signature" || s.kind === "initials" || s.kind === "stamp") && s.image) {
+    // Baseline rule under the ink, signer label beneath — a familiar signature line.
+    return `<div style="${pos}display:flex;flex-direction:column;justify-content:flex-end">
+      <img src="${esc(s.image)}" style="max-width:100%;max-height:${Math.max(20, s.height - 14)}px;object-fit:contain;object-position:left bottom"/>
+      <div style="border-top:1px solid #334155;margin-top:2px;font-size:7pt;color:#64748b">${esc(s.label || "")}</div>
+    </div>`;
+  }
+  if (s.kind === "checkbox") {
+    return `<div style="${pos}display:flex;align-items:center;justify-content:center;font-size:14pt;color:#020617;font-weight:700">${s.text === "✓" ? "✓" : ""}</div>`;
+  }
+  // text / date / other typed values
+  return `<div style="${pos}display:flex;align-items:flex-end;font-size:10pt;color:#020617;border-bottom:1px solid #334155;padding-bottom:1px;overflow:hidden">${esc(s.text ?? "")}</div>`;
+}
+
+function pageHtml(page: DocumentPage, doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string, isLast?: boolean, hideOverlays?: boolean, stamps?: StampField[]): string {
   const rows = page.rows.map((r) => rowHtml(r, ctx, doc.style, logoDataUri)).join("");
-  const fields = hideOverlays ? "" : page.overlayFields.map((f) => {
+  // When stamping signed values, suppress the empty dashed template boxes.
+  const fields = hideOverlays || stamps ? "" : page.overlayFields.map((f) => {
     const rc = doc.recipients.find((r) => r.id === f.recipientId)?.color ?? "#2563eb";
     return overlayFieldHtml(f, rc, doc.style.margin);
   }).join("");
+  const stamped = (stamps ?? []).map((s) => stampFieldHtml(s, doc.style.margin)).join("");
   // Free-placement content: absolutely positioned within the page box (coords are
   // page-relative but the page margin already offsets the flow, so shift by margin).
   const floats = page.floatingBlocks.map((fb) =>
     `<div style="position:absolute;left:${fb.x - doc.style.margin}px;top:${fb.y - doc.style.margin}px;width:${fb.width}px">${blockHtml(fb.block, ctx, doc.style, logoDataUri)}</div>`
   ).join("");
   const size = PAGE_SIZES[doc.style.pageSize];
-  return `<div style="position:relative;min-height:${size.h - doc.style.margin * 2}px;${isLast ? "" : "page-break-after:always;"}">${rows}${fields}${floats}</div>`;
+  return `<div style="position:relative;min-height:${size.h - doc.style.margin * 2}px;${isLast ? "" : "page-break-after:always;"}">${rows}${fields}${floats}${stamped}</div>`;
 }
 
 /**
@@ -244,13 +270,47 @@ export function renderEmailHtml(doc: DocumentModel, ctx: RenderCtx, logoDataUri?
   </body></html>`;
 }
 
-export function renderDocumentHtml(doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string, opts?: { hideOverlays?: boolean; appendHtml?: string }): string {
+/**
+ * Per-page "sheet" HTML for the interactive signing surface. Unlike the PDF
+ * renderer this produces full A4 sheets (no @page margin) with content inset by
+ * padding, so the client can overlay interactive field widgets at their exact
+ * sheet-relative coordinates (matching the editor's origin — no margin subtract).
+ * Overlay fields are intentionally omitted; the client renders live controls.
+ */
+export function renderSigningSheets(doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string): { width: number; height: number; margin: number; css: string; pages: string[] } {
+  const m = doc.style.margin;
+  const size = PAGE_SIZES[doc.style.pageSize];
+  const font = fontStack(doc.style.fontFamily);
+  const pages = doc.pages.map((page) => {
+    const rows = page.rows.map((r) => rowHtml(r, ctx, doc.style, logoDataUri)).join("");
+    // Free-placement blocks sit at raw sheet coordinates (sheet edge origin).
+    const floats = page.floatingBlocks.map((fb) =>
+      `<div style="position:absolute;left:${fb.x}px;top:${fb.y}px;width:${fb.width}px">${blockHtml(fb.block, ctx, doc.style, logoDataUri)}</div>`
+    ).join("");
+    return `<div style="position:absolute;inset:0;padding:${m}px">${rows}</div>${floats}`;
+  });
+  const css = `
+    .sg-sheet { font-family:${font}; font-size:11pt; line-height:1.5; color:#1e293b; }
+    .sg-sheet * { box-sizing:border-box; }
+    .sg-sheet h1 { font-size:20pt; margin:0 0 8px; color:${doc.style.ink}; }
+    .sg-sheet h2 { font-size:15pt; margin:12px 0 6px; color:${doc.style.ink}; }
+    .sg-sheet h3 { font-size:12pt; margin:10px 0 4px; color:${doc.style.ink}; }
+    .sg-sheet p { margin:0 0 8px; }
+    .sg-sheet a { color:${doc.style.accent}; }
+    .sg-sheet strong { font-weight:700; }
+    .sg-sheet blockquote { border-left:3px solid ${doc.style.accent}; margin:8px 0; padding:4px 12px; color:#475569; background:#f8fafc; }
+    .sg-sheet ul, .sg-sheet ol { margin:0 0 8px 20px; }`;
+  return { width: size.w, height: size.h, margin: m, css, pages };
+}
+
+export function renderDocumentHtml(doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string, opts?: { hideOverlays?: boolean; appendHtml?: string; stampedFields?: StampField[] }): string {
   const font = fontStack(doc.style.fontFamily);
   const m = doc.style.margin;
   const header = doc.header.length ? doc.header.map((b) => blockHtml(b, ctx, doc.style, logoDataUri)).join("") : "";
   const footer = doc.footer.length ? doc.footer.map((b) => blockHtml(b, ctx, doc.style, logoDataUri)).join("") : "";
   const lastIdx = doc.pages.length - 1;
-  const body = doc.pages.map((p, i) => pageHtml(p, doc, ctx, logoDataUri, i === lastIdx && !opts?.appendHtml, opts?.hideOverlays)).join("") + (opts?.appendHtml ?? "");
+  const stamped = opts?.stampedFields;
+  const body = doc.pages.map((p, i) => pageHtml(p, doc, ctx, logoDataUri, i === lastIdx && !opts?.appendHtml, opts?.hideOverlays, stamped ? stamped.filter((s) => s.page === i) : undefined)).join("") + (opts?.appendHtml ?? "");
   const pageCss = doc.style.pageSize === "A4" ? "A4" : "letter";
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     @page { size: ${pageCss}; margin: ${m}px; }
