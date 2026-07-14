@@ -20,10 +20,16 @@ export function formatZAR(cents: number): string {
   }).format(cents / 100);
 }
 
+// The app serves one business in South Africa (UTC+2). Servers run in UTC, so
+// every displayed time MUST be pinned to Africa/Johannesburg — otherwise stored
+// UTC prints two hours early (10:00 shows as 08:00).
+const SA_TZ = "Africa/Johannesburg";
+
 export function formatDate(d: Date | string | null | undefined): string {
   if (!d) return "—";
   const date = typeof d === "string" ? new Date(d) : d;
   return date.toLocaleDateString("en-ZA", {
+    timeZone: SA_TZ,
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -34,6 +40,7 @@ export function formatDateTime(d: Date | string | null | undefined): string {
   if (!d) return "—";
   const date = typeof d === "string" ? new Date(d) : d;
   return date.toLocaleString("en-ZA", {
+    timeZone: SA_TZ,
     year: "numeric",
     month: "short",
     day: "numeric",

@@ -27,7 +27,7 @@ export default async function InvoicePrintPage({
 
   return (
     <>
-      <PrintActions backHref={`/quotes/${quote.id}`} />
+      <PrintActions backHref={`/quotes/${quote.id}`} backLabel="Back to quote" />
       <PrintDocShell
         template={tpl}
         title="Invoice"

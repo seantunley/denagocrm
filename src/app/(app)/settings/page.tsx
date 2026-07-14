@@ -42,63 +42,11 @@ import { formatDate } from "@/lib/format";
 import AutomationsPage from "../automations/page";
 import ProductsPage from "../products/page";
 import LibraryPage from "../library/page";
-
-/**
- * Grouped settings IA — related blocks live together instead of one long
- * flat tab row. Keys are unchanged so existing content blocks (and any old
- * ?tab= links) keep working.
- */
-type SettingsTab = { key: string; label: string; href?: string };
-
-const NAV_GROUPS: { label: string; items: SettingsTab[] }[] = [
-  {
-    label: "You",
-    items: [
-      { key: "account", label: "My Account" },
-      { key: "notifications", label: "Notifications" },
-    ],
-  },
-  {
-    label: "CRM",
-    items: [
-      { key: "pipeline", label: "Pipeline" },
-      { key: "quotes", label: "Quotes" },
-      { key: "import", label: "Import" },
-    ],
-  },
-  {
-    label: "Workshop",
-    items: [{ key: "workshop", label: "Bookings & slots" }],
-  },
-  {
-    label: "Catalog",
-    items: [
-      { key: "products", label: "Products" },
-      { key: "library", label: "Library" },
-    ],
-  },
-  {
-    label: "Comms & Marketing",
-    items: [
-      { key: "email", label: "Email" },
-      { key: "automations", label: "Automations" },
-    ],
-  },
-  {
-    label: "Organisation",
-    items: [
-      { key: "team", label: "Team" },
-      { key: "documents", label: "Documents", href: "/settings/documents" },
-      { key: "security", label: "Security", href: "/settings/security" },
-      { key: "backups", label: "Backup & recovery", href: "/settings/backup-recovery" },
-      { key: "sessions", label: "Sessions & devices", href: "/settings/sessions" },
-      { key: "integrations", label: "Integrations" },
-      { key: "system", label: "System Log" },
-    ],
-  },
-];
-
-const TABS: SettingsTab[] = NAV_GROUPS.flatMap((g) => g.items);
+import {
+  SETTINGS_NAV_GROUPS,
+  SETTINGS_TABS,
+  settingsHref,
+} from "@/lib/settings-navigation";
 
 export default async function SettingsPage({
   searchParams,
@@ -108,7 +56,9 @@ export default async function SettingsPage({
   const currentUser = await requireUser();
   const isAdmin = currentUser.role === "owner";
   // Non-admins get exactly one tab: their own account
-  const visibleTabs = isAdmin ? TABS : TABS.filter((t) => t.key === "account");
+  const visibleTabs = isAdmin
+    ? SETTINGS_TABS
+    : SETTINGS_TABS.filter((t) => t.key === "account");
   const { tab: rawTab } = await searchParams;
   const tab = visibleTabs.some((t) => t.key === rawTab)
     ? rawTab
@@ -173,7 +123,7 @@ export default async function SettingsPage({
       })
     : [];
 
-  const visibleGroups = NAV_GROUPS.map((g) => ({
+  const visibleGroups = SETTINGS_NAV_GROUPS.map((g) => ({
     ...g,
     items: g.items.filter((i) => visibleTabs.some((t) => t.key === i.key)),
   })).filter((g) => g.items.length > 0);
@@ -200,7 +150,7 @@ export default async function SettingsPage({
                   {g.items.map((t) => (
                     <Link
                       key={t.key}
-                      href={t.href ?? `/settings?tab=${t.key}`}
+                      href={settingsHref(t)}
                       className={`whitespace-nowrap rounded-md px-2 py-[6px] text-[13px] font-medium transition-colors ${
                         tab === t.key
                           ? "bg-accent text-accent-foreground"

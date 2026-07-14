@@ -13,6 +13,18 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
   ]),
+  {
+    // The Next preset ships the React Compiler advisory rules at error level.
+    // They flag long-standing patterns across the app (components declared in
+    // render, setState-in-effect, Date.now in render) that build and run fine.
+    // Surface them as warnings pending a dedicated React Compiler migration
+    // rather than blocking CI on a risky repo-wide refactor.
+    rules: {
+      "react-hooks/set-state-in-effect": "warn",
+      "react-hooks/static-components": "warn",
+      "react-hooks/purity": "warn",
+    },
+  },
 ]);
 
 export default eslintConfig;

@@ -140,6 +140,43 @@
   }
 }
 
+/* The public portal login is a full-screen welcome experience. Authenticated
+   portal chrome stays unchanged on every other /portal route. */
+.portal-shell:has(.portal-login-page) {
+  overflow: visible;
+}
+
+.portal-shell:has(.portal-login-page) .portal-header,
+.portal-shell:has(.portal-login-page) .portal-shell-ambient {
+  display: none;
+}
+
+.portal-shell:has(.portal-login-page) .portal-main {
+  max-width: none;
+  padding: 0;
+}
+
+@keyframes portal-form-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.portal-form-in {
+  animation: portal-form-in 280ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .portal-form-in {
+    animation: none;
+  }
+}
+
 @layer components {
   .login-input {
     @apply w-full rounded-xl border border-white/10 bg-white/[0.045] px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-600 hover:border-white/15 focus:border-orange-500/60 focus:bg-white/[0.06] focus:ring-4 focus:ring-orange-500/10;
@@ -388,4 +425,17 @@ input::-webkit-inner-spin-button {
 input[type="number"] {
   -moz-appearance: textfield;
   appearance: textfield;
+}
+
+/* react-moveable: the doc-editor overlay/floating layers are pointer-events:none
+   so clicks pass through to flow content. Force the moveable control handles to be
+   interactive so resize/drag handles work inside those layers. */
+.moveable-control-box {
+  pointer-events: none;
+}
+.moveable-control-box .moveable-control,
+.moveable-control-box .moveable-line,
+.moveable-control-box .moveable-area,
+.moveable-control-box .moveable-direction {
+  pointer-events: auto !important;
 }
