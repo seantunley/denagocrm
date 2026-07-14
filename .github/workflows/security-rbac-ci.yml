@@ -76,8 +76,26 @@ jobs:
       - name: Generate Prisma client
         run: npm run prisma:generate
 
-      - name: Apply migrations to isolated PostgreSQL
-        run: npm run prisma:migrate
+      - name: Apply migrations in numeric order to isolated PostgreSQL
+        # The migration folders use non-zero-padded numeric prefixes, so Prisma's
+        # lexical `migrate deploy` mis-orders them (10_dealer_signature before
+        # 4_quotes → "relation Quote does not exist"). Apply each migration.sql
+        # directly in NUMERIC order — this also runs the data-seeding INSERTs
+        # (RBAC permissions/roles in 52/53) that the governance + security checks
+        # below depend on and that a schema-only `db push` would skip.
+        run: |
+          # Strip Prisma's ?schema=public — libpq/psql rejects it as a URI param.
+          DB_URL=$(echo "$DATABASE_URL" | cut -d'?' -f1)
+          for name in $(ls prisma/migrations | grep -E '^[0-9]+_' | sort -t_ -k1,1 -n); do
+            echo "→ $name"
+            psql "$DB_URL" -v ON_ERROR_STOP=1 -q -f "prisma/migrations/$name/migration.sql"
+          done
+
+      - name: Seed baseline data
+        # governance + security checks also assert on a default pipeline + admin
+        # user, which the seed provides on top of the migration-seeded RBAC rows.
+        # `seed` lives under package.json#prisma.seed, so invoke via prisma.
+        run: npx prisma db seed
 
       - name: Type check
         run: npm run typecheck

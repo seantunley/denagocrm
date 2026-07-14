@@ -27,7 +27,7 @@ export default async function WarrantyClaimPrintPage({
 
   return (
     <>
-      <PrintActions backHref="/warranty" />
+      <PrintActions backHref="/warranty" backLabel="Back to warranty" />
       <PrintDocShell
         template={tpl}
         title="Warranty claim"

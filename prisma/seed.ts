@@ -9,15 +9,19 @@ async function main() {
   const passwordHash = await bcrypt.hash("denago123", 10);
   await prisma.user.upsert({
     where: { email: "sean@tunley.co.za" },
-    update: {},
+    update: { role: "owner" },
     create: {
       name: "Sean Tunley",
       email: "sean@tunley.co.za",
       passwordHash,
+      role: "owner",
     },
   });
 
-  // Pipeline stages
+  // Pipeline stages. NOTE: migration 52 added the required PipelineStage.pipelineId
+  // (and a default "pipeline_default_retail" pipeline) but schema.prisma has not
+  // been reconciled with it, so the generated client omits the column. Insert via
+  // raw SQL against the real columns until the schema is synced.
   const stages = [
     { name: "New", order: 0, color: "#3b82f6" },
     { name: "Contacted", order: 1, color: "#8b5cf6" },
@@ -28,7 +32,13 @@ async function main() {
   const existing = await prisma.pipelineStage.count();
   if (existing === 0) {
     for (const s of stages) {
-      await prisma.pipelineStage.create({ data: s });
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "PipelineStage" ("id","name","order","color","pipelineId") VALUES ($1,$2,$3,$4,'pipeline_default_retail')`,
+        crypto.randomUUID(),
+        s.name,
+        s.order,
+        s.color
+      );
     }
   }
 

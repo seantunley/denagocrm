@@ -13,6 +13,7 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { buildNav } from "@/components/nav-config";
+import { SETTINGS_NAV_GROUPS, settingsHref } from "@/lib/settings-navigation";
 
 const QUICK_ACTIONS = [
   { href: "/leads/new", label: "New lead", icon: Plus },
@@ -35,6 +36,10 @@ export default function CommandMenu({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const { topLinks, groups } = buildNav(modules, isAdmin);
+  const settingsGroups = SETTINGS_NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => isAdmin || item.key === "account"),
+  })).filter((group) => group.items.length > 0);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -59,7 +64,7 @@ export default function CommandMenu({
 
   return (
     <CommandDialog open={open} onOpenChange={setOpen} title="Command menu" description="Search and navigate">
-      <CommandInput placeholder="Search pages or run an action…" />
+      <CommandInput placeholder="Search pages, settings, or actions…" />
       <CommandList>
         <CommandEmpty>No results found.</CommandEmpty>
 
@@ -95,18 +100,33 @@ export default function CommandMenu({
         ))}
 
         <CommandSeparator />
-        <CommandGroup heading="Account">
-          <CommandItem value="settings" onSelect={() => go("/settings")}>
-            <Settings className="size-4 text-muted-foreground" />
-            Settings
-          </CommandItem>
-          {isAdmin && (
-            <CommandItem value="trash" onSelect={() => go("/trash")}>
-              <Trash2 className="size-4 text-muted-foreground" />
-              Trash
-            </CommandItem>
+        <CommandGroup heading="Settings">
+          {settingsGroups.flatMap((group) =>
+            group.items.map((item) => (
+              <CommandItem
+                key={item.key}
+                value={`settings ${group.label} ${item.label} ${item.key} ${item.keywords?.join(" ") ?? ""}`}
+                onSelect={() => go(settingsHref(item))}
+              >
+                <Settings className="size-4 text-muted-foreground" />
+                <span className="flex-1">{item.label}</span>
+                <span className="text-xs text-muted-foreground">{group.label}</span>
+              </CommandItem>
+            ))
           )}
         </CommandGroup>
+
+        {isAdmin && (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading="Account">
+              <CommandItem value="trash" onSelect={() => go("/trash")}>
+                <Trash2 className="size-4 text-muted-foreground" />
+                Trash
+              </CommandItem>
+            </CommandGroup>
+          </>
+        )}
       </CommandList>
     </CommandDialog>
   );
