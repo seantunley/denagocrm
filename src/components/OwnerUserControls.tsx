@@ -2,6 +2,7 @@
 
 import { setUserRole, ownerResetUser2fa, setUserModules } from "@/app/actions/security";
 import { MODULES } from "@/lib/access";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 /** Admin-only per-teammate controls: modules, role, 2FA reset. */
 export default function OwnerUserControls({
@@ -52,20 +53,14 @@ export default function OwnerUserControls({
           {role === "owner" ? "Make member" : "Make admin"}
         </button>
         {has2fa && (
-          <button
-            onClick={() => {
-              if (
-                confirm(
-                  `Reset 2FA for ${name}? They'll sign in with just their password until they set it up again.`
-                )
-              ) {
-                ownerResetUser2fa(userId);
-              }
-            }}
-            className="text-xs text-slate-500 hover:text-red-400 underline cursor-pointer"
-          >
-            Reset 2FA
-          </button>
+          <ConfirmActionDialog
+            destructive
+            title={`Reset 2FA for ${name}?`}
+            description="They will be signed out and will use only their password until two-factor authentication is configured again."
+            confirmLabel="Reset 2FA"
+            onConfirm={() => ownerResetUser2fa(userId)}
+            trigger={<button type="button" className="cursor-pointer text-xs text-muted-foreground underline hover:text-red-400">Reset 2FA</button>}
+          />
         )}
       </div>
     </div>

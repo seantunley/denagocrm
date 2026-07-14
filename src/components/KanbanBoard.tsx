@@ -26,7 +26,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogContent,
+  ResponsiveDialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
@@ -387,7 +387,7 @@ function TestDriveDialog({
 
   return (
     <Dialog open={!!pending} onOpenChange={(o) => !o && onCancel()}>
-      <DialogContent className="sm:max-w-md">
+      <ResponsiveDialogContent className="sm:max-w-md">
         {pending && (
           <>
             <DialogHeader>
@@ -450,7 +450,7 @@ function TestDriveDialog({
             </div>
           </>
         )}
-      </DialogContent>
+      </ResponsiveDialogContent>
     </Dialog>
   );
 }

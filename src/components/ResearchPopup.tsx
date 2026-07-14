@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Search } from "lucide-react";
 import {
   Dialog,
-  DialogContent,
+  ResponsiveDialogContent,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -45,7 +45,7 @@ export default function ResearchPopup({
       </Tooltip>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent
+        <ResponsiveDialogContent
           className="max-h-[85vh] overflow-y-auto sm:max-w-xl"
           onPointerDown={(e) => e.stopPropagation()}
         >
@@ -58,7 +58,7 @@ export default function ResearchPopup({
           <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
             {summary}
           </p>
-        </DialogContent>
+        </ResponsiveDialogContent>
       </Dialog>
     </>
   );

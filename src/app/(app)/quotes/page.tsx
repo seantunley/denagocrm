@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Plus } from "lucide-react";
+import { FileText, Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import ModalTrigger from "@/components/Modal";
@@ -7,13 +7,8 @@ import { createQuoteForContact } from "@/app/actions/quotes";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
-
-const statusBadge: Record<string, string> = {
-  draft: "bg-slate-800 text-slate-300",
-  sent: "bg-blue-500/15 text-blue-300",
-  accepted: "bg-emerald-500/15 text-emerald-300",
-  declined: "bg-red-500/15 text-red-300",
-};
+import { EmptyState, StatusPill } from "@/components/visual-system";
+import { MobileDataCard, MobileDataField, MobileDataFields, MobileDataHeader, MobileDataList, ResponsiveDataView } from "@/components/responsive-patterns";
 
 export default async function QuotesPage() {
   await requireUser();
@@ -64,7 +59,34 @@ export default async function QuotesPage() {
         </ModalTrigger>
       </PageHeader>
 
-      <div className="card p-0 overflow-x-auto">
+      {quotes.length === 0 ? (
+        <EmptyState icon={FileText} title="No quotes yet" description="Create a quote for a customer or open lead to start tracking a proposal." />
+      ) : (
+      <ResponsiveDataView
+        mobile={
+          <MobileDataList>
+            {quotes.map((q) => {
+              const total = q.items.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
+              return (
+                <MobileDataCard key={q.id}>
+                  <MobileDataHeader
+                    title={<Link href={`/quotes/${q.id}`} className="text-primary hover:underline">Quote Q-{q.number}</Link>}
+                    detail={q.contact ? contactName(q.contact) : q.lead?.name ?? "Unlinked quote"}
+                    aside={<StatusPill tone={q.status === "accepted" ? "success" : q.status === "declined" ? "danger" : q.status === "sent" ? "info" : "neutral"}>{q.status}</StatusPill>}
+                  />
+                  <MobileDataFields>
+                    <MobileDataField label="Total">{formatZAR(Math.round(total))}</MobileDataField>
+                    <MobileDataField label="Valid until">{formatDate(q.validUntil)}</MobileDataField>
+                    <MobileDataField label="Lead">{q.lead ? <Link href={`/leads/${q.lead.id}`} className="text-primary hover:underline">{q.lead.title}</Link> : "—"}</MobileDataField>
+                    <MobileDataField label="Created">{formatDate(q.createdAt)}</MobileDataField>
+                  </MobileDataFields>
+                </MobileDataCard>
+              );
+            })}
+          </MobileDataList>
+        }
+        desktop={
+      <div className="card overflow-x-auto p-0">
         <table className="table-base">
           <thead>
             <tr>
@@ -78,13 +100,6 @@ export default async function QuotesPage() {
             </tr>
           </thead>
           <tbody>
-            {quotes.length === 0 && (
-              <tr>
-                <td colSpan={7} className="text-center text-slate-400 py-8">
-                  No quotes yet — open a lead and click “Create quote”.
-                </td>
-              </tr>
-            )}
             {quotes.map((q) => {
               const total = q.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
               return (
@@ -113,17 +128,7 @@ export default async function QuotesPage() {
                     )}
                   </td>
                   <td className="font-medium">{formatZAR(Math.round(total))}</td>
-                  <td>
-                    <span
-                      className={`badge ${
-                        q.supersededAt
-                          ? "bg-slate-800 text-slate-500"
-                          : statusBadge[q.status] ?? statusBadge.draft
-                      }`}
-                    >
-                      {q.supersededAt ? "superseded" : q.status}
-                    </span>
-                  </td>
+                  <td><StatusPill tone={q.supersededAt ? "neutral" : q.status === "accepted" ? "success" : q.status === "declined" ? "danger" : q.status === "sent" ? "info" : "neutral"}>{q.supersededAt ? "superseded" : q.status}</StatusPill></td>
                   <td className="text-slate-400">{formatDate(q.validUntil)}</td>
                   <td className="text-slate-400">
                     {formatDate(q.createdAt)}
@@ -135,6 +140,9 @@ export default async function QuotesPage() {
           </tbody>
         </table>
       </div>
+        }
+      />
+      )}
     </div>
   );
 }

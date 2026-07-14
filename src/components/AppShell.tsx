@@ -5,10 +5,9 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  House,
+  LayoutDashboard,
   Menu,
   MessageSquare,
-  Plus,
   Search,
   Settings,
   SquareKanban,
@@ -20,7 +19,7 @@ import Nav from "@/components/Nav";
 import ClockWeather from "@/components/ClockWeather";
 import CommandMenu, { openCommandMenu } from "@/components/CommandMenu";
 import QuickActions from "@/components/QuickActions";
-import QuickCreateDialog, { openQuickCreate } from "@/components/QuickCreateDialog";
+import QuickCreateDialog from "@/components/QuickCreateDialog";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -149,18 +148,16 @@ function MobilePrimaryNav({
   const modules = new Set(user.modules.split(",").map((item) => item.trim()).filter(Boolean));
   const has = (module: string) => user.role === "owner" || modules.has(module);
   const items = [
-    { href: "/", label: "Home", icon: House, show: true },
+    { href: "/", label: "Dashboard", icon: LayoutDashboard, show: true },
     { href: "/leads", label: "Leads", icon: SquareKanban, show: has("crm") },
     { href: "/inbox", label: "Inbox", icon: MessageSquare, show: has("inbox"), badge: inboxWaiting },
   ].filter((item) => item.show);
-  const createKind = has("crm") ? "lead" : "jobcard";
-
   const active = (href: string) => href === "/" ? pathname === "/" : pathname.startsWith(href);
 
   return (
     <nav
       className="fixed inset-x-3 bottom-[max(.75rem,env(safe-area-inset-bottom))] z-40 grid rounded-2xl border border-sidebar-border bg-sidebar/95 p-1.5 shadow-[0_22px_60px_rgba(0,0,0,.55)] backdrop-blur-xl lg:hidden"
-      style={{ gridTemplateColumns: `repeat(${items.length + 2}, minmax(0, 1fr))` }}
+      style={{ gridTemplateColumns: `repeat(${items.length + 1}, minmax(0, 1fr))` }}
       aria-label="Primary navigation"
     >
       {items.map(({ href, label, icon: Icon, badge }) => (
@@ -178,14 +175,6 @@ function MobilePrimaryNav({
           {badge ? <span className="absolute right-[22%] top-1.5 min-w-4 rounded-full bg-primary px-1 text-center text-[8px] font-bold leading-4 text-primary-foreground">{badge > 99 ? "99+" : badge}</span> : null}
         </Link>
       ))}
-      <button
-        type="button"
-        onClick={() => openQuickCreate(createKind)}
-        className="flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-      >
-        <span className="grid size-[22px] place-items-center rounded-full bg-primary text-primary-foreground shadow-sm"><Plus className="size-3.5" /></span>
-        Create
-      </button>
       <button
         type="button"
         onClick={onMore}

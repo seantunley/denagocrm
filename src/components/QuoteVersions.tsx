@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ArrowRight, ExternalLink, History } from "lucide-react";
 import {
   Dialog,
-  DialogContent,
+  ResponsiveDialogContent,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -84,7 +84,7 @@ export default function QuoteVersions({
       </div>
 
       <Dialog open={!!viewing} onOpenChange={(o) => !o && setViewing(null)}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+        <ResponsiveDialogContent className="sm:max-w-lg">
           {viewing && (
             <>
               <DialogHeader>
@@ -157,7 +157,7 @@ export default function QuoteVersions({
               </div>
             </>
           )}
-        </DialogContent>
+        </ResponsiveDialogContent>
       </Dialog>
     </>
   );

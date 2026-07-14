@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { startRegistration } from "@simplewebauthn/browser";
 import { Fingerprint, Plus, Trash2, KeyRound } from "lucide-react";
 import { removePasskey } from "@/app/actions/passkeys";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 export type PasskeyRow = {
   id: string;
@@ -81,18 +82,14 @@ export default function PasskeyManager({ passkeys }: { passkeys: PasskeyRow[] })
                   Added {when(p.createdAt)} · last used {when(p.lastUsedAt)}
                 </p>
               </div>
-              <button
-                type="button"
-                disabled={pending}
-                onClick={() => {
-                  if (!window.confirm(`Remove passkey "${p.nickname ?? "Passkey"}"?`)) return;
-                  startTransition(() => removePasskey(p.id).then(() => router.refresh()));
-                }}
-                className="text-slate-500 transition hover:text-red-400 disabled:opacity-50"
-                title="Remove this passkey"
-              >
-                <Trash2 className="size-4" />
-              </button>
+              <ConfirmActionDialog
+                destructive
+                title="Remove this passkey?"
+                description={`${p.nickname ?? "Passkey"} will no longer be able to sign in to this account.`}
+                confirmLabel="Remove passkey"
+                onConfirm={() => startTransition(() => removePasskey(p.id).then(() => router.refresh()))}
+                trigger={<button type="button" disabled={pending} className="text-muted-foreground transition hover:text-red-400 disabled:opacity-50" title="Remove this passkey"><Trash2 className="size-4" /></button>}
+              />
             </li>
           ))}
         </ul>

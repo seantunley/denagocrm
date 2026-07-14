@@ -15,7 +15,7 @@ export default function StudioEditorInner({
   initialContent: unknown;
   readOnly?: boolean;
   onChange: (content: unknown) => void;
-  registerApi: (api: { insertToken: (t: string) => void; insertBlocks: (b: unknown) => void }) => void;
+  registerApi: (api: { insertToken: (t: string) => void; insertBlocks: (b: unknown) => void; undo: () => void; redo: () => void }) => void;
 }) {
   const editor = useCreateBlockNote({
     initialContent:
@@ -34,6 +34,12 @@ export default function StudioEditorInner({
         const target = editor.getTextCursorPosition().block;
         editor.insertBlocks(blocks as any, target, "after");
       },
+      undo: () => {
+        editor.undo();
+      },
+      redo: () => {
+        editor.redo();
+      },
     });
   }, [editor, registerApi]);
 
@@ -41,7 +47,7 @@ export default function StudioEditorInner({
     <BlockNoteView
       editor={editor}
       editable={!readOnly}
-      theme="dark"
+      theme="light"
       onChange={() => onChange(editor.document)}
     />
   );

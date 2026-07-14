@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
+import { Send } from "lucide-react";
 import RichTextEditor from "@/components/RichTextEditor";
 import {
   sendCampaign,
@@ -9,6 +10,9 @@ import {
   uploadCampaignImage,
   type CampaignState,
 } from "@/app/actions/campaigns";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
+import { StickyActionArea } from "@/components/responsive-patterns";
+import { FeedbackBanner } from "@/components/visual-system";
 
 type Template = { id: string; subject: string; body: string };
 type Segment = { id: string; name: string };
@@ -33,6 +37,7 @@ export default function CampaignComposer({
   const [testMsg, setTestMsg] = useState<CampaignState | null>(null);
   const [count, setCount] = useState<number | null>(null);
   const [state, formAction, pending] = useActionState(sendCampaign, undefined);
+  const formRef = useRef<HTMLFormElement>(null);
 
   // live recipient count whenever audience or channel changes
   useEffect(() => {
@@ -60,10 +65,8 @@ export default function CampaignComposer({
 
   return (
     <form
+      ref={formRef}
       action={formAction}
-      onSubmit={(e) => {
-        if (!confirm(`Send this campaign to ${count ?? "all"} recipients?`)) e.preventDefault();
-      }}
       className="max-w-2xl space-y-5"
     >
       <input type="hidden" name="htmlBody" value={html} />
@@ -163,13 +166,19 @@ export default function CampaignComposer({
           </div>
           <button type="button" onClick={runTest} className="btn-secondary">Send test</button>
         </div>
-        {testMsg?.ok && <p className="text-sm text-emerald-400">{testMsg.ok}</p>}
-        {testMsg?.error && <p className="text-sm text-red-400">{testMsg.error}</p>}
-        <div className="flex items-center gap-3 border-t border-slate-800 pt-3">
-          <button className="btn-primary" disabled={pending}>{pending ? "Starting…" : "Send campaign"}</button>
-          {state?.ok && <p className="text-sm text-emerald-400">{state.ok}</p>}
-          {state?.error && <p className="text-sm text-red-400">{state.error}</p>}
-        </div>
+        {testMsg?.ok && <FeedbackBanner tone="success" title="Test sent">{testMsg.ok}</FeedbackBanner>}
+        {testMsg?.error && <FeedbackBanner tone="danger" title="Test failed">{testMsg.error}</FeedbackBanner>}
+        {state?.ok && <FeedbackBanner tone="success" title="Campaign started">{state.ok}</FeedbackBanner>}
+        {state?.error && <FeedbackBanner tone="danger" title="Campaign could not start">{state.error}</FeedbackBanner>}
+        <StickyActionArea className="border-t border-border pt-3 sm:border-t sm:pt-3">
+          <ConfirmActionDialog
+            title="Send this campaign?"
+            description={`This will send to ${count ?? "all available"} recipient${count === 1 ? "" : "s"}. Opted-out customers remain excluded.`}
+            confirmLabel="Start sending"
+            onConfirm={() => formRef.current?.requestSubmit()}
+            trigger={<button type="button" className="btn-primary w-full sm:w-auto" disabled={pending}><Send className="size-4" />{pending ? "Starting…" : "Send campaign"}</button>}
+          />
+        </StickyActionArea>
       </div>
     </form>
   );

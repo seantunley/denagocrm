@@ -1,4 +1,4 @@
-import type { LucideIcon } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, Info, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
@@ -163,7 +163,76 @@ export function StatusPill({
   );
 }
 
-export function PageSkeleton() {
+export function FeedbackBanner({
+  tone = "info",
+  title,
+  children,
+  className,
+}: {
+  tone?: "info" | "success" | "warning" | "danger";
+  title: ReactNode;
+  children?: ReactNode;
+  className?: string;
+}) {
+  const tones = {
+    info: { icon: Info, style: "border-sky-400/20 bg-sky-400/10 text-sky-200" },
+    success: { icon: CheckCircle2, style: "border-emerald-400/20 bg-emerald-400/10 text-emerald-200" },
+    warning: { icon: AlertTriangle, style: "border-amber-400/20 bg-amber-400/10 text-amber-100" },
+    danger: { icon: AlertCircle, style: "border-red-400/20 bg-red-400/10 text-red-200" },
+  };
+  const { icon: Icon, style } = tones[tone];
+  return (
+    <div
+      role={tone === "danger" || tone === "warning" ? "alert" : "status"}
+      className={cn("flex items-start gap-3 rounded-xl border px-4 py-3", style, className)}
+    >
+      <Icon className="mt-0.5 size-4 shrink-0" />
+      <div className="min-w-0 text-sm">
+        <p className="font-semibold">{title}</p>
+        {children && <div className="mt-1 text-xs leading-5 opacity-80">{children}</div>}
+      </div>
+    </div>
+  );
+}
+
+export function PageSkeleton({ variant = "dashboard" }: { variant?: "dashboard" | "list" | "form" | "builder" }) {
+  if (variant === "builder") {
+    return (
+      <div className="space-y-3" aria-label="Loading builder" role="status">
+        <div className="h-14 animate-pulse rounded-2xl border border-border bg-card" />
+        <div className="grid min-h-[65vh] gap-3 md:grid-cols-[15rem_minmax(0,1fr)_18rem]">
+          <div className="hidden animate-pulse rounded-2xl border border-border bg-card md:block" />
+          <div className="animate-pulse rounded-2xl border border-border bg-muted/40" />
+          <div className="hidden animate-pulse rounded-2xl border border-border bg-card md:block" />
+        </div>
+        <span className="sr-only">Loading builder</span>
+      </div>
+    );
+  }
+
+  if (variant === "list") {
+    return (
+      <div className="space-y-5" aria-label="Loading records" role="status">
+        <div className="space-y-2"><div className="h-7 w-44 animate-pulse rounded-lg bg-muted" /><div className="h-4 w-72 max-w-full animate-pulse rounded bg-muted/70" /></div>
+        <div className="h-12 animate-pulse rounded-2xl border border-border bg-card" />
+        <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card">
+          {[0, 1, 2, 3, 4].map((item) => <div key={item} className="h-20 animate-pulse bg-muted/20" />)}
+        </div>
+        <span className="sr-only">Loading records</span>
+      </div>
+    );
+  }
+
+  if (variant === "form") {
+    return (
+      <div className="mx-auto max-w-3xl space-y-5" aria-label="Loading form" role="status">
+        <div className="h-8 w-52 animate-pulse rounded-lg bg-muted" />
+        {[0, 1, 2].map((section) => <div key={section} className="h-40 animate-pulse rounded-2xl border border-border bg-card" />)}
+        <span className="sr-only">Loading form</span>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6" aria-label="Loading page" role="status">
       <div className="space-y-2">

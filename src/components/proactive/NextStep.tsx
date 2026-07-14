@@ -25,7 +25,7 @@ import { fireConfetti } from "@/lib/confetti";
 import { createQuoteFromLead } from "@/app/actions/quotes";
 import {
   Dialog,
-  DialogContent,
+  ResponsiveDialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
@@ -81,7 +81,7 @@ export function NextStepDialog({
         }
       }}
     >
-      <DialogContent className="sm:max-w-md">
+      <ResponsiveDialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>What&apos;s next for {leadName}?</DialogTitle>
           <DialogDescription>
@@ -258,7 +258,7 @@ export function NextStepDialog({
             </div>
           </form>
         )}
-      </DialogContent>
+      </ResponsiveDialogContent>
     </Dialog>
   );
 }
@@ -373,7 +373,7 @@ export function FollowUpPrompts({ prompts }: { prompts: OverduePrompt[] }) {
           }
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <ResponsiveDialogContent className="sm:max-w-md">
           {current && (
             <>
               <DialogHeader>
@@ -472,7 +472,7 @@ export function FollowUpPrompts({ prompts }: { prompts: OverduePrompt[] }) {
               )}
             </>
           )}
-        </DialogContent>
+        </ResponsiveDialogContent>
       </Dialog>
 
       {nextStep && (

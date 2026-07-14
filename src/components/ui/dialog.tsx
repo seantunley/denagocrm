@@ -81,6 +81,25 @@ function DialogContent({
   )
 }
 
+function ResponsiveDialogContent({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof DialogContent>) {
+  return (
+    <DialogContent
+      className={cn(
+        "max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-2xl border-border bg-background p-5 max-sm:top-auto max-sm:bottom-0 max-sm:max-w-full max-sm:translate-y-0 max-sm:rounded-b-none max-sm:rounded-t-3xl max-sm:pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:p-6",
+        className,
+      )}
+      {...props}
+    >
+      <span aria-hidden="true" className="absolute left-1/2 top-2 h-1 w-10 -translate-x-1/2 rounded-full bg-muted-foreground/25 sm:hidden" />
+      {children}
+    </DialogContent>
+  )
+}
+
 function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -155,4 +174,5 @@ export {
   DialogPortal,
   DialogTitle,
   DialogTrigger,
+  ResponsiveDialogContent,
 }

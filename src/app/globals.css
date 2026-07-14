@@ -315,8 +315,9 @@
   }
 }
 
-/* Phone layout contract: controls fill available width, dense data remains
-   deliberately scrollable, and overlays behave like reachable bottom sheets. */
+/* Phone baseline: typography and touch targets only. Layout decisions live in
+   explicit responsive components instead of selectors that reinterpret any
+   matching utility class. */
 @media (max-width: 639px) {
   .denago-workspace {
     font-size: 0.9375rem;
@@ -332,13 +333,6 @@
   .denago-workspace .card.p-0 {
     padding: 0;
   }
-  .denago-workspace :is(input, select, textarea).input:is(.w-28, .w-32, .w-36, .w-40, .w-44, .w-64, .min-w-44, .min-w-48, .min-w-56, .min-w-64) {
-    width: 100%;
-    min-width: 0;
-  }
-  .denago-workspace :is(.min-w-48, .min-w-56, .min-w-64) {
-    min-width: 0;
-  }
   [data-slot="page-header-actions"] {
     width: 100%;
   }
@@ -348,42 +342,32 @@
   [data-slot="page-header-actions"] > form > button {
     width: 100%;
   }
-  .denago-workspace form.flex:has(> .input),
-  .denago-workspace form.flex:has(> div > .input) {
-    flex-wrap: wrap;
-  }
-  .denago-workspace form.grid.grid-cols-2,
-  .denago-workspace .card form .grid.grid-cols-2 {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .denago-workspace .grid.grid-cols-3,
-  .denago-workspace .grid.grid-cols-4 {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .denago-workspace .card:has(> table),
-  .denago-workspace .card:has(> .table-base) {
-    overflow-x: auto;
-  }
-  .denago-workspace .table-base {
-    min-width: 680px;
-  }
-  .denago-workspace .table-base th,
-  .denago-workspace .table-base td {
-    padding-left: 0.75rem;
-    padding-right: 0.75rem;
-  }
   .denago-workspace :is(.btn, .btn-primary, .btn-secondary, .btn-danger) {
     min-height: 2.5rem;
   }
-  [data-slot="dialog-content"] {
-    top: auto;
-    bottom: 0;
-    max-height: calc(100dvh - 1rem);
-    max-width: 100%;
-    transform: translateX(-50%);
-    border-radius: 1rem 1rem 0 0;
-    padding-bottom: max(1rem, env(safe-area-inset-bottom));
-  }
+}
+
+/* Contrast floor for legacy muted utilities inside the staff workspace. */
+.denago-workspace .text-slate-500 {
+  color: color-mix(in oklab, var(--muted-foreground), white 8%);
+}
+.denago-workspace .text-slate-600 {
+  color: color-mix(in oklab, var(--muted-foreground), transparent 18%);
+}
+
+/* Document Studio keeps product chrome dark while the authored page remains
+   recognisably paper. */
+.document-canvas {
+  color-scheme: light;
+}
+.document-canvas .bn-container,
+.document-canvas .bn-editor {
+  background: #ffffff;
+  color: #172033;
+}
+.document-canvas .bn-editor {
+  min-height: 58vh;
+  padding-block: 2rem;
 }
 
 /* Horizontal scroll containers must never sprout a 1px vertical scrollbar */

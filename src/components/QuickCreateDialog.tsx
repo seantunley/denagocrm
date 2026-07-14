@@ -4,9 +4,9 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import {
   Dialog,
-  DialogContent,
   DialogHeader,
   DialogTitle,
+  ResponsiveDialogContent,
 } from "@/components/ui/dialog";
 import LeadForm from "@/components/LeadForm";
 import ContactForm from "@/components/ContactForm";
@@ -68,8 +68,8 @@ export default function QuickCreateDialog() {
 
   return (
     <Dialog open={!!kind} onOpenChange={(o) => !o && setKind(null)}>
-      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
+      <ResponsiveDialogContent className="sm:max-w-2xl">
+        <DialogHeader className="text-left">
           <DialogTitle>{kind ? TITLES[kind] : ""}</DialogTitle>
         </DialogHeader>
 
@@ -187,7 +187,7 @@ export default function QuickCreateDialog() {
             )}
           </>
         )}
-      </DialogContent>
+      </ResponsiveDialogContent>
     </Dialog>
   );
 }

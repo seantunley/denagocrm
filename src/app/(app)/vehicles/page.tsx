@@ -5,9 +5,18 @@ import ModalTrigger from "@/components/Modal";
 import VehicleForm from "@/components/VehicleForm";
 import { createVehicle } from "@/app/actions/vehicles";
 import { contactName, formatDate } from "@/lib/format";
-import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
+import { computeDue, dueLabels } from "@/lib/serviceDue";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
+import { EmptyState, StatusPill } from "@/components/visual-system";
+import {
+  MobileDataCard,
+  MobileDataField,
+  MobileDataFields,
+  MobileDataHeader,
+  MobileDataList,
+  ResponsiveDataView,
+} from "@/components/responsive-patterns";
 
 export default async function VehiclesPage({
   searchParams,
@@ -54,7 +63,35 @@ export default async function VehiclesPage({
           </ModalTrigger>
       </PageHeader>
 
-      <div className="card p-0 overflow-x-auto">
+      {rows.length === 0 ? (
+        <EmptyState
+          icon={Clock3}
+          title={filter === "due" ? "Nothing needs attention" : "No vehicles registered"}
+          description={filter === "due" ? "Every registered vehicle is currently up to date." : "Register a vehicle to start tracking ownership and service history."}
+        />
+      ) : (
+      <ResponsiveDataView
+        mobile={
+          <MobileDataList>
+            {rows.map(({ vehicle: v, due }) => (
+              <MobileDataCard key={v.id}>
+                <MobileDataHeader
+                  title={<Link href={`/vehicles/${v.id}`} className="text-primary hover:underline">{v.model}</Link>}
+                  detail={[v.color, v.vin].filter(Boolean).join(" · ") || "No colour or VIN recorded"}
+                  aside={<StatusPill tone={due.status === "overdue" ? "danger" : due.status === "due_soon" ? "warning" : "success"}>{dueLabels[due.status]}</StatusPill>}
+                />
+                <MobileDataFields>
+                  <MobileDataField label="Owner"><Link href={`/contacts/${v.contactId}`} className="text-primary hover:underline">{contactName(v.contact)}</Link></MobileDataField>
+                  <MobileDataField label="Current km">{due.currentKm != null ? `${due.currentKm.toLocaleString()} km` : "—"}</MobileDataField>
+                  <MobileDataField label="Next service" wide>{[due.nextDueDate ? formatDate(due.nextDueDate) : null, due.nextDueKm != null ? `${due.nextDueKm.toLocaleString()} km` : null].filter(Boolean).join(" / ") || "Not scheduled"}</MobileDataField>
+                  <MobileDataField label="Purchased">{formatDate(v.purchaseDate)}</MobileDataField>
+                </MobileDataFields>
+              </MobileDataCard>
+            ))}
+          </MobileDataList>
+        }
+        desktop={
+      <div className="card overflow-x-auto p-0">
         <table className="table-base">
           <thead>
             <tr>
@@ -68,13 +105,6 @@ export default async function VehiclesPage({
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={7} className="text-center text-slate-400 py-8">
-                  {filter === "due" ? "Nothing due for service." : "No vehicles registered yet."}
-                </td>
-              </tr>
-            )}
             {rows.map(({ vehicle: v, due }) => (
               <tr key={v.id}>
                 <td>
@@ -99,7 +129,7 @@ export default async function VehiclesPage({
                     .join(" / ") || "—"}
                 </td>
                 <td>
-                  <span className={`badge ${dueColors[due.status]}`}>{dueLabels[due.status]}</span>
+                  <StatusPill tone={due.status === "overdue" ? "danger" : due.status === "due_soon" ? "warning" : "success"}>{dueLabels[due.status]}</StatusPill>
                 </td>
                 <td className="text-slate-400">{formatDate(v.purchaseDate)}</td>
               </tr>
@@ -107,6 +137,9 @@ export default async function VehiclesPage({
           </tbody>
         </table>
       </div>
+        }
+      />
+      )}
     </div>
   );
 }

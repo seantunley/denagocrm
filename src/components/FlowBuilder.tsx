@@ -4,6 +4,31 @@ import "@xyflow/react/dist/style.css";
 import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Bot,
+  CalendarDays,
+  CircleStop,
+  FileQuestion,
+  FileUp,
+  GitBranch,
+  Hand,
+  ImageIcon,
+  Maximize2,
+  MessageSquare,
+  Minimize2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  RotateCcw,
+  Save,
+  Sparkles,
+  Upload,
+  Wrench,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import { toast } from "sonner";
+import {
   ReactFlow,
   Background,
   Controls,
@@ -18,23 +43,25 @@ import {
 import { saveFlow, resetFlow } from "@/app/actions/flow";
 import { uploadCampaignImage } from "@/app/actions/campaigns";
 import type { FlowNode } from "@/lib/flow";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
+import { cn } from "@/lib/utils";
 
 type Pos = { x: number; y: number };
 type FlowData = { start: string; nodes: Record<string, FlowNode>; positions?: Record<string, Pos> };
 type RFData = { flow: FlowNode; isStart: boolean };
 
-const TYPE_META: Record<string, { icon: string; label: string; color: string }> = {
-  message: { icon: "💬", label: "Message", color: "#334155" },
-  choice: { icon: "🔀", label: "Menu", color: "#7c3aed" },
-  capture: { icon: "✏️", label: "Ask & save", color: "#0891b2" },
-  captureFile: { icon: "📎", label: "Get a file", color: "#0e7490" },
-  image: { icon: "🖼", label: "Send image", color: "#9333ea" },
-  answer: { icon: "📄", label: "Answer", color: "#2563eb" },
-  slots: { icon: "📅", label: "Book a slot", color: "#0d9488" },
-  booking: { icon: "🔧", label: "CRM action", color: "#059669" },
-  ai: { icon: "🤖", label: "AI answer", color: "#ea580c" },
-  handoff: { icon: "🙋", label: "Hand off", color: "#d97706" },
-  end: { icon: "⛔", label: "End", color: "#64748b" },
+const TYPE_META: Record<string, { icon: LucideIcon; label: string; tone: string; header: string; handle: string }> = {
+  message: { icon: MessageSquare, label: "Message", tone: "border-sky-400/40", header: "bg-sky-500/15 text-sky-200", handle: "#38bdf8" },
+  choice: { icon: GitBranch, label: "Menu", tone: "border-violet-400/40", header: "bg-violet-500/15 text-violet-200", handle: "#a78bfa" },
+  capture: { icon: FileQuestion, label: "Ask & save", tone: "border-cyan-400/40", header: "bg-cyan-500/15 text-cyan-200", handle: "#22d3ee" },
+  captureFile: { icon: FileUp, label: "Get a file", tone: "border-cyan-400/40", header: "bg-cyan-500/15 text-cyan-200", handle: "#22d3ee" },
+  image: { icon: ImageIcon, label: "Send image", tone: "border-violet-400/40", header: "bg-violet-500/15 text-violet-200", handle: "#a78bfa" },
+  answer: { icon: Sparkles, label: "Answer", tone: "border-blue-400/40", header: "bg-blue-500/15 text-blue-200", handle: "#60a5fa" },
+  slots: { icon: CalendarDays, label: "Book a slot", tone: "border-emerald-400/40", header: "bg-emerald-500/15 text-emerald-200", handle: "#34d399" },
+  booking: { icon: Wrench, label: "CRM action", tone: "border-emerald-400/40", header: "bg-emerald-500/15 text-emerald-200", handle: "#34d399" },
+  ai: { icon: Bot, label: "AI answer", tone: "border-orange-400/50", header: "bg-orange-500/15 text-orange-200", handle: "#fb923c" },
+  handoff: { icon: Hand, label: "Hand off", tone: "border-amber-400/40", header: "bg-amber-500/15 text-amber-100", handle: "#fbbf24" },
+  end: { icon: CircleStop, label: "End", tone: "border-slate-500/50", header: "bg-slate-500/15 text-slate-200", handle: "#94a3b8" },
 };
 
 function summary(n: FlowNode): string {
@@ -51,18 +78,18 @@ function summary(n: FlowNode): string {
 }
 
 /** Custom node card with the right handles for its type. */
-function NodeCard({ id, data }: NodeProps) {
+function NodeCard({ data }: NodeProps) {
   const d = data as unknown as RFData;
   const n = d.flow;
   const meta = TYPE_META[n.type];
+  const Icon = meta.icon;
   return (
     <div
-      className="rounded-lg border bg-slate-900 shadow-md w-56 text-slate-100"
-      style={{ borderColor: d.isStart ? "#ea580c" : meta.color }}
+      className={cn("w-56 rounded-xl border bg-slate-950/95 text-slate-100 shadow-xl", d.isStart ? "border-orange-400/70 ring-2 ring-orange-400/15" : meta.tone)}
     >
       <Handle type="target" position={Position.Left} id="in" style={{ background: "#64748b" }} />
-      <div className="px-3 py-1.5 text-xs font-semibold flex items-center gap-1.5" style={{ background: meta.color }}>
-        <span>{meta.icon}</span>
+      <div className={cn("flex items-center gap-1.5 rounded-t-[11px] px-3 py-2 text-xs font-semibold", meta.header)}>
+        <Icon className="size-3.5" />
         {meta.label}
         {d.isStart && <span className="ml-auto text-[10px] bg-orange-600 px-1.5 rounded">START</span>}
       </div>
@@ -73,14 +100,14 @@ function NodeCard({ id, data }: NodeProps) {
           {n.options.map((o, i) => (
             <div key={o.id} className="relative px-3 py-1 text-[11px] text-slate-400 border-t border-slate-800">
               {o.label}
-              <Handle type="source" position={Position.Right} id={`opt:${o.id}`} style={{ top: `${100 + i * 26}px`, background: meta.color }} />
+              <Handle type="source" position={Position.Right} id={`opt:${o.id}`} style={{ top: `${100 + i * 26}px`, background: meta.handle }} />
             </div>
           ))}
         </div>
       ) : n.type === "ai" ? (
-        <Handle type="source" position={Position.Right} id="handoff" style={{ background: "#d97706" }} />
+        <Handle type="source" position={Position.Right} id="handoff" style={{ background: meta.handle }} />
       ) : n.type === "handoff" || n.type === "end" ? null : (
-        <Handle type="source" position={Position.Right} id="out" style={{ background: meta.color }} />
+        <Handle type="source" position={Position.Right} id="out" style={{ background: meta.handle }} />
       )}
     </div>
   );
@@ -96,13 +123,13 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
     case "message": return { id, type, text: "Your message…" };
     case "choice": return { id, type, text: "Pick an option:", options: [{ id: "o1", label: "Option 1" }, { id: "o2", label: "Option 2" }] };
     case "capture": return { id, type, text: "What's your name?", variable: "name" };
-    case "captureFile": return { id, type, text: "Please send a photo 📷", variable: "photo" };
+    case "captureFile": return { id, type, text: "Please send a photo", variable: "photo" };
     case "image": return { id, type, url: "" };
     case "answer": return { id, type, answerSource: "pricelist" };
-    case "slots": return { id, type, text: "Here are our next open times — pick one:", noneText: "We're fully booked online — the team will call you. 📞" };
+    case "slots": return { id, type, text: "Here are our next open times — pick one:", noneText: "We're fully booked online — the team will call you." };
     case "booking": return { id, type, action: "service", text: "Thanks — the team will confirm shortly." };
     case "ai": return { id, type };
-    case "handoff": return { id, type, text: "Let me get a team member to help — one moment 🙌" };
+    case "handoff": return { id, type, text: "Let me get a team member to help — one moment." };
     default: return { id, type: "end" };
   }
 }
@@ -119,9 +146,13 @@ export default function FlowBuilder({ flowId, initial }: { flowId: string; initi
     }))
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
+  const [status, setStatus] = useState("Saved");
+  const [fullscreen, setFullscreen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
 
   const patch = useCallback((id: string, updater: (n: FlowNode) => FlowNode) => {
+    setStatus("Unsaved changes");
     setRfNodes((ns) => ns.map((rn) => (rn.id === id ? { ...rn, data: { ...rn.data, flow: updater(rn.data.flow) } } : rn)));
   }, [setRfNodes]);
 
@@ -156,6 +187,8 @@ export default function FlowBuilder({ flowId, initial }: { flowId: string; initi
     const id = newId(type);
     setRfNodes((ns) => [...ns, { id, type: "flowNode", position: { x: 120 + Math.random() * 200, y: 120 + Math.random() * 200 }, data: { flow: blankNode(type, id), isStart: false } }]);
     setSelectedId(id);
+    setStatus("Unsaved changes");
+    setInspectorOpen(true);
   }
 
   function removeNode(id: string) {
@@ -164,11 +197,13 @@ export default function FlowBuilder({ flowId, initial }: { flowId: string; initi
       data: { ...n.data, flow: clearRefs(n.data.flow, id) },
     })));
     if (selectedId === id) setSelectedId(null);
+    setStatus("Unsaved changes");
   }
 
   function markStart(id: string) {
     setStart(id);
     setRfNodes((ns) => ns.map((n) => ({ ...n, data: { ...n.data, isStart: n.id === id } })));
+    setStatus("Unsaved changes");
   }
 
   async function onSave() {
@@ -180,74 +215,92 @@ export default function FlowBuilder({ flowId, initial }: { flowId: string; initi
       positions[rn.id] = rn.position;
     }
     const res = await saveFlow(flowId, JSON.stringify({ start, nodes, positions }));
-    setStatus(res.ok ? "Saved ✓" : res.error ?? "Error");
-    if (res.ok) router.refresh();
+    setStatus(res.ok ? "Saved" : res.error ?? "Save failed");
+    if (res.ok) {
+      toast.success("Flow saved");
+      router.refresh();
+    } else toast.error(res.error ?? "Flow could not be saved");
   }
 
   const selected = rfNodes.find((n) => n.id === selectedId)?.data.flow ?? null;
-  const nodeOptions = rfNodes.map((n) => ({ id: n.id, label: `${TYPE_META[n.data.flow.type].icon} ${summary(n.data.flow).slice(0, 24) || n.data.flow.type}` }));
+  const nodeOptions = rfNodes.map((n) => ({ id: n.id, label: `${TYPE_META[n.data.flow.type].label}: ${summary(n.data.flow).slice(0, 24) || n.data.flow.type}` }));
 
   return (
-    <div className="flex min-h-[720px] flex-col md:h-[calc(100dvh-8rem)] md:min-h-0">
-      {/* toolbar */}
-      <div className="flex items-center gap-2 flex-wrap pb-3">
-        <span className="text-xs text-slate-400 mr-1">Add:</span>
-        {(Object.keys(TYPE_META) as FlowNode["type"][]).map((t) => (
-          <button key={t} onClick={() => addNode(t)} className="btn-secondary btn-sm">
-            {TYPE_META[t].icon} {TYPE_META[t].label}
+    <div className={cn("flex min-h-[720px] flex-col overflow-hidden rounded-2xl border border-border bg-[#0d1110] shadow-[0_24px_80px_rgba(0,0,0,.28)] md:h-[calc(100dvh-8rem)] md:min-h-0", fullscreen && "fixed inset-0 z-[70] h-dvh min-h-0 rounded-none")}>
+      <header className="flex min-h-14 flex-wrap items-center gap-2 border-b border-white/[0.08] bg-[#111614] px-3 py-2 sm:px-4">
+        <div className="flex items-center rounded-lg border border-white/10 bg-white/[0.035] p-0.5">
+          <button type="button" onClick={() => setPaletteOpen((value) => !value)} className={cn("flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-slate-300 hover:bg-white/7", paletteOpen && "bg-primary/15 text-primary")}>
+            {paletteOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />} Nodes
           </button>
-        ))}
-        <span className="flex-1" />
-        {status && <span className="text-xs text-slate-400">{status}</span>}
-        <button onClick={onSave} className="btn-primary btn-sm">Save flow</button>
-        <button
-          onClick={async () => { if (confirm("Revert this flow to the default? Your changes will be lost.")) { await resetFlow(flowId); router.refresh(); } }}
-          className="btn-secondary btn-sm"
-        >
-          Reset
+          <button type="button" onClick={() => setInspectorOpen((value) => !value)} className={cn("flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-slate-300 hover:bg-white/7", inspectorOpen && "bg-primary/15 text-primary")}>
+            {inspectorOpen ? <PanelRightClose className="size-4" /> : <PanelRightOpen className="size-4" />} Inspector
+          </button>
+        </div>
+        <span className="ml-auto flex items-center gap-1.5 text-xs text-slate-400" role="status" aria-live="polite">
+          <span className={cn("size-2 rounded-full", status === "Saved" ? "bg-emerald-400" : status === "Saving…" ? "animate-pulse bg-primary" : "bg-amber-400")} />{status}
+        </span>
+        <button type="button" onClick={onSave} className="btn-primary btn-sm"><Save className="size-4" />Save</button>
+        <ConfirmActionDialog
+          destructive
+          title="Reset this flow?"
+          description="Every node, connection and unsaved change will be replaced with the default flow."
+          confirmLabel="Reset flow"
+          onConfirm={async () => { await resetFlow(flowId); toast.success("Flow reset"); router.refresh(); }}
+          trigger={<button type="button" className="btn-secondary btn-sm"><RotateCcwIcon />Reset</button>}
+        />
+        <button type="button" onClick={() => setFullscreen((value) => !value)} className="btn-secondary btn-sm" title={fullscreen ? "Exit full screen" : "Full screen"}>
+          {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}<span className="hidden sm:inline">{fullscreen ? "Exit" : "Full screen"}</span>
         </button>
-      </div>
+      </header>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 md:flex-row">
-        <div className="min-h-96 flex-1 overflow-hidden rounded-xl border border-slate-800">
-          <ReactFlow
-            nodes={rfNodes}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            onNodesChange={onNodesChange}
-            onConnect={onConnect}
-            onNodeClick={(_, n) => setSelectedId(n.id)}
-            onPaneClick={() => setSelectedId(null)}
-            fitView
-            proOptions={{ hideAttribution: true }}
-          >
-            <Background color="#1e293b" gap={18} />
-            <Controls className="!bg-slate-800 !border-slate-700" />
-          </ReactFlow>
-        </div>
+      <div className="relative flex min-h-0 flex-1">
+        {paletteOpen && (
+          <aside className="w-60 shrink-0 overflow-y-auto border-r border-white/[0.08] bg-[#111614] max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-[80] max-md:max-h-[72dvh] max-md:w-auto max-md:rounded-t-3xl max-md:border-t max-md:shadow-[0_-24px_70px_rgba(0,0,0,.55)]">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.08] bg-[#111614]/95 px-4 py-3 backdrop-blur"><div><p className="text-sm font-semibold text-white">Node palette</p><p className="text-xs text-slate-400">Add a step to the canvas</p></div><button type="button" onClick={() => setPaletteOpen(false)} className="grid size-8 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white"><X className="size-4" /><span className="sr-only">Close node palette</span></button></div>
+            <div className="grid gap-2 p-3 pb-[max(.75rem,env(safe-area-inset-bottom))]">
+              {(Object.keys(TYPE_META) as FlowNode["type"][]).map((type) => {
+                const meta = TYPE_META[type];
+                const Icon = meta.icon;
+                return <button key={type} type="button" onClick={() => addNode(type)} className={cn("flex items-center gap-3 rounded-xl border bg-white/[0.025] px-3 py-2.5 text-left text-sm text-slate-200 transition hover:bg-white/[0.055]", meta.tone)}><span className={cn("grid size-8 place-items-center rounded-lg", meta.header)}><Icon className="size-4" /></span><span>{meta.label}</span></button>;
+              })}
+            </div>
+          </aside>
+        )}
 
-        {/* config panel */}
-        <div className="card max-h-80 w-full shrink-0 overflow-y-auto md:max-h-none md:w-72">
-          {!selected ? (
-            <p className="text-sm text-slate-400">
-              Click a node to edit it. Drag from a node&apos;s right dot to another node to connect
-              them. First node is the <b className="text-orange-400">START</b>.
-            </p>
-          ) : (
-            <NodePanel
-              key={selected.id}
-              node={selected}
-              isStart={selected.id === start}
-              nodeOptions={nodeOptions.filter((o) => o.id !== selected.id)}
-              onChange={(fn) => patch(selected.id, () => fn)}
-              onDelete={() => removeNode(selected.id)}
-              onMakeStart={() => markStart(selected.id)}
-            />
-          )}
-        </div>
+        <main className="min-w-0 flex-1 bg-[#0b0f0e] p-2 sm:p-3">
+          <div className="h-full min-h-[32rem] overflow-hidden rounded-xl border border-white/[0.08] bg-[#0f1412]">
+            <ReactFlow
+              nodes={rfNodes}
+              edges={edges}
+              nodeTypes={nodeTypes}
+              onNodesChange={onNodesChange}
+              onConnect={onConnect}
+              onNodeClick={(_, node) => { setSelectedId(node.id); setInspectorOpen(true); }}
+              onPaneClick={() => setSelectedId(null)}
+              fitView
+              proOptions={{ hideAttribution: true }}
+            >
+              <Background color="#25312d" gap={20} />
+              <Controls className="!border-white/10 !bg-[#18201d] !text-white" />
+            </ReactFlow>
+          </div>
+        </main>
+
+        {inspectorOpen && (
+          <aside className="w-80 shrink-0 overflow-y-auto border-l border-white/[0.08] bg-[#111614] max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-[81] max-md:max-h-[78dvh] max-md:w-auto max-md:rounded-t-3xl max-md:border-t max-md:shadow-[0_-24px_70px_rgba(0,0,0,.55)]">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.08] bg-[#111614]/95 px-4 py-3 backdrop-blur"><div><p className="text-sm font-semibold text-white">Inspector</p><p className="text-xs text-slate-400">Configure the selected node</p></div><button type="button" onClick={() => setInspectorOpen(false)} className="grid size-8 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white"><X className="size-4" /><span className="sr-only">Close inspector</span></button></div>
+            <div className="p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+              {!selected ? <p className="text-sm leading-6 text-slate-400">Select a node to edit it. Drag from a node&apos;s output handle to another node to create a connection.</p> : <NodePanel key={selected.id} node={selected} isStart={selected.id === start} nodeOptions={nodeOptions.filter((option) => option.id !== selected.id)} onChange={(next) => patch(selected.id, () => next)} onDelete={() => removeNode(selected.id)} onMakeStart={() => markStart(selected.id)} />}
+            </div>
+          </aside>
+        )}
       </div>
     </div>
   );
+}
+
+function RotateCcwIcon() {
+  return <RotateCcw className="size-4" />;
 }
 
 function clearRefs(n: FlowNode, removedId: string): FlowNode {
@@ -281,10 +334,11 @@ function NodePanel({
   onMakeStart: () => void;
 }) {
   const meta = TYPE_META[node.type];
+  const Icon = meta.icon;
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold">{meta.icon} {meta.label}</span>
+        <span className="flex items-center gap-2 text-sm font-semibold"><Icon className="size-4 text-primary" />{meta.label}</span>
         {!isStart && <button onClick={onMakeStart} className="text-xs text-orange-400 hover:underline">Set as start</button>}
       </div>
 
@@ -318,7 +372,7 @@ function NodePanel({
       {node.type === "captureFile" && (
         <>
           <div><label className="label">What to ask for</label>
-            <textarea className="input" rows={2} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} placeholder="Please send a photo of the cart 📷" /></div>
+            <textarea className="input" rows={2} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} placeholder="Please send a photo of the cart" /></div>
           <div><label className="label">Save file as</label>
             <input className="input" value={node.variable} onChange={(e) => onChange({ ...node, variable: e.target.value.replace(/\W/g, "") })} placeholder="photo" />
             <p className="text-xs text-slate-500 mt-1">The uploaded file is saved and linked on the lead/booking.</p></div>
@@ -331,7 +385,7 @@ function NodePanel({
             <label className="label">Image</label>
             <input className="input" value={node.url} onChange={(e) => onChange({ ...node, url: e.target.value })} placeholder="Paste an image URL, or upload →" />
             <label className="btn-secondary btn-sm mt-1.5 inline-flex cursor-pointer">
-              ⬆ Upload
+              <Upload className="size-3.5" /> Upload
               <input
                 type="file"
                 accept="image/*"
@@ -348,7 +402,8 @@ function NodePanel({
               />
             </label>
           </div>
-          {node.url && <img src={node.url} alt="" className="rounded-lg max-h-32 border border-slate-800" />}
+          {/* eslint-disable-next-line @next/next/no-img-element -- user-provided URLs are not eligible for a fixed Next image loader */}
+          {node.url && <img src={node.url} alt="" className="max-h-32 rounded-lg border border-slate-800" />}
           <div><label className="label">Caption (optional)</label>
             <input className="input" value={node.caption ?? ""} onChange={(e) => onChange({ ...node, caption: e.target.value })} /></div>
         </>
@@ -408,7 +463,7 @@ function NodePanel({
             <div key={o.id} className="rounded-lg border border-slate-800 p-2 space-y-1.5">
               <div className="flex gap-1.5">
                 <input className="input btn-sm flex-1" value={o.label} onChange={(e) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, label: e.target.value } : x) })} />
-                <button onClick={() => onChange({ ...node, options: node.options.filter((x) => x.id !== o.id) })} className="text-slate-500 hover:text-red-400 text-sm px-1">✕</button>
+                <button onClick={() => onChange({ ...node, options: node.options.filter((x) => x.id !== o.id) })} className="px-1 text-muted-foreground hover:text-red-400"><X className="size-4" /><span className="sr-only">Remove option</span></button>
               </div>
                <TargetPicker nodeOptions={nodeOptions} value={o.next} onPick={(v) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, next: v } : x) })} />
               {i === 2 && node.options.length > 3 && <p className="text-[10px] text-amber-400">WhatsApp shows &gt;3 options as a list.</p>}

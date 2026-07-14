@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import {
   Dialog,
-  DialogContent,
+  ResponsiveDialogContent,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -98,7 +98,7 @@ export default function RepoRow({ doc, targets }: { doc: RepoDoc; targets: MoveT
       )}
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-md">
+        <ResponsiveDialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="truncate">Manage — {doc.fileName}</DialogTitle>
           </DialogHeader>
@@ -158,7 +158,7 @@ export default function RepoRow({ doc, targets }: { doc: RepoDoc; targets: MoveT
             <input type="file" name="file" required className="block w-full text-xs text-muted-foreground" />
             <Button size="sm" variant="outline" type="submit">Replace</Button>
           </form>
-        </DialogContent>
+        </ResponsiveDialogContent>
       </Dialog>
     </li>
   );
