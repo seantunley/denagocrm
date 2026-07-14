@@ -4,7 +4,7 @@ import path from "path";
 import { prisma } from "@/lib/db";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
 import { parseDocument, type DocumentModel } from "@/lib/doceditor/model";
-import { renderDocumentHtml, type RenderCtx } from "@/lib/doceditor/serialize";
+import { renderDocumentHtml, renderSigningSheets, type RenderCtx } from "@/lib/doceditor/serialize";
 import { htmlToPdf } from "@/lib/customDocs";
 import type { SignatureRequest } from "@prisma/client";
 
@@ -49,6 +49,14 @@ export async function renderEnvelopePdf(doc: DocumentModel, quoteId: string | nu
   const ctx = await bindCtx(quoteId, jobCardId);
   const html = renderDocumentHtml(doc, ctx, logoDataUri(), { hideOverlays: true });
   return htmlToPdf(html);
+}
+
+/** Interactive per-page sheets for the signing surface, bound to the record. */
+export async function renderRequestSigningSheets(req: Pick<SignatureRequest, "snapshotJson" | "quoteId" | "jobCardId">): Promise<{ width: number; height: number; margin: number; css: string; pages: string[] }> {
+  const doc = parseDocument(req.snapshotJson);
+  if (!doc) return { width: 794, height: 1123, margin: 40, css: "", pages: ["<div style='padding:24px;color:#64748b'>This document is unavailable.</div>"] };
+  const ctx = await bindCtx(req.quoteId, req.jobCardId);
+  return renderSigningSheets(doc, ctx, logoDataUri());
 }
 
 export { logoDataUri };

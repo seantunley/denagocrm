@@ -270,6 +270,39 @@ export function renderEmailHtml(doc: DocumentModel, ctx: RenderCtx, logoDataUri?
   </body></html>`;
 }
 
+/**
+ * Per-page "sheet" HTML for the interactive signing surface. Unlike the PDF
+ * renderer this produces full A4 sheets (no @page margin) with content inset by
+ * padding, so the client can overlay interactive field widgets at their exact
+ * sheet-relative coordinates (matching the editor's origin — no margin subtract).
+ * Overlay fields are intentionally omitted; the client renders live controls.
+ */
+export function renderSigningSheets(doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string): { width: number; height: number; margin: number; css: string; pages: string[] } {
+  const m = doc.style.margin;
+  const size = PAGE_SIZES[doc.style.pageSize];
+  const font = fontStack(doc.style.fontFamily);
+  const pages = doc.pages.map((page) => {
+    const rows = page.rows.map((r) => rowHtml(r, ctx, doc.style, logoDataUri)).join("");
+    // Free-placement blocks sit at raw sheet coordinates (sheet edge origin).
+    const floats = page.floatingBlocks.map((fb) =>
+      `<div style="position:absolute;left:${fb.x}px;top:${fb.y}px;width:${fb.width}px">${blockHtml(fb.block, ctx, doc.style, logoDataUri)}</div>`
+    ).join("");
+    return `<div style="position:absolute;inset:0;padding:${m}px">${rows}</div>${floats}`;
+  });
+  const css = `
+    .sg-sheet { font-family:${font}; font-size:11pt; line-height:1.5; color:#1e293b; }
+    .sg-sheet * { box-sizing:border-box; }
+    .sg-sheet h1 { font-size:20pt; margin:0 0 8px; color:${doc.style.ink}; }
+    .sg-sheet h2 { font-size:15pt; margin:12px 0 6px; color:${doc.style.ink}; }
+    .sg-sheet h3 { font-size:12pt; margin:10px 0 4px; color:${doc.style.ink}; }
+    .sg-sheet p { margin:0 0 8px; }
+    .sg-sheet a { color:${doc.style.accent}; }
+    .sg-sheet strong { font-weight:700; }
+    .sg-sheet blockquote { border-left:3px solid ${doc.style.accent}; margin:8px 0; padding:4px 12px; color:#475569; background:#f8fafc; }
+    .sg-sheet ul, .sg-sheet ol { margin:0 0 8px 20px; }`;
+  return { width: size.w, height: size.h, margin: m, css, pages };
+}
+
 export function renderDocumentHtml(doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string, opts?: { hideOverlays?: boolean; appendHtml?: string; stampedFields?: StampField[] }): string {
   const font = fontStack(doc.style.fontFamily);
   const m = doc.style.margin;
