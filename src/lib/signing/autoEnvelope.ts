@@ -4,6 +4,8 @@ import { contactName } from "@/lib/format";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import { parseDocument, type DocumentModel } from "@/lib/doceditor/model";
 import { standardQuoteTemplate, newBlock, newRow, newColumn, newPage, newRecipient, newOverlayField, uid } from "@/lib/doceditor/factory";
+import { parseGraph } from "@/lib/signflow/model";
+import { compileWorkflow, type ResolvedSigner, type WorkflowContext } from "@/lib/signflow/compile";
 
 /**
  * Resolves the document to send for signing for a quote / job card. If a doc-editor
@@ -26,6 +28,8 @@ export type EnvelopeResolution = {
   ordering: "parallel" | "sequential";
   /** True when Denago co-signs first (order 0) via the hub before the customer. */
   cosign: boolean;
+  /** Present when a saved workflow drove the recipient chain (else the built-in default). */
+  signers?: ResolvedSigner[];
 };
 
 /** Customer identity for a quote (contact first, else the originating lead). */
@@ -138,10 +142,51 @@ function makeCosignable(doc: DocumentModel, denago: { name: string; email: strin
   return { doc, denagoId: denagoR.id, customerId: customerR.id };
 }
 
+/** Numeric + string facts a workflow's conditions test against, from the quote. */
+async function quoteWorkflowContext(quoteId: string): Promise<WorkflowContext> {
+  const q = await prisma.quote.findUnique({
+    where: { id: quoteId },
+    include: { items: true, lead: { include: { product: true } }, contact: { include: { tags: true } } },
+  });
+  const total = (q?.items ?? []).reduce((s, i) => s + i.qty * i.unitPriceCents, 0) / 100;
+  const segment = (q?.contact?.tags ?? []).map((t) => t.name).join(",") || "retail";
+  const product = q?.lead?.product?.name ?? q?.items?.[0]?.description ?? "";
+  return { total, discount: 0, segment, product }; // discount: no per-quote discount field yet
+}
+
+async function staffMap(): Promise<Record<string, { name: string; email: string | null }>> {
+  const users = await prisma.user.findMany({ select: { id: true, name: true, email: true } });
+  return Object.fromEntries(users.map((u) => [u.id, { name: u.name, email: u.email }]));
+}
+
+const RECIPIENT_PALETTE = ["#020617", "#2563eb", "#7c3aed", "#db2777", "#16a34a", "#ea580c"];
+
+/** Lay out one signature block (+ date) per resolved signer and wire recipients. */
+function makeWorkflowSignable(doc: DocumentModel, signers: ResolvedSigner[]): DocumentModel {
+  doc.recipients = signers.map((s, i) => newRecipient({ name: s.name, email: s.email ?? "", role: s.role === "approver" ? "approver" : "signer", color: RECIPIENT_PALETTE[i % RECIPIENT_PALETTE.length] }));
+  const last = doc.pages[doc.pages.length - 1];
+  const fields = [...last.overlayFields];
+  const floats = [...last.floatingBlocks];
+  signers.forEach((s, i) => {
+    const col = i % 2, rowIdx = Math.floor(i / 2);
+    const x = col === 0 ? 70 : 430;
+    const yBase = 900 + rowIdx * 150;
+    const rid = doc.recipients[i].id;
+    floats.push(headingFloat(x, yBase - 28, s.label || s.name));
+    fields.push(newOverlayField("signature", { id: uid(), recipientId: rid, required: true, label: s.label || s.name, anchor: { mode: "page", blockId: null, x, y: yBase }, width: 250, height: 60 }));
+    fields.push(newOverlayField("date", { id: uid(), recipientId: rid, required: false, label: "Date", anchor: { mode: "page", blockId: null, x, y: yBase + 68 }, width: 150, height: 34 }));
+  });
+  last.overlayFields = fields;
+  last.floatingBlocks = floats;
+  return doc;
+}
+
 export async function resolveEnvelope(opts: {
   quoteId?: string | null;
   jobCardId?: string | null;
   templateId?: string | null;
+  /** A saved signing workflow to compile into the recipient chain. */
+  workflowId?: string | null;
   /** The Denago rep initiating — becomes the first (co-sign) signer on standard quotes. */
   signer?: { name: string; email: string | null } | null;
 }): Promise<EnvelopeResolution | null> {
@@ -159,16 +204,37 @@ export async function resolveEnvelope(opts: {
   if (!doc) doc = quoteId ? standardQuoteTemplate() : standardJobCardTemplate();
   doc.title = customer.title;
 
-  // Standard (synthesised) quotes become a Denago-first co-sign document; everything
-  // else (assigned templates, job cards) keeps the single-customer signer.
+  // Recipient chain, in priority order:
+  //  1. an explicit saved workflow (compiled against the quote),
+  //  2. else the built-in Denago-first co-sign for synthesised quotes,
+  //  3. else the single-customer signer (assigned templates, job cards).
   let ordering: "parallel" | "sequential" = "parallel";
   let cosign = false;
-  if (synthesised && quoteId && opts.signer) {
-    ({ doc } = makeCosignable(doc, { name: opts.signer.name, email: opts.signer.email }, { name: customer.customerName, email: customer.customerEmail }));
-    ordering = "sequential";
-    cosign = true;
-  } else {
-    doc = ensureSignable(doc, { name: customer.customerName, email: customer.customerEmail, phone: customer.customerPhone });
+  let signers: ResolvedSigner[] | undefined;
+
+  if (quoteId && opts.workflowId) {
+    const wf = await prisma.signWorkflow.findUnique({ where: { id: opts.workflowId } });
+    const graph = wf && !wf.deletedAt ? parseGraph(wf.graphJson) : null;
+    if (graph) {
+      const [vars, staff] = await Promise.all([quoteWorkflowContext(quoteId), staffMap()]);
+      const compiled = compileWorkflow(graph, { vars, customer: { name: customer.customerName, email: customer.customerEmail }, staff });
+      if (compiled.signers.length > 0) {
+        doc = makeWorkflowSignable(doc, compiled.signers);
+        ordering = "sequential";
+        cosign = true;
+        signers = compiled.signers;
+      }
+    }
+  }
+
+  if (!signers) {
+    if (synthesised && quoteId && opts.signer) {
+      ({ doc } = makeCosignable(doc, { name: opts.signer.name, email: opts.signer.email }, { name: customer.customerName, email: customer.customerEmail }));
+      ordering = "sequential";
+      cosign = true;
+    } else {
+      doc = ensureSignable(doc, { name: customer.customerName, email: customer.customerEmail, phone: customer.customerPhone });
+    }
   }
 
   return {
@@ -181,5 +247,6 @@ export async function resolveEnvelope(opts: {
     refLabel: customer.refLabel,
     ordering,
     cosign,
+    signers,
   };
 }

@@ -25,6 +25,7 @@ const SOFT_DELETE_MODELS = new Set([
   "ReusableBlock",
   "DocBuilderTemplate",
   "SignatureRequest",
+  "SignWorkflow",
 ]);
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
