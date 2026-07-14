@@ -23,7 +23,6 @@ import {
   PackageOpen,
   Plus,
   Save,
-  Search,
   Send,
   Trash2,
 } from "lucide-react";
@@ -92,6 +91,7 @@ export type QuoteEditorDefaults = {
 
 type DraftLine = {
   key: string;
+  kind: "catalogue" | "custom";
   description: string;
   qty: string;
   unitPrice: string;
@@ -136,7 +136,12 @@ function centsFromInput(value: string) {
   return Number.isFinite(parsed) ? Math.round(parsed * 100) : Number.NaN;
 }
 
-function createDraft(record: QuoteEditorRecord | null, defaults: QuoteEditorDefaults, initialContactId?: string) {
+function createDraft(
+  record: QuoteEditorRecord | null,
+  defaults: QuoteEditorDefaults,
+  initialContactId: string | undefined,
+  products: QuoteEditorProduct[],
+) {
   if (!record) {
     return {
       contactId: initialContactId ?? "",
@@ -149,14 +154,20 @@ function createDraft(record: QuoteEditorRecord | null, defaults: QuoteEditorDefa
     contactId: record.contactId ?? "",
     validUntil: record.validUntil,
     terms: record.terms,
-    lines: record.items.map((item) => ({
-      key: item.id,
-      description: item.description,
-      qty: String(item.qty),
-      unitPrice: priceInput(item.unitPriceCents),
-      productId: item.productId,
-      colorPreference: item.colorPreference ?? "",
-    })),
+    lines: record.items.map((item) => {
+      const matchingProduct = item.productId
+        ? products.find((product) => product.id === item.productId)
+        : products.find((product) => product.name.trim().toLowerCase() === item.description.trim().toLowerCase());
+      return {
+        key: item.id,
+        kind: item.productId || matchingProduct ? "catalogue" : "custom",
+        description: item.description,
+        qty: String(item.qty),
+        unitPrice: priceInput(item.unitPriceCents),
+        productId: item.productId ?? matchingProduct?.id ?? null,
+        colorPreference: item.colorPreference ?? "",
+      };
+    }),
   } satisfies DraftState;
 }
 
@@ -165,7 +176,8 @@ function draftSnapshot(draft: DraftState) {
     contactId: draft.contactId,
     validUntil: draft.validUntil,
     terms: draft.terms,
-    lines: draft.lines.map(({ description, qty, unitPrice, productId, colorPreference }) => ({
+    lines: draft.lines.map(({ kind, description, qty, unitPrice, productId, colorPreference }) => ({
+      kind,
       description,
       qty,
       unitPrice,
@@ -209,13 +221,12 @@ export function QuoteEditorDialog({
   initialContactId?: string;
 }) {
   const router = useRouter();
-  const [draft, setDraft] = useState<DraftState>(() => createDraft(record, defaults, initialContactId));
+  const [draft, setDraft] = useState<DraftState>(() => createDraft(record, defaults, initialContactId, products));
   const [initialSnapshot, setInitialSnapshot] = useState(() => draftSnapshot(draft));
   const [savedQuote, setSavedQuote] = useState<SavedQuote>(
     record ? { id: record.id, number: record.number, status: record.status } : null,
   );
   const [activeTab, setActiveTab] = useState("build");
-  const [productSearch, setProductSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [discardOpen, setDiscardOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
@@ -236,12 +247,6 @@ export function QuoteEditorDialog({
     return { total: Math.round(total), vat, subtotal: Math.round(total - vat) };
   }, [draft.lines]);
 
-  const productMatches = useMemo(() => {
-    const query = productSearch.trim().toLocaleLowerCase();
-    if (!query) return products.slice(0, 5);
-    return products.filter((product) => product.name.toLocaleLowerCase().includes(query)).slice(0, 6);
-  }, [productSearch, products]);
-
   function updateLine(key: string, patch: Partial<DraftLine>) {
     setDraft((current) => ({
       ...current,
@@ -249,7 +254,7 @@ export function QuoteEditorDialog({
     }));
   }
 
-  function addProduct(product: QuoteEditorProduct) {
+  function addProductLine() {
     if (!editable) return;
     setDraft((current) => ({
       ...current,
@@ -257,15 +262,35 @@ export function QuoteEditorDialog({
         ...current.lines,
         {
           key: lineKey(),
-          description: product.name,
+          kind: "catalogue",
+          description: "",
           qty: "1",
-          unitPrice: priceInput(product.basePriceCents),
-          productId: product.id,
+          unitPrice: "0.00",
+          productId: null,
           colorPreference: "",
         },
       ],
     }));
-    setProductSearch("");
+  }
+
+  function selectProduct(key: string, productId: string) {
+    const product = products.find((candidate) => candidate.id === productId);
+    setDraft((current) => ({
+      ...current,
+      lines: current.lines.map((line) => {
+        if (line.key !== key) return line;
+        if (!product) {
+          return { ...line, productId: null, description: "", unitPrice: "0.00", colorPreference: "" };
+        }
+        return {
+          ...line,
+          productId: product.id,
+          description: product.name,
+          unitPrice: priceInput(product.basePriceCents),
+          colorPreference: line.productId === product.id ? line.colorPreference : "",
+        };
+      }),
+    }));
   }
 
   function addCustomLine() {
@@ -276,6 +301,7 @@ export function QuoteEditorDialog({
         ...current.lines,
         {
           key: lineKey(),
+          kind: "custom",
           description: "",
           qty: "1",
           unitPrice: "0.00",
@@ -314,6 +340,11 @@ export function QuoteEditorDialog({
 
     const items: QuoteDraftInput["items"] = [];
     for (const line of draft.lines) {
+      if (line.kind === "catalogue" && !line.productId) {
+        setError("Select a product for every catalogue line.");
+        setActiveTab("build");
+        return;
+      }
       const description = line.description.trim();
       const qty = Number(line.qty.replace(",", "."));
       const unitPriceCents = centsFromInput(line.unitPrice);
@@ -439,49 +470,18 @@ export function QuoteEditorDialog({
                       </select>
                     </section>
 
-                    {editable && (
-                      <section className="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4 sm:p-5">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold">Add from product catalogue</p>
-                            <p className="mt-1 text-xs text-muted-foreground">Search a product to add its current base price, or add a custom line.</p>
-                          </div>
-                          <Button type="button" variant="outline" size="sm" onClick={addCustomLine}><Plus />Custom line</Button>
-                        </div>
-                        <div className="relative mt-4">
-                          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                          <input
-                            value={productSearch}
-                            onChange={(event) => setProductSearch(event.target.value)}
-                            className="input pl-9"
-                            placeholder="Search products…"
-                            aria-label="Search products"
-                          />
-                        </div>
-                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                          {productMatches.map((product) => (
-                            <button
-                              key={product.id}
-                              type="button"
-                              onClick={() => addProduct(product)}
-                              className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.07] bg-black/10 px-3 py-2.5 text-left transition-colors hover:border-primary/30 hover:bg-primary/[0.06]"
-                            >
-                              <span className="min-w-0 truncate text-sm font-medium">{product.name}</span>
-                              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{rands(product.basePriceCents)}</span>
-                            </button>
-                          ))}
-                          {productMatches.length === 0 && <p className="py-3 text-sm text-muted-foreground">No catalogue products matched.</p>}
-                        </div>
-                      </section>
-                    )}
-
                     <section className="overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.025]">
-                      <div className="flex items-center justify-between gap-3 border-b border-white/[0.07] px-4 py-4 sm:px-5">
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.07] px-4 py-4 sm:px-5">
                         <div>
                           <p className="text-sm font-semibold">Line items</p>
                           <p className="mt-1 text-xs text-muted-foreground">{draft.lines.length} {draft.lines.length === 1 ? "line" : "lines"} · prices include VAT</p>
                         </div>
-                        {editable && <Button type="button" variant="ghost" size="sm" onClick={addCustomLine}><Plus />Add line</Button>}
+                        {editable && (
+                          <div className="flex flex-wrap gap-2">
+                            <Button type="button" variant="outline" size="sm" onClick={addProductLine} disabled={products.length === 0}><Plus />Product line</Button>
+                            <Button type="button" variant="ghost" size="sm" onClick={addCustomLine}><Plus />Custom line</Button>
+                          </div>
+                        )}
                       </div>
                       {draft.lines.length === 0 ? (
                         <div className="px-5 py-12 text-center">
@@ -500,7 +500,21 @@ export function QuoteEditorDialog({
                               <span className="hidden pb-2 text-xs font-semibold tabular-nums text-muted-foreground sm:block">{String(index + 1).padStart(2, "0")}</span>
                               <div className="min-w-0">
                                 <label className="label" htmlFor={`${line.key}-description`}>Description</label>
-                                <input id={`${line.key}-description`} className="input" value={line.description} disabled={!editable} onChange={(event) => updateLine(line.key, { description: event.target.value })} />
+                                {line.kind === "catalogue" ? (
+                                  <select
+                                    id={`${line.key}-description`}
+                                    className="input"
+                                    value={line.productId ?? ""}
+                                    disabled={!editable}
+                                    onChange={(event) => selectProduct(line.key, event.target.value)}
+                                  >
+                                    <option value="">Select a product…</option>
+                                    {line.productId && !selectedProduct && <option value={line.productId}>{line.description} (unavailable)</option>}
+                                    {products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
+                                  </select>
+                                ) : (
+                                  <input id={`${line.key}-description`} className="input" value={line.description} disabled={!editable} onChange={(event) => updateLine(line.key, { description: event.target.value })} />
+                                )}
                                 {selectedProduct && selectedProduct.colors.length > 0 && (
                                   <div className="mt-3 rounded-xl border border-primary/15 bg-primary/[0.045] p-3">
                                     <div className="flex items-center justify-between gap-3">
