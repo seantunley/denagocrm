@@ -13,6 +13,7 @@ const SOCIAL_CHANNELS = ["whatsapp", "messenger", "instagram"];
  */
 export async function awaitingReplyCount(): Promise<number> {
   return prisma.conversation.count({
-    where: { channel: { in: SOCIAL_CHANNELS }, lastDirection: "inbound" },
+    // Match the inbox list filter (excludes closed) so the badge can't exceed what's shown.
+    where: { channel: { in: SOCIAL_CHANNELS }, lastDirection: "inbound", status: { not: "closed" } },
   });
 }

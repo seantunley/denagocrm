@@ -56,8 +56,10 @@ export async function saveConversationDraft(conversationId: string, body: string
 
 /** Discard the draft (e.g. after the reply is sent). */
 export async function discardConversationDraft(conversationId: string): Promise<void> {
-  await requireInbox();
-  await prisma.conversationDraft.deleteMany({ where: { conversationId } });
+  const actor = await requireInbox();
+  // Only discard the actor's own draft — never clobber a teammate's protected draft
+  // (the send-success effect calls this unconditionally).
+  await prisma.conversationDraft.deleteMany({ where: { conversationId, ownerId: actor.id } });
 }
 
 /**
