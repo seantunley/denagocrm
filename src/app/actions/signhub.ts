@@ -2,10 +2,26 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requireOwner, requireCrmOrWorkshop } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { dispatchRequest, notifyRecipient } from "@/lib/signing/dispatch";
 import { logSignEvent } from "@/lib/signing/events";
+import { approveStep, rejectStep, canActOnStep } from "@/lib/signing/approvals";
+
+/** Approve or reject a pending approval step from inside the app (hub queue). */
+export async function decideApproval(stepId: string, decision: "approve" | "reject", reason?: string): Promise<{ ok: boolean; error?: string }> {
+  const user = await requireCrmOrWorkshop();
+  const step = await prisma.approvalStep.findUnique({ where: { id: stepId } });
+  if (!step) return { ok: false, error: "Not found" };
+  if (step.status !== "pending") return { ok: false, error: "Already actioned." };
+  if (!canActOnStep(step, user)) return { ok: false, error: "You are not the assigned approver." };
+  const res = decision === "approve"
+    ? await approveStep(step.id, { userId: user.id, name: user.name })
+    : await rejectStep(step.id, { userId: user.id, name: user.name }, reason ?? "");
+  revalidatePath("/signatures");
+  revalidatePath(`/signatures/${step.requestId}`);
+  return res;
+}
 
 export async function sendRequest(requestId: string): Promise<{ ok: boolean; notified?: number; error?: string }> {
   const user = await requireOwner();

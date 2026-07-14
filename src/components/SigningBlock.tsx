@@ -63,6 +63,7 @@ export default function SigningBlock({
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [modalUrl, setModalUrl] = useState<string | null>(null);
 
   // Record already signed (via the hub or the historic legacy flow).
   if (signedAt) {
@@ -84,12 +85,14 @@ export default function SigningBlock({
   const active = state && state.status !== "completed" && state.status !== "declined" && state.status !== "voided";
   const declined = state?.recipients.find((r) => r.declinedAt);
 
-  async function run(label: string, fn: () => Promise<{ ok: boolean; error?: string; notified?: number; signFirstUrl?: string }>) {
+  async function run(label: string, fn: () => Promise<{ ok: boolean; error?: string; notified?: number; signFirstUrl?: string; modal?: boolean }>) {
     setBusy(label); setErr(null); setNote(null);
     try {
       const res = await fn();
       if (!res.ok) { setErr(res.error ?? "Something went wrong."); return; }
-      // Co-sign quote: go straight to sign Denago's block first.
+      // Sender's own first step → sign it in-context in a modal, don't leave the page.
+      if (res.signFirstUrl && res.modal) { setModalUrl(res.signFirstUrl); return; }
+      // Otherwise go to sign / the hub.
       if (res.signFirstUrl) { router.push(res.signFirstUrl); return; }
       if (typeof res.notified === "number") setNote(res.notified > 0 ? `Sent to ${res.notified} recipient(s).` : "Request ready — add a contact to notify.");
       router.refresh();
@@ -190,6 +193,18 @@ export default function SigningBlock({
 
       {err && <p className="text-xs text-red-400 mt-2">⚠ {err}</p>}
       {note && <p className="text-xs text-emerald-400 mt-2">{note}</p>}
+
+      {modalUrl && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-slate-950/80 p-3 sm:p-6" onClick={() => { setModalUrl(null); router.refresh(); }}>
+          <div className="mx-auto flex h-full w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-900" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-slate-700 px-4 py-2">
+              <span className="text-sm font-semibold text-white">Your signature</span>
+              <button onClick={() => { setModalUrl(null); router.refresh(); }} className="rounded-md bg-slate-700 px-3 py-1 text-xs text-white hover:bg-slate-600">Done ✕</button>
+            </div>
+            <iframe title="Sign" src={modalUrl} className="flex-1 w-full bg-slate-900" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

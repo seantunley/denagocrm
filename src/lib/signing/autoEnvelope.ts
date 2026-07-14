@@ -4,7 +4,7 @@ import { contactName } from "@/lib/format";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import { parseDocument, type DocumentModel } from "@/lib/doceditor/model";
 import { standardQuoteTemplate, newBlock, newRow, newColumn, newPage, newRecipient, newOverlayField, uid } from "@/lib/doceditor/factory";
-import { parseGraph } from "@/lib/signflow/model";
+import { parseGraph, type WorkflowGraph } from "@/lib/signflow/model";
 import { compileWorkflow, type ResolvedSigner, type WorkflowContext } from "@/lib/signflow/compile";
 
 /**
@@ -30,6 +30,8 @@ export type EnvelopeResolution = {
   cosign: boolean;
   /** Present when a saved workflow drove the recipient chain (else the built-in default). */
   signers?: ResolvedSigner[];
+  /** Frozen workflow graph — present when the request must run through the interpreter (has approval/branch nodes). */
+  frozen?: { graph: WorkflowGraph; vars: WorkflowContext };
 };
 
 /** Customer identity for a quote (contact first, else the originating lead). */
@@ -211,6 +213,7 @@ export async function resolveEnvelope(opts: {
   let ordering: "parallel" | "sequential" = "parallel";
   let cosign = false;
   let signers: ResolvedSigner[] | undefined;
+  let frozen: { graph: WorkflowGraph; vars: WorkflowContext } | undefined;
 
   if (quoteId && opts.workflowId) {
     const wf = await prisma.signWorkflow.findUnique({ where: { id: opts.workflowId } });
@@ -223,6 +226,10 @@ export async function resolveEnvelope(opts: {
         ordering = "sequential";
         cosign = true;
         signers = compiled.signers;
+        // Freeze the graph + vars: if it has approval/branch nodes the request runs
+        // through the interpreter rather than a static sequential dispatch.
+        const hasApprovalOrBranch = Object.values(graph.nodes).some((n) => n.type === "approval" || n.type === "condition");
+        if (hasApprovalOrBranch) frozen = { graph, vars };
       }
     }
   }
@@ -248,5 +255,6 @@ export async function resolveEnvelope(opts: {
     ordering,
     cosign,
     signers,
+    frozen,
   };
 }

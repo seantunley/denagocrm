@@ -31,7 +31,7 @@ function num(s: string): number {
   return Number.isFinite(n) ? n : NaN;
 }
 
-function evalCondition(node: ConditionNode, ctx: WorkflowContext): boolean {
+export function evalCondition(node: ConditionNode, ctx: WorkflowContext): boolean {
   const { field, op, value } = node;
   if (field === "total" || field === "discount") {
     const a = field === "total" ? ctx.total : ctx.discount;
@@ -75,6 +75,8 @@ function resolveWho(who: SignerWho, opts: { customer: { name: string; email: str
       return { name: who.name || who.email || "Recipient", email: who.email ?? null, needsInput: !who.email, roleHint: null };
     case "role":
       return { name: who.name || who.role || "Approver", email: who.email ?? null, needsInput: !who.email, roleHint: who.role ?? null };
+    case "owner":
+      return { name: who.name || "Owner", email: who.email ?? null, needsInput: false, roleHint: "owner" };
     case "ask":
       return { name: who.name || "To be chosen", email: null, needsInput: true, roleHint: null };
   }
@@ -101,6 +103,16 @@ export function compileWorkflow(
     if (node.type === "end") break;
     if (node.type === "condition") {
       cur = evalCondition(node, opts.vars) ? node.whenTrue : node.whenFalse;
+      continue;
+    }
+    if (node.type === "approval") {
+      // Only signature-mode approvals need a doc block + recipient; decision
+      // approvals are runtime gates. Follow the happy (approved) path for layout.
+      if (node.mode === "signature") {
+        const r = resolveWho(node.who, { customer: opts.customer, staff });
+        signers.push({ nodeId: node.id, label: node.label || r.name, role: "approver", mode: node.who.mode, name: r.name, email: r.email, needsInput: r.needsInput, roleHint: r.roleHint });
+      }
+      cur = node.whenApproved;
       continue;
     }
     // signer
