@@ -953,9 +953,29 @@ model DocBuilderTemplate {
   updatedAt       DateTime  @updatedAt
   deletedAt       DateTime?
 
+  // Default signing workflow used when this document is sent for signature (overridable at send).
+  defaultWorkflowId String?
+  defaultWorkflow   SignWorkflow? @relation("TemplateDefaultWorkflow", fields: [defaultWorkflowId], references: [id])
+
   versions DocBuilderVersion[]
 
   @@index([key, isDefault])
+}
+
+/// A visual signing workflow: an ordered/branching graph of signer + condition
+/// nodes that compiles (against a quote/job card) into the hub's recipient chain.
+model SignWorkflow {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  graphJson   Json // { start, nodes: {id: node}, positions: {id: {x,y}} }
+  isArchived  Boolean   @default(false)
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  templates DocBuilderTemplate[] @relation("TemplateDefaultWorkflow")
 }
 
 // Immutable snapshot of a builder template's JSON at publish time. Restore copies

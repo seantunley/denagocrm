@@ -89,6 +89,7 @@ const NAV_GROUPS: { label: string; items: SettingsTab[] }[] = [
     items: [
       { key: "team", label: "Team" },
       { key: "documents", label: "Documents", href: "/settings/documents" },
+      { key: "signing-workflows", label: "Signing workflows", href: "/settings/signing-workflows" },
       { key: "security", label: "Security", href: "/settings/security" },
       { key: "backups", label: "Backup & recovery", href: "/settings/backup-recovery" },
       { key: "sessions", label: "Sessions & devices", href: "/settings/sessions" },

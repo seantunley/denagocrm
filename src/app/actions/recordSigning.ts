@@ -27,7 +27,7 @@ function recordPath(kind: Kind, id: string): string {
 }
 
 /** Create + send a signing request for a quote / job card via the hub. */
-export async function startRecordSigning(kind: Kind, id: string): Promise<Result> {
+export async function startRecordSigning(kind: Kind, id: string, workflowId?: string | null): Promise<Result> {
   const user = await requireCrmOrWorkshop();
   const quoteId = kind === "quote" ? id : null;
   const jobCardId = kind === "jobcard" ? id : null;
@@ -51,7 +51,7 @@ export async function startRecordSigning(kind: Kind, id: string): Promise<Result
     if (jc.signedAt) return { ok: false, error: "This job card has already been signed." };
   }
 
-  const env = await resolveEnvelope({ quoteId, jobCardId, signer: { name: user.name, email: user.email } });
+  const env = await resolveEnvelope({ quoteId, jobCardId, workflowId, signer: { name: user.name, email: user.email } });
   if (!env) return { ok: false, error: "Could not prepare the document." };
 
   const pdf = await renderEnvelopePdf(env.doc, quoteId, jobCardId);
@@ -80,6 +80,13 @@ export async function startRecordSigning(kind: Kind, id: string): Promise<Result
 
   await logAudit({ action: "signing.send", summary: `Sent “${env.title}” (${env.refLabel}) for signing`, entityType: "SignatureRequest", entityId: created.id, user });
   revalidatePath(recordPath(kind, id));
+
+  // Workflow-driven send: the chain can be arbitrary (managers, finance, external
+  // approvers), so route the owner to the hub to review recipients, fill any
+  // "choose at send" contacts, and dispatch.
+  if (env.signers) {
+    return { ok: true, requestId: created.id, signFirstUrl: `/signatures/${created.id}` };
+  }
 
   // Co-sign quote: Denago signs first (in-person, through the hub). The customer is
   // notified automatically once Denago has signed (sequential advance). Route the

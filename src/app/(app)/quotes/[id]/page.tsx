@@ -105,6 +105,7 @@ export default async function QuoteDetailPage({
   const successor = quote.revisions[0] ?? null;
   const total = quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
   const signingState = await activeRecordRequest({ quoteId: quote.id });
+  const signWorkflows = await prisma.signWorkflow.findMany({ where: { isArchived: false }, select: { id: true, name: true }, orderBy: { updatedAt: "desc" } });
   const lockedBySigning = (Boolean(quote.signToken) && !quote.signedAt) || isLockedForSigning(signingState);
   const readOnly = Boolean(quote.signedAt || quote.supersededAt);
   const editable = quote.status === "draft" && !lockedBySigning && !readOnly;
@@ -325,6 +326,7 @@ export default async function QuoteDetailPage({
         hasSavedSignature={Boolean(currentUser.drawnSignatureRef)}
         state={signingState}
         legacyToken={quote.signToken}
+        workflows={signWorkflows}
       />
       )}
 

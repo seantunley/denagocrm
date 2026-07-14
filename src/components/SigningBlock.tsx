@@ -43,6 +43,7 @@ export default function SigningBlock({
   hasSavedSignature,
   state,
   legacyToken,
+  workflows = [],
 }: {
   kind: "quote" | "jobcard";
   id: string;
@@ -55,8 +56,10 @@ export default function SigningBlock({
   hasSavedSignature?: boolean;
   state: SigningState;
   legacyToken?: string | null;
+  workflows?: { id: string; name: string }[];
 }) {
   const router = useRouter();
+  const [workflowId, setWorkflowId] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -159,9 +162,20 @@ export default function SigningBlock({
           )}
         </div>
       ) : (
-        <button className="btn-primary" disabled={busy !== null} onClick={() => run("send", () => startRecordSigning(kind, id))}>
-          {busy === "send" ? "Preparing…" : "Send for signing"}
-        </button>
+        <div className="space-y-2">
+          {kind === "quote" && workflows.length > 0 && (
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-slate-400">Signing workflow</label>
+              <select value={workflowId} onChange={(e) => setWorkflowId(e.target.value)} className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground">
+                <option value="">Built-in — Denago countersigns, then the customer</option>
+                {workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+              </select>
+            </div>
+          )}
+          <button className="btn-primary" disabled={busy !== null} onClick={() => run("send", () => startRecordSigning(kind, id, workflowId || undefined))}>
+            {busy === "send" ? "Preparing…" : "Send for signing"}
+          </button>
+        </div>
       )}
 
       {legacyToken && !active && (
