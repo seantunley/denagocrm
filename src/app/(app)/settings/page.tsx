@@ -2,10 +2,6 @@ import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import {
-  createStage,
-  renameStage,
-  moveStage,
-  deleteStage,
   saveSetting,
   saveMyProfile,
   saveQuoteDefaults,
@@ -61,7 +57,6 @@ const NAV_GROUPS: { label: string; items: SettingsTab[] }[] = [
   {
     label: "CRM",
     items: [
-      { key: "pipeline", label: "Pipeline" },
       { key: "quotes", label: "Quotes" },
       { key: "import", label: "Import" },
     ],
@@ -114,14 +109,10 @@ export default async function SettingsPage({
   const tab = visibleTabs.some((t) => t.key === rawTab)
     ? rawTab
     : isAdmin
-    ? "pipeline"
+    ? "quotes"
     : "account";
 
-  const [stages, users, settings, templates] = await Promise.all([
-    prisma.pipelineStage.findMany({
-      orderBy: { order: "asc" },
-      include: { _count: { select: { leads: true } } },
-    }),
+  const [users, settings, templates] = await Promise.all([
     prisma.user.findMany({ orderBy: { createdAt: "asc" } }),
     prisma.appSetting.findMany(),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
@@ -218,50 +209,6 @@ export default async function SettingsPage({
         </aside>
 
         <div className="min-w-0 flex-1 space-y-6">
-
-      {tab === "pipeline" && (
-        <div className="card">
-          <h2 className="font-semibold mb-1">Pipeline stages</h2>
-          <p className="text-xs text-slate-400 mb-4">
-            The columns of your leads board, in order. Stages holding leads can&apos;t be deleted.
-          </p>
-          <ul className="space-y-2 mb-4">
-            {stages.map((s, i) => (
-              <li key={s.id} className="flex items-center gap-2">
-                <form action={renameStage.bind(null, s.id)} className="flex items-center gap-2 flex-1">
-                  <input type="color" name="color" defaultValue={s.color} className="h-8 w-10 rounded cursor-pointer border border-slate-800" />
-                  <input name="name" defaultValue={s.name} className="input flex-1" />
-                  <button className="btn-secondary btn-sm">Save</button>
-                </form>
-                <form action={moveStage.bind(null, s.id, "up")}>
-                  <button className="btn-secondary btn-sm" disabled={i === 0}>↑</button>
-                </form>
-                <form action={moveStage.bind(null, s.id, "down")}>
-                  <button className="btn-secondary btn-sm" disabled={i === stages.length - 1}>↓</button>
-                </form>
-                {s._count.leads > 0 ? (
-                  <button className="btn-danger btn-sm" disabled title="Stage still has leads">
-                    ✕
-                  </button>
-                ) : (
-                  <ConfirmDelete
-                    action={deleteStage.bind(null, s.id)}
-                    title={`Delete stage “${s.name}”?`}
-                    description="This cannot be undone."
-                    trigger="✕"
-                    triggerClass="btn-danger btn-sm"
-                  />
-                )}
-              </li>
-            ))}
-          </ul>
-          <form action={createStage} className="flex gap-2">
-            <input type="color" name="color" defaultValue="#64748b" className="h-9 w-10 rounded cursor-pointer border border-slate-800" />
-            <input name="name" className="input flex-1" placeholder="New stage name…" required />
-            <button className="btn-primary">Add stage</button>
-          </form>
-        </div>
-      )}
 
       {tab === "account" && (
         <div className="max-w-3xl space-y-6">
