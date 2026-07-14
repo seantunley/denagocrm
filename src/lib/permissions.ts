@@ -364,12 +364,16 @@ export async function getAccessibleCaseIds(user: PermissionUser): Promise<string
   if (!permissions.has("cases.view_owned")) return [];
   const [contactIds, vehicleIds] = await Promise.all([getAccessibleContactIds(user), getAccessibleVehicleIds(user)]);
   if (contactIds === null) return null;
-  const rows = await basePrisma.$queryRaw<Array<{ id: string }>>`
-    SELECT c."id"
-    FROM "CustomerCase" c
-    WHERE c."contactId" = ANY(${contactIds}::text[])
-       OR (c."vehicleId" IS NOT NULL AND c."vehicleId" = ANY(${vehicleIds ?? []}::text[]))
-  `;
+  // vehicleIds === null means the user can see ALL vehicles, so every vehicle-linked
+  // case is accessible — not `= ANY([])`, which would drop them all.
+  const rows = vehicleIds === null
+    ? await basePrisma.$queryRaw<Array<{ id: string }>>`
+        SELECT c."id" FROM "CustomerCase" c
+        WHERE c."contactId" = ANY(${contactIds}::text[]) OR c."vehicleId" IS NOT NULL`
+    : await basePrisma.$queryRaw<Array<{ id: string }>>`
+        SELECT c."id" FROM "CustomerCase" c
+        WHERE c."contactId" = ANY(${contactIds}::text[])
+           OR (c."vehicleId" IS NOT NULL AND c."vehicleId" = ANY(${vehicleIds}::text[]))`;
   return rows.map((row) => row.id);
 }
 

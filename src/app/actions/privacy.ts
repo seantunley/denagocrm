@@ -41,6 +41,9 @@ export async function recordConsent(contactId: string, formData: FormData) {
  */
 export async function anonymizeContact(contactId: string) {
   const user = await requireContactAccess(contactId, "contacts.delete");
+  // POPIA erasure is irreversible — keep it owner-only until the permission-based
+  // de-escalation is explicitly signed off (flagged in review of PR #12).
+  if (user.role !== "owner") throw new Error("Only an owner can anonymise a contact (POPIA erasure).");
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) return;
 

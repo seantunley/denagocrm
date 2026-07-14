@@ -21,9 +21,12 @@ import CalendarEventChip, { type CalendarEvent } from "@/components/CalendarEven
 export default async function CalendarView({
   mode,
   m,
+  activityIds,
 }: {
   mode: "sales" | "workshop";
   m?: string;
+  // RBAC: null = all activities accessible; otherwise restrict to these ids.
+  activityIds?: string[] | null;
 }) {
   const month = m ? parse(m, "yyyy-MM", new Date()) : new Date();
   const monthStart = startOfMonth(month);
@@ -37,6 +40,7 @@ export default async function CalendarView({
       // History stays on the calendar: completed items remain visible (✓),
       // only explicitly canceled ones are hidden.
       status: { in: ["planned", "done"] },
+      ...(activityIds != null ? { id: { in: activityIds } } : {}),
       ...(mode === "workshop"
         ? { category: "workshop" }
         : { OR: [{ category: null }, { category: { not: "workshop" } }] }),
