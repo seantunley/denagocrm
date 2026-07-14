@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { renderRequestSigningSheets } from "@/lib/signing/render";
+import { renderRequestSigningSheets, signedFieldStamps } from "@/lib/signing/render";
 import { recordView } from "@/lib/signing/events";
 import { SignSurface } from "@/app/signing/[token]/SignSurface";
 
@@ -24,7 +24,7 @@ export default async function InPersonSign({ params }: { params: Promise<{ id: s
   }
 
   await recordView(recipient.id, req.id, recipient.name);
-  const sheets = await renderRequestSigningSheets(req);
+  const [sheets, stamps] = await Promise.all([renderRequestSigningSheets(req), signedFieldStamps(req.id, recipient.id)]);
   const myFields = req.fields
     .filter((f) => f.recipientId === recipient.id || f.recipientId === null)
     .map((f) => ({ id: f.id, kind: f.kind, label: f.label, required: f.required, page: f.page, x: f.x, y: f.y, width: f.width, height: f.height }));
@@ -36,7 +36,7 @@ export default async function InPersonSign({ params }: { params: Promise<{ id: s
         <span className="text-xs text-slate-500">In-person signing · hand the device to {recipient.name}</span>
       </div>
       <div className="flex justify-center">
-        <SignSurface token={recipient.token} title={req.title} recipientName={recipient.name} sheets={sheets} fields={myFields} />
+        <SignSurface token={recipient.token} title={req.title} recipientName={recipient.name} sheets={sheets} fields={myFields} stamps={stamps} />
       </div>
     </div>
   );

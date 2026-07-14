@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect, useCallback } from "react";
+import type { StampField } from "@/lib/doceditor/serialize";
 
 type Field = { id: string; kind: string; label: string; required: boolean; page: number; x: number; y: number; width: number; height: number };
 type Sheets = { width: number; height: number; margin: number; css: string; pages: string[] };
@@ -79,7 +80,16 @@ function FieldWidget({ f, value, onSign, onSet, filled }: { f: Field; value: str
   return <input type="text" placeholder={f.label} value={value} onChange={(e) => onSet(e.target.value)} style={common} />;
 }
 
-export function SignSurface({ token, title, recipientName, sheets, fields }: { token: string; title: string; recipientName: string; sheets: Sheets; fields: Field[] }) {
+/** A read-only field already completed by an earlier signer (e.g. Denago's signature). */
+function StampView({ s }: { s: StampField }) {
+  const box: React.CSSProperties = { position: "absolute", left: s.x, top: s.y, width: s.width, height: s.height, pointerEvents: "none" };
+  if ((s.kind === "signature" || s.kind === "initials" || s.kind === "stamp") && s.image) {
+    return <div style={{ ...box, display: "flex", alignItems: "flex-end", justifyContent: "center" }}><img src={s.image} alt="signed" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} /></div>;
+  }
+  return <div style={{ ...box, display: "flex", alignItems: "flex-end", fontSize: 13, color: "#0f172a" }}>{s.text ?? ""}</div>;
+}
+
+export function SignSurface({ token, title, recipientName, sheets, fields, stamps = [] }: { token: string; title: string; recipientName: string; sheets: Sheets; fields: Field[]; stamps?: StampField[] }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [name, setName] = useState(recipientName);
   const [consent, setConsent] = useState(false);
@@ -163,6 +173,7 @@ export function SignSurface({ token, title, recipientName, sheets, fields }: { t
           <div key={i} style={{ width: sheets.width * scale, height: sheets.height * scale, position: "relative", margin: "0 auto 16px", boxShadow: "0 6px 24px rgba(0,0,0,.35)", background: "#fff" }}>
             <div style={{ width: sheets.width, height: sheets.height, transform: `scale(${scale})`, transformOrigin: "top left", position: "absolute", top: 0, left: 0 }}>
               <div className="sg-sheet" style={{ position: "absolute", inset: 0 }} dangerouslySetInnerHTML={{ __html: pageHtml }} />
+              {stamps.filter((s) => s.page === i).map((s, si) => <StampView key={`s${si}`} s={s} />)}
               {placed.filter((f) => f.page === i).map((f) => (
                 <FieldWidget key={f.id} f={f} value={values[f.id] ?? ""} filled={isFilled(f) && (f.kind === "checkbox" ? values[f.id] === "true" : Boolean(values[f.id]))}
                   onSign={() => setSigningId(f.id)} onSet={(v) => set(f.id, v)} />

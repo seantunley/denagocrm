@@ -81,12 +81,14 @@ export default function SigningBlock({
   const active = state && state.status !== "completed" && state.status !== "declined" && state.status !== "voided";
   const declined = state?.recipients.find((r) => r.declinedAt);
 
-  async function run(label: string, fn: () => Promise<{ ok: boolean; error?: string; notified?: number }>) {
+  async function run(label: string, fn: () => Promise<{ ok: boolean; error?: string; notified?: number; signFirstUrl?: string }>) {
     setBusy(label); setErr(null); setNote(null);
     try {
       const res = await fn();
-      if (!res.ok) setErr(res.error ?? "Something went wrong.");
-      else if (typeof res.notified === "number") setNote(res.notified > 0 ? `Sent to ${res.notified} recipient(s).` : "Request ready — add a contact to notify.");
+      if (!res.ok) { setErr(res.error ?? "Something went wrong."); return; }
+      // Co-sign quote: go straight to sign Denago's block first.
+      if (res.signFirstUrl) { router.push(res.signFirstUrl); return; }
+      if (typeof res.notified === "number") setNote(res.notified > 0 ? `Sent to ${res.notified} recipient(s).` : "Request ready — add a contact to notify.");
       router.refresh();
     } catch { setErr("Something went wrong. Please try again."); }
     finally { setBusy(null); }

@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { isValidSignToken } from "@/lib/signing/tokens";
-import { renderRequestSigningSheets } from "@/lib/signing/render";
+import { renderRequestSigningSheets, signedFieldStamps } from "@/lib/signing/render";
 import { recordView } from "@/lib/signing/events";
 import { SignSurface } from "./SignSurface";
 
@@ -49,14 +49,14 @@ export default async function SigningPage({ params }: { params: Promise<{ token:
   }
 
   await recordView(recipient.id, req.id, recipient.name);
-  const sheets = await renderRequestSigningSheets(req);
+  const [sheets, stamps] = await Promise.all([renderRequestSigningSheets(req), signedFieldStamps(req.id, recipient.id)]);
   const myFields = req.fields
     .filter((f) => f.recipientId === recipient.id || f.recipientId === null)
     .map((f) => ({ id: f.id, kind: f.kind, label: f.label, required: f.required, page: f.page, x: f.x, y: f.y, width: f.width, height: f.height }));
 
   return (
     <Shell>
-      <SignSurface token={token} title={req.title} recipientName={recipient.name} sheets={sheets} fields={myFields} />
+      <SignSurface token={token} title={req.title} recipientName={recipient.name} sheets={sheets} fields={myFields} stamps={stamps} />
     </Shell>
   );
 }

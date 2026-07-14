@@ -20,7 +20,7 @@ import { activeRecordRequest } from "@/lib/signing/record";
  */
 
 type Kind = "quote" | "jobcard";
-type Result = { ok: boolean; requestId?: string; error?: string; notified?: number };
+type Result = { ok: boolean; requestId?: string; error?: string; notified?: number; signFirstUrl?: string };
 
 function recordPath(kind: Kind, id: string): string {
   return kind === "quote" ? `/quotes/${id}` : `/jobcards/${id}`;
@@ -38,12 +38,12 @@ export async function startRecordSigning(kind: Kind, id: string): Promise<Result
     return { ok: true, requestId: existing.requestId };
   }
 
-  // Pre-send gates (parity with the legacy flow).
+  // Pre-send gates. (Denago's countersignature is now captured through the hub as
+  // the first co-signer, so no separate pad gate is required.)
   if (kind === "quote") {
     const quote = await prisma.quote.findUnique({ where: { id } });
     if (!quote) return { ok: false, error: "Quote not found." };
     if (quote.signedAt) return { ok: false, error: "This quote has already been signed." };
-    if (!quote.dealerSignedAt) return { ok: false, error: "Countersign the quote for Denago first, then send it." };
     if (quoteExpired(quote.validUntil)) return { ok: false, error: "This quote has expired — issue an updated quote first." };
   } else {
     const jc = await prisma.jobCard.findUnique({ where: { id } });
@@ -51,7 +51,7 @@ export async function startRecordSigning(kind: Kind, id: string): Promise<Result
     if (jc.signedAt) return { ok: false, error: "This job card has already been signed." };
   }
 
-  const env = await resolveEnvelope({ quoteId, jobCardId });
+  const env = await resolveEnvelope({ quoteId, jobCardId, signer: { name: user.name, email: user.email } });
   if (!env) return { ok: false, error: "Could not prepare the document." };
 
   const pdf = await renderEnvelopePdf(env.doc, quoteId, jobCardId);
@@ -68,21 +68,29 @@ export async function startRecordSigning(kind: Kind, id: string): Promise<Result
     title: env.title,
     unsignedPdfRef: storedName,
     source: { documentId: document.id, quoteId, jobCardId, contactId: env.contactId },
+    ordering: env.ordering,
     createdById: user.id,
   });
 
-  // Give the (single) synthesised signer a phone so WhatsApp can reach them.
-  if (env.customerPhone) {
-    const signers = await prisma.signatureRecipient.findMany({ where: { requestId: created.id, role: { not: "viewer" } } });
-    if (signers.length === 1 && !signers[0].phone) {
-      await prisma.signatureRecipient.update({ where: { id: signers[0].id }, data: { phone: env.customerPhone } });
-    }
+  // Attach the customer's phone (for WhatsApp) to the recipient carrying their email.
+  if (env.customerPhone && env.customerEmail) {
+    const cust = await prisma.signatureRecipient.findFirst({ where: { requestId: created.id, email: env.customerEmail, role: { not: "viewer" } } });
+    if (cust && !cust.phone) await prisma.signatureRecipient.update({ where: { id: cust.id }, data: { phone: env.customerPhone } });
   }
 
-  const { notified } = await dispatchRequest(created.id);
   await logAudit({ action: "signing.send", summary: `Sent “${env.title}” (${env.refLabel}) for signing`, entityType: "SignatureRequest", entityId: created.id, user });
-
   revalidatePath(recordPath(kind, id));
+
+  // Co-sign quote: Denago signs first (in-person, through the hub). The customer is
+  // notified automatically once Denago has signed (sequential advance). Route the
+  // Denago rep straight to their signing surface.
+  if (env.cosign) {
+    const denago = await prisma.signatureRecipient.findFirst({ where: { requestId: created.id, order: 0 } });
+    return { ok: true, requestId: created.id, signFirstUrl: denago ? `/signatures/${created.id}/sign/${denago.id}` : undefined };
+  }
+
+  // Single-signer flow (job cards, assigned templates): dispatch to the customer now.
+  const { notified } = await dispatchRequest(created.id);
   return { ok: true, requestId: created.id, notified };
 }
 

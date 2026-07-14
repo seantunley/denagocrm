@@ -23,6 +23,9 @@ export type EnvelopeResolution = {
   customerEmail: string | null;
   customerPhone: string | null;
   refLabel: string;
+  ordering: "parallel" | "sequential";
+  /** True when Denago co-signs first (order 0) via the hub before the customer. */
+  cosign: boolean;
 };
 
 /** Customer identity for a quote (contact first, else the originating lead). */
@@ -108,10 +111,39 @@ function ensureSignable(doc: DocumentModel, customer: { name: string; email: str
   return doc;
 }
 
+/** A small bold heading placed freely on the page (used to label signature areas). */
+function headingFloat(x: number, y: number, text: string) {
+  const b = newBlock("text");
+  if (b.type === "text") b.value = [{ type: "p", children: [{ text, bold: true }] }];
+  return { id: uid(), x, y, width: 250, block: b };
+}
+
+/**
+ * Two-party co-sign layout: Denago (signs first) + the customer, each with a
+ * labelled signature block, plus the customer's date. Sequential ordering so the
+ * customer is only notified once Denago has signed — and they then see Denago's
+ * signature already on the document.
+ */
+function makeCosignable(doc: DocumentModel, denago: { name: string; email: string | null }, customer: { name: string; email: string | null }): { doc: DocumentModel; denagoId: string; customerId: string } {
+  const denagoR = newRecipient({ name: denago.name || "Denago Cape Town", email: denago.email ?? "", role: "signer", color: "#020617" });
+  const customerR = newRecipient({ name: customer.name || "Customer", email: customer.email ?? "", role: "signer", color: "#2563eb" });
+  doc.recipients = [denagoR, customerR]; // index 0 signs first
+
+  const last = doc.pages[doc.pages.length - 1];
+  const denagoSig = newOverlayField("signature", { id: uid(), recipientId: denagoR.id, required: true, label: denagoR.name, anchor: { mode: "page", blockId: null, x: 70, y: 985 }, width: 250, height: 60 });
+  const custSig = newOverlayField("signature", { id: uid(), recipientId: customerR.id, required: true, label: customerR.name, anchor: { mode: "page", blockId: null, x: 430, y: 985 }, width: 250, height: 60 });
+  const custDate = newOverlayField("date", { id: uid(), recipientId: customerR.id, required: true, label: "Date", anchor: { mode: "page", blockId: null, x: 430, y: 1058 }, width: 160, height: 38 });
+  last.overlayFields = [...last.overlayFields, denagoSig, custSig, custDate];
+  last.floatingBlocks = [...last.floatingBlocks, headingFloat(70, 952, "For Denago Cape Town"), headingFloat(430, 952, "For the Customer")];
+  return { doc, denagoId: denagoR.id, customerId: customerR.id };
+}
+
 export async function resolveEnvelope(opts: {
   quoteId?: string | null;
   jobCardId?: string | null;
   templateId?: string | null;
+  /** The Denago rep initiating — becomes the first (co-sign) signer on standard quotes. */
+  signer?: { name: string; email: string | null } | null;
 }): Promise<EnvelopeResolution | null> {
   const { quoteId, jobCardId, templateId } = opts;
   const customer = quoteId ? await quoteCustomer(quoteId) : jobCardId ? await jobCardCustomer(jobCardId) : null;
@@ -123,10 +155,21 @@ export async function resolveEnvelope(opts: {
     const tpl = await getBuilderTemplate(templateId);
     if (tpl) doc = parseDocument(tpl.data);
   }
+  const synthesised = !doc;
   if (!doc) doc = quoteId ? standardQuoteTemplate() : standardJobCardTemplate();
-
   doc.title = customer.title;
-  doc = ensureSignable(doc, { name: customer.customerName, email: customer.customerEmail, phone: customer.customerPhone });
+
+  // Standard (synthesised) quotes become a Denago-first co-sign document; everything
+  // else (assigned templates, job cards) keeps the single-customer signer.
+  let ordering: "parallel" | "sequential" = "parallel";
+  let cosign = false;
+  if (synthesised && quoteId && opts.signer) {
+    ({ doc } = makeCosignable(doc, { name: opts.signer.name, email: opts.signer.email }, { name: customer.customerName, email: customer.customerEmail }));
+    ordering = "sequential";
+    cosign = true;
+  } else {
+    doc = ensureSignable(doc, { name: customer.customerName, email: customer.customerEmail, phone: customer.customerPhone });
+  }
 
   return {
     doc,
@@ -136,5 +179,7 @@ export async function resolveEnvelope(opts: {
     customerEmail: customer.customerEmail,
     customerPhone: customer.customerPhone,
     refLabel: customer.refLabel,
+    ordering,
+    cosign,
   };
 }

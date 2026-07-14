@@ -4,8 +4,9 @@ import path from "path";
 import { prisma } from "@/lib/db";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
 import { parseDocument, type DocumentModel } from "@/lib/doceditor/model";
-import { renderDocumentHtml, renderSigningSheets, type RenderCtx } from "@/lib/doceditor/serialize";
+import { renderDocumentHtml, renderSigningSheets, type RenderCtx, type StampField } from "@/lib/doceditor/serialize";
 import { htmlToPdf } from "@/lib/customDocs";
+import { readFile } from "@/lib/storage";
 import type { SignatureRequest } from "@prisma/client";
 
 let logoCache: string | null | undefined;
@@ -49,6 +50,35 @@ export async function renderEnvelopePdf(doc: DocumentModel, quoteId: string | nu
   const ctx = await bindCtx(quoteId, jobCardId);
   const html = renderDocumentHtml(doc, ctx, logoDataUri(), { hideOverlays: true });
   return htmlToPdf(html);
+}
+
+async function fieldImg(ref: string | null): Promise<string | null> {
+  if (!ref) return null;
+  if (ref.startsWith("http") || ref.startsWith("data:")) return ref;
+  try { const buf = await readFile(ref); return `data:image/png;base64,${buf.toString("base64")}`; } catch { return null; }
+}
+
+/**
+ * Fields already completed by OTHER recipients, as read-only stamps — so the
+ * current signer sees (e.g.) Denago's signature already on the document before
+ * adding their own.
+ */
+export async function signedFieldStamps(requestId: string, excludeRecipientId: string): Promise<StampField[]> {
+  const rows = await prisma.signatureField.findMany({ where: { requestId, filledAt: { not: null } } });
+  const out: StampField[] = [];
+  for (const f of rows) {
+    if (f.recipientId === excludeRecipientId) continue; // the current signer fills their own
+    const base = { page: f.page, x: f.x, y: f.y, width: f.width, height: f.height, kind: f.kind };
+    if (f.kind === "signature" || f.kind === "initials" || f.kind === "stamp") {
+      const img = await fieldImg(f.value);
+      if (img) out.push({ ...base, image: img });
+    } else if (f.kind === "checkbox") {
+      out.push({ ...base, text: f.value === "true" ? "✓" : "" });
+    } else {
+      out.push({ ...base, text: f.value ?? "" });
+    }
+  }
+  return out;
 }
 
 /** Interactive per-page sheets for the signing surface, bound to the record. */
