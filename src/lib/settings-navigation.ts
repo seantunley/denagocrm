@@ -67,3 +67,7 @@ export const SETTINGS_TABS = SETTINGS_NAV_GROUPS.flatMap((group) => group.items)
 export function settingsHref(item: SettingsNavItem) {
   return item.href ?? `/settings?tab=${encodeURIComponent(item.key)}`;
 }
+
+// Aliases used by the visual-consistency components (SettingsNav / search).
+export const settingsDestination = settingsHref;
+export type SettingsGroup = SettingsNavGroup;
