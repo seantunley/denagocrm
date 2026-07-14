@@ -76,17 +76,22 @@ jobs:
       - name: Generate Prisma client
         run: npm run prisma:generate
 
-      - name: Apply schema to isolated PostgreSQL
-        # Use db push (schema-first) rather than `migrate deploy`: the historical
-        # migration folders use non-zero-padded numeric prefixes, so a fresh-DB
-        # `migrate deploy` applies them in lexical order (10_ before 2_/4_) and
-        # fails before Quote exists. db push builds the correct schema directly;
-        # real environments apply migrations manually, so this only affects CI.
-        run: npx prisma db push --schema ./prisma --skip-generate --accept-data-loss
+      - name: Apply migrations in numeric order to isolated PostgreSQL
+        # The migration folders use non-zero-padded numeric prefixes, so Prisma's
+        # lexical `migrate deploy` mis-orders them (10_dealer_signature before
+        # 4_quotes → "relation Quote does not exist"). Apply each migration.sql
+        # directly in NUMERIC order — this also runs the data-seeding INSERTs
+        # (RBAC permissions/roles in 52/53) that the governance + security checks
+        # below depend on and that a schema-only `db push` would skip.
+        run: |
+          for name in $(ls prisma/migrations | grep -E '^[0-9]+_' | sort -t_ -k1,1 -n); do
+            echo "→ $name"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "prisma/migrations/$name/migration.sql"
+          done
 
       - name: Seed baseline data
-        # governance + security checks assert on baseline rows (default pipeline,
-        # admins, roles). db push gives an empty schema, so seed before them.
+        # governance + security checks also assert on a default pipeline + admin
+        # user, which the seed provides on top of the migration-seeded RBAC rows.
         run: npm run seed
 
       - name: Type check
