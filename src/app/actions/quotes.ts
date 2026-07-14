@@ -11,9 +11,39 @@ import { getSetting } from "@/lib/settings";
 import { markReferralEarned } from "@/lib/referrals";
 import { runLeadAutomations } from "@/lib/automations";
 import { parseRands, formatZAR, contactName } from "@/lib/format";
+import { z } from "zod";
+
+const quoteDraftSchema = z.object({
+  id: z.string().trim().min(1).optional(),
+  contactId: z.string().trim().min(1, "Select a customer."),
+  validUntil: z.string().trim().max(10).nullable().optional(),
+  terms: z.string().trim().max(10_000, "Terms are too long."),
+  intent: z.enum(["draft", "sent"]),
+  items: z.array(
+    z.object({
+      description: z.string().trim().min(1, "Every line needs a description.").max(500),
+      qty: z.number().finite().positive().max(100_000),
+      unitPriceCents: z.number().int().min(0).max(100_000_000_000),
+    }),
+  ).max(100, "A quote can contain at most 100 lines."),
+});
+
+export type QuoteDraftInput = z.input<typeof quoteDraftSchema>;
+
+export type QuoteDraftResult =
+  | {
+      ok: true;
+      quote: {
+        id: string;
+        number: number;
+        status: string;
+        updatedAt: string;
+      };
+    }
+  | { ok: false; error: string };
 
 /** Creates a draft quote from a lead, pre-filled with its product line. */
-export async function createQuoteFromLead(leadId: string) {
+async function createQuoteFromLeadRecord(leadId: string) {
   const user = await requireCrm();
   const lead = await prisma.lead.findUniqueOrThrow({
     where: { id: leadId },
@@ -55,7 +85,17 @@ export async function createQuoteFromLead(leadId: string) {
     user,
   });
   revalidatePath("/quotes");
+  return quote;
+}
+
+export async function createQuoteFromLead(leadId: string) {
+  const quote = await createQuoteFromLeadRecord(leadId);
   redirect(`/quotes/${quote.id}`);
+}
+
+export async function createQuoteFromLeadInEditor(leadId: string) {
+  const quote = await createQuoteFromLeadRecord(leadId);
+  redirect(`/quotes?edit=${quote.id}`);
 }
 
 /** Creates a quote directly for an existing customer (no lead needed). */
@@ -100,6 +140,128 @@ export async function createQuoteForContact(formData: FormData) {
   });
   revalidatePath("/quotes");
   redirect(`/quotes/${quote.id}`);
+}
+
+/**
+ * Creates or atomically updates a quote draft for the modal editor. The client
+ * supplies only editable fields; identity, locking state and quote numbering
+ * are always resolved again on the server.
+ */
+export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraftResult> {
+  const user = await requireCrm();
+  const parsed = quoteDraftSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the quote details." };
+  }
+
+  const data = parsed.data;
+  if (data.intent === "sent" && data.items.length === 0) {
+    return { ok: false, error: "Add at least one line before marking the quote as sent." };
+  }
+
+  const contact = await prisma.contact.findUnique({
+    where: { id: data.contactId },
+    select: { id: true, firstName: true, lastName: true, company: true, isCompany: true },
+  });
+  if (!contact) return { ok: false, error: "That customer is no longer available." };
+
+  let validUntil: Date | null = null;
+  if (data.validUntil) {
+    validUntil = new Date(`${data.validUntil}T12:00:00`);
+    if (Number.isNaN(validUntil.getTime())) {
+      return { ok: false, error: "Enter a valid expiry date." };
+    }
+  }
+
+  const createDefaults = data.id
+    ? null
+    : await Promise.all([getSetting("QUOTE_VALID_DAYS"), getSetting("QUOTE_TERMS")]);
+
+  const result = await basePrisma.$transaction(async (tx) => {
+    if (data.id) {
+      const existing = await tx.quote.findUnique({ where: { id: data.id } });
+      if (
+        !existing ||
+        existing.deletedAt ||
+        existing.status !== "draft" ||
+        existing.signToken ||
+        existing.signedAt ||
+        existing.supersededAt
+      ) {
+        return null;
+      }
+      if (existing.leadId && existing.contactId !== data.contactId) {
+        throw new Error("The customer on a lead-linked quote cannot be changed.");
+      }
+
+      await tx.quote.update({
+        where: { id: existing.id },
+        data: {
+          contactId: data.contactId,
+          validUntil,
+          terms: data.terms || null,
+          status: data.intent,
+        },
+      });
+      await tx.quoteItem.deleteMany({ where: { quoteId: existing.id } });
+      if (data.items.length > 0) {
+        await tx.quoteItem.createMany({
+          data: data.items.map((item) => ({ ...item, quoteId: existing.id })),
+        });
+      }
+      return tx.quote.findUniqueOrThrow({ where: { id: existing.id } });
+    }
+
+    const max = await tx.quote.aggregate({ _max: { number: true } });
+    const validDaysRaw = createDefaults?.[0];
+    const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
+    const defaultTerms =
+      createDefaults?.[1] ||
+      "Prices include VAT. Delivery arranged on acceptance. E&OE.";
+
+    return tx.quote.create({
+      data: {
+        number: (max._max.number ?? 1000) + 1,
+        contactId: data.contactId,
+        createdById: user.id,
+        validUntil: validUntil ?? addDays(new Date(), Number.isNaN(validDays) ? 7 : validDays),
+        terms: data.terms || defaultTerms,
+        status: data.intent,
+        items: data.items.length > 0 ? { create: data.items } : undefined,
+      },
+    });
+  });
+
+  if (!result) {
+    return {
+      ok: false,
+      error: "This quote is locked or no longer editable. Refresh to see its latest state.",
+    };
+  }
+
+  const total = data.items.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
+  await logAudit({
+    action: data.intent === "sent" ? "quote.sent" : data.id ? "quote.updated" : "quote.created",
+    summary:
+      data.intent === "sent"
+        ? `Quote Q-${result.number} (${formatZAR(Math.round(total))}) marked sent to the customer`
+        : `${data.id ? "Updated" : "Created"} quote Q-${result.number} for ${contactName(contact)}`,
+    leadId: result.leadId,
+    contactId: data.contactId,
+    user,
+  });
+
+  revalidatePath("/quotes");
+  revalidatePath(`/quotes/${result.id}`);
+  return {
+    ok: true,
+    quote: {
+      id: result.id,
+      number: result.number,
+      status: result.status,
+      updatedAt: result.updatedAt.toISOString(),
+    },
+  };
 }
 
 /**

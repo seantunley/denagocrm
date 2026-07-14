@@ -12,10 +12,10 @@ import LeadForm from "@/components/LeadForm";
 import ContactForm from "@/components/ContactForm";
 import JobCardForm from "@/components/JobCardForm";
 import VehicleForm from "@/components/VehicleForm";
+import { QuoteEditorDialog } from "@/components/quotes/QuoteEditorDialog";
 import { createLead } from "@/app/actions/leads";
 import { createContact } from "@/app/actions/contacts";
 import { createVehicle } from "@/app/actions/vehicles";
-import { createQuoteForContact } from "@/app/actions/quotes";
 import { scheduleActivity } from "@/app/actions/activities";
 
 export type QuickCreateKind = "lead" | "contact" | "calendar" | "quote" | "jobcard" | "vehicle";
@@ -39,6 +39,7 @@ type Options = {
   contacts: { id: string; label: string }[];
   users: { id: string; name: string }[];
   vehicles: { id: string; label: string }[];
+  quoteDefaults: { validUntil: string; terms: string };
 };
 
 /**
@@ -65,6 +66,18 @@ export default function QuickCreateDialog() {
 
   const input =
     "w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20";
+
+  if (kind === "quote" && options) {
+    return (
+      <QuoteEditorDialog
+        open
+        onOpenChange={(next) => !next && setKind(null)}
+        contacts={options.contacts}
+        products={options.products}
+        defaults={options.quoteDefaults}
+      />
+    );
+  }
 
   return (
     <Dialog open={!!kind} onOpenChange={(o) => !o && setKind(null)}>
@@ -105,36 +118,6 @@ export default function QuickCreateDialog() {
                 submitLabel="Register vehicle"
                 showInitialKm
               />
-            )}
-
-            {kind === "quote" && (
-              <form action={createQuoteForContact} className="space-y-4">
-                <div>
-                  <label className="label">Customer *</label>
-                  <select name="contactId" className={input} required defaultValue="">
-                    <option value="" disabled>
-                      Select customer…
-                    </option>
-                    {options.contacts.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="label">Product (optional — pre-fills the first line)</label>
-                  <select name="productId" className={input} defaultValue="">
-                    <option value="">— start empty —</option>
-                    {options.products.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <button className="btn-primary">Create quote</button>
-              </form>
             )}
 
             {kind === "calendar" && (

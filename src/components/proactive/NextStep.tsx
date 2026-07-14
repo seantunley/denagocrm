@@ -22,7 +22,7 @@ import {
 } from "@/app/actions/activities";
 import { markWon, markLost } from "@/app/actions/leads";
 import { fireConfetti } from "@/lib/confetti";
-import { createQuoteFromLead } from "@/app/actions/quotes";
+import { createQuoteFromLeadInEditor } from "@/app/actions/quotes";
 import {
   Dialog,
   ResponsiveDialogContent,
@@ -109,7 +109,7 @@ export function NextStepDialog({
               onClick={() =>
                 start(async () => {
                   toast.success("Creating a quote…");
-                  await createQuoteFromLead(leadId); // redirects to the new quote
+                  await createQuoteFromLeadInEditor(leadId);
                 })
               }
             >

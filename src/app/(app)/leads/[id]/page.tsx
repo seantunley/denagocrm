@@ -10,7 +10,7 @@ import {
   updateLead,
 } from "@/app/actions/leads";
 import LeadForm from "@/components/LeadForm";
-import { createQuoteFromLead } from "@/app/actions/quotes";
+import { createQuoteFromLeadInEditor } from "@/app/actions/quotes";
 import CommsTimeline from "@/components/CommsTimeline";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
@@ -116,7 +116,7 @@ export default async function LeadDetailPage({
         <div className="flex gap-2 flex-wrap">
           {lead.status === "open" && (
             <>
-              <form action={createQuoteFromLead.bind(null, lead.id)}>
+              <form action={createQuoteFromLeadInEditor.bind(null, lead.id)}>
                 <button className="btn-primary">📄 Create quote</button>
               </form>
               <form action={markWon.bind(null, lead.id)}>
@@ -310,7 +310,7 @@ export default async function LeadDetailPage({
                     <div className="flex items-center justify-between mb-3">
                       <h2 className="font-semibold">Quotes</h2>
                       {lead.status === "open" && (
-                        <form action={createQuoteFromLead.bind(null, lead.id)}>
+                        <form action={createQuoteFromLeadInEditor.bind(null, lead.id)}>
                           <button className="btn-secondary btn-sm">+ Create quote</button>
                         </form>
                       )}

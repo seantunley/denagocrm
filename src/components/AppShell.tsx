@@ -156,6 +156,7 @@ function MobilePrimaryNav({
 
   return (
     <nav
+      data-mobile-navigation="true"
       className="fixed inset-x-3 bottom-[max(.75rem,env(safe-area-inset-bottom))] z-40 grid rounded-2xl border border-sidebar-border bg-sidebar/95 p-1.5 shadow-[0_22px_60px_rgba(0,0,0,.55)] backdrop-blur-xl lg:hidden"
       style={{ gridTemplateColumns: `repeat(${items.length + 1}, minmax(0, 1fr))` }}
       aria-label="Primary navigation"
