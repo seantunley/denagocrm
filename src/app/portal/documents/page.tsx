@@ -1,9 +1,11 @@
 import { redirect } from "next/navigation";
+import { Download, FileText, FolderOpen, UploadCloud } from "lucide-react";
 import { basePrisma, prisma } from "@/lib/db";
 import { getPortalContact } from "@/lib/portal";
 import { requirePortalScope } from "@/lib/portalAccess";
 import { PortalUploadForm } from "@/components/PortalExpansionForms";
 import { formatDate } from "@/lib/format";
+import { EmptyState, PortalPageHeader, SectionHeading, Surface } from "@/components/visual-system";
 
 type UploadRow = {
   id: string;
@@ -65,53 +67,52 @@ export default async function PortalDocumentsPage() {
   ]);
 
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold">Documents</h1>
-        <p className="text-sm text-slate-400 mt-1">Download customer, vehicle, quote and delivery documents, or upload files securely to our team.</p>
-      </div>
+    <div className="space-y-10">
+      <PortalPageHeader eyebrow="Document centre" title="Documents" description="Download your customer, vehicle, quote and delivery documents, or send files securely to our team." />
 
-      <section className="card space-y-4">
-        <h2 className="font-semibold">Secure upload</h2>
+      <Surface className="space-y-5 p-5 sm:p-6">
+        <SectionHeading title="Secure upload" description="Files are attached directly to your customer record and are only visible to the Denago team." action={<span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><UploadCloud className="size-5" /></span>} />
         <PortalUploadForm
           vehicles={vehicles.map((vehicle) => ({ id: vehicle.id, label: `${vehicle.model}${vehicle.regNumber ? ` (${vehicle.regNumber})` : ""}` }))}
           cases={cases.map((item) => ({ id: item.id, label: `C-${item.number.toString()} · ${item.subject}` }))}
         />
-      </section>
+      </Surface>
 
       <section className="space-y-3">
-        <h2 className="font-semibold">Documents from Denago</h2>
+        <SectionHeading title="Documents from Denago" description="Your latest official documents and completed paperwork." />
         {documents.length === 0 ? (
-          <div className="card text-sm text-slate-400">No documents are currently available.</div>
+          <EmptyState icon={FolderOpen} title="No documents available yet" description="Quotes, delivery paperwork and other files shared with you will appear here." className="py-10" />
         ) : (
-          <div className="card p-0 divide-y divide-slate-800">
+          <Surface className="divide-y divide-border">
             {documents.map((document) => (
-              <a key={document.id} href={`/api/portal/documents/${document.id}`} className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-slate-900/60">
-                <div>
+              <a key={document.id} href={`/api/portal/documents/${document.id}`} className="group flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-white/[0.025] sm:px-5">
+                <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-white/[0.07] bg-white/[0.035] text-slate-400"><FileText className="size-4" /></span>
+                <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">{document.fileName}</p>
                   <p className="text-xs text-slate-400">{document.tag || document.mimeType} · {formatDate(document.createdAt)}</p>
                 </div>
-                <span className="btn-secondary btn-sm">Download</span>
+                <Download className="size-4 shrink-0 text-slate-500 transition-colors group-hover:text-orange-400" />
               </a>
             ))}
-          </div>
+          </Surface>
         )}
       </section>
 
       {uploads.length > 0 && (
         <section className="space-y-3">
-          <h2 className="font-semibold">Files you uploaded</h2>
-          <div className="card p-0 divide-y divide-slate-800">
+          <SectionHeading title="Files you uploaded" description="A record of files you have securely shared with us." />
+          <Surface className="divide-y divide-border">
             {uploads.map((upload) => (
-              <a key={upload.id} href={`/api/portal/uploads/${upload.id}`} className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-slate-900/60">
-                <div>
+              <a key={upload.id} href={`/api/portal/uploads/${upload.id}`} className="group flex items-center gap-3 px-4 py-3.5 transition-colors hover:bg-white/[0.025] sm:px-5">
+                <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-white/[0.07] bg-white/[0.035] text-slate-400"><UploadCloud className="size-4" /></span>
+                <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">{upload.fileName}</p>
                   <p className="text-xs text-slate-400">{Math.ceil(upload.sizeBytes / 1024)} KB · {upload.status} · {formatDate(upload.createdAt)}</p>
                 </div>
-                <span className="btn-secondary btn-sm">Download</span>
+                <Download className="size-4 shrink-0 text-slate-500 transition-colors group-hover:text-orange-400" />
               </a>
             ))}
-          </div>
+          </Surface>
         </section>
       )}
     </div>
