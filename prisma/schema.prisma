@@ -1001,8 +1001,13 @@ model DocBuilderVersion {
 model SignatureRequest {
   id      String @id @default(cuid())
   title   String
-  status  String @default("draft") // draft|sent|viewed|in_progress|completed|declined|expired|voided
+  status  String @default("draft") // draft|sent|viewed|in_progress|completed|declined|expired|voided|rejected
   ordering String @default("parallel") // parallel|sequential
+
+  // Workflow runtime — set when driven by a saved signing workflow with approval /
+  // branch logic. The graph is frozen at send; currentNodeId is the interpreter position.
+  workflowGraphJson Json?
+  currentNodeId     String?
 
   // Source of the document (any/all may be null; the PDF to sign is unsignedPdfRef)
   documentId String?
@@ -1030,11 +1035,45 @@ model SignatureRequest {
   recipients SignatureRecipient[]
   fields     SignatureField[]
   events     SignatureEvent[]
+  approvals  ApprovalStep[]
 
   @@index([status, updatedAt])
   @@index([quoteId])
   @@index([jobCardId])
   @@index([contactId])
+}
+
+/// An internal approval gate materialised from a workflow's approval node. A CRM
+/// person approves/rejects (decision mode) — signature-mode approvals are handled
+/// as approver SignatureRecipients instead. Reject routes down the node's rejected branch.
+model ApprovalStep {
+  id        String           @id @default(cuid())
+  requestId String
+  request   SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  nodeId String // workflow node this step was materialised from
+  label  String
+  mode   String @default("decision") // decision | signature
+
+  assigneeType   String // staff | role | owner
+  assigneeUserId String?
+  assigneeRole   String?
+  assigneeName   String?
+  assigneeEmail  String?
+
+  token String @unique // tokenised email approve/reject links
+
+  status         String    @default("pending") // pending | approved | rejected
+  decidedByUserId String?
+  decidedByName  String?
+  decidedAt      DateTime?
+  reason         String?
+
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([requestId])
+  @@index([status])
 }
 
 model SignatureRecipient {
@@ -1048,6 +1087,7 @@ model SignatureRecipient {
   role  String  @default("signer") // signer|approver|viewer
   order Int     @default(0) // signing order for sequential
   color String  @default("#2563eb")
+  nodeId String? // workflow signer node this recipient was materialised from
 
   token  String @unique // per-recipient signing token (hex)
   status String @default("pending") // pending|sent|viewed|signed|declined

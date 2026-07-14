@@ -18,21 +18,24 @@ const TYPE_META: Record<SignNode["type"], { icon: string; label: string; color: 
   start: { icon: "▶", label: "Start", color: "#0891b2" },
   signer: { icon: "✍", label: "Signer", color: "#2563eb" },
   condition: { icon: "🔀", label: "Condition", color: "#7c3aed" },
+  approval: { icon: "🛡", label: "Approval", color: "#d97706" },
   end: { icon: "✅", label: "Complete", color: "#059669" },
 };
 
 const MODE_LABEL: Record<SignerMode, string> = {
-  staff: "Denago staff", role: "Role", customer: "The customer", email: "Fixed email", ask: "Choose at send",
+  staff: "Denago staff", role: "Role", owner: "Any owner/admin", customer: "The customer", email: "Fixed email", ask: "Choose at send",
 };
 
+function whoLabel(who: { mode: SignerMode; userId?: string; role?: string; email?: string }, staff: StaffOption[]): string {
+  return who.mode === "staff" ? (staff.find((s) => s.id === who.userId)?.name ?? "Denago staff")
+    : who.mode === "role" ? (who.role || "a role")
+    : who.mode === "email" ? (who.email || "an email")
+    : MODE_LABEL[who.mode];
+}
+
 function summary(n: SignNode, staff: StaffOption[] = []): string {
-  if (n.type === "signer") {
-    const who = n.who.mode === "staff" ? (staff.find((s) => s.id === n.who.userId)?.name ?? "Denago staff")
-      : n.who.mode === "role" ? (n.who.role || "a role")
-      : n.who.mode === "email" ? (n.who.email || "an email")
-      : MODE_LABEL[n.who.mode];
-    return `${n.label || "Signer"} — ${who}${n.role === "approver" ? " (approver)" : ""}`;
-  }
+  if (n.type === "signer") return `${n.label || "Signer"} — ${whoLabel(n.who, staff)}${n.role === "approver" ? " (approver)" : ""}`;
+  if (n.type === "approval") return `${n.label || "Approval"} — ${whoLabel(n.who, staff)} · ${n.mode === "signature" ? "signs" : "approve/reject"}`;
   if (n.type === "condition") return `If ${CONDITION_LABEL[n.field]} ${OP_LABEL[n.op]} ${n.value || "…"}`;
   if (n.type === "start") return "Workflow begins";
   return "Everyone has signed → seal & file";
@@ -59,6 +62,15 @@ function NodeCard({ data }: NodeProps) {
             <Handle type="source" position={Position.Right} id="false" style={{ top: 126, background: "#e11d48" }} />
           </div>
         </div>
+      ) : n.type === "approval" ? (
+        <div className="pb-1">
+          <div className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-emerald-400">Approved →
+            <Handle type="source" position={Position.Right} id="approved" style={{ top: 100, background: "#059669" }} />
+          </div>
+          <div className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-rose-400">Rejected →
+            <Handle type="source" position={Position.Right} id="rejected" style={{ top: 126, background: "#e11d48" }} />
+          </div>
+        </div>
       ) : n.type === "end" ? null : (
         <Handle type="source" position={Position.Right} id="out" style={{ background: meta.color }} />
       )}
@@ -71,6 +83,7 @@ const nodeTypes = { signNode: NodeCard };
 function blankNode(type: SignNode["type"], id: string): SignNode {
   switch (type) {
     case "signer": return { id, type, label: "Signer", who: { mode: "customer" }, role: "signer" };
+    case "approval": return { id, type, label: "Approval", mode: "decision", who: { mode: "staff" } };
     case "condition": return { id, type, field: "total", op: "gt", value: "500000" };
     case "end": return { id, type };
     default: return { id, type: "start" };
@@ -103,6 +116,7 @@ export default function SignFlowBuilder({ workflowId, name, initial, staff }: { 
     for (const rn of rfNodes) {
       const n = rn.data.node;
       if (n.type === "condition") { add(n.id, "true", n.whenTrue, "#059669", "yes"); add(n.id, "false", n.whenFalse, "#e11d48", "no"); }
+      else if (n.type === "approval") { add(n.id, "approved", n.whenApproved, "#059669", "approved"); add(n.id, "rejected", n.whenRejected, "#e11d48", "rejected"); }
       else if (n.type !== "end") add(n.id, "out", (n as { next?: string }).next, "#475569");
     }
     return out;
@@ -113,6 +127,8 @@ export default function SignFlowBuilder({ workflowId, name, initial, staff }: { 
     patch(c.source, (n) => {
       if (n.type === "condition" && c.sourceHandle === "true") return { ...n, whenTrue: c.target! };
       if (n.type === "condition" && c.sourceHandle === "false") return { ...n, whenFalse: c.target! };
+      if (n.type === "approval" && c.sourceHandle === "approved") return { ...n, whenApproved: c.target! };
+      if (n.type === "approval" && c.sourceHandle === "rejected") return { ...n, whenRejected: c.target! };
       return { ...n, next: c.target! } as SignNode;
     });
   }, [patch]);
@@ -149,7 +165,7 @@ export default function SignFlowBuilder({ workflowId, name, initial, staff }: { 
       <div className="flex flex-wrap items-center gap-2 pb-3">
         <input className="input btn-sm w-56" value={wfName} onChange={(e) => setWfName(e.target.value)} placeholder="Workflow name" />
         <span className="ml-2 mr-1 text-xs text-slate-400">Add:</span>
-        {(["signer", "condition", "end"] as SignNode["type"][]).map((t) => (
+        {(["signer", "approval", "condition", "end"] as SignNode["type"][]).map((t) => (
           <button key={t} onClick={() => addNode(t)} className="btn-secondary btn-sm">{TYPE_META[t].icon} {TYPE_META[t].label}</button>
         ))}
         <span className="flex-1" />
@@ -180,9 +196,45 @@ export default function SignFlowBuilder({ workflowId, name, initial, staff }: { 
 
 function clearRefs(n: SignNode, removed: string): SignNode {
   if (n.type === "condition") return { ...n, whenTrue: n.whenTrue === removed ? undefined : n.whenTrue, whenFalse: n.whenFalse === removed ? undefined : n.whenFalse };
+  if (n.type === "approval") return { ...n, whenApproved: n.whenApproved === removed ? undefined : n.whenApproved, whenRejected: n.whenRejected === removed ? undefined : n.whenRejected };
   if (n.type === "end") return n;
   const nn = n as { next?: string };
   return nn.next === removed ? ({ ...n, next: undefined } as SignNode) : n;
+}
+
+type Who = { mode: SignerMode; userId?: string; role?: string; email?: string; name?: string };
+
+/** Shared "who acts" picker used by signer + approval nodes. */
+function WhoFields({ who, staff, onChange, label }: { who: Who; staff: StaffOption[]; onChange: (w: Who) => void; label: string }) {
+  return (
+    <>
+      <div><label className="label">{label}</label>
+        <select className="input" value={who.mode} onChange={(e) => onChange({ mode: e.target.value as SignerMode })}>
+          {SIGNER_MODES.map((m) => <option key={m} value={m}>{MODE_LABEL[m]}</option>)}
+        </select></div>
+      {who.mode === "staff" && (
+        <div><label className="label">Staff member</label>
+          <select className="input" value={who.userId ?? ""} onChange={(e) => onChange({ ...who, userId: e.target.value || undefined })}>
+            <option value="">— pick a person —</option>
+            {staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select></div>
+      )}
+      {who.mode === "role" && (
+        <div><label className="label">Role name</label>
+          <input className="input" value={who.role ?? ""} onChange={(e) => onChange({ ...who, role: e.target.value })} placeholder="e.g. Finance" />
+          <input className="input mt-1" value={who.email ?? ""} onChange={(e) => onChange({ ...who, email: e.target.value })} placeholder="Optional fixed email to notify" /></div>
+      )}
+      {who.mode === "email" && (
+        <div className="space-y-1.5">
+          <div><label className="label">Name</label><input className="input" value={who.name ?? ""} onChange={(e) => onChange({ ...who, name: e.target.value })} /></div>
+          <div><label className="label">Email</label><input className="input" value={who.email ?? ""} onChange={(e) => onChange({ ...who, email: e.target.value })} placeholder="person@example.com" /></div>
+        </div>
+      )}
+      {who.mode === "owner" && <p className="text-xs text-slate-500">Any account owner / governance admin can action this.</p>}
+      {who.mode === "customer" && <p className="text-xs text-slate-500">Resolves to the customer on the quote / job card automatically.</p>}
+      {who.mode === "ask" && <p className="text-xs text-slate-500">You&apos;ll be asked who this is when you send.</p>}
+    </>
+  );
 }
 
 function TargetPicker({ value, onPick, nodeOptions, label }: { value?: string; onPick: (v?: string) => void; nodeOptions: { id: string; label: string }[]; label: string }) {
@@ -212,37 +264,27 @@ function NodePanel({ node, isStart, staff, nodeOptions, onChange, onDelete, onMa
         <>
           <div><label className="label">Step label</label>
             <input className="input" value={node.label} onChange={(e) => onChange({ ...node, label: e.target.value })} placeholder="e.g. Manager" /></div>
-          <div><label className="label">Who signs</label>
-            <select className="input" value={node.who.mode} onChange={(e) => onChange({ ...node, who: { mode: e.target.value as SignerMode } })}>
-              {SIGNER_MODES.map((m) => <option key={m} value={m}>{MODE_LABEL[m]}</option>)}
-            </select></div>
-          {node.who.mode === "staff" && (
-            <div><label className="label">Staff member</label>
-              <select className="input" value={node.who.userId ?? ""} onChange={(e) => onChange({ ...node, who: { ...node.who, userId: e.target.value || undefined } })}>
-                <option value="">— pick a person —</option>
-                {staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select></div>
-          )}
-          {node.who.mode === "role" && (
-            <div><label className="label">Role name</label>
-              <input className="input" value={node.who.role ?? ""} onChange={(e) => onChange({ ...node, who: { ...node.who, role: e.target.value } })} placeholder="e.g. Finance" />
-              <p className="mt-1 text-xs text-slate-500">Whoever holds this role is chosen when you send (or type their email below).</p>
-              <input className="input mt-1" value={node.who.email ?? ""} onChange={(e) => onChange({ ...node, who: { ...node.who, email: e.target.value } })} placeholder="Optional fixed email" />
-            </div>
-          )}
-          {node.who.mode === "email" && (
-            <div className="space-y-1.5">
-              <div><label className="label">Name</label><input className="input" value={node.who.name ?? ""} onChange={(e) => onChange({ ...node, who: { ...node.who, name: e.target.value } })} /></div>
-              <div><label className="label">Email</label><input className="input" value={node.who.email ?? ""} onChange={(e) => onChange({ ...node, who: { ...node.who, email: e.target.value } })} placeholder="person@example.com" /></div>
-            </div>
-          )}
-          {node.who.mode === "customer" && <p className="text-xs text-slate-500">Resolves to the customer on the quote / job card automatically.</p>}
-          {node.who.mode === "ask" && <p className="text-xs text-slate-500">You&apos;ll be asked who this is when you send the document.</p>}
+          <WhoFields who={node.who} staff={staff} label="Who signs" onChange={(w) => onChange({ ...node, who: w })} />
           <div><label className="label">Step type</label>
             <select className="input" value={node.role} onChange={(e) => onChange({ ...node, role: e.target.value as "signer" | "approver" })}>
               <option value="signer">Signer</option><option value="approver">Approver</option>
             </select></div>
           <TargetPicker label="Then go to" nodeOptions={nodeOptions} value={node.next} onPick={(v) => onChange({ ...node, next: v })} />
+        </>
+      )}
+
+      {node.type === "approval" && (
+        <>
+          <div><label className="label">Step label</label>
+            <input className="input" value={node.label} onChange={(e) => onChange({ ...node, label: e.target.value })} placeholder="e.g. Manager approval" /></div>
+          <div><label className="label">How they respond</label>
+            <select className="input" value={node.mode} onChange={(e) => onChange({ ...node, mode: e.target.value as "decision" | "signature" })}>
+              <option value="decision">Approve / reject (no signature)</option>
+              <option value="signature">Sign the document as approver</option>
+            </select></div>
+          <WhoFields who={node.who} staff={staff} label="Who approves" onChange={(w) => onChange({ ...node, who: w })} />
+          <TargetPicker label="If approved → go to" nodeOptions={nodeOptions} value={node.whenApproved} onPick={(v) => onChange({ ...node, whenApproved: v })} />
+          <TargetPicker label="If rejected → go to" nodeOptions={nodeOptions} value={node.whenRejected} onPick={(v) => onChange({ ...node, whenRejected: v })} />
         </>
       )}
 

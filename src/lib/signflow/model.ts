@@ -7,7 +7,7 @@
 import { z } from "zod";
 
 // ── who a signer step resolves to ───────────────────────────────────
-export const SIGNER_MODES = ["staff", "role", "customer", "email", "ask"] as const;
+export const SIGNER_MODES = ["staff", "role", "owner", "customer", "email", "ask"] as const;
 export type SignerMode = (typeof SIGNER_MODES)[number];
 
 // ── condition fields the rules can test ─────────────────────────────
@@ -43,12 +43,25 @@ const conditionNode = z.object({
   whenTrue: z.string().optional(),
   whenFalse: z.string().optional(),
 });
+// Internal approval gate: a CRM person approves/rejects before the flow proceeds.
+// mode "decision" = approve/reject only (no ink); "signature" = they sign the doc
+// as an approver. Rejection follows whenRejected (draw your own rejected branch).
+const approvalNode = z.object({
+  id: z.string(),
+  type: z.literal("approval"),
+  label: z.string().default(""),
+  mode: z.enum(["decision", "signature"]).default("decision"),
+  who: whoSchema,
+  whenApproved: z.string().optional(),
+  whenRejected: z.string().optional(),
+});
 const endNode = z.object({ id: z.string(), type: z.literal("end") });
 
-export const signNodeSchema = z.discriminatedUnion("type", [startNode, signerNode, conditionNode, endNode]);
+export const signNodeSchema = z.discriminatedUnion("type", [startNode, signerNode, conditionNode, approvalNode, endNode]);
 export type SignNode = z.infer<typeof signNodeSchema>;
 export type SignerNode = z.infer<typeof signerNode>;
 export type ConditionNode = z.infer<typeof conditionNode>;
+export type ApprovalNode = z.infer<typeof approvalNode>;
 
 export const workflowGraphSchema = z.object({
   start: z.string(),
