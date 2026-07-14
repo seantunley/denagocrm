@@ -10,6 +10,7 @@ import { sendEmail } from "@/lib/email";
 import { formatDateTime } from "@/lib/format";
 import { bindCtx, logoDataUri } from "./render";
 import { logSignEvent } from "./events";
+import { runPostCompletion } from "./postComplete";
 
 function esc(s: unknown): string {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -78,6 +79,19 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     data: { status: "completed", completedAt: new Date(), signedPdfRef: storedName, signedPdfHash: hash, signedDocId: document?.id ?? null },
   });
   await logSignEvent(requestId, { type: "completed", actor: "system", metadata: { hash } });
+
+  // Fire CRM side-effects (quote accepted → lead won, job card signed). Parity
+  // with the legacy /sign flow. Best-effort: never unwinds the completed request.
+  const firstSigner = req.recipients.find((r) => r.status === "signed" && r.role !== "viewer");
+  await runPostCompletion({
+    id: req.id,
+    title: req.title,
+    quoteId: req.quoteId,
+    jobCardId: req.jobCardId,
+    signedByName: firstSigner?.signedName || firstSigner?.name || null,
+    signedPdfHash: hash,
+    signedDocId: document?.id ?? null,
+  });
 
   // Email the sealed PDF to every recipient with an address.
   for (const r of req.recipients) {

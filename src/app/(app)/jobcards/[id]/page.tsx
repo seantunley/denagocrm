@@ -14,7 +14,8 @@ import DocumentsPanel from "@/components/DocumentsPanel";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import SigningBlock from "@/components/SigningBlock";
 import { listBuilderTemplates } from "@/lib/docbuilder/store";
-import { generateDocEditorDocument, requestSignatureForRecord } from "@/app/actions/doceditor";
+import { generateDocEditorDocument } from "@/app/actions/doceditor";
+import { activeRecordRequest } from "@/lib/signing/record";
 import JobCardItemForm from "@/components/JobCardItemForm";
 import { uploadJobCardPhotos } from "@/app/actions/jobcards";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
@@ -43,6 +44,7 @@ export default async function JobCardDetailPage({
   if (!jobCard) notFound();
   const currentUser = await requireUser();
   const builderDocs = (await listBuilderTemplates()).filter((t) => t.key === "jobcard" || t.key === "service-report");
+  const signingState = await activeRecordRequest({ jobCardId: jobCard.id });
   const path = `/jobcards/${jobCard.id}`;
 
   const partsTotal = jobCard.items
@@ -106,9 +108,6 @@ export default async function JobCardDetailPage({
               </select>
               <button className="btn-secondary" title="Generate this builder document for the job card and file it">
                 📄 Generate
-              </button>
-              <button formAction={requestSignatureForRecord} className="btn-secondary" title="Create a signing request from this template + job card">
-                ✍ Send for signing
               </button>
             </form>
           )}
@@ -200,11 +199,10 @@ export default async function JobCardDetailPage({
         kind="jobcard"
         id={jobCard.id}
         refLabel={`#${jobCard.number}`}
-        signToken={jobCard.signToken}
         signedAt={jobCard.signedAt}
         signedByName={jobCard.signedByName}
-        customerEmail={jobCard.contact.email}
-        customerPhone={jobCard.contact.whatsapp ?? jobCard.contact.phone}
+        state={signingState}
+        legacyToken={jobCard.signToken}
       />
 
       <div className="grid lg:grid-cols-3 gap-6 items-start">

@@ -3,8 +3,9 @@ import fs from "fs";
 import path from "path";
 import { prisma } from "@/lib/db";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
-import { parseDocument } from "@/lib/doceditor/model";
+import { parseDocument, type DocumentModel } from "@/lib/doceditor/model";
 import { renderDocumentHtml, type RenderCtx } from "@/lib/doceditor/serialize";
+import { htmlToPdf } from "@/lib/customDocs";
 import type { SignatureRequest } from "@prisma/client";
 
 let logoCache: string | null | undefined;
@@ -41,6 +42,13 @@ export async function renderRequestDocHtml(req: Pick<SignatureRequest, "snapshot
   if (!doc) return "<p style='padding:24px;color:#64748b'>This document is unavailable.</p>";
   const ctx = await bindCtx(req.quoteId, req.jobCardId);
   return renderDocumentHtml(doc, ctx, logoDataUri());
+}
+
+/** Render a bound document to an unsigned print-ready PDF (overlay fields hidden). */
+export async function renderEnvelopePdf(doc: DocumentModel, quoteId: string | null, jobCardId: string | null): Promise<Buffer> {
+  const ctx = await bindCtx(quoteId, jobCardId);
+  const html = renderDocumentHtml(doc, ctx, logoDataUri(), { hideOverlays: true });
+  return htmlToPdf(html);
 }
 
 export { logoDataUri };
