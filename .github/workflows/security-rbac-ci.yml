@@ -76,8 +76,13 @@ jobs:
       - name: Generate Prisma client
         run: npm run prisma:generate
 
-      - name: Apply migrations to isolated PostgreSQL
-        run: npm run prisma:migrate
+      - name: Apply schema to isolated PostgreSQL
+        # Use db push (schema-first) rather than `migrate deploy`: the historical
+        # migration folders use non-zero-padded numeric prefixes, so a fresh-DB
+        # `migrate deploy` applies them in lexical order (10_ before 2_/4_) and
+        # fails before Quote exists. db push builds the correct schema directly;
+        # real environments apply migrations manually, so this only affects CI.
+        run: npx prisma db push --schema ./prisma --skip-generate --accept-data-loss
 
       - name: Type check
         run: npm run typecheck
