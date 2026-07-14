@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { Plus } from "lucide-react";
 import ModalTrigger from "@/components/Modal";
+import PartForm from "@/components/PartForm";
 import { formatZAR } from "@/lib/format";
 import { createPart, updatePart, adjustPartStock, deletePart } from "@/app/actions/parts";
 import { PageHeader } from "@/components/page-header";
@@ -60,10 +61,7 @@ export default async function PartsPage() {
     <div className="space-y-5">
       <PageHeader title="Parts" description={lowCount > 0 ? `${lowCount} part${lowCount === 1 ? "" : "s"} at or below reorder level` : "Workshop parts inventory is healthy."}>
         <ModalTrigger label={<><Plus className="size-4" />New part</>} title="New part" buttonClass={buttonVariants({ size: "sm" })}>
-          <form action={createPart} className="card space-y-3">
-            <PartFields />
-            <button className="btn-primary">Add part</button>
-          </form>
+          <PartForm action={createPart} variant="dialog" />
         </ModalTrigger>
       </PageHeader>
 
