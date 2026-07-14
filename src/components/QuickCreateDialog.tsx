@@ -92,7 +92,7 @@ export default function QuickCreateDialog() {
             )}
 
             {kind === "contact" && (
-              <ContactForm action={createContact} users={options.users} submitLabel="Create contact" />
+              <ContactForm action={createContact} users={options.users} submitLabel="Create contact" variant="dialog" />
             )}
 
             {kind === "jobcard" && <JobCardForm vehicles={options.vehicles} />}

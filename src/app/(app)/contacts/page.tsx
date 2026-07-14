@@ -127,6 +127,7 @@ export default async function ContactsPage({
               action={createContact}
               submitLabel="Create contact"
               users={users.map((item) => ({ id: item.id, name: item.name }))}
+              variant="dialog"
             />
           </ModalTrigger>
         )}
