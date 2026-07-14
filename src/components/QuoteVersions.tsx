@@ -19,7 +19,7 @@ export type QuoteVersion = {
   createdAt: string; // pre-formatted
   declineReason: string | null;
   totalZAR: string; // pre-formatted
-  items: { qty: number; description: string; priceZAR: string }[];
+  items: { qty: number; description: string; colorPreference: string | null; priceZAR: string }[];
 };
 
 const STATUS_STYLE: Record<string, string> = {
@@ -120,7 +120,10 @@ export default function QuoteVersions({
                   <tbody>
                     {viewing.items.map((it, i) => (
                       <tr key={i} className="border-b border-border/60 last:border-0">
-                        <td className="px-3 py-2 text-foreground">{it.description}</td>
+                        <td className="px-3 py-2 text-foreground">
+                          <span className="block">{it.description}</span>
+                          {it.colorPreference && <span className="mt-0.5 block text-[11px] text-muted-foreground">Colour preference: {it.colorPreference}</span>}
+                        </td>
                         <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
                           {it.qty}
                         </td>

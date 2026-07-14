@@ -24,6 +24,8 @@ const quoteDraftSchema = z.object({
       description: z.string().trim().min(1, "Every line needs a description.").max(500),
       qty: z.number().finite().positive().max(100_000),
       unitPriceCents: z.number().int().min(0).max(100_000_000_000),
+      productId: z.string().trim().min(1).nullable().optional(),
+      colorPreference: z.string().trim().max(100).nullable().optional(),
     }),
   ).max(100, "A quote can contain at most 100 lines."),
 });
@@ -68,9 +70,11 @@ async function createQuoteFromLeadRecord(leadId: string) {
         ? {
             create: [
               {
-                description: `${lead.product.name}${lead.color ? ` — ${lead.color}` : ""}`,
+                description: lead.product.name,
                 qty: 1,
                 unitPriceCents: lead.valueCents || lead.product.basePriceCents,
+                productId: lead.product.id,
+                colorPreference: lead.color || null,
               },
             ],
           }
@@ -125,7 +129,12 @@ export async function createQuoteForContact(formData: FormData) {
       items: product
         ? {
             create: [
-              { description: product.name, qty: 1, unitPriceCents: product.basePriceCents },
+              {
+                description: product.name,
+                qty: 1,
+                unitPriceCents: product.basePriceCents,
+                productId: product.id,
+              },
             ],
           }
         : undefined,
@@ -157,6 +166,43 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
   const data = parsed.data;
   if (data.intent === "sent" && data.items.length === 0) {
     return { ok: false, error: "Add at least one line before marking the quote as sent." };
+  }
+
+  const productIds = [...new Set(data.items.flatMap((item) => item.productId ? [item.productId] : []))];
+  const products = productIds.length > 0
+    ? await prisma.product.findMany({
+        where: { id: { in: productIds } },
+        select: { id: true, colors: { select: { name: true } } },
+      })
+    : [];
+  const productsById = new Map(products.map((product) => [product.id, product]));
+  const normalizedItems: Array<{
+    description: string;
+    qty: number;
+    unitPriceCents: number;
+    productId: string | null;
+    colorPreference: string | null;
+  }> = [];
+  for (const item of data.items) {
+    const productId = item.productId || null;
+    const requestedColor = item.colorPreference?.trim() || null;
+    if (!productId) {
+      if (requestedColor) {
+        return { ok: false, error: "A colour preference requires a catalogue product." };
+      }
+      normalizedItems.push({ ...item, productId: null, colorPreference: null });
+      continue;
+    }
+
+    const product = productsById.get(productId);
+    if (!product) return { ok: false, error: "A product on this quote is no longer available." };
+    const canonicalColor = requestedColor
+      ? product.colors.find((color) => color.name.toLocaleLowerCase() === requestedColor.toLocaleLowerCase())?.name
+      : null;
+    if (requestedColor && !canonicalColor) {
+      return { ok: false, error: `“${requestedColor}” is not configured for this product.` };
+    }
+    normalizedItems.push({ ...item, productId, colorPreference: canonicalColor ?? null });
   }
 
   const contact = await prisma.contact.findUnique({
@@ -204,9 +250,9 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
         },
       });
       await tx.quoteItem.deleteMany({ where: { quoteId: existing.id } });
-      if (data.items.length > 0) {
+      if (normalizedItems.length > 0) {
         await tx.quoteItem.createMany({
-          data: data.items.map((item) => ({ ...item, quoteId: existing.id })),
+          data: normalizedItems.map((item) => ({ ...item, quoteId: existing.id })),
         });
       }
       return tx.quote.findUniqueOrThrow({ where: { id: existing.id } });
@@ -227,7 +273,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
         validUntil: validUntil ?? addDays(new Date(), Number.isNaN(validDays) ? 7 : validDays),
         terms: data.terms || defaultTerms,
         status: data.intent,
-        items: data.items.length > 0 ? { create: data.items } : undefined,
+        items: normalizedItems.length > 0 ? { create: normalizedItems } : undefined,
       },
     });
   });
@@ -239,7 +285,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     };
   }
 
-  const total = data.items.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
+  const total = normalizedItems.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
   await logAudit({
     action: data.intent === "sent" ? "quote.sent" : data.id ? "quote.updated" : "quote.created",
     summary:
@@ -308,6 +354,8 @@ export async function createQuoteRevision(quoteId: string) {
           description: i.description,
           qty: i.qty,
           unitPriceCents: i.unitPriceCents,
+          productId: i.productId,
+          colorPreference: i.colorPreference,
         })),
       },
     },

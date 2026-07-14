@@ -30,7 +30,7 @@ type FamilyQuote = {
   supersededAt: Date | null;
   declineReason: string | null;
   createdAt: Date;
-  items: { qty: number; unitPriceCents: number; description: string }[];
+  items: { qty: number; unitPriceCents: number; description: string; colorPreference: string | null }[];
 };
 
 /** All versions of a quote: walk up to the root, then collect descendants. */
@@ -61,7 +61,7 @@ async function getQuoteFamily(start: {
         supersededAt: true,
         declineReason: true,
         createdAt: true,
-        items: { select: { qty: true, unitPriceCents: true, description: true } },
+        items: { select: { qty: true, unitPriceCents: true, description: true, colorPreference: true } },
         revisions: { select: { id: true } },
       },
       orderBy: { createdAt: "asc" },
@@ -240,6 +240,7 @@ export default async function QuoteDetailPage({
               items: f.items.map((i) => ({
                 qty: i.qty,
                 description: i.description,
+                colorPreference: i.colorPreference,
                 priceZAR: formatZAR(i.qty * i.unitPriceCents),
               })),
             }))}
@@ -377,7 +378,10 @@ export default async function QuoteDetailPage({
               )}
               {quote.items.map((i) => (
                 <tr key={i.id}>
-                  <td>{i.description}</td>
+                  <td>
+                    <span className="block">{i.description}</span>
+                    {i.colorPreference && <span className="mt-1 block text-xs text-muted-foreground">Colour preference: {i.colorPreference}</span>}
+                  </td>
                   <td className="text-right">{i.qty}</td>
                   <td className="text-right">{formatZAR(i.unitPriceCents)}</td>
                   <td className="text-right font-medium">

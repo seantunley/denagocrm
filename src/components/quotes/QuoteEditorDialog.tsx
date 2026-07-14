@@ -50,6 +50,7 @@ export type QuoteEditorProduct = {
   id: string;
   name: string;
   basePriceCents: number;
+  colors: string[];
 };
 
 export type QuoteEditorVersion = {
@@ -78,6 +79,8 @@ export type QuoteEditorRecord = {
     description: string;
     qty: number;
     unitPriceCents: number;
+    productId: string | null;
+    colorPreference: string | null;
   }>;
   versions: QuoteEditorVersion[];
 };
@@ -92,6 +95,8 @@ type DraftLine = {
   description: string;
   qty: string;
   unitPrice: string;
+  productId: string | null;
+  colorPreference: string;
 };
 
 type DraftState = {
@@ -149,6 +154,8 @@ function createDraft(record: QuoteEditorRecord | null, defaults: QuoteEditorDefa
       description: item.description,
       qty: String(item.qty),
       unitPrice: priceInput(item.unitPriceCents),
+      productId: item.productId,
+      colorPreference: item.colorPreference ?? "",
     })),
   } satisfies DraftState;
 }
@@ -158,7 +165,13 @@ function draftSnapshot(draft: DraftState) {
     contactId: draft.contactId,
     validUntil: draft.validUntil,
     terms: draft.terms,
-    lines: draft.lines.map(({ description, qty, unitPrice }) => ({ description, qty, unitPrice })),
+    lines: draft.lines.map(({ description, qty, unitPrice, productId, colorPreference }) => ({
+      description,
+      qty,
+      unitPrice,
+      productId,
+      colorPreference,
+    })),
   });
 }
 
@@ -247,6 +260,8 @@ export function QuoteEditorDialog({
           description: product.name,
           qty: "1",
           unitPrice: priceInput(product.basePriceCents),
+          productId: product.id,
+          colorPreference: "",
         },
       ],
     }));
@@ -259,7 +274,14 @@ export function QuoteEditorDialog({
       ...current,
       lines: [
         ...current.lines,
-        { key: lineKey(), description: "", qty: "1", unitPrice: "0.00" },
+        {
+          key: lineKey(),
+          description: "",
+          qty: "1",
+          unitPrice: "0.00",
+          productId: null,
+          colorPreference: "",
+        },
       ],
     }));
   }
@@ -310,7 +332,13 @@ export function QuoteEditorDialog({
         setActiveTab("build");
         return;
       }
-      items.push({ description, qty, unitPriceCents });
+      items.push({
+        description,
+        qty,
+        unitPriceCents,
+        productId: line.productId,
+        colorPreference: line.colorPreference.trim() || null,
+      });
     }
 
     startTransition(async () => {
@@ -463,12 +491,34 @@ export function QuoteEditorDialog({
                         </div>
                       ) : (
                         <div className="divide-y divide-white/[0.07]">
-                          {draft.lines.map((line, index) => (
+                          {draft.lines.map((line, index) => {
+                            const selectedProduct = line.productId
+                              ? products.find((product) => product.id === line.productId)
+                              : null;
+                            return (
                             <div key={line.key} className="grid gap-3 px-4 py-4 sm:grid-cols-[2rem_minmax(0,1fr)_6rem_9rem_2.25rem] sm:items-end sm:px-5">
                               <span className="hidden pb-2 text-xs font-semibold tabular-nums text-muted-foreground sm:block">{String(index + 1).padStart(2, "0")}</span>
                               <div className="min-w-0">
                                 <label className="label" htmlFor={`${line.key}-description`}>Description</label>
                                 <input id={`${line.key}-description`} className="input" value={line.description} disabled={!editable} onChange={(event) => updateLine(line.key, { description: event.target.value })} />
+                                {selectedProduct && selectedProduct.colors.length > 0 && (
+                                  <div className="mt-3 rounded-xl border border-primary/15 bg-primary/[0.045] p-3">
+                                    <div className="flex items-center justify-between gap-3">
+                                      <label className="label mb-0" htmlFor={`${line.key}-colour`}>Colour preference</label>
+                                      <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-primary">Catalogue EV</span>
+                                    </div>
+                                    <select
+                                      id={`${line.key}-colour`}
+                                      className="input mt-1.5"
+                                      value={line.colorPreference}
+                                      disabled={!editable}
+                                      onChange={(event) => updateLine(line.key, { colorPreference: event.target.value })}
+                                    >
+                                      <option value="">No preference</option>
+                                      {selectedProduct.colors.map((colour) => <option key={colour} value={colour}>{colour}</option>)}
+                                    </select>
+                                  </div>
+                                )}
                               </div>
                               <div>
                                 <label className="label" htmlFor={`${line.key}-qty`}>Qty</label>
@@ -484,7 +534,8 @@ export function QuoteEditorDialog({
                                 </Button>
                               )}
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
                     </section>
@@ -540,7 +591,7 @@ export function QuoteEditorDialog({
                         {draft.lines.map((line) => {
                           const qty = Number(line.qty.replace(",", ".")) || 0;
                           const price = centsFromInput(line.unitPrice) || 0;
-                          return <tr key={line.key} className="border-b border-slate-100"><td className="py-4 pr-4">{line.description || "Untitled line"}</td><td className="py-4 text-right tabular-nums">{qty}</td><td className="py-4 text-right tabular-nums">{rands(price)}</td><td className="py-4 text-right font-medium tabular-nums">{rands(Math.round(qty * price))}</td></tr>;
+                          return <tr key={line.key} className="border-b border-slate-100"><td className="py-4 pr-4"><span className="block">{line.description || "Untitled line"}</span>{line.colorPreference && <span className="mt-1 block text-xs text-slate-500">Colour preference: {line.colorPreference}</span>}</td><td className="py-4 text-right tabular-nums">{qty}</td><td className="py-4 text-right tabular-nums">{rands(price)}</td><td className="py-4 text-right font-medium tabular-nums">{rands(Math.round(qty * price))}</td></tr>;
                         })}
                         {draft.lines.length === 0 && <tr><td colSpan={4} className="py-12 text-center text-slate-400">No line items added.</td></tr>}
                       </tbody>

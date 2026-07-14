@@ -103,7 +103,8 @@ export default function QuotePrintDoc({
             {quote.items.map((i, idx) => (
               <tr key={i.id} className={idx % 2 === 1 ? "bg-slate-50" : ""}>
                 <td className="py-2.5 px-3 border-b border-slate-200 font-medium text-slate-900">
-                  {i.description}
+                  <span className="block">{i.description}</span>
+                  {i.colorPreference && <span className="mt-0.5 block text-[10px] font-normal text-slate-500">Colour preference: {i.colorPreference}</span>}
                 </td>
                 <td className="py-2.5 px-3 border-b border-slate-200 text-right">{i.qty}</td>
                 <td className="py-2.5 px-3 border-b border-slate-200 text-right">

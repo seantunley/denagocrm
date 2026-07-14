@@ -44,7 +44,11 @@ export default async function QuotesPage({
       take: 200,
     }),
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
-    prisma.product.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
+    prisma.product.findMany({
+      where: { active: true },
+      include: { colors: { orderBy: { name: "asc" } } },
+      orderBy: { name: "asc" },
+    }),
     prisma.quote.findMany({
       orderBy: { createdAt: "asc" },
       select: {
@@ -106,6 +110,8 @@ export default async function QuotesPage({
         description: item.description,
         qty: item.qty,
         unitPriceCents: item.unitPriceCents,
+        productId: item.productId,
+        colorPreference: item.colorPreference,
       })),
       versions: family
         .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
@@ -130,6 +136,7 @@ export default async function QuotesPage({
     id: product.id,
     name: product.name,
     basePriceCents: product.basePriceCents,
+    colors: product.colors.map((colour) => colour.name),
   }));
 
   return (
