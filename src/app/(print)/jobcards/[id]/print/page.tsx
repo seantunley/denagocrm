@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireJobCardReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { getDocTemplate } from "@/lib/docTemplateStore";
@@ -12,8 +12,8 @@ export default async function JobCardPrintPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ tpl?: string }>;
 }) {
-  await requireUser();
   const { id } = await params;
+  await requireJobCardReadAccess(id);
   const { tpl: tplId } = await searchParams;
   const jobCard = await prisma.jobCard.findUnique({
     where: { id },

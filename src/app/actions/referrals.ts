@@ -2,20 +2,19 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireCrm } from "@/lib/auth";
+import { requireContactAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { contactName } from "@/lib/format";
 
-/** Pays out an earned referral — the note records what was given at the time. */
 export async function redeemReferral(referralId: string, formData: FormData) {
-  const user = await requireCrm();
   const note = String(formData.get("note") ?? "").trim();
-  if (!note) return; // what was given is mandatory for the paper trail
+  if (!note) return;
   const referral = await prisma.referral.findUnique({
     where: { id: referralId },
     include: { referrer: true },
   });
   if (!referral || referral.status !== "earned") return;
+  const user = await requireContactAccess(referral.referrerId, "referrals.manage");
   await prisma.referral.update({
     where: { id: referralId },
     data: { status: "redeemed", redeemedAt: new Date(), redeemedNote: note },

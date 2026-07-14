@@ -6,6 +6,12 @@ import JobCardForm from "@/components/JobCardForm";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
+import {
+  getAccessibleJobCardIds,
+  getAccessibleVehicleIds,
+  hasPermission,
+  requireAnyPermission,
+} from "@/lib/permissions";
 
 const statusBadge: Record<string, string> = {
   open: "bg-slate-800 text-slate-400",
@@ -14,30 +20,42 @@ const statusBadge: Record<string, string> = {
 };
 
 export default async function JobCardsPage() {
+  const user = await requireAnyPermission("jobcards.view_all", "jobcards.view_owned");
+  const [jobCardIds, vehicleIds, canManage] = await Promise.all([
+    getAccessibleJobCardIds(user),
+    getAccessibleVehicleIds(user),
+    hasPermission(user, "jobcards.manage"),
+  ]);
   const [jobCards, vehicles] = await Promise.all([
     prisma.jobCard.findMany({
+      where: jobCardIds === null ? {} : { id: { in: jobCardIds } },
       orderBy: [{ status: "asc" }, { openedAt: "desc" }],
       include: { vehicle: true, contact: true, items: true },
       take: 200,
     }),
-    prisma.vehicle.findMany({
-      include: { contact: true },
-      orderBy: { createdAt: "desc" },
-      take: 500,
-    }),
+    canManage
+      ? prisma.vehicle.findMany({
+          where: vehicleIds === null ? {} : { id: { in: vehicleIds } },
+          include: { contact: true },
+          orderBy: { createdAt: "desc" },
+          take: 500,
+        })
+      : Promise.resolve([]),
   ]);
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Workshop jobs" description={`${jobCards.filter((job) => job.status !== "completed").length} active · ${jobCards.length} recent job cards`}>
-        <ModalTrigger label={<><Plus className="size-4" />New job card</>} title="New job card" buttonClass={buttonVariants({ size: "sm" })}>
-          <JobCardForm
-            vehicles={vehicles.map((v) => ({
-              id: v.id,
-              label: `${v.model}${v.vin ? ` (${v.vin})` : ""} — ${contactName(v.contact)}`,
-            }))}
-          />
-        </ModalTrigger>
+      <PageHeader title="Workshop jobs" description={`${jobCards.filter((job) => job.status !== "completed").length} active · ${jobCards.length} accessible recent job cards`}>
+        {canManage && (
+          <ModalTrigger label={<><Plus className="size-4" />New job card</>} title="New job card" buttonClass={buttonVariants({ size: "sm" })}>
+            <JobCardForm
+              vehicles={vehicles.map((v) => ({
+                id: v.id,
+                label: `${v.model}${v.vin ? ` (${v.vin})` : ""} — ${contactName(v.contact)}`,
+              }))}
+            />
+          </ModalTrigger>
+        )}
       </PageHeader>
 
       <div className="card p-0 overflow-x-auto">
@@ -57,7 +75,7 @@ export default async function JobCardsPage() {
             {jobCards.length === 0 && (
               <tr>
                 <td colSpan={7} className="text-center text-slate-400 py-8">
-                  No job cards yet.
+                  No accessible job cards.
                 </td>
               </tr>
             )}

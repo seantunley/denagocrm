@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireCrm } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
 import { isSmsConfigured } from "@/lib/sms";
 import { saveFile } from "@/lib/storage";
@@ -30,7 +30,6 @@ function criteriaFromForm(formData: FormData): SegmentCriteria {
   };
 }
 
-/** Resolve criteria from either a saved segment (segmentId) or inline f_* fields. */
 async function criteriaFor(formData: FormData): Promise<{ criteria: SegmentCriteria; label: string }> {
   const segmentId = str(formData.get("segmentId"));
   if (segmentId) {
@@ -52,9 +51,8 @@ async function audienceLabel(cr: SegmentCriteria): Promise<string> {
   return parts.length ? parts.join(" · ") : "All customers";
 }
 
-/** Upload an inline image for the email composer; returns the hosted URL. */
 export async function uploadCampaignImage(formData: FormData): Promise<string | null> {
-  await requireCrm();
+  await requirePermission("campaigns.manage");
   const file = formData.get("file") as File | null;
   if (!file || !file.type.startsWith("image/")) return null;
   if (file.size > 5 * 1024 * 1024) return null;
@@ -62,9 +60,8 @@ export async function uploadCampaignImage(formData: FormData): Promise<string | 
   return saveFile(buf, file.name, file.type);
 }
 
-/** Live recipient count for a saved segment or inline criteria + channel. */
 export async function previewAudience(formData: FormData): Promise<{ count: number }> {
-  await requireCrm();
+  await requirePermission("campaigns.manage");
   const channel = str(formData.get("channel")) || "email";
   const { criteria } = await criteriaFor(formData);
   return { count: (await resolveContacts(criteria, channel)).length };
@@ -74,7 +71,7 @@ export async function sendCampaignTest(
   _prev: CampaignState | undefined,
   formData: FormData
 ): Promise<CampaignState> {
-  await requireCrm();
+  await requirePermission("campaigns.manage");
   const channel = str(formData.get("channel")) || "email";
   const to = str(formData.get("testTo"));
   if (!to) return { error: "Enter a test address / number." };
@@ -102,7 +99,7 @@ export async function sendCampaign(
   _prev: CampaignState | undefined,
   formData: FormData
 ): Promise<CampaignState> {
-  const user = await requireCrm();
+  const user = await requirePermission("campaigns.manage");
   const name = str(formData.get("name"));
   const channel = str(formData.get("channel")) || "email";
   const subject = str(formData.get("subject"));
@@ -136,7 +133,6 @@ export async function sendCampaign(
     },
   });
 
-  // Send a first batch immediately for instant feedback; the cron drains the rest.
   await sendCampaignBatch(campaign.id, 60);
   await logAudit({
     action: "campaign.started",
@@ -150,7 +146,7 @@ export async function sendCampaign(
 }
 
 export async function saveSegment(formData: FormData) {
-  await requireCrm();
+  await requirePermission("campaigns.manage");
   const name = str(formData.get("name"));
   if (!name) return;
   await prisma.segment.create({
@@ -160,14 +156,13 @@ export async function saveSegment(formData: FormData) {
 }
 
 export async function deleteSegment(id: string) {
-  await requireCrm();
+  await requirePermission("campaigns.manage");
   await prisma.segment.delete({ where: { id } });
   revalidatePath("/campaigns");
 }
 
-/** Subscribe / unsubscribe a contact from marketing (Subscribers tab). */
 export async function setMarketingOptOut(contactId: string, optOut: boolean) {
-  await requireCrm();
+  await requirePermission("campaigns.manage");
   await prisma.contact.update({ where: { id: contactId }, data: { marketingOptOut: optOut } });
   revalidatePath("/campaigns");
 }

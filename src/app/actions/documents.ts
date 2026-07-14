@@ -3,16 +3,35 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { requireCrmOrWorkshop, requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { saveFile } from "@/lib/storage";
 import { DOC_DEFS, defaultTemplate, mergeTemplate, isDocKey } from "@/lib/docTemplates";
+import {
+  requirePermission,
+  requireDocumentAccess,
+  requireContactAccess,
+  requireVehicleAccess,
+  requireJobCardAccess,
+  requireQuoteAccess,
+} from "@/lib/permissions";
 
-const MAX_SIZE = 25 * 1024 * 1024; // 25 MB
+const MAX_SIZE = 25 * 1024 * 1024;
+
+async function requireUploadTargets(formData: FormData) {
+  const contactId = String(formData.get("contactId") ?? "").trim();
+  const vehicleId = String(formData.get("vehicleId") ?? "").trim();
+  const jobCardId = String(formData.get("jobCardId") ?? "").trim();
+  const quoteId = String(formData.get("quoteId") ?? "").trim();
+  if (contactId) return requireContactAccess(contactId, "documents.upload");
+  if (vehicleId) return requireVehicleAccess(vehicleId, "documents.upload");
+  if (jobCardId) return requireJobCardAccess(jobCardId, "documents.upload");
+  if (quoteId) return requireQuoteAccess(quoteId, "documents.upload");
+  return requirePermission("documents.upload");
+}
 
 export async function uploadDocument(formData: FormData) {
-  const user = await requireCrmOrWorkshop();
+  const user = await requireUploadTargets(formData);
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) return;
   if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
@@ -35,6 +54,7 @@ export async function uploadDocument(formData: FormData) {
       contactId: str("contactId"),
       vehicleId: str("vehicleId"),
       jobCardId: str("jobCardId"),
+      quoteId: str("quoteId"),
       uploadedById: user.id,
     },
     include: { vehicle: true, jobCard: true },
@@ -49,9 +69,8 @@ export async function uploadDocument(formData: FormData) {
 }
 
 export async function deleteDocument(id: string, revalidate: string, formData: FormData) {
-  const user = await requireCrmOrWorkshop();
+  const user = await requireDocumentAccess(id, "documents.manage");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
-  // soft delete: the stored file is kept until the trash purge
   const doc = await softDeleteRecord("document", id, reason, user.name);
   await logAudit({
     action: "trash.deleted",
@@ -62,10 +81,10 @@ export async function deleteDocument(id: string, revalidate: string, formData: F
   revalidatePath(revalidate);
 }
 
-/* ── Documents hub: template studio (owner) ──────────────────────── */
+/* ── Typed generated-document templates ─────────────────────────── */
 
 export async function createDocTemplate(formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("document_templates.manage");
   const docType = String(formData.get("docType") ?? "");
   if (!isDocKey(docType)) return;
   const name = String(formData.get("name") ?? "").trim() || "Untitled";
@@ -86,7 +105,7 @@ export async function createDocTemplate(formData: FormData) {
 }
 
 export async function updateDocTemplate(id: string, formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("document_templates.manage");
   const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
   if (!isDocKey(rec.docType)) return;
   const key = rec.docType;
@@ -98,11 +117,11 @@ export async function updateDocTemplate(id: string, formData: FormData) {
     terms: String(formData.get("terms") ?? "").trim() || null,
     footerLines: String(formData.get("footerLines") ?? "")
       .split("\n")
-      .map((l) => l.trim())
+      .map((line) => line.trim())
       .filter(Boolean)
       .slice(0, 4),
     sections: Object.fromEntries(
-      DOC_DEFS[key].sections.map((s) => [s.id, formData.get(`section_${s.id}`) === "on"])
+      DOC_DEFS[key].sections.map((section) => [section.id, formData.get(`section_${section.id}`) === "on"])
     ),
     signature: {
       position: String(formData.get("sigPosition") ?? base.signature.position),
@@ -118,7 +137,7 @@ export async function updateDocTemplate(id: string, formData: FormData) {
 }
 
 export async function setDefaultDocTemplate(id: string) {
-  const user = await requireOwner();
+  const user = await requirePermission("document_templates.manage");
   const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
   await prisma.$transaction([
     prisma.docTemplateRecord.updateMany({ where: { docType: rec.docType }, data: { isDefault: false } }),
@@ -129,7 +148,7 @@ export async function setDefaultDocTemplate(id: string) {
 }
 
 export async function duplicateDocTemplate(id: string) {
-  const user = await requireOwner();
+  const user = await requirePermission("document_templates.manage");
   const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
   const copy = await prisma.docTemplateRecord.create({
     data: { docType: rec.docType, name: `Copy of ${rec.name}`, config: rec.config as object },
@@ -139,16 +158,16 @@ export async function duplicateDocTemplate(id: string) {
 }
 
 export async function deleteDocTemplate(id: string) {
-  const user = await requireOwner();
+  const user = await requirePermission("document_templates.manage");
   const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
-  if (rec.isDefault) return; // the default cannot be deleted — set another default first
+  if (rec.isDefault) return;
   await prisma.docTemplateRecord.update({ where: { id }, data: { deletedAt: new Date() } });
   await logAudit({ action: "doctemplate.deleted", summary: `Deleted template “${rec.name}”`, user });
   revalidatePath("/settings/documents");
 }
 
 export async function uploadTemplateLogo(id: string, formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("document_templates.manage");
   const rec = await prisma.docTemplateRecord.findUniqueOrThrow({ where: { id } });
   if (!isDocKey(rec.docType)) return;
   const file = formData.get("file");
@@ -161,10 +180,10 @@ export async function uploadTemplateLogo(id: string, formData: FormData) {
   revalidatePath(`/settings/documents/t/${id}`);
 }
 
-/* ── Documents hub: repository (owner) ───────────────────────────── */
+/* ── Document repository ─────────────────────────────────────────── */
 
 export async function renameDocument(id: string, formData: FormData) {
-  const user = await requireOwner();
+  const user = await requireDocumentAccess(id, "documents.manage");
   const fileName = String(formData.get("fileName") ?? "").trim();
   const tag = String(formData.get("tag") ?? "").trim() || null;
   if (!fileName) return;
@@ -173,28 +192,27 @@ export async function renameDocument(id: string, formData: FormData) {
   revalidatePath("/settings/documents");
 }
 
-/** Re-file a document onto a different customer / vehicle / quote. */
 export async function moveDocument(id: string, formData: FormData) {
-  const user = await requireOwner();
+  const user = await requireDocumentAccess(id, "documents.manage");
   const [kind, targetId] = String(formData.get("target") ?? "").split(":");
   if (!targetId) return;
+  if (kind === "contact") await requireContactAccess(targetId, "documents.manage");
+  else if (kind === "vehicle") await requireVehicleAccess(targetId, "documents.manage");
+  else if (kind === "quote") await requireQuoteAccess(targetId, "documents.manage");
+  else return;
   const data =
     kind === "contact"
       ? { contactId: targetId, vehicleId: null, quoteId: null, jobCardId: null }
       : kind === "vehicle"
         ? { vehicleId: targetId }
-        : kind === "quote"
-          ? { quoteId: targetId }
-          : null;
-  if (!data) return;
+        : { quoteId: targetId };
   const doc = await prisma.document.update({ where: { id }, data });
   await logAudit({ action: "document.moved", summary: `Re-filed “${doc.fileName}”`, user });
   revalidatePath("/settings/documents");
 }
 
-/** Upload straight into the repository (optionally unfiled). */
 export async function uploadRepoDocument(formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("documents.manage");
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) return;
   if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
@@ -214,9 +232,8 @@ export async function uploadRepoDocument(formData: FormData) {
   revalidatePath("/settings/documents");
 }
 
-/** New version of a file: the old row is kept and linked via replacedById. */
 export async function replaceDocument(id: string, formData: FormData) {
-  const user = await requireOwner();
+  const user = await requireDocumentAccess(id, "documents.manage");
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) return;
   if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
