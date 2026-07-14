@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireWorkshop } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 
 const rand = (v: FormDataEntryValue | null) =>
@@ -11,7 +11,7 @@ const int = (v: FormDataEntryValue | null) => parseInt(String(v ?? "").replace(/
 const str = (v: FormDataEntryValue | null) => String(v ?? "").trim();
 
 export async function createPart(formData: FormData) {
-  await requireWorkshop();
+  await requirePermission("parts.manage");
   const name = str(formData.get("name"));
   if (!name) return;
   await prisma.part.create({
@@ -30,7 +30,7 @@ export async function createPart(formData: FormData) {
 }
 
 export async function updatePart(id: string, formData: FormData) {
-  await requireWorkshop();
+  await requirePermission("parts.manage");
   await prisma.part.update({
     where: { id },
     data: {
@@ -46,9 +46,8 @@ export async function updatePart(id: string, formData: FormData) {
   revalidatePath("/parts");
 }
 
-/** Adjust stock by a signed delta (e.g. +10 restock, -2 correction). */
 export async function adjustPartStock(id: string, formData: FormData) {
-  const user = await requireWorkshop();
+  const user = await requirePermission("parts.manage");
   const delta = int(formData.get("delta"));
   if (!delta || Number.isNaN(delta)) return;
   const part = await prisma.part.update({
@@ -64,7 +63,7 @@ export async function adjustPartStock(id: string, formData: FormData) {
 }
 
 export async function deletePart(id: string) {
-  await requireWorkshop();
+  await requirePermission("parts.manage");
   await prisma.part.update({ where: { id }, data: { deletedAt: new Date() } });
   revalidatePath("/parts");
 }

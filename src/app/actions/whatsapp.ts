@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireInbox } from "@/lib/auth";
+import { canAccessContact, canAccessLead, requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { sendWhatsAppText, waDigits } from "@/lib/whatsapp";
 
@@ -12,12 +12,14 @@ export async function sendWhatsAppMessage(
   _prev: WaState | undefined,
   formData: FormData
 ): Promise<WaState> {
-  const user = await requireInbox();
+  const user = await requirePermission("inbox.reply");
   const phone = String(formData.get("phone") ?? "").trim();
   const text = String(formData.get("text") ?? "").trim();
   const contactId = String(formData.get("contactId") ?? "").trim() || null;
   const leadId = String(formData.get("leadId") ?? "").trim() || null;
   if (!phone || !text) return { error: "Message is required." };
+  if (contactId && !(await canAccessContact(user, contactId))) return { error: "Customer access denied." };
+  if (leadId && !(await canAccessLead(user, leadId))) return { error: "Lead access denied." };
 
   const digits = waDigits(phone);
   const result = await sendWhatsAppText(digits, text);

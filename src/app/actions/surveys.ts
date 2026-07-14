@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireCrm } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { sendSurvey, submitResponse } from "@/lib/surveys";
 import {
@@ -13,7 +13,7 @@ import {
 } from "@/lib/surveyTypes";
 
 export async function createSurvey(formData: FormData) {
-  const user = await requireCrm();
+  const user = await requirePermission("surveys.manage");
   const title = String(formData.get("title") ?? "").trim();
   const type = (String(formData.get("type") ?? "adhoc") as SurveyType) || "adhoc";
   if (!title) throw new Error("Give the survey a name");
@@ -51,7 +51,7 @@ export async function saveSurvey(
     questions: SurveyQuestion[];
   }
 ) {
-  const user = await requireCrm();
+  const user = await requirePermission("surveys.manage");
   await prisma.survey.update({
     where: { id },
     data: {
@@ -71,7 +71,7 @@ export async function saveSurvey(
 }
 
 export async function deleteSurvey(formData: FormData) {
-  const user = await requireCrm();
+  const user = await requirePermission("surveys.manage");
   const id = String(formData.get("id") ?? "");
   const survey = await prisma.survey.findUnique({ where: { id } });
   await prisma.survey.update({ where: { id }, data: { deletedAt: new Date() } });
@@ -101,7 +101,6 @@ async function audienceContactIds(segment: string): Promise<string[]> {
     });
     return ls.map((l) => l.contactId).filter((x): x is string => !!x);
   }
-  // "customers" — everyone reachable who hasn't opted out
   const cs = await prisma.contact.findMany({
     where: { marketingOptOut: false, OR: [{ email: { not: null } }, { phone: { not: null } }] },
     select: { id: true },
@@ -113,7 +112,7 @@ async function audienceContactIds(segment: string): Promise<string[]> {
 export type SendResult = { sent: number; skipped: number; test?: boolean } | null;
 
 export async function sendToAudience(_prev: SendResult, formData: FormData): Promise<SendResult> {
-  const user = await requireCrm();
+  const user = await requirePermission("surveys.manage");
   const surveyId = String(formData.get("surveyId") ?? "");
   const segment = String(formData.get("segment") ?? "customers");
   const survey = await prisma.survey.findUniqueOrThrow({ where: { id: surveyId } });
@@ -142,7 +141,6 @@ export async function sendToAudience(_prev: SendResult, formData: FormData): Pro
   return { sent, skipped };
 }
 
-/** Public — no auth. Called from the /s/[token] response form. */
 export async function submitSurveyResponse(token: string, answers: Record<string, unknown>) {
   return submitResponse(token, answers);
 }

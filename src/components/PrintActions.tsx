@@ -2,7 +2,13 @@
 
 import Link from "next/link";
 
-export default function PrintActions({ backHref }: { backHref: string }) {
+export default function PrintActions({
+  backHref,
+  backLabel = "Back",
+}: {
+  backHref: string;
+  backLabel?: string;
+}) {
   return (
     <div className="print:hidden flex items-center gap-2 p-4 bg-slate-100 border-b border-slate-200">
       <button
@@ -15,7 +21,7 @@ export default function PrintActions({ backHref }: { backHref: string }) {
         href={backHref}
         className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium bg-white text-slate-700 border border-slate-300 hover:bg-slate-50"
       >
-        ← Back to job card
+        ← {backLabel}
       </Link>
     </div>
   );

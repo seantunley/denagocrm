@@ -3,11 +3,11 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireCrm } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { requirePermission, requireVehicleAccess } from "@/lib/permissions";
 
 export async function createFleet(formData: FormData) {
-  const user = await requireCrm();
+  const user = await requirePermission("fleets.manage");
   const name = String(formData.get("name") ?? "").trim();
   if (!name) throw new Error("Give the fleet a name");
   const fleet = await prisma.fleet.create({
@@ -23,7 +23,7 @@ export async function createFleet(formData: FormData) {
 }
 
 export async function updateFleet(id: string, formData: FormData) {
-  const user = await requireCrm();
+  const user = await requirePermission("fleets.manage");
   await prisma.fleet.update({
     where: { id },
     data: {
@@ -33,29 +33,29 @@ export async function updateFleet(id: string, formData: FormData) {
       notes: String(formData.get("notes") ?? "").trim() || null,
     },
   });
-  await logAudit({ action: "fleet.updated", summary: `Updated fleet`, user });
+  await logAudit({ action: "fleet.updated", summary: "Updated fleet", user });
   revalidatePath(`/fleets/${id}`);
 }
 
 export async function deleteFleet(formData: FormData) {
-  const user = await requireCrm();
+  const user = await requirePermission("fleets.manage");
   const id = String(formData.get("id") ?? "");
-  // Detach carts, then soft-delete the fleet (carts are never destroyed)
   await prisma.vehicle.updateMany({ where: { fleetId: id }, data: { fleetId: null } });
   await prisma.fleet.update({ where: { id }, data: { deletedAt: new Date() } });
-  await logAudit({ action: "fleet.deleted", summary: `Deleted a fleet`, user });
+  await logAudit({ action: "fleet.deleted", summary: "Deleted a fleet", user });
   redirect("/fleets");
 }
 
 export async function assignVehicleToFleet(fleetId: string, formData: FormData) {
-  await requireCrm();
   const vehicleId = String(formData.get("vehicleId") ?? "");
-  if (vehicleId) await prisma.vehicle.update({ where: { id: vehicleId }, data: { fleetId } });
+  if (!vehicleId) return;
+  await requireVehicleAccess(vehicleId, "fleets.manage");
+  await prisma.vehicle.update({ where: { id: vehicleId }, data: { fleetId } });
   revalidatePath(`/fleets/${fleetId}`);
 }
 
 export async function removeVehicleFromFleet(vehicleId: string, fleetId: string) {
-  await requireCrm();
+  await requireVehicleAccess(vehicleId, "fleets.manage");
   await prisma.vehicle.update({ where: { id: vehicleId }, data: { fleetId: null } });
   revalidatePath(`/fleets/${fleetId}`);
 }

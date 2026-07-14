@@ -345,6 +345,16 @@
   .denago-workspace :is(.btn, .btn-primary, .btn-secondary, .btn-danger) {
     min-height: 2.5rem;
   }
+  /* Safety net: wide tables scroll horizontally on phones instead of cramming.
+     Pages converted to intentional mobile layouts wrap their own tables; this
+     keeps the many list pages not yet converted usable. */
+  .denago-workspace .card:has(> table),
+  .denago-workspace .card:has(> .table-base) {
+    overflow-x: auto;
+  }
+  .denago-workspace .table-base {
+    min-width: 640px;
+  }
 }
 
 /* Contrast floor for legacy muted utilities inside the staff workspace. */
@@ -430,4 +440,17 @@ input::-webkit-inner-spin-button {
 input[type="number"] {
   -moz-appearance: textfield;
   appearance: textfield;
+}
+
+/* react-moveable: the doc-editor overlay/floating layers are pointer-events:none
+   so clicks pass through to flow content. Force the moveable control handles to be
+   interactive so resize/drag handles work inside those layers. */
+.moveable-control-box {
+  pointer-events: none;
+}
+.moveable-control-box .moveable-control,
+.moveable-control-box .moveable-line,
+.moveable-control-box .moveable-area,
+.moveable-control-box .moveable-direction {
+  pointer-events: auto !important;
 }

@@ -1,148 +1,120 @@
 import Link from "next/link";
-import { FileText, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
 import ModalTrigger from "@/components/Modal";
 import { createQuoteForContact } from "@/app/actions/quotes";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
-import { EmptyState, StatusPill } from "@/components/visual-system";
-import { MobileDataCard, MobileDataField, MobileDataFields, MobileDataHeader, MobileDataList, ResponsiveDataView } from "@/components/responsive-patterns";
+import {
+  getAccessibleContactIds,
+  getAccessibleQuoteIds,
+  hasPermission,
+  requireAnyPermission,
+} from "@/lib/permissions";
+
+const statusBadge: Record<string, string> = {
+  draft: "bg-slate-800 text-slate-300",
+  sent: "bg-blue-500/15 text-blue-300",
+  accepted: "bg-emerald-500/15 text-emerald-300",
+  declined: "bg-red-500/15 text-red-300",
+};
 
 export default async function QuotesPage() {
-  await requireUser();
+  const user = await requireAnyPermission("quotes.view_all", "quotes.view_owned");
+  const [quoteIds, contactIds, canCreate] = await Promise.all([
+    getAccessibleQuoteIds(user),
+    getAccessibleContactIds(user),
+    hasPermission(user, "quotes.create"),
+  ]);
   const [quotes, contacts, products] = await Promise.all([
     prisma.quote.findMany({
-      // Only the current head of each revision chain — old versions live in
-      // the quote's Versions panel, not the list.
-      where: { supersededAt: null },
+      where: {
+        AND: [
+          { supersededAt: null },
+          ...(quoteIds === null ? [] : [{ id: { in: quoteIds } }]),
+        ],
+      },
       orderBy: { createdAt: "desc" },
       include: { items: true, lead: true, contact: true, createdBy: true },
       take: 200,
     }),
-    prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
-    prisma.product.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
+    canCreate
+      ? prisma.contact.findMany({
+          where: contactIds === null ? {} : { id: { in: contactIds } },
+          orderBy: { firstName: "asc" },
+          take: 500,
+        })
+      : Promise.resolve([]),
+    canCreate
+      ? prisma.product.findMany({ where: { active: true }, orderBy: { name: "asc" } })
+      : Promise.resolve([]),
   ]);
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Quotes" description={`${quotes.length} current quotes · Create, send and track every customer proposal.`}>
-        <ModalTrigger label={<><Plus className="size-4" />New quote</>} title="New quote for a customer" buttonClass={buttonVariants({ size: "sm" })}>
-          <form action={createQuoteForContact} className="card space-y-4">
-            <div>
-              <label className="label">Customer *</label>
-              <select name="contactId" className="input" required defaultValue="">
-                <option value="" disabled>
-                  Select customer…
-                </option>
-                {contacts.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {contactName(c)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="label">Product (optional — pre-fills the first line)</label>
-              <select name="productId" className="input" defaultValue="">
-                <option value="">— start empty —</option>
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({formatZAR(p.basePriceCents)})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <button className="btn-primary">Create quote</button>
-          </form>
-        </ModalTrigger>
+      <PageHeader title="Quotes" description={`${quotes.length} accessible current quotes · Create, send and track customer proposals.`}>
+        {canCreate && (
+          <ModalTrigger label={<><Plus className="size-4" />New quote</>} title="New quote for a customer" buttonClass={buttonVariants({ size: "sm" })}>
+            <form action={createQuoteForContact} className="card space-y-4">
+              <div>
+                <label className="label">Customer *</label>
+                <select name="contactId" className="input" required defaultValue="">
+                  <option value="" disabled>Select customer…</option>
+                  {contacts.map((contact) => (
+                    <option key={contact.id} value={contact.id}>{contactName(contact)}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Product (optional — pre-fills the first line)</label>
+                <select name="productId" className="input" defaultValue="">
+                  <option value="">— start empty —</option>
+                  {products.map((product) => (
+                    <option key={product.id} value={product.id}>
+                      {product.name} ({formatZAR(product.basePriceCents)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button className="btn-primary">Create quote</button>
+            </form>
+          </ModalTrigger>
+        )}
       </PageHeader>
 
-      {quotes.length === 0 ? (
-        <EmptyState icon={FileText} title="No quotes yet" description="Create a quote for a customer or open lead to start tracking a proposal." />
-      ) : (
-      <ResponsiveDataView
-        mobile={
-          <MobileDataList>
-            {quotes.map((q) => {
-              const total = q.items.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
-              return (
-                <MobileDataCard key={q.id}>
-                  <MobileDataHeader
-                    title={<Link href={`/quotes/${q.id}`} className="text-primary hover:underline">Quote Q-{q.number}</Link>}
-                    detail={q.contact ? contactName(q.contact) : q.lead?.name ?? "Unlinked quote"}
-                    aside={<StatusPill tone={q.status === "accepted" ? "success" : q.status === "declined" ? "danger" : q.status === "sent" ? "info" : "neutral"}>{q.status}</StatusPill>}
-                  />
-                  <MobileDataFields>
-                    <MobileDataField label="Total">{formatZAR(Math.round(total))}</MobileDataField>
-                    <MobileDataField label="Valid until">{formatDate(q.validUntil)}</MobileDataField>
-                    <MobileDataField label="Lead">{q.lead ? <Link href={`/leads/${q.lead.id}`} className="text-primary hover:underline">{q.lead.title}</Link> : "—"}</MobileDataField>
-                    <MobileDataField label="Created">{formatDate(q.createdAt)}</MobileDataField>
-                  </MobileDataFields>
-                </MobileDataCard>
-              );
-            })}
-          </MobileDataList>
-        }
-        desktop={
-      <div className="card overflow-x-auto p-0">
+      <div className="card p-0 overflow-x-auto">
         <table className="table-base">
           <thead>
-            <tr>
-              <th>#</th>
-              <th>Customer</th>
-              <th>Lead</th>
-              <th>Total</th>
-              <th>Status</th>
-              <th>Valid until</th>
-              <th>Created</th>
-            </tr>
+            <tr><th>#</th><th>Customer</th><th>Lead</th><th>Total</th><th>Status</th><th>Valid until</th><th>Created</th></tr>
           </thead>
           <tbody>
-            {quotes.map((q) => {
-              const total = q.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+            {quotes.length === 0 && (
+              <tr><td colSpan={7} className="text-center text-slate-400 py-8">No accessible quotes.</td></tr>
+            )}
+            {quotes.map((quote) => {
+              const total = quote.items.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
               return (
-                <tr key={q.id}>
+                <tr key={quote.id}>
+                  <td><Link href={`/quotes/${quote.id}`} className="font-medium text-orange-400 hover:underline">Q-{quote.number}</Link></td>
                   <td>
-                    <Link href={`/quotes/${q.id}`} className="font-medium text-orange-400 hover:underline">
-                      Q-{q.number}
-                    </Link>
-                  </td>
-                  <td>
-                    {q.contact ? (
-                      <Link href={`/contacts/${q.contact.id}`} className="text-orange-400 hover:underline">
-                        {contactName(q.contact)}
-                      </Link>
-                    ) : (
-                      q.lead?.name ?? "—"
-                    )}
+                    {quote.contact ? (
+                      <Link href={`/contacts/${quote.contact.id}`} className="text-orange-400 hover:underline">{contactName(quote.contact)}</Link>
+                    ) : quote.lead?.name ?? "—"}
                   </td>
                   <td className="max-w-56 truncate">
-                    {q.lead ? (
-                      <Link href={`/leads/${q.lead.id}`} className="text-orange-400 hover:underline">
-                        {q.lead.title}
-                      </Link>
-                    ) : (
-                      "—"
-                    )}
+                    {quote.lead ? <Link href={`/leads/${quote.lead.id}`} className="text-orange-400 hover:underline">{quote.lead.title}</Link> : "—"}
                   </td>
                   <td className="font-medium">{formatZAR(Math.round(total))}</td>
-                  <td><StatusPill tone={q.supersededAt ? "neutral" : q.status === "accepted" ? "success" : q.status === "declined" ? "danger" : q.status === "sent" ? "info" : "neutral"}>{q.supersededAt ? "superseded" : q.status}</StatusPill></td>
-                  <td className="text-slate-400">{formatDate(q.validUntil)}</td>
-                  <td className="text-slate-400">
-                    {formatDate(q.createdAt)}
-                    {q.createdBy ? ` · ${q.createdBy.name}` : ""}
-                  </td>
+                  <td><span className={`badge ${quote.supersededAt ? "bg-slate-800 text-slate-500" : statusBadge[quote.status] ?? statusBadge.draft}`}>{quote.supersededAt ? "superseded" : quote.status}</span></td>
+                  <td className="text-slate-400">{formatDate(quote.validUntil)}</td>
+                  <td className="text-slate-400">{formatDate(quote.createdAt)}{quote.createdBy ? ` · ${quote.createdBy.name}` : ""}</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-        }
-      />
-      )}
     </div>
   );
 }

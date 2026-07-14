@@ -226,7 +226,7 @@ export async function snapshotForecast(formData: FormData) {
   const requestedTeamId = str(formData, "teamId");
   const requestedUserId = str(formData, "userId");
 
-  let teamId = requestedTeamId;
+  const teamId = requestedTeamId;
   let userId = requestedUserId;
   if (!scope.viewAll) {
     if (teamId && !scope.teamIds.includes(teamId)) {

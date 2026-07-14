@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
-import { requireOwner } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { MERGE_FIELDS } from "@/lib/mergeFields";
 import StudioEditor from "@/components/StudioEditor";
@@ -10,7 +10,7 @@ import { saveReusableBlock } from "@/app/actions/studio";
 export const dynamic = "force-dynamic";
 
 export default async function StudioClausePage({ params }: { params: Promise<{ id: string }> }) {
-  await requireOwner();
+  await requirePermission("document_templates.manage");
   const { id } = await params;
   const clause = await prisma.reusableBlock.findUnique({ where: { id } });
   if (!clause) notFound();
@@ -31,7 +31,7 @@ export default async function StudioClausePage({ params }: { params: Promise<{ i
           Document Studio
         </Link>
         <p className="text-sm text-muted-foreground">
-          Reusable clause — insert it into any template or document. It's copied in at insert
+          Reusable clause — insert it into any template or document. It is copied in at insert
           time, so editing this clause never changes existing documents.
         </p>
       </div>

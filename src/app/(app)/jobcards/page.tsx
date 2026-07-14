@@ -1,69 +1,64 @@
 import Link from "next/link";
-import { Plus, Wrench } from "lucide-react";
+import { Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import ModalTrigger from "@/components/Modal";
 import JobCardForm from "@/components/JobCardForm";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
-import { EmptyState, StatusPill } from "@/components/visual-system";
-import { MobileDataCard, MobileDataField, MobileDataFields, MobileDataHeader, MobileDataList, ResponsiveDataView } from "@/components/responsive-patterns";
+import {
+  getAccessibleJobCardIds,
+  getAccessibleVehicleIds,
+  hasPermission,
+  requireAnyPermission,
+} from "@/lib/permissions";
+
+const statusBadge: Record<string, string> = {
+  open: "bg-slate-800 text-slate-400",
+  in_progress: "bg-amber-500/15 text-amber-300",
+  completed: "bg-emerald-500/15 text-emerald-300",
+};
 
 export default async function JobCardsPage() {
+  const user = await requireAnyPermission("jobcards.view_all", "jobcards.view_owned");
+  const [jobCardIds, vehicleIds, canManage] = await Promise.all([
+    getAccessibleJobCardIds(user),
+    getAccessibleVehicleIds(user),
+    hasPermission(user, "jobcards.manage"),
+  ]);
   const [jobCards, vehicles] = await Promise.all([
     prisma.jobCard.findMany({
+      where: jobCardIds === null ? {} : { id: { in: jobCardIds } },
       orderBy: [{ status: "asc" }, { openedAt: "desc" }],
       include: { vehicle: true, contact: true, items: true },
       take: 200,
     }),
-    prisma.vehicle.findMany({
-      include: { contact: true },
-      orderBy: { createdAt: "desc" },
-      take: 500,
-    }),
+    canManage
+      ? prisma.vehicle.findMany({
+          where: vehicleIds === null ? {} : { id: { in: vehicleIds } },
+          include: { contact: true },
+          orderBy: { createdAt: "desc" },
+          take: 500,
+        })
+      : Promise.resolve([]),
   ]);
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Workshop jobs" description={`${jobCards.filter((job) => job.status !== "completed").length} active · ${jobCards.length} recent job cards`}>
-        <ModalTrigger label={<><Plus className="size-4" />New job card</>} title="New job card" buttonClass={buttonVariants({ size: "sm" })}>
-          <JobCardForm
-            vehicles={vehicles.map((v) => ({
-              id: v.id,
-              label: `${v.model}${v.vin ? ` (${v.vin})` : ""} — ${contactName(v.contact)}`,
-            }))}
-          />
-        </ModalTrigger>
+      <PageHeader title="Workshop jobs" description={`${jobCards.filter((job) => job.status !== "completed").length} active · ${jobCards.length} accessible recent job cards`}>
+        {canManage && (
+          <ModalTrigger label={<><Plus className="size-4" />New job card</>} title="New job card" buttonClass={buttonVariants({ size: "sm" })}>
+            <JobCardForm
+              vehicles={vehicles.map((v) => ({
+                id: v.id,
+                label: `${v.model}${v.vin ? ` (${v.vin})` : ""} — ${contactName(v.contact)}`,
+              }))}
+            />
+          </ModalTrigger>
+        )}
       </PageHeader>
 
-      {jobCards.length === 0 ? (
-        <EmptyState icon={Wrench} title="No job cards yet" description="Create the first workshop job to track labour, parts, status and customer updates." />
-      ) : (
-      <ResponsiveDataView
-        mobile={
-          <MobileDataList>
-            {jobCards.map((j) => {
-              const total = j.items.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
-              return (
-                <MobileDataCard key={j.id}>
-                  <MobileDataHeader
-                    title={<Link href={`/jobcards/${j.id}`} className="text-primary hover:underline">Job card #{j.number}</Link>}
-                    detail={j.description}
-                    aside={<StatusPill tone={j.status === "completed" ? "success" : j.status === "in_progress" ? "warning" : "neutral"}>{j.status.replace("_", " ")}</StatusPill>}
-                  />
-                  <MobileDataFields>
-                    <MobileDataField label="Vehicle"><Link href={`/vehicles/${j.vehicleId}`} className="text-primary hover:underline">{j.vehicle.model}</Link></MobileDataField>
-                    <MobileDataField label="Customer">{contactName(j.contact)}</MobileDataField>
-                    <MobileDataField label="Total">{formatZAR(Math.round(total))}</MobileDataField>
-                    <MobileDataField label="Opened">{formatDate(j.openedAt)}</MobileDataField>
-                  </MobileDataFields>
-                </MobileDataCard>
-              );
-            })}
-          </MobileDataList>
-        }
-        desktop={
-      <div className="card overflow-x-auto p-0">
+      <div className="card p-0 overflow-x-auto">
         <table className="table-base">
           <thead>
             <tr>
@@ -77,6 +72,13 @@ export default async function JobCardsPage() {
             </tr>
           </thead>
           <tbody>
+            {jobCards.length === 0 && (
+              <tr>
+                <td colSpan={7} className="text-center text-slate-400 py-8">
+                  No accessible job cards.
+                </td>
+              </tr>
+            )}
             {jobCards.map((j) => {
               const total = j.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
               return (
@@ -95,7 +97,9 @@ export default async function JobCardsPage() {
                   <td className="max-w-64 truncate">{j.description}</td>
                   <td>{formatZAR(Math.round(total))}</td>
                   <td>
-                    <StatusPill tone={j.status === "completed" ? "success" : j.status === "in_progress" ? "warning" : "neutral"}>{j.status.replace("_", " ")}</StatusPill>
+                    <span className={`badge ${statusBadge[j.status] ?? statusBadge.open}`}>
+                      {j.status.replace("_", " ")}
+                    </span>
                   </td>
                   <td className="text-slate-400">{formatDate(j.openedAt)}</td>
                 </tr>
@@ -104,9 +108,6 @@ export default async function JobCardsPage() {
           </tbody>
         </table>
       </div>
-        }
-      />
-      )}
     </div>
   );
 }

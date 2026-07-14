@@ -1,12 +1,21 @@
-import { requireUser } from "@/lib/auth";
 import CalendarView from "@/components/CalendarView";
+import { getAccessibleActivityIds } from "@/lib/activityAccess";
+import { requireAnyPermission } from "@/lib/permissions";
 
 export default async function WorkshopCalendarPage({
   searchParams,
 }: {
   searchParams: Promise<{ m?: string }>;
 }) {
-  await requireUser();
-  const { m } = await searchParams;
-  return <CalendarView mode="workshop" m={m} />;
+  const user = await requireAnyPermission(
+    "jobcards.view_all",
+    "jobcards.view_owned",
+    "activities.view",
+    "activities.manage"
+  );
+  const [{ m }, activityIds] = await Promise.all([
+    searchParams,
+    getAccessibleActivityIds(user),
+  ]);
+  return <CalendarView mode="workshop" m={m} activityIds={activityIds} />;
 }

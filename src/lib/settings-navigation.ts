@@ -1,84 +1,73 @@
-export type SettingsItem = {
+export type SettingsNavItem = {
   key: string;
   label: string;
   href?: string;
   keywords?: string[];
 };
 
-export type SettingsGroup = { label: string; items: SettingsItem[] };
+export type SettingsNavGroup = {
+  label: string;
+  items: SettingsNavItem[];
+};
 
-export const SETTINGS_NAV_GROUPS: SettingsGroup[] = [
+/** Shared source of truth for the settings page and application search. */
+export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
   {
     label: "You",
     items: [
       { key: "account", label: "My Account", keywords: ["profile", "password", "signature"] },
-      { key: "notifications", label: "Notifications", keywords: ["alerts", "push"] },
+      { key: "notifications", label: "Notifications", keywords: ["alerts", "push", "email preferences"] },
     ],
   },
   {
     label: "CRM",
     items: [
-      { key: "pipeline", label: "Pipeline", keywords: ["sales", "stages"] },
-      { key: "quotes", label: "Quotes", keywords: ["defaults", "terms", "tax"] },
-      { key: "import", label: "Import", keywords: ["contacts", "csv"] },
+      { key: "pipeline", label: "Pipeline", keywords: ["lead stages", "sales stages"] },
+      { key: "quotes", label: "Quotes", keywords: ["quote defaults", "terms"] },
+      { key: "import", label: "Import", keywords: ["contacts", "csv", "upload"] },
     ],
   },
   {
     label: "Workshop",
     items: [
-      { key: "workshop", label: "Bookings & slots", keywords: ["calendar", "hours", "capacity"] },
+      { key: "workshop", label: "Bookings & slots", keywords: ["schedule", "calendar", "hours"] },
     ],
   },
   {
     label: "Catalog",
     items: [
-      { key: "products", label: "Products", href: "/products", keywords: ["catalog", "pricing"] },
-      {
-        key: "library",
-        label: "Library",
-        href: "/library",
-        keywords: ["files", "brochures", "price lists", "documents"],
-      },
+      { key: "products", label: "Products", keywords: ["catalog", "pricing"] },
+      { key: "library", label: "Library", keywords: ["document library", "files", "attachments"] },
     ],
   },
   {
     label: "Comms & Marketing",
     items: [
       { key: "email", label: "Email", keywords: ["smtp", "imap", "templates"] },
-      { key: "automations", label: "Automations", href: "/automations", keywords: ["workflows"] },
+      { key: "automations", label: "Automations", keywords: ["rules", "workflows", "triggers"] },
     ],
   },
   {
     label: "Organisation",
     items: [
-      { key: "team", label: "Team", keywords: ["users", "staff"] },
-      {
-        key: "documents",
-        label: "Documents",
-        href: "/settings/documents",
-        keywords: ["document studio", "templates", "indemnity", "quote templates"],
-      },
-      { key: "security", label: "Security", href: "/settings/security", keywords: ["checks", "audit"] },
-      {
-        key: "backups",
-        label: "Backup & recovery",
-        href: "/settings/backup-recovery",
-        keywords: ["restore", "database", "disaster recovery"],
-      },
-      {
-        key: "sessions",
-        label: "Sessions & devices",
-        href: "/settings/sessions",
-        keywords: ["login", "devices", "sign out"],
-      },
+      { key: "team", label: "Team", keywords: ["users", "staff", "members"] },
+      { key: "documents", label: "Documents", href: "/settings/documents", keywords: ["templates", "document studio"] },
+      { key: "signing-workflows", label: "Signing workflows", href: "/settings/signing-workflows", keywords: ["approval", "signing", "workflow", "e-sign"] },
+      { key: "security", label: "Security", href: "/settings/security", keywords: ["security checks", "surface exposure"] },
+      { key: "backups", label: "Backup & recovery", href: "/settings/backup-recovery", keywords: ["backup", "restore", "disaster recovery"] },
+      { key: "sessions", label: "Sessions & devices", href: "/settings/sessions", keywords: ["devices", "logins", "sign out"] },
       { key: "integrations", label: "Integrations", keywords: ["api", "webhooks", "whatsapp", "meta"] },
-      { key: "system", label: "System Log", keywords: ["errors", "health", "diagnostics"] },
+      { key: "system", label: "System Log", keywords: ["errors", "logs", "diagnostics"] },
     ],
   },
 ];
 
-export const SETTINGS_NAV_ITEMS = SETTINGS_NAV_GROUPS.flatMap((group) => group.items);
+export const SETTINGS_TABS = SETTINGS_NAV_GROUPS.flatMap((group) => group.items);
 
-export function settingsDestination(item: SettingsItem) {
-  return item.href ?? `/settings?tab=${item.key}`;
+export function settingsHref(item: SettingsNavItem) {
+  return item.href ?? `/settings?tab=${encodeURIComponent(item.key)}`;
 }
+
+// Aliases used by the visual-consistency components (SettingsNav / search).
+export const settingsDestination = settingsHref;
+export type SettingsGroup = SettingsNavGroup;
