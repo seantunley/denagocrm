@@ -52,6 +52,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     items: [
       { key: "team", label: "Team", keywords: ["users", "staff", "members"] },
       { key: "documents", label: "Documents", href: "/settings/documents", keywords: ["templates", "document studio"] },
+      { key: "signing-workflows", label: "Signing workflows", href: "/settings/signing-workflows", keywords: ["approval", "signing", "workflow", "e-sign"] },
       { key: "security", label: "Security", href: "/settings/security", keywords: ["security checks", "surface exposure"] },
       { key: "backups", label: "Backup & recovery", href: "/settings/backup-recovery", keywords: ["backup", "restore", "disaster recovery"] },
       { key: "sessions", label: "Sessions & devices", href: "/settings/sessions", keywords: ["devices", "logins", "sign out"] },
