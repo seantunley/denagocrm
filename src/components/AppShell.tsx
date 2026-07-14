@@ -36,7 +36,7 @@ import { logout } from "@/app/login/actions";
 import { APP_VERSION } from "@/lib/version";
 import { cn } from "@/lib/utils";
 
-type ShellUser = { name: string; role: string; modules: string };
+type ShellUser = { name: string; role: string; modules: string; permissions: string[] };
 
 function initials(name: string) {
   return name
@@ -203,7 +203,7 @@ export default function AppShell({
   return (
     <TooltipProvider delayDuration={250}>
     <div className="min-h-screen">
-      <CommandMenu modules={user.modules} isAdmin={user.role === "owner"} />
+      <CommandMenu modules={user.modules} isAdmin={user.role === "owner"} permissions={user.permissions} />
       <QuickCreateDialog />
       <Toaster />
 

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Rocket } from "lucide-react";
-import { requireOwner } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { MERGE_FIELDS } from "@/lib/mergeFields";
 import { formatDateTime } from "@/lib/format";
@@ -16,7 +16,7 @@ export default async function StudioTemplatePage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requireOwner();
+  await requirePermission("document_templates.manage");
   const { id } = await params;
   const [tpl, clauses] = await Promise.all([
     prisma.customDocTemplate.findUnique({
@@ -56,11 +56,11 @@ export default async function StudioTemplatePage({
         initialTitle={tpl.name}
         initialContent={tpl.draftJson}
         fields={MERGE_FIELDS}
-        clauses={clauses.map((c) => ({
-          id: c.id,
-          name: c.name,
-          category: c.category,
-          contentJson: c.contentJson,
+        clauses={clauses.map((clause) => ({
+          id: clause.id,
+          name: clause.name,
+          category: clause.category,
+          contentJson: clause.contentJson,
         }))}
         onSave={save}
         headerRight={

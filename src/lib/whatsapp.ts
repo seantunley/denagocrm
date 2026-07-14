@@ -188,7 +188,8 @@ export async function recordInboundWhatsApp(
   text: string
 ) {
   const match = await matchByPhone(fromDigits);
-  let { contactId, leadId } = match;
+  const { contactId } = match;
+  let { leadId } = match;
 
   // unknown number → create a lead so nothing is lost
   if (!contactId && !leadId) {

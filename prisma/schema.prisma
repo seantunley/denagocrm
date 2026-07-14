@@ -184,6 +184,7 @@ model Contact {
 
   leads             Lead[]
   communications    Communication[]
+  conversations     Conversation[]
   referralsMade     Referral[]      @relation("ReferralsMade")
   referredIn        Referral[]      @relation("ReferredIn")
   documents         Document[]
@@ -342,6 +343,7 @@ model Lead {
   createdBy    User?         @relation("LeadCreator", fields: [createdById], references: [id])
 
   communications Communication[]
+  conversations  Conversation[]
   activities     Activity[]
   quotes         Quote[]
   researchNotes  ResearchNote[]
@@ -485,6 +487,7 @@ model QuoteItem {
   description    String
   qty            Float  @default(1)
   unitPriceCents Int    @default(0)
+  discountPct    Float  @default(0)
   colorPreference String?
 
   productId String?
@@ -551,12 +554,50 @@ model Communication {
   occurredAt     DateTime @default(now())
   createdAt      DateTime @default(now())
 
+  // Shared-inbox threading (Phase 1)
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  messageId      String? // provider Message-ID (email) / platform message id
+  inReplyTo      String? // email In-Reply-To header
+  references     String? // email References chain (space-separated Message-IDs)
+  readAt         DateTime? // when staff first opened the conversation carrying this inbound message
+
   contactId String?
   contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
   leadId    String?
   lead      Lead?    @relation(fields: [leadId], references: [id], onDelete: Cascade)
   userId    String
   user      User     @relation(fields: [userId], references: [id])
+
+  @@index([conversationId])
+  @@index([messageId])
+}
+
+/// A shared-inbox conversation: groups related messages with a contact (or lead)
+/// on a single channel. Foundation for assignment, unread and SLA reporting.
+model Conversation {
+  id              String    @id @default(cuid())
+  channel         String // email | whatsapp | messenger | instagram | call | note | other
+  subject         String?
+  status          String    @default("open") // open | snoozed | closed
+  unread          Boolean   @default(false) // has un-opened inbound messages
+  lastMessageAt   DateTime  @default(now())
+  lastInboundAt   DateTime?
+  firstResponseAt DateTime? // first outbound after an inbound — foundation for response-time reporting
+  messageCount    Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  contactId String?
+  contact   Contact?        @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  leadId    String?
+  lead      Lead?           @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  messages  Communication[]
+
+  @@index([status, lastMessageAt])
+  @@index([unread, lastMessageAt])
+  @@index([contactId])
+  @@index([leadId])
 }
 
 model Document {
@@ -942,6 +983,217 @@ model DocTemplateRecord {
   deletedAt DateTime?
 
   @@index([docType, isDefault])
+}
+
+// Block-based document builder: a Puck document tree (blocks + root props) that
+// renders to a flowing, multi-page PDF via react-pdf. This is the "control your
+// own documents" editor — additive; the live print/signing pipeline is untouched.
+model DocBuilderTemplate {
+  id              String    @id @default(cuid())
+  name            String
+  key             String // doc type: quote | invoice | agreement | … | custom
+  data            Json // Puck document data ({ content, root, zones }) — the working draft
+  isDefault       Boolean   @default(false)
+  status          String    @default("draft") // draft | published
+  publishedVersion Int? // version number currently published (null = never published)
+  createdById     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  // Default signing workflow used when this document is sent for signature (overridable at send).
+  defaultWorkflowId String?
+  defaultWorkflow   SignWorkflow? @relation("TemplateDefaultWorkflow", fields: [defaultWorkflowId], references: [id])
+
+  versions DocBuilderVersion[]
+
+  @@index([key, isDefault])
+}
+
+/// A visual signing workflow: an ordered/branching graph of signer + condition
+/// nodes that compiles (against a quote/job card) into the hub's recipient chain.
+model SignWorkflow {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  graphJson   Json // { start, nodes: {id: node}, positions: {id: {x,y}} }
+  isArchived  Boolean   @default(false)
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  templates DocBuilderTemplate[] @relation("TemplateDefaultWorkflow")
+}
+
+// Immutable snapshot of a builder template's JSON at publish time. Restore copies
+// a version's data back onto the working draft; publish snapshots the draft.
+model DocBuilderVersion {
+  id          String   @id @default(cuid())
+  version     Int
+  data        Json // immutable Puck document snapshot
+  label       String?
+  publishedAt DateTime @default(now())
+  publishedBy String?
+
+  templateId String
+  template   DocBuilderTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, version])
+  @@index([templateId, version])
+}
+
+// ── E-signing: unified signature-request hub (all document types) ────
+// An envelope wrapping any PDF: recipients act on placed fields; every action is
+// logged to SignatureEvent (ECTA-grade audit). Sequential or parallel ordering.
+model SignatureRequest {
+  id      String @id @default(cuid())
+  title   String
+  status  String @default("draft") // draft|sent|viewed|in_progress|completed|declined|expired|voided|rejected
+  ordering String @default("parallel") // parallel|sequential
+
+  // Workflow runtime — set when driven by a saved signing workflow with approval /
+  // branch logic. The graph is frozen at send; currentNodeId is the interpreter position.
+  workflowGraphJson Json?
+  currentNodeId     String?
+
+  // Source of the document (any/all may be null; the PDF to sign is unsignedPdfRef)
+  documentId String?
+  quoteId    String?
+  jobCardId  String?
+  contactId  String?
+  templateId String? // DocBuilderTemplate it was generated from, if any
+
+  snapshotJson   Json? // frozen resolved document at send time (what the signer sees)
+  unsignedPdfRef String? // storage ref of the PDF sent for signing
+  signedPdfRef   String? // storage ref of the sealed, completed PDF
+  signedPdfHash  String? // sha-256 of the completed PDF
+  signedDocId    String? // Document row of the filed, completed PDF
+
+  message     String? // note shown to recipients
+  createdById String?
+  sentAt      DateTime?
+  completedAt DateTime?
+  declinedAt  DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  recipients SignatureRecipient[]
+  fields     SignatureField[]
+  events     SignatureEvent[]
+  approvals  ApprovalStep[]
+
+  @@index([status, updatedAt])
+  @@index([quoteId])
+  @@index([jobCardId])
+  @@index([contactId])
+}
+
+/// An internal approval gate materialised from a workflow's approval node. A CRM
+/// person approves/rejects (decision mode) — signature-mode approvals are handled
+/// as approver SignatureRecipients instead. Reject routes down the node's rejected branch.
+model ApprovalStep {
+  id        String           @id @default(cuid())
+  requestId String
+  request   SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  nodeId String // workflow node this step was materialised from
+  label  String
+  mode   String @default("decision") // decision | signature
+
+  assigneeType   String // staff | role | owner
+  assigneeUserId String?
+  assigneeRole   String?
+  assigneeName   String?
+  assigneeEmail  String?
+
+  token String @unique // tokenised email approve/reject links
+
+  status         String    @default("pending") // pending | approved | rejected
+  decidedByUserId String?
+  decidedByName  String?
+  decidedAt      DateTime?
+  reason         String?
+
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([requestId])
+  @@index([status])
+}
+
+model SignatureRecipient {
+  id        String           @id @default(cuid())
+  requestId String
+  request   SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  name  String
+  email String?
+  phone String? // for WhatsApp / SMS
+  role  String  @default("signer") // signer|approver|viewer
+  order Int     @default(0) // signing order for sequential
+  color String  @default("#2563eb")
+  nodeId String? // workflow signer node this recipient was materialised from
+
+  token  String @unique // per-recipient signing token (hex)
+  status String @default("pending") // pending|sent|viewed|signed|declined
+
+  signedAt        DateTime?
+  signedName      String?
+  signatureRef    String? // PNG of their drawn/typed signature
+  viewedAt        DateTime?
+  declinedAt      DateTime?
+  declineReason   String?
+  signerIp        String?
+  signerUserAgent String?
+  remindedAt      DateTime?
+
+  fields SignatureField[]
+
+  @@index([requestId, order])
+}
+
+model SignatureField {
+  id        String           @id @default(cuid())
+  requestId String
+  request   SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  recipientId String?
+  recipient   SignatureRecipient? @relation(fields: [recipientId], references: [id], onDelete: SetNull)
+
+  kind     String // signature|initials|date|text|checkbox|radio|dropdown|attachment|stamp
+  page     Int
+  x        Float
+  y        Float
+  width    Float
+  height   Float
+  required Boolean @default(true)
+  label    String  @default("")
+
+  value    String? // captured text / signature ref / "true"
+  filledAt DateTime?
+
+  @@index([requestId])
+}
+
+// Append-only audit trail — never updated or deleted.
+model SignatureEvent {
+  id        String           @id @default(cuid())
+  requestId String
+  request   SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  recipientId String?
+  type        String // created|sent|delivered|opened|viewed|field_filled|signed|declined|completed|reminded|downloaded|voided
+  actor       String // "Denago: <name>" | recipient name | "system"
+  channel     String? // email|whatsapp|sms|in_person|web
+  ip          String?
+  userAgent   String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([requestId, createdAt])
 }
 
 // ── Document Studio: free-form BlockNote documents ──────────────────

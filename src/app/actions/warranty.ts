@@ -2,14 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireWorkshop } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
 import { sendSms } from "@/lib/sms";
 import { claimStatuses } from "@/lib/warranty";
+import { requirePermission, requireVehicleAccess } from "@/lib/permissions";
 
 export async function addWarrantyClaim(vehicleId: string, formData: FormData) {
-  const user = await requireWorkshop();
+  const user = await requireVehicleAccess(vehicleId, "warranty.manage");
   const description = String(formData.get("description") ?? "").trim();
   if (!description) throw new Error("Describe the fault");
   const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
@@ -27,7 +27,8 @@ export async function addWarrantyClaim(vehicleId: string, formData: FormData) {
 }
 
 export async function setWarrantyClaimStatus(id: string, formData: FormData) {
-  const user = await requireWorkshop();
+  const existing = await prisma.warrantyClaim.findUniqueOrThrow({ where: { id } });
+  const user = await requireVehicleAccess(existing.vehicleId, "warranty.manage");
   const status = String(formData.get("status") ?? "");
   if (!claimStatuses.includes(status as (typeof claimStatuses)[number])) return;
   const resolution = String(formData.get("resolution") ?? "").trim() || null;
@@ -50,17 +51,16 @@ export async function setWarrantyClaimStatus(id: string, formData: FormData) {
 }
 
 export async function deleteWarrantyClaim(id: string) {
-  await requireWorkshop();
   const claim = await prisma.warrantyClaim.findUnique({ where: { id } });
-  if (claim) await prisma.warrantyClaim.delete({ where: { id } });
-  if (claim) {
-    revalidatePath(`/vehicles/${claim.vehicleId}`);
-    revalidatePath("/warranty");
-  }
+  if (!claim) return;
+  await requireVehicleAccess(claim.vehicleId, "warranty.manage");
+  await prisma.warrantyClaim.delete({ where: { id } });
+  revalidatePath(`/vehicles/${claim.vehicleId}`);
+  revalidatePath("/warranty");
 }
 
 export async function createRecall(formData: FormData) {
-  const user = await requireWorkshop();
+  const user = await requirePermission("warranty.manage");
   const title = String(formData.get("title") ?? "").trim();
   const model = String(formData.get("model") ?? "").trim();
   const description = String(formData.get("description") ?? "").trim();
@@ -71,16 +71,15 @@ export async function createRecall(formData: FormData) {
 }
 
 export async function deleteRecall(id: string) {
-  await requireWorkshop();
+  await requirePermission("warranty.manage");
   await prisma.recall.delete({ where: { id } }).catch(() => {});
   revalidatePath("/warranty");
 }
 
 export type NotifyResult = { sent: number; skipped: number } | null;
 
-/** Notify the owners of every cart matching this recall's model. */
 export async function notifyRecall(_prev: NotifyResult, formData: FormData): Promise<NotifyResult> {
-  const user = await requireWorkshop();
+  const user = await requirePermission("warranty.manage");
   const id = String(formData.get("recallId") ?? "");
   const recall = await prisma.recall.findUniqueOrThrow({ where: { id } });
   const vehicles = await prisma.vehicle.findMany({
@@ -94,7 +93,7 @@ export async function notifyRecall(_prev: NotifyResult, formData: FormData): Pro
   let skipped = 0;
   for (const v of vehicles) {
     const c = v.contact;
-    if (seen.has(c.id)) continue; // one message per owner even with multiple carts
+    if (seen.has(c.id)) continue;
     seen.add(c.id);
     const first = c.firstName;
     const subject = `Important: ${recall.title} — your ${recall.model}`;

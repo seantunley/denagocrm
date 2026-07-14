@@ -23,29 +23,28 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-/**
- * Sidebar "create anything" menu. Also opens with N anywhere in the app
- * (outside text inputs) — the fastest path to a new record.
- */
 export default function QuickActions({
-  modules,
   isAdmin,
+  permissions = [],
 }: {
-  modules: string;
+  modules?: string;
   isAdmin: boolean;
+  permissions?: string[];
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const mods = new Set(modules.split(",").map((m) => m.trim()).filter(Boolean));
-  const has = (m: string) => isAdmin || mods.has(m);
+  const granted = new Set(permissions);
+  const can = (...keys: string[]) => isAdmin || keys.some((key) => granted.has(key));
+  const hasCrmActions = can("leads.create", "contacts.create", "activities.manage", "quotes.create");
+  const hasWorkshopActions = can("jobcards.manage", "vehicles.manage");
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "n" && e.key !== "N") return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      e.preventDefault();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "n" && event.key !== "N") return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      event.preventDefault();
       setOpen(true);
     };
     document.addEventListener("keydown", onKey);
@@ -61,54 +60,55 @@ export default function QuickActions({
         <button className="flex w-full items-center gap-2 rounded-md bg-primary px-2.5 py-1.5 text-[13px] font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90">
           <Plus className="size-4" />
           <span className="flex-1 text-left">Quick actions</span>
-          <kbd className="rounded border border-white/20 bg-white/10 px-1.5 py-0.5 text-[10px] font-medium">
-            N
-          </kbd>
+          <kbd className="rounded border border-white/20 bg-white/10 px-1.5 py-0.5 text-[10px] font-medium">N</kbd>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56" sideOffset={6}>
-        {has("crm") && (
+        {hasCrmActions && (
           <>
-            <DropdownMenuLabel className="text-[11px] uppercase tracking-wider text-muted-foreground">
-              CRM
-            </DropdownMenuLabel>
-            <DropdownMenuItem onSelect={() => create("lead")}>
-              <SquareKanban className="size-4" />
-              New lead
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => create("contact")}>
-              <UserPlus className="size-4" />
-              New contact
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => create("calendar")}>
-              <CalendarPlus className="size-4" />
-              New calendar item
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => create("quote")}>
-              <FileText className="size-4" />
-              New quote
-            </DropdownMenuItem>
+            <DropdownMenuLabel className="text-[11px] uppercase tracking-wider text-muted-foreground">CRM</DropdownMenuLabel>
+            {can("leads.create") && (
+              <DropdownMenuItem onSelect={() => create("lead")}>
+                <SquareKanban className="size-4" />New lead
+              </DropdownMenuItem>
+            )}
+            {can("contacts.create") && (
+              <DropdownMenuItem onSelect={() => create("contact")}>
+                <UserPlus className="size-4" />New contact
+              </DropdownMenuItem>
+            )}
+            {can("activities.manage") && (
+              <DropdownMenuItem onSelect={() => create("calendar")}>
+                <CalendarPlus className="size-4" />New calendar item
+              </DropdownMenuItem>
+            )}
+            {can("quotes.create") && (
+              <DropdownMenuItem onSelect={() => create("quote")}>
+                <FileText className="size-4" />New quote
+              </DropdownMenuItem>
+            )}
           </>
         )}
-        {has("crm") && has("workshop") && <DropdownMenuSeparator />}
-        {has("workshop") && (
+        {hasCrmActions && hasWorkshopActions && <DropdownMenuSeparator />}
+        {hasWorkshopActions && (
           <>
-            <DropdownMenuLabel className="text-[11px] uppercase tracking-wider text-muted-foreground">
-              Workshop
-            </DropdownMenuLabel>
-            <DropdownMenuItem onSelect={() => create("jobcard")}>
-              <Wrench className="size-4" />
-              New job card
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => create("vehicle")}>
-              <CarFront className="size-4" />
-              Register vehicle
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => go("/vehicles")}>
-              <BatteryCharging className="size-4" />
-              Log battery check
-              <DropdownMenuShortcut>pick cart</DropdownMenuShortcut>
-            </DropdownMenuItem>
+            <DropdownMenuLabel className="text-[11px] uppercase tracking-wider text-muted-foreground">Workshop</DropdownMenuLabel>
+            {can("jobcards.manage") && (
+              <DropdownMenuItem onSelect={() => create("jobcard")}>
+                <Wrench className="size-4" />New job card
+              </DropdownMenuItem>
+            )}
+            {can("vehicles.manage") && (
+              <>
+                <DropdownMenuItem onSelect={() => create("vehicle")}>
+                  <CarFront className="size-4" />Register vehicle
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => go("/vehicles")}>
+                  <BatteryCharging className="size-4" />Log battery check
+                  <DropdownMenuShortcut>pick cart</DropdownMenuShortcut>
+                </DropdownMenuItem>
+              </>
+            )}
           </>
         )}
       </DropdownMenuContent>

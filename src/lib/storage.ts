@@ -14,7 +14,7 @@ import { put, del } from "@vercel/blob";
 
 const UPLOAD_DIR = path.join(process.cwd(), "storage", "uploads");
 
-const useBlob = () => Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+const blobConfigured = () => Boolean(process.env.BLOB_READ_WRITE_TOKEN);
 
 export async function saveFile(
   buffer: Buffer,
@@ -24,7 +24,7 @@ export async function saveFile(
   const ext = path.extname(originalName).slice(0, 12);
   const storedName = crypto.randomUUID() + ext;
 
-  if (useBlob()) {
+  if (blobConfigured()) {
     const blob = await put(`uploads/${storedName}`, buffer, {
       access: "public", // public = unguessable URL; downloads still go through our auth route
       contentType,

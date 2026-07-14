@@ -2,82 +2,71 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireCrm } from "@/lib/auth";
+import { requireLeadAccess, requirePermission, requireQuoteAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 
-const rand = (v: FormDataEntryValue | null) =>
-  Math.round(parseFloat(String(v ?? "0").replace(/[^0-9.]/g, "")) * 100) || 0;
-const str = (v: FormDataEntryValue | null) => String(v ?? "").trim();
-const date = (v: FormDataEntryValue | null) => {
-  const s = str(v);
-  return s ? new Date(`${s}T00:00:00+02:00`) : null;
+const rand = (value: FormDataEntryValue | null) =>
+  Math.round(parseFloat(String(value ?? "0").replace(/[^0-9.]/g, "")) * 100) || 0;
+const str = (value: FormDataEntryValue | null) => String(value ?? "").trim();
+const date = (value: FormDataEntryValue | null) => {
+  const raw = str(value);
+  return raw ? new Date(`${raw}T00:00:00+02:00`) : null;
 };
 
-/** Create a purchase order and its incoming stock units. */
 export async function createPurchaseOrder(formData: FormData) {
-  const user = await requireCrm();
+  const user = await requirePermission("stock.manage");
   const productId = str(formData.get("productId"));
   const qty = Math.max(1, Math.min(200, parseInt(str(formData.get("qty")) || "1", 10)));
   if (!productId) return;
   const color = str(formData.get("color")) || null;
   const costCents = rand(formData.get("cost"));
-  const po = await prisma.purchaseOrder.create({
+  const order = await prisma.purchaseOrder.create({
     data: {
       reference: str(formData.get("reference")) || null,
       supplier: str(formData.get("supplier")) || "Denago",
       expectedAt: date(formData.get("expectedAt")),
       notes: str(formData.get("notes")) || null,
       units: {
-        create: Array.from({ length: qty }, () => ({
-          productId,
-          color,
-          costCents,
-          status: "incoming",
-        })),
+        create: Array.from({ length: qty }, () => ({ productId, color, costCents, status: "incoming" })),
       },
     },
     include: { units: { include: { product: true } } },
   });
   await logAudit({
     action: "stock.po_created",
-    summary: `Purchase order for ${qty}× ${po.units[0]?.product.name ?? "unit"}${
-      color ? ` (${color})` : ""
-    }${po.reference ? ` — ${po.reference}` : ""}`,
+    summary: `Purchase order for ${qty}× ${order.units[0]?.product.name ?? "unit"}${color ? ` (${color})` : ""}${order.reference ? ` — ${order.reference}` : ""}`,
     user,
   });
   revalidatePath("/stock");
 }
 
-/** Mark a PO received: its incoming units become available. */
 export async function receivePurchaseOrder(id: string) {
-  const user = await requireCrm();
+  const user = await requirePermission("stock.manage");
   await prisma.stockUnit.updateMany({
     where: { purchaseOrderId: id, status: "incoming", deletedAt: null },
     data: { status: "available", arrivedAt: new Date() },
   });
   await prisma.purchaseOrder.update({ where: { id }, data: { status: "received" } });
-  await logAudit({ action: "stock.po_received", summary: `Purchase order received into stock`, user });
+  await logAudit({ action: "stock.po_received", summary: "Purchase order received into stock", user });
   revalidatePath("/stock");
 }
 
-/** Cancel a PO: soft-delete any units still on order. */
 export async function cancelPurchaseOrder(id: string) {
-  const user = await requireCrm();
+  const user = await requirePermission("stock.manage");
   await prisma.stockUnit.updateMany({
     where: { purchaseOrderId: id, status: "incoming" },
     data: { deletedAt: new Date() },
   });
   await prisma.purchaseOrder.update({ where: { id }, data: { status: "cancelled" } });
-  await logAudit({ action: "stock.po_cancelled", summary: `Purchase order cancelled`, user });
+  await logAudit({ action: "stock.po_cancelled", summary: "Purchase order cancelled", user });
   revalidatePath("/stock");
 }
 
-/** Add a single unit already on the floor (no PO). */
 export async function addStockUnit(formData: FormData) {
-  const user = await requireCrm();
+  const user = await requirePermission("stock.manage");
   const productId = str(formData.get("productId"));
   if (!productId) return;
-  const u = await prisma.stockUnit.create({
+  const unit = await prisma.stockUnit.create({
     data: {
       productId,
       color: str(formData.get("color")) || null,
@@ -91,16 +80,14 @@ export async function addStockUnit(formData: FormData) {
   });
   await logAudit({
     action: "stock.unit_added",
-    summary: `Added to stock: ${u.product.name}${u.color ? ` (${u.color})` : ""}${
-      u.serial ? ` — ${u.serial}` : ""
-    }`,
+    summary: `Added to stock: ${unit.product.name}${unit.color ? ` (${unit.color})` : ""}${unit.serial ? ` — ${unit.serial}` : ""}`,
     user,
   });
   revalidatePath("/stock");
 }
 
 export async function updateStockUnit(id: string, formData: FormData) {
-  await requireCrm();
+  await requirePermission("stock.manage");
   await prisma.stockUnit.update({
     where: { id },
     data: {
@@ -113,10 +100,11 @@ export async function updateStockUnit(id: string, formData: FormData) {
   revalidatePath("/stock");
 }
 
-/** Reserve an available unit against a lead. */
 export async function reserveUnit(id: string, formData: FormData) {
-  const user = await requireCrm();
   const leadId = str(formData.get("leadId")) || null;
+  const user = leadId
+    ? await requireLeadAccess(leadId, "stock.manage")
+    : await requirePermission("stock.manage");
   const unit = await prisma.stockUnit.update({
     where: { id },
     data: { status: "reserved", reservedForLeadId: leadId },
@@ -124,18 +112,15 @@ export async function reserveUnit(id: string, formData: FormData) {
   });
   await logAudit({
     action: "stock.reserved",
-    summary: `Reserved ${unit.product.name}${unit.serial ? ` (${unit.serial})` : ""} for ${
-      unit.reservedForLead?.name ?? "a lead"
-    }`,
+    summary: `Reserved ${unit.product.name}${unit.serial ? ` (${unit.serial})` : ""} for ${unit.reservedForLead?.name ?? "a lead"}`,
     leadId,
     user,
   });
   revalidatePath("/stock");
 }
 
-/** Return a unit to available stock. */
 export async function releaseUnit(id: string) {
-  await requireCrm();
+  await requirePermission("stock.manage");
   await prisma.stockUnit.update({
     where: { id },
     data: { status: "available", reservedForLeadId: null, soldQuoteId: null, soldAt: null },
@@ -143,10 +128,11 @@ export async function releaseUnit(id: string) {
   revalidatePath("/stock");
 }
 
-/** Mark a unit sold, optionally tied to a quote. */
 export async function markUnitSold(id: string, formData: FormData) {
-  const user = await requireCrm();
   const soldQuoteId = str(formData.get("quoteId")) || null;
+  const user = soldQuoteId
+    ? await requireQuoteAccess(soldQuoteId, "stock.manage")
+    : await requirePermission("stock.manage");
   const unit = await prisma.stockUnit.update({
     where: { id },
     data: { status: "sold", soldQuoteId, soldAt: new Date() },
@@ -161,7 +147,7 @@ export async function markUnitSold(id: string, formData: FormData) {
 }
 
 export async function deleteStockUnit(id: string) {
-  await requireCrm();
+  await requirePermission("stock.manage");
   await prisma.stockUnit.update({ where: { id }, data: { deletedAt: new Date() } });
   revalidatePath("/stock");
 }

@@ -438,3 +438,28 @@ input[type="number"] {
     display: none;
   }
 }
+
+/* react-moveable: the doc-editor overlay/floating layers are pointer-events:none
+   so clicks pass through to flow content. Force the moveable control handles to be
+   interactive so resize/drag handles work inside those layers. */
+.moveable-control-box {
+  pointer-events: none;
+}
+.moveable-control-box .moveable-control,
+.moveable-control-box .moveable-line,
+.moveable-control-box .moveable-area,
+.moveable-control-box .moveable-direction {
+  pointer-events: auto !important;
+}
+
+/* Safety net: list pages not yet converted to the responsive data components
+   still need their wide tables to scroll (not clip) on phones. */
+@media (max-width: 639px) {
+  .denago-workspace .card:has(> table),
+  .denago-workspace .card:has(> .table-base) {
+    overflow-x: auto;
+  }
+  .denago-workspace .table-base {
+    min-width: 640px;
+  }
+}

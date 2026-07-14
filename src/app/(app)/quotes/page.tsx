@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { FileText, Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireAnyPermission, getAccessibleQuoteIds } from "@/lib/permissions";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { getSetting } from "@/lib/settings";
 import { PageHeader } from "@/components/page-header";
@@ -32,13 +32,14 @@ export default async function QuotesPage({
 }: {
   searchParams: Promise<{ edit?: string }>;
 }) {
-  await requireUser();
+  const user = await requireAnyPermission("quotes.view_all", "quotes.view_owned");
+  const accessibleQuoteIds = await getAccessibleQuoteIds(user);
   const { edit } = await searchParams;
   const [quotes, contacts, products, allVersions, validDaysRaw, quoteTerms] = await Promise.all([
     prisma.quote.findMany({
       // Only current heads appear in the list. Older revisions remain available
-      // from the editor's version history and the full record.
-      where: { supersededAt: null },
+      // from the editor's version history and the full record. RBAC-scoped.
+      where: { supersededAt: null, ...(accessibleQuoteIds ? { id: { in: accessibleQuoteIds } } : {}) },
       orderBy: { createdAt: "desc" },
       include: { items: true, lead: true, contact: true, createdBy: true },
       take: 200,
@@ -112,6 +113,7 @@ export default async function QuotesPage({
         unitPriceCents: item.unitPriceCents,
         productId: item.productId,
         colorPreference: item.colorPreference,
+        discountPct: item.discountPct,
       })),
       versions: family
         .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())

@@ -80,6 +80,7 @@ export type QuoteEditorRecord = {
     unitPriceCents: number;
     productId: string | null;
     colorPreference: string | null;
+    discountPct: number;
   }>;
   versions: QuoteEditorVersion[];
 };
@@ -95,6 +96,7 @@ type DraftLine = {
   description: string;
   qty: string;
   unitPrice: string;
+  discount: string;
   productId: string | null;
   colorPreference: string;
 };
@@ -164,6 +166,7 @@ function createDraft(
         description: item.description,
         qty: String(item.qty),
         unitPrice: priceInput(item.unitPriceCents),
+        discount: item.discountPct ? String(item.discountPct) : "",
         productId: item.productId ?? matchingProduct?.id ?? null,
         colorPreference: item.colorPreference ?? "",
       };
@@ -176,11 +179,12 @@ function draftSnapshot(draft: DraftState) {
     contactId: draft.contactId,
     validUntil: draft.validUntil,
     terms: draft.terms,
-    lines: draft.lines.map(({ kind, description, qty, unitPrice, productId, colorPreference }) => ({
+    lines: draft.lines.map(({ kind, description, qty, unitPrice, discount, productId, colorPreference }) => ({
       kind,
       description,
       qty,
       unitPrice,
+      discount,
       productId,
       colorPreference,
     })),
@@ -241,7 +245,8 @@ export function QuoteEditorDialog({
     const total = draft.lines.reduce((sum, line) => {
       const qty = Number(line.qty.replace(",", "."));
       const cents = centsFromInput(line.unitPrice);
-      return sum + (Number.isFinite(qty) && Number.isFinite(cents) ? qty * cents : 0);
+      const discount = Math.min(100, Math.max(0, Number(line.discount.replace(",", ".")) || 0));
+      return sum + (Number.isFinite(qty) && Number.isFinite(cents) ? qty * cents * (1 - discount / 100) : 0);
     }, 0);
     const vat = Math.round(total * (15 / 115));
     return { total: Math.round(total), vat, subtotal: Math.round(total - vat) };
@@ -266,6 +271,7 @@ export function QuoteEditorDialog({
           description: "",
           qty: "1",
           unitPrice: "0.00",
+          discount: "",
           productId: null,
           colorPreference: "",
         },
@@ -305,6 +311,7 @@ export function QuoteEditorDialog({
           description: "",
           qty: "1",
           unitPrice: "0.00",
+          discount: "",
           productId: null,
           colorPreference: "",
         },
@@ -363,10 +370,17 @@ export function QuoteEditorDialog({
         setActiveTab("build");
         return;
       }
+      const discountPct = line.discount.trim() ? Number(line.discount.replace(",", ".")) : 0;
+      if (!Number.isFinite(discountPct) || discountPct < 0 || discountPct > 100) {
+        setError(`Enter a discount between 0 and 100 for “${description}”.`);
+        setActiveTab("build");
+        return;
+      }
       items.push({
         description,
         qty,
         unitPriceCents,
+        discountPct,
         productId: line.productId,
         colorPreference: line.colorPreference.trim() || null,
       });
@@ -496,7 +510,7 @@ export function QuoteEditorDialog({
                               ? products.find((product) => product.id === line.productId)
                               : null;
                             return (
-                            <div key={line.key} className="grid gap-3 px-4 py-4 sm:grid-cols-[2rem_minmax(0,1fr)_6rem_9rem_2.25rem] sm:items-end sm:px-5">
+                            <div key={line.key} className="grid gap-3 px-4 py-4 sm:grid-cols-[2rem_minmax(0,1fr)_5rem_8rem_5rem_2.25rem] sm:items-end sm:px-5">
                               <span className="hidden pb-2 text-xs font-semibold tabular-nums text-muted-foreground sm:block">{String(index + 1).padStart(2, "0")}</span>
                               <div className="min-w-0">
                                 <label className="label" htmlFor={`${line.key}-description`}>Description</label>
@@ -541,6 +555,10 @@ export function QuoteEditorDialog({
                               <div>
                                 <label className="label" htmlFor={`${line.key}-price`}>Unit price (R)</label>
                                 <input id={`${line.key}-price`} className="input" inputMode="decimal" value={line.unitPrice} disabled={!editable} onChange={(event) => updateLine(line.key, { unitPrice: event.target.value })} />
+                              </div>
+                              <div>
+                                <label className="label" htmlFor={`${line.key}-discount`}>Disc %</label>
+                                <input id={`${line.key}-discount`} className="input" inputMode="decimal" placeholder="0" value={line.discount} disabled={!editable} onChange={(event) => updateLine(line.key, { discount: event.target.value })} />
                               </div>
                               {editable && (
                                 <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-red-300" onClick={() => removeLine(line.key)} aria-label={`Remove line ${index + 1}`}>
@@ -600,14 +618,16 @@ export function QuoteEditorDialog({
                   </div>
                   <div className="overflow-x-auto">
                     <table className="w-full min-w-[34rem] border-collapse text-sm">
-                      <thead><tr className="border-y border-slate-200 text-left text-[10px] uppercase tracking-[0.12em] text-slate-500"><th className="py-3">Description</th><th className="py-3 text-right">Qty</th><th className="py-3 text-right">Unit price</th><th className="py-3 text-right">Total</th></tr></thead>
+                      <thead><tr className="border-y border-slate-200 text-left text-[10px] uppercase tracking-[0.12em] text-slate-500"><th className="py-3">Description</th><th className="py-3 text-right">Qty</th><th className="py-3 text-right">Unit price</th><th className="py-3 text-right">Disc</th><th className="py-3 text-right">Total</th></tr></thead>
                       <tbody>
                         {draft.lines.map((line) => {
                           const qty = Number(line.qty.replace(",", ".")) || 0;
                           const price = centsFromInput(line.unitPrice) || 0;
-                          return <tr key={line.key} className="border-b border-slate-100"><td className="py-4 pr-4"><span className="block">{line.description || "Untitled line"}</span>{line.colorPreference && <span className="mt-1 block text-xs text-slate-500">Colour preference: {line.colorPreference}</span>}</td><td className="py-4 text-right tabular-nums">{qty}</td><td className="py-4 text-right tabular-nums">{rands(price)}</td><td className="py-4 text-right font-medium tabular-nums">{rands(Math.round(qty * price))}</td></tr>;
+                          const discount = Math.min(100, Math.max(0, Number(line.discount.replace(",", ".")) || 0));
+                          const lineTotal = Math.round(qty * price * (1 - discount / 100));
+                          return <tr key={line.key} className="border-b border-slate-100"><td className="py-4 pr-4"><span className="block">{line.description || "Untitled line"}</span>{line.colorPreference && <span className="mt-1 block text-xs text-slate-500">Colour preference: {line.colorPreference}</span>}</td><td className="py-4 text-right tabular-nums">{qty}</td><td className="py-4 text-right tabular-nums">{rands(price)}</td><td className="py-4 text-right tabular-nums text-slate-500">{discount ? `${discount}%` : "—"}</td><td className="py-4 text-right font-medium tabular-nums">{rands(lineTotal)}</td></tr>;
                         })}
-                        {draft.lines.length === 0 && <tr><td colSpan={4} className="py-12 text-center text-slate-400">No line items added.</td></tr>}
+                        {draft.lines.length === 0 && <tr><td colSpan={5} className="py-12 text-center text-slate-400">No line items added.</td></tr>}
                       </tbody>
                     </table>
                   </div>

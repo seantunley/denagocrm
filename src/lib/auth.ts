@@ -1,10 +1,11 @@
+import { cache } from "react";
 import { cookies, headers } from "next/headers";
 import crypto from "crypto";
 import { redirect } from "next/navigation";
 import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { hasModule, type ModuleId } from "./access";
-import { getUserSecurityState } from "./userSecurity";
+import { getUserSecurityState, getUserSecurityStateFresh } from "./userSecurity";
 import {
   verifySession,
   signFreshSession,
@@ -13,7 +14,14 @@ import {
   DEFAULT_IDLE_MINUTES,
 } from "./session";
 
-export async function getCurrentUser() {
+/**
+ * Resolve the signed-in user for the current request. Wrapped in React
+ * `cache()` so the session-registry, user and security-state lookups run once
+ * per request even though the layout, nested layouts and page all call it.
+ * The cache is request-scoped, so role/account/password changes still take
+ * effect on the very next request.
+ */
+export const getCurrentUser = cache(async () => {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
@@ -42,7 +50,7 @@ export async function getCurrentUser() {
   if (!user || !security || security.disabledAt) return null;
   if (security.sessionVersion !== session.sv) return null;
   return user;
-}
+});
 
 export async function requireUser() {
   const user = await getCurrentUser();
@@ -79,7 +87,10 @@ export async function createSessionCookie(
   user: { id: string; name: string; email: string; role: string; modules: string },
   opts?: { pwa?: boolean }
 ) {
-  const security = await getUserSecurityState(user.id);
+  // Fresh (uncached) read: this runs after a session-version bump in the same
+  // request, so the memoised value would be stale and mint a cookie that logs
+  // the user straight back out.
+  const security = await getUserSecurityStateFresh(user.id);
   if (!security || security.disabledAt) throw new Error("User is disabled or no longer exists");
   const pwa = Boolean(opts?.pwa);
   // Installed PWA: the phone lock is the security boundary — a flat 7-day

@@ -3,12 +3,15 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireWorkshop } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendReviewRequest } from "@/lib/reviewRequests";
 import { triggerSurvey } from "@/lib/surveys";
 import { remindVehicleService } from "@/lib/serviceReminders";
 import { softDeleteRecord } from "@/lib/trash";
+import {
+  requireContactAccess,
+  requireVehicleAccess,
+} from "@/lib/permissions";
 
 function vehicleData(formData: FormData) {
   const str = (k: string) => {
@@ -37,9 +40,9 @@ function vehicleData(formData: FormData) {
 }
 
 export async function createVehicle(formData: FormData) {
-  const user = await requireWorkshop();
   const data = vehicleData(formData);
   if (!data.contactId) throw new Error("Customer is required");
+  const user = await requireContactAccess(data.contactId, "vehicles.manage");
   if (!data.model && data.productId) {
     const p = await prisma.product.findUnique({ where: { id: data.productId } });
     data.model = p?.name ?? "";
@@ -64,10 +67,8 @@ export async function createVehicle(formData: FormData) {
       },
     });
   }
-  // New-cart delivery → ask for a Google review (only when ticked on the form)
   if (formData.get("newDelivery")) {
     await sendReviewRequest(vehicle.contactId, "delivery", vehicle.model).catch(() => {});
-    // …and an internal sales/delivery experience survey (self-throttled)
     await triggerSurvey("delivery", { contactId: vehicle.contactId });
   }
   revalidatePath("/vehicles");
@@ -75,7 +76,7 @@ export async function createVehicle(formData: FormData) {
 }
 
 export async function addBatteryCheck(vehicleId: string, formData: FormData) {
-  const user = await requireWorkshop();
+  const user = await requireVehicleAccess(vehicleId, "vehicles.manage");
   const num = (k: string) => {
     const v = String(formData.get(k) ?? "").trim();
     if (v === "") return null;
@@ -105,25 +106,25 @@ export async function addBatteryCheck(vehicleId: string, formData: FormData) {
 }
 
 export async function deleteBatteryCheck(id: string) {
-  await requireWorkshop();
   const bc = await prisma.batteryCheck.findUnique({ where: { id } });
-  if (bc) await prisma.batteryCheck.delete({ where: { id } });
-  if (bc) revalidatePath(`/vehicles/${bc.vehicleId}`);
+  if (!bc) return;
+  await requireVehicleAccess(bc.vehicleId, "vehicles.manage");
+  await prisma.batteryCheck.delete({ where: { id } });
+  revalidatePath(`/vehicles/${bc.vehicleId}`);
 }
 
 export type RemindResult = { ok: boolean; channel?: string; error?: string } | null;
 
-/** Send a service reminder for one vehicle from the Service Due worklist. */
 export async function remindService(_prev: RemindResult, formData: FormData): Promise<RemindResult> {
-  await requireWorkshop();
   const vehicleId = String(formData.get("vehicleId") ?? "");
+  await requireVehicleAccess(vehicleId, "vehicles.manage");
   const res = await remindVehicleService(vehicleId);
   revalidatePath("/service-due");
   return res;
 }
 
 export async function updateVehicle(id: string, formData: FormData) {
-  await requireWorkshop();
+  await requireVehicleAccess(id, "vehicles.manage");
   const data = vehicleData(formData);
   if (!data.model) throw new Error("Model is required");
   await prisma.vehicle.update({ where: { id }, data });
@@ -133,7 +134,7 @@ export async function updateVehicle(id: string, formData: FormData) {
 }
 
 export async function deleteVehicle(id: string, formData: FormData) {
-  const user = await requireWorkshop();
+  const user = await requireVehicleAccess(id, "vehicles.manage");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const vehicle = await softDeleteRecord("vehicle", id, reason, user.name);
   await logAudit({
@@ -147,7 +148,7 @@ export async function deleteVehicle(id: string, formData: FormData) {
 }
 
 export async function addMileage(vehicleId: string, formData: FormData) {
-  await requireWorkshop();
+  await requireVehicleAccess(vehicleId, "vehicles.manage");
   const km = parseInt(String(formData.get("km") ?? ""), 10);
   if (isNaN(km) || km < 0) return;
   const note = String(formData.get("note") ?? "").trim() || null;
@@ -157,7 +158,7 @@ export async function addMileage(vehicleId: string, formData: FormData) {
 }
 
 export async function deleteMileage(id: string, vehicleId: string, formData: FormData) {
-  const user = await requireWorkshop();
+  const user = await requireVehicleAccess(vehicleId, "vehicles.manage");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const entry = await prisma.mileageLog.delete({ where: { id } });
   const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
@@ -171,7 +172,7 @@ export async function deleteMileage(id: string, vehicleId: string, formData: For
 }
 
 export async function addServiceRecord(vehicleId: string, formData: FormData) {
-  const user = await requireWorkshop();
+  const user = await requireVehicleAccess(vehicleId, "vehicles.manage");
   const str = (k: string) => {
     const v = String(formData.get(k) ?? "").trim();
     return v === "" ? null : v;
@@ -215,7 +216,7 @@ export async function addServiceRecord(vehicleId: string, formData: FormData) {
 }
 
 export async function deleteServiceRecord(id: string, vehicleId: string, formData: FormData) {
-  const user = await requireWorkshop();
+  const user = await requireVehicleAccess(vehicleId, "vehicles.manage");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const record = await prisma.serviceRecord.delete({ where: { id } });
   const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });

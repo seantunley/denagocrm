@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireQuoteReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getDocTemplate } from "@/lib/docTemplateStore";
@@ -13,8 +13,8 @@ export default async function AgreementPrintPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ tpl?: string }>;
 }) {
-  await requireUser();
   const { id } = await params;
+  await requireQuoteReadAccess(id);
   const { tpl: tplId } = await searchParams;
   const quote = await prisma.quote.findUnique({
     where: { id },
@@ -30,7 +30,7 @@ export default async function AgreementPrintPage({
 
   return (
     <>
-      <PrintActions backHref={`/quotes/${quote.id}`} />
+      <PrintActions backHref={`/quotes/${quote.id}`} backLabel="Back to quote" />
       <PrintDocShell
         template={tpl}
         title="Sales agreement"

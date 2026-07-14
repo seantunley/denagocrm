@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireInbox } from "@/lib/auth";
+import { canAccessContact, requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { sendDirectMessage, sendDirectAttachment, type DmPlatform } from "@/lib/messenger";
 import { saveFile } from "@/lib/storage";
@@ -12,36 +12,35 @@ const ATTACH_KIND = (mime: string): "image" | "audio" | "video" | "file" =>
 
 export type DmState = { ok?: string; error?: string };
 
-/** Reply to a Messenger / Instagram DM from the CRM. */
 export async function sendDmReply(
   _prev: DmState | undefined,
   formData: FormData
 ): Promise<DmState> {
-  const user = await requireInbox();
+  const user = await requirePermission("inbox.reply");
   const contactId = String(formData.get("contactId") ?? "").trim();
   const text = String(formData.get("text") ?? "").trim();
   const file = formData.get("file") as File | null;
   const hasFile = file && typeof file === "object" && file.size > 0;
   if (!contactId || (!text && !hasFile)) return { error: "Type a message or attach a file." };
+  if (!(await canAccessContact(user, contactId))) return { error: "Customer access denied." };
 
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) return { error: "Contact not found." };
-
   const platform: DmPlatform = contact.instagramId && !contact.messengerPsid ? "instagram" : "messenger";
   const recipientId = platform === "instagram" ? contact.instagramId : contact.messengerPsid;
   if (!recipientId) return { error: "This contact has no Messenger/Instagram identity." };
 
   let attachmentUrl: string | null = null;
-  let attachmentType: string | null = null;
+  let attachmentType: "image" | "audio" | "video" | "file" | null = null;
   if (hasFile) {
     if (file.size > 4 * 1024 * 1024) {
       return { error: "File too big — 4MB max here. For larger files, share a Library link instead." };
     }
-    const buf = Buffer.from(await file.arrayBuffer());
-    attachmentUrl = await saveFile(buf, file.name || "attachment", file.type || "application/octet-stream");
+    const buffer = Buffer.from(await file.arrayBuffer());
+    attachmentUrl = await saveFile(buffer, file.name || "attachment", file.type || "application/octet-stream");
     attachmentType = ATTACH_KIND(file.type || "");
     const sent = await sendDirectAttachment(platform, recipientId, {
-      type: attachmentType as "image" | "audio" | "video" | "file",
+      type: attachmentType,
       url: attachmentUrl,
     });
     if (!sent.ok) return { error: sent.error };

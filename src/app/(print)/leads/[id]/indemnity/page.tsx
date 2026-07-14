@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireLeadReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { InfoBlock } from "@/components/print/PrintDocShell";
 import { getDocTemplate } from "@/lib/docTemplateStore";
@@ -13,8 +13,8 @@ export default async function IndemnityPrintPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ tpl?: string }>;
 }) {
-  await requireUser();
   const { id } = await params;
+  await requireLeadReadAccess(id);
   const { tpl: tplId } = await searchParams;
   const lead = await prisma.lead.findUnique({
     where: { id },
@@ -25,7 +25,7 @@ export default async function IndemnityPrintPage({
 
   return (
     <>
-      <PrintActions backHref={`/leads/${lead.id}`} />
+      <PrintActions backHref={`/leads/${lead.id}`} backLabel="Back to lead" />
       <PrintDocShell
         template={tpl}
         title="Test-drive indemnity"

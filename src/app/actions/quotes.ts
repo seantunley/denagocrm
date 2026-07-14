@@ -4,7 +4,6 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addDays } from "date-fns";
 import { prisma, basePrisma } from "@/lib/db";
-import { requireUser, requireCrm } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { getSetting } from "@/lib/settings";
@@ -12,6 +11,12 @@ import { markReferralEarned } from "@/lib/referrals";
 import { runLeadAutomations } from "@/lib/automations";
 import { parseRands, formatZAR, contactName } from "@/lib/format";
 import { z } from "zod";
+import {
+  requireLeadAccess,
+  requireContactAccess,
+  requireQuoteAccess,
+  type PermissionUser,
+} from "@/lib/permissions";
 
 const quoteDraftSchema = z.object({
   id: z.string().trim().min(1).optional(),
@@ -26,6 +31,7 @@ const quoteDraftSchema = z.object({
       unitPriceCents: z.number().int().min(0).max(100_000_000_000),
       productId: z.string().trim().min(1).nullable().optional(),
       colorPreference: z.string().trim().max(100).nullable().optional(),
+      discountPct: z.number().finite().min(0).max(100).optional(),
     }),
   ).max(100, "A quote can contain at most 100 lines."),
 });
@@ -46,12 +52,11 @@ export type QuoteDraftResult =
 
 /** Creates a draft quote from a lead, pre-filled with its product line. */
 async function createQuoteFromLeadRecord(leadId: string) {
-  const user = await requireCrm();
+  const user = await requireLeadAccess(leadId, "quotes.create");
   const lead = await prisma.lead.findUniqueOrThrow({
     where: { id: leadId },
     include: { product: true },
   });
-  // basePrisma: trashed quotes keep their number, so they must count here
   const max = await basePrisma.quote.aggregate({ _max: { number: true } });
   const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
   const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
@@ -104,15 +109,14 @@ export async function createQuoteFromLeadInEditor(leadId: string) {
 
 /** Creates a quote directly for an existing customer (no lead needed). */
 export async function createQuoteForContact(formData: FormData) {
-  const user = await requireCrm();
   const contactId = String(formData.get("contactId") ?? "").trim();
   const productId = String(formData.get("productId") ?? "").trim() || null;
   if (!contactId) throw new Error("Customer is required");
+  const user = await requireContactAccess(contactId, "quotes.create");
 
   const product = productId
     ? await prisma.product.findUnique({ where: { id: productId } })
     : null;
-  // basePrisma: trashed quotes keep their number, so they must count here
   const max = await basePrisma.quote.aggregate({ _max: { number: true } });
   const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
   const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
@@ -157,13 +161,16 @@ export async function createQuoteForContact(formData: FormData) {
  * are always resolved again on the server.
  */
 export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraftResult> {
-  const user = await requireCrm();
   const parsed = quoteDraftSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the quote details." };
   }
 
   const data = parsed.data;
+  // RBAC: editing an existing draft needs quote access; a new quote needs contact access.
+  const user = data.id
+    ? await requireQuoteAccess(data.id, "quotes.edit")
+    : await requireContactAccess(data.contactId, "quotes.create");
   if (data.intent === "sent" && data.items.length === 0) {
     return { ok: false, error: "Add at least one line before marking the quote as sent." };
   }
@@ -182,15 +189,18 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     unitPriceCents: number;
     productId: string | null;
     colorPreference: string | null;
+    discountPct: number;
   }> = [];
   for (const item of data.items) {
     const productId = item.productId || null;
     const requestedColor = item.colorPreference?.trim() || null;
+    // Clamp discount to a sane 0–100 range; the schema already validates it.
+    const discountPct = Math.min(100, Math.max(0, item.discountPct ?? 0));
     if (!productId) {
       if (requestedColor) {
         return { ok: false, error: "A colour preference requires a catalogue product." };
       }
-      normalizedItems.push({ ...item, productId: null, colorPreference: null });
+      normalizedItems.push({ ...item, productId: null, colorPreference: null, discountPct });
       continue;
     }
 
@@ -202,7 +212,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     if (requestedColor && !canonicalColor) {
       return { ok: false, error: `“${requestedColor}” is not configured for this product.` };
     }
-    normalizedItems.push({ ...item, productId, colorPreference: canonicalColor ?? null });
+    normalizedItems.push({ ...item, productId, colorPreference: canonicalColor ?? null, discountPct });
   }
 
   const contact = await prisma.contact.findUnique({
@@ -285,7 +295,10 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     };
   }
 
-  const total = normalizedItems.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
+  const total = normalizedItems.reduce(
+    (sum, item) => sum + item.qty * item.unitPriceCents * (1 - item.discountPct / 100),
+    0,
+  );
   await logAudit({
     action: data.intent === "sent" ? "quote.sent" : data.id ? "quote.updated" : "quote.created",
     summary:
@@ -326,17 +339,13 @@ async function quoteLocked(quoteId: string): Promise<boolean> {
   );
 }
 
-/**
- * Clones a quote into a fresh draft revision and freezes the original —
- * the version the customer saw stays on record, read-only.
- */
 export async function createQuoteRevision(quoteId: string) {
-  const user = await requireCrm();
+  const user = await requireQuoteAccess(quoteId, "quotes.edit");
   const original = await prisma.quote.findUniqueOrThrow({
     where: { id: quoteId },
     include: { items: true },
   });
-  if (original.supersededAt || original.signedAt) return; // only the latest, unsigned version can be revised
+  if (original.supersededAt || original.signedAt) return;
   const max = await basePrisma.quote.aggregate({ _max: { number: true } });
   const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
   const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
@@ -360,7 +369,6 @@ export async function createQuoteRevision(quoteId: string) {
       },
     },
   });
-  // Freeze the original and kill its signing link so a stale price can't be accepted
   await prisma.quote.update({
     where: { id: original.id },
     data: { supersededAt: new Date(), signToken: null, signLinkCreatedAt: null, reminderSentAt: null },
@@ -378,7 +386,7 @@ export async function createQuoteRevision(quoteId: string) {
 }
 
 export async function addQuoteItem(quoteId: string, formData: FormData) {
-  await requireCrm();
+  await requireQuoteAccess(quoteId, "quotes.edit");
   if (await quoteLocked(quoteId)) return;
   const description = String(formData.get("description") ?? "").trim();
   if (!description) return;
@@ -394,7 +402,7 @@ export async function addQuoteItem(quoteId: string, formData: FormData) {
 }
 
 export async function deleteQuoteItem(id: string, quoteId: string, formData: FormData) {
-  await requireCrm();
+  await requireQuoteAccess(quoteId, "quotes.edit");
   void formData;
   if (await quoteLocked(quoteId)) return;
   await prisma.quoteItem.delete({ where: { id } });
@@ -402,7 +410,7 @@ export async function deleteQuoteItem(id: string, quoteId: string, formData: For
 }
 
 export async function updateQuoteMeta(quoteId: string, formData: FormData) {
-  await requireCrm();
+  await requireQuoteAccess(quoteId, "quotes.edit");
   if (await quoteLocked(quoteId)) return;
   const validUntilRaw = String(formData.get("validUntil") ?? "").trim();
   await prisma.quote.update({
@@ -415,15 +423,10 @@ export async function updateQuoteMeta(quoteId: string, formData: FormData) {
   revalidatePath(`/quotes/${quoteId}`);
 }
 
-/**
- * A lead only stays "won" while a live accepted quote backs it up. If the
- * accepted quote is deleted or reverted, the sale never happened — reopen the
- * lead so reports don't count it.
- */
 async function reopenLeadIfNoAcceptedQuote(
   leadId: string,
   quoteNumber: number,
-  user: Awaited<ReturnType<typeof requireUser>>
+  user: PermissionUser
 ) {
   const lead = await prisma.lead.findUnique({ where: { id: leadId } });
   if (!lead || lead.status !== "won") return;
@@ -445,9 +448,11 @@ async function reopenLeadIfNoAcceptedQuote(
 }
 
 export async function setQuoteStatus(quoteId: string, status: string) {
-  const user = await requireCrm();
+  const user = await requireQuoteAccess(quoteId, "quotes.change_status");
   const before = await prisma.quote.findUniqueOrThrow({ where: { id: quoteId } });
-  if (before.signedAt || before.supersededAt) return; // signed and superseded versions are read-only
+  if (before.signedAt || before.supersededAt) return;
+  const allowed = new Set(["draft", "sent", "accepted", "declined"]);
+  if (!allowed.has(status)) throw new Error("Invalid quote status");
   const quote = await prisma.quote.update({
     where: { id: quoteId },
     data: { status },
@@ -469,7 +474,6 @@ export async function setQuoteStatus(quoteId: string, status: string) {
     contactId: quote.contactId,
     user,
   });
-  // Accepting a quote wins its lead
   if (status === "accepted" && quote.leadId && quote.lead?.status === "open") {
     await prisma.lead.update({ where: { id: quote.leadId }, data: { status: "won" } });
     await markReferralEarned(quote.leadId).catch(() => {});
@@ -482,7 +486,6 @@ export async function setQuoteStatus(quoteId: string, status: string) {
       user,
     });
   }
-  // Reverting an accepted quote un-wins the lead (unless another accepted quote backs it)
   if (before.status === "accepted" && status !== "accepted" && quote.leadId) {
     await reopenLeadIfNoAcceptedQuote(quote.leadId, quote.number, user);
   }
@@ -492,7 +495,7 @@ export async function setQuoteStatus(quoteId: string, status: string) {
 }
 
 export async function deleteQuote(id: string, formData: FormData) {
-  const user = await requireCrm();
+  const user = await requireQuoteAccess(id, "quotes.delete");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const quote = await softDeleteRecord("quote", id, reason, user.name);
   await logAudit({
@@ -502,7 +505,6 @@ export async function deleteQuote(id: string, formData: FormData) {
     contactId: quote.contactId,
     user,
   });
-  // Deleting an accepted quote means the sale is off — un-win the lead
   if (quote.status === "accepted" && quote.leadId) {
     await reopenLeadIfNoAcceptedQuote(quote.leadId, quote.number, user);
   }

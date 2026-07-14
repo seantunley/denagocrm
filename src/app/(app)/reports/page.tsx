@@ -9,8 +9,7 @@ import {
   subMonths,
 } from "date-fns";
 import { TrendingDown, TrendingUp } from "lucide-react";
-import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { prisma, basePrisma } from "@/lib/db";
 import { formatZARCompact } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import ReportFilters from "@/components/reports/ReportFilters";
@@ -28,11 +27,16 @@ import {
   type ServicePoint,
 } from "@/components/reports/ReportCharts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  getAccessibleJobCardIds,
+  getAccessibleLeadIds,
+  getUserTeamIds,
+  hasPermission,
+  requireAnyPermission,
+} from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
-
-/* ── date range from the URL ──────────────────────────────────────── */
 
 function resolveRange(params: Record<string, string | undefined>) {
   const now = new Date();
@@ -45,10 +49,10 @@ function resolveRange(params: Record<string, string | undefined>) {
     case "ytd": from = startOfYear(now); break;
     case "12m": from = subMonths(now, 12); break;
     case "custom": {
-      const f = params.from ? new Date(params.from) : startOfMonth(now);
-      const t = params.to ? addDays(new Date(params.to), 1) : now;
-      from = isNaN(f.getTime()) ? startOfMonth(now) : f;
-      to = isNaN(t.getTime()) ? now : t;
+      const candidateFrom = params.from ? new Date(params.from) : startOfMonth(now);
+      const candidateTo = params.to ? addDays(new Date(params.to), 1) : now;
+      from = isNaN(candidateFrom.getTime()) ? startOfMonth(now) : candidateFrom;
+      to = isNaN(candidateTo.getTime()) ? now : candidateTo;
       break;
     }
     default: from = startOfMonth(now);
@@ -57,8 +61,6 @@ function resolveRange(params: Record<string, string | undefined>) {
   const prevFrom = new Date(from.getTime() - lengthMs);
   return { from, to, prevFrom, prevTo: from };
 }
-
-/* ── time buckets for trend charts ────────────────────────────────── */
 
 type Bucket = { start: Date; end: Date; label: string };
 
@@ -77,9 +79,7 @@ function makeBuckets(from: Date, to: Date): Bucket[] {
 }
 
 const countIn = (buckets: Bucket[], dates: Date[]) =>
-  buckets.map((b) => dates.filter((d) => d >= b.start && d < b.end).length);
-
-/* ── source palette ───────────────────────────────────────────────── */
+  buckets.map((bucket) => dates.filter((date) => date >= bucket.start && date < bucket.end).length);
 
 const SOURCE_COLORS: Record<string, string> = {
   facebook: "var(--chart-2)",
@@ -89,8 +89,6 @@ const SOURCE_COLORS: Record<string, string> = {
   referral: "var(--chart-5)",
   manual: "oklch(0.55 0.01 264)",
 };
-
-/* ── stat card with delta ─────────────────────────────────────────── */
 
 function StatCard({
   label,
@@ -132,23 +130,47 @@ function StatCard({
   );
 }
 
-const pct = (cur: number, prev: number): number | null =>
-  prev === 0 ? (cur > 0 ? 100 : null) : Math.round(((cur - prev) / prev) * 100);
+const pct = (current: number, previous: number): number | null =>
+  previous === 0 ? (current > 0 ? 100 : null) : Math.round(((current - previous) / previous) * 100);
 
-/* ── page ─────────────────────────────────────────────────────────── */
+async function accessibleReportUserIds(userId: string, unrestricted: boolean): Promise<string[] | null> {
+  if (unrestricted) return null;
+  const teamIds = await getUserTeamIds(userId);
+  if (teamIds.length === 0) return [userId];
+  const rows = await basePrisma.$queryRaw<Array<{ id: string }>>`
+    SELECT DISTINCT u."id"
+    FROM "User" u
+    WHERE u."id" = ${userId}
+       OR u."id" IN (
+         SELECT tm."userId" FROM "TeamMember" tm WHERE tm."teamId" = ANY(${teamIds}::text[])
+       )
+  `;
+  return rows.map((row) => row.id);
+}
 
 export default async function ReportsPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
-  await requireUser();
+  const user = await requireAnyPermission("reports.view_all", "reports.view_team", "reports.view");
   const params = await searchParams;
   const { from, to, prevFrom, prevTo } = resolveRange(params);
+  const unrestricted = await hasPermission(user, "reports.view_all");
+  const [leadIds, jobCardIds, reportUserIds] = await Promise.all([
+    getAccessibleLeadIds(user),
+    getAccessibleJobCardIds(user),
+    accessibleReportUserIds(user.id, unrestricted),
+  ]);
+  const requestedUser = params.user && (reportUserIds === null || reportUserIds.includes(params.user))
+    ? params.user
+    : undefined;
 
-  // Lead-level filters shared by every lead query
+  const leadScope = leadIds === null ? {} : { id: { in: leadIds } };
+  const jobScope = jobCardIds === null ? {} : { id: { in: jobCardIds } };
   const leadFilter = {
-    ...(params.user ? { assignedToId: params.user } : {}),
+    ...leadScope,
+    ...(requestedUser ? { assignedToId: requestedUser } : {}),
     ...(params.product ? { productId: params.product } : {}),
     ...(params.source ? { source: params.source } : {}),
   };
@@ -174,7 +196,6 @@ export default async function ReportsPage({
       where: { ...leadFilter, createdAt: { gte: prevFrom, lt: prevTo } },
       select: { createdAt: true },
     }),
-    // Won date isn't stored separately; updatedAt is when the deal was marked won.
     prisma.lead.findMany({
       where: { ...leadFilter, status: "won", updatedAt: { gte: from, lt: to } },
       select: {
@@ -202,135 +223,108 @@ export default async function ReportsPage({
       },
     }),
     prisma.jobCard.findMany({
-      where: { status: "completed", completedAt: { gte: from, lt: to } },
+      where: { ...jobScope, status: "completed", completedAt: { gte: from, lt: to } },
       select: { completedAt: true },
     }),
-    prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    prisma.user.findMany({
+      where: reportUserIds === null ? {} : { id: { in: reportUserIds } },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    }),
     prisma.product.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
-    prisma.lead.groupBy({ by: ["source"] }),
+    prisma.lead.groupBy({ by: ["source"], where: leadScope }),
   ]);
 
-  /* Trend */
   const buckets = makeBuckets(from, to);
   const prevBuckets = makeBuckets(prevFrom, prevTo);
-  const leadCounts = countIn(buckets, leadsInRange.map((l) => l.createdAt));
-  const prevCounts = countIn(prevBuckets, prevLeads.map((l) => l.createdAt));
-  const trend: TrendPoint[] = buckets.map((b, i) => {
-    const wonHere = wonInRange.filter((w) => w.updatedAt >= b.start && w.updatedAt < b.end);
+  const leadCounts = countIn(buckets, leadsInRange.map((lead) => lead.createdAt));
+  const prevCounts = countIn(prevBuckets, prevLeads.map((lead) => lead.createdAt));
+  const trend: TrendPoint[] = buckets.map((bucket, index) => {
+    const wonHere = wonInRange.filter((won) => won.updatedAt >= bucket.start && won.updatedAt < bucket.end);
     return {
-      label: b.label,
-      leads: leadCounts[i],
+      label: bucket.label,
+      leads: leadCounts[index],
       won: wonHere.length,
-      wonValue: Math.round(wonHere.reduce((s, w) => s + w.valueCents, 0) / 100),
-      prevLeads: prevCounts[i] ?? null,
+      wonValue: Math.round(wonHere.reduce((sum, won) => sum + won.valueCents, 0) / 100),
+      prevLeads: prevCounts[index] ?? null,
     };
   });
 
-  /* Funnel (current pipeline, date-independent) */
   const stageMap = new Map<string, FunnelRow & { order: number }>();
-  for (const l of openLeads) {
-    const cur =
-      stageMap.get(l.stage.id) ??
-      { name: l.stage.name, count: 0, value: 0, color: l.stage.color, order: l.stage.order };
-    cur.count += 1;
-    cur.value += Math.round(l.valueCents / 100);
-    stageMap.set(l.stage.id, cur);
+  for (const lead of openLeads) {
+    const current = stageMap.get(lead.stage.id) ?? {
+      name: lead.stage.name,
+      count: 0,
+      value: 0,
+      color: lead.stage.color,
+      order: lead.stage.order,
+    };
+    current.count += 1;
+    current.value += Math.round(lead.valueCents / 100);
+    stageMap.set(lead.stage.id, current);
   }
   const funnel = [...stageMap.values()].sort((a, b) => a.order - b.order);
 
-  /* Sources */
-  const srcMap = new Map<string, SourceRow>();
-  for (const l of leadsInRange) {
-    const cur =
-      srcMap.get(l.source) ??
-      { name: l.source, leads: 0, won: 0, color: SOURCE_COLORS[l.source] ?? "var(--chart-5)" };
-    cur.leads += 1;
-    if (l.status === "won") cur.won += 1;
-    srcMap.set(l.source, cur);
+  const sourceMap = new Map<string, SourceRow>();
+  for (const lead of leadsInRange) {
+    const current = sourceMap.get(lead.source) ?? {
+      name: lead.source,
+      leads: 0,
+      won: 0,
+      color: SOURCE_COLORS[lead.source] ?? "var(--chart-5)",
+    };
+    current.leads += 1;
+    if (lead.status === "won") current.won += 1;
+    sourceMap.set(lead.source, current);
   }
-  const sources = [...srcMap.values()].sort((a, b) => b.leads - a.leads);
+  const sources = [...sourceMap.values()].sort((a, b) => b.leads - a.leads);
 
-  /* Team */
   const teamMap = new Map<string, TeamRow>();
-  for (const w of wonInRange) {
-    const name = w.assignedTo?.name ?? "Unassigned";
-    const cur = teamMap.get(name) ?? { name, won: 0, wonValue: 0 };
-    cur.won += 1;
-    cur.wonValue += Math.round(w.valueCents / 100);
-    teamMap.set(name, cur);
+  for (const won of wonInRange) {
+    const name = won.assignedTo?.name ?? "Unassigned";
+    const current = teamMap.get(name) ?? { name, won: 0, wonValue: 0 };
+    current.won += 1;
+    current.wonValue += Math.round(won.valueCents / 100);
+    teamMap.set(name, current);
   }
   const team = [...teamMap.values()].sort((a, b) => b.wonValue - a.wonValue);
 
-  /* Service */
-  const service: ServicePoint[] = buckets.map((b) => ({
-    label: b.label,
-    services: jobsInRange.filter((j) => j.completedAt! >= b.start && j.completedAt! < b.end).length,
+  const service: ServicePoint[] = buckets.map((bucket) => ({
+    label: bucket.label,
+    services: jobsInRange.filter((job) => job.completedAt! >= bucket.start && job.completedAt! < bucket.end).length,
   }));
 
-  /* Stats + deltas */
-  const wonValue = wonInRange.reduce((s, w) => s + w.valueCents, 0);
-  const prevWonValue = prevWon.reduce((s, w) => s + w.valueCents, 0);
+  const wonValue = wonInRange.reduce((sum, won) => sum + won.valueCents, 0);
+  const prevWonValue = prevWon.reduce((sum, won) => sum + won.valueCents, 0);
   const closed = wonInRange.length + lostInRange;
   const prevClosed = prevWon.length + prevLost;
   const winRate = closed ? Math.round((wonInRange.length / closed) * 100) : 0;
   const prevWinRate = prevClosed ? Math.round((prevWon.length / prevClosed) * 100) : 0;
   const compare = `${format(prevFrom, "d MMM")} – ${format(prevTo, "d MMM")}`;
-  const filtered = !!(params.user || params.product || params.source);
+  const filtered = Boolean(requestedUser || params.product || params.source);
 
   return (
     <div className="space-y-4">
       <PageHeader
         title="Reports"
-        description={`${format(from, "d MMM yyyy")} – ${format(to, "d MMM yyyy")}`}
+        description={`${format(from, "d MMM yyyy")} – ${format(to, "d MMM yyyy")}${unrestricted ? "" : " · restricted to your permitted records"}`}
       />
 
-      <ReportFilters
-        options={{ users, products, sources: allSources.map((s) => s.source).sort() }}
-      />
+      <ReportFilters options={{ users, products, sources: allSources.map((source) => source.source).sort() }} />
 
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <StatCard
-          label="New leads"
-          value={String(leadsInRange.length)}
-          delta={pct(leadsInRange.length, prevLeads.length)}
-          compare={compare}
-        />
-        <StatCard
-          label="Deals won"
-          value={String(wonInRange.length)}
-          delta={pct(wonInRange.length, prevWon.length)}
-          compare={compare}
-        />
-        <StatCard
-          label="Won value"
-          value={formatZARCompact(wonValue)}
-          delta={pct(wonValue, prevWonValue)}
-          compare={compare}
-        />
-        <StatCard
-          label="Win rate"
-          value={`${winRate}%`}
-          delta={prevClosed || closed ? winRate - prevWinRate : null}
-          compare={compare}
-        />
+        <StatCard label="New leads" value={String(leadsInRange.length)} delta={pct(leadsInRange.length, prevLeads.length)} compare={compare} />
+        <StatCard label="Deals won" value={String(wonInRange.length)} delta={pct(wonInRange.length, prevWon.length)} compare={compare} />
+        <StatCard label="Won value" value={formatZARCompact(wonValue)} delta={pct(wonValue, prevWonValue)} compare={compare} />
+        <StatCard label="Win rate" value={`${winRate}%`} delta={prevClosed || closed ? winRate - prevWinRate : null} compare={compare} />
       </div>
 
-      <ChartCard
-        title="Sales trend"
-        subtitle="New leads (line) and won deal value (bars) — dashed line is the previous period"
-      >
+      <ChartCard title="Sales trend" subtitle="New leads (line) and won deal value (bars) — dashed line is the previous period">
         <TrendChart data={trend} />
       </ChartCard>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <ChartCard
-          title="Pipeline right now"
-          subtitle={
-            filtered
-              ? "Open leads by stage (filters applied — date range doesn't apply here)"
-              : "Open leads by stage (date range doesn't apply here)"
-          }
-        >
+        <ChartCard title="Pipeline right now" subtitle={filtered ? "Open leads by stage (filters applied — date range doesn't apply here)" : "Open leads by stage (date range doesn't apply here)"}>
           <FunnelChart data={funnel} />
         </ChartCard>
         <ChartCard title="Lead sources" subtitle="Share of leads in period, with win rate per channel">
@@ -339,19 +333,10 @@ export default async function ReportsPage({
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <ChartCard title="Team performance" subtitle="Value of deals won in period, per team member">
-          {team.length ? (
-            <TeamChart data={team} />
-          ) : (
-            <p className="py-8 text-center text-xs text-muted-foreground/70">
-              No deals won in this period.
-            </p>
-          )}
+        <ChartCard title="Team performance" subtitle="Value of accessible deals won in period, per team member">
+          {team.length ? <TeamChart data={team} /> : <p className="py-8 text-center text-xs text-muted-foreground/70">No deals won in this period.</p>}
         </ChartCard>
-        <ChartCard
-          title="Workshop"
-          subtitle="Job cards completed per period (team/product filters don't apply)"
-        >
+        <ChartCard title="Workshop" subtitle="Accessible job cards completed per period">
           <ServiceChart data={service} />
         </ChartCard>
       </div>

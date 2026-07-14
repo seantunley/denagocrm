@@ -2,16 +2,15 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireCrm, requireOwner } from "@/lib/auth";
+import { requireContactAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { CONSENT_TYPES } from "@/lib/consent";
 
-/** Record a consent grant or withdrawal, and keep marketingOptOut in sync. */
 export async function recordConsent(contactId: string, formData: FormData) {
-  const user = await requireCrm();
+  const user = await requireContactAccess(contactId, "contacts.edit");
   const type = String(formData.get("type") ?? "");
   const granted = String(formData.get("granted") ?? "") === "granted";
-  if (!CONSENT_TYPES.some((t) => t.id === type)) return;
+  if (!CONSENT_TYPES.some((item) => item.id === type)) return;
 
   await prisma.consentRecord.create({
     data: {
@@ -23,7 +22,6 @@ export async function recordConsent(contactId: string, formData: FormData) {
       createdById: user.id,
     },
   });
-  // Marketing consent drives the opt-out flag used by campaigns
   if (type === "marketing") {
     await prisma.contact.update({ where: { id: contactId }, data: { marketingOptOut: !granted } });
   }
@@ -37,12 +35,15 @@ export async function recordConsent(contactId: string, formData: FormData) {
 }
 
 /**
- * POPIA erasure. We do NOT hard-delete (records are needed for warranty,
- * safety and audit) — we redact personal identifiers from the contact and
- * their leads, withdraw consent, and soft-delete the contact.
+ * POPIA erasure is intentionally tied to contact deletion authority and record
+ * scope. Records remain for warranty, safety and audit, but personal identifiers
+ * are redacted and consent is withdrawn.
  */
 export async function anonymizeContact(contactId: string) {
-  const user = await requireOwner();
+  const user = await requireContactAccess(contactId, "contacts.delete");
+  // POPIA erasure is irreversible — keep it owner-only until the permission-based
+  // de-escalation is explicitly signed off (flagged in review of PR #12).
+  if (user.role !== "owner") throw new Error("Only an owner can anonymise a contact (POPIA erasure).");
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) return;
 
@@ -72,11 +73,18 @@ export async function anonymizeContact(contactId: string) {
     data: { name: "Redacted", email: null, phone: null },
   });
   await prisma.consentRecord.create({
-    data: { contactId, type: "data_processing", granted: false, source: "admin", note: "Erasure request", createdById: user.id },
+    data: {
+      contactId,
+      type: "data_processing",
+      granted: false,
+      source: "admin",
+      note: "Erasure request",
+      createdById: user.id,
+    },
   });
   await logAudit({
     action: "privacy.erased",
-    summary: `POPIA erasure — personal data redacted for a contact`,
+    summary: "POPIA erasure — personal data redacted for a contact",
     contactId,
     user,
   });

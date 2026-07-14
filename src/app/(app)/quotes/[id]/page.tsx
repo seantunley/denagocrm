@@ -13,7 +13,10 @@ import {
 import ConfirmDelete from "@/components/ConfirmDelete";
 import QuoteVersions from "@/components/QuoteVersions";
 import { uploadDeliveryPhotos } from "@/app/actions/fulfilment";
+import { listBuilderTemplates } from "@/lib/docbuilder/store";
+import { generateDocEditorDocument } from "@/app/actions/doceditor";
 import SigningBlock from "@/components/SigningBlock";
+import { activeRecordRequest, isLockedForSigning } from "@/lib/signing/record";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 
 const statusBadge: Record<string, string> = {
@@ -90,6 +93,7 @@ export default async function QuoteDetailPage({
     },
   });
   if (!quote) notFound();
+  const builderDocs = (await listBuilderTemplates()).filter((t) => t.key === "quote");
   const family = await getQuoteFamily(quote);
   const deliveryPhotos =
     quote.status === "accepted"
@@ -100,7 +104,9 @@ export default async function QuoteDetailPage({
       : [];
   const successor = quote.revisions[0] ?? null;
   const total = quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
-  const lockedBySigning = Boolean(quote.signToken) && !quote.signedAt;
+  const signingState = await activeRecordRequest({ quoteId: quote.id });
+  const signWorkflows = await prisma.signWorkflow.findMany({ where: { isArchived: false }, select: { id: true, name: true }, orderBy: { updatedAt: "desc" } });
+  const lockedBySigning = (Boolean(quote.signToken) && !quote.signedAt) || isLockedForSigning(signingState);
   const readOnly = Boolean(quote.signedAt || quote.supersededAt);
   const editable = quote.status === "draft" && !lockedBySigning && !readOnly;
   const canRevise = !readOnly && (quote.status === "sent" || quote.status === "declined");
@@ -149,6 +155,24 @@ export default async function QuoteDetailPage({
                 📜 Sales agreement
               </Link>
             </>
+          )}
+          {builderDocs.length > 0 && currentUser.role === "owner" && (
+            <form action={generateDocEditorDocument} className="flex items-center gap-1">
+              <input type="hidden" name="quoteId" value={quote.id} />
+              <select
+                name="templateId"
+                defaultValue={builderDocs[0].id}
+                className="rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground"
+                title="Builder template"
+              >
+                {builderDocs.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+              <button className="btn-secondary" title="Generate this builder document for the quote and file it in the repository">
+                📄 Generate
+              </button>
+            </form>
           )}
           {canRevise && (
             <form action={createQuoteRevision.bind(null, quote.id)}>
@@ -295,18 +319,15 @@ export default async function QuoteDetailPage({
         kind="quote"
         id={quote.id}
         refLabel={`Q-${quote.number}`}
-        signToken={quote.signToken}
         signedAt={quote.signedAt}
         signedByName={quote.signedByName}
-        customerEmail={quote.contact?.email ?? quote.lead?.email}
-        customerPhone={quote.contact?.whatsapp ?? quote.contact?.phone ?? quote.lead?.phone}
+        signedPdfHash={quote.signedPdfHash}
         dealerSignedAt={quote.dealerSignedAt}
         dealerSignedByName={quote.dealerSignedByName}
         hasSavedSignature={Boolean(currentUser.drawnSignatureRef)}
-        viewedAt={quote.viewedAt}
-        declinedAt={quote.declinedAt}
-        declineReason={quote.declineReason}
-        signedPdfHash={quote.signedPdfHash}
+        state={signingState}
+        legacyToken={quote.signToken}
+        workflows={signWorkflows}
       />
       )}
 

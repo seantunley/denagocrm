@@ -3,18 +3,41 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { requireCrm, requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { saveFile } from "@/lib/storage";
 import { buildMergeContext, renderInstanceHtml, htmlToPdf } from "@/lib/customDocs";
 import { resolveBlocks } from "@/lib/mergeFields";
+import {
+  canAccessContact,
+  canAccessLead,
+  canAccessQuote,
+  requirePermission,
+  type PermissionKey,
+  type PermissionUser,
+} from "@/lib/permissions";
 
 const EMPTY_DOC = [{ type: "paragraph", content: [] }];
+
+async function assertLinkedScope(
+  user: PermissionUser,
+  links: { contactId?: string | null; leadId?: string | null; quoteId?: string | null }
+) {
+  if (links.contactId && !(await canAccessContact(user, links.contactId))) throw new Error("Contact access denied");
+  if (links.leadId && !(await canAccessLead(user, links.leadId))) throw new Error("Lead access denied");
+  if (links.quoteId && !(await canAccessQuote(user, links.quoteId))) throw new Error("Quote access denied");
+}
+
+async function requireDocInstanceAccess(id: string, permission: PermissionKey) {
+  const user = await requirePermission(permission);
+  const doc = await prisma.docInstance.findUniqueOrThrow({ where: { id } });
+  await assertLinkedScope(user, doc);
+  return { user, doc };
+}
 
 /* ── templates ───────────────────────────────────────────────────── */
 
 export async function createStudioTemplate(formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("document_templates.manage");
   const name = String(formData.get("name") ?? "").trim() || "Untitled template";
   const tpl = await prisma.customDocTemplate.create({
     data: { name, draftJson: EMPTY_DOC },
@@ -27,7 +50,7 @@ export async function saveStudioTemplate(
   id: string,
   data: { name: string; content: unknown }
 ): Promise<{ ok: boolean }> {
-  await requireOwner();
+  await requirePermission("document_templates.manage");
   await prisma.customDocTemplate.update({
     where: { id },
     data: { name: data.name.trim() || "Untitled template", draftJson: data.content as object },
@@ -35,9 +58,8 @@ export async function saveStudioTemplate(
   return { ok: true };
 }
 
-/** Publishing snapshots the draft as an immutable numbered version. */
 export async function publishStudioTemplate(id: string) {
-  const user = await requireOwner();
+  const user = await requirePermission("document_templates.manage");
   const tpl = await prisma.customDocTemplate.findUniqueOrThrow({
     where: { id },
     include: { versions: { orderBy: { version: "desc" }, take: 1 } },
@@ -56,7 +78,7 @@ export async function publishStudioTemplate(id: string) {
 }
 
 export async function deleteStudioTemplate(id: string) {
-  const user = await requireOwner();
+  const user = await requirePermission("document_templates.manage");
   const tpl = await prisma.customDocTemplate.update({ where: { id }, data: { deletedAt: new Date() } });
   await logAudit({ action: "studio.template.deleted", summary: `Deleted studio template “${tpl.name}”`, user });
   redirect("/settings/documents?tab=studio");
@@ -65,7 +87,7 @@ export async function deleteStudioTemplate(id: string) {
 /* ── reusable blocks (inserted by value) ─────────────────────────── */
 
 export async function createReusableBlock(formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("document_templates.manage");
   const name = String(formData.get("name") ?? "").trim() || "Untitled clause";
   const row = await prisma.reusableBlock.create({
     data: { name, contentJson: EMPTY_DOC },
@@ -78,7 +100,7 @@ export async function saveReusableBlock(
   id: string,
   data: { title: string; content: unknown }
 ): Promise<{ ok: boolean }> {
-  await requireOwner();
+  await requirePermission("document_templates.manage");
   await prisma.reusableBlock.update({
     where: { id },
     data: { name: data.title.trim() || "Untitled clause", contentJson: data.content as object },
@@ -87,22 +109,21 @@ export async function saveReusableBlock(
 }
 
 export async function deleteReusableBlock(id: string) {
-  await requireOwner();
+  await requirePermission("document_templates.manage");
   await prisma.reusableBlock.update({ where: { id }, data: { deletedAt: new Date() } });
   revalidatePath("/settings/documents");
 }
 
 /* ── document instances ──────────────────────────────────────────── */
 
-/** Create a document from a published template (or blank). Tokens resolve NOW
- *  and the data snapshot is stored — later CRM edits never change this doc. */
 export async function createDocInstance(formData: FormData) {
-  const user = await requireCrm();
+  const user = await requirePermission("documents.manage");
   const templateId = String(formData.get("templateId") ?? "").trim() || null;
   const title = String(formData.get("title") ?? "").trim() || "Untitled document";
   const contactId = String(formData.get("contactId") ?? "").trim() || null;
   const leadId = String(formData.get("leadId") ?? "").trim() || null;
   const quoteId = String(formData.get("quoteId") ?? "").trim() || null;
+  await assertLinkedScope(user, { contactId, leadId, quoteId });
 
   let content: unknown = EMPTY_DOC;
   let templateVersionId: string | null = null;
@@ -115,7 +136,6 @@ export async function createDocInstance(formData: FormData) {
       content = version.contentJson;
       templateVersionId = version.id;
     } else {
-      // no published version yet — use the draft
       const tpl = await prisma.customDocTemplate.findUnique({ where: { id: templateId } });
       content = tpl?.draftJson ?? EMPTY_DOC;
     }
@@ -151,8 +171,7 @@ export async function saveDocInstance(
   id: string,
   data: { title: string; content: unknown }
 ): Promise<{ ok: boolean; error?: string }> {
-  await requireCrm();
-  const doc = await prisma.docInstance.findUniqueOrThrow({ where: { id } });
+  const { doc } = await requireDocInstanceAccess(id, "documents.manage");
   if (doc.status === "final") return { ok: false, error: "This document is finalised — duplicate it to edit." };
   await prisma.docInstance.update({
     where: { id },
@@ -161,10 +180,8 @@ export async function saveDocInstance(
   return { ok: true };
 }
 
-/** Finalise: lock the document and generate its PDF into the repository. */
 export async function finalizeDocInstance(id: string): Promise<{ ok: boolean; error?: string; pdfDocId?: string }> {
-  const user = await requireCrm();
-  const doc = await prisma.docInstance.findUniqueOrThrow({ where: { id } });
+  const { user, doc } = await requireDocInstanceAccess(id, "documents.manage");
 
   try {
     const html = await renderInstanceHtml({ title: doc.title, contentJson: doc.contentJson });
@@ -195,16 +212,16 @@ export async function finalizeDocInstance(id: string): Promise<{ ok: boolean; er
     });
     revalidatePath(`/settings/documents/studio/d/${id}`);
     return { ok: true, pdfDocId: pdfDoc.id };
-  } catch (e) {
+  } catch (error) {
     const { logError } = await import("@/lib/errorLog");
-    await logError("studio-pdf", e);
-    return { ok: false, error: e instanceof Error ? e.message : "PDF generation failed" };
+    await logError("studio-pdf", error);
+    return { ok: false, error: error instanceof Error ? error.message : "PDF generation failed" };
   }
 }
 
 export async function deleteDocInstance(id: string) {
-  const user = await requireCrm();
-  const doc = await prisma.docInstance.update({ where: { id }, data: { deletedAt: new Date() } });
+  const { user, doc } = await requireDocInstanceAccess(id, "documents.manage");
+  await prisma.docInstance.update({ where: { id }, data: { deletedAt: new Date() } });
   await logAudit({ action: "studio.doc.deleted", summary: `Deleted document “${doc.title}”`, user });
   redirect("/settings/documents?tab=studio");
 }

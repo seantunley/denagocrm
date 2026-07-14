@@ -4,13 +4,13 @@ import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 
 const text = (formData: FormData, key: string) => String(formData.get(key) ?? "").trim();
 
 export async function grantPortalAccess(formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("portal_access.manage");
   const viewerContactId = text(formData, "viewerContactId");
   const targetType = text(formData, "targetType");
   const targetId = text(formData, "targetId");
@@ -49,13 +49,11 @@ export async function grantPortalAccess(formData: FormData) {
 
 export async function revokePortalAccess(id: string, formData: FormData) {
   void formData;
-  const user = await requireOwner();
+  const user = await requirePermission("portal_access.manage");
   const rows = await basePrisma.$queryRaw<Array<{ viewerContactId: string }>>`
     SELECT "viewerContactId" FROM "PortalAccessGrant" WHERE "id" = ${id} LIMIT 1
   `;
-  await basePrisma.$executeRaw`
-    UPDATE "PortalAccessGrant" SET "active" = false WHERE "id" = ${id}
-  `;
+  await basePrisma.$executeRaw`UPDATE "PortalAccessGrant" SET "active" = false WHERE "id" = ${id}`;
   await logAudit({
     action: "portal.access_revoked",
     summary: "Revoked portal access grant",
@@ -112,7 +110,7 @@ export async function reviewPortalProfileRequest(
   decision: "approved" | "rejected",
   formData: FormData
 ) {
-  const user = await requireOwner();
+  const user = await requirePermission("portal_access.manage");
   const reviewNote = text(formData, "reviewNote") || null;
   const rows = await basePrisma.$queryRaw<ProfileRequestRow[]>`
     SELECT "id", "contactId", "changes", "status"

@@ -1,8 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, FileDown, Lock } from "lucide-react";
-import { requireCrm } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import {
+  canAccessContact,
+  canAccessLead,
+  canAccessQuote,
+  hasPermission,
+  requireAnyPermission,
+} from "@/lib/permissions";
 import { MERGE_FIELDS } from "@/lib/mergeFields";
 import { contactName, formatDateTime } from "@/lib/format";
 import StudioEditor from "@/components/StudioEditor";
@@ -13,13 +19,19 @@ import { Button } from "@/components/ui/button";
 export const dynamic = "force-dynamic";
 
 export default async function StudioDocPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireCrm();
+  const user = await requireAnyPermission("documents.view_all", "documents.view_owned", "documents.manage");
   const { id } = await params;
   const [doc, clauses] = await Promise.all([
     prisma.docInstance.findUnique({ where: { id }, include: { template: true } }),
     prisma.reusableBlock.findMany({ orderBy: { name: "asc" } }),
   ]);
-  if (!doc) notFound();
+  if (!doc || doc.deletedAt) notFound();
+  const allowed =
+    (!doc.contactId || await canAccessContact(user, doc.contactId)) &&
+    (!doc.leadId || await canAccessLead(user, doc.leadId)) &&
+    (!doc.quoteId || await canAccessQuote(user, doc.quoteId));
+  if (!allowed) notFound();
+  const canManage = await hasPermission(user, "documents.manage");
   const contact = doc.contactId
     ? await prisma.contact.findUnique({ where: { id: doc.contactId } })
     : null;
@@ -34,11 +46,11 @@ export default async function StudioDocPage({ params }: { params: Promise<{ id: 
     <div className="space-y-4">
       <div>
         <Link
-          href="/settings/documents?tab=studio"
+          href="/documents"
           className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" />
-          Document Studio
+          Documents
         </Link>
         <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           {final ? (
@@ -46,8 +58,10 @@ export default async function StudioDocPage({ params }: { params: Promise<{ id: 
               <Lock className="size-3" />
               Finalised {doc.finalizedAt ? formatDateTime(doc.finalizedAt) : ""} — read-only
             </span>
-          ) : (
+          ) : canManage ? (
             <span>Draft document — merge data was resolved when it was created.</span>
+          ) : (
+            <span>Draft document — read-only because your role cannot edit documents.</span>
           )}
           {doc.template && <span>· from “{doc.template.name}”</span>}
           {contact && (
@@ -65,13 +79,13 @@ export default async function StudioDocPage({ params }: { params: Promise<{ id: 
         initialTitle={doc.title}
         initialContent={doc.contentJson}
         fields={MERGE_FIELDS}
-        clauses={clauses.map((c) => ({
-          id: c.id,
-          name: c.name,
-          category: c.category,
-          contentJson: c.contentJson,
+        clauses={clauses.map((clause) => ({
+          id: clause.id,
+          name: clause.name,
+          category: clause.category,
+          contentJson: clause.contentJson,
         }))}
-        readOnly={final}
+        readOnly={final || !canManage}
         onSave={save}
         headerRight={
           final ? (
@@ -83,9 +97,9 @@ export default async function StudioDocPage({ params }: { params: Promise<{ id: 
                 </a>
               </Button>
             ) : null
-          ) : (
+          ) : canManage ? (
             <StudioFinalize docId={doc.id} />
-          )
+          ) : null
         }
       />
     </div>

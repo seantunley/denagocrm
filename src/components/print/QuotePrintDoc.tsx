@@ -17,7 +17,9 @@ export default function QuotePrintDoc({
   template?: DocTemplate;
 }) {
   const tpl = template ?? defaultTemplate("quote");
-  const total = quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+  const lineNet = (i: { qty: number; unitPriceCents: number; discountPct?: number | null }) =>
+    Math.round(i.qty * i.unitPriceCents * (1 - Math.min(100, Math.max(0, i.discountPct ?? 0)) / 100));
+  const total = quote.items.reduce((s, i) => s + lineNet(i), 0);
   const termsText = tpl.terms ?? quote.terms;
   const customerName = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
   const phone = quote.contact?.phone ?? quote.lead?.phone;
@@ -109,9 +111,10 @@ export default function QuotePrintDoc({
                 <td className="py-2.5 px-3 border-b border-slate-200 text-right">{i.qty}</td>
                 <td className="py-2.5 px-3 border-b border-slate-200 text-right">
                   {formatZAR(i.unitPriceCents)}
+                  {i.discountPct ? <span className="block text-[10px] font-normal text-slate-500">−{i.discountPct}% discount</span> : null}
                 </td>
                 <td className="py-2.5 px-3 border-b border-slate-200 text-right font-medium">
-                  {formatZAR(Math.round(i.qty * i.unitPriceCents))}
+                  {formatZAR(lineNet(i))}
                 </td>
               </tr>
             ))}
