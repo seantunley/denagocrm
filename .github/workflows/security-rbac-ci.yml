@@ -84,9 +84,11 @@ jobs:
         # (RBAC permissions/roles in 52/53) that the governance + security checks
         # below depend on and that a schema-only `db push` would skip.
         run: |
+          # Strip Prisma's ?schema=public — libpq/psql rejects it as a URI param.
+          DB_URL=$(echo "$DATABASE_URL" | cut -d'?' -f1)
           for name in $(ls prisma/migrations | grep -E '^[0-9]+_' | sort -t_ -k1,1 -n); do
             echo "→ $name"
-            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "prisma/migrations/$name/migration.sql"
+            psql "$DB_URL" -v ON_ERROR_STOP=1 -q -f "prisma/migrations/$name/migration.sql"
           done
 
       - name: Seed baseline data
