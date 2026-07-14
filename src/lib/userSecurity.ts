@@ -15,9 +15,7 @@ const DEFAULT_STATE: UserSecurityState = {
   failedLoginCount: 0,
 };
 
-// Request-memoised: read the row once per request even when getCurrentUser and
-// direct callers both ask. Request-scoped, so changes apply on the next request.
-export const getUserSecurityState = cache(async (userId: string): Promise<UserSecurityState | null> => {
+async function readUserSecurityState(userId: string): Promise<UserSecurityState | null> {
   try {
     const rows = await basePrisma.$queryRaw<UserSecurityState[]>`
       SELECT "sessionVersion", "disabledAt", "lastLoginAt", "failedLoginCount"
@@ -34,7 +32,16 @@ export const getUserSecurityState = cache(async (userId: string): Promise<UserSe
     `;
     return rows[0] ? DEFAULT_STATE : null;
   }
-});
+}
+
+// Request-memoised: read the row once per request even when getCurrentUser and
+// direct callers both ask. Request-scoped, so changes apply on the next request.
+export const getUserSecurityState = cache(readUserSecurityState);
+
+// Uncached read — use this after mutating the row in the SAME request (e.g. a
+// session-version bump before re-issuing the cookie), where the memoised value
+// would be stale and would sign the user straight back out.
+export const getUserSecurityStateFresh = readUserSecurityState;
 
 export async function bumpUserSessionVersion(userId: string): Promise<number> {
   const rows = await basePrisma.$queryRaw<Array<{ sessionVersion: number }>>`

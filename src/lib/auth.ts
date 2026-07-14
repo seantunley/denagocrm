@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { hasModule, type ModuleId } from "./access";
-import { getUserSecurityState } from "./userSecurity";
+import { getUserSecurityState, getUserSecurityStateFresh } from "./userSecurity";
 import {
   verifySession,
   signFreshSession,
@@ -87,7 +87,10 @@ export async function createSessionCookie(
   user: { id: string; name: string; email: string; role: string; modules: string },
   opts?: { pwa?: boolean }
 ) {
-  const security = await getUserSecurityState(user.id);
+  // Fresh (uncached) read: this runs after a session-version bump in the same
+  // request, so the memoised value would be stale and mint a cookie that logs
+  // the user straight back out.
+  const security = await getUserSecurityStateFresh(user.id);
   if (!security || security.disabledAt) throw new Error("User is disabled or no longer exists");
   const pwa = Boolean(opts?.pwa);
   // Installed PWA: the phone lock is the security boundary — a flat 7-day
