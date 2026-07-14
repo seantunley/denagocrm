@@ -2,6 +2,10 @@ import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import {
+  createStage,
+  renameStage,
+  moveStage,
+  deleteStage,
   saveSetting,
   saveMyProfile,
   saveQuoteDefaults,
@@ -38,63 +42,11 @@ import { formatDate } from "@/lib/format";
 import AutomationsPage from "../automations/page";
 import ProductsPage from "../products/page";
 import LibraryPage from "../library/page";
-
-/**
- * Grouped settings IA — related blocks live together instead of one long
- * flat tab row. Keys are unchanged so existing content blocks (and any old
- * ?tab= links) keep working.
- */
-type SettingsTab = { key: string; label: string; href?: string };
-
-const NAV_GROUPS: { label: string; items: SettingsTab[] }[] = [
-  {
-    label: "You",
-    items: [
-      { key: "account", label: "My Account" },
-      { key: "notifications", label: "Notifications" },
-    ],
-  },
-  {
-    label: "CRM",
-    items: [
-      { key: "quotes", label: "Quotes" },
-      { key: "import", label: "Import" },
-    ],
-  },
-  {
-    label: "Workshop",
-    items: [{ key: "workshop", label: "Bookings & slots" }],
-  },
-  {
-    label: "Catalog",
-    items: [
-      { key: "products", label: "Products" },
-      { key: "library", label: "Library" },
-    ],
-  },
-  {
-    label: "Comms & Marketing",
-    items: [
-      { key: "email", label: "Email" },
-      { key: "automations", label: "Automations" },
-    ],
-  },
-  {
-    label: "Organisation",
-    items: [
-      { key: "team", label: "Team" },
-      { key: "documents", label: "Documents", href: "/settings/documents" },
-      { key: "signing-workflows", label: "Signing workflows", href: "/settings/signing-workflows" },
-      { key: "security", label: "Security", href: "/settings/security" },
-      { key: "backups", label: "Backup & recovery", href: "/settings/backup-recovery" },
-      { key: "sessions", label: "Sessions & devices", href: "/settings/sessions" },
-      { key: "integrations", label: "Integrations" },
-      { key: "system", label: "System Log" },
-    ],
-  },
-];
-
-const TABS: SettingsTab[] = NAV_GROUPS.flatMap((g) => g.items);
+import {
+  SETTINGS_NAV_GROUPS,
+  SETTINGS_TABS,
+  settingsHref,
+} from "@/lib/settings-navigation";
 
 export default async function SettingsPage({
   searchParams,
@@ -104,15 +56,21 @@ export default async function SettingsPage({
   const currentUser = await requireUser();
   const isAdmin = currentUser.role === "owner";
   // Non-admins get exactly one tab: their own account
-  const visibleTabs = isAdmin ? TABS : TABS.filter((t) => t.key === "account");
+  const visibleTabs = isAdmin
+    ? SETTINGS_TABS
+    : SETTINGS_TABS.filter((t) => t.key === "account");
   const { tab: rawTab } = await searchParams;
   const tab = visibleTabs.some((t) => t.key === rawTab)
     ? rawTab
     : isAdmin
-    ? "quotes"
+    ? "pipeline"
     : "account";
 
-  const [users, settings, templates] = await Promise.all([
+  const [stages, users, settings, templates] = await Promise.all([
+    prisma.pipelineStage.findMany({
+      orderBy: { order: "asc" },
+      include: { _count: { select: { leads: true } } },
+    }),
     prisma.user.findMany({ orderBy: { createdAt: "asc" } }),
     prisma.appSetting.findMany(),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
@@ -165,7 +123,7 @@ export default async function SettingsPage({
       })
     : [];
 
-  const visibleGroups = NAV_GROUPS.map((g) => ({
+  const visibleGroups = SETTINGS_NAV_GROUPS.map((g) => ({
     ...g,
     items: g.items.filter((i) => visibleTabs.some((t) => t.key === i.key)),
   })).filter((g) => g.items.length > 0);
@@ -192,7 +150,7 @@ export default async function SettingsPage({
                   {g.items.map((t) => (
                     <Link
                       key={t.key}
-                      href={t.href ?? `/settings?tab=${t.key}`}
+                      href={settingsHref(t)}
                       className={`whitespace-nowrap rounded-md px-2 py-[6px] text-[13px] font-medium transition-colors ${
                         tab === t.key
                           ? "bg-accent text-accent-foreground"
@@ -209,6 +167,50 @@ export default async function SettingsPage({
         </aside>
 
         <div className="min-w-0 flex-1 space-y-6">
+
+      {tab === "pipeline" && (
+        <div className="card">
+          <h2 className="font-semibold mb-1">Pipeline stages</h2>
+          <p className="text-xs text-slate-400 mb-4">
+            The columns of your leads board, in order. Stages holding leads can&apos;t be deleted.
+          </p>
+          <ul className="space-y-2 mb-4">
+            {stages.map((s, i) => (
+              <li key={s.id} className="flex items-center gap-2">
+                <form action={renameStage.bind(null, s.id)} className="flex items-center gap-2 flex-1">
+                  <input type="color" name="color" defaultValue={s.color} className="h-8 w-10 rounded cursor-pointer border border-slate-800" />
+                  <input name="name" defaultValue={s.name} className="input flex-1" />
+                  <button className="btn-secondary btn-sm">Save</button>
+                </form>
+                <form action={moveStage.bind(null, s.id, "up")}>
+                  <button className="btn-secondary btn-sm" disabled={i === 0}>↑</button>
+                </form>
+                <form action={moveStage.bind(null, s.id, "down")}>
+                  <button className="btn-secondary btn-sm" disabled={i === stages.length - 1}>↓</button>
+                </form>
+                {s._count.leads > 0 ? (
+                  <button className="btn-danger btn-sm" disabled title="Stage still has leads">
+                    ✕
+                  </button>
+                ) : (
+                  <ConfirmDelete
+                    action={deleteStage.bind(null, s.id)}
+                    title={`Delete stage “${s.name}”?`}
+                    description="This cannot be undone."
+                    trigger="✕"
+                    triggerClass="btn-danger btn-sm"
+                  />
+                )}
+              </li>
+            ))}
+          </ul>
+          <form action={createStage} className="flex gap-2">
+            <input type="color" name="color" defaultValue="#64748b" className="h-9 w-10 rounded cursor-pointer border border-slate-800" />
+            <input name="name" className="input flex-1" placeholder="New stage name…" required />
+            <button className="btn-primary">Add stage</button>
+          </form>
+        </div>
+      )}
 
       {tab === "account" && (
         <div className="max-w-3xl space-y-6">
