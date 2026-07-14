@@ -151,16 +151,22 @@ export async function createPortalCase(
 
     const id = crypto.randomUUID();
     const users = await prisma.user.findMany({ orderBy: { createdAt: "asc" }, take: 1 });
+    const mailboxes = await basePrisma.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "SupportMailbox" WHERE "slug" = 'support' LIMIT 1
+    `;
+    const mailboxId = mailboxes[0]?.id ?? null;
     await basePrisma.$executeRaw`
       INSERT INTO "CustomerCase" (
-        "id", "subject", "description", "type", "priority", "source", "contactId", "vehicleId", "assignedToId"
+        "id", "subject", "description", "type", "priority", "source", "contactId", "vehicleId", "assignedToId",
+        "mailboxId", "lastReplyBy", "lastReplyAt"
       ) VALUES (
-        ${id}, ${subject}, ${description}, ${type}, ${priority}, 'portal', ${forContactId}, ${vehicleId}, ${users[0]?.id ?? null}
+        ${id}, ${subject}, ${description}, ${type}, ${priority}, 'portal', ${forContactId}, ${vehicleId}, ${users[0]?.id ?? null},
+        ${mailboxId}, 'customer', CURRENT_TIMESTAMP
       )
     `;
     await basePrisma.$executeRaw`
-      INSERT INTO "CustomerCaseMessage" ("id", "caseId", "contactId", "direction", "body")
-      VALUES (${crypto.randomUUID()}, ${id}, ${contact.id}, 'customer', ${description})
+      INSERT INTO "CustomerCaseMessage" ("id", "caseId", "contactId", "direction", "type", "body")
+      VALUES (${crypto.randomUUID()}, ${id}, ${contact.id}, 'customer', 'customer', ${description})
     `;
     const rows = await basePrisma.$queryRaw<Array<{ number: bigint }>>`
       SELECT "number" FROM "CustomerCase" WHERE "id" = ${id}
@@ -196,15 +202,29 @@ export async function addPortalCaseMessage(
     if (body.length < 2) return { error: "Enter a message." };
     await basePrisma.$transaction([
       basePrisma.$executeRaw`
-        INSERT INTO "CustomerCaseMessage" ("id", "caseId", "contactId", "direction", "body")
-        VALUES (${crypto.randomUUID()}, ${caseId}, ${contact.id}, 'customer', ${body})
+        INSERT INTO "CustomerCaseMessage" ("id", "caseId", "contactId", "direction", "type", "body")
+        VALUES (${crypto.randomUUID()}, ${caseId}, ${contact.id}, 'customer', 'customer', ${body})
       `,
       basePrisma.$executeRaw`
-        UPDATE "CustomerCase" SET "status" = CASE WHEN "status" IN ('resolved', 'closed') THEN 'open' ELSE "status" END,
+        UPDATE "CustomerCase" SET "status" = CASE
+            WHEN "status" IN ('resolved', 'closed', 'cancelled') THEN 'open'
+            WHEN "status" = 'waiting_customer' THEN 'waiting_internal'
+            ELSE "status" END,
+          "lastReplyAt" = CURRENT_TIMESTAMP, "lastReplyBy" = 'customer',
           "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${caseId}
       `,
     ]);
+    const rows = await basePrisma.$queryRaw<Array<{ number: bigint }>>`
+      SELECT "number" FROM "CustomerCase" WHERE "id" = ${caseId}
+    `;
+    const number = rows[0]?.number?.toString() ?? "new";
+    await sendPushToAll({
+      title: `Customer replied to C-${number}`,
+      body: body.slice(0, 120),
+      url: `/cases/${caseId}`,
+    }, "portal_case").catch(() => {});
     revalidatePath(`/portal/support/${caseId}`);
+    revalidatePath("/cases");
     return { ok: "Message sent." };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Could not send the message." };
