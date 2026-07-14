@@ -5,9 +5,13 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  House,
   Menu,
+  MessageSquare,
+  Plus,
   Search,
   Settings,
+  SquareKanban,
   Trash2,
   LogOut,
   ChevronsUpDown,
@@ -16,7 +20,7 @@ import Nav from "@/components/Nav";
 import ClockWeather from "@/components/ClockWeather";
 import CommandMenu, { openCommandMenu } from "@/components/CommandMenu";
 import QuickActions from "@/components/QuickActions";
-import QuickCreateDialog from "@/components/QuickCreateDialog";
+import QuickCreateDialog, { openQuickCreate } from "@/components/QuickCreateDialog";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -31,6 +35,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { logout } from "@/app/login/actions";
 import { APP_VERSION } from "@/lib/version";
+import { cn } from "@/lib/utils";
 
 type ShellUser = { name: string; role: string; modules: string; permissions: string[] };
 
@@ -38,7 +43,7 @@ function initials(name: string) {
   return name
     .split(/\s+/)
     .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
+    .map((p) => p[0]?.toUpperCase() ?? "")
     .join("");
 }
 
@@ -47,6 +52,7 @@ function SidebarInner({ user, inboxWaiting = 0 }: { user: ShellUser; inboxWaitin
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-sidebar">
       <div className="pointer-events-none absolute -left-28 top-24 size-64 rounded-full bg-orange-500/[0.055] blur-3xl" />
+      {/* Brand */}
       <div className="flex h-16 items-center border-b border-sidebar-border px-4">
         <Image
           src="/branding/denago-cape-town-logo.png"
@@ -57,6 +63,7 @@ function SidebarInner({ user, inboxWaiting = 0 }: { user: ShellUser; inboxWaitin
         />
       </div>
 
+      {/* Command trigger + quick actions */}
       <div className="relative space-y-2 px-3 pt-3">
         <button
           onClick={openCommandMenu}
@@ -64,20 +71,19 @@ function SidebarInner({ user, inboxWaiting = 0 }: { user: ShellUser; inboxWaitin
         >
           <Search className="size-4" />
           <span className="flex-1 text-left">Search…</span>
-          <kbd className="rounded border border-sidebar-border bg-background/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">⌘K</kbd>
+          <kbd className="rounded border border-sidebar-border bg-background/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            ⌘K
+          </kbd>
         </button>
-        <QuickActions isAdmin={isOwner} permissions={user.permissions} />
+        <QuickActions modules={user.modules} isAdmin={isOwner} />
       </div>
 
+      {/* Nav */}
       <div className="relative flex-1 overflow-y-auto px-3 py-3">
-        <Nav
-          modules={user.modules}
-          isAdmin={isOwner}
-          permissions={user.permissions}
-          badges={{ "/inbox": inboxWaiting }}
-        />
+        <Nav modules={user.modules} isAdmin={isOwner} badges={{ "/inbox": inboxWaiting }} />
       </div>
 
+      {/* User */}
       <div className="border-t border-sidebar-border p-3">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -88,31 +94,107 @@ function SidebarInner({ user, inboxWaiting = 0 }: { user: ShellUser; inboxWaitin
                 </AvatarFallback>
               </Avatar>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[13px] font-medium text-sidebar-foreground">{user.name}</p>
-                <p className="truncate text-[11px] capitalize text-muted-foreground">{user.role}</p>
+                <p className="truncate text-[13px] font-medium text-sidebar-foreground">
+                  {user.name}
+                </p>
+                <p className="truncate text-[11px] capitalize text-muted-foreground">
+                  {user.role}
+                </p>
               </div>
               <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" side="top" className="w-[13.5rem]">
-            <DropdownMenuLabel className="text-muted-foreground">v{APP_VERSION}</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-muted-foreground">
+              v{APP_VERSION}
+            </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
-              <Link href="/settings"><Settings className="size-4" />Settings</Link>
+              <Link href="/settings">
+                <Settings className="size-4" />
+                Settings
+              </Link>
             </DropdownMenuItem>
             {isOwner && (
               <DropdownMenuItem asChild>
-                <Link href="/trash"><Trash2 className="size-4" />Trash</Link>
+                <Link href="/trash">
+                  <Trash2 className="size-4" />
+                  Trash
+                </Link>
               </DropdownMenuItem>
             )}
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onSelect={() => logout()}>
-              <LogOut className="size-4" />Sign out
+              <LogOut className="size-4" />
+              Sign out
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
     </div>
+  );
+}
+
+function MobilePrimaryNav({
+  user,
+  pathname,
+  inboxWaiting,
+  onMore,
+}: {
+  user: ShellUser;
+  pathname: string;
+  inboxWaiting: number;
+  onMore: () => void;
+}) {
+  const modules = new Set(user.modules.split(",").map((item) => item.trim()).filter(Boolean));
+  const has = (module: string) => user.role === "owner" || modules.has(module);
+  const items = [
+    { href: "/", label: "Home", icon: House, show: true },
+    { href: "/leads", label: "Leads", icon: SquareKanban, show: has("crm") },
+    { href: "/inbox", label: "Inbox", icon: MessageSquare, show: has("inbox"), badge: inboxWaiting },
+  ].filter((item) => item.show);
+  const createKind = has("crm") ? "lead" : "jobcard";
+
+  const active = (href: string) => href === "/" ? pathname === "/" : pathname.startsWith(href);
+
+  return (
+    <nav
+      className="fixed inset-x-3 bottom-[max(.75rem,env(safe-area-inset-bottom))] z-40 grid rounded-2xl border border-sidebar-border bg-sidebar/95 p-1.5 shadow-[0_22px_60px_rgba(0,0,0,.55)] backdrop-blur-xl lg:hidden"
+      style={{ gridTemplateColumns: `repeat(${items.length + 2}, minmax(0, 1fr))` }}
+      aria-label="Primary navigation"
+    >
+      {items.map(({ href, label, icon: Icon, badge }) => (
+        <Link
+          key={href}
+          href={href}
+          aria-current={active(href) ? "page" : undefined}
+          className={cn(
+            "relative flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-medium transition-colors",
+            active(href) ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+          )}
+        >
+          <Icon className="size-[18px]" />
+          {label}
+          {badge ? <span className="absolute right-[22%] top-1.5 min-w-4 rounded-full bg-primary px-1 text-center text-[8px] font-bold leading-4 text-primary-foreground">{badge > 99 ? "99+" : badge}</span> : null}
+        </Link>
+      ))}
+      <button
+        type="button"
+        onClick={() => openQuickCreate(createKind)}
+        className="flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+      >
+        <span className="grid size-[22px] place-items-center rounded-full bg-primary text-primary-foreground shadow-sm"><Plus className="size-3.5" /></span>
+        Create
+      </button>
+      <button
+        type="button"
+        onClick={onMore}
+        className="flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+      >
+        <Menu className="size-[18px]" />
+        More
+      </button>
+    </nav>
   );
 }
 
@@ -130,54 +212,67 @@ export default function AppShell({
 
   return (
     <TooltipProvider delayDuration={250}>
-      <div className="min-h-screen">
-        <CommandMenu modules={user.modules} isAdmin={user.role === "owner"} permissions={user.permissions} />
-        <QuickCreateDialog />
-        <Toaster />
+    <div className="min-h-screen">
+      <CommandMenu modules={user.modules} isAdmin={user.role === "owner"} permissions={user.permissions} />
+      <QuickCreateDialog />
+      <Toaster />
 
-        <header className="fixed inset-x-0 top-0 z-40 flex h-14 items-center gap-3 border-b border-sidebar-border bg-sidebar/90 px-4 backdrop-blur-xl lg:hidden">
-          <button
-            onClick={() => setMobileOpen(true)}
-            aria-label="Open menu"
-            className="-ml-2 flex size-10 items-center justify-center rounded-lg text-sidebar-foreground transition hover:bg-sidebar-accent"
-          >
-            <Menu className="size-5" />
-          </button>
-          <Image
-            src="/branding/denago-cape-town-logo.png"
-            alt="Denago Cape Town"
-            width={230}
-            height={58}
-            className="h-6 w-auto object-contain"
-          />
-          <button
-            onClick={openCommandMenu}
-            aria-label="Search"
-            className="-mr-2 ml-auto flex size-10 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-sidebar-accent hover:text-foreground"
-          >
-            <Search className="size-5" />
-          </button>
-        </header>
+      {/* Mobile top bar */}
+      <header className="fixed inset-x-0 top-0 z-40 flex h-14 items-center gap-3 border-b border-sidebar-border bg-sidebar/90 px-4 backdrop-blur-xl lg:hidden">
+        <button
+          onClick={() => setMobileOpen(true)}
+          aria-label="Open menu"
+          className="-ml-2 flex size-10 items-center justify-center rounded-lg text-sidebar-foreground transition hover:bg-sidebar-accent"
+        >
+          <Menu className="size-5" />
+        </button>
+        <Image
+          src="/branding/denago-cape-town-logo.png"
+          alt="Denago Cape Town"
+          width={230}
+          height={58}
+          className="h-6 w-auto object-contain"
+        />
+        <button
+          onClick={openCommandMenu}
+          aria-label="Search"
+          className="-mr-2 ml-auto flex size-10 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-sidebar-accent hover:text-foreground"
+        >
+          <Search className="size-5" />
+        </button>
+      </header>
 
-        <Sheet key={pathname} open={mobileOpen} onOpenChange={setMobileOpen}>
-          <SheetContent side="left" className="w-72 border-sidebar-border p-0">
-            <SheetTitle className="sr-only">Navigation</SheetTitle>
-            <SidebarInner user={user} inboxWaiting={inboxWaiting} />
-          </SheetContent>
-        </Sheet>
-
-        <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 border-r border-sidebar-border lg:flex lg:flex-col">
+      {/* Mobile drawer */}
+      <Sheet key={pathname} open={mobileOpen} onOpenChange={setMobileOpen}>
+        <SheetContent side="left" className="w-72 border-sidebar-border p-0">
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
           <SidebarInner user={user} inboxWaiting={inboxWaiting} />
-        </aside>
+        </SheetContent>
+      </Sheet>
 
-        <main className="relative lg:pl-60">
-          <div className="pointer-events-none fixed inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(circle_at_65%_0%,rgba(249,115,22,.045),transparent_42%)] lg:left-60" />
-          <div className="denago-workspace mx-auto max-w-[1800px] p-4 pt-[4.5rem] lg:p-7 lg:pt-6">
-            <div className="mb-5 hidden lg:block"><ClockWeather /></div>
-            {children}
+      <MobilePrimaryNav
+        user={user}
+        pathname={pathname}
+        inboxWaiting={inboxWaiting}
+        onMore={() => setMobileOpen(true)}
+      />
+
+      {/* Desktop sidebar */}
+      <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 border-r border-sidebar-border lg:flex lg:flex-col">
+        <SidebarInner user={user} inboxWaiting={inboxWaiting} />
+      </aside>
+
+      <main className="relative lg:pl-60">
+        <div className="pointer-events-none fixed inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(circle_at_65%_0%,rgba(249,115,22,.045),transparent_42%)] lg:left-60" />
+        <div className="denago-workspace mx-auto max-w-[1800px] p-4 pb-24 pt-[4.5rem] lg:p-7 lg:pt-6">
+          {/* Desktop-only furniture — takes real estate on phones */}
+          <div className="mb-5 hidden lg:block">
+            <ClockWeather />
           </div>
-        </main>
-      </div>
+          {children}
+        </div>
+      </main>
+    </div>
     </TooltipProvider>
   );
 }

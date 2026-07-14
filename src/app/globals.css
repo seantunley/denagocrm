@@ -140,6 +140,64 @@
   }
 }
 
+/* The public portal login is a full-screen welcome experience. Authenticated
+   portal chrome stays unchanged on every other /portal route. */
+.portal-shell:has(.portal-login-page) {
+  overflow: visible;
+}
+
+.portal-shell:has(.portal-login-page) .portal-header,
+.portal-shell:has(.portal-login-page) .portal-mobile-nav,
+.portal-shell:has(.portal-login-page) .portal-shell-ambient {
+  display: none;
+}
+
+.portal-shell:has(.portal-login-page) .portal-main {
+  max-width: none;
+  padding: 0;
+}
+
+@keyframes portal-form-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.portal-form-in {
+  animation: portal-form-in 280ms ease-out both;
+}
+
+/* Customer-facing surfaces share the premium login's quieter, warmer depth
+   without changing the denser staff workspace. */
+.portal-main .card {
+  border-color: rgb(255 255 255 / 8%);
+  background: rgb(255 255 255 / 3.5%);
+  box-shadow: 0 18px 55px rgb(0 0 0 / 12%);
+}
+
+.portal-main .card:hover {
+  border-color: rgb(255 255 255 / 12%);
+}
+
+.portal-main :is(.input, textarea, select) {
+  background-color: rgb(255 255 255 / 4%);
+}
+
+.portal-main :is(.btn-primary, .btn-secondary) {
+  min-height: 2.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .portal-form-in {
+    animation: none;
+  }
+}
+
 @layer components {
   .login-input {
     @apply w-full rounded-xl border border-white/10 bg-white/[0.045] px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-600 hover:border-white/15 focus:border-orange-500/60 focus:bg-white/[0.06] focus:ring-4 focus:ring-orange-500/10;
@@ -388,4 +446,17 @@ input::-webkit-inner-spin-button {
 input[type="number"] {
   -moz-appearance: textfield;
   appearance: textfield;
+}
+
+/* react-moveable: the doc-editor overlay/floating layers are pointer-events:none
+   so clicks pass through to flow content. Force the moveable control handles to be
+   interactive so resize/drag handles work inside those layers. */
+.moveable-control-box {
+  pointer-events: none;
+}
+.moveable-control-box .moveable-control,
+.moveable-control-box .moveable-line,
+.moveable-control-box .moveable-area,
+.moveable-control-box .moveable-direction {
+  pointer-events: auto !important;
 }

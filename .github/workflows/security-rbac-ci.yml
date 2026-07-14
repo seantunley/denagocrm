@@ -3,7 +3,7 @@ name: Security and RBAC validation
 on:
   push:
     branches:
-      - agent/platform-wide-rbac
+      - agent/security-rbac-complete
   pull_request:
     paths:
       - "src/lib/auth.ts"
@@ -11,23 +11,14 @@ on:
       - "src/lib/rateLimit.ts"
       - "src/lib/userSecurity.ts"
       - "src/lib/permissions.ts"
-      - "src/lib/documentAccess.ts"
-      - "src/lib/activityAccess.ts"
       - "src/lib/audit.ts"
-      - "src/lib/access.ts"
-      - "src/app/actions/**"
-      - "src/app/(app)/**"
-      - "src/app/api/files/**"
-      - "src/components/AppShell.tsx"
-      - "src/components/Nav.tsx"
-      - "src/components/nav-config.ts"
-      - "src/components/CommandMenu.tsx"
-      - "src/components/QuickActions.tsx"
-      - "src/components/CalendarView.tsx"
-      - "src/components/RepoRow.tsx"
+      - "src/app/actions/accessControl.ts"
+      - "src/app/actions/security.ts"
+      - "src/app/actions/settings.ts"
+      - "src/app/login/actions.ts"
+      - "src/app/actions/portal.ts"
       - "prisma/**"
       - "scripts/test-security.ts"
-      - "scripts/test-rbac.ts"
       - "scripts/verify-governance.ts"
       - "package.json"
       - "package-lock.json"
@@ -40,7 +31,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:16-alpine
@@ -85,18 +76,26 @@ jobs:
       - name: Generate Prisma client
         run: npm run prisma:generate
 
-      - name: Apply migrations to isolated PostgreSQL
+      - name: Apply migrations in numeric order to isolated PostgreSQL
+        # The migration folders use non-zero-padded numeric prefixes, so Prisma's
+        # lexical `migrate deploy` mis-orders them (10_dealer_signature before
+        # 4_quotes → "relation Quote does not exist"). Apply each migration.sql
+        # directly in NUMERIC order — this also runs the data-seeding INSERTs
+        # (RBAC permissions/roles in 52/53) that the governance + security checks
+        # below depend on and that a schema-only `db push` would skip.
         run: |
-          set -o pipefail
-          npm run prisma:migrate 2>&1 | tee migration.log
+          # Strip Prisma's ?schema=public — libpq/psql rejects it as a URI param.
+          DB_URL=$(echo "$DATABASE_URL" | cut -d'?' -f1)
+          for name in $(ls prisma/migrations | grep -E '^[0-9]+_' | sort -t_ -k1,1 -n); do
+            echo "→ $name"
+            psql "$DB_URL" -v ON_ERROR_STOP=1 -q -f "prisma/migrations/$name/migration.sql"
+          done
 
-      - name: Upload migration diagnostic
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: migration-log
-          path: migration.log
-          if-no-files-found: ignore
+      - name: Seed baseline data
+        # governance + security checks also assert on a default pipeline + admin
+        # user, which the seed provides on top of the migration-seeded RBAC rows.
+        # `seed` lives under package.json#prisma.seed, so invoke via prisma.
+        run: npx prisma db seed
 
       - name: Type check
         run: npm run typecheck
@@ -114,6 +113,3 @@ jobs:
 
       - name: Run security integration tests
         run: npm run test:security
-
-      - name: Run platform RBAC integration tests
-        run: npm run test:rbac

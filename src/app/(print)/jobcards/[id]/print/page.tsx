@@ -46,7 +46,7 @@ export default async function JobCardPrintPage({
 
   return (
     <>
-      <PrintActions backHref={`/jobcards/${jobCard.id}`} />
+      <PrintActions backHref={`/jobcards/${jobCard.id}`} backLabel="Back to job card" />
       <style>{`
         @page { margin: 12mm; }
         @media print { * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; } }

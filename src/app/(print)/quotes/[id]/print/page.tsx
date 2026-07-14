@@ -23,7 +23,7 @@ export default async function QuotePrintPage({
 
   return (
     <>
-      <PrintActions backHref={`/quotes/${quote.id}`} />
+      <PrintActions backHref={`/quotes/${quote.id}`} backLabel="Back to quote" />
       <QuotePrintDoc quote={quote} template={await getDocTemplate("quote", tpl)} />
     </>
   );

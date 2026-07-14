@@ -30,7 +30,7 @@ export default async function AgreementPrintPage({
 
   return (
     <>
-      <PrintActions backHref={`/quotes/${quote.id}`} />
+      <PrintActions backHref={`/quotes/${quote.id}`} backLabel="Back to quote" />
       <PrintDocShell
         template={tpl}
         title="Sales agreement"

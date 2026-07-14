@@ -32,7 +32,7 @@ export default async function ServiceReportPrintPage({
 
   return (
     <>
-      <PrintActions backHref={`/jobcards/${jobCard.id}`} />
+      <PrintActions backHref={`/jobcards/${jobCard.id}`} backLabel="Back to job card" />
       <PrintDocShell
         template={tpl}
         title="Service report"

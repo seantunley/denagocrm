@@ -27,6 +27,7 @@ import {
   ScrollText,
   GitBranch,
   ShieldEllipsis,
+  PenLine,
   type LucideIcon,
 } from "lucide-react";
 
@@ -68,6 +69,7 @@ export function buildNav(modules: string, isAdmin: boolean) {
         { href: "/calendar", label: "Calendar", icon: CalendarDays },
         { href: "/leads", label: "Leads", icon: SquareKanban },
         { href: "/quotes", label: "Quotes", icon: FileText },
+        ...(isAdmin ? [{ href: "/signatures", label: "Signatures", icon: PenLine }] : []),
         { href: "/deliveries", label: "Deliveries", icon: Truck },
         { href: "/contacts", label: "Contacts", icon: Users },
         { href: "/activities", label: "Activities", icon: ListChecks },

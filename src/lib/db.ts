@@ -23,6 +23,9 @@ const SOFT_DELETE_MODELS = new Set([
   "CustomDocTemplate",
   "DocInstance",
   "ReusableBlock",
+  "DocBuilderTemplate",
+  "SignatureRequest",
+  "SignWorkflow",
 ]);
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -55,6 +58,31 @@ function buildClient(base: PrismaClient) {
         },
         async groupBy({ model, args, query }: any) {
           return query(addAliveFilter(model, args));
+        },
+      },
+      // Shared inbox: attach every new message to a conversation and roll its
+      // counters/unread forward. Best-effort — conversation bookkeeping must
+      // never fail a Communication write. Uses basePrisma internally (no recursion).
+      communication: {
+        async create({ args, query }: any) {
+          let conversationId: string | null = null;
+          try {
+            const { resolveConversationId } = await import("./conversations");
+            conversationId = await resolveConversationId(args.data);
+            if (conversationId && !args.data.conversationId) args.data.conversationId = conversationId;
+          } catch {
+            conversationId = null;
+          }
+          const result = await query(args);
+          if (conversationId) {
+            try {
+              const { bumpConversation } = await import("./conversations");
+              await bumpConversation(conversationId, args.data);
+            } catch {
+              /* bookkeeping is best-effort */
+            }
+          }
+          return result;
         },
       },
     },

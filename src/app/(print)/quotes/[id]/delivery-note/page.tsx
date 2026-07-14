@@ -32,7 +32,7 @@ export default async function DeliveryNotePrintPage({
 
   return (
     <>
-      <PrintActions backHref="/deliveries" />
+      <PrintActions backHref="/deliveries" backLabel="Back to deliveries" />
       <PrintDocShell
         template={tpl}
         title="Delivery note"
