@@ -18,13 +18,9 @@ import { generateDocEditorDocument } from "@/app/actions/doceditor";
 import SigningBlock from "@/components/SigningBlock";
 import { activeRecordRequest, isLockedForSigning } from "@/lib/signing/record";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-
-const statusBadge: Record<string, string> = {
-  draft: "bg-slate-800 text-slate-300",
-  sent: "bg-blue-500/15 text-blue-300",
-  accepted: "bg-emerald-500/15 text-emerald-300",
-  declined: "bg-red-500/15 text-red-300",
-};
+import { EntityDetailShell } from "@/components/entity-detail-shell";
+import { StatusPill } from "@/components/visual-system";
+import { FileDown, FileText, Printer, ReceiptText, RefreshCcw } from "lucide-react";
 
 type FamilyQuote = {
   id: string;
@@ -112,19 +108,16 @@ export default async function QuoteDetailPage({
   const canRevise = !readOnly && (quote.status === "sent" || quote.status === "declined");
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold tracking-[-0.035em]">Quote Q-{quote.number}</h1>
-            <span className={`badge ${statusBadge[quote.status] ?? statusBadge.draft}`}>
-              {quote.status}
-            </span>
-          </div>
-          <p className="text-sm text-slate-400 mt-0.5">
+    <EntityDetailShell
+      backHref="/quotes"
+      backLabel="Quotes"
+      eyebrow={`Quote Q-${quote.number}`}
+      title={`Quote Q-${quote.number}`}
+      status={<StatusPill tone={quote.status === "accepted" ? "success" : quote.status === "declined" ? "danger" : quote.status === "sent" ? "info" : "neutral"}>{quote.status}</StatusPill>}
+      description={<>
             {quote.contact && (
               <>
-                <Link href={`/contacts/${quote.contact.id}`} className="text-orange-400 hover:underline">
+                <Link href={`/contacts/${quote.contact.id}`} className="text-primary hover:underline">
                   {contactName(quote.contact)}
                 </Link>
                 {" · "}
@@ -132,7 +125,7 @@ export default async function QuoteDetailPage({
             )}
             {quote.lead && (
               <>
-                <Link href={`/leads/${quote.lead.id}`} className="text-orange-400 hover:underline">
+                <Link href={`/leads/${quote.lead.id}`} className="text-primary hover:underline">
                   {quote.lead.title}
                 </Link>
                 {" · "}
@@ -140,19 +133,25 @@ export default async function QuoteDetailPage({
             )}
             created {formatDate(quote.createdAt)}
             {quote.createdBy ? ` by ${quote.createdBy.name}` : ""}
-          </p>
-        </div>
-        <div className="flex gap-2 flex-wrap">
+      </>}
+      meta={readOnly ? "Record locked · create a revision to make changes" : editable ? "Editable draft" : lockedBySigning ? "Locked while signing is in progress" : "Managed quote record"}
+      facts={[
+        { label: "Total", value: formatZAR(total) },
+        { label: "Line items", value: quote.items.length },
+        { label: "Version", value: `${family.findIndex((item) => item.id === quote.id) + 1} of ${family.length}` },
+        { label: "Signing", value: quote.signedAt ? "Signed" : signingState ? "In progress" : "Not started" },
+      ]}
+      actions={<>
           <Link href={`/quotes/${quote.id}/print`} className="btn-secondary">
-            🖨 Print / PDF
+            <Printer className="size-4" />Print / PDF
           </Link>
           {quote.status === "accepted" && (
             <>
               <Link href={`/quotes/${quote.id}/invoice`} className="btn-secondary" target="_blank">
-                🧾 Invoice
+                <ReceiptText className="size-4" />Invoice
               </Link>
               <Link href={`/quotes/${quote.id}/agreement`} className="btn-secondary" target="_blank">
-                📜 Sales agreement
+                <FileText className="size-4" />Sales agreement
               </Link>
             </>
           )}
@@ -170,7 +169,7 @@ export default async function QuoteDetailPage({
                 ))}
               </select>
               <button className="btn-secondary" title="Generate this builder document for the quote and file it in the repository">
-                📄 Generate
+                <FileDown className="size-4" />Generate
               </button>
             </form>
           )}
@@ -180,7 +179,7 @@ export default async function QuoteDetailPage({
                 className="btn-primary"
                 title="Copies this quote into a fresh editable draft; this version stays on record read-only."
               >
-                ↻ Create revision
+                <RefreshCcw className="size-4" />Create revision
               </button>
             </form>
           )}
@@ -211,8 +210,8 @@ export default async function QuoteDetailPage({
             title={`Delete quote Q-${quote.number}?`}
             description="The quote moves to the Trash and can be restored for 60 days."
           />
-        </div>
-      </div>
+      </>}
+    >
 
       {quote.supersededAt && (
         <div className="card bg-slate-800/60 border-slate-700">
@@ -505,6 +504,6 @@ export default async function QuoteDetailPage({
           </div>
         )}
       </div>
-    </div>
+    </EntityDetailShell>
   );
 }

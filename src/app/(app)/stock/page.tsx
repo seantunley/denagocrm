@@ -17,6 +17,7 @@ import {
 } from "@/app/actions/stock";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 
 const STATUS_BADGE: Record<string, string> = {
   incoming: "bg-sky-500/15 text-sky-300",
@@ -187,7 +188,7 @@ export default async function StockPage({
       </div>
 
       {/* Units table */}
-      <div className="card p-0 overflow-x-auto">
+      <ResponsiveEntityTable>
         <table className="table-base">
           <thead>
             <tr>
@@ -203,20 +204,20 @@ export default async function StockPage({
           <tbody>
             {units.length === 0 && (
               <tr>
-                <td colSpan={7} className="text-center text-slate-400 py-8">
+                <td data-empty colSpan={7} className="text-center text-slate-400 py-8">
                   No stock here yet.
                 </td>
               </tr>
             )}
             {units.map((u) => (
               <tr key={u.id}>
-                <td className="font-medium">{u.product.name}</td>
-                <td>{u.color ?? "—"}</td>
-                <td className="text-slate-400">{u.serial ?? "—"}</td>
-                <td>
+                <td data-primary data-label="Model" className="font-medium">{u.product.name}</td>
+                <td data-label="Colour">{u.color ?? "—"}</td>
+                <td data-label="Serial / VIN" className="text-slate-400">{u.serial ?? "—"}</td>
+                <td data-label="Status">
                   <span className={`badge ${STATUS_BADGE[u.status]}`}>{STATUS_LABEL[u.status]}</span>
                 </td>
-                <td className="text-slate-400">
+                <td data-label="Reserved / sold for" className="text-slate-400">
                   {u.reservedForLead ? (
                     <Link href={`/leads/${u.reservedForLead.id}`} className="text-orange-400 hover:underline">
                       {u.reservedForLead.name}
@@ -225,8 +226,8 @@ export default async function StockPage({
                     "—"
                   )}
                 </td>
-                <td>{u.costCents ? formatZAR(u.costCents) : "—"}</td>
-                <td className="text-right">
+                <td data-label="Cost">{u.costCents ? formatZAR(u.costCents) : "—"}</td>
+                <td data-actions className="text-right">
                   <ModalTrigger label="Manage" title={`${u.product.name}${u.serial ? ` · ${u.serial}` : ""}`} buttonClass="btn-secondary btn-sm">
                     <div className="space-y-4">
                       <form action={updateStockUnit.bind(null, u.id)} className="card space-y-3">
@@ -296,7 +297,7 @@ export default async function StockPage({
             ))}
           </tbody>
         </table>
-      </div>
+      </ResponsiveEntityTable>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import JobCardForm from "@/components/JobCardForm";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import {
   getAccessibleJobCardIds,
   getAccessibleVehicleIds,
@@ -58,7 +59,7 @@ export default async function JobCardsPage() {
         )}
       </PageHeader>
 
-      <div className="card p-0 overflow-x-auto">
+      <ResponsiveEntityTable>
         <table className="table-base">
           <thead>
             <tr>
@@ -74,7 +75,7 @@ export default async function JobCardsPage() {
           <tbody>
             {jobCards.length === 0 && (
               <tr>
-                <td colSpan={7} className="text-center text-slate-400 py-8">
+                <td data-empty colSpan={7} className="text-center text-slate-400 py-8">
                   No accessible job cards.
                 </td>
               </tr>
@@ -83,31 +84,31 @@ export default async function JobCardsPage() {
               const total = j.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
               return (
                 <tr key={j.id}>
-                  <td>
+                  <td data-primary data-label="Job card">
                     <Link href={`/jobcards/${j.id}`} className="font-medium text-orange-400 hover:underline">
                       #{j.number}
                     </Link>
                   </td>
-                  <td>
+                  <td data-label="Vehicle">
                     <Link href={`/vehicles/${j.vehicleId}`} className="text-orange-400 hover:underline">
                       {j.vehicle.model}
                     </Link>
                   </td>
-                  <td>{contactName(j.contact)}</td>
-                  <td className="max-w-64 truncate">{j.description}</td>
-                  <td>{formatZAR(Math.round(total))}</td>
-                  <td>
+                  <td data-label="Customer">{contactName(j.contact)}</td>
+                  <td data-label="Description" className="max-w-64 truncate">{j.description}</td>
+                  <td data-label="Total">{formatZAR(Math.round(total))}</td>
+                  <td data-label="Status">
                     <span className={`badge ${statusBadge[j.status] ?? statusBadge.open}`}>
                       {j.status.replace("_", " ")}
                     </span>
                   </td>
-                  <td className="text-slate-400">{formatDate(j.openedAt)}</td>
+                  <td data-label="Opened" className="text-slate-400">{formatDate(j.openedAt)}</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
-      </div>
+      </ResponsiveEntityTable>
     </div>
   );
 }

@@ -7,6 +7,9 @@ import {
   deleteProduct,
 } from "@/app/actions/products";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import { EntityDetailShell } from "@/components/entity-detail-shell";
+import { StatusPill } from "@/components/visual-system";
+import { formatZAR } from "@/lib/format";
 
 export default async function ProductDetailPage({
   params,
@@ -21,15 +24,25 @@ export default async function ProductDetailPage({
   if (!product) notFound();
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-[-0.035em]">{product.name}</h1>
-        <ConfirmDelete
+    <EntityDetailShell
+      backHref="/products"
+      backLabel="Products"
+      eyebrow="Product catalogue"
+      title={product.name}
+      status={<StatusPill tone={product.active ? "success" : "neutral"}>{product.active ? "Active" : "Inactive"}</StatusPill>}
+      description={product.sku ? `SKU ${product.sku}` : "No SKU recorded"}
+      facts={[
+        { label: "Base price", value: formatZAR(product.basePriceCents) },
+        { label: "Colours", value: product.colors.length },
+        { label: "Open leads", value: product._count.leads },
+        { label: "Vehicles", value: product._count.vehicles },
+      ]}
+      actions={<ConfirmDelete
           action={deleteProduct.bind(null, product.id)}
           title={`Delete product ${product.name}?`}
           description="The product moves to the Trash for 60 days. Existing leads and vehicles keep their link to it."
-        />
-      </div>
+        />}
+    >
 
       <div className="grid lg:grid-cols-2 gap-6 items-start">
         <form action={updateProduct.bind(null, product.id)} className="card space-y-4">
@@ -109,6 +122,6 @@ export default async function ProductDetailPage({
           </p>
         </div>
       </div>
-    </div>
+    </EntityDetailShell>
   );
 }
