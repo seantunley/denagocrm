@@ -62,7 +62,7 @@ export default async function JobCardDetailPage({
       backHref="/jobcards"
       backLabel="Job cards"
       eyebrow={`Workshop · #${jobCard.number}`}
-      title={jobCard.vehicle.model}
+      title={<Link href={`/vehicles/${jobCard.vehicleId}`} className="hover:underline">{jobCard.vehicle.model}</Link>}
       status={<StatusPill tone={jobCard.status === "completed" ? "success" : jobCard.status === "in_progress" ? "warning" : "neutral"}>{jobCard.status.replace("_", " ")}</StatusPill>}
       description={<><Link href={`/contacts/${jobCard.contactId}`} className="text-primary hover:underline">{contactName(jobCard.contact)}</Link> · opened {formatDate(jobCard.openedAt)}</>}
       meta={jobCard.technician ? `Technician: ${jobCard.technician.name}` : "No technician assigned"}

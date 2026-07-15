@@ -109,8 +109,19 @@ export default async function ContactDetailPage({
       backLabel="Contacts"
       eyebrow={contact.isCompany ? "Company account" : "Customer profile"}
       title={contactName(contact)}
-      status={<StatusPill tone={health.tier === "healthy" ? "success" : health.tier === "at_risk" ? "danger" : "warning"}>{healthLabels[health.tier]} · {health.score}</StatusPill>}
-      description={[contact.email, contact.phone, contact.city].filter(Boolean).join(" · ") || "No contact details recorded"}
+      status={<span title={health.reasons.join(" · ")}><StatusPill tone={health.tier === "healthy" ? "success" : health.tier === "at_risk" ? "danger" : "warning"}>{healthLabels[health.tier]} · {health.score}</StatusPill></span>}
+      description={
+        <div className="space-y-1.5">
+          <p>{[contact.email, contact.phone, contact.city].filter(Boolean).join(" · ") || "No contact details recorded"}</p>
+          {contact.tags.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {contact.tags.map((t) => (
+                <span key={t.id} className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: `${t.color}22`, color: t.color }}>{t.name}</span>
+              ))}
+            </div>
+          )}
+        </div>
+      }
       meta={`${contact.owner ? `Owner: ${contact.owner.name}` : "No owner assigned"} · added${contact.createdBy ? ` by ${contact.createdBy.name}` : ""} at ${formatDateTime(contact.createdAt)}`}
       facts={[
         { label: "Vehicles", value: contact.vehicles.length },
