@@ -82,6 +82,10 @@ export async function findPossibleDuplicates(input: {
 export async function clearErrorLog() {
   await requireOwner();
   await basePrisma.errorLog.deleteMany({});
+  // Without this the Settings → System tab keeps rendering the cached (now
+  // deleted) rows, so the button looked like it did nothing.
+  const { revalidatePath } = await import("next/cache");
+  revalidatePath("/settings");
 }
 
 export type ResearchState = { summary?: string; error?: string };
