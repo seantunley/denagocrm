@@ -1,5 +1,5 @@
 import { PageSkeleton } from "@/components/visual-system";
 
-export default function LeadsLoading() {
+export default function LoadingLeads() {
   return <PageSkeleton variant="list" />;
 }
