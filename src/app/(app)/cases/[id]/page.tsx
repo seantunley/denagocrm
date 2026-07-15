@@ -3,6 +3,8 @@ import { basePrisma } from "@/lib/db";
 import { requireOperational } from "@/lib/auth";
 import { replyToCustomerCase, updateCustomerCaseStatus } from "@/app/actions/customerCases";
 import { formatDateTime } from "@/lib/format";
+import { EntityDetailShell } from "@/components/entity-detail-shell";
+import { StatusPill } from "@/components/visual-system";
 
 type CaseRow = {
   id: string;
@@ -77,20 +79,29 @@ export default async function CustomerCaseDetailPage({ params }: { params: Promi
   `;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <p className="text-xs text-slate-500">Case C-{item.number.toString()}</p>
-          <h1 className="text-2xl font-bold mt-1">{item.subject}</h1>
-          <p className="text-sm text-slate-400 mt-1">{item.contactName}{item.vehicleModel ? ` · ${item.vehicleModel}` : ""}</p>
-        </div>
-        <form action={updateCustomerCaseStatus.bind(null, item.id)} className="flex gap-2">
+    <EntityDetailShell
+      backHref="/cases"
+      backLabel="Cases"
+      eyebrow={`Case C-${item.number.toString()}`}
+      title={item.subject}
+      status={<StatusPill tone={item.status === "resolved" || item.status === "closed" ? "success" : item.priority === "urgent" ? "danger" : "info"}>{item.status.replaceAll("_", " ")}</StatusPill>}
+      description={<>{item.contactName}{item.vehicleModel ? ` · ${item.vehicleModel}` : ""}</>}
+      meta={`Opened ${formatDateTime(item.createdAt)} · Last updated ${formatDateTime(item.updatedAt)}`}
+      facts={[
+        { label: "Type", value: item.type },
+        { label: "Priority", value: item.priority },
+        { label: "Category", value: item.category || "Uncategorised" },
+        { label: "Messages", value: messages.length },
+      ]}
+      actions={(
+        <form action={updateCustomerCaseStatus.bind(null, item.id)} className="flex w-full gap-2 sm:w-auto">
           <select name="status" className="input" defaultValue={item.status}>
             <option value="new">New</option><option value="open">Open</option><option value="waiting_customer">Waiting customer</option><option value="waiting_internal">Waiting internal</option><option value="resolved">Resolved</option><option value="closed">Closed</option><option value="cancelled">Cancelled</option>
           </select>
           <button className="btn-primary">Update</button>
         </form>
-      </div>
+      )}
+    >
 
       <section className="card">
         <div className="flex gap-2 flex-wrap mb-3"><span className="badge bg-slate-800 text-slate-300">{item.type}</span><span className="badge bg-slate-800 text-slate-300">{item.priority}</span><span className="badge bg-slate-800 text-slate-300">{item.status.replaceAll("_", " ")}</span></div>
@@ -136,6 +147,6 @@ export default async function CustomerCaseDetailPage({ params }: { params: Promi
           </form>
         </section>
       )}
-    </div>
+    </EntityDetailShell>
   );
 }

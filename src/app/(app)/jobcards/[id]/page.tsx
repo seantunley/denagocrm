@@ -19,6 +19,8 @@ import { activeRecordRequest } from "@/lib/signing/record";
 import JobCardItemForm from "@/components/JobCardItemForm";
 import { uploadJobCardPhotos } from "@/app/actions/jobcards";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { EntityDetailShell } from "@/components/entity-detail-shell";
+import { StatusPill } from "@/components/visual-system";
 
 export default async function JobCardDetailPage({
   params,
@@ -55,36 +57,22 @@ export default async function JobCardDetailPage({
     .reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
   const grandTotal = partsTotal + labourTotal;
 
-  const statusBadge =
-    jobCard.status === "completed"
-      ? "bg-emerald-500/15 text-emerald-300"
-      : jobCard.status === "in_progress"
-      ? "bg-amber-500/15 text-amber-300"
-      : "bg-slate-800 text-slate-400";
-
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold tracking-[-0.035em]">Job card #{jobCard.number}</h1>
-            <span className={`badge ${statusBadge}`}>{jobCard.status.replace("_", " ")}</span>
-          </div>
-          <p className="text-sm text-slate-400 mt-0.5">
-            <Link href={`/vehicles/${jobCard.vehicleId}`} className="text-orange-400 hover:underline">
-              {jobCard.vehicle.model}
-            </Link>
-            {" · "}
-            <Link href={`/contacts/${jobCard.contactId}`} className="text-orange-400 hover:underline">
-              {contactName(jobCard.contact)}
-            </Link>
-            {" · opened "}
-            {formatDate(jobCard.openedAt)}
-            {jobCard.kmIn != null ? ` at ${jobCard.kmIn.toLocaleString()} km` : ""}
-            {jobCard.technician ? ` · 🔧 ${jobCard.technician.name}` : ""}
-          </p>
-        </div>
-        <div className="flex gap-2 flex-wrap">
+    <EntityDetailShell
+      backHref="/jobcards"
+      backLabel="Job cards"
+      eyebrow={`Workshop · #${jobCard.number}`}
+      title={jobCard.vehicle.model}
+      status={<StatusPill tone={jobCard.status === "completed" ? "success" : jobCard.status === "in_progress" ? "warning" : "neutral"}>{jobCard.status.replace("_", " ")}</StatusPill>}
+      description={<><Link href={`/contacts/${jobCard.contactId}`} className="text-primary hover:underline">{contactName(jobCard.contact)}</Link> · opened {formatDate(jobCard.openedAt)}</>}
+      meta={jobCard.technician ? `Technician: ${jobCard.technician.name}` : "No technician assigned"}
+      facts={[
+        { label: "Odometer in", value: jobCard.kmIn != null ? `${jobCard.kmIn.toLocaleString()} km` : "Not recorded" },
+        { label: "Parts", value: formatZAR(partsTotal) },
+        { label: "Labour", value: formatZAR(labourTotal) },
+        { label: "Total", value: formatZAR(grandTotal) },
+      ]}
+      actions={<>
           <Link href={`/jobcards/${jobCard.id}/print`} className="btn-secondary">
             🖨 Print
           </Link>
@@ -128,8 +116,8 @@ export default async function JobCardDetailPage({
             title={`Delete job card #${jobCard.number}?`}
             description="The job card moves to the Trash and can be restored for 60 days."
           />
-        </div>
-      </div>
+        </>}
+    >
 
       <div className="card flex items-center justify-between gap-3 flex-wrap">
         <div>
@@ -349,6 +337,6 @@ export default async function JobCardDetailPage({
 
         <DocumentsPanel documents={jobCard.documents} jobCardId={jobCard.id} revalidate={path} />
       </div>
-    </div>
+    </EntityDetailShell>
   );
 }

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireCrm } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { contactName, formatDate } from "@/lib/format";
+import { contactName } from "@/lib/format";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
 import { computeWarranty, warrantyColors, warrantyLabels } from "@/lib/warranty";
 import {
@@ -12,6 +12,8 @@ import {
   removeVehicleFromFleet,
 } from "@/app/actions/fleets";
 import { FLEET_TYPES } from "../page";
+import { EntityDetailShell } from "@/components/entity-detail-shell";
+import { StatusPill } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
 
@@ -50,24 +52,19 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
   const inWarranty = fleet.vehicles.filter((v) => computeWarranty(v).status === "active").length;
 
   return (
-    <div className="space-y-6">
-      <div>
-        <Link href="/fleets" className="text-sm text-slate-400 hover:text-slate-200">
-          ← Fleets
-        </Link>
-        <div className="flex flex-wrap items-center gap-3 mt-1">
-          <h1 className="text-2xl font-semibold tracking-[-0.035em]">{fleet.name}</h1>
-          {fleet.type && <span className="badge bg-orange-600/15 text-orange-300 capitalize">{fleet.type}</span>}
-        </div>
-        {primary && (
-          <p className="text-sm text-slate-400 mt-1">
-            Primary contact:{" "}
-            <Link href={`/contacts/${primary.id}`} className="text-orange-400 hover:underline">
-              {contactName(primary)}
-            </Link>
-          </p>
-        )}
-      </div>
+    <EntityDetailShell
+      backHref="/fleets"
+      backLabel="Fleets"
+      eyebrow="Fleet workspace"
+      title={fleet.name}
+      status={fleet.type ? <StatusPill tone="info">{fleet.type}</StatusPill> : undefined}
+      description={primary ? <>Primary contact: <Link href={`/contacts/${primary.id}`} className="text-primary hover:underline">{contactName(primary)}</Link></> : "No primary contact assigned"}
+      facts={[
+        { label: "Vehicles", value: fleet.vehicles.length },
+        { label: "Due for service", value: dueCount },
+        { label: "In warranty", value: inWarranty },
+      ]}
+    >
 
       <div className="grid grid-cols-3 gap-3">
         <div className="card">
@@ -186,6 +183,6 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
           </form>
         </div>
       </div>
-    </div>
+    </EntityDetailShell>
   );
 }
