@@ -111,7 +111,7 @@ export default function StockUnitForm({
             className="input font-mono uppercase"
             autoCapitalize="characters"
             value={serial}
-            onChange={(event) => setSerial(event.target.value)}
+            onChange={(event) => setSerial(event.target.value.toUpperCase())}
             placeholder="Serial or VIN"
           />
         </CaptureField>
