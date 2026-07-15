@@ -125,6 +125,7 @@ export default async function LeadsPage() {
             contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
             users={users.map((u) => ({ id: u.id, name: u.name }))}
             submitLabel="Create lead"
+            variant="dialog"
           />
         </ModalTrigger>
       </PageHeader>
