@@ -214,11 +214,11 @@ function ContactCard({ contact }: { contact: ContactWithRelations }) {
   const name = contactName(contact);
   const context = contact.isCompany ? "Company account" : contact.company || contact.city || "Individual customer";
   return (
-    <Link href={`/contacts/${contact.id}`} className="group relative flex min-h-56 flex-col overflow-hidden rounded-2xl border border-border bg-card p-5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-orange-500/35 hover:shadow-xl hover:shadow-black/15 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-500/15">
+    <Link href={`/contacts/${contact.id}`} className="group relative flex min-h-44 flex-col overflow-hidden rounded-2xl border border-border bg-card p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-orange-500/35 hover:shadow-xl hover:shadow-black/15 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-500/15">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
-      <div className="flex items-start gap-3.5">
-        <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl border border-orange-400/15 bg-gradient-to-br from-orange-400/15 to-orange-600/5 text-sm font-semibold text-orange-300 shadow-inner">
-          {contact.isCompany ? <Building2 className="size-5" /> : initials(name)}
+      <div className="flex items-start gap-3">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-orange-400/15 bg-gradient-to-br from-orange-400/15 to-orange-600/5 text-xs font-semibold text-orange-300 shadow-inner">
+          {contact.isCompany ? <Building2 className="size-4" /> : initials(name)}
         </span>
         <div className="min-w-0 flex-1">
           <p className="truncate font-semibold tracking-tight text-foreground transition-colors group-hover:text-orange-300">{name}</p>
@@ -227,7 +227,7 @@ function ContactCard({ contact }: { contact: ContactWithRelations }) {
         <ArrowRight className="size-4 -translate-x-1 text-muted-foreground/40 opacity-0 transition-all group-hover:translate-x-0 group-hover:text-orange-400 group-hover:opacity-100" />
       </div>
 
-      <div className="mt-4 flex min-h-6 flex-wrap gap-1.5">
+      <div className="mt-3 flex min-h-5 flex-wrap gap-1.5">
         {contact.tags.slice(0, 3).map((tag) => (
           <Badge key={tag.id} variant="outline" className="border-white/8 bg-white/[0.035] text-[10px] text-muted-foreground">
             <span className="size-1.5 rounded-full" style={{ backgroundColor: tag.color }} />
@@ -237,12 +237,12 @@ function ContactCard({ contact }: { contact: ContactWithRelations }) {
         {contact.tags.length > 3 && <Badge variant="ghost" className="text-[10px] text-muted-foreground">+{contact.tags.length - 3}</Badge>}
       </div>
 
-      <div className="mt-auto grid grid-cols-2 gap-2 pt-5">
+      <div className="mt-auto grid grid-cols-2 gap-2 pt-3">
         <MiniMetric icon={CarFront} value={contact._count.vehicles} label="Vehicles" />
         <MiniMetric icon={ArrowRight} value={contact._count.leads} label="Open leads" active={contact._count.leads > 0} />
       </div>
 
-      <div className="mt-4 flex items-center gap-3 border-t border-border/70 pt-3 text-[11px] text-muted-foreground">
+      <div className="mt-3 flex items-center gap-3 border-t border-border/70 pt-2.5 text-[11px] text-muted-foreground">
         {contact.email ? <span className="flex min-w-0 items-center gap-1.5"><Mail className="size-3 shrink-0" /><span className="truncate">{contact.email}</span></span> : contact.phone ? <span className="flex items-center gap-1.5"><Phone className="size-3" />{contact.phone}</span> : <span className="flex items-center gap-1.5"><UserRound className="size-3" />No contact details</span>}
         {contact.owner && <span className="ml-auto shrink-0">{contact.owner.name.split(" ")[0]}</span>}
       </div>
@@ -251,7 +251,7 @@ function ContactCard({ contact }: { contact: ContactWithRelations }) {
 }
 
 function MiniMetric({ icon: Icon, value, label, active = false }: { icon: typeof CarFront; value: number; label: string; active?: boolean }) {
-  return <div className="rounded-xl border border-border/70 bg-background/35 px-3 py-2"><div className="flex items-center gap-1.5"><Icon className={cn("size-3.5", active ? "text-orange-400" : "text-muted-foreground")} /><span className="text-sm font-semibold tabular-nums">{value}</span></div><p className="mt-0.5 text-[10px] text-muted-foreground">{label}</p></div>;
+  return <div className="rounded-lg border border-border/70 bg-background/35 px-2.5 py-1.5"><div className="flex items-center gap-1.5"><Icon className={cn("size-3.5", active ? "text-orange-400" : "text-muted-foreground")} /><span className="text-sm font-semibold tabular-nums">{value}</span></div><p className="mt-0.5 text-[10px] text-muted-foreground">{label}</p></div>;
 }
 
 function ContactTable({ contacts }: { contacts: ContactWithRelations[] }) {
