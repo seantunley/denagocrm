@@ -10,6 +10,7 @@ import { Palette } from "./Palette";
 import { Canvas } from "./Canvas";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { VersionHistory } from "./VersionHistory";
+import { toast } from "sonner";
 
 type RecordOpt = { id: string; label: string };
 
@@ -109,7 +110,8 @@ export function DocEditor({ id, initialDoc, quotes }: { id: string; initialDoc: 
               const d = useEditor.getState().doc; if (!d) return;
               await saveDocEditor(id, d); markSaved();
               const r = await sendDocForSigning(id, quoteId || null);
-              alert(r.ok ? `✓ ${r.message}` : `Couldn’t prepare for signing: ${r.message}`);
+              if (r.ok) toast.success(r.message);
+              else toast.error(`Couldn’t prepare for signing: ${r.message}`);
             }}
             title="Seal + file the PDF and prepare recipients for signing"
           >✍ Send for signing</button>

@@ -6,6 +6,7 @@ import Image from "@tiptap/extension-image";
 import { Table, TableRow, TableCell, TableHeader } from "@tiptap/extension-table";
 import { TextStyle, Color } from "@tiptap/extension-text-style";
 import { useEffect, useRef, useState } from "react";
+import { TextPromptDialog } from "@/components/TextPromptDialog";
 
 const COLORS = ["#1e293b", "#ea580c", "#2563eb", "#059669", "#dc2626"];
 
@@ -53,24 +54,24 @@ function Toolbar({
       <Btn title="Bullet list" label="• List" active={editor.isActive("bulletList")} onClick={() => editor.chain().focus().toggleBulletList().run()} />
       <Btn title="Numbered list" label="1. List" active={editor.isActive("orderedList")} onClick={() => editor.chain().focus().toggleOrderedList().run()} />
       <span className="w-px bg-slate-700 mx-0.5" />
-      <Btn
+      <TextPromptDialog
         title="Insert link"
-        label="🔗 Link"
-        active={editor.isActive("link")}
-        onClick={() => {
-          const url = window.prompt("Link URL:", editor.getAttributes("link").href ?? "https://");
-          if (url === null) return;
-          if (url === "") editor.chain().focus().unsetLink().run();
-          else editor.chain().focus().setLink({ href: url }).run();
-        }}
+        description="Paste the full destination URL."
+        label="Link URL"
+        defaultValue={editor.getAttributes("link").href ?? "https://"}
+        submitLabel="Apply link"
+        onSubmit={(url) => { editor.chain().focus().setLink({ href: url }).run(); }}
+        trigger={<span><Btn title="Insert link" label="Link" active={editor.isActive("link")} onClick={() => undefined} /></span>}
       />
-      <Btn
-        title="Insert image from URL"
-        label="🖼 URL"
-        onClick={() => {
-          const url = window.prompt("Image URL:");
-          if (url) editor.chain().focus().setImage({ src: url }).run();
-        }}
+      {editor.isActive("link") && <Btn title="Remove link" label="Unlink" onClick={() => editor.chain().focus().unsetLink().run()} />}
+      <TextPromptDialog
+        title="Insert image"
+        description="Paste a direct URL for the image."
+        label="Image URL"
+        placeholder="https://…"
+        submitLabel="Insert image"
+        onSubmit={(url) => { editor.chain().focus().setImage({ src: url }).run(); }}
+        trigger={<span><Btn title="Insert image from URL" label="Image URL" onClick={() => undefined} /></span>}
       />
       {onImageUpload && (
         <>
@@ -163,7 +164,6 @@ export default function RichTextEditor({
     if (editor && value !== editor.getHTML()) {
       editor.commands.setContent(value, { emitUpdate: false });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, editor]);
 
   if (!editor) {
