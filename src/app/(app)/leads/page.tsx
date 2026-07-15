@@ -70,6 +70,10 @@ export default async function LeadsPage() {
     }
   }
 
+  // The test-drive booking belongs to the test-drive stage; hide it on cards
+  // parked before that stage. (Restored — lost in the #67/#68 merge.)
+  const testDriveStage = stages.find((s) => /test/i.test(s.name)) ?? null;
+
   const boardStages: KanbanStage[] = stages.map((s) => ({
     id: s.id,
     name: s.name,
