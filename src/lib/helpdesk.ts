@@ -147,6 +147,24 @@ export async function folderCounts(user: PermissionUser, base: TicketFilters): P
   };
 }
 
+/**
+ * Tickets awaiting a staff reply — open-group status where the customer spoke
+ * last (a brand-new ticket counts, since its first message is the customer's).
+ * Powers the sidebar badge on "Customer Cases". Scoped to the user's access.
+ */
+export async function casesAwaitingCount(user: PermissionUser): Promise<number> {
+  const accessibleIds = await getAccessibleCaseIds(user);
+  if (accessibleIds !== null && accessibleIds.length === 0) return 0;
+  const scope = accessibleIds === null ? Prisma.sql`TRUE` : Prisma.sql`c."id" = ANY(${accessibleIds}::text[])`;
+  const rows = await basePrisma.$queryRaw<Array<{ n: bigint }>>`
+    SELECT COUNT(*) AS "n"
+    FROM "CustomerCase" c
+    WHERE ${scope}
+      AND c."status" NOT IN ('resolved','closed','cancelled')
+      AND c."lastReplyBy" = 'customer'`;
+  return Number(rows[0]?.n ?? 0);
+}
+
 export type ThreadItem = {
   id: string;
   type: string;
