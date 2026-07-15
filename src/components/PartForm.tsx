@@ -77,7 +77,7 @@ export default function PartForm({
             className="input font-mono uppercase"
             autoCapitalize="characters"
             value={sku}
-            onChange={(event) => setSku(event.target.value)}
+            onChange={(event) => setSku(event.target.value.toUpperCase())}
             placeholder="DGO-BRK-001"
           />
         </CaptureField>

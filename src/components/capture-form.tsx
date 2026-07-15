@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+"use client";
+
+import { cloneElement, isValidElement, useId, type ReactElement, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import CaptureSubmitButton, { type CaptureKind } from "@/components/CaptureSubmitButton";
 import { cn } from "@/lib/utils";
@@ -89,10 +91,21 @@ export function CaptureField({
   wide?: boolean;
   children: ReactNode;
 }) {
+  // Associate the caption with its control so clicking the label focuses the
+  // field and screen readers pair them. Only safe for a single native control;
+  // icon-wrapped inputs and radio groups keep the caption as a visible label.
+  const fieldId = useId();
+  const asElement = isValidElement(children) ? (children as ReactElement<{ id?: string }>) : null;
+  const canAssociate =
+    asElement !== null &&
+    typeof asElement.type === "string" &&
+    ["input", "select", "textarea"].includes(asElement.type) &&
+    asElement.props.id === undefined;
+
   return (
     <div className={cn("min-w-0", wide && "sm:col-span-2")}>
-      <label className="label">{label}</label>
-      {children}
+      <label className="label" htmlFor={canAssociate ? fieldId : undefined}>{label}</label>
+      {canAssociate && asElement ? cloneElement(asElement, { id: fieldId }) : children}
       {hint && <p className="mt-1.5 text-[11px] leading-4 text-muted-foreground">{hint}</p>}
     </div>
   );

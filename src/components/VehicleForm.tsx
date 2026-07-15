@@ -158,6 +158,7 @@ export default function VehicleForm({
             className="input font-mono uppercase"
             autoCapitalize="characters"
             defaultValue={defaults.vin ?? ""}
+            onChange={(event) => { event.target.value = event.target.value.toUpperCase(); }}
             placeholder="Manufacturer identifier"
           />
         </CaptureField>
@@ -167,6 +168,7 @@ export default function VehicleForm({
             className="input uppercase"
             autoCapitalize="characters"
             defaultValue={defaults.regNumber ?? ""}
+            onChange={(event) => { event.target.value = event.target.value.toUpperCase(); }}
             placeholder="e.g. CA 123-456"
           />
         </CaptureField>
