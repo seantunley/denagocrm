@@ -51,7 +51,9 @@ for (const absolute of await sourceFiles(sourceRoot)) {
   const relative = path.relative(root, absolute).replaceAll("\\", "/");
   const source = await readFile(absolute, "utf8");
 
-  const nativeDialog = source.match(/\b(?:window\.)?(?:alert|prompt)\s*\(|\bwindow\.confirm\s*\(/);
+  // Bare or window.-prefixed native dialogs only — the negative lookbehind keeps
+  // member calls like logger.alert()/prompt() on other objects from matching.
+  const nativeDialog = source.match(/(?<![.\w])(?:window\.)?(?:alert|prompt)\s*\(|\bwindow\.confirm\s*\(/);
   if (nativeDialog) failures.push(`${relative}: native browser dialogs are not part of the product feedback system`);
 
   const isStaffRoute = relative.startsWith("src/app/(app)/");
