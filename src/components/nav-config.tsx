@@ -28,6 +28,9 @@ import {
   GitBranch,
   ShieldEllipsis,
   PenLine,
+  Building2,
+  HeartPulse,
+  Gift,
   type LucideIcon,
 } from "lucide-react";
 
@@ -72,8 +75,10 @@ export function buildNav(modules: string, isAdmin: boolean) {
         ...(isAdmin ? [{ href: "/signatures", label: "Signatures", icon: PenLine }] : []),
         { href: "/deliveries", label: "Deliveries", icon: Truck },
         { href: "/contacts", label: "Contacts", icon: Users },
+        { href: "/fleets", label: "Fleets", icon: Building2 },
         { href: "/activities", label: "Activities", icon: ListChecks },
         { href: "/cases", label: "Customer Cases", icon: Ticket },
+        { href: "/health", label: "Customer Health", icon: HeartPulse },
       ],
     });
     groups.push({
@@ -82,6 +87,7 @@ export function buildNav(modules: string, isAdmin: boolean) {
       links: [
         { href: "/campaigns", label: "Campaigns", icon: Megaphone },
         { href: "/surveys", label: "Surveys", icon: ClipboardList },
+        { href: "/referrals", label: "Referrals", icon: Gift },
       ],
     });
     groups.push({
