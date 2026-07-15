@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "backup:verify": "tsx scripts/verify-backup.ts",
     "test:journeys": "node --import tsx --test tests/journeyTypes.test.ts",
+    "check:visual": "node scripts/check-visual-consistency.mjs",
     "prisma:generate": "prisma generate --schema ./prisma",
     "prisma:migrate": "prisma migrate deploy --schema ./prisma",
     "prisma:validate": "prisma validate --schema ./prisma",

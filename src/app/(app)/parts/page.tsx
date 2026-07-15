@@ -6,6 +6,7 @@ import { formatZAR } from "@/lib/format";
 import { createPart, updatePart, adjustPartStock, deletePart } from "@/app/actions/parts";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 
 function PartFields({ p }: { p?: { name: string; sku: string | null; priceCents: number; costCents: number; reorderAt: number | null; location: string | null; notes: string | null; stockQty?: number } }) {
   return (
@@ -65,7 +66,7 @@ export default async function PartsPage() {
         </ModalTrigger>
       </PageHeader>
 
-      <div className="card p-0 overflow-x-auto">
+      <ResponsiveEntityTable>
         <table className="table-base">
           <thead>
             <tr>
@@ -80,7 +81,7 @@ export default async function PartsPage() {
           <tbody>
             {parts.length === 0 && (
               <tr>
-                <td colSpan={6} className="text-center text-slate-400 py-8">
+                <td data-empty colSpan={6} className="text-center text-slate-400 py-8">
                   No parts yet — add the parts you keep on hand.
                 </td>
               </tr>
@@ -89,15 +90,15 @@ export default async function PartsPage() {
               const low = p.reorderAt != null && p.stockQty <= p.reorderAt;
               return (
                 <tr key={p.id}>
-                  <td className="font-medium">{p.name}</td>
-                  <td className="text-slate-400">{p.sku ?? "—"}</td>
-                  <td className="text-slate-400">{p.location ?? "—"}</td>
-                  <td className="text-right">
+                  <td data-primary data-label="Part" className="font-medium">{p.name}</td>
+                  <td data-label="SKU" className="text-slate-400">{p.sku ?? "—"}</td>
+                  <td data-label="Location" className="text-slate-400">{p.location ?? "—"}</td>
+                  <td data-label="In stock" className="text-right">
                     <span className={low ? "text-amber-400 font-semibold" : ""}>{p.stockQty}</span>
                     {low && <span title="At/below reorder level"> ⚠</span>}
                   </td>
-                  <td className="text-right">{formatZAR(p.priceCents)}</td>
-                  <td className="text-right">
+                  <td data-label="Sell" className="text-right">{formatZAR(p.priceCents)}</td>
+                  <td data-actions className="text-right">
                     <ModalTrigger label="Manage" title={p.name} buttonClass="btn-secondary btn-sm">
                       <div className="space-y-4">
                         <form action={adjustPartStock.bind(null, p.id)} className="card space-y-2">
@@ -126,7 +127,7 @@ export default async function PartsPage() {
             })}
           </tbody>
         </table>
-      </div>
+      </ResponsiveEntityTable>
     </div>
   );
 }

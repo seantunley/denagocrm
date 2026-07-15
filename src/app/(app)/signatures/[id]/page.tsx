@@ -1,9 +1,11 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
 import { SendVoidBar, RecipientControls } from "./SigningClient";
+import { EntityDetailShell } from "@/components/entity-detail-shell";
+import { StatusPill } from "@/components/visual-system";
+import { FileCheck2, FileText } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -24,21 +26,26 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
   const closed = req.status === "completed" || req.status === "voided";
 
   return (
-    <div className="space-y-5">
-      <div>
-        <Link href="/signatures" className="mb-1 inline-block text-xs text-muted-foreground hover:text-foreground">← Signatures</Link>
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold tracking-tight">{req.title}</h1>
-          <span className="rounded bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground">{req.status.replace("_", " ")}</span>
-        </div>
-        <p className="mt-0.5 text-sm text-muted-foreground">{req.ordering === "sequential" ? "Sequential" : "Parallel"} signing · {req.recipients.filter((r) => r.role !== "viewer").length} signer(s) · {req.fields.length} field(s)</p>
-      </div>
+    <EntityDetailShell
+      backHref="/signatures"
+      backLabel="Signatures"
+      eyebrow="Signing request"
+      title={req.title}
+      status={<StatusPill tone={req.status === "completed" ? "success" : req.status === "declined" || req.status === "voided" ? "danger" : req.status === "draft" ? "neutral" : "info"}>{req.status.replace("_", " ")}</StatusPill>}
+      description={`${req.ordering === "sequential" ? "Sequential" : "Parallel"} signing workflow`}
+      facts={[
+        { label: "Signers", value: req.recipients.filter((recipient) => recipient.role !== "viewer").length },
+        { label: "Fields", value: req.fields.length },
+        { label: "Completed", value: req.recipients.filter((recipient) => recipient.status === "signed").length },
+        { label: "Mode", value: req.ordering },
+      ]}
+      actions={<SendVoidBar requestId={req.id} status={req.status} />}
+    >
 
       <div className={card}>
-        <SendVoidBar requestId={req.id} status={req.status} />
-        <div className="mt-3 flex flex-wrap gap-2">
-          {req.documentId && <a className="btn-secondary btn-sm" href={`/api/files/${req.documentId}`} target="_blank" rel="noreferrer">📄 Unsigned PDF</a>}
-          {req.signedDocId && <a className="btn-primary btn-sm" href={`/api/files/${req.signedDocId}`} target="_blank" rel="noreferrer">🔏 Signed PDF</a>}
+        <div className="flex flex-wrap gap-2">
+          {req.documentId && <a className="btn-secondary btn-sm" href={`/api/files/${req.documentId}`} target="_blank" rel="noreferrer"><FileText className="size-4" />Unsigned PDF</a>}
+          {req.signedDocId && <a className="btn-primary btn-sm" href={`/api/files/${req.signedDocId}`} target="_blank" rel="noreferrer"><FileCheck2 className="size-4" />Signed PDF</a>}
           {req.signedPdfHash && <span className="self-center text-[10px] text-muted-foreground">sha256 {req.signedPdfHash.slice(0, 16)}…</span>}
         </div>
       </div>
@@ -82,6 +89,6 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
           ))}
         </ol>
       </div>
-    </div>
+    </EntityDetailShell>
   );
 }
