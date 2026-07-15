@@ -4,6 +4,7 @@ import { saveFile } from "@/lib/storage";
 import { isValidSignToken } from "@/lib/signing/tokens";
 import { logSignEvent, reqMeta } from "@/lib/signing/events";
 import { advanceAfterSignature } from "@/lib/signing/workflow";
+import { logAudit } from "@/lib/audit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,6 +58,20 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
   if (claimed.count === 0) return new Response("Already signed", { status: 409 });
 
   await logSignEvent(request.id, { type: "signed", recipientId: recipient.id, actor: name, channel: "web", ip: meta.ip, userAgent: meta.ua });
+  // Surface the signature on the customer's timeline (audit feed). logSignEvent
+  // only writes to SignatureEvent, which the contact/lead timelines don't read.
+  const auditLead = request.quoteId
+    ? (await prisma.quote.findUnique({ where: { id: request.quoteId }, select: { leadId: true } }))?.leadId ?? null
+    : null;
+  await logAudit({
+    action: "signing.signed",
+    summary: `${name} signed “${request.title}”`,
+    contactId: request.contactId,
+    leadId: auditLead,
+    userName: name,
+    entityType: "SignatureRequest",
+    entityId: request.id,
+  });
   await advanceAfterSignature(request.id);
 
   return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });

@@ -41,11 +41,13 @@ export async function startRecordSigning(kind: Kind, id: string, workflowId?: st
 
   // Pre-send gates. (Denago's countersignature is now captured through the hub as
   // the first co-signer, so no separate pad gate is required.)
+  let sendLeadId: string | null = null;
   if (kind === "quote") {
     const quote = await prisma.quote.findUnique({ where: { id } });
     if (!quote) return { ok: false, error: "Quote not found." };
     if (quote.signedAt) return { ok: false, error: "This quote has already been signed." };
     if (quoteExpired(quote.validUntil)) return { ok: false, error: "This quote has expired — issue an updated quote first." };
+    sendLeadId = quote.leadId;
   } else {
     const jc = await prisma.jobCard.findUnique({ where: { id } });
     if (!jc) return { ok: false, error: "Job card not found." };
@@ -79,7 +81,7 @@ export async function startRecordSigning(kind: Kind, id: string, workflowId?: st
     if (cust && !cust.phone) await prisma.signatureRecipient.update({ where: { id: cust.id }, data: { phone: env.customerPhone } });
   }
 
-  await logAudit({ action: "signing.send", summary: `Sent “${env.title}” (${env.refLabel}) for signing`, entityType: "SignatureRequest", entityId: created.id, user });
+  await logAudit({ action: "signing.send", summary: `Sent “${env.title}” (${env.refLabel}) for signing`, contactId: env.contactId, leadId: sendLeadId, entityType: "SignatureRequest", entityId: created.id, user });
   revalidatePath(recordPath(kind, id));
 
   // Approval workflow: freeze the graph, link each doc-signer recipient to its
