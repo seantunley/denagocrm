@@ -114,8 +114,8 @@ export default async function CampaignsPage() {
           <MobileDataFields>
             <MobileDataField label="Delivered">{campaign.sentCount}/{campaign.recipientCount}</MobileDataField>
             <MobileDataField label="Created">{formatDateTime(campaign.createdAt)}</MobileDataField>
-            {campaign.channel === "email" && <MobileDataField label="Opened">{openRate}%</MobileDataField>}
-            {campaign.channel === "email" && <MobileDataField label="Clicked">{campaignClickRate}%</MobileDataField>}
+            {campaign.channel === "email" && <MobileDataField label="Opened">{campaign.sentCount > 0 ? `${openRate}%` : "—"}</MobileDataField>}
+            {campaign.channel === "email" && <MobileDataField label="Clicked">{campaign.sentCount > 0 ? `${campaignClickRate}%` : "—"}</MobileDataField>}
           </MobileDataFields>
           <Link href={`/campaigns/${campaign.id}`} className="btn-secondary w-full">View campaign</Link>
         </MobileDataCard>;
