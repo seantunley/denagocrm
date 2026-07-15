@@ -11,6 +11,8 @@ const rawHeadingAllowlist = new Set([
   "src/app/(app)/jobcards/[id]/page.tsx",
   "src/app/(app)/quotes/[id]/page.tsx",
   "src/app/(app)/bot-builder/[id]/page.tsx",
+  // FreeScout-style help-desk ticket detail: bespoke thread + properties layout.
+  "src/app/(app)/cases/[id]/page.tsx",
   "src/app/(app)/contacts/[id]/edit/page.tsx",
   "src/app/(app)/contacts/new/page.tsx",
   "src/app/(app)/jobcards/new/page.tsx",
