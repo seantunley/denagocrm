@@ -1,0 +1,98 @@
+"use server";
+
+import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
+import { prisma } from "@/lib/db";
+import { requireOwner } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
+import { collectSource } from "@/lib/competitors";
+
+const str = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
+
+export async function createCompetitor(formData: FormData) {
+  const user = await requireOwner();
+  const name = str(formData, "name");
+  if (!name) throw new Error("Give the competitor a name");
+  const website = str(formData, "website") || null;
+  const tierRaw = parseInt(str(formData, "tier") || "2", 10);
+  const competitor = await prisma.competitor.create({
+    data: {
+      name,
+      website,
+      description: str(formData, "description") || null,
+      tier: [1, 2, 3].includes(tierRaw) ? tierRaw : 2,
+      createdById: user.id,
+    },
+  });
+  await logAudit({ action: "competitor.created", summary: `Added competitor "${name}"`, user });
+  redirect(`/competitors/${competitor.id}`);
+}
+
+export async function updateCompetitor(id: string, formData: FormData) {
+  const user = await requireOwner();
+  const name = str(formData, "name");
+  if (!name) throw new Error("Name is required");
+  const tierRaw = parseInt(str(formData, "tier") || "2", 10);
+  await prisma.competitor.update({
+    where: { id },
+    data: {
+      name,
+      website: str(formData, "website") || null,
+      description: str(formData, "description") || null,
+      notes: str(formData, "notes") || null,
+      tier: [1, 2, 3].includes(tierRaw) ? tierRaw : 2,
+      status: str(formData, "status") === "archived" ? "archived" : "active",
+    },
+  });
+  await logAudit({ action: "competitor.updated", summary: `Updated competitor "${name}"`, user });
+  revalidatePath(`/competitors/${id}`);
+  revalidatePath("/competitors");
+}
+
+export async function deleteCompetitor(id: string) {
+  const user = await requireOwner();
+  const competitor = await prisma.competitor.findUnique({ where: { id } });
+  await prisma.competitor.update({ where: { id }, data: { deletedAt: new Date() } });
+  await logAudit({ action: "competitor.deleted", summary: `Deleted competitor "${competitor?.name ?? id}"`, user });
+  redirect("/competitors");
+}
+
+export async function addSource(competitorId: string, formData: FormData) {
+  const user = await requireOwner();
+  const url = str(formData, "url");
+  const label = str(formData, "label") || url;
+  if (!/^https?:\/\//i.test(url)) throw new Error("Enter a full http(s) URL");
+  await prisma.competitorSource.create({
+    data: {
+      competitorId,
+      url,
+      label,
+      sourceType: str(formData, "sourceType") || "page",
+    },
+  });
+  await logAudit({ action: "competitor.source_added", summary: `Watching ${url}`, user, entityType: "Competitor", entityId: competitorId });
+  revalidatePath(`/competitors/${competitorId}`);
+}
+
+export async function deleteSource(competitorId: string, sourceId: string) {
+  await requireOwner();
+  await prisma.competitorSource.delete({ where: { id: sourceId } });
+  revalidatePath(`/competitors/${competitorId}`);
+}
+
+/** Run one source right now (manual "check now"). */
+export async function runSourceNow(competitorId: string, sourceId: string) {
+  await requireOwner();
+  await collectSource(sourceId);
+  revalidatePath(`/competitors/${competitorId}`);
+}
+
+export async function reviewChange(competitorId: string, changeId: string, decision: "reviewed" | "dismissed") {
+  const user = await requireOwner();
+  await prisma.competitorChange.update({
+    where: { id: changeId },
+    data: { status: decision, reviewedById: user.id, reviewedAt: new Date() },
+  });
+  revalidatePath(`/competitors/${competitorId}`);
+  revalidatePath("/competitors");
+}

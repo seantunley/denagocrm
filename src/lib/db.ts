@@ -26,6 +26,7 @@ const SOFT_DELETE_MODELS = new Set([
   "DocBuilderTemplate",
   "SignatureRequest",
   "SignWorkflow",
+  "Competitor",
 ]);
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
