@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   BellRing,
   BookOpenText,
@@ -65,6 +65,15 @@ export function SettingsWorkspace({
 
 function SettingsFinder({ groups }: { groups: SettingsGroup[] }) {
   const [query, setQuery] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!query.trim()) return;
+    function onPointerDown(event: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setQuery("");
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [query]);
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return [];
@@ -75,11 +84,12 @@ function SettingsFinder({ groups }: { groups: SettingsGroup[] }) {
   }, [groups, query]);
 
   return (
-    <div className="relative max-w-2xl">
+    <div className="relative max-w-2xl" ref={rootRef}>
       <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
       <input
         value={query}
         onChange={(event) => setQuery(event.target.value)}
+        onKeyDown={(event) => { if (event.key === "Escape") setQuery(""); }}
         className="input h-11 pl-10 pr-24"
         placeholder="Find a setting, integration or policy…"
         aria-label="Search settings"
