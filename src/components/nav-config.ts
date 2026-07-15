@@ -30,6 +30,9 @@ import {
   ScrollText,
   GitBranch,
   ShieldEllipsis,
+  Building2,
+  HeartPulse,
+  Gift,
   type LucideIcon,
 } from "lucide-react";
 
@@ -41,9 +44,9 @@ export function buildNav(
   isAdmin: boolean,
   permissionList: string[] = []
 ) {
-  const mods = new Set(modules.split(",").map((module) => module.trim()).filter(Boolean));
+  const mods = new Set(modules.split(",").map((m) => m.trim()).filter(Boolean));
   const permissions = new Set(permissionList);
-  const module = (id: string) => isAdmin || mods.has(id);
+  const hasModule = (id: string) => isAdmin || mods.has(id);
   const can = (...keys: string[]) => isAdmin || keys.some((key) => permissions.has(key));
 
   const topLinks: NavLink[] = [{ href: "/", label: "Dashboard", icon: LayoutDashboard }];
@@ -58,7 +61,7 @@ export function buildNav(
   const groups: NavGroup[] = [];
 
   const socialLinks: NavLink[] = [];
-  if (can("inbox.view", "inbox.reply") || (permissionList.length === 0 && module("inbox"))) {
+  if (can("inbox.view", "inbox.reply") || (permissionList.length === 0 && hasModule("inbox"))) {
     socialLinks.push({ href: "/inbox", label: "Inbox", icon: MessageSquare });
   }
   if (socialLinks.length) groups.push({ key: "social", label: "Social", links: socialLinks });
@@ -69,8 +72,10 @@ export function buildNav(
   if (can("quotes.view_all", "quotes.view_owned")) crmLinks.push({ href: "/quotes", label: "Quotes", icon: FileText });
   if (can("deliveries.view", "deliveries.manage")) crmLinks.push({ href: "/deliveries", label: "Deliveries", icon: Truck });
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/contacts", label: "Contacts", icon: Users });
+  if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/fleets", label: "Fleets", icon: Building2 });
   if (can("activities.view", "activities.manage")) crmLinks.push({ href: "/activities", label: "Activities", icon: ListChecks });
   if (can("cases.view_all", "cases.view_owned")) crmLinks.push({ href: "/cases", label: "Customer Cases", icon: Ticket });
+  if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/health", label: "Customer Health", icon: HeartPulse });
   if (can("documents.view_all", "documents.view_owned", "documents.upload", "documents.manage", "document_templates.manage")) {
     crmLinks.push({ href: "/documents", label: "Documents", icon: FolderOpen });
   }
@@ -79,6 +84,7 @@ export function buildNav(
   const marketingLinks: NavLink[] = [];
   if (can("campaigns.view", "campaigns.manage")) marketingLinks.push({ href: "/campaigns", label: "Campaigns", icon: Megaphone });
   if (can("surveys.view", "surveys.manage")) marketingLinks.push({ href: "/surveys", label: "Surveys", icon: ClipboardList });
+  if (can("contacts.view_all", "contacts.view_owned")) marketingLinks.push({ href: "/referrals", label: "Referrals", icon: Gift });
   if (marketingLinks.length) groups.push({ key: "marketing", label: "Marketing", links: marketingLinks });
 
   if (can("stock.view", "stock.manage")) {

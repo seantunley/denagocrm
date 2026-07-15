@@ -92,7 +92,7 @@ export default async function TemplateEditorPage({
             )}
           </h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            {definition.description} This is the operational template used by the CRM's built-in {definition.label.toLowerCase()} PDF.
+            {definition.description} This is the operational template used by the CRM&apos;s built-in {definition.label.toLowerCase()} PDF.
           </p>
         </div>
         {!record.isDefault && (
