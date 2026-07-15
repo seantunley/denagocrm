@@ -42,6 +42,34 @@ export default async function LeadsPage() {
 
   const forecast = await getDailyForecast();
 
+  // Active signing requests for these leads' quotes → a "quote sent · waiting for
+  // X" badge on the card. Clears automatically once signing completes or is voided.
+  const leadIds = stages.flatMap((s) => s.leads.map((l) => l.id));
+  const signingByLead = new Map<string, { label: string }>();
+  if (leadIds.length) {
+    const leadQuotes = await prisma.quote.findMany({
+      where: { leadId: { in: leadIds }, deletedAt: null },
+      select: { id: true, leadId: true },
+    });
+    const quoteToLead = new Map(leadQuotes.map((q) => [q.id, q.leadId]));
+    const quoteIds = leadQuotes.map((q) => q.id);
+    if (quoteIds.length) {
+      const requests = await prisma.signatureRequest.findMany({
+        where: { quoteId: { in: quoteIds }, deletedAt: null, status: { in: ["sent", "viewed", "in_progress"] } },
+        orderBy: { updatedAt: "desc" },
+        include: { recipients: { orderBy: { order: "asc" } } },
+      });
+      for (const req of requests) {
+        const leadId = req.quoteId ? quoteToLead.get(req.quoteId) : null;
+        if (!leadId || signingByLead.has(leadId)) continue; // most-recent request wins
+        const next = req.recipients.find((r) => r.role !== "viewer" && r.status !== "signed" && r.status !== "declined");
+        signingByLead.set(leadId, {
+          label: next ? `Quote sent · waiting for ${next.name.split(" ")[0]}` : "Quote fully signed",
+        });
+      }
+    }
+  }
+
   const boardStages: KanbanStage[] = stages.map((s) => ({
     id: s.id,
     name: s.name,
@@ -76,6 +104,7 @@ export default async function LeadsPage() {
           date: dateKey,
         };
       })(),
+      signing: signingByLead.get(l.id) ?? null,
     })),
   }));
 
