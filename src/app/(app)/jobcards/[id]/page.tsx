@@ -41,7 +41,23 @@ import { activeRecordRequest } from "@/lib/signing/record";
 import JobCardItemForm from "@/components/JobCardItemForm";
 import { uploadJobCardPhotos } from "@/app/actions/jobcards";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
-import { StatusPill } from "@/components/visual-system";
+import {
+  ArrowLeft,
+  CarFront,
+  UserRound,
+  CalendarDays,
+  Printer,
+  ClipboardCheck,
+  FileText,
+  Check,
+  Gauge,
+  Package,
+  Clock3,
+} from "lucide-react";
+import { StatusPill, Surface, MetricCard } from "@/components/visual-system";
+import { KpiGrid } from "@/components/responsive-patterns";
+import { buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import {
   PIPELINE_STAGES,
   PRIORITIES,
@@ -115,128 +131,89 @@ export default async function JobCardDetailPage({
     .reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
   const grandTotal = partsTotal + labourTotal;
   const pm = priorityMeta(jobCard.priority);
+  const progressIndex = jobCard.status === "collected"
+    ? PIPELINE_STAGES.length
+    : PIPELINE_STAGES.findIndex((s) => s.value === jobCard.status);
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-semibold tracking-[-0.035em]">Job card #{jobCard.number}</h1>
+      <Link href="/jobcards" className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"><ArrowLeft className="size-3.5" />Back to job cards</Link>
+
+      <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-3xl font-semibold tracking-[-0.045em]">Job #{jobCard.number}</h1>
             <StatusPill tone={sm.tone}>{sm.label}</StatusPill>
             {jobCard.priority !== "normal" && <StatusPill tone={pm.tone}>{pm.label} priority</StatusPill>}
-            {jobCard.bay && (
-              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                <span className="inline-block size-2 rounded-full" style={{ backgroundColor: jobCard.bay.color }} />
-                {jobCard.bay.name}
-              </span>
-            )}
           </div>
-          <p className="text-sm text-slate-400 mt-0.5">
-            <Link href={`/vehicles/${jobCard.vehicleId}`} className="text-orange-400 hover:underline">
-              {jobCard.vehicle.model}
-            </Link>
-            {" · "}
-            <Link href={`/contacts/${jobCard.contactId}`} className="text-orange-400 hover:underline">
-              {contactName(jobCard.contact)}
-            </Link>
-            {" · opened "}
-            {formatDate(jobCard.openedAt)}
-            {jobCard.kmIn != null ? ` at ${jobCard.kmIn.toLocaleString()} km` : ""}
-            {jobCard.technician ? ` · 🔧 ${jobCard.technician.name}` : ""}
-          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
+            <Link href={`/vehicles/${jobCard.vehicleId}`} className="inline-flex items-center gap-1.5 hover:text-primary"><CarFront className="size-4" />{jobCard.vehicle.model}</Link>
+            <Link href={`/contacts/${jobCard.contactId}`} className="inline-flex items-center gap-1.5 hover:text-primary"><UserRound className="size-4" />{contactName(jobCard.contact)}</Link>
+            <span className="inline-flex items-center gap-1.5"><CalendarDays className="size-4" />Opened {formatDate(jobCard.openedAt)}</span>
+            {jobCard.bay && <span className="inline-flex items-center gap-1.5"><span className="inline-block size-2 rounded-full" style={{ backgroundColor: jobCard.bay.color }} />{jobCard.bay.name}</span>}
+          </div>
         </div>
-        <div className="flex gap-2 flex-wrap">
-          <Link href={`/jobcards/${jobCard.id}/print`} className="btn-secondary">
-            🖨 Print
-          </Link>
-          {jobCard.status === "collected" && (
-            <Link href={`/jobcards/${jobCard.id}/service-report`} className="btn-secondary" target="_blank">
-              📋 Service report
-            </Link>
-          )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Link href={`/jobcards/${jobCard.id}/print`} className={buttonVariants({ variant: "outline", size: "sm" })}><Printer />Print</Link>
+          {jobCard.status === "collected" && <Link href={`/jobcards/${jobCard.id}/service-report`} className={buttonVariants({ variant: "outline", size: "sm" })} target="_blank"><ClipboardCheck />Service report</Link>}
           {builderDocs.length > 0 && currentUser.role === "owner" && (
             <form action={generateDocEditorDocument} className="flex items-center gap-1">
               <input type="hidden" name="jobCardId" value={jobCard.id} />
-              <select
-                name="templateId"
-                defaultValue={builderDocs[0].id}
-                className="rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground"
-                title="Builder template"
-              >
-                {builderDocs.map((t) => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
+              <select name="templateId" defaultValue={builderDocs[0].id} className="h-8 max-w-44 rounded-md border border-input bg-card px-2 text-xs text-foreground" title="Document template">
+                {builderDocs.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
-              <button className="btn-secondary" title="Generate this builder document for the job card and file it">
-                📄 Generate
-              </button>
+              <button className={buttonVariants({ variant: "outline", size: "sm" })}><FileText />Generate</button>
             </form>
           )}
-          {terminal && (
-            <form action={setJobCardStatus.bind(null, jobCard.id, "repair")}>
-              <button className="btn-secondary">Reopen</button>
-            </form>
-          )}
-          {!terminal && (
-            <form action={setJobCardStatus.bind(null, jobCard.id, "cancelled")}>
-              <button className="btn-secondary">Cancel job</button>
-            </form>
-          )}
-          <ConfirmDelete
-            action={deleteJobCard.bind(null, jobCard.id)}
-            title={`Delete job card #${jobCard.number}?`}
-            description="The job card moves to the Trash and can be restored for 60 days."
-          />
+          {terminal && <form action={setJobCardStatus.bind(null, jobCard.id, "repair")}><button className={buttonVariants({ variant: "outline", size: "sm" })}>Reopen</button></form>}
+          {!terminal && <form action={setJobCardStatus.bind(null, jobCard.id, "cancelled")}><button className={buttonVariants({ variant: "outline", size: "sm" })}>Cancel job</button></form>}
+          <ConfirmDelete action={deleteJobCard.bind(null, jobCard.id)} title={`Delete job card #${jobCard.number}?`} description="The job card moves to Trash and can be restored for 60 days." triggerClass="btn-danger btn-sm" />
         </div>
       </div>
 
-      <div className="card flex items-center justify-between gap-3 flex-wrap">
-        <div>
-          <h2 className="font-semibold mb-2">Work requested</h2>
-          <p className="text-sm text-slate-400 whitespace-pre-wrap">{jobCard.description}</p>
-        </div>
-        <form action={setJobCardTechnician.bind(null, jobCard.id)} className="shrink-0">
-          <label className="label">🔧 Technician</label>
-          <select name="technicianId" className="input min-w-44" defaultValue={jobCard.technicianId ?? ""}>
-            <option value="">Unassigned</option>
-            {users.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name}
-              </option>
-            ))}
-          </select>
-          <button className="btn-secondary btn-sm mt-2">Assign</button>
-        </form>
-      </div>
-
-      {/* Workshop stage ─────────────────────────────────────────────────────── */}
-      <div className="card">
-        <h2 className="font-semibold mb-3">Workshop stage</h2>
-        <div className="flex flex-wrap gap-2">
-          {PIPELINE_STAGES.map((stage) => {
-            const active = jobCard.status === stage.value;
+      {/* 8-stage workflow stepper (PR30 chrome, workshop workflow) ───────────── */}
+      <Surface className="p-4 sm:p-5">
+        <div className="grid gap-2 sm:grid-cols-4 lg:grid-cols-7">
+          {PIPELINE_STAGES.map((stage, index) => {
+            const complete = index < progressIndex;
+            const current = index === progressIndex && !terminal;
             return (
               <form key={stage.value} action={setJobCardStatus.bind(null, jobCard.id, stage.value)}>
-                <button
-                  disabled={active}
-                  className={
-                    active
-                      ? "rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground"
-                      : "rounded-full border border-border bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-                  }
-                >
-                  {stage.label}
+                <button className={cn("flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left transition-colors", complete ? "border-emerald-400/20 bg-emerald-400/[0.06]" : current ? "border-primary/25 bg-primary/[0.07]" : "border-border bg-muted/15 hover:border-primary/30")}>
+                  <span className={cn("grid size-6 shrink-0 place-items-center rounded-lg border text-[10px] font-semibold", complete ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : current ? "border-primary/20 bg-primary/10 text-primary" : "border-border bg-muted/30 text-muted-foreground")}>{complete ? <Check className="size-3.5" /> : index + 1}</span>
+                  <span className="min-w-0 truncate text-xs font-medium">{stage.label}</span>
                 </button>
               </form>
             );
           })}
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">
-          {terminal
-            ? `This job is ${sm.label.toLowerCase()}. Pick a stage above to reopen it.`
-            : "Use “Complete & write service record” below to move to Collected."}
-        </p>
-      </div>
+        <p className="mt-3 text-xs text-muted-foreground">{terminal ? `This job is ${sm.label.toLowerCase()}. Tap a stage to reopen it.` : "Tap a stage to move the job. “Complete & write service record” below moves it to Collected."}</p>
+      </Surface>
+
+      <KpiGrid>
+        <MetricCard icon={Gauge} label="Arrival mileage" value={jobCard.kmIn != null ? jobCard.kmIn.toLocaleString() : "—"} detail={jobCard.kmIn != null ? "kilometres" : "Not captured"} />
+        <MetricCard icon={Package} label="Parts" value={formatZAR(Math.round(partsTotal))} detail={`${jobCard.items.filter((i) => i.kind === "part").length} line items`} />
+        <MetricCard icon={Clock3} label="Labour" value={formatZAR(Math.round(labourTotal))} detail={`${actualHours} h logged`} />
+        <MetricCard icon={ClipboardCheck} label="Job total" value={formatZAR(Math.round(grandTotal))} detail="Customer-facing total" accent />
+      </KpiGrid>
+
+      <Surface className="p-5">
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-primary">Work requested</p>
+            <p className="mt-3 whitespace-pre-wrap text-base leading-7 text-foreground">{jobCard.description}</p>
+          </div>
+          <form action={setJobCardTechnician.bind(null, jobCard.id)} className="rounded-xl border border-border bg-muted/20 p-3">
+            <label className="label" htmlFor="job-technician">Technician</label>
+            <select id="job-technician" name="technicianId" className="input" defaultValue={jobCard.technicianId ?? ""}>
+              <option value="">Unassigned</option>
+              {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+            <button className="btn-secondary btn-sm mt-2 w-full">Update assignment</button>
+          </form>
+        </div>
+      </Surface>
 
       {/* Bay · priority · estimate ──────────────────────────────────────────── */}
       <div className="grid gap-4 md:grid-cols-3">

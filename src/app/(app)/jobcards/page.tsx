@@ -1,12 +1,31 @@
 import Link from "next/link";
-import { Plus } from "lucide-react";
+import {
+  ArrowRight,
+  CheckCircle2,
+  CircleDotDashed,
+  Clock3,
+  Plus,
+  Search,
+  UserRoundX,
+  Wrench,
+} from "lucide-react";
 import { prisma } from "@/lib/db";
 import ModalTrigger from "@/components/Modal";
 import JobCardForm from "@/components/JobCardForm";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
-import { StatusPill } from "@/components/visual-system";
+import { EmptyState, MetricCard, StatusPill, Surface } from "@/components/visual-system";
+import {
+  KpiGrid,
+  MobileDataCard,
+  MobileDataField,
+  MobileDataFields,
+  MobileDataHeader,
+  MobileDataList,
+  ResponsiveDataView,
+} from "@/components/responsive-patterns";
+import { cn } from "@/lib/utils";
 import { stageMeta, priorityMeta, isTerminalStage } from "@/lib/workshop-constants";
 import {
   getAccessibleJobCardIds,
@@ -15,8 +34,24 @@ import {
   requireAnyPermission,
 } from "@/lib/permissions";
 
-export default async function JobCardsPage() {
+const FILTERS = [
+  { value: "all", label: "All" },
+  { value: "active", label: "Active" },
+  { value: "approval", label: "Awaiting approval" },
+  { value: "repair", label: "In repair" },
+  { value: "ready", label: "Ready" },
+  { value: "collected", label: "Collected" },
+] as const;
+
+export default async function JobCardsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ status?: string; q?: string }>;
+}) {
   const user = await requireAnyPermission("jobcards.view_all", "jobcards.view_owned");
+  const { status: requestedStatus = "all", q = "" } = await searchParams;
+  const activeStatus = FILTERS.some((filter) => filter.value === requestedStatus) ? requestedStatus : "all";
+  const query = q.trim().toLowerCase();
   const [jobCardIds, vehicleIds, canManage] = await Promise.all([
     getAccessibleJobCardIds(user),
     getAccessibleVehicleIds(user),
@@ -39,107 +74,207 @@ export default async function JobCardsPage() {
       : Promise.resolve([]),
   ]);
 
+  const active = jobCards.filter((job) => !isTerminalStage(job.status));
+  const counts = {
+    active: active.length,
+    repair: jobCards.filter((job) => job.status === "repair").length,
+    ready: jobCards.filter((job) => job.status === "ready").length,
+    unassigned: active.filter((job) => !job.technicianId).length,
+  };
+  const wipCents = active.reduce(
+    (sum, job) => sum + job.items.reduce((itemSum, item) => itemSum + item.qty * item.unitPriceCents, 0),
+    0,
+  );
+
+  const filteredJobs = jobCards.filter((job) => {
+    if (activeStatus === "active" && isTerminalStage(job.status)) return false;
+    if (activeStatus !== "all" && activeStatus !== "active" && job.status !== activeStatus) return false;
+    if (!query) return true;
+    const searchable = [
+      String(job.number),
+      job.description,
+      job.vehicle.model,
+      job.vehicle.vin,
+      job.vehicle.regNumber,
+      contactName(job.contact),
+      job.technician?.name,
+      job.bay?.name,
+    ].filter(Boolean).join(" ").toLowerCase();
+    return searchable.includes(query);
+  });
+
+  const load = new Map<string, number>();
+  for (const job of active) {
+    const name = job.technician?.name ?? "Unassigned";
+    load.set(name, (load.get(name) ?? 0) + 1);
+  }
+  const loadRows = [...load.entries()].sort((a, b) => b[1] - a[1]);
+
+  const newJobTrigger = canManage ? (
+    <ModalTrigger label={<><Plus className="size-4" />New job card</>} title="Open a new job card" buttonClass={buttonVariants({ size: "sm" })}>
+      <JobCardForm
+        vehicles={vehicles.map((vehicle) => ({
+          id: vehicle.id,
+          label: `${vehicle.model}${vehicle.regNumber ? ` · ${vehicle.regNumber}` : vehicle.vin ? ` · ${vehicle.vin}` : ""} — ${contactName(vehicle.contact)}`,
+        }))}
+      />
+    </ModalTrigger>
+  ) : null;
+
   return (
-    <div className="space-y-5">
-      <PageHeader title="Workshop jobs" description={`${jobCards.filter((job) => !isTerminalStage(job.status)).length} active · ${jobCards.length} accessible recent job cards`}>
-        {canManage && (
-          <ModalTrigger label={<><Plus className="size-4" />New job card</>} title="New job card" buttonClass={buttonVariants({ size: "sm" })}>
-            <JobCardForm
-              vehicles={vehicles.map((v) => ({
-                id: v.id,
-                label: `${v.model}${v.vin ? ` (${v.vin})` : ""} — ${contactName(v.contact)}`,
-              }))}
-            />
-          </ModalTrigger>
-        )}
+    <div className="space-y-6">
+      <PageHeader
+        title="Job cards"
+        description="Run every workshop job from vehicle intake through technician work, customer approval and service history."
+      >
+        {newJobTrigger}
       </PageHeader>
 
-      {(() => {
-        const active = jobCards.filter((j) => !isTerminalStage(j.status));
-        const load = new Map<string, number>();
-        for (const j of active) {
-          const name = j.technician?.name ?? "Unassigned";
-          load.set(name, (load.get(name) ?? 0) + 1);
-        }
-        const rows = [...load.entries()].sort((a, b) => b[1] - a[1]);
-        if (rows.length === 0) return null;
-        return (
-          <div className="card">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Technician load · active jobs</p>
-            <div className="flex flex-wrap gap-2">
-              {rows.map(([name, count]) => (
-                <span key={name} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-3 py-1 text-xs">
-                  <span className="text-muted-foreground">{name}</span>
-                  <span className="tabular-nums font-semibold">{count}</span>
-                </span>
-              ))}
-            </div>
-          </div>
-        );
-      })()}
+      <KpiGrid>
+        <MetricCard icon={CircleDotDashed} label="Active jobs" value={counts.active} detail={`${counts.unassigned} unassigned`} />
+        <MetricCard icon={Wrench} label="In repair" value={counts.repair} detail="On the workshop floor" accent />
+        <MetricCard icon={CheckCircle2} label="Ready for collection" value={counts.ready} detail="Awaiting customer" />
+        <MetricCard icon={UserRoundX} label="Work in progress" value={formatZAR(Math.round(wipCents))} detail="Billed value on active jobs" />
+      </KpiGrid>
 
-      <div className="card p-0 overflow-x-auto">
-        <table className="table-base">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Vehicle</th>
-              <th>Customer</th>
-              <th>Description</th>
-              <th>Bay</th>
-              <th>Total</th>
-              <th>Status</th>
-              <th>Opened</th>
-            </tr>
-          </thead>
-          <tbody>
-            {jobCards.length === 0 && (
-              <tr>
-                <td colSpan={8} className="text-center text-slate-400 py-8">
-                  No accessible job cards.
-                </td>
-              </tr>
-            )}
-            {jobCards.map((j) => {
-              const total = j.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+      {loadRows.length > 0 && (
+        <div className="card">
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Technician load · active jobs</p>
+          <div className="flex flex-wrap gap-2">
+            {loadRows.map(([name, count]) => (
+              <span key={name} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-3 py-1 text-xs">
+                <span className="text-muted-foreground">{name}</span>
+                <span className="font-semibold tabular-nums">{count}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <Surface className="overflow-visible">
+        <div className="flex flex-col gap-3 border-b border-border p-4 lg:flex-row lg:items-center lg:justify-between">
+          <form className="relative w-full lg:max-w-md">
+            <input type="hidden" name="status" value={activeStatus} />
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              name="q"
+              defaultValue={q}
+              className="input pl-9"
+              placeholder="Search job, vehicle, customer, technician or bay…"
+              aria-label="Search job cards"
+            />
+          </form>
+          <div className="flex max-w-full gap-1 overflow-x-auto rounded-lg border border-border bg-muted/25 p-1">
+            {FILTERS.map((filter) => {
+              const params = new URLSearchParams();
+              if (filter.value !== "all") params.set("status", filter.value);
+              if (q.trim()) params.set("q", q.trim());
               return (
-                <tr key={j.id}>
-                  <td>
-                    <Link href={`/jobcards/${j.id}`} className="font-medium text-orange-400 hover:underline">
-                      #{j.number}
-                    </Link>
-                  </td>
-                  <td>
-                    <Link href={`/vehicles/${j.vehicleId}`} className="text-orange-400 hover:underline">
-                      {j.vehicle.model}
-                    </Link>
-                  </td>
-                  <td>{contactName(j.contact)}</td>
-                  <td className="max-w-64 truncate">{j.description}</td>
-                  <td className="text-slate-400">
-                    {j.bay ? (
-                      <span className="inline-flex items-center gap-1.5">
-                        <span className="inline-block size-2 rounded-full" style={{ backgroundColor: j.bay.color }} />
-                        {j.bay.name}
-                      </span>
-                    ) : "—"}
-                  </td>
-                  <td>{formatZAR(Math.round(total))}</td>
-                  <td>
-                    <div className="flex items-center gap-1.5">
-                      <StatusPill tone={stageMeta(j.status).tone}>{stageMeta(j.status).label}</StatusPill>
-                      {j.priority !== "normal" && (
-                        <span className="inline-block size-2 rounded-full" style={{ backgroundColor: priorityMeta(j.priority).tone === "danger" ? "#ef4444" : priorityMeta(j.priority).tone === "warning" ? "#f59e0b" : "#64748b" }} title={`${priorityMeta(j.priority).label} priority`} />
-                      )}
-                    </div>
-                  </td>
-                  <td className="text-slate-400">{formatDate(j.openedAt)}</td>
-                </tr>
+                <Link
+                  key={filter.value}
+                  href={`/jobcards${params.size ? `?${params.toString()}` : ""}`}
+                  className={cn(
+                    "shrink-0 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                    activeStatus === filter.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                  )}
+                >
+                  {filter.label}
+                </Link>
               );
             })}
-          </tbody>
-        </table>
-      </div>
+          </div>
+        </div>
+
+        {filteredJobs.length === 0 ? (
+          <EmptyState
+            icon={Wrench}
+            title={jobCards.length === 0 ? "No job cards yet" : "No jobs matched this view"}
+            description={jobCards.length === 0 ? "Open the first workshop job when a vehicle arrives." : "Try another status or a broader search."}
+            action={jobCards.length === 0 ? newJobTrigger : <Link href="/jobcards" className={buttonVariants({ variant: "outline", size: "sm" })}>Clear filters</Link>}
+            className="m-4"
+          />
+        ) : (
+          <ResponsiveDataView
+            mobile={
+              <MobileDataList className="rounded-none border-0">
+                {filteredJobs.map((job) => {
+                  const total = job.items.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
+                  const sm = stageMeta(job.status);
+                  return (
+                    <MobileDataCard key={job.id}>
+                      <MobileDataHeader
+                        title={<Link href={`/jobcards/${job.id}`} className="text-primary hover:underline">Job #{job.number}</Link>}
+                        detail={`${job.vehicle.model} · ${contactName(job.contact)}`}
+                        aside={<StatusPill tone={sm.tone}>{sm.label}</StatusPill>}
+                      />
+                      <MobileDataFields>
+                        <MobileDataField label="Work requested" wide><span className="line-clamp-2 text-muted-foreground">{job.description}</span></MobileDataField>
+                        <MobileDataField label="Technician">{job.technician?.name ?? "Unassigned"}</MobileDataField>
+                        <MobileDataField label="Bay">{job.bay?.name ?? "—"}</MobileDataField>
+                        <MobileDataField label="Estimate">{formatZAR(Math.round(total))}</MobileDataField>
+                        <MobileDataField label="Priority">{priorityMeta(job.priority).label}</MobileDataField>
+                      </MobileDataFields>
+                      <Link href={`/jobcards/${job.id}`} className="inline-flex items-center gap-1 text-xs font-semibold text-primary">Open workspace <ArrowRight className="size-3.5" /></Link>
+                    </MobileDataCard>
+                  );
+                })}
+              </MobileDataList>
+            }
+            desktop={
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[960px] text-sm">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/20 text-left text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                      <th className="px-5 py-3 font-semibold">Job</th>
+                      <th className="px-4 py-3 font-semibold">Vehicle &amp; customer</th>
+                      <th className="px-4 py-3 font-semibold">Technician</th>
+                      <th className="px-4 py-3 font-semibold">Bay</th>
+                      <th className="px-4 py-3 text-right font-semibold">Estimate</th>
+                      <th className="px-4 py-3 font-semibold">Stage</th>
+                      <th className="px-4 py-3 font-semibold">Opened</th>
+                      <th className="px-5 py-3" />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {filteredJobs.map((job) => {
+                      const total = job.items.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
+                      const sm = stageMeta(job.status);
+                      const pm = priorityMeta(job.priority);
+                      return (
+                        <tr key={job.id} className="group transition-colors hover:bg-muted/20">
+                          <td className="px-5 py-4">
+                            <Link href={`/jobcards/${job.id}`} className="font-semibold text-foreground hover:text-primary">#{job.number}</Link>
+                            <p className="mt-1 max-w-xs truncate text-xs text-muted-foreground">{job.description}</p>
+                          </td>
+                          <td className="px-4 py-4">
+                            <Link href={`/vehicles/${job.vehicleId}`} className="font-medium text-foreground hover:text-primary">{job.vehicle.model}</Link>
+                            <p className="mt-1 text-xs text-muted-foreground">{contactName(job.contact)}{job.vehicle.regNumber ? ` · ${job.vehicle.regNumber}` : ""}</p>
+                          </td>
+                          <td className="px-4 py-4 text-muted-foreground">{job.technician?.name ?? "Unassigned"}</td>
+                          <td className="px-4 py-4 text-muted-foreground">
+                            {job.bay ? (
+                              <span className="inline-flex items-center gap-1.5"><span className="inline-block size-2 rounded-full" style={{ backgroundColor: job.bay.color }} />{job.bay.name}</span>
+                            ) : "—"}
+                          </td>
+                          <td className="px-4 py-4 text-right font-medium tabular-nums">{formatZAR(Math.round(total))}</td>
+                          <td className="px-4 py-4">
+                            <span className="inline-flex items-center gap-1.5">
+                              <StatusPill tone={sm.tone}>{sm.label}</StatusPill>
+                              {job.priority !== "normal" && <span className="inline-block size-2 rounded-full" title={`${pm.label} priority`} style={{ backgroundColor: pm.tone === "danger" ? "#ef4444" : pm.tone === "warning" ? "#f59e0b" : "#64748b" }} />}
+                            </span>
+                          </td>
+                          <td className="px-4 py-4 text-muted-foreground"><span className="inline-flex items-center gap-1.5"><Clock3 className="size-3.5" />{formatDate(job.openedAt)}</span></td>
+                          <td className="px-5 py-4 text-right"><Link href={`/jobcards/${job.id}`} className={buttonVariants({ variant: "ghost", size: "sm" })}>Open <ArrowRight /></Link></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            }
+          />
+        )}
+      </Surface>
     </div>
   );
 }
