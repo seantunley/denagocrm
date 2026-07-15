@@ -434,6 +434,7 @@ export default async function LeadDetailPage({
           revalidate={path}
           audit={audit}
           communications={comms}
+          activities={lead.activities}
           creationNote={
             lead.notes
               ? {
