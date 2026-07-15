@@ -1,9 +1,13 @@
 import Link from "next/link";
+import { BadgeDollarSign, Calculator, CircleDollarSign, Crosshair, HandCoins, Layers3 } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { formatDate, formatDateTime, formatZAR, formatZARCompact } from "@/lib/format";
 import { getAccessibleLeadScope, hasPermission, requirePermission } from "@/lib/permissions";
 import { listActiveSalesPipelines, listForecastLeads, summarizeForecast } from "@/lib/pipelines";
 import { saveLeadForecast, snapshotForecast } from "@/app/actions/pipelines";
+import { PageHeader } from "@/components/page-header";
+import { KpiGrid } from "@/components/responsive-patterns";
+import { MetricCard } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
 
@@ -125,14 +129,7 @@ export default async function ForecastPage({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold">Sales forecast</h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Weighted, commit and best-case pipeline for {range.period}.
-          </p>
-        </div>
-        <div className="flex gap-2 flex-wrap">
+      <PageHeader title="Sales forecast" description={`Weighted, commit and best-case pipeline for ${range.period}.`}>
           {canManagePipelines && <Link href="/settings/pipelines" className="btn-secondary">Pipelines</Link>}
           {canViewTeams && <Link href="/settings/access" className="btn-secondary">Teams &amp; roles</Link>}
           {canViewAudit && <Link href="/audit" className="btn-secondary">Audit</Link>}
@@ -145,8 +142,7 @@ export default async function ForecastPage({
               <button className="btn-secondary">Capture snapshot</button>
             </form>
           )}
-        </div>
-      </div>
+      </PageHeader>
 
       <form className="card grid md:grid-cols-5 gap-3 items-end">
         <label className="space-y-1">
@@ -177,21 +173,18 @@ export default async function ForecastPage({
         <button className="btn-primary">Apply</button>
       </form>
 
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+      <KpiGrid className="md:grid-cols-3 xl:grid-cols-6">
         {[
-          ["Open", formatZARCompact(summary.openValueCents)],
-          ["Weighted", formatZARCompact(summary.weightedValueCents)],
-          ["Commit", formatZARCompact(summary.commitValueCents)],
-          ["Best case", formatZARCompact(summary.bestCaseValueCents)],
-          ["Pipeline", formatZARCompact(summary.pipelineValueCents)],
-          ["Deals", String(summary.count)],
-        ].map(([label, value]) => (
-          <div key={label} className="card">
-            <p className="text-xs uppercase text-slate-400">{label}</p>
-            <p className="text-xl font-bold mt-1">{value}</p>
-          </div>
+          { label: "Open", value: formatZARCompact(summary.openValueCents), icon: CircleDollarSign },
+          { label: "Weighted", value: formatZARCompact(summary.weightedValueCents), icon: Calculator },
+          { label: "Commit", value: formatZARCompact(summary.commitValueCents), icon: Crosshair },
+          { label: "Best case", value: formatZARCompact(summary.bestCaseValueCents), icon: HandCoins },
+          { label: "Pipeline", value: formatZARCompact(summary.pipelineValueCents), icon: Layers3 },
+          { label: "Deals", value: String(summary.count), icon: BadgeDollarSign },
+        ].map(({ label, value, icon }) => (
+          <MetricCard key={label} icon={icon} label={label} value={value} />
         ))}
-      </div>
+      </KpiGrid>
 
       <div className="card p-0 overflow-x-auto">
         <table className="table-base">

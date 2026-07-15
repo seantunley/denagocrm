@@ -1,22 +1,30 @@
 import Link from "next/link";
+import { CheckCircle2, Clock3, Gift, HandCoins } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { redeemReferral } from "@/app/actions/referrals";
 import { contactName, formatDate } from "@/lib/format";
+import { PageHeader } from "@/components/page-header";
+import {
+  KpiGrid,
+  MobileDataCard,
+  MobileDataField,
+  MobileDataFields,
+  MobileDataHeader,
+  MobileDataList,
+  ResponsiveDataView,
+} from "@/components/responsive-patterns";
+import { EmptyState, MetricCard, StatusPill } from "@/components/visual-system";
 
 export const metadata = { title: "Referrals — DenagoCRM" };
 
-const statusBadge: Record<string, string> = {
-  pending: "bg-slate-800 text-slate-300",
-  earned: "bg-amber-500/15 text-amber-300",
-  redeemed: "bg-emerald-500/15 text-emerald-300",
-};
 const statusLabel: Record<string, string> = {
   pending: "pending",
   earned: "fee due",
   redeemed: "redeemed",
 };
 const order: Record<string, number> = { earned: 0, pending: 1, redeemed: 2 };
+const statusTone = (status: string) => status === "redeemed" ? "success" as const : status === "earned" ? "warning" as const : "neutral" as const;
 
 export default async function ReferralsPage() {
   await requireUser();
@@ -28,19 +36,67 @@ export default async function ReferralsPage() {
   const sorted = [...referrals].sort(
     (a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3)
   );
+  const earned = referrals.filter((referral) => referral.status === "earned").length;
+  const pending = referrals.filter((referral) => referral.status === "pending").length;
+  const redeemed = referrals.filter((referral) => referral.status === "redeemed").length;
 
   return (
-    <div className="space-y-4 max-w-4xl">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-[-0.035em]">Referrals</h1>
-        <p className="text-sm text-slate-400 mt-1">
-          Every customer has a unique code (on their contact page). When a referred deal is won
-          the fee becomes due here — redeem it with a note of what was given.
-        </p>
-      </div>
+    <div className="space-y-5">
+      <PageHeader
+        title="Referrals"
+        description="Track customer introductions from shared referral code through won deal and reward redemption."
+      />
 
-      <div className="card p-0 overflow-x-auto">
-        <table className="table-base">
+      <KpiGrid className="xl:grid-cols-3">
+        <MetricCard icon={HandCoins} label="Rewards due" value={earned} detail="Won referrals awaiting fulfilment" accent={earned > 0} />
+        <MetricCard icon={Clock3} label="In progress" value={pending} detail="Introductions awaiting a won deal" />
+        <MetricCard icon={CheckCircle2} label="Redeemed" value={redeemed} detail="Customer rewards already fulfilled" />
+      </KpiGrid>
+
+      {sorted.length === 0 ? (
+        <EmptyState
+          icon={Gift}
+          title="No referrals to track yet"
+          description="Each customer has a unique code on their contact record. Share it to connect a future lead and reward the introduction when the deal is won."
+          action={<Link href="/contacts" className="btn-secondary">Browse customer contacts</Link>}
+        />
+      ) : (
+        <ResponsiveDataView
+          mobile={
+            <MobileDataList>
+              {sorted.map((referral) => {
+                const referred = referral.lead?.name ?? (referral.contact ? contactName(referral.contact) : "Not linked");
+                return (
+                  <MobileDataCard key={referral.id}>
+                    <MobileDataHeader
+                      title={<Link href={`/contacts/${referral.referrerId}`} className="text-primary hover:underline">{contactName(referral.referrer)}</Link>}
+                      detail={`Code ${referral.referrer.referralCode}`}
+                      aside={<StatusPill tone={statusTone(referral.status)}>{statusLabel[referral.status] ?? referral.status}</StatusPill>}
+                    />
+                    <MobileDataFields>
+                      <MobileDataField label="Referred record">{referred}</MobileDataField>
+                      <MobileDataField label="Introduced">{formatDate(referral.createdAt)}</MobileDataField>
+                      <MobileDataField label="Progress" wide>
+                        {referral.earnedAt ? `Won ${formatDate(referral.earnedAt)}` : "Awaiting won deal"}
+                        {referral.redeemedAt ? ` · Redeemed ${formatDate(referral.redeemedAt)}` : ""}
+                      </MobileDataField>
+                    </MobileDataFields>
+                    {referral.status === "earned" && (
+                      <form action={redeemReferral.bind(null, referral.id)} className="space-y-2 border-t border-border pt-3">
+                        <label className="label" htmlFor={`reward-${referral.id}`}>Reward provided</label>
+                        <input id={`reward-${referral.id}`} name="note" required className="input" placeholder="e.g. R1,000 voucher" />
+                        <button className="btn-primary w-full">Mark reward redeemed</button>
+                      </form>
+                    )}
+                    {referral.status === "redeemed" && referral.redeemedNote && <p className="rounded-xl border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">Reward: {referral.redeemedNote}</p>}
+                  </MobileDataCard>
+                );
+              })}
+            </MobileDataList>
+          }
+          desktop={
+            <div className="card p-0 overflow-x-auto">
+              <table className="table-base">
           <thead>
             <tr>
               <th>Referrer</th>
@@ -51,13 +107,6 @@ export default async function ReferralsPage() {
             </tr>
           </thead>
           <tbody>
-            {sorted.length === 0 && (
-              <tr>
-                <td colSpan={5} className="text-center text-slate-400 py-8">
-                  No referrals yet — share customers&apos; codes to get the ball rolling.
-                </td>
-              </tr>
-            )}
             {sorted.map((r) => (
               <tr key={r.id}>
                 <td>
@@ -86,9 +135,7 @@ export default async function ReferralsPage() {
                   )}
                 </td>
                 <td>
-                  <span className={`badge ${statusBadge[r.status] ?? statusBadge.pending}`}>
-                    {statusLabel[r.status] ?? r.status}
-                  </span>
+                  <StatusPill tone={statusTone(r.status)}>{statusLabel[r.status] ?? r.status}</StatusPill>
                 </td>
                 <td className="text-xs text-slate-400">
                   referred {formatDate(r.createdAt)}
@@ -118,8 +165,11 @@ export default async function ReferralsPage() {
               </tr>
             ))}
           </tbody>
-        </table>
-      </div>
+              </table>
+            </div>
+          }
+        />
+      )}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Activity, Workflow } from "lucide-react";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireOwner } from "@/lib/auth";
@@ -15,6 +16,8 @@ import {
   retryJourneyRun,
   runJourneyNowAction,
 } from "@/app/actions/journeyRuns";
+import { PageHeader } from "@/components/page-header";
+import { EmptyState, FeedbackBanner, StatusPill } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
 
@@ -57,12 +60,12 @@ function triggerLabel(trigger: string) {
   return trigger.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function statusClass(status: string) {
-  if (status === "completed") return "bg-emerald-950 text-emerald-300";
-  if (status === "failed") return "bg-red-950 text-red-300";
-  if (status === "waiting") return "bg-blue-950 text-blue-300";
-  if (status === "cancelled") return "bg-slate-800 text-slate-400";
-  return "bg-slate-800 text-slate-300";
+function statusTone(status: string) {
+  if (status === "active" || status === "completed") return "success" as const;
+  if (status === "failed") return "danger" as const;
+  if (status === "paused" || status === "waiting") return "warning" as const;
+  if (status === "draft") return "info" as const;
+  return "neutral" as const;
 }
 
 export default async function JourneysPage() {
@@ -95,31 +98,24 @@ export default async function JourneysPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
-            <Link href="/automations" className="hover:text-orange-400">Automations</Link>
-            <span>/</span><span>Journeys</span>
-          </div>
-          <h1 className="text-2xl font-semibold tracking-[-0.035em]">Marketing journeys & advanced automations</h1>
-          <p className="text-sm text-slate-400 mt-1 max-w-3xl">
-            Versioned multi-step workflows with safe conditions, waits, email, SMS, CRM actions,
-            segment enrollment and detailed execution history.
-          </p>
-        </div>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Link href="/automations" className="transition-colors hover:text-primary">Automations</Link>
+        <span>/</span><span>Journeys</span>
+      </div>
+      <PageHeader
+        title="Marketing journeys & advanced automations"
+        description="Versioned multi-step workflows with safe conditions, waits, messaging, CRM actions, segment enrolment and execution history."
+      >
         <form action={installJourneyTemplates}>
           <button className="btn-secondary">Install recommended drafts</button>
         </form>
-      </div>
+      </PageHeader>
 
       {legacyLifecycleEnabled && (
-        <div className="rounded-lg border border-amber-800/60 bg-amber-950/20 p-4 text-sm">
-          <p className="font-medium text-amber-300">Legacy lifecycle emails are still enabled</p>
-          <p className="text-slate-400 mt-1">
+        <FeedbackBanner tone="warning" title="Legacy lifecycle emails are still enabled">
             Disable the old anniversary and win-back toggles in Settings before activating equivalent
             advanced journeys, otherwise customers could receive both versions.
-          </p>
-        </div>
+        </FeedbackBanner>
       )}
 
       <details className="card" open={journeys.length === 0}>
@@ -130,9 +126,7 @@ export default async function JourneysPage() {
       <section className="space-y-3">
         <h2 className="font-semibold">Journey library</h2>
         {journeys.length === 0 ? (
-          <div className="card text-sm text-slate-400">
-            No journeys yet. Install the recommended drafts or create one above.
-          </div>
+          <EmptyState icon={Workflow} title="No journeys configured" description="Install the recommended drafts for a guided start, or create a journey with your own trigger and actions." />
         ) : journeys.map((journey) => {
           const draft = journey.versions.find((version) => version.state === "draft");
           const published = journey.versions.find((version) => version.version === journey.activeVersion);
@@ -143,11 +137,9 @@ export default async function JourneysPage() {
                 <div className="flex-1 min-w-64">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="font-semibold">{journey.name}</h3>
-                    <span className={`badge ${journey.status === "active" ? "bg-emerald-950 text-emerald-300" : journey.status === "paused" ? "bg-amber-950 text-amber-300" : "bg-slate-800 text-slate-300"}`}>
-                      {journey.status}
-                    </span>
-                    <span className="badge bg-slate-800 text-slate-300">{journey.category}</span>
-                    {draft && <span className="badge bg-blue-950 text-blue-300">draft v{draft.version}</span>}
+                    <StatusPill tone={statusTone(journey.status)}>{journey.status}</StatusPill>
+                    <StatusPill>{journey.category}</StatusPill>
+                    {draft && <StatusPill tone="info">draft v{draft.version}</StatusPill>}
                   </div>
                   <p className="text-sm text-slate-400 mt-1">{journey.description || "No description"}</p>
                   <p className="text-xs text-slate-500 mt-2">
@@ -191,7 +183,7 @@ export default async function JourneysPage() {
       <section className="card">
         <h2 className="font-semibold mb-4">Recent journey runs</h2>
         {recentRuns.length === 0 ? (
-          <p className="text-sm text-slate-400">Runs appear here after an active journey enrolls a lead or contact.</p>
+          <EmptyState icon={Activity} title="No journey runs yet" description="Execution history appears here after an active journey enrols a lead or contact." className="py-8" />
         ) : (
           <div className="overflow-x-auto">
             <table className="table-base">
@@ -206,7 +198,7 @@ export default async function JourneysPage() {
                         : run.entityType}
                     </td>
                     <td>v{run.journeyVersion.version}</td>
-                    <td><span className={`badge ${statusClass(run.status)}`}>{run.status}</span></td>
+                    <td><StatusPill tone={statusTone(run.status)}>{run.status}</StatusPill></td>
                     <td className="text-xs text-slate-400">{run.currentStepId ?? "—"}</td>
                     <td className="text-xs text-slate-400">{formatDateTime(run.createdAt)}</td>
                     <td className="text-xs text-red-300 max-w-64 truncate">{run.lastError ?? "—"}</td>

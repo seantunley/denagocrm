@@ -2,6 +2,7 @@ import Link from "next/link";
 import { basePrisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
 import { hasPermission, requirePermission } from "@/lib/permissions";
+import { PageHeader } from "@/components/page-header";
 
 export const dynamic = "force-dynamic";
 
@@ -86,15 +87,12 @@ export default async function AuditPage({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold">Audit events</h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Append-only governance history with actors, changes, request context and correlation IDs.
-          </p>
-        </div>
+      <PageHeader
+        title="Audit events"
+        description={`${events.length} filtered event${events.length === 1 ? "" : "s"} · Append-only governance history with actors, changes and request context.`}
+      >
         {canExport && <Link href={exportHref} className="btn-secondary">Export filtered CSV</Link>}
-      </div>
+      </PageHeader>
 
       <form className="card grid md:grid-cols-6 gap-3 items-end">
         <label className="space-y-1">
