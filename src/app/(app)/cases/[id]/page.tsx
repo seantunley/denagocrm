@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
-  ArrowLeft, Paperclip, StickyNote, CircleDot, User as UserIcon, Car, X, Tag as TagIcon,
+  Paperclip, StickyNote, CircleDot, User as UserIcon, Car, X, Tag as TagIcon,
 } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { requireCaseReadAccess } from "@/lib/permissions";
@@ -18,6 +18,7 @@ import { StatusPill } from "@/components/visual-system";
 import { AutoSubmitSelect } from "@/components/helpdesk/AutoSubmitSelect";
 import { TicketComposer } from "@/components/helpdesk/TicketComposer";
 import { cn } from "@/lib/utils";
+import { EntityDetailShell } from "@/components/entity-detail-shell";
 
 export const dynamic = "force-dynamic";
 
@@ -48,21 +49,25 @@ export default async function TicketDetailPage({ params }: { params: Promise<{ i
     { value: "closed", label: "Closed" },
   ];
 
-  return (
-    <div className="space-y-4">
-      <Link href="/cases" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="size-4" /> Help desk
-      </Link>
+  const assigneeName = assignees.find((user) => user.id === ticket.assigneeId)?.name ?? "Unassigned";
+  const mailboxName = mailboxes.find((mailbox) => mailbox.id === ticket.mailboxId)?.name ?? "No mailbox";
 
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="truncate text-xl font-semibold tracking-tight">{ticket.subject}</h1>
-          <StatusPill tone={sm.tone}>{sm.label}</StatusPill>
-        </div>
-        <p className="mt-1 text-sm text-muted-foreground">
-          C-{ticket.number.toString()} · {contact ? contactName(contact) : "Unknown"} · opened {formatDate(ticket.createdAt)}
-        </p>
-      </div>
+  return (
+    <EntityDetailShell
+      backHref="/cases"
+      backLabel="Help desk"
+      eyebrow={`Case C-${ticket.number.toString()}`}
+      title={ticket.subject}
+      status={<StatusPill tone={sm.tone}>{sm.label}</StatusPill>}
+      description={<>{contact ? contactName(contact) : "Unknown customer"}{vehicle ? ` · ${vehicle.model}` : ""}</>}
+      meta={`Opened ${formatDate(ticket.createdAt)} · Last updated ${formatDateTime(ticket.updatedAt)}`}
+      facts={[
+        { label: "Priority", value: ticket.priority },
+        { label: "Assignee", value: assigneeName },
+        { label: "Mailbox", value: mailboxName },
+        { label: "Messages", value: ticket.thread.length },
+      ]}
+    >
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
         {/* Conversation */}
@@ -197,6 +202,6 @@ export default async function TicketDetailPage({ params }: { params: Promise<{ i
           )}
         </aside>
       </div>
-    </div>
+    </EntityDetailShell>
   );
 }

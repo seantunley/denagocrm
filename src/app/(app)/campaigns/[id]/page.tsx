@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { contactName, formatDateTime } from "@/lib/format";
+import { EntityDetailShell } from "@/components/entity-detail-shell";
+import { StatusPill } from "@/components/visual-system";
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -36,22 +38,21 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
   const queued = campaign.recipientCount - campaign.sentCount - campaign.failedCount;
 
   return (
-    <div className="space-y-5">
-      <div>
-        <Link href="/campaigns" className="text-sm text-orange-400 hover:underline">
-          ← Campaigns
-        </Link>
-        <div className="flex items-center gap-3 mt-1 flex-wrap">
-          <h1 className="text-2xl font-semibold tracking-[-0.035em]">{campaign.name}</h1>
-          <span className="badge bg-slate-800 text-slate-300 uppercase">{campaign.channel}</span>
-          <span className="badge bg-slate-800 text-slate-300">{campaign.status}</span>
-        </div>
-        <p className="text-sm text-slate-400 mt-0.5">
-          {campaign.audience} · created {formatDateTime(campaign.createdAt)}
-          {campaign.createdBy ? ` by ${campaign.createdBy.name}` : ""}
-          {campaign.subject ? ` · “${campaign.subject}”` : ""}
-        </p>
-      </div>
+    <EntityDetailShell
+      backHref="/campaigns"
+      backLabel="Campaigns"
+      eyebrow={`${campaign.channel} campaign`}
+      title={campaign.name}
+      status={<StatusPill tone={campaign.status === "sent" ? "success" : campaign.status === "failed" ? "danger" : "info"}>{campaign.status}</StatusPill>}
+      description={campaign.subject || `${campaign.audience} audience`}
+      meta={`Created ${formatDateTime(campaign.createdAt)}${campaign.createdBy ? ` by ${campaign.createdBy.name}` : ""}`}
+      facts={[
+        { label: "Audience", value: campaign.audience },
+        { label: "Recipients", value: campaign.recipientCount },
+        { label: "Sent", value: campaign.sentCount },
+        { label: "Failed", value: campaign.failedCount },
+      ]}
+    >
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat label="Recipients" value={String(campaign.recipientCount)} sub={queued > 0 ? `${queued} still queued` : "all processed"} />
@@ -120,6 +121,6 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           </tbody>
         </table>
       </div>
-    </div>
+    </EntityDetailShell>
   );
 }
