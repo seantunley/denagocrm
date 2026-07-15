@@ -73,6 +73,7 @@ function collectAssetReferences(data: Record<string, unknown[]>): AssetReference
     add(row.dealerSignatureRef, "quote-dealer-signature");
   }
   for (const row of (data.JobCard ?? []) as Array<Record<string, unknown>>) add(row.signatureRef, "jobcard-signature");
+  for (const row of (data.PortalUpload ?? []) as Array<Record<string, unknown>>) add(row.storedName, "portal-upload");
 
   return [...refs.values()].sort((a, b) => a.kind.localeCompare(b.kind) || a.ref.localeCompare(b.ref));
 }
