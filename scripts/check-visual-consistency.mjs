@@ -5,6 +5,11 @@ const root = process.cwd();
 const sourceRoot = path.join(root, "src");
 
 const rawHeadingAllowlist = new Set([
+  // Bespoke workspace headers: the unified job-card page (PR30 design + workshop
+  // depth) and the CPQ quote record both use a purpose-built header, not the
+  // generic PageHeader/EntityDetailShell.
+  "src/app/(app)/jobcards/[id]/page.tsx",
+  "src/app/(app)/quotes/[id]/page.tsx",
   "src/app/(app)/bot-builder/[id]/page.tsx",
   "src/app/(app)/contacts/[id]/edit/page.tsx",
   "src/app/(app)/contacts/new/page.tsx",
