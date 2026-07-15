@@ -21,6 +21,8 @@ const icons: Record<string, React.ReactNode> = {
   contact: "👤",
   automation: "🤖",
   activity: "✓",
+  todo: "✓",
+  test_drive: "🚗",
   document: "📄",
   creation: "🟢",
 };
@@ -33,6 +35,8 @@ type Item = {
   image?: string | null;
   who: string;
   when: Date;
+  /** Not-yet-completed activity — pinned to the top of the timeline. */
+  pending?: boolean;
 };
 
 export default function LeadTimeline({
@@ -41,6 +45,7 @@ export default function LeadTimeline({
   revalidate,
   audit,
   communications,
+  activities = [],
   creationNote,
 }: {
   leadId?: string;
@@ -57,17 +62,40 @@ export default function LeadTimeline({
     occurredAt: Date;
     user: { name: string };
   }[];
+  activities?: {
+    id: string;
+    type: string;
+    summary: string;
+    location?: string | null;
+    dueDate: Date;
+    status: string;
+    assignedTo?: { name: string } | null;
+  }[];
   creationNote: { text: string; when: Date; who: string } | null;
 }) {
   const items: Item[] = [
-    ...audit.map((a) => ({
+    // Not-yet-done activities (scheduled test drives, follow-up calls, …) are
+    // pinned above the historical feed so upcoming work never hides beneath a
+    // completed entry, regardless of dates.
+    ...activities
+      .filter((a) => a.status === "planned")
+      .map((a): Item => ({
+        id: `act-${a.id}`,
+        icon: icons[a.type] ?? icons.activity,
+        title: a.summary,
+        body: a.location ? `📍 ${a.location}` : null,
+        who: a.assignedTo?.name ?? "Unassigned",
+        when: a.dueDate,
+        pending: true,
+      })),
+    ...audit.map((a): Item => ({
       id: `a-${a.id}`,
       icon: icons[a.action.split(".")[0]] ?? "•",
       title: a.summary,
       who: a.userName,
       when: a.createdAt,
     })),
-    ...communications.map((c) => ({
+    ...communications.map((c): Item => ({
       id: `c-${c.id}`,
       icon: icons[c.type] ?? "💬",
       title: `${c.type.charAt(0).toUpperCase() + c.type.slice(1)}${
@@ -87,10 +115,15 @@ export default function LeadTimeline({
             body: creationNote.text,
             who: creationNote.who,
             when: creationNote.when,
-          },
+          } satisfies Item,
         ]
       : []),
-  ].sort((a, b) => b.when.getTime() - a.when.getTime());
+  ].sort((a, b) => {
+    // Incomplete activities always float to the top; within each group the
+    // newest entry comes first.
+    if (Boolean(a.pending) !== Boolean(b.pending)) return a.pending ? -1 : 1;
+    return b.when.getTime() - a.when.getTime();
+  });
 
   return (
     <div className="card min-w-0">
@@ -119,10 +152,17 @@ export default function LeadTimeline({
           <ol className="relative border-l border-slate-800 ml-3 space-y-5 py-0.5">
           {items.map((item) => (
             <li key={item.id} className="ml-5">
-              <span className="absolute -left-[11px] flex h-5 w-5 items-center justify-center rounded-full bg-slate-800 text-[10px]">
+              <span className={`absolute -left-[11px] flex h-5 w-5 items-center justify-center rounded-full text-[10px] ${item.pending ? "bg-amber-500/20 ring-1 ring-amber-500/40" : "bg-slate-800"}`}>
                 {item.icon}
               </span>
-              <p className="text-sm text-slate-200 break-words [overflow-wrap:anywhere]">{item.title}</p>
+              <p className="text-sm text-slate-200 break-words [overflow-wrap:anywhere]">
+                {item.pending && (
+                  <span className="mr-2 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300 align-middle">
+                    {item.when < new Date() ? "Overdue" : "Upcoming"}
+                  </span>
+                )}
+                {item.title}
+              </p>
               {item.image && (
                 <a href={item.image} target="_blank">
                   {/* eslint-disable-next-line @next/next/no-img-element */}

@@ -549,6 +549,7 @@ export default async function ContactDetailPage({
           revalidate={path}
           audit={history}
           communications={comms}
+          activities={contact.activities}
           creationNote={
             contact.notes
               ? {
