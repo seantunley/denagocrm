@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma, basePrisma } from "@/lib/db";
+import { quoteTotalCents } from "@/lib/pricing";
 import { logAudit } from "@/lib/audit";
 import { runLeadAutomations } from "@/lib/automations";
 import { sendPushToAll } from "@/lib/push";
@@ -55,7 +56,7 @@ export async function POST(
     return NextResponse.json({ error: "This quote has already been declined." }, { status: 409 });
   }
 
-  const total = quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+  const total = quoteTotalCents(quote.items);
   await logAudit({
     action: "quote.declined",
     summary: `Quote Q-${quote.number} (${formatZAR(Math.round(total))}) declined online by the customer — “${parsed.data.reason}”`,

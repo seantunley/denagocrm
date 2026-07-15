@@ -1,5 +1,6 @@
 import type { DocTemplate } from "@/lib/docTemplates";
 import { formatZAR } from "@/lib/format";
+import { lineNetCents } from "@/lib/pricing";
 
 /** Shared line-items table used by invoice / agreement / delivery / service report. */
 export function ItemsTable({
@@ -8,7 +9,7 @@ export function ItemsTable({
   totalCents,
   totalLabel = "Total incl. VAT",
 }: {
-  rows: { description: string; qty: number; unitPriceCents?: number }[];
+  rows: { description: string; qty: number; unitPriceCents?: number; discountPct?: number | null }[];
   showPrices: boolean;
   totalCents?: number;
   totalLabel?: string;
@@ -49,7 +50,7 @@ export function ItemsTable({
                     {formatZAR(r.unitPriceCents ?? 0)}
                   </td>
                   <td className="py-2.5 px-3 border-b border-slate-200 text-right font-medium">
-                    {formatZAR(Math.round(r.qty * (r.unitPriceCents ?? 0)))}
+                    {formatZAR(lineNetCents({ qty: r.qty, unitPriceCents: r.unitPriceCents ?? 0, discountPct: r.discountPct }))}
                   </td>
                 </>
               )}

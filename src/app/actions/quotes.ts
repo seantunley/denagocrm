@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addDays } from "date-fns";
 import { prisma, basePrisma } from "@/lib/db";
+import { quoteTotalCents } from "@/lib/pricing";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { getSetting } from "@/lib/settings";
@@ -458,7 +459,7 @@ export async function setQuoteStatus(quoteId: string, status: string) {
     data: { status },
     include: { items: true, lead: true },
   });
-  const total = quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+  const total = quoteTotalCents(quote.items);
   const verb =
     status === "sent"
       ? "sent to the customer"

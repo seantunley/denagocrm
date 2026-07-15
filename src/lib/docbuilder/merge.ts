@@ -1,6 +1,7 @@
 import "server-only";
 import type { Prisma } from "@prisma/client";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { lineNetCents } from "@/lib/pricing";
 import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
 import type { BuilderData, TableRow } from "./blocks";
 import { evaluateCondition } from "./expr";
@@ -23,12 +24,6 @@ export type MergeContext = {
   items: TableRow[];
   vars: Record<string, unknown>;
 };
-
-// Effective (discounted) line total in cents for a quote line.
-function lineNetCents(i: { qty: number; unitPriceCents: number; discountPct?: number | null }) {
-  const discount = Math.min(100, Math.max(0, i.discountPct ?? 0));
-  return Math.round(i.qty * i.unitPriceCents * (1 - discount / 100));
-}
 
 export function buildQuoteContext(quote: QuoteForPrint): MergeContext {
   const total = quote.items.reduce((sum, i) => sum + lineNetCents(i), 0);

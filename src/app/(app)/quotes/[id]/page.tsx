@@ -18,6 +18,7 @@ import { generateDocEditorDocument } from "@/app/actions/doceditor";
 import SigningBlock from "@/components/SigningBlock";
 import { activeRecordRequest, isLockedForSigning } from "@/lib/signing/record";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { lineNetCents, quoteTotalCents } from "@/lib/pricing";
 
 const statusBadge: Record<string, string> = {
   draft: "bg-slate-800 text-slate-300",
@@ -33,7 +34,7 @@ type FamilyQuote = {
   supersededAt: Date | null;
   declineReason: string | null;
   createdAt: Date;
-  items: { qty: number; unitPriceCents: number; description: string; colorPreference: string | null }[];
+  items: { qty: number; unitPriceCents: number; description: string; colorPreference: string | null; discountPct: number }[];
 };
 
 /** All versions of a quote: walk up to the root, then collect descendants. */
@@ -64,7 +65,7 @@ async function getQuoteFamily(start: {
         supersededAt: true,
         declineReason: true,
         createdAt: true,
-        items: { select: { qty: true, unitPriceCents: true, description: true, colorPreference: true } },
+        items: { select: { qty: true, unitPriceCents: true, description: true, colorPreference: true, discountPct: true } },
         revisions: { select: { id: true } },
       },
       orderBy: { createdAt: "asc" },
@@ -103,7 +104,7 @@ export default async function QuoteDetailPage({
         })
       : [];
   const successor = quote.revisions[0] ?? null;
-  const total = quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+  const total = quoteTotalCents(quote.items);
   const signingState = await activeRecordRequest({ quoteId: quote.id });
   const signWorkflows = await prisma.signWorkflow.findMany({ where: { isArchived: false }, select: { id: true, name: true }, orderBy: { updatedAt: "desc" } });
   const lockedBySigning = (Boolean(quote.signToken) && !quote.signedAt) || isLockedForSigning(signingState);
@@ -258,14 +259,12 @@ export default async function QuoteDetailPage({
               superseded: Boolean(f.supersededAt),
               createdAt: formatDate(f.createdAt),
               declineReason: f.declineReason,
-              totalZAR: formatZAR(
-                f.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0)
-              ),
+              totalZAR: formatZAR(quoteTotalCents(f.items)),
               items: f.items.map((i) => ({
                 qty: i.qty,
                 description: i.description,
                 colorPreference: i.colorPreference,
-                priceZAR: formatZAR(i.qty * i.unitPriceCents),
+                priceZAR: formatZAR(lineNetCents(i)),
               })),
             }))}
           />
@@ -406,7 +405,7 @@ export default async function QuoteDetailPage({
                   <td className="text-right">{i.qty}</td>
                   <td className="text-right">{formatZAR(i.unitPriceCents)}</td>
                   <td className="text-right font-medium">
-                    {formatZAR(Math.round(i.qty * i.unitPriceCents))}
+                    {formatZAR(lineNetCents(i))}
                   </td>
                   <td className="text-right">
                     {editable && (

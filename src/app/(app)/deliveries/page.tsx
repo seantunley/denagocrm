@@ -8,6 +8,7 @@ import {
 } from "@/app/actions/fulfilment";
 import ProofOfDelivery from "@/components/ProofOfDelivery";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { quoteTotalCents } from "@/lib/pricing";
 import { PageHeader } from "@/components/page-header";
 import {
   getAccessibleQuoteIds,
@@ -71,7 +72,7 @@ export default async function DeliveriesPage() {
               <div className="space-y-3">
                 {cards.length === 0 && <p className="text-xs text-slate-600 px-1 pb-2">Nothing here.</p>}
                 {cards.map((quote) => {
-                  const total = quote.items.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
+                  const total = quoteTotalCents(quote.items);
                   const model = quote.lead?.product?.name ?? quote.items[0]?.description ?? "—";
                   const who = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "—";
                   return (

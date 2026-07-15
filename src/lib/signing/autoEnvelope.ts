@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { quoteTotalCents } from "@/lib/pricing";
 import { contactName } from "@/lib/format";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import { parseDocument, type DocumentModel } from "@/lib/doceditor/model";
@@ -150,7 +151,7 @@ async function quoteWorkflowContext(quoteId: string): Promise<WorkflowContext> {
     where: { id: quoteId },
     include: { items: true, lead: { include: { product: true } }, contact: { include: { tags: true } } },
   });
-  const total = (q?.items ?? []).reduce((s, i) => s + i.qty * i.unitPriceCents, 0) / 100;
+  const total = quoteTotalCents(q?.items ?? []) / 100;
   const segment = (q?.contact?.tags ?? []).map((t) => t.name).join(",") || "retail";
   const product = q?.lead?.product?.name ?? q?.items?.[0]?.description ?? "";
   return { total, discount: 0, segment, product }; // discount: no per-quote discount field yet
