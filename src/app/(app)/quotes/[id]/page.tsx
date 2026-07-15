@@ -18,7 +18,8 @@ import { generateDocEditorDocument } from "@/app/actions/doceditor";
 import SigningBlock from "@/components/SigningBlock";
 import { activeRecordRequest, isLockedForSigning } from "@/lib/signing/record";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { lineNetCents, quoteTotalCents } from "@/lib/pricing";
+import { lineNetCents, quoteTotalCents, quotePricing } from "@/lib/pricing";
+import { addQuoteFee, deleteQuoteFee, setQuoteDeposit, setQuoteTaxMode } from "@/app/actions/cpq";
 
 const statusBadge: Record<string, string> = {
   draft: "bg-slate-800 text-slate-300",
@@ -87,6 +88,7 @@ export default async function QuoteDetailPage({
     where: { id },
     include: {
       items: true,
+      fees: { orderBy: { sortOrder: "asc" } },
       lead: true,
       contact: true,
       createdBy: true,
@@ -105,6 +107,11 @@ export default async function QuoteDetailPage({
       : [];
   const successor = quote.revisions[0] ?? null;
   const total = quoteTotalCents(quote.items);
+  const pricing = quotePricing(quote.items, quote.fees, {
+    taxInclusive: quote.taxInclusive,
+    depositType: quote.depositType,
+    depositValue: quote.depositValue,
+  });
   const signingState = await activeRecordRequest({ quoteId: quote.id });
   const signWorkflows = await prisma.signWorkflow.findMany({ where: { isArchived: false }, select: { id: true, name: true }, orderBy: { updatedAt: "desc" } });
   const lockedBySigning = (Boolean(quote.signToken) && !quote.signedAt) || isLockedForSigning(signingState);
@@ -448,14 +455,81 @@ export default async function QuoteDetailPage({
           )}
 
           <div className="flex justify-end mt-4">
-            <div className="w-64">
+            <div className="w-72 space-y-1 text-sm">
+              <div className="flex justify-between"><span className="text-slate-400">Subtotal (excl. VAT)</span><span className="tabular-nums">{formatZAR(pricing.netCents)}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">VAT</span><span className="tabular-nums">{formatZAR(pricing.taxCents)}</span></div>
+              {pricing.feesTotalCents > 0 && (
+                <div className="flex justify-between"><span className="text-slate-400">Fees &amp; delivery (incl.)</span><span className="tabular-nums">{formatZAR(pricing.feesTotalCents)}</span></div>
+              )}
               <div className="flex justify-between border-t-2 border-slate-700 pt-2">
                 <span className="font-semibold">Total (incl. VAT)</span>
-                <span className="font-bold text-lg">{formatZAR(Math.round(total))}</span>
+                <span className="font-bold text-lg tabular-nums">{formatZAR(pricing.totalCents)}</span>
               </div>
+              {pricing.depositCents > 0 && (
+                <>
+                  <div className="flex justify-between"><span className="text-slate-400">Deposit</span><span className="tabular-nums">{formatZAR(pricing.depositCents)}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400">Balance on delivery</span><span className="tabular-nums">{formatZAR(pricing.balanceCents)}</span></div>
+                </>
+              )}
+              {pricing.costCents > 0 && (
+                <div className="flex justify-between border-t border-slate-800 pt-1 text-xs">
+                  <span className="text-slate-500">Margin</span>
+                  <span className={`tabular-nums ${pricing.marginPct < 0 ? "text-red-400" : "text-slate-400"}`}>{formatZAR(pricing.marginCents)} · {pricing.marginPct}%</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
+
+        {editable && (
+          <div className="card space-y-4">
+            <h2 className="font-semibold">Fees, delivery &amp; deposit</h2>
+            {quote.fees.length > 0 && (
+              <div className="divide-y divide-border text-sm">
+                {quote.fees.map((f) => (
+                  <div key={f.id} className="flex items-center justify-between gap-3 py-1.5">
+                    <span className="min-w-0 truncate text-muted-foreground"><span className="capitalize">{f.kind}</span> · {f.label}</span>
+                    <span className="flex items-center gap-2 shrink-0">
+                      <span className="tabular-nums">{formatZAR(f.amountCents)}</span>
+                      <form action={deleteQuoteFee.bind(null, f.id, quote.id)}><button className="text-xs text-slate-600 hover:text-red-500">✕</button></form>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <form action={addQuoteFee.bind(null, quote.id)} className="flex flex-wrap items-end gap-2">
+              <select name="kind" defaultValue="fee" className="input w-28"><option value="fee">Fee</option><option value="delivery">Delivery</option></select>
+              <input name="label" required placeholder="Label (e.g. Delivery to Cape Town)" className="input flex-1 min-w-40" />
+              <input name="amount" inputMode="decimal" placeholder="Amount R" className="input w-28 tabular-nums" />
+              <input name="taxRatePct" inputMode="decimal" defaultValue="15" placeholder="VAT %" className="input w-20 tabular-nums" title="VAT %" />
+              <button className="btn-secondary btn-sm">Add</button>
+            </form>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <form action={setQuoteDeposit.bind(null, quote.id)} className="flex items-end gap-2">
+                <div className="flex-1">
+                  <label className="label" htmlFor="depositType">Deposit</label>
+                  <select id="depositType" name="depositType" defaultValue={quote.depositType ?? ""} className="input">
+                    <option value="">No deposit</option>
+                    <option value="percent">Percent of total</option>
+                    <option value="amount">Fixed amount</option>
+                  </select>
+                </div>
+                <input name="depositValue" inputMode="decimal" defaultValue={quote.depositValue ?? ""} placeholder="% or R" className="input w-24 tabular-nums" />
+                <button className="btn-secondary btn-sm">Save</button>
+              </form>
+              <form action={setQuoteTaxMode.bind(null, quote.id)} className="flex items-end gap-2">
+                <div className="flex-1">
+                  <label className="label" htmlFor="taxInclusive">Pricing basis</label>
+                  <select id="taxInclusive" name="taxInclusive" defaultValue={quote.taxInclusive ? "true" : "false"} className="input">
+                    <option value="true">Prices include VAT</option>
+                    <option value="false">Add VAT on top</option>
+                  </select>
+                </div>
+                <button className="btn-secondary btn-sm">Save</button>
+              </form>
+            </div>
+          </div>
+        )}
 
         {editable ? (
           <form action={updateQuoteMeta.bind(null, quote.id)} className="card space-y-4">

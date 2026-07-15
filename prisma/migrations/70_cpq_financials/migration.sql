@@ -1,0 +1,25 @@
+-- CPQ (phase 1): per-line VAT + cost, quote tax mode, deposit terms, fees.
+
+ALTER TABLE "QuoteItem" ADD COLUMN "kind" TEXT NOT NULL DEFAULT 'product';
+ALTER TABLE "QuoteItem" ADD COLUMN "taxRatePct" DOUBLE PRECISION NOT NULL DEFAULT 15;
+ALTER TABLE "QuoteItem" ADD COLUMN "costCents" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "QuoteItem" ADD COLUMN "optional" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "QuoteItem" ADD COLUMN "selected" BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE "QuoteItem" ADD COLUMN "sortOrder" INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE "Quote" ADD COLUMN "taxInclusive" BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE "Quote" ADD COLUMN "depositType" TEXT;
+ALTER TABLE "Quote" ADD COLUMN "depositValue" DOUBLE PRECISION;
+
+CREATE TABLE "QuoteFee" (
+  "id" TEXT NOT NULL,
+  "label" TEXT NOT NULL,
+  "kind" TEXT NOT NULL DEFAULT 'fee',
+  "amountCents" INTEGER NOT NULL DEFAULT 0,
+  "taxRatePct" DOUBLE PRECISION NOT NULL DEFAULT 15,
+  "sortOrder" INTEGER NOT NULL DEFAULT 0,
+  "quoteId" TEXT NOT NULL,
+  CONSTRAINT "QuoteFee_pkey" PRIMARY KEY ("id")
+);
+CREATE INDEX "QuoteFee_quoteId_idx" ON "QuoteFee"("quoteId");
+ALTER TABLE "QuoteFee" ADD CONSTRAINT "QuoteFee_quoteId_fkey" FOREIGN KEY ("quoteId") REFERENCES "Quote"("id") ON DELETE CASCADE ON UPDATE CASCADE;
