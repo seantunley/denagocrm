@@ -80,6 +80,12 @@ export async function startRecordSigning(kind: Kind, id: string, workflowId?: st
   }
 
   await logAudit({ action: "signing.send", summary: `Sent “${env.title}” (${env.refLabel}) for signing`, entityType: "SignatureRequest", entityId: created.id, user });
+  // Reflect the send on the quote's own lifecycle: draft → sent. It advances to
+  // "accepted" when signing completes (postComplete); voiding returns it to draft.
+  // Without this the quote stayed "draft" even after being issued for signature.
+  if (kind === "quote") {
+    await prisma.quote.updateMany({ where: { id, status: "draft" }, data: { status: "sent" } });
+  }
   revalidatePath(recordPath(kind, id));
 
   // Approval workflow: freeze the graph, link each doc-signer recipient to its
@@ -141,6 +147,11 @@ export async function voidRecordSigning(kind: Kind, id: string): Promise<Result>
   await prisma.signatureRequest.update({ where: { id: state.requestId }, data: { status: "voided" } });
   await logSignEvent(state.requestId, { type: "voided", actor: `Denago: ${user.name}`, metadata: { via: "record" } });
   await logAudit({ action: "signing.void", summary: `Voided signing for “${state.title}”`, entityType: "SignatureRequest", entityId: state.requestId, user });
+  // Voiding unlocks the record for editing again — return a still-unsigned quote
+  // from "sent" back to "draft" so it isn't stranded mid-lifecycle.
+  if (kind === "quote") {
+    await prisma.quote.updateMany({ where: { id, status: "sent", signedAt: null }, data: { status: "draft" } });
+  }
   revalidatePath(recordPath(kind, id));
   return { ok: true, requestId: state.requestId };
 }
