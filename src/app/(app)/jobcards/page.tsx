@@ -26,7 +26,7 @@ export default async function JobCardsPage() {
     prisma.jobCard.findMany({
       where: jobCardIds === null ? {} : { id: { in: jobCardIds } },
       orderBy: [{ openedAt: "desc" }],
-      include: { vehicle: true, contact: true, items: true, bay: true },
+      include: { vehicle: true, contact: true, items: true, bay: true, technician: true },
       take: 200,
     }),
     canManage
@@ -53,6 +53,30 @@ export default async function JobCardsPage() {
           </ModalTrigger>
         )}
       </PageHeader>
+
+      {(() => {
+        const active = jobCards.filter((j) => !isTerminalStage(j.status));
+        const load = new Map<string, number>();
+        for (const j of active) {
+          const name = j.technician?.name ?? "Unassigned";
+          load.set(name, (load.get(name) ?? 0) + 1);
+        }
+        const rows = [...load.entries()].sort((a, b) => b[1] - a[1]);
+        if (rows.length === 0) return null;
+        return (
+          <div className="card">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Technician load · active jobs</p>
+            <div className="flex flex-wrap gap-2">
+              {rows.map(([name, count]) => (
+                <span key={name} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-3 py-1 text-xs">
+                  <span className="text-muted-foreground">{name}</span>
+                  <span className="tabular-nums font-semibold">{count}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="card p-0 overflow-x-auto">
         <table className="table-base">

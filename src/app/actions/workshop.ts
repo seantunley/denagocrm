@@ -42,3 +42,40 @@ export async function deleteBay(id: string) {
   if (bay) await logAudit({ action: "workshop.bay_deleted", summary: `Deleted workshop bay “${bay.name}”`, user });
   revalidatePath("/settings/workshop");
 }
+
+// ── Service packages ──────────────────────────────────────────────────────────
+export async function savePackage(formData: FormData) {
+  await requirePermission("workshop.manage");
+  const id = String(formData.get("id") ?? "").trim() || null;
+  const name = String(formData.get("name") ?? "").trim();
+  if (!name) throw new Error("A package needs a name");
+  const description = String(formData.get("description") ?? "").trim() || null;
+  const active = formData.get("active") === "on";
+  if (id) await prisma.servicePackage.update({ where: { id }, data: { name, description, active } });
+  else await prisma.servicePackage.create({ data: { name, description, active } });
+  revalidatePath("/settings/workshop");
+  revalidatePath("/jobcards");
+}
+
+export async function deletePackage(id: string) {
+  await requirePermission("workshop.manage");
+  await prisma.servicePackage.delete({ where: { id } }).catch(() => {});
+  revalidatePath("/settings/workshop");
+}
+
+export async function addPackageItem(packageId: string, formData: FormData) {
+  await requirePermission("workshop.manage");
+  const description = String(formData.get("description") ?? "").trim();
+  if (!description) return;
+  const kind = String(formData.get("kind") ?? "part") === "labour" ? "labour" : "part";
+  const qty = parseFloat(String(formData.get("qty") ?? "1")) || 1;
+  const unitPriceCents = parseRands(String(formData.get("unitPrice") ?? ""));
+  await prisma.servicePackageItem.create({ data: { packageId, kind, description, qty, unitPriceCents } });
+  revalidatePath("/settings/workshop");
+}
+
+export async function deletePackageItem(id: string) {
+  await requirePermission("workshop.manage");
+  await prisma.servicePackageItem.delete({ where: { id } }).catch(() => {});
+  revalidatePath("/settings/workshop");
+}

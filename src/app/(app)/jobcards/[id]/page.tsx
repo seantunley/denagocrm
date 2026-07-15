@@ -23,6 +23,11 @@ import {
   requestAdditionalWork,
   decideApproval,
   deleteApproval,
+  saveSubcontract,
+  reservePart,
+  releaseReservation,
+  consumeReservation,
+  applyServicePackage,
 } from "@/app/actions/jobcards";
 import { requireUser } from "@/lib/auth";
 import DocumentsPanel from "@/components/DocumentsPanel";
@@ -67,6 +72,7 @@ export default async function JobCardDetailPage({
         timeEntries: { include: { technician: true }, orderBy: { startedAt: "desc" } },
         inspectionItems: { orderBy: { sortOrder: "asc" } },
         approvals: { orderBy: { createdAt: "desc" } },
+        reservations: { where: { status: "active" }, include: { part: true }, orderBy: { createdAt: "desc" } },
         documents: { where: { deletedAt: null }, include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
       },
     }),
@@ -75,6 +81,7 @@ export default async function JobCardDetailPage({
     prisma.workshopBay.findMany({ where: { active: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }),
     getDefaultLabourRateCents(),
   ]);
+  const servicePackages = await prisma.servicePackage.findMany({ where: { active: true }, orderBy: { name: "asc" } });
   if (!jobCard) notFound();
   const currentUser = await requireUser();
 
@@ -496,6 +503,77 @@ export default async function JobCardDetailPage({
         state={signingState}
         legacyToken={jobCard.signToken}
       />
+
+      {/* Reservations · packages · subcontracting (phase 3) ─────────────────── */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="card space-y-3">
+          <div>
+            <h2 className="font-semibold">📦 Parts reservations</h2>
+            <p className="text-xs text-slate-400">Earmark stock before it&apos;s fitted. Consuming adds a part line and deducts stock.</p>
+          </div>
+          {jobCard.reservations.length > 0 && (
+            <div className="divide-y divide-border text-sm">
+              {jobCard.reservations.map((r) => (
+                <div key={r.id} className="flex items-center justify-between gap-3 py-1.5">
+                  <span className="min-w-0 truncate">{r.qty}× {r.part.name}</span>
+                  <span className="flex items-center gap-2 shrink-0">
+                    <form action={consumeReservation.bind(null, r.id, jobCard.id)}>
+                      <button className="btn-secondary btn-sm text-emerald-400">Consume</button>
+                    </form>
+                    <form action={releaseReservation.bind(null, r.id, jobCard.id)}>
+                      <button className="text-xs text-slate-600 hover:text-red-500">Release</button>
+                    </form>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {!terminal && (
+            <form action={reservePart.bind(null, jobCard.id)} className="flex flex-wrap items-end gap-2">
+              <div className="flex-1 min-w-40">
+                <label className="label" htmlFor="res-part">Part</label>
+                <select id="res-part" name="partId" required className="input">
+                  <option value="">Select part…</option>
+                  {parts.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.stockQty} in stock)</option>)}
+                </select>
+              </div>
+              <div className="w-20">
+                <label className="label" htmlFor="res-qty">Qty</label>
+                <input id="res-qty" name="qty" type="number" min={1} defaultValue={1} className="input tabular-nums" />
+              </div>
+              <button className="btn-secondary">Reserve</button>
+            </form>
+          )}
+        </div>
+
+        <div className="space-y-4">
+          {servicePackages.length > 0 && !terminal && (
+            <form action={applyServicePackage.bind(null, jobCard.id)} className="card space-y-2">
+              <h2 className="font-semibold">🧰 Apply service package</h2>
+              <p className="text-xs text-slate-400">Drop a preset bundle of parts &amp; labour onto this job.</p>
+              <div className="flex items-end gap-2">
+                <select name="packageId" required className="input flex-1">
+                  <option value="">Select package…</option>
+                  {servicePackages.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+                <button className="btn-secondary">Apply</button>
+              </div>
+            </form>
+          )}
+          <form action={saveSubcontract.bind(null, jobCard.id)} className="card space-y-2">
+            <h2 className="font-semibold">🏭 Subcontracted work</h2>
+            <label className="flex items-center gap-2 text-sm text-slate-300">
+              <input type="checkbox" name="isSubcontracted" defaultChecked={jobCard.isSubcontracted} className="h-4 w-4" />
+              This job is (partly) subcontracted
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <input name="subcontractor" defaultValue={jobCard.subcontractor ?? ""} placeholder="Subcontractor" className="input" />
+              <input name="subCost" inputMode="decimal" defaultValue={jobCard.subCostCents ? (jobCard.subCostCents / 100).toFixed(2) : ""} placeholder="Cost (R)" className="input tabular-nums" />
+            </div>
+            <button className="btn-secondary btn-sm">Save</button>
+          </form>
+        </div>
+      </div>
 
       <div className="grid lg:grid-cols-3 gap-6 items-start">
         <div className="lg:col-span-2 space-y-6">

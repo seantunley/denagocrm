@@ -784,6 +784,11 @@ model JobCard {
   checkinNotes  String?
   checkoutNotes String?
 
+  // Workshop depth (phase 3): subcontracting
+  isSubcontracted Boolean @default(false)
+  subcontractor   String?
+  subCostCents    Int     @default(0)
+
   deletedAt     DateTime?
   deletedByName String?
   deleteReason  String?
@@ -810,8 +815,48 @@ model JobCard {
   timeEntries     JobCardTimeEntry[]
   inspectionItems JobCardInspectionItem[]
   approvals       JobCardApproval[]
+  reservations    PartReservation[]
 
   @@index([bayId])
+}
+
+model PartReservation {
+  id        String   @id @default(cuid())
+  qty       Int      @default(1)
+  status    String   @default("active") // active | released | consumed
+  createdAt DateTime @default(now())
+
+  partId    String
+  part      Part    @relation(fields: [partId], references: [id], onDelete: Cascade)
+  jobCardId String
+  jobCard   JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+
+  @@index([partId, status])
+  @@index([jobCardId, status])
+}
+
+model ServicePackage {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  items ServicePackageItem[]
+}
+
+model ServicePackageItem {
+  id             String @id @default(cuid())
+  kind           String @default("part") // part | labour
+  description    String
+  qty            Float  @default(1)
+  unitPriceCents Int    @default(0)
+  partId         String?
+
+  packageId String
+  package   ServicePackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  @@index([packageId])
 }
 
 model JobCardInspectionItem {
@@ -902,6 +947,7 @@ model Part {
   deletedAt  DateTime?
 
   jobCardItems JobCardItem[]
+  reservations PartReservation[]
 }
 
 // One-time codes for verifying vehicle owners on the public booking form.

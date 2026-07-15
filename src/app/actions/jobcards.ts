@@ -419,3 +419,72 @@ export async function deleteApproval(approvalId: string, jobCardId: string) {
   await prisma.jobCardApproval.delete({ where: { id: approvalId } }).catch(() => {});
   revalidatePath(`/jobcards/${jobCardId}`);
 }
+
+// ── Subcontracting (phase 3) ──────────────────────────────────────────────────
+export async function saveSubcontract(jobCardId: string, formData: FormData) {
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const isSubcontracted = formData.get("isSubcontracted") === "on";
+  const subcontractor = String(formData.get("subcontractor") ?? "").trim() || null;
+  const subCostCents = parseRands(String(formData.get("subCost") ?? ""));
+  await prisma.jobCard.update({ where: { id: jobCardId }, data: { isSubcontracted, subcontractor, subCostCents } });
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+// ── Part reservations (phase 3) ───────────────────────────────────────────────
+// A reservation earmarks stock without consuming it. Available = stockQty minus
+// active reservations. Consuming turns a reservation into a job-card part line
+// and decrements stock.
+export async function reservePart(jobCardId: string, formData: FormData) {
+  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const partId = String(formData.get("partId") ?? "").trim();
+  if (!partId) return;
+  const qty = Math.max(1, parseInt(String(formData.get("qty") ?? "1"), 10) || 1);
+  const [part, jobCard] = await Promise.all([
+    prisma.part.findUnique({ where: { id: partId }, select: { name: true } }),
+    prisma.jobCard.findUnique({ where: { id: jobCardId }, select: { number: true, contactId: true } }),
+  ]);
+  await prisma.partReservation.create({ data: { jobCardId, partId, qty } });
+  await logAudit({ action: "jobcard.part_reserved", summary: `Reserved ${qty}× ${part?.name ?? "part"} for job card #${jobCard?.number ?? "?"}`, contactId: jobCard?.contactId, user });
+  revalidatePath(`/jobcards/${jobCardId}`);
+  revalidatePath("/parts");
+}
+
+export async function releaseReservation(reservationId: string, jobCardId: string) {
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  await prisma.partReservation.update({ where: { id: reservationId }, data: { status: "released" } }).catch(() => {});
+  revalidatePath(`/jobcards/${jobCardId}`);
+  revalidatePath("/parts");
+}
+
+export async function consumeReservation(reservationId: string, jobCardId: string) {
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const reservation = await prisma.partReservation.findUnique({ where: { id: reservationId }, include: { part: true } });
+  if (!reservation || reservation.status !== "active") return;
+  await prisma.$transaction([
+    prisma.jobCardItem.create({
+      data: { jobCardId, kind: "part", description: reservation.part.name, qty: reservation.qty, unitPriceCents: reservation.part.priceCents, partId: reservation.partId },
+    }),
+    prisma.part.update({ where: { id: reservation.partId }, data: { stockQty: { decrement: reservation.qty } } }),
+    prisma.partReservation.update({ where: { id: reservationId }, data: { status: "consumed" } }),
+  ]);
+  revalidatePath(`/jobcards/${jobCardId}`);
+  revalidatePath("/parts");
+}
+
+// ── Service packages (phase 3) ────────────────────────────────────────────────
+export async function applyServicePackage(jobCardId: string, formData: FormData) {
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const packageId = String(formData.get("packageId") ?? "").trim();
+  if (!packageId) return;
+  const pkg = await prisma.servicePackage.findUnique({ where: { id: packageId }, include: { items: true } });
+  if (!pkg) return;
+  for (const item of pkg.items) {
+    await prisma.jobCardItem.create({
+      data: { jobCardId, kind: item.kind, description: item.description, qty: item.qty, unitPriceCents: item.unitPriceCents, partId: item.partId },
+    });
+    if (item.partId && item.kind === "part") {
+      await prisma.part.update({ where: { id: item.partId }, data: { stockQty: { decrement: Math.round(item.qty) } } }).catch(() => {});
+    }
+  }
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
