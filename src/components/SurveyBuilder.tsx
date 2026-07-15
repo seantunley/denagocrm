@@ -8,6 +8,7 @@ import {
   blankQuestion,
   type SurveyQuestion,
 } from "@/lib/surveyTypes";
+import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 
 type Initial = {
   id: string;
@@ -81,7 +82,17 @@ export default function SurveyBuilder({ survey }: { survey: Initial }) {
   }
 
   return (
-    <div className="space-y-4">
+    <BuilderWorkspaceShell className="min-h-0">
+      <BuilderWorkspaceBar
+        title={title || "Untitled survey"}
+        description="Design the invitation, delivery trigger and customer questions."
+        status={<BuilderSaveStatus status={pending ? "Saving…" : saved ? "Saved" : "Unsaved changes"} />}
+      >
+        <button type="button" className="btn-primary btn-sm" onClick={save} disabled={pending}>
+          {pending ? "Saving…" : "Save survey"}
+        </button>
+      </BuilderWorkspaceBar>
+      <div className="space-y-4 bg-[#0f1412] p-3 sm:p-5">
       <div className="card space-y-4">
         <div>
           <label className="label">Survey name</label>
@@ -327,13 +338,8 @@ export default function SurveyBuilder({ survey }: { survey: Initial }) {
         <button type="button" className="btn-secondary" onClick={add}>
           + Add question
         </button>
-        <div className="ml-auto flex items-center gap-3">
-          {saved && <span className="text-sm text-emerald-400">Saved ✓</span>}
-          <button type="button" className="btn-primary" onClick={save} disabled={pending}>
-            {pending ? "Saving…" : "Save survey"}
-          </button>
-        </div>
       </div>
-    </div>
+      </div>
+    </BuilderWorkspaceShell>
   );
 }
