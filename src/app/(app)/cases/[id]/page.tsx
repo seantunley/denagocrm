@@ -1,152 +1,202 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
+import {
+  ArrowLeft, Paperclip, StickyNote, CircleDot, User as UserIcon, Car, X, Tag as TagIcon,
+} from "lucide-react";
 import { basePrisma } from "@/lib/db";
-import { requireOperational } from "@/lib/auth";
-import { replyToCustomerCase, updateCustomerCaseStatus } from "@/app/actions/customerCases";
-import { formatDateTime } from "@/lib/format";
-import { EntityDetailShell } from "@/components/entity-detail-shell";
+import { requireCaseReadAccess } from "@/lib/permissions";
+import {
+  getTicketDetail, listMailboxes, listCannedReplies, markCustomerMessagesRead,
+} from "@/lib/helpdesk";
+import { STATUSES, PRIORITIES, statusMeta } from "@/lib/helpdesk-constants";
+import {
+  replyToTicket, addNote, assignTicket, setTicketStatus, setTicketPriority,
+  setTicketMailbox, addTicketTag, removeTicketTag,
+} from "@/app/actions/helpdesk";
+import { contactName, formatDateTime, formatDate } from "@/lib/format";
 import { StatusPill } from "@/components/visual-system";
-
-type CaseRow = {
-  id: string;
-  number: bigint;
-  subject: string;
-  description: string;
-  type: string;
-  category: string | null;
-  priority: string;
-  status: string;
-  contactId: string;
-  contactName: string;
-  vehicleId: string | null;
-  vehicleModel: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-};
-type MessageRow = {
-  id: string;
-  direction: string;
-  body: string;
-  createdAt: Date;
-  authorName: string | null;
-};
-type UploadRow = {
-  id: string;
-  fileName: string;
-  mimeType: string;
-  sizeBytes: number;
-  createdAt: Date;
-  status: string;
-};
+import { AutoSubmitSelect } from "@/components/helpdesk/AutoSubmitSelect";
+import { TicketComposer } from "@/components/helpdesk/TicketComposer";
+import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-export default async function CustomerCaseDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireOperational();
-  const { id } = await params;
-  const [cases, messages, uploads] = await Promise.all([
-    basePrisma.$queryRaw<CaseRow[]>`
-      SELECT c."id", c."number", c."subject", c."description", c."type", c."category", c."priority", c."status",
-        c."contactId", CASE WHEN contact."isCompany" AND contact."company" IS NOT NULL THEN contact."company"
-          ELSE TRIM(CONCAT(contact."firstName", ' ', COALESCE(contact."lastName", ''))) END AS "contactName",
-        c."vehicleId", vehicle."model" AS "vehicleModel", c."createdAt", c."updatedAt"
-      FROM "CustomerCase" c
-      JOIN "Contact" contact ON contact."id" = c."contactId"
-      LEFT JOIN "Vehicle" vehicle ON vehicle."id" = c."vehicleId"
-      WHERE c."id" = ${id} LIMIT 1
-    `,
-    basePrisma.$queryRaw<MessageRow[]>`
-      SELECT message."id", message."direction", message."body", message."createdAt",
-        COALESCE(user_row."name", CASE WHEN contact."isCompany" AND contact."company" IS NOT NULL THEN contact."company"
-          ELSE TRIM(CONCAT(contact."firstName", ' ', COALESCE(contact."lastName", ''))) END) AS "authorName"
-      FROM "CustomerCaseMessage" message
-      LEFT JOIN "User" user_row ON user_row."id" = message."userId"
-      LEFT JOIN "Contact" contact ON contact."id" = message."contactId"
-      WHERE message."caseId" = ${id}
-      ORDER BY message."createdAt" ASC
-    `,
-    basePrisma.$queryRaw<UploadRow[]>`
-      SELECT "id", "fileName", "mimeType", "sizeBytes", "createdAt", "status"
-      FROM "PortalUpload" WHERE "caseId" = ${id}
-      ORDER BY "createdAt" DESC
-    `,
-  ]);
-  const item = cases[0];
-  if (!item) notFound();
+type Upload = { id: string; fileName: string; sizeBytes: number; createdAt: Date };
 
-  await basePrisma.$executeRaw`
-    UPDATE "CustomerCaseMessage" SET "readAt" = COALESCE("readAt", CURRENT_TIMESTAMP)
-    WHERE "caseId" = ${id} AND "direction" = 'customer'
-  `;
+export default async function TicketDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  await requireCaseReadAccess(id);
+  const ticket = await getTicketDetail(id);
+  if (!ticket) notFound();
+  await markCustomerMessagesRead(id);
+
+  const [contact, vehicle, assignees, mailboxes, canned, uploads, otherTickets] = await Promise.all([
+    basePrisma.contact.findUnique({ where: { id: ticket.contactId }, select: { id: true, firstName: true, lastName: true, company: true, isCompany: true, email: true, phone: true } }),
+    ticket.vehicleId ? basePrisma.vehicle.findUnique({ where: { id: ticket.vehicleId }, select: { id: true, model: true, regNumber: true } }) : Promise.resolve(null),
+    basePrisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    listMailboxes(),
+    listCannedReplies(ticket.mailboxId),
+    basePrisma.$queryRaw<Upload[]>`SELECT "id","fileName","sizeBytes","createdAt" FROM "PortalUpload" WHERE "caseId" = ${id} ORDER BY "createdAt" DESC`,
+    basePrisma.customerCase.findMany({ where: { contactId: ticket.contactId, id: { not: id } }, orderBy: { updatedAt: "desc" }, take: 6, select: { id: true, number: true, subject: true, status: true } }),
+  ]);
+
+  const sm = statusMeta(ticket.status);
+  const replyStatusOptions = [
+    { value: "waiting_customer", label: "Pending customer" },
+    { value: "open", label: "Open" },
+    { value: "resolved", label: "Resolved" },
+    { value: "closed", label: "Closed" },
+  ];
 
   return (
-    <EntityDetailShell
-      backHref="/cases"
-      backLabel="Cases"
-      eyebrow={`Case C-${item.number.toString()}`}
-      title={item.subject}
-      status={<StatusPill tone={item.status === "resolved" || item.status === "closed" ? "success" : item.priority === "urgent" ? "danger" : "info"}>{item.status.replaceAll("_", " ")}</StatusPill>}
-      description={<>{item.contactName}{item.vehicleModel ? ` · ${item.vehicleModel}` : ""}</>}
-      meta={`Opened ${formatDateTime(item.createdAt)} · Last updated ${formatDateTime(item.updatedAt)}`}
-      facts={[
-        { label: "Type", value: item.type },
-        { label: "Priority", value: item.priority },
-        { label: "Category", value: item.category || "Uncategorised" },
-        { label: "Messages", value: messages.length },
-      ]}
-      actions={(
-        <form action={updateCustomerCaseStatus.bind(null, item.id)} className="flex w-full gap-2 sm:w-auto">
-          <select name="status" className="input" defaultValue={item.status}>
-            <option value="new">New</option><option value="open">Open</option><option value="waiting_customer">Waiting customer</option><option value="waiting_internal">Waiting internal</option><option value="resolved">Resolved</option><option value="closed">Closed</option><option value="cancelled">Cancelled</option>
-          </select>
-          <button className="btn-primary">Update</button>
-        </form>
-      )}
-    >
+    <div className="space-y-4">
+      <Link href="/cases" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+        <ArrowLeft className="size-4" /> Help desk
+      </Link>
 
-      <section className="card">
-        <div className="flex gap-2 flex-wrap mb-3"><span className="badge bg-slate-800 text-slate-300">{item.type}</span><span className="badge bg-slate-800 text-slate-300">{item.priority}</span><span className="badge bg-slate-800 text-slate-300">{item.status.replaceAll("_", " ")}</span></div>
-        <p className="text-sm whitespace-pre-wrap">{item.description}</p>
-        <p className="text-xs text-slate-500 mt-3">Opened {formatDateTime(item.createdAt)}</p>
-      </section>
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="truncate text-xl font-semibold tracking-tight">{ticket.subject}</h1>
+          <StatusPill tone={sm.tone}>{sm.label}</StatusPill>
+        </div>
+        <p className="mt-1 text-sm text-muted-foreground">
+          C-{ticket.number.toString()} · {contact ? contactName(contact) : "Unknown"} · opened {formatDate(ticket.createdAt)}
+        </p>
+      </div>
 
-      <section className="space-y-3">
-        <h2 className="font-semibold">Conversation</h2>
-        {messages.length === 0 ? <div className="card text-sm text-slate-400">No messages yet.</div> : (
-          <div className="space-y-3">
-            {messages.map((message) => (
-              <div key={message.id} className={`rounded-xl p-4 max-w-3xl ${message.direction === "staff" ? "bg-slate-800 ml-auto" : "bg-orange-950/40 border border-orange-900/50"}`}>
-                <p className="text-xs font-semibold text-slate-400 mb-1">{message.authorName || (message.direction === "staff" ? "Staff" : "Customer")}</p>
-                <p className="text-sm whitespace-pre-wrap">{message.body}</p>
-                <p className="text-[11px] text-slate-500 mt-2">{formatDateTime(message.createdAt)}</p>
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        {/* Conversation */}
+        <div className="min-w-0 space-y-4">
+          {ticket.thread.length === 0 && (
+            <article className="card">
+              <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+                <UserIcon className="size-3.5" /> {contact ? contactName(contact) : "Customer"} · {formatDateTime(ticket.createdAt)}
               </div>
-            ))}
+              <p className="whitespace-pre-wrap text-sm">{ticket.description}</p>
+            </article>
+          )}
+
+          {ticket.thread.map((m) => {
+            if (m.type === "event") {
+              return (
+                <div key={m.id} className="flex items-center justify-center gap-2 text-center text-xs text-muted-foreground">
+                  <CircleDot className="size-3 shrink-0" /> <span>{m.body} · {m.authorName ?? "System"} · {formatDateTime(m.createdAt)}</span>
+                </div>
+              );
+            }
+            if (m.type === "note") {
+              return (
+                <article key={m.id} className="rounded-xl border border-amber-400/20 bg-amber-400/[0.05] p-4">
+                  <div className="mb-1.5 flex items-center gap-2 text-xs font-medium text-amber-300">
+                    <StickyNote className="size-3.5" /> Internal note · {m.authorName ?? "Staff"} · {formatDateTime(m.createdAt)}
+                  </div>
+                  <p className="whitespace-pre-wrap text-sm">{m.body}</p>
+                </article>
+              );
+            }
+            const staff = m.type === "staff";
+            return (
+              <article key={m.id} className={cn("card max-w-[92%]", staff ? "ml-auto border-primary/20 bg-primary/[0.04]" : "")}>
+                <div className="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground">
+                  <UserIcon className="size-3.5" /> {m.authorName ?? (staff ? "Staff" : "Customer")} · {formatDateTime(m.createdAt)}
+                </div>
+                <p className="whitespace-pre-wrap text-sm">{m.body}</p>
+              </article>
+            );
+          })}
+
+          <TicketComposer
+            replyAction={replyToTicket.bind(null, ticket.id)}
+            noteAction={addNote.bind(null, ticket.id)}
+            cannedReplies={canned.map((c) => ({ id: c.id, title: c.title, body: c.body }))}
+            statusOptions={replyStatusOptions}
+          />
+        </div>
+
+        {/* Properties sidebar */}
+        <aside className="space-y-4">
+          <div className="card space-y-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Properties</p>
+            <label className="block text-xs text-muted-foreground">Status
+              <form action={setTicketStatus.bind(null, ticket.id)}>
+                <AutoSubmitSelect name="status" defaultValue={ticket.status} aria-label="Status" options={STATUSES.map((s) => ({ value: s.value, label: s.label }))} />
+              </form>
+            </label>
+            <label className="block text-xs text-muted-foreground">Assignee
+              <form action={assignTicket.bind(null, ticket.id)}>
+                <AutoSubmitSelect name="assigneeId" defaultValue={ticket.assigneeId ?? ""} aria-label="Assignee" options={[{ value: "", label: "Unassigned" }, ...assignees.map((u) => ({ value: u.id, label: u.name }))]} />
+              </form>
+            </label>
+            <label className="block text-xs text-muted-foreground">Priority
+              <form action={setTicketPriority.bind(null, ticket.id)}>
+                <AutoSubmitSelect name="priority" defaultValue={ticket.priority} aria-label="Priority" options={PRIORITIES.map((p) => ({ value: p.value, label: p.label }))} />
+              </form>
+            </label>
+            <label className="block text-xs text-muted-foreground">Mailbox
+              <form action={setTicketMailbox.bind(null, ticket.id)}>
+                <AutoSubmitSelect name="mailboxId" defaultValue={ticket.mailboxId ?? ""} aria-label="Mailbox" options={[{ value: "", label: "No mailbox" }, ...mailboxes.map((m) => ({ value: m.id, label: m.name }))]} />
+              </form>
+            </label>
           </div>
-        )}
-      </section>
 
-      {uploads.length > 0 && (
-        <section className="card">
-          <h2 className="font-semibold mb-3">Customer uploads</h2>
-          <ul className="divide-y divide-slate-800">
-            {uploads.map((upload) => (
-              <li key={upload.id} className="py-3 flex items-center justify-between gap-3">
-                <div><p className="text-sm font-medium">{upload.fileName}</p><p className="text-xs text-slate-500">{Math.ceil(upload.sizeBytes / 1024)} KB · {formatDateTime(upload.createdAt)}</p></div>
-                <a href={`/api/cases/uploads/${upload.id}`} className="btn-secondary btn-sm">Download</a>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+          <div className="card space-y-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Tags</p>
+            <div className="flex flex-wrap gap-1.5">
+              {ticket.tags.map((t) => (
+                <span key={t.id} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs" style={{ backgroundColor: `${t.color}22`, color: t.color }}>
+                  {t.name}
+                  <form action={removeTicketTag.bind(null, ticket.id, t.id)}>
+                    <button type="submit" aria-label={`Remove ${t.name}`} className="opacity-60 hover:opacity-100"><X className="size-3" /></button>
+                  </form>
+                </span>
+              ))}
+              {ticket.tags.length === 0 && <span className="text-xs text-muted-foreground">No tags</span>}
+            </div>
+            <form action={addTicketTag.bind(null, ticket.id)} className="flex gap-1.5">
+              <input name="name" placeholder="Add tag…" className="input h-8 py-0 text-xs" />
+              <button className="btn-secondary h-8 px-2 text-xs"><TagIcon className="size-3.5" /></button>
+            </form>
+          </div>
 
-      {!['closed', 'cancelled'].includes(item.status) && (
-        <section className="card space-y-3">
-          <h2 className="font-semibold">Reply to customer</h2>
-          <form action={replyToCustomerCase.bind(null, item.id)} className="space-y-3">
-            <textarea name="body" className="input min-h-28" required placeholder="Write a customer-visible reply…" />
-            <button className="btn-primary">Send reply</button>
-          </form>
-        </section>
-      )}
-    </EntityDetailShell>
+          <div className="card space-y-2 text-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Customer</p>
+            {contact ? (
+              <>
+                <Link href={`/contacts/${contact.id}`} className="font-medium text-primary hover:underline">{contactName(contact)}</Link>
+                {contact.email && <p className="truncate text-xs text-muted-foreground">{contact.email}</p>}
+                {contact.phone && <p className="text-xs text-muted-foreground">{contact.phone}</p>}
+              </>
+            ) : <p className="text-muted-foreground">Unknown</p>}
+            {vehicle && (
+              <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Car className="size-3.5" />{vehicle.model}{vehicle.regNumber ? ` · ${vehicle.regNumber}` : ""}</p>
+            )}
+          </div>
+
+          {uploads.length > 0 && (
+            <div className="card space-y-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Attachments</p>
+              {uploads.map((u) => (
+                <a key={u.id} href={`/api/cases/uploads/${u.id}`} className="flex items-center gap-2 text-xs text-primary hover:underline">
+                  <Paperclip className="size-3.5 shrink-0" /> <span className="truncate">{u.fileName}</span>
+                  <span className="shrink-0 text-muted-foreground">{Math.max(1, Math.round(u.sizeBytes / 1024))} KB</span>
+                </a>
+              ))}
+            </div>
+          )}
+
+          {otherTickets.length > 0 && (
+            <div className="card space-y-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Other tickets</p>
+              {otherTickets.map((o) => (
+                <Link key={o.id} href={`/cases/${o.id}`} className="flex items-center justify-between gap-2 text-xs hover:text-primary">
+                  <span className="truncate">C-{o.number.toString()} · {o.subject}</span>
+                  <StatusPill tone={statusMeta(o.status).tone}>{statusMeta(o.status).label}</StatusPill>
+                </Link>
+              ))}
+            </div>
+          )}
+        </aside>
+      </div>
+    </div>
   );
 }

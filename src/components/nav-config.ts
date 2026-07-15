@@ -24,6 +24,7 @@ import {
   Bot,
   Network,
   Ticket,
+  LifeBuoy,
   KeyRound,
   TrendingUp,
   ScrollText,
@@ -106,6 +107,14 @@ export function buildNav(
     automationLinks.push({ href: "/bot-builder", label: "Flow builder", icon: Network });
   }
   if (automationLinks.length) groups.push({ key: "automation", label: "Automation", links: automationLinks });
+
+  if (can("cases.manage")) {
+    groups.push({
+      key: "helpdesk",
+      label: "Help desk",
+      links: [{ href: "/settings/helpdesk", label: "Help desk", icon: LifeBuoy }],
+    });
+  }
 
   if (can("portal_access.manage")) {
     groups.push({

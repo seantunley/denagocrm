@@ -1,5 +1,6 @@
 import { requireUser } from "@/lib/auth";
 import { awaitingReplyCount } from "@/lib/inboxCount";
+import { casesAwaitingCount } from "@/lib/helpdesk";
 import { getUserPermissionList } from "@/lib/permissions";
 import AppShell from "@/components/AppShell";
 
@@ -7,8 +8,9 @@ export default async function AppLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   const user = await requireUser();
-  const [inboxWaiting, permissions] = await Promise.all([
+  const [inboxWaiting, casesWaiting, permissions] = await Promise.all([
     awaitingReplyCount().catch(() => 0),
+    casesAwaitingCount(user).catch(() => 0),
     getUserPermissionList(user),
   ]);
 
@@ -21,6 +23,7 @@ export default async function AppLayout({
         permissions,
       }}
       inboxWaiting={inboxWaiting}
+      casesWaiting={casesWaiting}
     >
       {children}
     </AppShell>
