@@ -53,6 +53,7 @@ import {
   Gauge,
   Package,
   Clock3,
+  ChevronDown,
 } from "lucide-react";
 import { StatusPill, Surface, MetricCard } from "@/components/visual-system";
 import { KpiGrid } from "@/components/responsive-patterns";
@@ -70,6 +71,57 @@ import {
   APPROVAL_STATUS_TONE,
 } from "@/lib/workshop-constants";
 import { getDefaultLabourRateCents, effectiveLabourRateCents, totalLoggedHours, jobProfit } from "@/lib/workshop";
+
+/**
+ * One collapsible step in the job's flow. The current stage is expanded; done
+ * and upcoming stages collapse to a one-line header you can open on demand.
+ * Native <details> keeps this a server component (no client JS).
+ */
+function StageSection({
+  n,
+  label,
+  state,
+  hint,
+  children,
+}: {
+  n: number;
+  label: string;
+  state: "done" | "current" | "todo";
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <details
+      open={state === "current"}
+      className={cn(
+        "group overflow-hidden rounded-2xl border transition-colors",
+        state === "current" ? "border-primary/30 bg-primary/[0.04]" : "border-border bg-card",
+      )}
+    >
+      <summary className="flex cursor-pointer select-none items-center gap-3 px-4 py-3.5 list-none [&::-webkit-details-marker]:hidden">
+        <span
+          className={cn(
+            "grid size-7 shrink-0 place-items-center rounded-lg border text-xs font-semibold",
+            state === "done"
+              ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300"
+              : state === "current"
+                ? "border-primary/25 bg-primary/10 text-primary"
+                : "border-border bg-muted/30 text-muted-foreground",
+          )}
+        >
+          {state === "done" ? <Check className="size-3.5" /> : n}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-foreground">{label}</p>
+          {hint && <p className="truncate text-xs text-muted-foreground">{hint}</p>}
+        </div>
+        {state === "current" && <StatusPill tone="info">Current step</StatusPill>}
+        <ChevronDown className="size-4 shrink-0 text-muted-foreground/60 transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="space-y-4 border-t border-border/60 px-4 py-4">{children}</div>
+    </details>
+  );
+}
 
 export default async function JobCardDetailPage({
   params,
@@ -134,6 +186,18 @@ export default async function JobCardDetailPage({
   const progressIndex = jobCard.status === "collected"
     ? PIPELINE_STAGES.length
     : PIPELINE_STAGES.findIndex((s) => s.value === jobCard.status);
+  const collected = jobCard.status === "collected";
+  // Per-stage state for the focus sections. Collected → all done, the final
+  // "Ready" step opens (holds the service record). Cancelled → everything closed.
+  const stageState = (idx: number): "done" | "current" | "todo" => {
+    if (collected) return idx === PIPELINE_STAGES.length - 1 ? "current" : "done";
+    if (jobCard.status === "cancelled") return "todo";
+    if (idx < progressIndex) return "done";
+    if (idx === progressIndex) return "current";
+    return "todo";
+  };
+  const partLines = jobCard.items.filter((i) => i.kind === "part").length;
+  const pendingApprovals = jobCard.approvals.filter((a) => a.status === "pending").length;
 
   return (
     <div className="space-y-6">
@@ -172,7 +236,7 @@ export default async function JobCardDetailPage({
         </div>
       </div>
 
-      {/* 8-stage workflow stepper (PR30 chrome, workshop workflow) ───────────── */}
+      {/* Workflow stepper — tap a stage to move the job ─────────────────────── */}
       <Surface className="p-4 sm:p-5">
         <div className="grid gap-2 sm:grid-cols-4 lg:grid-cols-7">
           {PIPELINE_STAGES.map((stage, index) => {
@@ -188,417 +252,229 @@ export default async function JobCardDetailPage({
             );
           })}
         </div>
-        <p className="mt-3 text-xs text-muted-foreground">{terminal ? `This job is ${sm.label.toLowerCase()}. Tap a stage to reopen it.` : "Tap a stage to move the job. “Complete & write service record” below moves it to Collected."}</p>
+        <p className="mt-3 text-xs text-muted-foreground">{terminal ? `This job is ${sm.label.toLowerCase()}. Tap a stage to reopen it.` : "Tap a stage to move the job, or work through the open step below. “Complete & write service record” moves it to Collected."}</p>
       </Surface>
 
       <KpiGrid>
         <MetricCard icon={Gauge} label="Arrival mileage" value={jobCard.kmIn != null ? jobCard.kmIn.toLocaleString() : "—"} detail={jobCard.kmIn != null ? "kilometres" : "Not captured"} />
-        <MetricCard icon={Package} label="Parts" value={formatZAR(Math.round(partsTotal))} detail={`${jobCard.items.filter((i) => i.kind === "part").length} line items`} />
+        <MetricCard icon={Package} label="Parts" value={formatZAR(Math.round(partsTotal))} detail={`${partLines} line items`} />
         <MetricCard icon={Clock3} label="Labour" value={formatZAR(Math.round(labourTotal))} detail={`${actualHours} h logged`} />
         <MetricCard icon={ClipboardCheck} label="Job total" value={formatZAR(Math.round(grandTotal))} detail="Customer-facing total" accent />
       </KpiGrid>
 
-      <Surface className="p-5">
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-primary">Work requested</p>
-            <p className="mt-3 whitespace-pre-wrap text-base leading-7 text-foreground">{jobCard.description}</p>
-          </div>
-          <form action={setJobCardTechnician.bind(null, jobCard.id)} className="rounded-xl border border-border bg-muted/20 p-3">
-            <label className="label" htmlFor="job-technician">Technician</label>
-            <select id="job-technician" name="technicianId" className="input" defaultValue={jobCard.technicianId ?? ""}>
-              <option value="">Unassigned</option>
-              {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-            </select>
-            <button className="btn-secondary btn-sm mt-2 w-full">Update assignment</button>
-          </form>
-        </div>
-      </Surface>
+      {/* Guided flow — the current step is expanded, the rest collapse away ── */}
+      <div className="space-y-3">
 
-      {/* Bay · priority · estimate ──────────────────────────────────────────── */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <form action={setJobCardBay.bind(null, jobCard.id)} className="card space-y-2">
-          <label className="label" htmlFor="bayId">Workshop bay</label>
-          <select id="bayId" name="bayId" className="input" defaultValue={jobCard.bayId ?? ""}>
-            <option value="">Unassigned</option>
-            {bays.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
-          <button className="btn-secondary btn-sm">Set bay</button>
-        </form>
-        <form action={setJobCardPriority.bind(null, jobCard.id)} className="card space-y-2">
-          <label className="label" htmlFor="priority">Priority</label>
-          <select id="priority" name="priority" className="input" defaultValue={jobCard.priority}>
-            {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-          </select>
-          <button className="btn-secondary btn-sm">Set priority</button>
-        </form>
-        <form action={setJobCardEstimate.bind(null, jobCard.id)} className="card space-y-2">
-          <label className="label">Labour estimate</label>
-          <div className="grid grid-cols-2 gap-2">
-            <input name="estimatedHours" inputMode="decimal" className="input tabular-nums" placeholder="Hours" defaultValue={jobCard.estimatedHours ?? ""} />
-            <input name="labourRate" inputMode="decimal" className="input tabular-nums" placeholder={`R${(defaultRateCents / 100).toFixed(0)}/h`} defaultValue={jobCard.labourRateCents != null ? (jobCard.labourRateCents / 100).toFixed(2) : ""} />
-          </div>
-          <button className="btn-secondary btn-sm">Save estimate</button>
-        </form>
-      </div>
-
-      {/* Technician time clock ──────────────────────────────────────────────── */}
-      <div className="card space-y-3">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <h2 className="font-semibold">⏱ Technician time</h2>
-            <p className="text-xs text-muted-foreground">
-              Estimated {jobCard.estimatedHours != null ? `${jobCard.estimatedHours} h` : "—"} · Logged{" "}
-              <span className="tabular-nums text-foreground">{actualHours} h</span> · Labour value{" "}
-              <span className="text-foreground">{formatZAR(timeLabourCents)}</span> @ R{(rateCents / 100).toFixed(0)}/h
-              {jobCard.estimatedHours != null && actualHours > jobCard.estimatedHours && (
-                <span className="ml-1 text-amber-400">· over estimate</span>
-              )}
-            </p>
-          </div>
-          {!terminal &&
-            (myRunning ? (
-              <form action={stopTimeEntry.bind(null, jobCard.id)}>
-                <button className="btn bg-red-600 text-white hover:bg-red-700">■ Stop my clock</button>
-              </form>
-            ) : (
-              <form action={startTimeEntry.bind(null, jobCard.id)}>
-                <button className="btn bg-emerald-700 text-white hover:bg-emerald-600">▶ Start my clock</button>
-              </form>
-            ))}
-        </div>
-        {jobCard.timeEntries.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No time logged yet.</p>
-        ) : (
-          <div className="divide-y divide-border text-sm">
-            {jobCard.timeEntries.map((e) => (
-              <div key={e.id} className="flex items-center justify-between gap-3 py-1.5">
-                <span className="min-w-0 truncate text-muted-foreground">
-                  {e.technician?.name ?? "—"} · {formatDateTime(e.startedAt)}{e.note ? ` · ${e.note}` : ""}
-                </span>
-                <span className="flex items-center gap-2 shrink-0">
-                  {e.endedAt ? (
-                    <span className="tabular-nums font-medium text-foreground">{hoursBetween(e.startedAt, e.endedAt)} h</span>
-                  ) : (
-                    <span className="text-emerald-400">running…</span>
-                  )}
-                  <form action={deleteTimeEntry.bind(null, e.id, jobCard.id)}>
-                    <button className="text-xs text-slate-600 hover:text-red-500">✕</button>
-                  </form>
-                </span>
+        {/* 1 · Booking ───────────────────────────────────────────────────── */}
+        <StageSection n={1} label="Booking" state={stageState(0)} hint={`${jobCard.technician?.name ?? "Unassigned"} · ${jobCard.bay?.name ?? "no bay"} · ${pm.label} priority`}>
+          <Surface className="p-5">
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-primary">Work requested</p>
+                <p className="mt-3 whitespace-pre-wrap text-base leading-7 text-foreground">{jobCard.description}</p>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="card">
-        <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-          <div>
-            <h2 className="font-semibold">📷 Check-in photos</h2>
-            <p className="text-xs text-slate-400">
-              Condition BEFORE work starts — scratches, dents, odometer reading. Protects both
-              sides.
-            </p>
-          </div>
-          <form
-            action={uploadJobCardPhotos.bind(null, jobCard.id)}
-            className="flex items-center gap-2"
-          >
-            <input
-              type="file"
-              name="files"
-              multiple
-              required
-              accept="image/*"
-              capture="environment"
-              className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0"
-            />
-            <button className="btn-primary btn-sm">Upload</button>
-          </form>
-        </div>
-        {jobCard.documents.filter((d) => d.tag === "checkin-photo").length === 0 ? (
-          <p className="text-xs text-slate-500">No photos yet — snap them at check-in.</p>
-        ) : (
-          <div className="flex gap-2 flex-wrap">
-            {jobCard.documents
-              .filter((d) => d.tag === "checkin-photo")
-              .map((d) => (
-                <a key={d.id} href={d.storedName} target="_blank">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={d.storedName}
-                    alt={d.fileName}
-                    className="h-24 w-24 object-cover rounded-lg border border-slate-700 hover:border-orange-500 transition-colors"
-                  />
-                </a>
-              ))}
-          </div>
-        )}
-      </div>
-
-      {/* Check-out condition + notes (phase 2) ──────────────────────────────── */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="card">
-          <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-            <div>
-              <h2 className="font-semibold">📸 Check-out photos</h2>
-              <p className="text-xs text-slate-400">Condition AFTER the work — proof of hand-over state.</p>
+              <form action={setJobCardTechnician.bind(null, jobCard.id)} className="rounded-xl border border-border bg-muted/20 p-3">
+                <label className="label" htmlFor="job-technician">Technician</label>
+                <select id="job-technician" name="technicianId" className="input" defaultValue={jobCard.technicianId ?? ""}>
+                  <option value="">Unassigned</option>
+                  {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                </select>
+                <button className="btn-secondary btn-sm mt-2 w-full">Update assignment</button>
+              </form>
             </div>
-            <form action={uploadCheckoutPhotos.bind(null, jobCard.id)} className="flex items-center gap-2">
-              <input type="file" name="files" multiple required accept="image/*" capture="environment" className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-              <button className="btn-primary btn-sm">Upload</button>
+          </Surface>
+          <div className="grid gap-4 md:grid-cols-3">
+            <form action={setJobCardBay.bind(null, jobCard.id)} className="card space-y-2">
+              <label className="label" htmlFor="bayId">Workshop bay</label>
+              <select id="bayId" name="bayId" className="input" defaultValue={jobCard.bayId ?? ""}>
+                <option value="">Unassigned</option>
+                {bays.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+              <button className="btn-secondary btn-sm">Set bay</button>
+            </form>
+            <form action={setJobCardPriority.bind(null, jobCard.id)} className="card space-y-2">
+              <label className="label" htmlFor="priority">Priority</label>
+              <select id="priority" name="priority" className="input" defaultValue={jobCard.priority}>
+                {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
+              <button className="btn-secondary btn-sm">Set priority</button>
+            </form>
+            <form action={setJobCardEstimate.bind(null, jobCard.id)} className="card space-y-2">
+              <label className="label">Labour estimate</label>
+              <div className="grid grid-cols-2 gap-2">
+                <input name="estimatedHours" inputMode="decimal" className="input tabular-nums" placeholder="Hours" defaultValue={jobCard.estimatedHours ?? ""} />
+                <input name="labourRate" inputMode="decimal" className="input tabular-nums" placeholder={`R${(defaultRateCents / 100).toFixed(0)}/h`} defaultValue={jobCard.labourRateCents != null ? (jobCard.labourRateCents / 100).toFixed(2) : ""} />
+              </div>
+              <button className="btn-secondary btn-sm">Save estimate</button>
             </form>
           </div>
-          {jobCard.documents.filter((d) => d.tag === "checkout-photo").length === 0 ? (
-            <p className="text-xs text-slate-500">No check-out photos yet.</p>
-          ) : (
-            <div className="flex gap-2 flex-wrap">
-              {jobCard.documents.filter((d) => d.tag === "checkout-photo").map((d) => (
-                <a key={d.id} href={d.storedName} target="_blank">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={d.storedName} alt={d.fileName} className="h-24 w-24 object-cover rounded-lg border border-slate-700 hover:border-orange-500 transition-colors" />
-                </a>
-              ))}
+        </StageSection>
+
+        {/* 2 · Check-in ──────────────────────────────────────────────────── */}
+        <StageSection n={2} label="Check-in" state={stageState(1)} hint={`${jobCard.documents.filter((d) => d.tag === "checkin-photo").length} check-in photos${jobCard.kmIn != null ? ` · ${jobCard.kmIn.toLocaleString()} km` : ""}`}>
+          <div className="card">
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+              <div>
+                <h2 className="font-semibold">📷 Check-in photos</h2>
+                <p className="text-xs text-slate-400">
+                  Condition BEFORE work starts — scratches, dents, odometer reading. Protects both
+                  sides.
+                </p>
+              </div>
+              <form action={uploadJobCardPhotos.bind(null, jobCard.id)} className="flex items-center gap-2">
+                <input type="file" name="files" multiple required accept="image/*" capture="environment" className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
+                <button className="btn-primary btn-sm">Upload</button>
+              </form>
             </div>
-          )}
-        </div>
-        <form action={saveConditionNotes.bind(null, jobCard.id)} className="card space-y-2">
-          <h2 className="font-semibold">Condition notes</h2>
-          <div>
-            <label className="label" htmlFor="checkinNotes">At check-in</label>
-            <textarea id="checkinNotes" name="checkinNotes" rows={2} className="input" defaultValue={jobCard.checkinNotes ?? ""} placeholder="Existing damage, fuel/charge level, loose items…" />
-          </div>
-          <div>
-            <label className="label" htmlFor="checkoutNotes">At check-out</label>
-            <textarea id="checkoutNotes" name="checkoutNotes" rows={2} className="input" defaultValue={jobCard.checkoutNotes ?? ""} placeholder="Final condition, what was handed back…" />
-          </div>
-          <button className="btn-secondary btn-sm">Save condition notes</button>
-        </form>
-      </div>
-
-      {/* Inspection checklist (phase 2) ──────────────────────────────────────── */}
-      <div className="card space-y-3">
-        <div>
-          <h2 className="font-semibold">✅ Inspection checklist</h2>
-          <p className="text-xs text-slate-400">Multi-point check with a status, note and optional photo per item.</p>
-        </div>
-        {jobCard.inspectionItems.length > 0 && (
-          <div className="divide-y divide-border">
-            {jobCard.inspectionItems.map((item) => {
-              const meta = inspectionStatusMeta(item.status);
-              return (
-                <div key={item.id} className="flex flex-wrap items-center gap-3 py-2">
-                  <span className="min-w-40 flex-1 font-medium">{item.label}</span>
-                  <form action={setInspectionItem.bind(null, item.id, jobCard.id)} className="flex items-center gap-2">
-                    <select name="status" defaultValue={item.status} className="input h-8 py-0 text-xs w-32">
-                      {INSPECTION_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-                    </select>
-                    <input name="notes" defaultValue={item.notes ?? ""} placeholder="Note" className="input h-8 py-0 text-xs w-40" />
-                    <button className="btn-secondary btn-sm">Save</button>
-                  </form>
-                  <StatusPill tone={meta.tone}>{meta.label}</StatusPill>
-                  {item.photoStoredName ? (
-                    <a href={item.photoStoredName} target="_blank">
+            {jobCard.documents.filter((d) => d.tag === "checkin-photo").length === 0 ? (
+              <p className="text-xs text-slate-500">No photos yet — snap them at check-in.</p>
+            ) : (
+              <div className="flex gap-2 flex-wrap">
+                {jobCard.documents
+                  .filter((d) => d.tag === "checkin-photo")
+                  .map((d) => (
+                    <a key={d.id} href={d.storedName} target="_blank">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={item.photoStoredName} alt={item.label} className="h-8 w-8 rounded object-cover border border-slate-700" />
+                      <img src={d.storedName} alt={d.fileName} className="h-24 w-24 object-cover rounded-lg border border-slate-700 hover:border-orange-500 transition-colors" />
                     </a>
-                  ) : (
-                    <form action={uploadInspectionPhoto.bind(null, item.id, jobCard.id)} className="flex items-center gap-1">
-                      <input type="file" name="file" accept="image/*" className="block w-28 text-[10px] text-slate-500 file:btn-secondary file:btn-sm file:mr-1 file:border-0" />
-                      <button className="text-xs text-slate-500 hover:text-foreground">📎</button>
-                    </form>
-                  )}
-                  <form action={deleteInspectionItem.bind(null, item.id, jobCard.id)}>
-                    <button className="text-xs text-slate-600 hover:text-red-500">✕</button>
-                  </form>
-                </div>
-              );
-            })}
+                  ))}
+              </div>
+            )}
           </div>
-        )}
-        <form action={addInspectionItem.bind(null, jobCard.id)} className="flex flex-wrap items-end gap-2">
-          <div className="flex-1 min-w-48">
-            <label className="label" htmlFor="ins-label">Add check</label>
-            <input id="ins-label" name="label" required className="input" placeholder="e.g. Brakes · Tyres · Lights · Battery terminals" />
-          </div>
-          <select name="status" defaultValue="ok" className="input w-32">
-            {INSPECTION_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-          </select>
-          <button className="btn-secondary">Add</button>
-        </form>
-      </div>
+          <form action={saveConditionNotes.bind(null, jobCard.id)} className="card space-y-2">
+            <h2 className="font-semibold">Condition notes</h2>
+            <div>
+              <label className="label" htmlFor="checkinNotes">At check-in</label>
+              <textarea id="checkinNotes" name="checkinNotes" rows={2} className="input" defaultValue={jobCard.checkinNotes ?? ""} placeholder="Existing damage, fuel/charge level, loose items…" />
+            </div>
+            <div>
+              <label className="label" htmlFor="checkoutNotes">At check-out</label>
+              <textarea id="checkoutNotes" name="checkoutNotes" rows={2} className="input" defaultValue={jobCard.checkoutNotes ?? ""} placeholder="Final condition, what was handed back…" />
+            </div>
+            <button className="btn-secondary btn-sm">Save condition notes</button>
+          </form>
+        </StageSection>
 
-      {/* Additional-work approvals (phase 2) ─────────────────────────────────── */}
-      <div className="card space-y-3">
-        <div>
-          <h2 className="font-semibold">🖐 Additional-work approvals</h2>
-          <p className="text-xs text-slate-400">Extra work found mid-job. Requesting notifies the customer in their portal.</p>
-        </div>
-        {jobCard.approvals.length > 0 && (
-          <div className="divide-y divide-border">
-            {jobCard.approvals.map((a) => (
-              <div key={a.id} className="flex flex-wrap items-center gap-3 py-2">
-                <div className="min-w-48 flex-1">
-                  <p className="font-medium">{a.description}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {a.amountCents ? formatZAR(a.amountCents) : "No price"}
-                    {a.decidedAt ? ` · ${a.decidedVia} · ${formatDate(a.decidedAt)}` : ""}
-                    {a.notes ? ` · ${a.notes}` : ""}
-                  </p>
-                </div>
-                <StatusPill tone={APPROVAL_STATUS_TONE[a.status] ?? "neutral"}>{a.status}</StatusPill>
-                {a.status === "pending" && (
-                  <div className="flex items-center gap-1.5">
-                    <form action={decideApproval.bind(null, a.id, jobCard.id, "approved")} className="flex items-center gap-1">
-                      <input type="hidden" name="decidedVia" value="phone" />
-                      <button className="btn-secondary btn-sm text-emerald-400">Approve</button>
-                    </form>
-                    <form action={decideApproval.bind(null, a.id, jobCard.id, "declined")} className="flex items-center gap-1">
-                      <input type="hidden" name="decidedVia" value="phone" />
-                      <button className="btn-secondary btn-sm text-red-400">Decline</button>
+        {/* 3 · Diagnosis ─────────────────────────────────────────────────── */}
+        <StageSection n={3} label="Diagnosis" state={stageState(2)} hint={`${jobCard.inspectionItems.length} inspection checks`}>
+          <div className="card space-y-3">
+            <div>
+              <h2 className="font-semibold">✅ Inspection checklist</h2>
+              <p className="text-xs text-slate-400">Multi-point check with a status, note and optional photo per item.</p>
+            </div>
+            {jobCard.inspectionItems.length > 0 && (
+              <div className="divide-y divide-border">
+                {jobCard.inspectionItems.map((item) => {
+                  const meta = inspectionStatusMeta(item.status);
+                  return (
+                    <div key={item.id} className="flex flex-wrap items-center gap-3 py-2">
+                      <span className="min-w-40 flex-1 font-medium">{item.label}</span>
+                      <form action={setInspectionItem.bind(null, item.id, jobCard.id)} className="flex items-center gap-2">
+                        <select name="status" defaultValue={item.status} className="input h-8 py-0 text-xs w-32">
+                          {INSPECTION_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                        </select>
+                        <input name="notes" defaultValue={item.notes ?? ""} placeholder="Note" className="input h-8 py-0 text-xs w-40" />
+                        <button className="btn-secondary btn-sm">Save</button>
+                      </form>
+                      <StatusPill tone={meta.tone}>{meta.label}</StatusPill>
+                      {item.photoStoredName ? (
+                        <a href={item.photoStoredName} target="_blank">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={item.photoStoredName} alt={item.label} className="h-8 w-8 rounded object-cover border border-slate-700" />
+                        </a>
+                      ) : (
+                        <form action={uploadInspectionPhoto.bind(null, item.id, jobCard.id)} className="flex items-center gap-1">
+                          <input type="file" name="file" accept="image/*" className="block w-28 text-[10px] text-slate-500 file:btn-secondary file:btn-sm file:mr-1 file:border-0" />
+                          <button className="text-xs text-slate-500 hover:text-foreground">📎</button>
+                        </form>
+                      )}
+                      <form action={deleteInspectionItem.bind(null, item.id, jobCard.id)}>
+                        <button className="text-xs text-slate-600 hover:text-red-500">✕</button>
+                      </form>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <form action={addInspectionItem.bind(null, jobCard.id)} className="flex flex-wrap items-end gap-2">
+              <div className="flex-1 min-w-48">
+                <label className="label" htmlFor="ins-label">Add check</label>
+                <input id="ins-label" name="label" required className="input" placeholder="e.g. Brakes · Tyres · Lights · Battery terminals" />
+              </div>
+              <select name="status" defaultValue="ok" className="input w-32">
+                {INSPECTION_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+              </select>
+              <button className="btn-secondary">Add</button>
+            </form>
+          </div>
+        </StageSection>
+
+        {/* 4 · Approval ──────────────────────────────────────────────────── */}
+        <StageSection n={4} label="Approval" state={stageState(3)} hint={pendingApprovals > 0 ? `${pendingApprovals} awaiting customer approval` : jobCard.signedAt ? "Signed" : "Additional-work approvals & customer sign-off"}>
+          <div className="card space-y-3">
+            <div>
+              <h2 className="font-semibold">🖐 Additional-work approvals</h2>
+              <p className="text-xs text-slate-400">Extra work found mid-job. Requesting notifies the customer in their portal.</p>
+            </div>
+            {jobCard.approvals.length > 0 && (
+              <div className="divide-y divide-border">
+                {jobCard.approvals.map((a) => (
+                  <div key={a.id} className="flex flex-wrap items-center gap-3 py-2">
+                    <div className="min-w-48 flex-1">
+                      <p className="font-medium">{a.description}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {a.amountCents ? formatZAR(a.amountCents) : "No price"}
+                        {a.decidedAt ? ` · ${a.decidedVia} · ${formatDate(a.decidedAt)}` : ""}
+                        {a.notes ? ` · ${a.notes}` : ""}
+                      </p>
+                    </div>
+                    <StatusPill tone={APPROVAL_STATUS_TONE[a.status] ?? "neutral"}>{a.status}</StatusPill>
+                    {a.status === "pending" && (
+                      <div className="flex items-center gap-1.5">
+                        <form action={decideApproval.bind(null, a.id, jobCard.id, "approved")} className="flex items-center gap-1">
+                          <input type="hidden" name="decidedVia" value="phone" />
+                          <button className="btn-secondary btn-sm text-emerald-400">Approve</button>
+                        </form>
+                        <form action={decideApproval.bind(null, a.id, jobCard.id, "declined")} className="flex items-center gap-1">
+                          <input type="hidden" name="decidedVia" value="phone" />
+                          <button className="btn-secondary btn-sm text-red-400">Decline</button>
+                        </form>
+                      </div>
+                    )}
+                    <form action={deleteApproval.bind(null, a.id, jobCard.id)}>
+                      <button className="text-xs text-slate-600 hover:text-red-500">✕</button>
                     </form>
                   </div>
-                )}
-                <form action={deleteApproval.bind(null, a.id, jobCard.id)}>
-                  <button className="text-xs text-slate-600 hover:text-red-500">✕</button>
-                </form>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
-        {!terminal && (
-          <form action={requestAdditionalWork.bind(null, jobCard.id)} className="flex flex-wrap items-end gap-2">
-            <div className="flex-1 min-w-48">
-              <label className="label" htmlFor="aw-desc">Additional work</label>
-              <input id="aw-desc" name="description" required className="input" placeholder="e.g. Replace worn brake pads" />
-            </div>
-            <div className="w-32">
-              <label className="label" htmlFor="aw-amount">Est. cost (R)</label>
-              <input id="aw-amount" name="amount" inputMode="decimal" className="input tabular-nums" placeholder="0.00" />
-            </div>
-            <button className="btn-primary">Request approval</button>
-          </form>
-        )}
-      </div>
-
-      <SigningBlock
-        kind="jobcard"
-        id={jobCard.id}
-        refLabel={`#${jobCard.number}`}
-        signedAt={jobCard.signedAt}
-        signedByName={jobCard.signedByName}
-        state={signingState}
-      />
-
-      {/* Reservations · packages · subcontracting (phase 3) ─────────────────── */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="card space-y-3">
-          <div>
-            <h2 className="font-semibold">📦 Parts reservations</h2>
-            <p className="text-xs text-slate-400">Earmark stock before it&apos;s fitted. Consuming adds a part line and deducts stock.</p>
-          </div>
-          {jobCard.reservations.length > 0 && (
-            <div className="divide-y divide-border text-sm">
-              {jobCard.reservations.map((r) => (
-                <div key={r.id} className="flex items-center justify-between gap-3 py-1.5">
-                  <span className="min-w-0 truncate">{r.qty}× {r.part.name}</span>
-                  <span className="flex items-center gap-2 shrink-0">
-                    <form action={consumeReservation.bind(null, r.id, jobCard.id)}>
-                      <button className="btn-secondary btn-sm text-emerald-400">Consume</button>
-                    </form>
-                    <form action={releaseReservation.bind(null, r.id, jobCard.id)}>
-                      <button className="text-xs text-slate-600 hover:text-red-500">Release</button>
-                    </form>
-                  </span>
+            )}
+            {!terminal && (
+              <form action={requestAdditionalWork.bind(null, jobCard.id)} className="flex flex-wrap items-end gap-2">
+                <div className="flex-1 min-w-48">
+                  <label className="label" htmlFor="aw-desc">Additional work</label>
+                  <input id="aw-desc" name="description" required className="input" placeholder="e.g. Replace worn brake pads" />
                 </div>
-              ))}
-            </div>
-          )}
-          {!terminal && (
-            <form action={reservePart.bind(null, jobCard.id)} className="flex flex-wrap items-end gap-2">
-              <div className="flex-1 min-w-40">
-                <label className="label" htmlFor="res-part">Part</label>
-                <select id="res-part" name="partId" required className="input">
-                  <option value="">Select part…</option>
-                  {parts.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.stockQty} in stock)</option>)}
-                </select>
-              </div>
-              <div className="w-20">
-                <label className="label" htmlFor="res-qty">Qty</label>
-                <input id="res-qty" name="qty" type="number" min={1} defaultValue={1} className="input tabular-nums" />
-              </div>
-              <button className="btn-secondary">Reserve</button>
-            </form>
-          )}
-        </div>
-
-        <div className="space-y-4">
-          {servicePackages.length > 0 && !terminal && (
-            <form action={applyServicePackage.bind(null, jobCard.id)} className="card space-y-2">
-              <h2 className="font-semibold">🧰 Apply service package</h2>
-              <p className="text-xs text-slate-400">Drop a preset bundle of parts &amp; labour onto this job.</p>
-              <div className="flex items-end gap-2">
-                <select name="packageId" required className="input flex-1">
-                  <option value="">Select package…</option>
-                  {servicePackages.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-                <button className="btn-secondary">Apply</button>
-              </div>
-            </form>
-          )}
-          <form action={saveSubcontract.bind(null, jobCard.id)} className="card space-y-2">
-            <h2 className="font-semibold">🏭 Subcontracted work</h2>
-            <label className="flex items-center gap-2 text-sm text-slate-300">
-              <input type="checkbox" name="isSubcontracted" defaultChecked={jobCard.isSubcontracted} className="h-4 w-4" />
-              This job is (partly) subcontracted
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <input name="subcontractor" defaultValue={jobCard.subcontractor ?? ""} placeholder="Subcontractor" className="input" />
-              <input name="subCost" inputMode="decimal" defaultValue={jobCard.subCostCents ? (jobCard.subCostCents / 100).toFixed(2) : ""} placeholder="Cost (R)" className="input tabular-nums" />
-            </div>
-            <button className="btn-secondary btn-sm">Save</button>
-          </form>
-        </div>
-      </div>
-
-      {/* Profitability & recovery (phase 4) ─────────────────────────────────── */}
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="card">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Profitability</p>
-          <dl className="space-y-1 text-sm">
-            <div className="flex justify-between"><dt className="text-muted-foreground">Revenue</dt><dd className="font-medium tabular-nums">{formatZAR(profit.revenueCents)}</dd></div>
-            <div className="flex justify-between"><dt className="text-muted-foreground">Parts cost</dt><dd className="tabular-nums">−{formatZAR(profit.partsCostCents)}</dd></div>
-            {profit.subCostCents > 0 && <div className="flex justify-between"><dt className="text-muted-foreground">Subcontract</dt><dd className="tabular-nums">−{formatZAR(profit.subCostCents)}</dd></div>}
-            <div className="flex justify-between border-t border-border pt-1"><dt className="font-semibold">Gross profit</dt><dd className={`font-bold tabular-nums ${profit.profitCents >= 0 ? "text-emerald-400" : "text-red-400"}`}>{formatZAR(profit.profitCents)}</dd></div>
-            <div className="flex justify-between"><dt className="text-muted-foreground">Margin</dt><dd className="tabular-nums">{profit.marginPct}%</dd></div>
-          </dl>
-        </div>
-        <form action={setJobWarranty.bind(null, jobCard.id)} className="card space-y-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Warranty recovery</p>
-          <label className="flex items-center gap-2 text-sm text-slate-300">
-            <input type="checkbox" name="underWarranty" defaultChecked={jobCard.underWarranty} className="h-4 w-4" />
-            Work is under warranty
-          </label>
-          <div>
-            <label className="label" htmlFor="warrantyRecovered">Recovered (R)</label>
-            <input id="warrantyRecovered" name="warrantyRecovered" inputMode="decimal" className="input tabular-nums" defaultValue={jobCard.warrantyRecoveredCents ? (jobCard.warrantyRecoveredCents / 100).toFixed(2) : ""} placeholder="Labour + parts recovered" />
+                <div className="w-32">
+                  <label className="label" htmlFor="aw-amount">Est. cost (R)</label>
+                  <input id="aw-amount" name="amount" inputMode="decimal" className="input tabular-nums" placeholder="0.00" />
+                </div>
+                <button className="btn-primary">Request approval</button>
+              </form>
+            )}
           </div>
-          <button className="btn-secondary btn-sm">Save</button>
-        </form>
-        <form action={setComeback.bind(null, jobCard.id)} className="card space-y-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Comeback / repeat repair</p>
-          <p className="text-xs text-muted-foreground">Link this job to the earlier one it&apos;s a repeat of, on the same vehicle.</p>
-          <select name="comebackOfId" defaultValue={jobCard.comebackOfId ?? ""} className="input">
-            <option value="">Not a comeback</option>
-            {siblingJobs.map((s) => <option key={s.id} value={s.id}>#{s.number} · {s.description.slice(0, 40)}</option>)}
-          </select>
-          <button className="btn-secondary btn-sm">Save</button>
-        </form>
-      </div>
 
-      <div className="grid lg:grid-cols-3 gap-6 items-start">
-        <div className="lg:col-span-2 space-y-6">
+          <SigningBlock
+            kind="jobcard"
+            id={jobCard.id}
+            refLabel={`#${jobCard.number}`}
+            signedAt={jobCard.signedAt}
+            signedByName={jobCard.signedByName}
+            state={signingState}
+          />
+        </StageSection>
+
+        {/* 5 · Repair ────────────────────────────────────────────────────── */}
+        <StageSection n={5} label="Repair" state={stageState(4)} hint={`${partLines} parts · ${actualHours} h logged · ${formatZAR(Math.round(grandTotal))}`}>
           <div className="card">
             <h2 className="font-semibold mb-4">Parts &amp; labour</h2>
             <table className="table-base mb-4">
@@ -675,6 +551,157 @@ export default async function JobCardDetailPage({
             </div>
           </div>
 
+          {/* Technician time clock */}
+          <div className="card space-y-3">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <h2 className="font-semibold">⏱ Technician time</h2>
+                <p className="text-xs text-muted-foreground">
+                  Estimated {jobCard.estimatedHours != null ? `${jobCard.estimatedHours} h` : "—"} · Logged{" "}
+                  <span className="tabular-nums text-foreground">{actualHours} h</span> · Labour value{" "}
+                  <span className="text-foreground">{formatZAR(timeLabourCents)}</span> @ R{(rateCents / 100).toFixed(0)}/h
+                  {jobCard.estimatedHours != null && actualHours > jobCard.estimatedHours && (
+                    <span className="ml-1 text-amber-400">· over estimate</span>
+                  )}
+                </p>
+              </div>
+              {!terminal &&
+                (myRunning ? (
+                  <form action={stopTimeEntry.bind(null, jobCard.id)}>
+                    <button className="btn bg-red-600 text-white hover:bg-red-700">■ Stop my clock</button>
+                  </form>
+                ) : (
+                  <form action={startTimeEntry.bind(null, jobCard.id)}>
+                    <button className="btn bg-emerald-700 text-white hover:bg-emerald-600">▶ Start my clock</button>
+                  </form>
+                ))}
+            </div>
+            {jobCard.timeEntries.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No time logged yet.</p>
+            ) : (
+              <div className="divide-y divide-border text-sm">
+                {jobCard.timeEntries.map((e) => (
+                  <div key={e.id} className="flex items-center justify-between gap-3 py-1.5">
+                    <span className="min-w-0 truncate text-muted-foreground">
+                      {e.technician?.name ?? "—"} · {formatDateTime(e.startedAt)}{e.note ? ` · ${e.note}` : ""}
+                    </span>
+                    <span className="flex items-center gap-2 shrink-0">
+                      {e.endedAt ? (
+                        <span className="tabular-nums font-medium text-foreground">{hoursBetween(e.startedAt, e.endedAt)} h</span>
+                      ) : (
+                        <span className="text-emerald-400">running…</span>
+                      )}
+                      <form action={deleteTimeEntry.bind(null, e.id, jobCard.id)}>
+                        <button className="text-xs text-slate-600 hover:text-red-500">✕</button>
+                      </form>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="card space-y-3">
+              <div>
+                <h2 className="font-semibold">📦 Parts reservations</h2>
+                <p className="text-xs text-slate-400">Earmark stock before it&apos;s fitted. Consuming adds a part line and deducts stock.</p>
+              </div>
+              {jobCard.reservations.length > 0 && (
+                <div className="divide-y divide-border text-sm">
+                  {jobCard.reservations.map((r) => (
+                    <div key={r.id} className="flex items-center justify-between gap-3 py-1.5">
+                      <span className="min-w-0 truncate">{r.qty}× {r.part.name}</span>
+                      <span className="flex items-center gap-2 shrink-0">
+                        <form action={consumeReservation.bind(null, r.id, jobCard.id)}>
+                          <button className="btn-secondary btn-sm text-emerald-400">Consume</button>
+                        </form>
+                        <form action={releaseReservation.bind(null, r.id, jobCard.id)}>
+                          <button className="text-xs text-slate-600 hover:text-red-500">Release</button>
+                        </form>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!terminal && (
+                <form action={reservePart.bind(null, jobCard.id)} className="flex flex-wrap items-end gap-2">
+                  <div className="flex-1 min-w-40">
+                    <label className="label" htmlFor="res-part">Part</label>
+                    <select id="res-part" name="partId" required className="input">
+                      <option value="">Select part…</option>
+                      {parts.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.stockQty} in stock)</option>)}
+                    </select>
+                  </div>
+                  <div className="w-20">
+                    <label className="label" htmlFor="res-qty">Qty</label>
+                    <input id="res-qty" name="qty" type="number" min={1} defaultValue={1} className="input tabular-nums" />
+                  </div>
+                  <button className="btn-secondary">Reserve</button>
+                </form>
+              )}
+            </div>
+
+            <div className="space-y-4">
+              {servicePackages.length > 0 && !terminal && (
+                <form action={applyServicePackage.bind(null, jobCard.id)} className="card space-y-2">
+                  <h2 className="font-semibold">🧰 Apply service package</h2>
+                  <p className="text-xs text-slate-400">Drop a preset bundle of parts &amp; labour onto this job.</p>
+                  <div className="flex items-end gap-2">
+                    <select name="packageId" required className="input flex-1">
+                      <option value="">Select package…</option>
+                      {servicePackages.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                    <button className="btn-secondary">Apply</button>
+                  </div>
+                </form>
+              )}
+              <form action={saveSubcontract.bind(null, jobCard.id)} className="card space-y-2">
+                <h2 className="font-semibold">🏭 Subcontracted work</h2>
+                <label className="flex items-center gap-2 text-sm text-slate-300">
+                  <input type="checkbox" name="isSubcontracted" defaultChecked={jobCard.isSubcontracted} className="h-4 w-4" />
+                  This job is (partly) subcontracted
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <input name="subcontractor" defaultValue={jobCard.subcontractor ?? ""} placeholder="Subcontractor" className="input" />
+                  <input name="subCost" inputMode="decimal" defaultValue={jobCard.subCostCents ? (jobCard.subCostCents / 100).toFixed(2) : ""} placeholder="Cost (R)" className="input tabular-nums" />
+                </div>
+                <button className="btn-secondary btn-sm">Save</button>
+              </form>
+            </div>
+          </div>
+        </StageSection>
+
+        {/* 6 · Quality check ─────────────────────────────────────────────── */}
+        <StageSection n={6} label="Quality check" state={stageState(5)} hint={`${jobCard.documents.filter((d) => d.tag === "checkout-photo").length} check-out photos`}>
+          <div className="card">
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+              <div>
+                <h2 className="font-semibold">📸 Check-out photos</h2>
+                <p className="text-xs text-slate-400">Condition AFTER the work — proof of hand-over state.</p>
+              </div>
+              <form action={uploadCheckoutPhotos.bind(null, jobCard.id)} className="flex items-center gap-2">
+                <input type="file" name="files" multiple required accept="image/*" capture="environment" className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
+                <button className="btn-primary btn-sm">Upload</button>
+              </form>
+            </div>
+            {jobCard.documents.filter((d) => d.tag === "checkout-photo").length === 0 ? (
+              <p className="text-xs text-slate-500">No check-out photos yet.</p>
+            ) : (
+              <div className="flex gap-2 flex-wrap">
+                {jobCard.documents.filter((d) => d.tag === "checkout-photo").map((d) => (
+                  <a key={d.id} href={d.storedName} target="_blank">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={d.storedName} alt={d.fileName} className="h-24 w-24 object-cover rounded-lg border border-slate-700 hover:border-orange-500 transition-colors" />
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
+        </StageSection>
+
+        {/* 7 · Ready for collection ──────────────────────────────────────── */}
+        <StageSection n={7} label="Ready for collection" state={stageState(6)} hint={collected && jobCard.serviceRecord ? `Completed ${formatDate(jobCard.completedAt)}` : "Complete the job & write the service record"}>
           {!terminal ? (
             <div className="card border-emerald-500/30">
               <h2 className="font-semibold mb-1">Complete job card</h2>
@@ -686,12 +713,7 @@ export default async function JobCardDetailPage({
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div>
                     <label className="label">Mileage (km)</label>
-                    <input
-                      type="number"
-                      name="km"
-                      className="input"
-                      defaultValue={jobCard.kmIn ?? ""}
-                    />
+                    <input type="number" name="km" className="input" defaultValue={jobCard.kmIn ?? ""} />
                   </div>
                   <div>
                     <label className="label">Next due (km)</label>
@@ -703,11 +725,7 @@ export default async function JobCardDetailPage({
                   </div>
                   <div className="col-span-2 md:col-span-4">
                     <label className="label">Service summary</label>
-                    <input
-                      name="summary"
-                      className="input"
-                      placeholder={jobCard.description}
-                    />
+                    <input name="summary" className="input" placeholder={jobCard.description} />
                   </div>
                   <div className="col-span-2 md:col-span-4">
                     <label className="label">Work done / notes</label>
@@ -727,20 +745,56 @@ export default async function JobCardDetailPage({
                 </h2>
                 <p className="text-sm text-emerald-300">
                   Service record: {jobCard.serviceRecord.summary}
-                  {jobCard.serviceRecord.nextDueDate
-                    ? ` — next due ${formatDate(jobCard.serviceRecord.nextDueDate)}`
-                    : ""}
-                  {jobCard.serviceRecord.nextDueKm != null
-                    ? ` at ${jobCard.serviceRecord.nextDueKm.toLocaleString()} km`
-                    : ""}
+                  {jobCard.serviceRecord.nextDueDate ? ` — next due ${formatDate(jobCard.serviceRecord.nextDueDate)}` : ""}
+                  {jobCard.serviceRecord.nextDueKm != null ? ` at ${jobCard.serviceRecord.nextDueKm.toLocaleString()} km` : ""}
                 </p>
               </div>
             )
           )}
-        </div>
-
-        <DocumentsPanel documents={jobCard.documents} jobCardId={jobCard.id} revalidate={path} />
+          <form action={setJobWarranty.bind(null, jobCard.id)} className="card space-y-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Warranty recovery</p>
+            <label className="flex items-center gap-2 text-sm text-slate-300">
+              <input type="checkbox" name="underWarranty" defaultChecked={jobCard.underWarranty} className="h-4 w-4" />
+              Work is under warranty
+            </label>
+            <div>
+              <label className="label" htmlFor="warrantyRecovered">Recovered (R)</label>
+              <input id="warrantyRecovered" name="warrantyRecovered" inputMode="decimal" className="input tabular-nums" defaultValue={jobCard.warrantyRecoveredCents ? (jobCard.warrantyRecoveredCents / 100).toFixed(2) : ""} placeholder="Labour + parts recovered" />
+            </div>
+            <button className="btn-secondary btn-sm">Save</button>
+          </form>
+          <form action={setComeback.bind(null, jobCard.id)} className="card space-y-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Comeback / repeat repair</p>
+            <p className="text-xs text-muted-foreground">Link this job to the earlier one it&apos;s a repeat of, on the same vehicle.</p>
+            <select name="comebackOfId" defaultValue={jobCard.comebackOfId ?? ""} className="input">
+              <option value="">Not a comeback</option>
+              {siblingJobs.map((s) => <option key={s.id} value={s.id}>#{s.number} · {s.description.slice(0, 40)}</option>)}
+            </select>
+            <button className="btn-secondary btn-sm">Save</button>
+          </form>
+        </StageSection>
       </div>
+
+      {/* Reference — always available, not tied to a step ──────────────────── */}
+      <details className="group overflow-hidden rounded-2xl border border-border bg-card">
+        <summary className="flex cursor-pointer select-none items-center gap-3 px-4 py-3.5 list-none [&::-webkit-details-marker]:hidden">
+          <span className="text-sm font-semibold text-foreground">Profitability &amp; documents</span>
+          <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground/60 transition-transform group-open:rotate-180" />
+        </summary>
+        <div className="space-y-4 border-t border-border/60 px-4 py-4">
+          <div className="card">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Profitability</p>
+            <dl className="space-y-1 text-sm max-w-sm">
+              <div className="flex justify-between"><dt className="text-muted-foreground">Revenue</dt><dd className="font-medium tabular-nums">{formatZAR(profit.revenueCents)}</dd></div>
+              <div className="flex justify-between"><dt className="text-muted-foreground">Parts cost</dt><dd className="tabular-nums">−{formatZAR(profit.partsCostCents)}</dd></div>
+              {profit.subCostCents > 0 && <div className="flex justify-between"><dt className="text-muted-foreground">Subcontract</dt><dd className="tabular-nums">−{formatZAR(profit.subCostCents)}</dd></div>}
+              <div className="flex justify-between border-t border-border pt-1"><dt className="font-semibold">Gross profit</dt><dd className={`font-bold tabular-nums ${profit.profitCents >= 0 ? "text-emerald-400" : "text-red-400"}`}>{formatZAR(profit.profitCents)}</dd></div>
+              <div className="flex justify-between"><dt className="text-muted-foreground">Margin</dt><dd className="tabular-nums">{profit.marginPct}%</dd></div>
+            </dl>
+          </div>
+          <DocumentsPanel documents={jobCard.documents} jobCardId={jobCard.id} revalidate={path} />
+        </div>
+      </details>
     </div>
   );
 }
