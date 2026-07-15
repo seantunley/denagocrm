@@ -1,6 +1,6 @@
 import Link from "next/link";
 import {
-  ArrowLeft,
+  Sparkles,
   Upload,
   Plus,
   Star,
@@ -36,6 +36,8 @@ import {
 import RepoRow, { type RepoDoc, type MoveTargets } from "@/components/RepoRow";
 import Tabs from "@/components/Tabs";
 import { Button } from "@/components/ui/button";
+import { SettingsWorkspace } from "@/components/settings-workspace";
+import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 
 export const dynamic = "force-dynamic";
 
@@ -494,31 +496,22 @@ export default async function DocumentsHubPage({
   );
 
   return (
-    <div className="space-y-5">
-      <div>
-        <Link
-          href="/settings"
-          className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="size-3.5" />
-          Settings
-        </Link>
-        <h1 className="text-xl font-semibold tracking-tight">Documents</h1>
-        <p className="mt-0.5 text-sm text-muted-foreground">
-          Eight document types across your sales, fulfilment and workshop flows — multiple
-          templates per type, one default each — plus the repository of every stored file.
-        </p>
-      </div>
+    <SettingsWorkspace
+      current="documents"
+      title="Documents"
+      description="Manage templates, Studio documents and the repository shared across sales, fulfilment and workshop flows."
+      groups={SETTINGS_NAV_GROUPS}
+    >
 
       <Link
         href="/settings/documents/builder"
         className="flex items-center justify-between rounded-xl border border-primary/25 bg-primary/[0.06] px-4 py-3 transition-colors hover:bg-primary/10"
       >
         <div>
-          <p className="text-sm font-semibold text-foreground">✨ Document Builder</p>
-          <p className="text-xs text-muted-foreground">Drag-and-drop blocks → flowing, multi-page, sealed PDFs. Your documents, your control.</p>
+          <p className="flex items-center gap-2 text-sm font-semibold text-foreground"><Sparkles className="size-4 text-primary" />Document Builder</p>
+          <p className="text-xs text-muted-foreground">Drag-and-drop blocks for flowing, multi-page, sealed PDFs.</p>
         </div>
-        <span className="text-sm text-primary">Open →</span>
+        <span className="text-sm text-primary">Open builder →</span>
       </Link>
 
       <Tabs
@@ -529,6 +522,6 @@ export default async function DocumentsHubPage({
           { key: "repository", label: "Repository", count: rows.length, content: repositoryTab },
         ]}
       />
-    </div>
+    </SettingsWorkspace>
   );
 }

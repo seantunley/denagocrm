@@ -1,8 +1,6 @@
-import Link from "next/link";
 import { list, type ListBlobResultBlob } from "@vercel/blob";
 import {
   ArrowDownToLine,
-  ArrowLeft,
   Check,
   Clock3,
   Cloud,
@@ -17,6 +15,8 @@ import { requireOwner } from "@/lib/auth";
 import { getSetting } from "@/lib/settings";
 import { RunBackupControl, VerifyBackupControl } from "@/components/BackupControls";
 import { Button } from "@/components/ui/button";
+import { SettingsWorkspace } from "@/components/settings-workspace";
+import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 
 export const dynamic = "force-dynamic";
 // "Run backup now" invokes the backup route in-process via a server action, so
@@ -135,19 +135,13 @@ export default async function BackupsPage() {
   ];
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <Link href="/settings" className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-            <ArrowLeft className="size-3.5" /> Settings
-          </Link>
-          <h1 className="text-xl font-semibold tracking-tight">Backup &amp; recovery</h1>
-          <p className="mt-0.5 max-w-2xl text-sm text-muted-foreground">
-            Monitor automated backups, verify retained packages and follow the safe recovery runbook.
-          </p>
-        </div>
-        <RunBackupControl />
-      </div>
+    <SettingsWorkspace
+      current="backups"
+      title="Backup & recovery"
+      description="Monitor automated backups, verify retained packages and follow the safe recovery runbook."
+      actions={<RunBackupControl />}
+      groups={SETTINGS_NAV_GROUPS}
+    >
 
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
@@ -246,6 +240,6 @@ export default async function BackupsPage() {
           <div className="flex gap-3"><Clock3 className="mt-0.5 size-4 shrink-0 text-amber-400" /><p className="text-xs leading-5 text-muted-foreground"><strong className="text-foreground">Portable restore is an emergency path.</strong> Packages are complete and verifiable, but this repository does not yet include an automated importer. Follow <code>docs/backup-and-recovery.md</code> during an incident.</p></div>
         </div>
       </section>
-    </div>
+    </SettingsWorkspace>
   );
 }

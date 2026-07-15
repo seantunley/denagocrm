@@ -11,6 +11,8 @@ import {
 import ConfirmDelete from "@/components/ConfirmDelete";
 import ModalTrigger from "@/components/Modal";
 import { buttonVariants } from "@/components/ui/button";
+import { SettingsWorkspace } from "@/components/settings-workspace";
+import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 
 export const dynamic = "force-dynamic";
 
@@ -23,14 +25,12 @@ export default async function PipelineSettingsPage() {
   );
 
   return (
-    <div className="space-y-6 max-w-6xl">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-[-0.035em]">Sales pipelines</h1>
-          <p className="text-sm text-slate-400 mt-0.5">
-            Configure separate retail, fleet, hospitality, partner and service-sales processes.
-          </p>
-        </div>
+    <SettingsWorkspace
+      current="pipeline"
+      title="Sales pipelines"
+      description="Configure separate retail, fleet, hospitality, partner and service-sales processes."
+      groups={SETTINGS_NAV_GROUPS}
+      actions={
         <ModalTrigger
           label={<><Plus className="size-4" />Create pipeline</>}
           title="Create pipeline"
@@ -62,7 +62,8 @@ export default async function PipelineSettingsPage() {
             <button className="btn-primary w-full">Create pipeline</button>
           </form>
         </ModalTrigger>
-      </div>
+      }
+    >
 
       <div className="card p-0 divide-y divide-slate-800">
       {pipelines.map((pipeline) => {
@@ -204,6 +205,6 @@ export default async function PipelineSettingsPage() {
         );
       })}
       </div>
-    </div>
+    </SettingsWorkspace>
   );
 }
