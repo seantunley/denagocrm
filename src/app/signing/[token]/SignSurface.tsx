@@ -2,6 +2,7 @@
 
 import { useRef, useState, useEffect, useCallback } from "react";
 import type { StampField } from "@/lib/doceditor/serialize";
+import { TextPromptDialog } from "@/components/TextPromptDialog";
 
 type Field = { id: string; kind: string; label: string; required: boolean; page: number; x: number; y: number; width: number; height: number };
 type Sheets = { width: number; height: number; margin: number; css: string; pages: string[] };
@@ -145,8 +146,7 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
     finally { setBusy(false); }
   };
 
-  const decline = async () => {
-    const reason = prompt("Optional: why are you declining?") ?? "";
+  const decline = async (reason: string) => {
     setBusy(true);
     try {
       const res = await fetch(`/api/signing/${token}/decline`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason }) });
@@ -228,7 +228,16 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
             <button type="button" disabled={busy} onClick={submit} style={{ flex: 1, minWidth: 180, background: "#ea580c", color: "#fff", border: "none", borderRadius: 8, padding: "12px 20px", fontWeight: 700, cursor: "pointer", opacity: busy ? 0.6 : 1 }}>
               {busy ? "Submitting…" : "Sign & submit"}
             </button>
-            <button type="button" disabled={busy} onClick={decline} style={{ background: "transparent", color: "#94a3b8", border: "1px solid #334155", borderRadius: 8, padding: "12px 16px", cursor: "pointer" }}>Decline</button>
+            <TextPromptDialog
+              title="Decline this document?"
+              description="You can add an optional reason. Denago will be notified and the request can no longer be signed by you."
+              label="Reason (optional)"
+              placeholder="Tell us what needs attention"
+              required={false}
+              submitLabel="Decline document"
+              onSubmit={decline}
+              trigger={<button type="button" disabled={busy} style={{ background: "transparent", color: "#94a3b8", border: "1px solid #334155", borderRadius: 8, padding: "12px 16px", cursor: "pointer" }}>Decline</button>}
+            />
           </div>
         </div>
       </Card>

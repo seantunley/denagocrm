@@ -11,6 +11,9 @@ import { resolveContacts, type SegmentCriteria } from "@/lib/campaigns";
 import { deleteSegment, setMarketingOptOut } from "@/app/actions/campaigns";
 import { contactName, formatDateTime } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
+import { MobileDataCard, MobileDataField, MobileDataFields, MobileDataHeader, MobileDataList, ResponsiveDataView } from "@/components/responsive-patterns";
+import { EmptyState, StatusPill } from "@/components/visual-system";
+import { Megaphone } from "lucide-react";
 
 // First send batch runs inside the send action — give it room.
 export const maxDuration = 60;
@@ -98,7 +101,26 @@ export default async function CampaignsPage() {
 
   // ---- Tab: Campaigns list ----
   const campaignsList = (
-    <div className="card p-0 overflow-x-auto">
+    campaigns.length === 0 ? <EmptyState icon={Megaphone} title="No campaigns yet" description="Create a campaign to start measuring delivery and engagement." /> : <ResponsiveDataView
+      mobile={<MobileDataList>{campaigns.map((campaign) => {
+        const openRate = campaign.sentCount > 0 ? Math.round((campaign.openCount / campaign.sentCount) * 100) : 0;
+        const campaignClickRate = campaign.sentCount > 0 ? Math.round((campaign.clickCount / campaign.sentCount) * 100) : 0;
+        return <MobileDataCard key={campaign.id}>
+          <MobileDataHeader
+            title={<Link href={`/campaigns/${campaign.id}`} className="text-primary">{campaign.name}</Link>}
+            detail={`${campaign.channel.toUpperCase()} · ${campaign.audience}`}
+            aside={<StatusPill tone={campaign.status === "sent" ? "success" : campaign.status === "sending" ? "warning" : "info"}>{campaign.status}</StatusPill>}
+          />
+          <MobileDataFields>
+            <MobileDataField label="Delivered">{campaign.sentCount}/{campaign.recipientCount}</MobileDataField>
+            <MobileDataField label="Created">{formatDateTime(campaign.createdAt)}</MobileDataField>
+            {campaign.channel === "email" && <MobileDataField label="Opened">{openRate}%</MobileDataField>}
+            {campaign.channel === "email" && <MobileDataField label="Clicked">{campaignClickRate}%</MobileDataField>}
+          </MobileDataFields>
+          <Link href={`/campaigns/${campaign.id}`} className="btn-secondary w-full">View campaign</Link>
+        </MobileDataCard>;
+      })}</MobileDataList>}
+      desktop={<div className="card p-0 overflow-x-auto">
       <table className="table-base">
         <thead>
           <tr>
@@ -135,7 +157,8 @@ export default async function CampaignsPage() {
           })}
         </tbody>
       </table>
-    </div>
+    </div>}
+    />
   );
 
   // ---- Tab: Audiences ----

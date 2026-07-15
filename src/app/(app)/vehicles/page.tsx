@@ -8,6 +8,7 @@ import { contactName, formatDate } from "@/lib/format";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import {
   getAccessibleContactIds,
   getAccessibleVehicleIds,
@@ -72,12 +73,13 @@ export default async function VehiclesPage({
                 }))}
                 submitLabel="Register vehicle"
                 showInitialKm
+                variant="dialog"
               />
             </ModalTrigger>
           )}
       </PageHeader>
 
-      <div className="card p-0 overflow-x-auto">
+      <ResponsiveEntityTable>
         <table className="table-base">
           <thead>
             <tr>
@@ -93,27 +95,27 @@ export default async function VehiclesPage({
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="text-center text-slate-400 py-8">
+                <td data-empty colSpan={7} className="text-center text-slate-400 py-8">
                   {filter === "due" ? "Nothing due for service." : "No accessible vehicles."}
                 </td>
               </tr>
             )}
             {rows.map(({ vehicle: v, due }) => (
               <tr key={v.id}>
-                <td>
+                <td data-primary data-label="Model">
                   <Link href={`/vehicles/${v.id}`} className="font-medium text-orange-400 hover:underline">
                     {v.model}
                   </Link>
                   {v.color && <span className="text-xs text-slate-400 ml-2">{v.color}</span>}
                 </td>
-                <td>
+                <td data-label="Owner">
                   <Link href={`/contacts/${v.contactId}`} className="text-orange-400 hover:underline">
                     {contactName(v.contact)}
                   </Link>
                 </td>
-                <td className="font-mono text-xs">{v.vin ?? "—"}</td>
-                <td>{due.currentKm != null ? `${due.currentKm.toLocaleString()} km` : "—"}</td>
-                <td className="text-slate-400">
+                <td data-label="VIN / Serial" className="font-mono text-xs">{v.vin ?? "—"}</td>
+                <td data-label="Current km">{due.currentKm != null ? `${due.currentKm.toLocaleString()} km` : "—"}</td>
+                <td data-label="Next service" className="text-slate-400">
                   {[
                     due.nextDueDate ? formatDate(due.nextDueDate) : null,
                     due.nextDueKm != null ? `${due.nextDueKm.toLocaleString()} km` : null,
@@ -121,15 +123,15 @@ export default async function VehiclesPage({
                     .filter(Boolean)
                     .join(" / ") || "—"}
                 </td>
-                <td>
+                <td data-label="Status">
                   <span className={`badge ${dueColors[due.status]}`}>{dueLabels[due.status]}</span>
                 </td>
-                <td className="text-slate-400">{formatDate(v.purchaseDate)}</td>
+                <td data-label="Purchased" className="text-slate-400">{formatDate(v.purchaseDate)}</td>
               </tr>
             ))}
           </tbody>
         </table>
-      </div>
+      </ResponsiveEntityTable>
     </div>
   );
 }

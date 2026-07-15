@@ -4,6 +4,8 @@ import { requireOwner } from "@/lib/auth";
 import { createSignWorkflow } from "@/app/actions/signflow";
 import { parseGraph } from "@/lib/signflow/model";
 import { formatDateTime } from "@/lib/format";
+import { SettingsWorkspace } from "@/components/settings-workspace";
+import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 
 export const dynamic = "force-dynamic";
 
@@ -19,12 +21,12 @@ export default async function SigningWorkflowsPage() {
   const workflows = await prisma.signWorkflow.findMany({ where: { isArchived: false }, orderBy: { updatedAt: "desc" } });
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6 p-4">
-      <div>
-        <Link href="/settings" className="text-xs text-slate-400 hover:text-white">← Settings</Link>
-        <h1 className="mt-2 text-xl font-semibold">Signing workflows</h1>
-        <p className="text-sm text-slate-400">Design who signs, in what order, and the rules that route approvals — visually. A document template can pick one of these as its default (changeable when you send).</p>
-      </div>
+    <SettingsWorkspace
+      current="signing-workflows"
+      title="Signing workflows"
+      description="Design who signs, in what order, and the rules that route approvals."
+      groups={SETTINGS_NAV_GROUPS}
+    >
 
       <form action={createSignWorkflow} className="card flex flex-wrap items-end gap-2">
         <div className="flex-1">
@@ -46,6 +48,6 @@ export default async function SigningWorkflowsPage() {
           </Link>
         ))}
       </div>
-    </div>
+    </SettingsWorkspace>
   );
 }

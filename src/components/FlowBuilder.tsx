@@ -45,6 +45,7 @@ import { uploadCampaignImage } from "@/app/actions/campaigns";
 import type { FlowNode } from "@/lib/flow";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { cn } from "@/lib/utils";
+import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 
 type Pos = { x: number; y: number };
 type FlowData = { start: string; nodes: Record<string, FlowNode>; positions?: Record<string, Pos> };
@@ -226,8 +227,12 @@ export default function FlowBuilder({ flowId, initial }: { flowId: string; initi
   const nodeOptions = rfNodes.map((n) => ({ id: n.id, label: `${TYPE_META[n.data.flow.type].label}: ${summary(n.data.flow).slice(0, 24) || n.data.flow.type}` }));
 
   return (
-    <div className={cn("flex min-h-[720px] flex-col overflow-hidden rounded-2xl border border-border bg-[#0d1110] shadow-[0_24px_80px_rgba(0,0,0,.28)] md:h-[calc(100dvh-8rem)] md:min-h-0", fullscreen && "fixed inset-0 z-[70] h-dvh min-h-0 rounded-none")}>
-      <header className="flex min-h-14 flex-wrap items-center gap-2 border-b border-white/[0.08] bg-[#111614] px-3 py-2 sm:px-4">
+    <BuilderWorkspaceShell fullscreen={fullscreen} className="min-h-[720px] md:h-[calc(100dvh-8rem)] md:min-h-0">
+      <BuilderWorkspaceBar
+        title="Conversation flow"
+        description="Connect nodes to shape customer conversations and CRM hand-offs."
+        status={<BuilderSaveStatus status={status} />}
+      >
         <div className="flex items-center rounded-lg border border-white/10 bg-white/[0.035] p-0.5">
           <button type="button" onClick={() => setPaletteOpen((value) => !value)} className={cn("flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-slate-300 hover:bg-white/7", paletteOpen && "bg-primary/15 text-primary")}>
             {paletteOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />} Nodes
@@ -236,9 +241,6 @@ export default function FlowBuilder({ flowId, initial }: { flowId: string; initi
             {inspectorOpen ? <PanelRightClose className="size-4" /> : <PanelRightOpen className="size-4" />} Inspector
           </button>
         </div>
-        <span className="ml-auto flex items-center gap-1.5 text-xs text-slate-400" role="status" aria-live="polite">
-          <span className={cn("size-2 rounded-full", status === "Saved" ? "bg-emerald-400" : status === "Saving…" ? "animate-pulse bg-primary" : "bg-amber-400")} />{status}
-        </span>
         <button type="button" onClick={onSave} className="btn-primary btn-sm"><Save className="size-4" />Save</button>
         <ConfirmActionDialog
           destructive
@@ -251,7 +253,7 @@ export default function FlowBuilder({ flowId, initial }: { flowId: string; initi
         <button type="button" onClick={() => setFullscreen((value) => !value)} className="btn-secondary btn-sm" title={fullscreen ? "Exit full screen" : "Full screen"}>
           {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}<span className="hidden sm:inline">{fullscreen ? "Exit" : "Full screen"}</span>
         </button>
-      </header>
+      </BuilderWorkspaceBar>
 
       <div className="relative flex min-h-0 flex-1">
         {paletteOpen && (
@@ -295,7 +297,7 @@ export default function FlowBuilder({ flowId, initial }: { flowId: string; initi
           </aside>
         )}
       </div>
-    </div>
+    </BuilderWorkspaceShell>
   );
 }
 

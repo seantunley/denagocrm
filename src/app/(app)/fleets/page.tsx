@@ -4,6 +4,9 @@ import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
 import { createFleet } from "@/app/actions/fleets";
 import { PageHeader } from "@/components/page-header";
+import { MobileDataCard, MobileDataField, MobileDataFields, MobileDataHeader, MobileDataList, ResponsiveDataView } from "@/components/responsive-patterns";
+import { EmptyState, StatusPill } from "@/components/visual-system";
+import { Warehouse } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -48,7 +51,20 @@ export default async function FleetsPage() {
         </form>
       </div>
 
-      <div className="card p-0 overflow-x-auto">
+      {fleets.length === 0 ? <EmptyState icon={Warehouse} title="No fleets yet" description="Create the first managed estate, golf course, resort or business fleet above." /> : <ResponsiveDataView
+        mobile={<MobileDataList>{fleets.map((fleet) => <MobileDataCard key={fleet.id}>
+          <MobileDataHeader
+            title={<Link href={`/fleets/${fleet.id}`} className="text-primary">{fleet.name}</Link>}
+            detail="Open the fleet workspace to manage vehicles and service status."
+            aside={fleet.type ? <StatusPill tone="info">{fleet.type}</StatusPill> : undefined}
+          />
+          <MobileDataFields>
+            <MobileDataField label="Vehicles">{fleet._count.vehicles}</MobileDataField>
+            <MobileDataField label="Account type"><span className="capitalize">{fleet.type ?? "Not set"}</span></MobileDataField>
+          </MobileDataFields>
+          <Link href={`/fleets/${fleet.id}`} className="btn-secondary w-full">Open fleet</Link>
+        </MobileDataCard>)}</MobileDataList>}
+        desktop={<div className="card p-0 overflow-x-auto">
         <table className="table-base">
           <thead>
             <tr>
@@ -78,7 +94,8 @@ export default async function FleetsPage() {
             ))}
           </tbody>
         </table>
-      </div>
+      </div>}
+      />}
     </div>
   );
 }

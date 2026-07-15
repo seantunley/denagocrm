@@ -117,6 +117,7 @@ export default function QuickCreateDialog() {
                 products={options.products}
                 submitLabel="Register vehicle"
                 showInitialKm
+                variant="dialog"
               />
             )}
 

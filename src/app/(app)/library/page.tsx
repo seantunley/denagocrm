@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Download, FileStack, FileText, Plus, Upload } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import ModalTrigger from "@/components/Modal";
@@ -6,6 +7,8 @@ import ConfirmDelete from "@/components/ConfirmDelete";
 import { deleteLibraryDocument } from "@/app/actions/library";
 import { AddDocumentsForm, NewVersionForm } from "@/components/LibraryUploader";
 import { formatDateTime } from "@/lib/format";
+import { PageHeader } from "@/components/page-header";
+import { EmptyState, StatusPill } from "@/components/visual-system";
 
 function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -29,13 +32,13 @@ function DocumentCard({ doc }: { doc: DocWithVersions }) {
   return (
     <div className="card">
       <div className="flex items-center gap-4 flex-wrap">
-        <span className="text-2xl">📄</span>
+        <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-border bg-muted/40 text-muted-foreground">
+          <FileText className="size-5" />
+        </span>
         <div className="flex-1 min-w-48">
           <p className="font-semibold">
             {doc.name}{" "}
-            <span className="badge bg-orange-500/15 text-orange-300 ml-1">
-              v{latest?.version ?? 0} — latest
-            </span>
+            <StatusPill className="ml-1" tone="info">v{latest?.version ?? 0} · latest</StatusPill>
           </p>
           <p className="text-xs text-slate-400">
             {doc.category ?? "Document"} · {latest ? humanSize(latest.sizeBytes) : ""} · updated{" "}
@@ -45,11 +48,11 @@ function DocumentCard({ doc }: { doc: DocWithVersions }) {
         </div>
         {latest && (
           <a href={`/api/library/${latest.id}`} className="btn-primary btn-sm">
-            ⬇ Download latest
+            <Download className="size-3.5" />Download latest
           </a>
         )}
         <ModalTrigger
-          label="⬆ New version"
+          label={<><Upload className="size-3.5" />New version</>}
           title={`New version of ${doc.name}`}
           buttonClass="btn-secondary btn-sm"
         >
@@ -59,7 +62,7 @@ function DocumentCard({ doc }: { doc: DocWithVersions }) {
           action={deleteLibraryDocument.bind(null, doc.id)}
           title={`Delete “${doc.name}”?`}
           description="The document and all its versions move to the Trash for 60 days."
-          trigger="✕"
+          trigger="Remove"
           triggerClass="text-xs text-slate-600 hover:text-red-500 cursor-pointer"
         />
       </div>
@@ -88,8 +91,8 @@ function DocumentCard({ doc }: { doc: DocWithVersions }) {
                     {v.note ? ` — ${v.note}` : ""}
                   </p>
                 </div>
-                <a href={`/api/library/${v.id}`} className="btn-secondary btn-sm">
-                  ⬇
+                <a href={`/api/library/${v.id}`} className="btn-secondary btn-sm" aria-label={`Download version ${v.version}`}>
+                  <Download className="size-3.5" />
                 </a>
               </li>
             ))}
@@ -123,18 +126,14 @@ export default async function LibraryPage({
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-[-0.035em]">Document library</h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Brochures, price lists and spec sheets — versioned, so everyone always uses the
-            latest. Attach them to emails straight from any lead or contact.
-          </p>
-        </div>
-        <ModalTrigger label="+ Add documents" title="Add documents to library">
+      <PageHeader
+        title="Document library"
+        description="Brochures, price lists and spec sheets — versioned so the team always shares the latest approved file."
+      >
+        <ModalTrigger label={<><Plus className="size-4" />Add documents</>} title="Add documents to library">
           <AddDocumentsForm />
         </ModalTrigger>
-      </div>
+      </PageHeader>
 
       {documents.length > 0 && (
         <div className="flex gap-2 flex-wrap">
@@ -154,9 +153,12 @@ export default async function LibraryPage({
       )}
 
       {documents.length === 0 ? (
-        <div className="card text-center py-10">
-          <p className="text-slate-400">No documents yet — add your first brochure or price list.</p>
-        </div>
+        <EmptyState
+          icon={FileStack}
+          title="Build a trusted document library"
+          description="Upload the first brochure, price list or specification sheet. New versions stay grouped so staff never send an outdated file."
+          action={<ModalTrigger label={<><Plus className="size-4" />Add first document</>} title="Add documents to library"><AddDocumentsForm /></ModalTrigger>}
+        />
       ) : (
         groups.map(
           (g) =>

@@ -14,6 +14,8 @@ import { revokeUserSessions, setUserDisabled } from "@/app/actions/security";
 import { formatDateTime } from "@/lib/format";
 import ModalTrigger from "@/components/Modal";
 import { buttonVariants } from "@/components/ui/button";
+import { SettingsWorkspace } from "@/components/settings-workspace";
+import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 
 export const dynamic = "force-dynamic";
 
@@ -87,13 +89,12 @@ export default async function AccessSettingsPage() {
     id ? users.find((u) => u.id === id)?.name ?? "None" : "None";
 
   return (
-    <div className="space-y-6 max-w-7xl">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-[-0.035em]">Teams, roles &amp; permissions</h1>
-        <p className="text-sm text-slate-400 mt-0.5">
-          Granular access, team ownership, session revocation and user lifecycle controls.
-        </p>
-      </div>
+    <SettingsWorkspace
+      current="team"
+      title="Teams, roles & permissions"
+      description="Granular access, team ownership, session revocation and user lifecycle controls."
+      groups={SETTINGS_NAV_GROUPS}
+    >
 
       {canManageSecurity && (
         <section className="card p-0 overflow-x-auto">
@@ -318,6 +319,6 @@ export default async function AccessSettingsPage() {
           </div>
         </section>
       )}
-    </div>
+    </SettingsWorkspace>
   );
 }

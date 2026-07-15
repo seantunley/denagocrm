@@ -9,6 +9,9 @@ import {
   hasPermission,
   requireAnyPermission,
 } from "@/lib/permissions";
+import { MobileDataCard, MobileDataField, MobileDataFields, MobileDataHeader, MobileDataList, ResponsiveDataView } from "@/components/responsive-patterns";
+import { EmptyState, StatusPill } from "@/components/visual-system";
+import { CalendarCheck2 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -46,7 +49,25 @@ export default async function ServiceDuePage() {
         <div className="card"><p className="text-xs uppercase tracking-wide text-slate-400">Total to action</p><p className="text-3xl font-bold mt-1">{rows.length}</p></div>
       </div>
 
-      <div className="card p-0 overflow-x-auto">
+      {rows.length === 0 ? <EmptyState icon={CalendarCheck2} title="Service schedule is clear" description="No accessible vehicles are overdue or due soon." /> : <ResponsiveDataView
+        mobile={<MobileDataList>{rows.map(({ vehicle, due }) => {
+          const last = vehicle.serviceRecords[0];
+          return <MobileDataCard key={vehicle.id}>
+            <MobileDataHeader
+              title={<Link href={`/vehicles/${vehicle.id}`} className="text-primary">{vehicle.model}</Link>}
+              detail={<><Link href={`/contacts/${vehicle.contactId}`} className="hover:text-foreground">{contactName(vehicle.contact)}</Link>{vehicle.regNumber ? ` · ${vehicle.regNumber}` : ""}</>}
+              aside={<StatusPill tone={due.status === "overdue" ? "danger" : "warning"}>{dueLabels[due.status]}</StatusPill>}
+            />
+            <MobileDataFields>
+              <MobileDataField label="Due">{due.nextDueDate ? formatDate(due.nextDueDate) : "Not set"}</MobileDataField>
+              <MobileDataField label="Km left">{due.kmRemaining != null ? due.kmRemaining.toLocaleString() : "Not set"}</MobileDataField>
+              <MobileDataField label="Last service">{last ? formatDate(last.serviceDate) : "Never"}</MobileDataField>
+              <MobileDataField label="Timing">{due.daysRemaining != null ? (due.daysRemaining < 0 ? `${-due.daysRemaining}d overdue` : `in ${due.daysRemaining}d`) : "Unknown"}</MobileDataField>
+            </MobileDataFields>
+            {canManage && <div className="flex gap-2"><Link href={`/jobcards/new?vehicleId=${vehicle.id}`} className="btn-primary flex-1">Book workshop</Link><ServiceReminderButton vehicleId={vehicle.id} /></div>}
+          </MobileDataCard>;
+        })}</MobileDataList>}
+        desktop={<div className="card p-0 overflow-x-auto">
         <table className="table-base">
           <thead><tr><th>Cart</th><th>Owner</th><th>Status</th><th>Due</th><th className="text-right">Km left</th><th>Last service</th><th /></tr></thead>
           <tbody>
@@ -69,7 +90,8 @@ export default async function ServiceDuePage() {
             })}
           </tbody>
         </table>
-      </div>
+      </div>}
+      />}
     </div>
   );
 }

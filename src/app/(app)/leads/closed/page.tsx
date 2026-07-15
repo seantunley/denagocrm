@@ -7,6 +7,8 @@ import {
   hasPermission,
   requireAnyPermission,
 } from "@/lib/permissions";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
+import { PageHeader } from "@/components/page-header";
 
 export default async function ClosedLeadsPage() {
   const user = await requireAnyPermission("leads.view_all", "leads.view_owned");
@@ -26,40 +28,42 @@ export default async function ClosedLeadsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-[-0.035em]">Won &amp; lost leads</h1>
+      <PageHeader
+        title="Won & lost leads"
+        description="Review completed opportunities and reopen work that needs another pass."
+      >
         <Link href="/leads" className="btn-secondary">
-          ← Pipeline
+          Back to pipeline
         </Link>
-      </div>
+      </PageHeader>
 
-      <div className="card p-0 overflow-x-auto">
+      <ResponsiveEntityTable>
         <table className="table-base">
           <thead>
             <tr><th>Lead</th><th>Customer</th><th>Product</th><th>Value</th><th>Status</th><th>Closed</th><th /></tr>
           </thead>
           <tbody>
             {leads.length === 0 && (
-              <tr><td colSpan={7} className="text-center text-slate-400 py-8">No accessible closed leads yet.</td></tr>
+              <tr><td data-empty colSpan={7} className="text-center text-slate-400 py-8">No accessible closed leads yet.</td></tr>
             )}
             {leads.map((lead) => (
               <tr key={lead.id}>
-                <td>
+                <td data-primary data-label="Lead">
                   <Link href={`/leads/${lead.id}`} className="font-medium text-orange-400 hover:underline">
                     {lead.title}
                   </Link>
                 </td>
-                <td>{lead.name}</td>
-                <td>{lead.product?.name ?? "—"}{lead.color ? ` (${lead.color})` : ""}</td>
-                <td>{formatZAR(lead.valueCents)}</td>
-                <td>
+                <td data-label="Customer">{lead.name}</td>
+                <td data-label="Product">{lead.product?.name ?? "—"}{lead.color ? ` (${lead.color})` : ""}</td>
+                <td data-label="Value">{formatZAR(lead.valueCents)}</td>
+                <td data-label="Status">
                   <span className={`badge ${lead.status === "won" ? "bg-emerald-500/15 text-emerald-300" : "bg-red-500/15 text-red-300"}`}>
                     {lead.status}
                   </span>
                   {lead.lostReason && <span className="text-xs text-slate-400 ml-2">{lead.lostReason}</span>}
                 </td>
-                <td className="text-slate-400">{formatDate(lead.updatedAt)}</td>
-                <td>
+                <td data-label="Closed" className="text-slate-400">{formatDate(lead.updatedAt)}</td>
+                <td data-actions>
                   {canReopen && (
                     <form action={reopenLead.bind(null, lead.id)}>
                       <button className="btn-secondary btn-sm">Reopen</button>
@@ -70,7 +74,7 @@ export default async function ClosedLeadsPage() {
             ))}
           </tbody>
         </table>
-      </div>
+      </ResponsiveEntityTable>
     </div>
   );
 }

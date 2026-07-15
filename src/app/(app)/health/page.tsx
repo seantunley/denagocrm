@@ -1,9 +1,26 @@
 import Link from "next/link";
+import { Crown, Eye, HeartPulse, ShieldCheck, TriangleAlert, UserRoundSearch, type LucideIcon } from "lucide-react";
 import { requireCrm } from "@/lib/auth";
 import { bulkHealth } from "@/lib/healthData";
-import { healthColors, healthLabels, type HealthTier } from "@/lib/health";
+import { healthLabels, type HealthTier } from "@/lib/health";
+import { PageHeader } from "@/components/page-header";
+import {
+  KpiGrid,
+  MobileDataCard,
+  MobileDataHeader,
+  MobileDataList,
+  ResponsiveDataView,
+} from "@/components/responsive-patterns";
+import { EmptyState, MetricCard, SectionHeading, StatusPill } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
+
+const healthTone: Record<HealthTier, "info" | "success" | "warning" | "danger"> = {
+  vip: "info",
+  healthy: "success",
+  watch: "warning",
+  at_risk: "danger",
+};
 
 function name(c: { firstName: string; lastName: string | null; company: string | null; isCompany: boolean }) {
   if (c.isCompany && c.company) return c.company;
@@ -26,21 +43,39 @@ export default async function HealthPage() {
     .sort((a, b) => a.health.score - b.health.score)
     .slice(0, 50);
 
-  const Section = ({
+  const renderSection = ({
     title,
     rows,
     empty,
+    icon: Icon,
   }: {
     title: string;
     rows: typeof scored;
     empty: string;
+    icon: LucideIcon;
   }) => (
     <section className="space-y-3">
-      <h2 className="font-semibold">
-        {title} ({rows.length})
-      </h2>
-      <div className="card p-0 overflow-x-auto">
-        <table className="table-base">
+      <SectionHeading title={`${title} (${rows.length})`} />
+      {rows.length === 0 ? (
+        <EmptyState icon={Icon} title={empty} description="Customer health updates automatically as ownership, service, feedback and support activity changes." className="py-9" />
+      ) : (
+        <ResponsiveDataView
+          mobile={
+            <MobileDataList>
+              {rows.map((row) => (
+                <MobileDataCard key={row.id}>
+                  <MobileDataHeader
+                    title={<Link href={`/contacts/${row.id}`} className="text-primary hover:underline">{name(row)}</Link>}
+                    detail={row.health.reasons.slice(0, 3).join(" · ") || "No contributing signals recorded"}
+                    aside={<StatusPill tone={healthTone[row.health.tier]}>Score {row.health.score}</StatusPill>}
+                  />
+                </MobileDataCard>
+              ))}
+            </MobileDataList>
+          }
+          desktop={
+            <div className="card p-0 overflow-x-auto">
+              <table className="table-base">
           <thead>
             <tr>
               <th>Customer</th>
@@ -49,13 +84,6 @@ export default async function HealthPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={3} className="text-center text-slate-400 py-6">
-                  {empty}
-                </td>
-              </tr>
-            )}
             {rows.map((s) => (
               <tr key={s.id}>
                 <td>
@@ -64,38 +92,36 @@ export default async function HealthPage() {
                   </Link>
                 </td>
                 <td className="text-right">
-                  <span className={`badge ${healthColors[s.health.tier]}`}>{s.health.score}</span>
+                  <StatusPill tone={healthTone[s.health.tier]}>{s.health.score}</StatusPill>
                 </td>
                 <td className="text-slate-400 text-xs">{s.health.reasons.slice(0, 3).join(" · ") || "—"}</td>
               </tr>
             ))}
           </tbody>
-        </table>
-      </div>
+              </table>
+            </div>
+          }
+        />
+      )}
     </section>
   );
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-[-0.035em]">Customer health</h1>
-        <p className="text-sm text-slate-400 mt-0.5">
-          A blended score from ownership, service recency, survey sentiment, referrals and open
-          issues — so you know who to look after and who to win back.
-        </p>
-      </div>
+      <PageHeader
+        title="Customer health"
+        description="A blended view of ownership, service recency, sentiment, referrals and open issues — prioritised for customer care."
+      />
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {(["vip", "healthy", "watch", "at_risk"] as HealthTier[]).map((t) => (
-          <div key={t} className="card">
-            <p className="text-xs uppercase tracking-wide text-slate-400">{healthLabels[t]}</p>
-            <p className="text-3xl font-bold mt-1">{counts[t]}</p>
-          </div>
-        ))}
-      </div>
+      <KpiGrid>
+        <MetricCard icon={Crown} label={healthLabels.vip} value={counts.vip} detail="Highest-value relationships" />
+        <MetricCard icon={ShieldCheck} label={healthLabels.healthy} value={counts.healthy} detail="Engaged and on track" />
+        <MetricCard icon={Eye} label={healthLabels.watch} value={counts.watch} detail="Needs proactive attention" />
+        <MetricCard icon={TriangleAlert} label={healthLabels.at_risk} value={counts.at_risk} detail="Prioritise win-back activity" accent={counts.at_risk > 0} />
+      </KpiGrid>
 
-      <Section title="⭐ VIPs" rows={vips} empty="No VIPs yet." />
-      <Section title="⚠️ At risk — win these back" rows={atRisk} empty="Nobody at risk. 🎉" />
+      {renderSection({ title: "VIP customers", rows: vips, empty: "No VIP customers yet", icon: UserRoundSearch })}
+      {renderSection({ title: "At risk — win these back", rows: atRisk, empty: "No customers are currently at risk", icon: HeartPulse })}
     </div>
   );
 }

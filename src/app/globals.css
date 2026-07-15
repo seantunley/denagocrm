@@ -295,14 +295,23 @@
   font-variant-numeric: tabular-nums;
 }
 .denago-workspace :is(a, button, input, select, textarea):focus-visible {
-  outline: none;
+  outline: 2px solid color-mix(in oklab, var(--primary), white 16%);
+  outline-offset: 3px;
 }
 @keyframes workspace-enter {
   from { opacity: 0; transform: translateY(5px); }
   to { opacity: 1; transform: translateY(0); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .denago-workspace > * { animation: none; }
+  html:focus-within { scroll-behavior: auto; }
+  .denago-workspace *,
+  .denago-workspace *::before,
+  .denago-workspace *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* Phones: never let a rogue element drag the whole page sideways —
@@ -344,6 +353,95 @@
   }
   .denago-workspace :is(.btn, .btn-primary, .btn-secondary, .btn-danger) {
     min-height: 2.5rem;
+  }
+  /* Safety net: wide tables scroll horizontally on phones instead of cramming.
+     Pages converted to intentional mobile layouts wrap their own tables; this
+     keeps the many list pages not yet converted usable. */
+  .denago-workspace .card:has(> table),
+  .denago-workspace .card:has(> .table-base) {
+    overflow-x: auto;
+  }
+  .denago-workspace .table-base {
+    min-width: 640px;
+  }
+}
+
+/* Explicit entity-table pattern: desktop table, labelled mobile records. */
+@media (max-width: 639px) {
+  [data-slot="responsive-entity-table"] {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+  }
+  [data-slot="responsive-entity-table"] .table-base {
+    display: block;
+    min-width: 0;
+  }
+  [data-slot="responsive-entity-table"] thead {
+    display: none;
+  }
+  [data-slot="responsive-entity-table"] tbody {
+    display: grid;
+    gap: 0.75rem;
+  }
+  [data-slot="responsive-entity-table"] tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem 1rem;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    background: var(--card);
+    padding: 1rem;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.14);
+  }
+  [data-slot="responsive-entity-table"] td {
+    display: block;
+    min-width: 0;
+    border: 0;
+    padding: 0;
+    text-align: left !important;
+    white-space: normal;
+  }
+  [data-slot="responsive-entity-table"] td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 0.2rem;
+    color: var(--muted-foreground);
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    line-height: 1rem;
+    text-transform: uppercase;
+  }
+  [data-slot="responsive-entity-table"] td[data-primary],
+  [data-slot="responsive-entity-table"] td[data-actions],
+  [data-slot="responsive-entity-table"] td[colspan] {
+    grid-column: 1 / -1;
+  }
+  [data-slot="responsive-entity-table"] td[data-primary]::before,
+  [data-slot="responsive-entity-table"] td[data-actions]::before {
+    content: none;
+  }
+  [data-slot="responsive-entity-table"] td[data-actions] {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding-top: 0.25rem;
+  }
+
+  [data-slot="responsive-entity-table"] td[data-empty] {
+    display: block;
+    grid-column: 1 / -1;
+    padding: 2rem 1rem;
+    text-align: center;
+  }
+
+  [data-slot="responsive-entity-table"] td[data-empty]::before {
+    content: none;
+  }
+  [data-slot="responsive-entity-table"] td[data-actions] > :is(a, button, form) {
+    flex: 1 1 auto;
   }
 }
 

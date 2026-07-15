@@ -1,6 +1,4 @@
-import Link from "next/link";
 import {
-  ArrowLeft,
   ShieldCheck,
   ShieldAlert,
   ShieldX,
@@ -13,6 +11,8 @@ import { getAiHealth, getAiUsageThisMonth } from "@/lib/systemHealth";
 import { runSecurityNow } from "@/app/actions/runbook";
 import { RunButton } from "./RunButton";
 import { cn } from "@/lib/utils";
+import { SettingsWorkspace } from "@/components/settings-workspace";
+import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 
 export const dynamic = "force-dynamic";
 // The runbook makes several live self-probes; give it headroom over Vercel's
@@ -61,26 +61,13 @@ export default async function SecurityPage() {
     : [];
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <Link
-            href="/settings"
-            className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-          >
-            <ArrowLeft className="size-3.5" />
-            Settings
-          </Link>
-          <h1 className="text-xl font-semibold tracking-tight">Security runbook</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            Automated checks on keys, exposure, backups and accounts. Runs monthly by itself —
-            or on demand. Alerts go to the people who ticked “Security” in their notifications.
-          </p>
-        </div>
-        <form action={runSecurityNow}>
-          <RunButton />
-        </form>
-      </div>
+    <SettingsWorkspace
+      current="security"
+      title="Security runbook"
+      description="Automated checks on keys, exposure, backups and accounts, with monthly scheduling and on-demand verification."
+      actions={<form action={runSecurityNow}><RunButton /></form>}
+      groups={SETTINGS_NAV_GROUPS}
+    >
 
       {/* Score + system health strip */}
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
@@ -186,6 +173,6 @@ export default async function SecurityPage() {
           </ul>
         </div>
       )}
-    </div>
+    </SettingsWorkspace>
   );
 }

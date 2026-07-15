@@ -6,6 +6,9 @@ import {
   reviewPortalProfileRequest,
 } from "@/app/actions/portalAdmin";
 import { contactName, formatDateTime } from "@/lib/format";
+import { SettingsWorkspace } from "@/components/settings-workspace";
+import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 
 export const dynamic = "force-dynamic";
 
@@ -69,8 +72,12 @@ export default async function PortalAccessPage() {
   ]);
   const portalUsers = contacts.filter((contact) => contact.email);
 
-  return <div className="space-y-8">
-    <div><h1 className="text-2xl font-bold">Customer portal administration</h1><p className="text-sm text-slate-400 mt-1">Manage delegated access and review customer profile-change requests.</p></div>
+  return <SettingsWorkspace
+    current="portal-access"
+    title="Customer portal administration"
+    description="Manage delegated access and review customer profile-change requests."
+    groups={SETTINGS_NAV_GROUPS}
+  >
 
     {profileRequests.length > 0 && (
       <section className="space-y-3">
@@ -122,7 +129,24 @@ export default async function PortalAccessPage() {
         </form>
       </div>
 
-      <div className="card p-0 overflow-x-auto"><table className="table-base"><thead><tr><th>Portal user</th><th>Target</th><th>Role</th><th>Status</th><th>Granted</th><th></th></tr></thead><tbody>{grants.length === 0 && <tr><td colSpan={6} className="text-center py-8 text-slate-400">No delegated portal access grants.</td></tr>}{grants.map((grant) => <tr key={grant.id}><td>{grant.viewerName}</td><td>{grant.targetName}<p className="text-xs text-slate-500 capitalize">{grant.targetType}</p></td><td className="capitalize">{grant.role}</td><td><span className={`badge ${grant.active ? "bg-emerald-500/15 text-emerald-300" : "bg-slate-800 text-slate-500"}`}>{grant.active ? "Active" : "Revoked"}</span></td><td>{formatDateTime(grant.createdAt)}</td><td>{grant.active && <form action={revokePortalAccess.bind(null, grant.id)}><button className="text-red-400 text-sm">Revoke</button></form>}</td></tr>)}</tbody></table></div>
+      <ResponsiveEntityTable>
+        <table className="table-base">
+          <thead><tr><th>Portal user</th><th>Target</th><th>Role</th><th>Status</th><th>Granted</th><th></th></tr></thead>
+          <tbody>
+            {grants.length === 0 && <tr><td data-empty colSpan={6} className="text-center py-8 text-slate-400">No delegated portal access grants.</td></tr>}
+            {grants.map((grant) => (
+              <tr key={grant.id}>
+                <td data-primary data-label="Portal user">{grant.viewerName}</td>
+                <td data-label="Target">{grant.targetName}<p className="text-xs text-slate-500 capitalize">{grant.targetType}</p></td>
+                <td data-label="Role" className="capitalize">{grant.role}</td>
+                <td data-label="Status"><span className={`badge ${grant.active ? "bg-emerald-500/15 text-emerald-300" : "bg-slate-800 text-slate-500"}`}>{grant.active ? "Active" : "Revoked"}</span></td>
+                <td data-label="Granted">{formatDateTime(grant.createdAt)}</td>
+                <td data-actions>{grant.active && <form action={revokePortalAccess.bind(null, grant.id)}><button className="text-red-400 text-sm">Revoke</button></form>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </ResponsiveEntityTable>
     </section>
-  </div>;
+  </SettingsWorkspace>;
 }

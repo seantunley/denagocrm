@@ -6,6 +6,8 @@ import { formatDateTime } from "@/lib/format";
 import SurveyBuilder from "@/components/SurveyBuilder";
 import SurveySendPanel from "@/components/SurveySendPanel";
 import { npsFromScores, surveyTypeLabel, type SurveyQuestion } from "@/lib/surveyTypes";
+import { EntityDetailShell } from "@/components/entity-detail-shell";
+import { StatusPill } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
 
@@ -51,36 +53,20 @@ export default async function SurveyEditorPage({
         };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <Link href="/surveys" className="text-sm text-slate-400 hover:text-slate-200">
-          ← Surveys
-        </Link>
-        <div className="flex flex-wrap items-center gap-3 mt-1">
-          <h1 className="text-2xl font-semibold tracking-[-0.035em]">{survey.title}</h1>
-          <span className="badge bg-orange-600/15 text-orange-300">
-            {surveyTypeLabel(survey.type)}
-          </span>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-3 gap-3">
-        <div className="card">
-          <p className="text-xs uppercase tracking-wide text-slate-400">Sent</p>
-          <p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{live.length}</p>
-        </div>
-        <div className="card">
-          <p className="text-xs uppercase tracking-wide text-slate-400">Responses</p>
-          <p className="text-2xl font-semibold tracking-[-0.035em] mt-1">
-            {completed.length}
-            <span className="text-sm text-slate-500 font-normal"> · {rate}%</span>
-          </p>
-        </div>
-        <div className="card">
-          <p className="text-xs uppercase tracking-wide text-slate-400">{summaryStat.label}</p>
-          <p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{summaryStat.value}</p>
-        </div>
-      </div>
+    <EntityDetailShell
+      backHref="/surveys"
+      backLabel="Surveys"
+      eyebrow="Customer feedback"
+      title={survey.title}
+      status={<StatusPill tone={survey.active ? "success" : "neutral"}>{survey.active ? "Active" : "Inactive"}</StatusPill>}
+      description={`${surveyTypeLabel(survey.type)} survey · ${questions.length} question${questions.length === 1 ? "" : "s"}`}
+      facts={[
+        { label: "Sent", value: live.length },
+        { label: "Responses", value: `${completed.length} · ${rate}%` },
+        { label: summaryStat.label, value: summaryStat.value },
+        { label: "Trigger", value: survey.trigger ? survey.trigger.replaceAll("_", " ") : "Manual" },
+      ]}
+    >
 
       <SurveySendPanel
         surveyId={survey.id}
@@ -173,6 +159,6 @@ export default async function SurveyEditorPage({
           </table>
         </div>
       </div>
-    </div>
+    </EntityDetailShell>
   );
 }

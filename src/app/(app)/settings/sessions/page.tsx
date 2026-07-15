@@ -1,11 +1,12 @@
-import Link from "next/link";
-import { ArrowLeft, Smartphone, Monitor, LogOut, ShieldOff } from "lucide-react";
+import { Smartphone, Monitor, LogOut, ShieldOff } from "lucide-react";
 import { requireOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
 import { revokeSession, revokeAllForUser } from "@/app/actions/sessions";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { SettingsWorkspace } from "@/components/settings-workspace";
+import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 
 export const dynamic = "force-dynamic";
 
@@ -59,23 +60,12 @@ export default async function SessionsPage() {
   const totalActive = users.reduce((s, u) => s + u.sessions.length, 0);
 
   return (
-    <div className="space-y-5">
-      <div>
-        <Link
-          href="/settings"
-          className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="size-3.5" />
-          Settings
-        </Link>
-        <h1 className="text-xl font-semibold tracking-tight">Sessions &amp; devices</h1>
-        <p className="mt-0.5 text-sm text-muted-foreground">
-          Every signed-in device: who, where from, since when, last activity. {totalActive} active.
-          Revoking signs the device out on its next request. (Sessions started before this feature
-          shipped appear once their owner signs in again.)
-        </p>
-      </div>
-
+    <SettingsWorkspace
+      current="sessions"
+      title="Sessions & devices"
+      description={`${totalActive} active device session${totalActive === 1 ? "" : "s"} · Review activity and revoke access immediately.`}
+      groups={SETTINGS_NAV_GROUPS}
+    >
       <div className="space-y-4">
         {users.map((u) => (
           <div key={u.id} className="rounded-xl border border-border bg-card p-4 shadow-sm">
@@ -143,6 +133,6 @@ export default async function SessionsPage() {
           </div>
         ))}
       </div>
-    </div>
+    </SettingsWorkspace>
   );
 }
