@@ -61,20 +61,15 @@ jobs:
       - name: Generate Prisma client
         run: npm run prisma:generate
 
-      - name: Apply migrations in numeric order to isolated PostgreSQL
-        # The migration folders use non-zero-padded numeric prefixes, so Prisma's
-        # lexical `migrate deploy` mis-orders them (10_dealer_signature before
-        # 4_quotes → "relation Quote does not exist"). Apply each migration.sql
-        # directly in NUMERIC order — this also runs the data-seeding INSERTs
-        # (RBAC permissions/roles in 52/53) that the governance + security checks
-        # below depend on and that a schema-only `db push` would skip.
-        run: |
-          # Strip Prisma's ?schema=public — libpq/psql rejects it as a URI param.
-          DB_URL=$(echo "$DATABASE_URL" | cut -d'?' -f1)
-          for name in $(ls prisma/migrations | grep -E '^[0-9]+_' | sort -t_ -k1,1 -n); do
-            echo "→ $name"
-            psql "$DB_URL" -v ON_ERROR_STOP=1 -q -f "prisma/migrations/$name/migration.sql"
-          done
+      - name: Apply migrations (same unified script as preview & production)
+        # scripts/apply-migrations.mjs is the exact command Vercel runs, so CI,
+        # preview and production apply migrations identically — in true NUMERIC
+        # order (Prisma's lexical `migrate deploy` mis-orders the non-zero-padded
+        # prefixes: 10_dealer_signature before 4_quotes → "relation Quote does not
+        # exist"). Running it here against a completely empty PostgreSQL IS the
+        # shared empty-database migration test. It also runs each migration's
+        # data-seeding INSERTs (RBAC in 52/53) the governance checks depend on.
+        run: node scripts/apply-migrations.mjs
 
       - name: Seed baseline data
         # governance + security checks also assert on a default pipeline + admin
