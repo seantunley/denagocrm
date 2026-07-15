@@ -137,14 +137,14 @@ export function DocEditor({ id, initialDoc, quotes }: { id: string; initialDoc: 
       <DndController>
         <div className="flex min-h-0 flex-1">
           <aside className={`${paletteOpen ? "fixed inset-x-0 bottom-0 z-[80] max-h-[72dvh] rounded-t-3xl shadow-2xl" : "hidden"} w-60 flex-shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50 md:static md:block md:max-h-none md:rounded-none md:shadow-none`}>
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white p-3 md:hidden"><span className="text-sm font-semibold">Content palette</span><button type="button" onClick={() => setPaletteOpen(false)}><X className="size-4" /></button></div>
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white p-3 md:hidden"><span className="text-sm font-semibold">Content palette</span><button type="button" onClick={() => setPaletteOpen(false)} aria-label="Close content palette"><X className="size-4" /></button></div>
             <Palette />
           </aside>
           <main className="min-w-0 flex-1 overflow-auto">
             <Canvas zoom={zoom} />
           </main>
           <aside className={`${inspectorOpen ? "fixed inset-x-0 bottom-0 z-[81] max-h-[78dvh] rounded-t-3xl shadow-2xl" : "hidden"} w-80 flex-shrink-0 overflow-y-auto border-l border-slate-200 bg-white md:static md:block md:max-h-none md:rounded-none md:shadow-none`}>
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white p-3 md:hidden"><span className="text-sm font-semibold">Inspector</span><button type="button" onClick={() => setInspectorOpen(false)}><X className="size-4" /></button></div>
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white p-3 md:hidden"><span className="text-sm font-semibold">Inspector</span><button type="button" onClick={() => setInspectorOpen(false)} aria-label="Close inspector"><X className="size-4" /></button></div>
             <PropertiesPanel />
           </aside>
         </div>
