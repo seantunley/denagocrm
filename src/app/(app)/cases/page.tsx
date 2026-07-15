@@ -1,9 +1,12 @@
 import Link from "next/link";
 import { LifeBuoy, Plus, Inbox } from "lucide-react";
-import { requireAnyPermission } from "@/lib/permissions";
+import { prisma } from "@/lib/db";
+import { requireAnyPermission, getAccessibleContactIds, hasPermission } from "@/lib/permissions";
 import { listTickets, folderCounts, listMailboxes, listTags, type TicketFilters } from "@/lib/helpdesk";
 import { FOLDERS, statusMeta, priorityMeta } from "@/lib/helpdesk-constants";
-import { formatDateTime } from "@/lib/format";
+import { contactName, formatDateTime } from "@/lib/format";
+import ModalTrigger from "@/components/Modal";
+import { NewTicketForm } from "@/components/helpdesk/NewTicketForm";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { EmptyState, StatusPill } from "@/components/visual-system";
@@ -33,22 +36,41 @@ export default async function CasesPage({ searchParams }: { searchParams: Promis
     type: sp.type ?? null,
   };
 
-  const [tickets, counts, mailboxes, tags] = await Promise.all([
+  const [tickets, counts, mailboxes, tags, canCreate] = await Promise.all([
     listTickets(user, filters),
     folderCounts(user, filters),
     listMailboxes(),
     listTags(),
+    hasPermission(user, "cases.create"),
   ]);
+
+  const contactIds = canCreate ? await getAccessibleContactIds(user) : [];
+  const newTicketContacts = canCreate
+    ? await prisma.contact.findMany({
+        where: contactIds === null ? {} : { id: { in: contactIds } },
+        orderBy: { firstName: "asc" },
+        take: 500,
+        select: { id: true, firstName: true, lastName: true, company: true, isCompany: true },
+      })
+    : [];
 
   const activeFolder = filters.folder ?? "open";
 
   return (
     <div className="space-y-5">
       <PageHeader title="Help desk" description="Customer support tickets across every mailbox.">
-        <Link href="/cases/new" className={buttonVariants({ size: "sm" })}>
-          <Plus className="size-4" />
-          New ticket
-        </Link>
+        {canCreate && (
+          <ModalTrigger
+            label={<><Plus className="size-4" />New ticket</>}
+            title="New ticket"
+            buttonClass={buttonVariants({ size: "sm" })}
+          >
+            <NewTicketForm
+              contacts={newTicketContacts.map((c) => ({ id: c.id, label: contactName(c) }))}
+              mailboxes={mailboxes.map((m) => ({ id: m.id, label: m.name }))}
+            />
+          </ModalTrigger>
+        )}
       </PageHeader>
 
       <div className="grid gap-5 lg:grid-cols-[15rem_minmax(0,1fr)]">
