@@ -1275,3 +1275,114 @@ model Passkey {
 
   @@index([userId])
 }
+
+// ── Customer portal ─────────────────────────────────────────────────────────
+// These tables are created by the raw-SQL migrations 50 (customer portal
+// expansion) and 51 (portal preferences). They are modelled here so that the
+// schema-driven logical backup (Prisma.dmmf.datamodel.models in src/lib/backup)
+// captures them, and so restore/retention/POPIA-erasure tooling can see them.
+// Foreign keys are kept scalar (no @relation) to avoid modifying Contact /
+// Vehicle / User / Fleet; the database enforces the real referential actions,
+// partial-unique indexes and CHECK constraints defined in migration 50.
+
+model PortalAccessGrant {
+  id               String   @id
+  viewerContactId  String
+  grantedContactId String?
+  fleetId          String?
+  role             String   @default("viewer")
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  createdById      String?
+
+  @@index([viewerContactId, active])
+}
+
+model CustomerCase {
+  id              String    @id
+  number          BigInt    @unique @default(autoincrement())
+  subject         String
+  description     String
+  type            String    @default("support")
+  category        String?
+  priority        String    @default("normal")
+  status          String    @default("new")
+  source          String    @default("portal")
+  contactId       String
+  vehicleId       String?
+  warrantyClaimId String?
+  assignedToId    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @default(now())
+  resolvedAt      DateTime?
+  closedAt        DateTime?
+
+  @@index([contactId, status, createdAt])
+  @@index([vehicleId, createdAt])
+}
+
+model CustomerCaseMessage {
+  id        String    @id
+  caseId    String
+  contactId String?
+  userId    String?
+  direction String    @default("customer")
+  body      String
+  createdAt DateTime  @default(now())
+  readAt    DateTime?
+
+  @@index([caseId, createdAt])
+}
+
+model PortalNotification {
+  id        String    @id
+  contactId String
+  title     String
+  body      String
+  href      String?
+  kind      String    @default("info")
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([contactId, readAt, createdAt])
+}
+
+model PortalProfileChangeRequest {
+  id           String    @id
+  contactId    String
+  changes      Json
+  note         String?
+  status       String    @default("pending")
+  createdAt    DateTime  @default(now())
+  reviewedAt   DateTime?
+  reviewedById String?
+  reviewNote   String?
+
+  @@index([contactId, status, createdAt])
+}
+
+model PortalPreference {
+  contactId           String   @id
+  serviceReminders    Boolean  @default(true)
+  portalNotifications Boolean  @default(true)
+  marketingEmail      Boolean  @default(true)
+  updatedAt           DateTime @default(now())
+  emailServiceUpdates Boolean  @default(true)
+  smsServiceUpdates   Boolean  @default(true)
+  emailMarketing      Boolean  @default(true)
+}
+
+model PortalUpload {
+  id         String   @id
+  contactId  String
+  caseId     String?
+  vehicleId  String?
+  fileName   String
+  storedName String
+  mimeType   String
+  sizeBytes  Int
+  status     String   @default("received")
+  createdAt  DateTime @default(now())
+
+  @@index([contactId, createdAt])
+}
