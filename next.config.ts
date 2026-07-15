@@ -1,10 +1,23 @@
 import type { NextConfig } from "next";
 
+// @sparticuz/chromium ships the browser as bin/chromium.br (~64 MB) which
+// chromium.executablePath() reads at RUNTIME. Next's tracer can't see that
+// runtime read, so Vercel omits the bin/ folder from the function and PDF
+// generation dies with "…/@sparticuz/chromium/bin does not exist". Externalizing
+// the package (below) stops the bundler mangling it but does NOT force those
+// files in — outputFileTracingIncludes does, scoped to the routes that render
+// PDFs (signing send + document studio + public sign completion).
+const CHROMIUM_FILES = "./node_modules/@sparticuz/chromium/**/*";
+
 const nextConfig: NextConfig = {
-  // Keep the headless-Chrome packages out of the server bundle so their native
-  // binary isn't relocated — otherwise chromium.executablePath() can't find it
-  // on Vercel and PDF generation (signing, document render) fails at runtime.
   serverExternalPackages: ["@sparticuz/chromium", "puppeteer-core"],
+  outputFileTracingIncludes: {
+    "/quotes/**": [CHROMIUM_FILES],
+    "/jobcards/**": [CHROMIUM_FILES],
+    "/document-studio": [CHROMIUM_FILES],
+    "/settings/documents/**": [CHROMIUM_FILES],
+    "/api/sign/**": [CHROMIUM_FILES],
+  },
   async headers() {
     return [
       {
