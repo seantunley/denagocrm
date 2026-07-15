@@ -33,8 +33,21 @@ const quoteDraftSchema = z.object({
       productId: z.string().trim().min(1).nullable().optional(),
       colorPreference: z.string().trim().max(100).nullable().optional(),
       discountPct: z.number().finite().min(0).max(100).optional(),
+      taxRatePct: z.number().finite().min(0).max(100).optional(),
     }),
   ).max(100, "A quote can contain at most 100 lines."),
+  // CPQ
+  taxInclusive: z.boolean().optional(),
+  depositType: z.enum(["percent", "amount"]).nullable().optional(),
+  depositValue: z.number().finite().min(0).nullable().optional(),
+  fees: z.array(
+    z.object({
+      label: z.string().trim().min(1).max(120),
+      kind: z.enum(["fee", "delivery"]).optional(),
+      amountCents: z.number().int(),
+      taxRatePct: z.number().finite().min(0).max(100).optional(),
+    }),
+  ).max(20).optional(),
 });
 
 export type QuoteDraftInput = z.input<typeof quoteDraftSchema>;
@@ -191,17 +204,19 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     productId: string | null;
     colorPreference: string | null;
     discountPct: number;
+    taxRatePct: number;
   }> = [];
   for (const item of data.items) {
     const productId = item.productId || null;
     const requestedColor = item.colorPreference?.trim() || null;
     // Clamp discount to a sane 0–100 range; the schema already validates it.
     const discountPct = Math.min(100, Math.max(0, item.discountPct ?? 0));
+    const taxRatePct = Math.min(100, Math.max(0, item.taxRatePct ?? 15));
     if (!productId) {
       if (requestedColor) {
         return { ok: false, error: "A colour preference requires a catalogue product." };
       }
-      normalizedItems.push({ ...item, productId: null, colorPreference: null, discountPct });
+      normalizedItems.push({ ...item, productId: null, colorPreference: null, discountPct, taxRatePct });
       continue;
     }
 
@@ -213,8 +228,20 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     if (requestedColor && !canonicalColor) {
       return { ok: false, error: `“${requestedColor}” is not configured for this product.` };
     }
-    normalizedItems.push({ ...item, productId, colorPreference: canonicalColor ?? null, discountPct });
+    normalizedItems.push({ ...item, productId, colorPreference: canonicalColor ?? null, discountPct, taxRatePct });
   }
+
+  const normalizedFees = (data.fees ?? []).map((fee) => ({
+    label: fee.label.trim(),
+    kind: fee.kind === "delivery" ? "delivery" : "fee",
+    amountCents: Math.round(fee.amountCents),
+    taxRatePct: Math.min(100, Math.max(0, fee.taxRatePct ?? 15)),
+  }));
+  const cpqQuoteData = {
+    taxInclusive: data.taxInclusive ?? true,
+    depositType: data.depositType ?? null,
+    depositValue: data.depositValue ?? null,
+  };
 
   const contact = await prisma.contact.findUnique({
     where: { id: data.contactId },
@@ -258,12 +285,19 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
           validUntil,
           terms: data.terms || null,
           status: data.intent,
+          ...cpqQuoteData,
         },
       });
       await tx.quoteItem.deleteMany({ where: { quoteId: existing.id } });
       if (normalizedItems.length > 0) {
         await tx.quoteItem.createMany({
           data: normalizedItems.map((item) => ({ ...item, quoteId: existing.id })),
+        });
+      }
+      await tx.quoteFee.deleteMany({ where: { quoteId: existing.id } });
+      if (normalizedFees.length > 0) {
+        await tx.quoteFee.createMany({
+          data: normalizedFees.map((fee, index) => ({ ...fee, sortOrder: index, quoteId: existing.id })),
         });
       }
       return tx.quote.findUniqueOrThrow({ where: { id: existing.id } });
@@ -284,7 +318,9 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
         validUntil: validUntil ?? addDays(new Date(), Number.isNaN(validDays) ? 7 : validDays),
         terms: data.terms || defaultTerms,
         status: data.intent,
+        ...cpqQuoteData,
         items: normalizedItems.length > 0 ? { create: normalizedItems } : undefined,
+        fees: normalizedFees.length > 0 ? { create: normalizedFees.map((fee, index) => ({ ...fee, sortOrder: index })) } : undefined,
       },
     });
   });

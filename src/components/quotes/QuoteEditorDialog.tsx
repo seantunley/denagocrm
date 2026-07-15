@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { saveQuoteDraft, type QuoteDraftInput } from "@/app/actions/quotes";
+import { quotePricing } from "@/lib/pricing";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -82,6 +83,10 @@ export type QuoteEditorRecord = {
     colorPreference: string | null;
     discountPct: number;
   }>;
+  taxInclusive: boolean;
+  depositType: string | null;
+  depositValue: number | null;
+  fees: Array<{ id: string; label: string; kind: string; amountCents: number }>;
   versions: QuoteEditorVersion[];
 };
 
@@ -101,11 +106,22 @@ type DraftLine = {
   colorPreference: string;
 };
 
+type DraftFee = {
+  key: string;
+  label: string;
+  kind: "fee" | "delivery";
+  amount: string;
+};
+
 type DraftState = {
   contactId: string;
   validUntil: string;
   terms: string;
   lines: DraftLine[];
+  fees: DraftFee[];
+  taxInclusive: boolean;
+  depositType: "" | "percent" | "amount";
+  depositValue: string;
 };
 
 type SavedQuote = {
@@ -119,6 +135,11 @@ let lineSequence = 0;
 function lineKey() {
   lineSequence += 1;
   return `quote-line-${lineSequence}`;
+}
+
+function feeKey() {
+  lineSequence += 1;
+  return `quote-fee-${lineSequence}`;
 }
 
 function rands(cents: number) {
@@ -150,12 +171,25 @@ function createDraft(
       validUntil: defaults.validUntil,
       terms: defaults.terms,
       lines: [],
+      fees: [],
+      taxInclusive: true,
+      depositType: "",
+      depositValue: "",
     } satisfies DraftState;
   }
   return {
     contactId: record.contactId ?? "",
     validUntil: record.validUntil,
     terms: record.terms,
+    fees: record.fees.map((fee) => ({
+      key: fee.id,
+      label: fee.label,
+      kind: fee.kind === "delivery" ? "delivery" : "fee",
+      amount: (fee.amountCents / 100).toFixed(2),
+    })),
+    taxInclusive: record.taxInclusive,
+    depositType: record.depositType === "percent" || record.depositType === "amount" ? record.depositType : "",
+    depositValue: record.depositValue != null ? String(record.depositValue) : "",
     lines: record.items.map((item) => {
       const matchingProduct = item.productId
         ? products.find((product) => product.id === item.productId)
@@ -179,6 +213,10 @@ function draftSnapshot(draft: DraftState) {
     contactId: draft.contactId,
     validUntil: draft.validUntil,
     terms: draft.terms,
+    taxInclusive: draft.taxInclusive,
+    depositType: draft.depositType,
+    depositValue: draft.depositValue,
+    fees: draft.fees.map(({ label, kind, amount }) => ({ label, kind, amount })),
     lines: draft.lines.map(({ kind, description, qty, unitPrice, discount, productId, colorPreference }) => ({
       kind,
       description,
@@ -242,15 +280,29 @@ export function QuoteEditorDialog({
   const customerLabel = contacts.find((contact) => contact.id === draft.contactId)?.label ?? "Customer not selected";
 
   const calculated = useMemo(() => {
-    const total = draft.lines.reduce((sum, line) => {
-      const qty = Number(line.qty.replace(",", "."));
-      const cents = centsFromInput(line.unitPrice);
-      const discount = Math.min(100, Math.max(0, Number(line.discount.replace(",", ".")) || 0));
-      return sum + (Number.isFinite(qty) && Number.isFinite(cents) ? qty * cents * (1 - discount / 100) : 0);
-    }, 0);
-    const vat = Math.round(total * (15 / 115));
-    return { total: Math.round(total), vat, subtotal: Math.round(total - vat) };
-  }, [draft.lines]);
+    const lines = draft.lines.map((line) => ({
+      qty: Number(line.qty.replace(",", ".")) || 0,
+      unitPriceCents: centsFromInput(line.unitPrice) || 0,
+      discountPct: Number(line.discount.replace(",", ".")) || 0,
+      taxRatePct: 15,
+    }));
+    const fees = draft.fees
+      .map((fee) => ({ amountCents: centsFromInput(fee.amount) || 0, taxRatePct: 15 }))
+      .filter((fee) => fee.amountCents !== 0);
+    const p = quotePricing(lines, fees, {
+      taxInclusive: draft.taxInclusive,
+      depositType: draft.depositType || null,
+      depositValue: draft.depositValue ? Number(draft.depositValue.replace(",", ".")) : null,
+    });
+    return {
+      subtotal: p.netCents,
+      vat: p.taxCents,
+      fees: p.feesTotalCents,
+      total: p.totalCents,
+      deposit: p.depositCents,
+      balance: p.balanceCents,
+    };
+  }, [draft.lines, draft.fees, draft.taxInclusive, draft.depositType, draft.depositValue]);
 
   function updateLine(key: string, patch: Partial<DraftLine>) {
     setDraft((current) => ({
@@ -324,6 +376,23 @@ export function QuoteEditorDialog({
     setDraft((current) => ({ ...current, lines: current.lines.filter((line) => line.key !== key) }));
   }
 
+  function addFee(kind: "fee" | "delivery") {
+    if (!editable) return;
+    setDraft((current) => ({
+      ...current,
+      fees: [...current.fees, { key: feeKey(), label: kind === "delivery" ? "Delivery" : "", kind, amount: "0.00" }],
+    }));
+  }
+
+  function updateFee(key: string, patch: Partial<DraftFee>) {
+    setDraft((current) => ({ ...current, fees: current.fees.map((fee) => (fee.key === key ? { ...fee, ...patch } : fee)) }));
+  }
+
+  function removeFee(key: string) {
+    if (!editable) return;
+    setDraft((current) => ({ ...current, fees: current.fees.filter((fee) => fee.key !== key) }));
+  }
+
   function requestOpenChange(nextOpen: boolean) {
     if (!nextOpen && dirty && !isPending) {
       setDiscardOpen(true);
@@ -386,6 +455,14 @@ export function QuoteEditorDialog({
       });
     }
 
+    const fees = draft.fees
+      .map((fee) => ({
+        label: fee.label.trim() || (fee.kind === "delivery" ? "Delivery" : "Fee"),
+        kind: fee.kind,
+        amountCents: centsFromInput(fee.amount),
+      }))
+      .filter((fee) => Number.isFinite(fee.amountCents) && fee.amountCents !== 0);
+
     startTransition(async () => {
       try {
         const result = await saveQuoteDraft({
@@ -395,6 +472,10 @@ export function QuoteEditorDialog({
           terms: draft.terms,
           intent,
           items,
+          fees,
+          taxInclusive: draft.taxInclusive,
+          depositType: draft.depositType || null,
+          depositValue: draft.depositValue ? Number(draft.depositValue.replace(",", ".")) : null,
         });
         if (!result.ok) {
           setError(result.error);
@@ -571,15 +652,65 @@ export function QuoteEditorDialog({
                         </div>
                       )}
                     </section>
+
+                    <section className="overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.025]">
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.07] px-4 py-4 sm:px-5">
+                        <div>
+                          <p className="text-sm font-semibold">Fees &amp; delivery</p>
+                          <p className="mt-1 text-xs text-muted-foreground">Delivery charges, admin or other fees (VAT at 15%).</p>
+                        </div>
+                        {editable && (
+                          <div className="flex flex-wrap gap-2">
+                            <Button type="button" variant="outline" size="sm" onClick={() => addFee("delivery")}><Plus />Delivery</Button>
+                            <Button type="button" variant="ghost" size="sm" onClick={() => addFee("fee")}><Plus />Fee</Button>
+                          </div>
+                        )}
+                      </div>
+                      {draft.fees.length === 0 ? (
+                        <div className="px-5 py-8 text-center text-xs text-muted-foreground">No fees or delivery charges added.</div>
+                      ) : (
+                        <div className="divide-y divide-white/[0.07]">
+                          {draft.fees.map((fee) => (
+                            <div key={fee.key} className="grid gap-3 px-4 py-4 sm:grid-cols-[8rem_minmax(0,1fr)_8rem_2.25rem] sm:items-end sm:px-5">
+                              <div>
+                                <label className="label" htmlFor={`${fee.key}-kind`}>Type</label>
+                                <select id={`${fee.key}-kind`} className="input" value={fee.kind} disabled={!editable} onChange={(event) => updateFee(fee.key, { kind: event.target.value as DraftFee["kind"] })}>
+                                  <option value="delivery">Delivery</option>
+                                  <option value="fee">Fee</option>
+                                </select>
+                              </div>
+                              <div className="min-w-0">
+                                <label className="label" htmlFor={`${fee.key}-label`}>Label</label>
+                                <input id={`${fee.key}-label`} className="input" value={fee.label} disabled={!editable} placeholder={fee.kind === "delivery" ? "Delivery to…" : "Admin fee"} onChange={(event) => updateFee(fee.key, { label: event.target.value })} />
+                              </div>
+                              <div>
+                                <label className="label" htmlFor={`${fee.key}-amount`}>Amount (R)</label>
+                                <input id={`${fee.key}-amount`} className="input tabular-nums" inputMode="decimal" value={fee.amount} disabled={!editable} onChange={(event) => updateFee(fee.key, { amount: event.target.value })} />
+                              </div>
+                              {editable && (
+                                <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-red-300" onClick={() => removeFee(fee.key)} aria-label="Remove fee"><Trash2 /></Button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </section>
                   </div>
 
                   <aside className="space-y-4 lg:sticky lg:top-0 lg:self-start">
                     <section className="rounded-2xl border border-primary/20 bg-primary/[0.055] p-5">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">Quote total</p>
                       <div className="mt-4 space-y-2 text-sm">
-                        <div className="flex justify-between gap-3 text-muted-foreground"><span>Subtotal</span><span className="tabular-nums">{rands(calculated.subtotal)}</span></div>
-                        <div className="flex justify-between gap-3 text-muted-foreground"><span>VAT included</span><span className="tabular-nums">{rands(calculated.vat)}</span></div>
+                        <div className="flex justify-between gap-3 text-muted-foreground"><span>Subtotal (excl. VAT)</span><span className="tabular-nums">{rands(calculated.subtotal)}</span></div>
+                        <div className="flex justify-between gap-3 text-muted-foreground"><span>VAT</span><span className="tabular-nums">{rands(calculated.vat)}</span></div>
+                        {calculated.fees > 0 && <div className="flex justify-between gap-3 text-muted-foreground"><span>Fees &amp; delivery</span><span className="tabular-nums">{rands(calculated.fees)}</span></div>}
                         <div className="mt-3 flex justify-between gap-3 border-t border-primary/15 pt-3 text-lg font-semibold"><span>Total</span><span className="tabular-nums text-primary">{rands(calculated.total)}</span></div>
+                        {calculated.deposit > 0 && (
+                          <>
+                            <div className="flex justify-between gap-3 text-muted-foreground"><span>Deposit</span><span className="tabular-nums">{rands(calculated.deposit)}</span></div>
+                            <div className="flex justify-between gap-3 text-muted-foreground"><span>Balance on delivery</span><span className="tabular-nums">{rands(calculated.balance)}</span></div>
+                          </>
+                        )}
                       </div>
                     </section>
 
@@ -589,6 +720,26 @@ export function QuoteEditorDialog({
                         <div>
                           <label className="label" htmlFor="quote-valid-until">Valid until</label>
                           <input id="quote-valid-until" type="date" className="input" value={draft.validUntil} disabled={!editable} onChange={(event) => setDraft((current) => ({ ...current, validUntil: event.target.value }))} />
+                        </div>
+                        <div>
+                          <label className="label" htmlFor="quote-tax-basis">Pricing basis</label>
+                          <select id="quote-tax-basis" className="input" value={draft.taxInclusive ? "true" : "false"} disabled={!editable} onChange={(event) => setDraft((current) => ({ ...current, taxInclusive: event.target.value === "true" }))}>
+                            <option value="true">Prices include VAT</option>
+                            <option value="false">Add VAT on top</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="label" htmlFor="quote-deposit-type">Deposit</label>
+                          <div className="flex gap-2">
+                            <select id="quote-deposit-type" className="input" value={draft.depositType} disabled={!editable} onChange={(event) => setDraft((current) => ({ ...current, depositType: event.target.value as DraftState["depositType"] }))}>
+                              <option value="">None</option>
+                              <option value="percent">Percent</option>
+                              <option value="amount">Amount</option>
+                            </select>
+                            {draft.depositType && (
+                              <input className="input w-24 tabular-nums" inputMode="decimal" placeholder={draft.depositType === "percent" ? "%" : "R"} value={draft.depositValue} disabled={!editable} onChange={(event) => setDraft((current) => ({ ...current, depositValue: event.target.value }))} aria-label="Deposit value" />
+                            )}
+                          </div>
                         </div>
                         <div>
                           <label className="label" htmlFor="quote-terms">Terms</label>

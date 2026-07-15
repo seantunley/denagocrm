@@ -42,7 +42,7 @@ export default async function QuotesPage({
       // from the editor's version history and the full record. RBAC-scoped.
       where: { supersededAt: null, ...(accessibleQuoteIds ? { id: { in: accessibleQuoteIds } } : {}) },
       orderBy: { createdAt: "desc" },
-      include: { items: true, lead: true, contact: true, createdBy: true },
+      include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, lead: true, contact: true, createdBy: true },
       take: 200,
     }),
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
@@ -116,6 +116,10 @@ export default async function QuotesPage({
         colorPreference: item.colorPreference,
         discountPct: item.discountPct,
       })),
+      taxInclusive: quote.taxInclusive,
+      depositType: quote.depositType,
+      depositValue: quote.depositValue,
+      fees: quote.fees.map((fee) => ({ id: fee.id, label: fee.label, kind: fee.kind, amountCents: fee.amountCents })),
       versions: family
         .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
         .map((version) => ({
