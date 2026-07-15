@@ -143,6 +143,11 @@ export async function voidRecordSigning(kind: Kind, id: string): Promise<Result>
   await prisma.signatureRequest.update({ where: { id: state.requestId }, data: { status: "voided" } });
   await logSignEvent(state.requestId, { type: "voided", actor: `Denago: ${user.name}`, metadata: { via: "record" } });
   await logAudit({ action: "signing.void", summary: `Voided signing for “${state.title}”`, entityType: "SignatureRequest", entityId: state.requestId, user });
+  // Voiding unlocks the record for editing again — return a still-unsigned quote
+  // from "sent" back to "draft" so it isn't stranded mid-lifecycle.
+  if (kind === "quote") {
+    await prisma.quote.updateMany({ where: { id, status: "sent", signedAt: null }, data: { status: "draft" } });
+  }
   revalidatePath(recordPath(kind, id));
   return { ok: true, requestId: state.requestId };
 }
