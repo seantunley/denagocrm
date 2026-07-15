@@ -332,7 +332,6 @@ export default async function QuoteDetailPage({
         dealerSignedByName={quote.dealerSignedByName}
         hasSavedSignature={Boolean(currentUser.drawnSignatureRef)}
         state={signingState}
-        legacyToken={quote.signToken}
         workflows={signWorkflows}
       />
       )}
