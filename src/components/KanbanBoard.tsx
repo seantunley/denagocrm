@@ -46,6 +46,7 @@ export type KanbanLead = {
   productName: string | null;
   assignee: string | null;
   testDrive?: { when: string; weather: string | null; date: string } | null;
+  signing?: { label: string } | null;
   research?: string | null;
   isNew?: boolean;
   noNextStep?: boolean;
@@ -185,6 +186,15 @@ function LeadCard({ lead, dragging }: { lead: KanbanLead; dragging?: boolean }) 
               summary={lead.testDrive.weather}
             />
           )}
+        </div>
+      )}
+
+      {lead.signing && (
+        <div className="mt-2">
+          <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-300 ring-1 ring-amber-500/20">
+            <PenLine className="size-3" />
+            {lead.signing.label}
+          </span>
         </div>
       )}
     </div>
