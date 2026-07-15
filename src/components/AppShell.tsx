@@ -46,7 +46,7 @@ function initials(name: string) {
     .join("");
 }
 
-function SidebarInner({ user, inboxWaiting = 0 }: { user: ShellUser; inboxWaiting?: number }) {
+function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0 }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number }) {
   const isOwner = user.role === "owner";
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-sidebar">
@@ -79,7 +79,7 @@ function SidebarInner({ user, inboxWaiting = 0 }: { user: ShellUser; inboxWaitin
 
       {/* Nav */}
       <div className="relative flex-1 overflow-y-auto px-3 py-3">
-        <Nav modules={user.modules} isAdmin={isOwner} badges={{ "/inbox": inboxWaiting }} />
+        <Nav modules={user.modules} isAdmin={isOwner} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting }} />
       </div>
 
       {/* User */}
@@ -191,10 +191,12 @@ function MobilePrimaryNav({
 export default function AppShell({
   user,
   inboxWaiting = 0,
+  casesWaiting = 0,
   children,
 }: {
   user: ShellUser;
   inboxWaiting?: number;
+  casesWaiting?: number;
   children: ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -236,7 +238,7 @@ export default function AppShell({
       <Sheet key={pathname} open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="left" className="w-72 border-sidebar-border p-0">
           <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <SidebarInner user={user} inboxWaiting={inboxWaiting} />
+          <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} />
         </SheetContent>
       </Sheet>
 
@@ -249,7 +251,7 @@ export default function AppShell({
 
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 border-r border-sidebar-border lg:flex lg:flex-col">
-        <SidebarInner user={user} inboxWaiting={inboxWaiting} />
+        <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} />
       </aside>
 
       <main className="relative lg:pl-60">
