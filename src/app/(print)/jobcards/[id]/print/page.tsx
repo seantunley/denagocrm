@@ -4,6 +4,7 @@ import { requireJobCardReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { getDocTemplate } from "@/lib/docTemplateStore";
+import { stageMeta } from "@/lib/workshop-constants";
 
 export default async function JobCardPrintPage({
   params,
@@ -64,7 +65,7 @@ export default async function JobCardPrintPage({
           <div className="text-right">
             <p className="text-2xl font-semibold tracking-[-0.035em] tracking-widest text-white">JOB CARD</p>
             <p className="text-lg font-bold text-orange-500">#{jobCard.number}</p>
-            <p className="text-xs text-slate-400 capitalize">{jobCard.status.replace("_", " ")}</p>
+            <p className="text-xs text-slate-400">{stageMeta(jobCard.status).label}</p>
           </div>
         </div>
         {tpl.sections.footer !== false && (
