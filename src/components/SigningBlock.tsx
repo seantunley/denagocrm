@@ -42,7 +42,6 @@ export default function SigningBlock({
   dealerSignedByName,
   hasSavedSignature,
   state,
-  legacyToken,
   workflows = [],
 }: {
   kind: "quote" | "jobcard";
@@ -55,7 +54,6 @@ export default function SigningBlock({
   dealerSignedByName?: string | null;
   hasSavedSignature?: boolean;
   state: SigningState;
-  legacyToken?: string | null;
   workflows?: { id: string; name: string }[];
 }) {
   const router = useRouter();
@@ -178,16 +176,6 @@ export default function SigningBlock({
           <button className="btn-primary" disabled={busy !== null} onClick={() => run("send", () => startRecordSigning(kind, id, workflowId || undefined))}>
             {busy === "send" ? "Preparing…" : "Send for signing"}
           </button>
-        </div>
-      )}
-
-      {legacyToken && !active && (
-        <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
-          <p className="text-[11px] text-amber-300 mb-1">An older signing link is still live from the previous system. It still works, but new sends now go through the hub above.</p>
-          <div className="flex items-center gap-2">
-            <input readOnly value={`${BASE}/sign/${kind}/${legacyToken}`} className="input text-xs font-mono" />
-            <CopyButton text={`${BASE}/sign/${kind}/${legacyToken}`} />
-          </div>
         </div>
       )}
 

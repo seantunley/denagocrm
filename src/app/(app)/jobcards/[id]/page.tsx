@@ -489,7 +489,6 @@ export default async function JobCardDetailPage({
         signedAt={jobCard.signedAt}
         signedByName={jobCard.signedByName}
         state={signingState}
-        legacyToken={jobCard.signToken}
       />
 
       {/* Reservations · packages · subcontracting (phase 3) ─────────────────── */}
