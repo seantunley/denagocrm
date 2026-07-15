@@ -5,6 +5,7 @@ import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { contactName, formatDate } from "@/lib/format";
+import { quoteTotalCents } from "@/lib/pricing";
 
 export default async function AgreementPrintPage({
   params,
@@ -22,7 +23,7 @@ export default async function AgreementPrintPage({
   });
   if (!quote) notFound();
   const tpl = await getDocTemplate("agreement", tplId);
-  const total = quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+  const total = quoteTotalCents(quote.items);
   const customer = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
   const address = quote.contact
     ? [quote.contact.address, quote.contact.suburb, quote.contact.city].filter(Boolean).join(", ")

@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "./db";
 import { contactName, formatDate, formatZAR } from "./format";
+import { quoteTotalCents } from "./pricing";
 import { type MergeContext } from "./mergeFields";
 
 /**
@@ -25,9 +26,7 @@ export async function buildMergeContext(links: {
 
   // Lead can stand in for a missing contact
   const custName = contact ? contactName(contact) : lead?.name ?? "";
-  const quoteTotal = quote
-    ? quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0)
-    : null;
+  const quoteTotal = quote ? quoteTotalCents(quote.items) : null;
 
   return {
     "company.name": "Denago Cape Town",

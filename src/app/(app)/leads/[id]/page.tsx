@@ -26,6 +26,7 @@ import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { requireUser } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
+import { quoteTotalCents } from "@/lib/pricing";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
 
@@ -320,7 +321,7 @@ export default async function LeadDetailPage({
                     ) : (
                       <ul className="space-y-2">
                         {lead.quotes.map((q) => {
-                          const total = q.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+                          const total = quoteTotalCents(q.items);
                           return (
                             <li key={q.id} className="flex items-center gap-2 text-sm">
                               <Link href={`/quotes/${q.id}`} className="text-orange-400 hover:underline font-medium">

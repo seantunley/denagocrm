@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { lineNetCents, quoteTotalCents } from "@/lib/pricing";
 import { defaultTemplate, type DocTemplate } from "@/lib/docTemplates";
 
 export type QuoteForPrint = Prisma.QuoteGetPayload<{
@@ -17,9 +18,8 @@ export default function QuotePrintDoc({
   template?: DocTemplate;
 }) {
   const tpl = template ?? defaultTemplate("quote");
-  const lineNet = (i: { qty: number; unitPriceCents: number; discountPct?: number | null }) =>
-    Math.round(i.qty * i.unitPriceCents * (1 - Math.min(100, Math.max(0, i.discountPct ?? 0)) / 100));
-  const total = quote.items.reduce((s, i) => s + lineNet(i), 0);
+  const lineNet = lineNetCents;
+  const total = quoteTotalCents(quote.items);
   const termsText = tpl.terms ?? quote.terms;
   const customerName = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
   const phone = quote.contact?.phone ?? quote.lead?.phone;

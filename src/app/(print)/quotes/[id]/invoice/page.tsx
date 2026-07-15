@@ -5,6 +5,7 @@ import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { contactName, formatDate } from "@/lib/format";
+import { quoteTotalCents } from "@/lib/pricing";
 
 export default async function InvoicePrintPage({
   params,
@@ -22,7 +23,7 @@ export default async function InvoicePrintPage({
   });
   if (!quote) notFound();
   const tpl = await getDocTemplate("invoice", tplId);
-  const total = quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+  const total = quoteTotalCents(quote.items);
   const customer = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
 
   return (

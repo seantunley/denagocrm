@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma, basePrisma } from "@/lib/db";
+import { quoteTotalCents } from "@/lib/pricing";
 import { logAudit } from "@/lib/audit";
 import { sendPushToAll } from "@/lib/push";
 import { formatZAR } from "@/lib/format";
@@ -67,7 +68,7 @@ async function acceptQuote(req: CompletedReq): Promise<void> {
     await runLeadAutomations("lead_won", quote.leadId).catch(() => {});
   }
 
-  const total = quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+  const total = quoteTotalCents(quote.items);
   await logAudit({
     action: "quote.signed",
     summary: `Quote Q-${quote.number} (${formatZAR(Math.round(total))}) signed online by ${name} via signing hub — sealed PDF filed${req.signedPdfHash ? ` (SHA-256 ${req.signedPdfHash.slice(0, 16)}…)` : ""}`,

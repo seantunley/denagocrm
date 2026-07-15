@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma, basePrisma } from "@/lib/db";
+import { quoteTotalCents } from "@/lib/pricing";
 import { logAudit } from "@/lib/audit";
 import { sendPushToAll } from "@/lib/push";
 import { saveFile } from "@/lib/storage";
@@ -133,7 +134,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
         },
       });
     }
-    const total = quote.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+    const total = quoteTotalCents(quote.items);
     await logAudit({
       action: "quote.signed",
       summary: `Quote Q-${quote.number} (${formatZAR(Math.round(total))}) signed online by ${name} — signed PDF filed (SHA-256 ${pdfHash.slice(0, 16)}…)`,

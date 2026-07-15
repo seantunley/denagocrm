@@ -4,6 +4,7 @@ import { logAudit } from "@/lib/audit";
 import { sendPushToAll } from "@/lib/push";
 import SignPanel from "@/components/SignPanel";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { lineNetCents, quoteTotalCents } from "@/lib/pricing";
 import { quoteExpired } from "@/lib/quoteExpiry";
 
 export async function generateMetadata({
@@ -47,7 +48,7 @@ export default async function SignPage({
     customerName: string;
     vehicleLine: string | null;
     description: string | null;
-    items: { id: string; description: string; qty: number; unitPriceCents: number }[];
+    items: { id: string; description: string; qty: number; unitPriceCents: number; discountPct?: number | null }[];
     termsLines: string[];
     validUntil: Date | null;
     signedAt: Date | null;
@@ -137,7 +138,7 @@ export default async function SignPage({
     };
   }
 
-  const total = doc.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+  const total = quoteTotalCents(doc.items);
   const signable = !doc.signedAt && !doc.expired;
 
   return (
@@ -216,7 +217,7 @@ export default async function SignPage({
               <td className="py-2 px-3 border-b border-slate-200">{i.description}</td>
               <td className="py-2 px-3 border-b border-slate-200 text-right">{i.qty}</td>
               <td className="py-2 px-3 border-b border-slate-200 text-right font-medium">
-                {formatZAR(Math.round(i.qty * i.unitPriceCents))}
+                {formatZAR(lineNetCents(i))}
               </td>
             </tr>
           ))}
