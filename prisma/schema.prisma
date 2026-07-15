@@ -780,6 +780,10 @@ model JobCard {
   bayId           String?
   bay             WorkshopBay? @relation(fields: [bayId], references: [id], onDelete: SetNull)
 
+  // Workshop depth (phase 2): condition notes at check-in / check-out
+  checkinNotes  String?
+  checkoutNotes String?
+
   deletedAt     DateTime?
   deletedByName String?
   deleteReason  String?
@@ -800,12 +804,46 @@ model JobCard {
   technicianId String?
   technician   User?   @relation("JobCardTechnician", fields: [technicianId], references: [id])
 
-  items         JobCardItem[]
-  serviceRecord ServiceRecord?
-  documents     Document[]
-  timeEntries   JobCardTimeEntry[]
+  items           JobCardItem[]
+  serviceRecord   ServiceRecord?
+  documents       Document[]
+  timeEntries     JobCardTimeEntry[]
+  inspectionItems JobCardInspectionItem[]
+  approvals       JobCardApproval[]
 
   @@index([bayId])
+}
+
+model JobCardInspectionItem {
+  id             String   @id @default(cuid())
+  label          String
+  status         String   @default("ok") // ok | attention | fail | na
+  notes          String?
+  photoStoredName String? // blob URL / filename from saveFile
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  jobCardId String
+  jobCard   JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+
+  @@index([jobCardId])
+}
+
+model JobCardApproval {
+  id          String    @id @default(cuid())
+  description String
+  amountCents Int       @default(0)
+  status      String    @default("pending") // pending | approved | declined
+  decidedVia  String? // portal | phone | in_person | email
+  decidedAt   DateTime?
+  notes       String?
+  createdById String?
+  createdAt   DateTime  @default(now())
+
+  jobCardId String
+  jobCard   JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+
+  @@index([jobCardId, status])
 }
 
 model WorkshopBay {

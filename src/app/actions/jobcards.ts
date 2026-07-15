@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addMonths } from "date-fns";
@@ -302,4 +303,119 @@ export async function deleteJobCard(id: string, formData: FormData) {
   });
   revalidatePath("/jobcards");
   redirect("/jobcards");
+}
+
+// ── Condition notes & check-out photos (phase 2) ──────────────────────────────
+export async function saveConditionNotes(jobCardId: string, formData: FormData) {
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const checkinNotes = String(formData.get("checkinNotes") ?? "").trim() || null;
+  const checkoutNotes = String(formData.get("checkoutNotes") ?? "").trim() || null;
+  await prisma.jobCard.update({ where: { id: jobCardId }, data: { checkinNotes, checkoutNotes } });
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+export async function uploadCheckoutPhotos(jobCardId: string, formData: FormData) {
+  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId } });
+  const files = formData.getAll("files").filter((f): f is File => typeof f === "object" && (f as File).size > 0);
+  let saved = 0;
+  for (const file of files.slice(0, 12)) {
+    if (file.size > 4 * 1024 * 1024 || !file.type.startsWith("image/")) continue;
+    const buf = Buffer.from(await file.arrayBuffer());
+    const storedName = await saveFile(buf, file.name || "checkout.jpg", file.type);
+    await prisma.document.create({
+      data: {
+        fileName: `Check-out photo — job card #${jobCard.number} — ${file.name}`,
+        storedName,
+        mimeType: file.type,
+        sizeBytes: file.size,
+        contactId: jobCard.contactId,
+        jobCardId,
+        tag: "checkout-photo",
+        uploadedById: user.id,
+      },
+    });
+    saved++;
+  }
+  if (saved > 0) {
+    await logAudit({ action: "jobcard.photos", summary: `${saved} check-out photo${saved !== 1 ? "s" : ""} added to job card #${jobCard.number} (post-work condition)`, contactId: jobCard.contactId, user });
+  }
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+// ── Inspection checklist (phase 2) ────────────────────────────────────────────
+export async function addInspectionItem(jobCardId: string, formData: FormData) {
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const label = String(formData.get("label") ?? "").trim();
+  if (!label) return;
+  const status = String(formData.get("status") ?? "ok");
+  const max = await prisma.jobCardInspectionItem.aggregate({ where: { jobCardId }, _max: { sortOrder: true } });
+  await prisma.jobCardInspectionItem.create({
+    data: { jobCardId, label, status, sortOrder: (max._max.sortOrder ?? 0) + 1 },
+  });
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+export async function setInspectionItem(itemId: string, jobCardId: string, formData: FormData) {
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const status = String(formData.get("status") ?? "ok");
+  const notes = String(formData.get("notes") ?? "").trim() || null;
+  await prisma.jobCardInspectionItem.update({ where: { id: itemId }, data: { status, notes } });
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+export async function deleteInspectionItem(itemId: string, jobCardId: string) {
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  await prisma.jobCardInspectionItem.delete({ where: { id: itemId } }).catch(() => {});
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+export async function uploadInspectionPhoto(itemId: string, jobCardId: string, formData: FormData) {
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) return;
+  if (file.size > 4 * 1024 * 1024 || !file.type.startsWith("image/")) return;
+  const buf = Buffer.from(await file.arrayBuffer());
+  const storedName = await saveFile(buf, file.name || "inspection.jpg", file.type);
+  await prisma.jobCardInspectionItem.update({ where: { id: itemId }, data: { photoStoredName: storedName } });
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+// ── Additional-work approval (phase 2) ────────────────────────────────────────
+export async function requestAdditionalWork(jobCardId: string, formData: FormData) {
+  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const description = String(formData.get("description") ?? "").trim();
+  if (!description) return;
+  const amountCents = parseRands(String(formData.get("amount") ?? ""));
+  const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId }, select: { number: true, contactId: true } });
+  await prisma.jobCardApproval.create({
+    data: { jobCardId, description, amountCents, createdById: user.id },
+  });
+  // Notify the customer in their portal (PortalNotification is a raw-SQL table on this base).
+  await prisma.$executeRaw`
+    INSERT INTO "PortalNotification" ("id","contactId","title","body","href","kind")
+    VALUES (${randomUUID()}, ${jobCard.contactId}, ${"Additional work needs your approval"},
+      ${`Job card #${jobCard.number}: ${description}${amountCents ? ` — R${(amountCents / 100).toFixed(2)}` : ""}`},
+      ${"/portal/support"}, ${"jobcard"})`.catch(() => {});
+  await logAudit({ action: "jobcard.approval_requested", summary: `Requested approval for additional work on job card #${jobCard.number}: ${description}`, contactId: jobCard.contactId, user });
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+export async function decideApproval(approvalId: string, jobCardId: string, decision: "approved" | "declined", formData: FormData) {
+  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const decidedVia = String(formData.get("decidedVia") ?? "phone");
+  const notes = String(formData.get("notes") ?? "").trim() || null;
+  const approval = await prisma.jobCardApproval.update({
+    where: { id: approvalId },
+    data: { status: decision, decidedVia, decidedAt: new Date(), notes },
+    include: { jobCard: { select: { number: true, contactId: true } } },
+  });
+  await logAudit({ action: "jobcard.approval_decided", summary: `Additional work ${decision} (${decidedVia}) on job card #${approval.jobCard.number}: ${approval.description}`, contactId: approval.jobCard.contactId, user });
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+export async function deleteApproval(approvalId: string, jobCardId: string) {
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  await prisma.jobCardApproval.delete({ where: { id: approvalId } }).catch(() => {});
+  revalidatePath(`/jobcards/${jobCardId}`);
 }

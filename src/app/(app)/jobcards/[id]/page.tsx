@@ -14,6 +14,15 @@ import {
   deleteTimeEntry,
   completeJobCard,
   deleteJobCard,
+  saveConditionNotes,
+  uploadCheckoutPhotos,
+  addInspectionItem,
+  setInspectionItem,
+  deleteInspectionItem,
+  uploadInspectionPhoto,
+  requestAdditionalWork,
+  decideApproval,
+  deleteApproval,
 } from "@/app/actions/jobcards";
 import { requireUser } from "@/lib/auth";
 import DocumentsPanel from "@/components/DocumentsPanel";
@@ -29,10 +38,13 @@ import { StatusPill } from "@/components/visual-system";
 import {
   PIPELINE_STAGES,
   PRIORITIES,
+  INSPECTION_STATUSES,
   stageMeta,
   priorityMeta,
+  inspectionStatusMeta,
   isTerminalStage,
   hoursBetween,
+  APPROVAL_STATUS_TONE,
 } from "@/lib/workshop-constants";
 import { getDefaultLabourRateCents, effectiveLabourRateCents, totalLoggedHours } from "@/lib/workshop";
 
@@ -53,6 +65,8 @@ export default async function JobCardDetailPage({
         serviceRecord: true,
         bay: true,
         timeEntries: { include: { technician: true }, orderBy: { startedAt: "desc" } },
+        inspectionItems: { orderBy: { sortOrder: "asc" } },
+        approvals: { orderBy: { createdAt: "desc" } },
         documents: { where: { deletedAt: null }, include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
       },
     }),
@@ -325,6 +339,151 @@ export default async function JobCardDetailPage({
                 </a>
               ))}
           </div>
+        )}
+      </div>
+
+      {/* Check-out condition + notes (phase 2) ──────────────────────────────── */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="card">
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+            <div>
+              <h2 className="font-semibold">📸 Check-out photos</h2>
+              <p className="text-xs text-slate-400">Condition AFTER the work — proof of hand-over state.</p>
+            </div>
+            <form action={uploadCheckoutPhotos.bind(null, jobCard.id)} className="flex items-center gap-2">
+              <input type="file" name="files" multiple required accept="image/*" capture="environment" className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
+              <button className="btn-primary btn-sm">Upload</button>
+            </form>
+          </div>
+          {jobCard.documents.filter((d) => d.tag === "checkout-photo").length === 0 ? (
+            <p className="text-xs text-slate-500">No check-out photos yet.</p>
+          ) : (
+            <div className="flex gap-2 flex-wrap">
+              {jobCard.documents.filter((d) => d.tag === "checkout-photo").map((d) => (
+                <a key={d.id} href={d.storedName} target="_blank">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={d.storedName} alt={d.fileName} className="h-24 w-24 object-cover rounded-lg border border-slate-700 hover:border-orange-500 transition-colors" />
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+        <form action={saveConditionNotes.bind(null, jobCard.id)} className="card space-y-2">
+          <h2 className="font-semibold">Condition notes</h2>
+          <div>
+            <label className="label" htmlFor="checkinNotes">At check-in</label>
+            <textarea id="checkinNotes" name="checkinNotes" rows={2} className="input" defaultValue={jobCard.checkinNotes ?? ""} placeholder="Existing damage, fuel/charge level, loose items…" />
+          </div>
+          <div>
+            <label className="label" htmlFor="checkoutNotes">At check-out</label>
+            <textarea id="checkoutNotes" name="checkoutNotes" rows={2} className="input" defaultValue={jobCard.checkoutNotes ?? ""} placeholder="Final condition, what was handed back…" />
+          </div>
+          <button className="btn-secondary btn-sm">Save condition notes</button>
+        </form>
+      </div>
+
+      {/* Inspection checklist (phase 2) ──────────────────────────────────────── */}
+      <div className="card space-y-3">
+        <div>
+          <h2 className="font-semibold">✅ Inspection checklist</h2>
+          <p className="text-xs text-slate-400">Multi-point check with a status, note and optional photo per item.</p>
+        </div>
+        {jobCard.inspectionItems.length > 0 && (
+          <div className="divide-y divide-border">
+            {jobCard.inspectionItems.map((item) => {
+              const meta = inspectionStatusMeta(item.status);
+              return (
+                <div key={item.id} className="flex flex-wrap items-center gap-3 py-2">
+                  <span className="min-w-40 flex-1 font-medium">{item.label}</span>
+                  <form action={setInspectionItem.bind(null, item.id, jobCard.id)} className="flex items-center gap-2">
+                    <select name="status" defaultValue={item.status} className="input h-8 py-0 text-xs w-32">
+                      {INSPECTION_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                    </select>
+                    <input name="notes" defaultValue={item.notes ?? ""} placeholder="Note" className="input h-8 py-0 text-xs w-40" />
+                    <button className="btn-secondary btn-sm">Save</button>
+                  </form>
+                  <StatusPill tone={meta.tone}>{meta.label}</StatusPill>
+                  {item.photoStoredName ? (
+                    <a href={item.photoStoredName} target="_blank">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={item.photoStoredName} alt={item.label} className="h-8 w-8 rounded object-cover border border-slate-700" />
+                    </a>
+                  ) : (
+                    <form action={uploadInspectionPhoto.bind(null, item.id, jobCard.id)} className="flex items-center gap-1">
+                      <input type="file" name="file" accept="image/*" className="block w-28 text-[10px] text-slate-500 file:btn-secondary file:btn-sm file:mr-1 file:border-0" />
+                      <button className="text-xs text-slate-500 hover:text-foreground">📎</button>
+                    </form>
+                  )}
+                  <form action={deleteInspectionItem.bind(null, item.id, jobCard.id)}>
+                    <button className="text-xs text-slate-600 hover:text-red-500">✕</button>
+                  </form>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <form action={addInspectionItem.bind(null, jobCard.id)} className="flex flex-wrap items-end gap-2">
+          <div className="flex-1 min-w-48">
+            <label className="label" htmlFor="ins-label">Add check</label>
+            <input id="ins-label" name="label" required className="input" placeholder="e.g. Brakes · Tyres · Lights · Battery terminals" />
+          </div>
+          <select name="status" defaultValue="ok" className="input w-32">
+            {INSPECTION_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+          <button className="btn-secondary">Add</button>
+        </form>
+      </div>
+
+      {/* Additional-work approvals (phase 2) ─────────────────────────────────── */}
+      <div className="card space-y-3">
+        <div>
+          <h2 className="font-semibold">🖐 Additional-work approvals</h2>
+          <p className="text-xs text-slate-400">Extra work found mid-job. Requesting notifies the customer in their portal.</p>
+        </div>
+        {jobCard.approvals.length > 0 && (
+          <div className="divide-y divide-border">
+            {jobCard.approvals.map((a) => (
+              <div key={a.id} className="flex flex-wrap items-center gap-3 py-2">
+                <div className="min-w-48 flex-1">
+                  <p className="font-medium">{a.description}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {a.amountCents ? formatZAR(a.amountCents) : "No price"}
+                    {a.decidedAt ? ` · ${a.decidedVia} · ${formatDate(a.decidedAt)}` : ""}
+                    {a.notes ? ` · ${a.notes}` : ""}
+                  </p>
+                </div>
+                <StatusPill tone={APPROVAL_STATUS_TONE[a.status] ?? "neutral"}>{a.status}</StatusPill>
+                {a.status === "pending" && (
+                  <div className="flex items-center gap-1.5">
+                    <form action={decideApproval.bind(null, a.id, jobCard.id, "approved")} className="flex items-center gap-1">
+                      <input type="hidden" name="decidedVia" value="phone" />
+                      <button className="btn-secondary btn-sm text-emerald-400">Approve</button>
+                    </form>
+                    <form action={decideApproval.bind(null, a.id, jobCard.id, "declined")} className="flex items-center gap-1">
+                      <input type="hidden" name="decidedVia" value="phone" />
+                      <button className="btn-secondary btn-sm text-red-400">Decline</button>
+                    </form>
+                  </div>
+                )}
+                <form action={deleteApproval.bind(null, a.id, jobCard.id)}>
+                  <button className="text-xs text-slate-600 hover:text-red-500">✕</button>
+                </form>
+              </div>
+            ))}
+          </div>
+        )}
+        {!terminal && (
+          <form action={requestAdditionalWork.bind(null, jobCard.id)} className="flex flex-wrap items-end gap-2">
+            <div className="flex-1 min-w-48">
+              <label className="label" htmlFor="aw-desc">Additional work</label>
+              <input id="aw-desc" name="description" required className="input" placeholder="e.g. Replace worn brake pads" />
+            </div>
+            <div className="w-32">
+              <label className="label" htmlFor="aw-amount">Est. cost (R)</label>
+              <input id="aw-amount" name="amount" inputMode="decimal" className="input tabular-nums" placeholder="0.00" />
+            </div>
+            <button className="btn-primary">Request approval</button>
+          </form>
         )}
       </div>
 

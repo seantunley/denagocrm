@@ -74,6 +74,23 @@ export function priorityMeta(value: string): PriorityMeta {
   return PRIORITIES.find((p) => p.value === value) ?? { value, label: value, tone: "neutral" };
 }
 
+export const INSPECTION_STATUSES: { value: string; label: string; tone: StageTone }[] = [
+  { value: "ok", label: "OK", tone: "success" },
+  { value: "attention", label: "Attention", tone: "warning" },
+  { value: "fail", label: "Fail", tone: "danger" },
+  { value: "na", label: "N/A", tone: "neutral" },
+];
+
+export function inspectionStatusMeta(value: string): { value: string; label: string; tone: StageTone } {
+  return INSPECTION_STATUSES.find((s) => s.value === value) ?? { value, label: value, tone: "neutral" };
+}
+
+export const APPROVAL_STATUS_TONE: Record<string, StageTone> = {
+  pending: "warning",
+  approved: "success",
+  declined: "danger",
+};
+
 /** Default workshop labour rate (rands) when no AppSetting / per-job override is set. */
 export const DEFAULT_LABOUR_RATE_CENTS = 65000; // R650/hour
 
