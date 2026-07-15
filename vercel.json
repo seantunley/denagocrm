@@ -1,5 +1,5 @@
 {
-  "buildCommand": "prisma generate --schema ./prisma && prisma migrate deploy --schema ./prisma && next build",
+  "buildCommand": "prisma generate --schema ./prisma && node scripts/apply-migrations.mjs && next build",
   "regions": [
     "fra1"
   ],
