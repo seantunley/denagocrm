@@ -20,6 +20,15 @@ const STATUS_STYLE: Record<string, string> = {
   rejected: "bg-rose-500/15 text-rose-300",
 };
 
+// Per-recipient status → dot colour + label, for the signer chips on each row.
+const RECIPIENT_STATUS: Record<string, { dot: string; label: string }> = {
+  signed: { dot: "bg-emerald-400", label: "signed" },
+  declined: { dot: "bg-red-400", label: "declined" },
+  viewed: { dot: "bg-sky-400", label: "viewed" },
+  sent: { dot: "bg-amber-400", label: "sent, not signed" },
+  pending: { dot: "bg-slate-500", label: "not sent" },
+};
+
 function median(nums: number[]): number | null {
   if (nums.length === 0) return null;
   const s = [...nums].sort((a, b) => a - b);
@@ -94,16 +103,52 @@ export default async function SignaturesPage() {
         ) : (
           <ul className="divide-y divide-border/50">
             {requests.map((r) => {
-              const signers = r.recipients.filter((x) => x.role !== "viewer");
+              const signers = [...r.recipients]
+                .filter((x) => x.role !== "viewer")
+                .sort((a, b) => a.order - b.order);
+              const viewers = r.recipients.filter((x) => x.role === "viewer");
               const signed = signers.filter((x) => x.status === "signed").length;
+              const pct = signers.length ? Math.round((signed / signers.length) * 100) : 0;
+              const isActive = ["sent", "viewed", "in_progress"].includes(r.status);
+              // Sequential runs pause on the first unfinished signer — that's who we wait on.
+              const nextUp =
+                r.ordering === "sequential" && isActive
+                  ? signers.find((x) => x.status !== "signed" && x.status !== "declined") ?? null
+                  : null;
               return (
-                <li key={r.id} className="flex items-center gap-3 py-2.5">
+                <li key={r.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:gap-3">
                   <div className="min-w-0 flex-1">
-                    <Link href={`/signatures/${r.id}`} className="truncate text-[13px] font-medium text-foreground hover:text-primary">{r.title}</Link>
-                    <div className="text-[11px] text-muted-foreground">{signed}/{signers.length} signed · {r.ordering} · updated {formatDate(r.updatedAt)}</div>
+                    <div className="flex items-center gap-2">
+                      <Link href={`/signatures/${r.id}`} className="truncate text-[13px] font-medium text-foreground hover:text-primary">{r.title}</Link>
+                      <span className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-semibold ${STATUS_STYLE[r.status] ?? "bg-slate-700/40 text-slate-300"}`}>{r.status.replace("_", " ")}</span>
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-muted-foreground">
+                      {signed}/{signers.length} signed · {r.ordering}
+                      {viewers.length > 0 ? ` · ${viewers.length} viewer${viewers.length > 1 ? "s" : ""}` : ""}
+                      {r.sentAt ? ` · sent ${formatDate(r.sentAt)}` : ""}
+                      {r.completedAt ? ` · completed ${formatDate(r.completedAt)}` : ` · updated ${formatDate(r.updatedAt)}`}
+                    </div>
+                    {signers.length > 0 && (
+                      <div className="mt-1.5 h-1 w-full max-w-xs overflow-hidden rounded-full bg-border/60" aria-hidden="true">
+                        <div className="h-full rounded-full bg-emerald-500/70" style={{ width: `${pct}%` }} />
+                      </div>
+                    )}
+                    <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+                      {signers.map((x) => {
+                        const meta = RECIPIENT_STATUS[x.status] ?? RECIPIENT_STATUS.pending;
+                        const isNext = nextUp?.id === x.id;
+                        return (
+                          <span key={x.id} className={`inline-flex items-center gap-1.5 text-[11px] ${isNext ? "font-semibold text-amber-200" : "text-muted-foreground"}`} title={x.email ?? undefined}>
+                            <span className={`size-1.5 shrink-0 rounded-full ${meta.dot}`} aria-hidden="true" />
+                            {x.name}
+                            {x.role === "approver" ? " (approver)" : ""}
+                            <span className="text-muted-foreground/60">· {isNext ? "up next" : x.status === "signed" && x.signedAt ? `signed ${formatDate(x.signedAt)}` : meta.label}</span>
+                          </span>
+                        );
+                      })}
+                    </div>
                   </div>
-                  <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${STATUS_STYLE[r.status] ?? "bg-slate-700/40 text-slate-300"}`}>{r.status.replace("_", " ")}</span>
-                  <Link href={`/signatures/${r.id}`} className="btn-secondary btn-sm">Open</Link>
+                  <Link href={`/signatures/${r.id}`} className="btn-secondary btn-sm shrink-0 self-start">Open</Link>
                 </li>
               );
             })}
