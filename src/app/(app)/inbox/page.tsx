@@ -2,6 +2,7 @@ import Link from "next/link";
 import { prisma, basePrisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import InboxReply from "@/components/InboxReply";
+import { markThreadRead } from "@/app/actions/communications";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import RowModal from "@/components/RowModal";
@@ -51,6 +52,7 @@ export default async function InboxPage() {
     leadId: string | null;
     phone: string | null;
     awaiting: boolean;
+    unread: boolean;
     lastAt: Date;
     messages: {
       id: string;
@@ -76,7 +78,11 @@ export default async function InboxPage() {
         contactId: c.contactId,
         leadId: c.leadId,
         phone: c.contact?.whatsapp ?? c.contact?.phone ?? c.lead?.phone ?? null,
-        awaiting: c.direction === "inbound", // comms are sorted desc: first seen = newest
+        // comms are sorted desc, so the first seen is the newest in the thread.
+        // awaiting  = they spoke last and we haven't replied (read or not)
+        // unread    = ...and we haven't even opened it yet (readAt null)
+        awaiting: c.direction === "inbound",
+        unread: c.direction === "inbound" && c.readAt == null,
         lastAt: c.occurredAt,
         messages: [],
       };
@@ -94,26 +100,29 @@ export default async function InboxPage() {
     }
   }
   const threadList = [...threads.values()].sort(
-    (a, b) => Number(b.awaiting) - Number(a.awaiting) || b.lastAt.getTime() - a.lastAt.getTime()
+    (a, b) =>
+      Number(b.unread) - Number(a.unread) ||
+      Number(b.awaiting) - Number(a.awaiting) ||
+      b.lastAt.getTime() - a.lastAt.getTime()
   );
 
   return (
     <div className="space-y-5">
       <AutoRefresh seconds={60} />
-      <PageHeader title="Social inbox" description={`${threadList.filter((thread) => thread.awaiting).length} awaiting reply · WhatsApp, Messenger, Instagram and Google reviews.`} />
+      <PageHeader title="Social inbox" description={`${threadList.filter((thread) => thread.unread).length} unread · WhatsApp, Messenger, Instagram and Google reviews.`} />
 
       <Tabs
         tabs={[
           {
             key: "all",
             label: "All",
-            count: threadList.filter((t) => t.awaiting).length,
+            count: threadList.filter((t) => t.unread).length,
             content: <ThreadList list={threadList} empty="No conversations yet. WhatsApp chats appear once the number is connected; Messenger and Instagram DMs flow for app admins now and for everyone once Meta approves the messaging permissions." />,
           },
           {
             key: "whatsapp",
             label: "WhatsApp",
-            count: threadList.filter((t) => t.channel === "whatsapp" && t.awaiting).length,
+            count: threadList.filter((t) => t.channel === "whatsapp" && t.unread).length,
             content: (
               <ThreadList
                 list={threadList.filter((t) => t.channel === "whatsapp")}
@@ -124,7 +133,7 @@ export default async function InboxPage() {
           {
             key: "messenger",
             label: "Messenger",
-            count: threadList.filter((t) => t.channel === "messenger" && t.awaiting).length,
+            count: threadList.filter((t) => t.channel === "messenger" && t.unread).length,
             content: (
               <ThreadList
                 list={threadList.filter((t) => t.channel === "messenger")}
@@ -135,7 +144,7 @@ export default async function InboxPage() {
           {
             key: "instagram",
             label: "Instagram",
-            count: threadList.filter((t) => t.channel === "instagram" && t.awaiting).length,
+            count: threadList.filter((t) => t.channel === "instagram" && t.unread).length,
             content: (
               <ThreadList
                 list={threadList.filter((t) => t.channel === "instagram")}
@@ -196,6 +205,7 @@ type ThreadForList = {
   leadId: string | null;
   phone: string | null;
   awaiting: boolean;
+  unread: boolean;
   lastAt: Date;
   messages: {
     id: string;
@@ -222,6 +232,7 @@ function ThreadList({ list, empty }: { list: ThreadForList[]; empty: string }) {
         return (
           <RowModal
             key={t.key}
+            onOpen={t.unread ? markThreadRead.bind(null, t.contactId, t.leadId, t.channel) : undefined}
             row={
               <div className="flex items-center gap-3">
                 <span className="shrink-0">{meta.icon}</span>
@@ -233,8 +244,12 @@ function ThreadList({ list, empty }: { list: ThreadForList[]; empty: string }) {
                   <p className="text-xs text-slate-400 truncate">{preview}</p>
                 </div>
                 <div className="text-right shrink-0">
-                  {t.awaiting && (
-                    <span className="badge bg-amber-500/15 text-amber-300">awaiting reply</span>
+                  {t.unread ? (
+                    <span className="badge bg-amber-500/15 text-amber-300">Unread</span>
+                  ) : t.awaiting ? (
+                    <span className="badge bg-sky-500/15 text-sky-300">Read · reply due</span>
+                  ) : (
+                    <span className="badge bg-emerald-500/15 text-emerald-300">Replied</span>
                   )}
                   <p className="text-[11px] text-slate-500 mt-0.5">{formatDateTime(t.lastAt)}</p>
                 </div>

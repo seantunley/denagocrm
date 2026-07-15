@@ -35,6 +35,18 @@ export async function isSmtpConfigured(): Promise<boolean> {
   return (await getSmtpConfig()) != null;
 }
 
+/**
+ * A deliverable From header. If SMTP_FROM has no email address (e.g. it's just a
+ * display name like "Denago Cape Town"), pair it with the authenticated SMTP
+ * user so the message has a valid sender and isn't rejected/dropped.
+ */
+function fromHeader(config: SmtpConfig): string {
+  const from = config.from.trim();
+  if (from.includes("@")) return from;
+  if (config.user && config.user.includes("@")) return `${from} <${config.user}>`;
+  return from;
+}
+
 export async function sendEmail(input: {
   to: string;
   subject: string;
@@ -52,7 +64,7 @@ export async function sendEmail(input: {
       auth: config.user ? { user: config.user, pass: config.pass ?? "" } : undefined,
     });
     await transporter.sendMail({
-      from: config.from,
+      from: fromHeader(config),
       to: input.to,
       subject: input.subject,
       text: input.text,

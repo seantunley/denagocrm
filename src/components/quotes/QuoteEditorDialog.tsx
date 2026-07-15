@@ -851,7 +851,7 @@ export function QuoteEditorDialog({
       </Dialog>
 
       <Dialog open={discardOpen} onOpenChange={setDiscardOpen}>
-        <ResponsiveDialogContent className="sm:max-w-md">
+        <ResponsiveDialogContent className="z-[110] sm:max-w-md">
           <DialogHeader className="text-left">
             <DialogTitle>Discard unsaved changes?</DialogTitle>
             <DialogDescription>Your latest quote edits have not been saved.</DialogDescription>
