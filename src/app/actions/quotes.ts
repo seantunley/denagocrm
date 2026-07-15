@@ -22,6 +22,7 @@ import {
 const quoteDraftSchema = z.object({
   id: z.string().trim().min(1).optional(),
   contactId: z.string().trim().min(1, "Select a customer."),
+  leadId: z.string().trim().min(1).nullable().optional(),
   validUntil: z.string().trim().max(10).nullable().optional(),
   terms: z.string().trim().max(10_000, "Terms are too long."),
   intent: z.enum(["draft", "sent"]),
@@ -249,6 +250,21 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
   });
   if (!contact) return { ok: false, error: "That customer is no longer available." };
 
+  // Optional lead link (new quotes only). Verify the lead exists and belongs to
+  // the chosen customer so a quote can't be tied to someone else's lead.
+  let linkedLeadId: string | null = null;
+  if (!data.id && data.leadId) {
+    const lead = await prisma.lead.findUnique({
+      where: { id: data.leadId },
+      select: { id: true, contactId: true },
+    });
+    if (!lead) return { ok: false, error: "That lead is no longer available." };
+    if (lead.contactId && lead.contactId !== data.contactId) {
+      return { ok: false, error: "That lead belongs to a different customer." };
+    }
+    linkedLeadId = lead.id;
+  }
+
   let validUntil: Date | null = null;
   if (data.validUntil) {
     validUntil = new Date(`${data.validUntil}T12:00:00`);
@@ -314,6 +330,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       data: {
         number: (max._max.number ?? 1000) + 1,
         contactId: data.contactId,
+        leadId: linkedLeadId,
         createdById: user.id,
         validUntil: validUntil ?? addDays(new Date(), Number.isNaN(validDays) ? 7 : validDays),
         terms: data.terms || defaultTerms,

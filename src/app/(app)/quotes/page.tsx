@@ -38,7 +38,7 @@ export default async function QuotesPage({
   const user = await requireAnyPermission("quotes.view_all", "quotes.view_owned");
   const accessibleQuoteIds = await getAccessibleQuoteIds(user);
   const { edit } = await searchParams;
-  const [quotes, contacts, products, allVersions, validDaysRaw, quoteTerms] = await Promise.all([
+  const [quotes, contacts, openLeads, products, allVersions, validDaysRaw, quoteTerms] = await Promise.all([
     prisma.quote.findMany({
       // Only current heads appear in the list. Older revisions remain available
       // from the editor's version history and the full record. RBAC-scoped.
@@ -48,6 +48,13 @@ export default async function QuotesPage({
       take: 200,
     }),
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
+    // Open leads offered as an optional link when starting a fresh quote.
+    prisma.lead.findMany({
+      where: { status: "open" },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, title: true, name: true, contactId: true },
+      take: 500,
+    }),
     prisma.product.findMany({
       where: { active: true },
       include: { colors: { orderBy: { name: "asc" } } },
@@ -141,6 +148,11 @@ export default async function QuotesPage({
     terms: quoteTerms || "Prices include VAT. Delivery arranged on acceptance. E&OE.",
   };
   const contactOptions = contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }));
+  const leadOptions = openLeads.map((lead) => ({
+    id: lead.id,
+    label: lead.title || lead.name,
+    contactId: lead.contactId,
+  }));
   const productOptions = products.map((product) => ({
     id: product.id,
     name: product.name,
@@ -151,6 +163,7 @@ export default async function QuotesPage({
   return (
     <QuoteEditorProvider
       contacts={contactOptions}
+      leads={leadOptions}
       products={productOptions}
       defaults={defaults}
       records={records}

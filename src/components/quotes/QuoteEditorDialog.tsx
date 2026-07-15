@@ -46,6 +46,12 @@ export type QuoteEditorContact = {
   label: string;
 };
 
+export type QuoteEditorLead = {
+  id: string;
+  label: string;
+  contactId: string | null;
+};
+
 export type QuoteEditorProduct = {
   id: string;
   name: string;
@@ -115,6 +121,7 @@ type DraftFee = {
 
 type DraftState = {
   contactId: string;
+  leadId: string;
   validUntil: string;
   terms: string;
   lines: DraftLine[];
@@ -168,6 +175,7 @@ function createDraft(
   if (!record) {
     return {
       contactId: initialContactId ?? "",
+      leadId: "",
       validUntil: defaults.validUntil,
       terms: defaults.terms,
       lines: [],
@@ -179,6 +187,7 @@ function createDraft(
   }
   return {
     contactId: record.contactId ?? "",
+    leadId: "", // existing quotes keep their server-side lead link; not editable here
     validUntil: record.validUntil,
     terms: record.terms,
     fees: record.fees.map((fee) => ({
@@ -211,6 +220,7 @@ function createDraft(
 function draftSnapshot(draft: DraftState) {
   return JSON.stringify({
     contactId: draft.contactId,
+    leadId: draft.leadId,
     validUntil: draft.validUntil,
     terms: draft.terms,
     taxInclusive: draft.taxInclusive,
@@ -249,6 +259,7 @@ export function QuoteEditorDialog({
   open,
   onOpenChange,
   contacts,
+  leads = [],
   products,
   defaults,
   record = null,
@@ -257,6 +268,7 @@ export function QuoteEditorDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   contacts: QuoteEditorContact[];
+  leads?: QuoteEditorLead[];
   products: QuoteEditorProduct[];
   defaults: QuoteEditorDefaults;
   record?: QuoteEditorRecord | null;
@@ -468,6 +480,7 @@ export function QuoteEditorDialog({
         const result = await saveQuoteDraft({
           id: savedQuote?.id,
           contactId: draft.contactId,
+          leadId: draft.leadId || null,
           validUntil: draft.validUntil || null,
           terms: draft.terms,
           intent,
@@ -563,6 +576,34 @@ export function QuoteEditorDialog({
                         <option value="">Select a customer…</option>
                         {contacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.label}</option>)}
                       </select>
+                      {/* Optional lead link — only when starting a fresh quote. Picking a
+                          lead ties the quote to it (so it shows on the lead) and fills in
+                          the customer from that lead. Existing quotes keep their own link. */}
+                      {!record && leads.length > 0 && (
+                        <>
+                          <label className="mt-4 block text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground" htmlFor="quote-lead">Link to a lead (optional)</label>
+                          <select
+                            id="quote-lead"
+                            className="input mt-1.5"
+                            value={draft.leadId}
+                            disabled={!editable}
+                            onChange={(event) => {
+                              const leadId = event.target.value;
+                              const lead = leads.find((item) => item.id === leadId);
+                              setDraft((current) => ({
+                                ...current,
+                                leadId,
+                                // Keep the customer in step with the chosen lead.
+                                contactId: lead?.contactId ?? current.contactId,
+                              }));
+                            }}
+                          >
+                            <option value="">No lead — customer quote</option>
+                            {leads.map((lead) => <option key={lead.id} value={lead.id}>{lead.label}</option>)}
+                          </select>
+                          <p className="mt-1.5 text-xs text-muted-foreground">Links this quote to the lead so it appears on the lead&apos;s record.</p>
+                        </>
+                      )}
                     </section>
 
                     <section className="overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.025]">
@@ -875,6 +916,7 @@ const QuoteEditorContext = createContext<QuoteEditorContextValue | null>(null);
 export function QuoteEditorProvider({
   children,
   contacts,
+  leads,
   products,
   defaults,
   records,
@@ -882,6 +924,7 @@ export function QuoteEditorProvider({
 }: {
   children: ReactNode;
   contacts: QuoteEditorContact[];
+  leads: QuoteEditorLead[];
   products: QuoteEditorProduct[];
   defaults: QuoteEditorDefaults;
   records: QuoteEditorRecord[];
@@ -900,6 +943,7 @@ export function QuoteEditorProvider({
           open
           onOpenChange={(next) => !next && setSelection(null)}
           contacts={contacts}
+          leads={leads}
           products={products}
           defaults={defaults}
           record={record}
