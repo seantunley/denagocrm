@@ -41,6 +41,30 @@ export async function addCommunication(formData: FormData) {
   revalidatePath(String(formData.get("revalidate") ?? "/"));
 }
 
+/**
+ * Marks a social-inbox thread as read — stamps readAt on every unopened inbound
+ * message in the conversation. Fired when the thread is opened in the inbox, so
+ * the sidebar badge and the thread's pill flip from "Unread" to "Read". Idempotent.
+ */
+export async function markThreadRead(
+  contactId: string | null,
+  leadId: string | null,
+  channel: string,
+) {
+  await requireCrmOrWorkshop();
+  if (!contactId && !leadId) return;
+  await prisma.communication.updateMany({
+    where: {
+      type: channel,
+      direction: "inbound",
+      readAt: null,
+      ...(contactId ? { contactId } : { leadId }),
+    },
+    data: { readAt: new Date() },
+  });
+  revalidatePath("/inbox");
+}
+
 export async function deleteCommunication(id: string, path: string, formData: FormData) {
   const user = await requireCrmOrWorkshop();
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";

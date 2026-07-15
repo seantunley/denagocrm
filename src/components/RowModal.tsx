@@ -3,10 +3,19 @@
 import type { ReactNode } from "react";
 import { Dialog, DialogTitle, DialogTrigger, ResponsiveDialogContent } from "@/components/ui/dialog";
 
-/** Accessible row-detail dialog. */
-export default function RowModal({ row, children }: { row: ReactNode; children: ReactNode }) {
+/** Accessible row-detail dialog. `onOpen` fires once when the dialog opens —
+ *  used by the inbox to mark a thread read the moment it's viewed. */
+export default function RowModal({
+  row,
+  children,
+  onOpen,
+}: {
+  row: ReactNode;
+  children: ReactNode;
+  onOpen?: () => void | Promise<void>;
+}) {
   return (
-    <Dialog>
+    <Dialog onOpenChange={(open) => { if (open) void onOpen?.(); }}>
       <DialogTrigger asChild>
         <button type="button" className="block w-full cursor-pointer px-4 py-3 text-left transition-colors hover:bg-white/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-orange-500/40">{row}</button>
       </DialogTrigger>

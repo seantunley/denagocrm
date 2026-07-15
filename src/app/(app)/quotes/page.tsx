@@ -8,6 +8,8 @@ import { getSetting } from "@/lib/settings";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { EmptyState, StatusPill } from "@/components/visual-system";
+import ConfirmDelete from "@/components/ConfirmDelete";
+import { deleteQuote } from "@/app/actions/quotes";
 import {
   MobileDataCard,
   MobileDataField,
@@ -203,6 +205,9 @@ export default async function QuotesPage({
                         </MobileDataField>
                         <MobileDataField label="Created">{formatDate(quote.createdAt)}</MobileDataField>
                       </MobileDataFields>
+                      <div className="mt-2 flex justify-end">
+                        <ConfirmDelete action={deleteQuote.bind(null, quote.id)} title={`Delete quote Q-${quote.number}?`} description="Moves the quote to Trash (restorable for 60 days)." trigger="Delete quote" triggerClass="text-xs text-slate-500 hover:text-red-400" />
+                      </div>
                     </MobileDataCard>
                   );
                 })}
@@ -220,6 +225,7 @@ export default async function QuotesPage({
                       <th>Status</th>
                       <th>Valid until</th>
                       <th>Created</th>
+                      <th />
                     </tr>
                   </thead>
                   <tbody>
@@ -246,6 +252,9 @@ export default async function QuotesPage({
                           </td>
                           <td className="text-slate-400">{formatDate(quote.validUntil)}</td>
                           <td className="text-slate-400">{formatDate(quote.createdAt)}{quote.createdBy ? ` · ${quote.createdBy.name}` : ""}</td>
+                          <td className="text-right">
+                            <ConfirmDelete action={deleteQuote.bind(null, quote.id)} title={`Delete quote Q-${quote.number}?`} description="Moves the quote to Trash (restorable for 60 days)." trigger="Delete" triggerClass="text-xs text-slate-500 hover:text-red-400" />
+                          </td>
                         </tr>
                       );
                     })}

@@ -207,6 +207,28 @@ export async function moveLead(leadId: string, stageId: string) {
     before: { stageId: before.stageId, position: before.position, pipelineId: currentScope?.pipelineId },
     after: { stageId, position: lead.position, pipelineId: targetStage.pipelineId },
   });
+  // Moving a lead back to a stage BEFORE the test-drive stage cancels any booked
+  // test drive — otherwise a stale appointment (and its weather) lingers on the
+  // card. Remove the activity and record the cancellation in the audit log.
+  const pipelineStages = await listPipelineStages(targetStage.pipelineId);
+  const testDriveStage = pipelineStages.find((s) => /test/i.test(s.name)); // same rule the board uses
+  if (testDriveStage && targetStage.order < testDriveStage.order) {
+    const booking = await prisma.activity.findFirst({
+      where: { leadId, type: "test_drive", status: "planned" },
+      orderBy: { dueDate: "desc" },
+    });
+    if (booking) {
+      await prisma.activity.delete({ where: { id: booking.id } });
+      await logAudit({
+        action: "lead.test_drive_cancelled",
+        summary: `Cancelled the booked test drive for “${lead.title}” — moved back to ${lead.stage.name}`,
+        leadId,
+        contactId: lead.contactId,
+        user,
+      });
+    }
+  }
+
   await runLeadAutomations("stage_entered", leadId);
   revalidatePath("/leads");
   revalidatePath("/forecast");
