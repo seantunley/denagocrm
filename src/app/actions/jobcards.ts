@@ -471,6 +471,22 @@ export async function consumeReservation(reservationId: string, jobCardId: strin
   revalidatePath("/parts");
 }
 
+// ── Warranty recovery & comebacks (phase 4) ───────────────────────────────────
+export async function setJobWarranty(jobCardId: string, formData: FormData) {
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const underWarranty = formData.get("underWarranty") === "on";
+  const warrantyRecoveredCents = parseRands(String(formData.get("warrantyRecovered") ?? ""));
+  await prisma.jobCard.update({ where: { id: jobCardId }, data: { underWarranty, warrantyRecoveredCents } });
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+export async function setComeback(jobCardId: string, formData: FormData) {
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const comebackOfId = String(formData.get("comebackOfId") ?? "").trim() || null;
+  await prisma.jobCard.update({ where: { id: jobCardId }, data: { comebackOfId } });
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
 // ── Service packages (phase 3) ────────────────────────────────────────────────
 export async function applyServicePackage(jobCardId: string, formData: FormData) {
   await requireJobCardAccess(jobCardId, "jobcards.manage");

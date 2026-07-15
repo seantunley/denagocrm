@@ -28,6 +28,8 @@ import {
   releaseReservation,
   consumeReservation,
   applyServicePackage,
+  setJobWarranty,
+  setComeback,
 } from "@/app/actions/jobcards";
 import { requireUser } from "@/lib/auth";
 import DocumentsPanel from "@/components/DocumentsPanel";
@@ -51,7 +53,7 @@ import {
   hoursBetween,
   APPROVAL_STATUS_TONE,
 } from "@/lib/workshop-constants";
-import { getDefaultLabourRateCents, effectiveLabourRateCents, totalLoggedHours } from "@/lib/workshop";
+import { getDefaultLabourRateCents, effectiveLabourRateCents, totalLoggedHours, jobProfit } from "@/lib/workshop";
 
 export default async function JobCardDetailPage({
   params,
@@ -65,7 +67,7 @@ export default async function JobCardDetailPage({
       include: {
         vehicle: true,
         contact: true,
-        items: true,
+        items: { include: { part: true } },
         technician: true,
         serviceRecord: true,
         bay: true,
@@ -81,9 +83,18 @@ export default async function JobCardDetailPage({
     prisma.workshopBay.findMany({ where: { active: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }),
     getDefaultLabourRateCents(),
   ]);
-  const servicePackages = await prisma.servicePackage.findMany({ where: { active: true }, orderBy: { name: "asc" } });
   if (!jobCard) notFound();
   const currentUser = await requireUser();
+  const [servicePackages, siblingJobs] = await Promise.all([
+    prisma.servicePackage.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
+    prisma.jobCard.findMany({
+      where: { vehicleId: jobCard.vehicleId, id: { not: jobCard.id }, deletedAt: null },
+      orderBy: { openedAt: "desc" },
+      take: 20,
+      select: { id: true, number: true, description: true },
+    }),
+  ]);
+  const profit = jobProfit(jobCard.items, jobCard.subCostCents);
 
   const now = new Date();
   const terminal = isTerminalStage(jobCard.status);
@@ -573,6 +584,41 @@ export default async function JobCardDetailPage({
             <button className="btn-secondary btn-sm">Save</button>
           </form>
         </div>
+      </div>
+
+      {/* Profitability & recovery (phase 4) ─────────────────────────────────── */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="card">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Profitability</p>
+          <dl className="space-y-1 text-sm">
+            <div className="flex justify-between"><dt className="text-muted-foreground">Revenue</dt><dd className="font-medium tabular-nums">{formatZAR(profit.revenueCents)}</dd></div>
+            <div className="flex justify-between"><dt className="text-muted-foreground">Parts cost</dt><dd className="tabular-nums">−{formatZAR(profit.partsCostCents)}</dd></div>
+            {profit.subCostCents > 0 && <div className="flex justify-between"><dt className="text-muted-foreground">Subcontract</dt><dd className="tabular-nums">−{formatZAR(profit.subCostCents)}</dd></div>}
+            <div className="flex justify-between border-t border-border pt-1"><dt className="font-semibold">Gross profit</dt><dd className={`font-bold tabular-nums ${profit.profitCents >= 0 ? "text-emerald-400" : "text-red-400"}`}>{formatZAR(profit.profitCents)}</dd></div>
+            <div className="flex justify-between"><dt className="text-muted-foreground">Margin</dt><dd className="tabular-nums">{profit.marginPct}%</dd></div>
+          </dl>
+        </div>
+        <form action={setJobWarranty.bind(null, jobCard.id)} className="card space-y-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Warranty recovery</p>
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input type="checkbox" name="underWarranty" defaultChecked={jobCard.underWarranty} className="h-4 w-4" />
+            Work is under warranty
+          </label>
+          <div>
+            <label className="label" htmlFor="warrantyRecovered">Recovered (R)</label>
+            <input id="warrantyRecovered" name="warrantyRecovered" inputMode="decimal" className="input tabular-nums" defaultValue={jobCard.warrantyRecoveredCents ? (jobCard.warrantyRecoveredCents / 100).toFixed(2) : ""} placeholder="Labour + parts recovered" />
+          </div>
+          <button className="btn-secondary btn-sm">Save</button>
+        </form>
+        <form action={setComeback.bind(null, jobCard.id)} className="card space-y-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Comeback / repeat repair</p>
+          <p className="text-xs text-muted-foreground">Link this job to the earlier one it&apos;s a repeat of, on the same vehicle.</p>
+          <select name="comebackOfId" defaultValue={jobCard.comebackOfId ?? ""} className="input">
+            <option value="">Not a comeback</option>
+            {siblingJobs.map((s) => <option key={s.id} value={s.id}>#{s.number} · {s.description.slice(0, 40)}</option>)}
+          </select>
+          <button className="btn-secondary btn-sm">Save</button>
+        </form>
       </div>
 
       <div className="grid lg:grid-cols-3 gap-6 items-start">

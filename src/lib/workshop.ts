@@ -26,3 +26,30 @@ export function totalLoggedHours(entries: TimeEntry[], now: Date): number {
   );
   return Math.round(sum * 100) / 100;
 }
+
+type ProfitItem = { kind: string; qty: number; unitPriceCents: number; part: { costCents: number } | null };
+
+export type JobProfit = {
+  partsRevenueCents: number;
+  labourRevenueCents: number;
+  revenueCents: number;
+  partsCostCents: number;
+  subCostCents: number;
+  costCents: number;
+  profitCents: number;
+  marginPct: number;
+};
+
+/** Job profitability: labour is the shop's value-add, parts are costed at cost. */
+export function jobProfit(items: ProfitItem[], subCostCents: number): JobProfit {
+  const parts = items.filter((i) => i.kind === "part");
+  const labour = items.filter((i) => i.kind === "labour");
+  const partsRevenueCents = parts.reduce((s, i) => s + Math.round(i.qty * i.unitPriceCents), 0);
+  const labourRevenueCents = labour.reduce((s, i) => s + Math.round(i.qty * i.unitPriceCents), 0);
+  const revenueCents = partsRevenueCents + labourRevenueCents;
+  const partsCostCents = parts.reduce((s, i) => s + Math.round(i.qty * (i.part?.costCents ?? 0)), 0);
+  const costCents = partsCostCents + subCostCents;
+  const profitCents = revenueCents - costCents;
+  const marginPct = revenueCents > 0 ? Math.round((profitCents / revenueCents) * 100) : 0;
+  return { partsRevenueCents, labourRevenueCents, revenueCents, partsCostCents, subCostCents, costCents, profitCents, marginPct };
+}

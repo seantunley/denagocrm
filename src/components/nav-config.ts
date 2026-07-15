@@ -94,6 +94,7 @@ export function buildNav(
   }
   if (can("warranty.view", "warranty.manage")) workshopLinks.push({ href: "/warranty", label: "Warranty", icon: ShieldCheck });
   if (can("jobcards.view_all", "jobcards.view_owned")) workshopLinks.push({ href: "/jobcards", label: "Job Cards", icon: Wrench });
+  if (can("jobcards.view_all", "jobcards.view_owned")) workshopLinks.push({ href: "/jobcards/insights", label: "Workshop Insights", icon: TrendingUp });
   if (can("parts.view", "parts.manage")) workshopLinks.push({ href: "/parts", label: "Parts", icon: Cog });
   if (can("workshop.manage")) workshopLinks.push({ href: "/settings/workshop", label: "Workshop settings", icon: Warehouse });
   if (workshopLinks.length) groups.push({ key: "workshop", label: "Workshop", links: workshopLinks });

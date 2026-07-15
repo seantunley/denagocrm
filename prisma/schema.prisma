@@ -789,6 +789,11 @@ model JobCard {
   subcontractor   String?
   subCostCents    Int     @default(0)
 
+  // Workshop depth (phase 4): comeback tracking + warranty recovery
+  comebackOfId           String?
+  underWarranty          Boolean @default(false)
+  warrantyRecoveredCents Int     @default(0)
+
   deletedAt     DateTime?
   deletedByName String?
   deleteReason  String?
@@ -816,8 +821,11 @@ model JobCard {
   inspectionItems JobCardInspectionItem[]
   approvals       JobCardApproval[]
   reservations    PartReservation[]
+  comebackOf      JobCard?  @relation("JobCardComeback", fields: [comebackOfId], references: [id], onDelete: SetNull)
+  comebacks       JobCard[] @relation("JobCardComeback")
 
   @@index([bayId])
+  @@index([comebackOfId])
 }
 
 model PartReservation {
