@@ -42,6 +42,12 @@ export default async function LeadsPage() {
 
   const forecast = await getDailyForecast();
 
+  // The test-drive booking belongs to the test-drive stage. If a lead is moved
+  // back BEFORE that stage (e.g. booked by mistake), don't keep showing the date
+  // + weather on its card — even if a stale planned activity lingers. moveLead
+  // also cancels the booking on move-back; this is the belt-and-braces display side.
+  const testDriveStage = stages.find((s) => /test/i.test(s.name)) ?? null;
+
   const boardStages: KanbanStage[] = stages.map((s) => ({
     id: s.id,
     name: s.name,
@@ -62,6 +68,8 @@ export default async function LeadsPage() {
       noNextStep: l._count.activities === 0,
       ageDays: Math.floor((Date.now() - l.stageEnteredAt.getTime()) / 86400000),
       testDrive: (() => {
+        // Hide the booking once the lead is parked before the test-drive stage.
+        if (testDriveStage && s.order < testDriveStage.order) return null;
         const td = l.activities[0];
         if (!td) return null;
         const saDate = new Date(td.dueDate.getTime() + 2 * 60 * 60 * 1000);
