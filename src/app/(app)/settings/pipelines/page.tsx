@@ -7,6 +7,7 @@ import {
   createSalesPipelineStage,
   editSalesPipeline,
   editSalesPipelineStage,
+  moveStage,
 } from "@/app/actions/pipelines";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import ModalTrigger from "@/components/Modal";
@@ -122,8 +123,17 @@ export default async function PipelineSettingsPage() {
             <div>
               <h3 className="font-medium mb-3">Stages</h3>
               <div className="space-y-2">
-                {stages.map((stage) => (
-                  <details key={stage.id} className="rounded-lg border border-slate-800 p-3">
+                {stages.map((stage, i) => (
+                  <div key={stage.id} className="flex items-stretch gap-1.5">
+                    <div className="flex flex-col justify-center gap-1">
+                      <form action={moveStage.bind(null, pipeline.id, stage.id, "up")}>
+                        <button disabled={i === 0} title="Move up" aria-label={`Move ${stage.name} up`} className="flex size-6 items-center justify-center rounded-md border border-slate-800 text-slate-400 hover:border-orange-500/40 hover:text-orange-400 disabled:opacity-25 disabled:hover:border-slate-800 disabled:hover:text-slate-400">↑</button>
+                      </form>
+                      <form action={moveStage.bind(null, pipeline.id, stage.id, "down")}>
+                        <button disabled={i === stages.length - 1} title="Move down" aria-label={`Move ${stage.name} down`} className="flex size-6 items-center justify-center rounded-md border border-slate-800 text-slate-400 hover:border-orange-500/40 hover:text-orange-400 disabled:opacity-25 disabled:hover:border-slate-800 disabled:hover:text-slate-400">↓</button>
+                      </form>
+                    </div>
+                    <details className="flex-1 rounded-lg border border-slate-800 p-3">
                     <summary className="cursor-pointer flex items-center gap-3 list-none">
                       <span className="w-3 h-3 rounded-full" style={{ backgroundColor: stage.color }} />
                       <span className="font-medium flex-1">{stage.order + 1}. {stage.name}</span>
@@ -161,7 +171,8 @@ export default async function PipelineSettingsPage() {
                         </select>
                       </label>
                     </form>
-                  </details>
+                    </details>
+                  </div>
                 ))}
                 {stages.length === 0 && <p className="text-sm text-slate-500">No stages yet.</p>}
               </div>

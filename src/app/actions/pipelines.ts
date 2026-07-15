@@ -12,6 +12,8 @@ import {
   archivePipeline,
   captureForecastSnapshot,
   createPipeline,
+  listPipelineStages,
+  reorderPipelineStages,
   updateLeadForecast,
   updatePipeline,
   updatePipelineStage,
@@ -151,6 +153,31 @@ export async function editSalesPipelineStage(id: string, formData: FormData) {
     user,
     before: before[0],
     after,
+  });
+  revalidatePath("/settings/pipelines");
+  revalidatePath("/leads");
+  revalidatePath("/forecast");
+}
+
+/** Swap a stage with its neighbour to reorder the pipeline. */
+export async function moveStage(pipelineId: string, stageId: string, direction: "up" | "down") {
+  const user = await requirePermission("pipelines.manage");
+  const stages = await listPipelineStages(pipelineId); // ordered by "order" asc
+  const idx = stages.findIndex((s) => s.id === stageId);
+  if (idx < 0) return;
+  const swapWith = direction === "up" ? idx - 1 : idx + 1;
+  if (swapWith < 0 || swapWith >= stages.length) return; // already at the edge
+
+  const ids = stages.map((s) => s.id);
+  [ids[idx], ids[swapWith]] = [ids[swapWith], ids[idx]];
+  await reorderPipelineStages(pipelineId, ids);
+
+  await logAuditStrict({
+    action: "pipeline.stage_reordered",
+    summary: `Moved stage “${stages[idx].name}” ${direction}`,
+    entityType: "PipelineStage",
+    entityId: stageId,
+    user,
   });
   revalidatePath("/settings/pipelines");
   revalidatePath("/leads");
