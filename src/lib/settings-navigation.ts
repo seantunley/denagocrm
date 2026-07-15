@@ -13,6 +13,12 @@ export type SettingsNavGroup = {
 /** Shared source of truth for the settings page and application search. */
 export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
   {
+    label: "Workspace",
+    items: [
+      { key: "overview", label: "Settings overview", keywords: ["home", "all settings", "configuration"] },
+    ],
+  },
+  {
     label: "You",
     items: [
       { key: "account", label: "My Account", keywords: ["profile", "password", "signature"] },
@@ -22,7 +28,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
   {
     label: "CRM",
     items: [
-      { key: "pipeline", label: "Pipeline", keywords: ["lead stages", "sales stages"] },
+      { key: "pipeline", label: "Pipeline", href: "/settings/pipelines", keywords: ["lead stages", "sales stages"] },
       { key: "quotes", label: "Quotes", keywords: ["quote defaults", "terms"] },
       { key: "import", label: "Import", keywords: ["contacts", "csv", "upload"] },
     ],
@@ -50,7 +56,8 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
   {
     label: "Organisation",
     items: [
-      { key: "team", label: "Team", keywords: ["users", "staff", "members"] },
+      { key: "team", label: "Team & access", href: "/settings/access", keywords: ["users", "staff", "members", "roles", "permissions"] },
+      { key: "portal-access", label: "Portal access", href: "/settings/portal-access", keywords: ["customer portal", "delegation", "profile requests"] },
       { key: "documents", label: "Documents", href: "/settings/documents", keywords: ["templates", "document studio"] },
       { key: "signing-workflows", label: "Signing workflows", href: "/settings/signing-workflows", keywords: ["approval", "signing", "workflow", "e-sign"] },
       { key: "security", label: "Security", href: "/settings/security", keywords: ["security checks", "surface exposure"] },
