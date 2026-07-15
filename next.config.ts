@@ -1,6 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Keep the headless-Chrome packages out of the server bundle so their native
+  // binary isn't relocated — otherwise chromium.executablePath() can't find it
+  // on Vercel and PDF generation (signing, document render) fails at runtime.
+  serverExternalPackages: ["@sparticuz/chromium", "puppeteer-core"],
   async headers() {
     return [
       {
