@@ -435,6 +435,11 @@ model Quote {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
+  // CPQ (phase 1): tax mode + deposit terms
+  taxInclusive Boolean @default(true) // unit prices already include VAT
+  depositType  String? // percent | amount
+  depositValue Float? // % when percent, rands when amount
+
   deletedAt     DateTime?
   deletedByName String?
   deleteReason  String?
@@ -480,6 +485,7 @@ model Quote {
   createdBy   User?    @relation("QuoteCreator", fields: [createdById], references: [id])
 
   items     QuoteItem[]
+  fees      QuoteFee[]
   soldStock StockUnit[] @relation("StockSold")
 }
 
@@ -491,6 +497,14 @@ model QuoteItem {
   discountPct    Float  @default(0)
   colorPreference String?
 
+  // CPQ (phase 1)
+  kind        String  @default("product") // product | accessory | optional | trade_in | service_plan | warranty
+  taxRatePct  Float   @default(15) // per-line VAT
+  costCents   Int     @default(0) // unit cost, for margin visibility
+  optional    Boolean @default(false) // customer-selectable add-on
+  selected    Boolean @default(true) // whether an optional line is currently chosen
+  sortOrder   Int     @default(0)
+
   productId String?
   product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
 
@@ -498,6 +512,20 @@ model QuoteItem {
   quote   Quote  @relation(fields: [quoteId], references: [id], onDelete: Cascade)
 
   @@index([productId])
+}
+
+model QuoteFee {
+  id         String @id @default(cuid())
+  label      String
+  kind       String @default("fee") // fee | delivery
+  amountCents Int   @default(0)
+  taxRatePct Float  @default(15)
+  sortOrder  Int    @default(0)
+
+  quoteId String
+  quote   Quote  @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  @@index([quoteId])
 }
 
 model ServiceReminderLog {
