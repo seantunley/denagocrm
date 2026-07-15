@@ -10,6 +10,7 @@ import { triggerSurvey } from "@/lib/surveys";
 import { softDeleteRecord } from "@/lib/trash";
 import { saveFile } from "@/lib/storage";
 import { parseRands } from "@/lib/format";
+import { STAGE_VALUES, PRIORITY_VALUES, stageMeta } from "@/lib/workshop-constants";
 import {
   requireJobCardAccess,
   requireVehicleAccess,
@@ -140,15 +141,84 @@ export async function setJobCardTechnician(jobCardId: string, formData: FormData
   revalidatePath(`/jobcards/${jobCardId}`);
 }
 
+// Moving to any workflow stage (or cancelling / reopening). "collected" is
+// reserved for completeJobCard, which also creates the service record.
 export async function setJobCardStatus(jobCardId: string, status: string) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const allowed = new Set(["open", "in_progress", "completed"]);
+  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const allowed = new Set(STAGE_VALUES.filter((s) => s !== "collected"));
   if (!allowed.has(status)) throw new Error("Invalid job card status");
+  const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId }, select: { number: true, contactId: true, status: true } });
   await prisma.jobCard.update({
     where: { id: jobCardId },
-    data: { status, completedAt: status === "completed" ? new Date() : null },
+    data: { status, completedAt: null },
+  });
+  await logAudit({
+    action: "jobcard.stage",
+    summary: `Job card #${jobCard.number}: ${stageMeta(jobCard.status).label} → ${stageMeta(status).label}`,
+    contactId: jobCard.contactId,
+    user,
   });
   revalidatePath("/jobcards");
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+export async function setJobCardPriority(jobCardId: string, formData: FormData) {
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const priority = String(formData.get("priority") ?? "normal");
+  if (!PRIORITY_VALUES.includes(priority)) return;
+  await prisma.jobCard.update({ where: { id: jobCardId }, data: { priority } });
+  revalidatePath("/jobcards");
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+export async function setJobCardBay(jobCardId: string, formData: FormData) {
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const bayId = String(formData.get("bayId") ?? "").trim() || null;
+  await prisma.jobCard.update({ where: { id: jobCardId }, data: { bayId } });
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+export async function setJobCardEstimate(jobCardId: string, formData: FormData) {
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const hoursRaw = String(formData.get("estimatedHours") ?? "").trim();
+  const rateRaw = String(formData.get("labourRate") ?? "").trim();
+  const estimatedHours = hoursRaw === "" ? null : Math.max(0, parseFloat(hoursRaw) || 0);
+  const labourRateCents = rateRaw === "" ? null : parseRands(rateRaw);
+  await prisma.jobCard.update({
+    where: { id: jobCardId },
+    data: { estimatedHours, labourRateCents },
+  });
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+// ── Technician time clock ────────────────────────────────────────────────────
+// A technician has at most one running clock at a time. Starting one auto-stops
+// any other running entry they left open (on this or another job).
+export async function startTimeEntry(jobCardId: string, formData: FormData) {
+  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+  const note = String(formData.get("note") ?? "").trim() || null;
+  await prisma.jobCardTimeEntry.updateMany({
+    where: { technicianId: user.id, endedAt: null },
+    data: { endedAt: new Date() },
+  });
+  await prisma.jobCardTimeEntry.create({
+    data: { jobCardId, technicianId: user.id, note },
+  });
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+export async function stopTimeEntry(jobCardId: string) {
+  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+  await prisma.jobCardTimeEntry.updateMany({
+    where: { jobCardId, technicianId: user.id, endedAt: null },
+    data: { endedAt: new Date() },
+  });
+  revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+export async function deleteTimeEntry(entryId: string, jobCardId: string) {
+  await requireJobCardAccess(jobCardId, "jobcards.manage");
+  await prisma.jobCardTimeEntry.delete({ where: { id: entryId } }).catch(() => {});
   revalidatePath(`/jobcards/${jobCardId}`);
 }
 
@@ -179,7 +249,7 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
   await prisma.$transaction([
     prisma.jobCard.update({
       where: { id: jobCardId },
-      data: { status: "completed", completedAt: new Date() },
+      data: { status: "collected", completedAt: new Date() },
     }),
     prisma.serviceRecord.create({
       data: {

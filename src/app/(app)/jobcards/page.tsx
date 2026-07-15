@@ -6,18 +6,14 @@ import JobCardForm from "@/components/JobCardForm";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
+import { StatusPill } from "@/components/visual-system";
+import { stageMeta, priorityMeta, isTerminalStage } from "@/lib/workshop-constants";
 import {
   getAccessibleJobCardIds,
   getAccessibleVehicleIds,
   hasPermission,
   requireAnyPermission,
 } from "@/lib/permissions";
-
-const statusBadge: Record<string, string> = {
-  open: "bg-slate-800 text-slate-400",
-  in_progress: "bg-amber-500/15 text-amber-300",
-  completed: "bg-emerald-500/15 text-emerald-300",
-};
 
 export default async function JobCardsPage() {
   const user = await requireAnyPermission("jobcards.view_all", "jobcards.view_owned");
@@ -29,8 +25,8 @@ export default async function JobCardsPage() {
   const [jobCards, vehicles] = await Promise.all([
     prisma.jobCard.findMany({
       where: jobCardIds === null ? {} : { id: { in: jobCardIds } },
-      orderBy: [{ status: "asc" }, { openedAt: "desc" }],
-      include: { vehicle: true, contact: true, items: true },
+      orderBy: [{ openedAt: "desc" }],
+      include: { vehicle: true, contact: true, items: true, bay: true },
       take: 200,
     }),
     canManage
@@ -45,7 +41,7 @@ export default async function JobCardsPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Workshop jobs" description={`${jobCards.filter((job) => job.status !== "completed").length} active · ${jobCards.length} accessible recent job cards`}>
+      <PageHeader title="Workshop jobs" description={`${jobCards.filter((job) => !isTerminalStage(job.status)).length} active · ${jobCards.length} accessible recent job cards`}>
         {canManage && (
           <ModalTrigger label={<><Plus className="size-4" />New job card</>} title="New job card" buttonClass={buttonVariants({ size: "sm" })}>
             <JobCardForm
@@ -66,6 +62,7 @@ export default async function JobCardsPage() {
               <th>Vehicle</th>
               <th>Customer</th>
               <th>Description</th>
+              <th>Bay</th>
               <th>Total</th>
               <th>Status</th>
               <th>Opened</th>
@@ -74,7 +71,7 @@ export default async function JobCardsPage() {
           <tbody>
             {jobCards.length === 0 && (
               <tr>
-                <td colSpan={7} className="text-center text-slate-400 py-8">
+                <td colSpan={8} className="text-center text-slate-400 py-8">
                   No accessible job cards.
                 </td>
               </tr>
@@ -95,11 +92,22 @@ export default async function JobCardsPage() {
                   </td>
                   <td>{contactName(j.contact)}</td>
                   <td className="max-w-64 truncate">{j.description}</td>
+                  <td className="text-slate-400">
+                    {j.bay ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="inline-block size-2 rounded-full" style={{ backgroundColor: j.bay.color }} />
+                        {j.bay.name}
+                      </span>
+                    ) : "—"}
+                  </td>
                   <td>{formatZAR(Math.round(total))}</td>
                   <td>
-                    <span className={`badge ${statusBadge[j.status] ?? statusBadge.open}`}>
-                      {j.status.replace("_", " ")}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <StatusPill tone={stageMeta(j.status).tone}>{stageMeta(j.status).label}</StatusPill>
+                      {j.priority !== "normal" && (
+                        <span className="inline-block size-2 rounded-full" style={{ backgroundColor: priorityMeta(j.priority).tone === "danger" ? "#ef4444" : priorityMeta(j.priority).tone === "warning" ? "#f59e0b" : "#64748b" }} title={`${priorityMeta(j.priority).label} priority`} />
+                      )}
+                    </div>
                   </td>
                   <td className="text-slate-400">{formatDate(j.openedAt)}</td>
                 </tr>

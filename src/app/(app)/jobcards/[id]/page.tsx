@@ -6,6 +6,12 @@ import {
   deleteJobCardItem,
   setJobCardStatus,
   setJobCardTechnician,
+  setJobCardBay,
+  setJobCardPriority,
+  setJobCardEstimate,
+  startTimeEntry,
+  stopTimeEntry,
+  deleteTimeEntry,
   completeJobCard,
   deleteJobCard,
 } from "@/app/actions/jobcards";
@@ -18,7 +24,17 @@ import { generateDocEditorDocument } from "@/app/actions/doceditor";
 import { activeRecordRequest } from "@/lib/signing/record";
 import JobCardItemForm from "@/components/JobCardItemForm";
 import { uploadJobCardPhotos } from "@/app/actions/jobcards";
-import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
+import { StatusPill } from "@/components/visual-system";
+import {
+  PIPELINE_STAGES,
+  PRIORITIES,
+  stageMeta,
+  priorityMeta,
+  isTerminalStage,
+  hoursBetween,
+} from "@/lib/workshop-constants";
+import { getDefaultLabourRateCents, effectiveLabourRateCents, totalLoggedHours } from "@/lib/workshop";
 
 export default async function JobCardDetailPage({
   params,
@@ -26,7 +42,7 @@ export default async function JobCardDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [jobCard, parts, users] = await Promise.all([
+  const [jobCard, parts, users, bays, defaultRateCents] = await Promise.all([
     prisma.jobCard.findUnique({
       where: { id },
       include: {
@@ -35,14 +51,26 @@ export default async function JobCardDetailPage({
         items: true,
         technician: true,
         serviceRecord: true,
+        bay: true,
+        timeEntries: { include: { technician: true }, orderBy: { startedAt: "desc" } },
         documents: { where: { deletedAt: null }, include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
       },
     }),
     prisma.part.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
     prisma.user.findMany({ orderBy: { name: "asc" } }),
+    prisma.workshopBay.findMany({ where: { active: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }),
+    getDefaultLabourRateCents(),
   ]);
   if (!jobCard) notFound();
   const currentUser = await requireUser();
+
+  const now = new Date();
+  const terminal = isTerminalStage(jobCard.status);
+  const sm = stageMeta(jobCard.status);
+  const actualHours = totalLoggedHours(jobCard.timeEntries, now);
+  const rateCents = effectiveLabourRateCents(jobCard.labourRateCents, defaultRateCents);
+  const timeLabourCents = Math.round(actualHours * rateCents);
+  const myRunning = jobCard.timeEntries.find((e) => e.endedAt === null && e.technicianId === currentUser.id) ?? null;
   const builderDocs = (await listBuilderTemplates()).filter((t) => t.key === "jobcard" || t.key === "service-report");
   const signingState = await activeRecordRequest({ jobCardId: jobCard.id });
   const path = `/jobcards/${jobCard.id}`;
@@ -54,21 +82,22 @@ export default async function JobCardDetailPage({
     .filter((i) => i.kind === "labour")
     .reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
   const grandTotal = partsTotal + labourTotal;
-
-  const statusBadge =
-    jobCard.status === "completed"
-      ? "bg-emerald-500/15 text-emerald-300"
-      : jobCard.status === "in_progress"
-      ? "bg-amber-500/15 text-amber-300"
-      : "bg-slate-800 text-slate-400";
+  const pm = priorityMeta(jobCard.priority);
 
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-2xl font-semibold tracking-[-0.035em]">Job card #{jobCard.number}</h1>
-            <span className={`badge ${statusBadge}`}>{jobCard.status.replace("_", " ")}</span>
+            <StatusPill tone={sm.tone}>{sm.label}</StatusPill>
+            {jobCard.priority !== "normal" && <StatusPill tone={pm.tone}>{pm.label} priority</StatusPill>}
+            {jobCard.bay && (
+              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                <span className="inline-block size-2 rounded-full" style={{ backgroundColor: jobCard.bay.color }} />
+                {jobCard.bay.name}
+              </span>
+            )}
           </div>
           <p className="text-sm text-slate-400 mt-0.5">
             <Link href={`/vehicles/${jobCard.vehicleId}`} className="text-orange-400 hover:underline">
@@ -88,7 +117,7 @@ export default async function JobCardDetailPage({
           <Link href={`/jobcards/${jobCard.id}/print`} className="btn-secondary">
             🖨 Print
           </Link>
-          {jobCard.status === "completed" && (
+          {jobCard.status === "collected" && (
             <Link href={`/jobcards/${jobCard.id}/service-report`} className="btn-secondary" target="_blank">
               📋 Service report
             </Link>
@@ -111,16 +140,14 @@ export default async function JobCardDetailPage({
               </button>
             </form>
           )}
-          {jobCard.status === "open" && (
-            <form action={setJobCardStatus.bind(null, jobCard.id, "in_progress")}>
-              <button className="btn bg-amber-500 text-white hover:bg-amber-600">
-                ▶ Start work
-              </button>
+          {terminal && (
+            <form action={setJobCardStatus.bind(null, jobCard.id, "repair")}>
+              <button className="btn-secondary">Reopen</button>
             </form>
           )}
-          {jobCard.status === "completed" && (
-            <form action={setJobCardStatus.bind(null, jobCard.id, "open")}>
-              <button className="btn-secondary">Reopen</button>
+          {!terminal && (
+            <form action={setJobCardStatus.bind(null, jobCard.id, "cancelled")}>
+              <button className="btn-secondary">Cancel job</button>
             </form>
           )}
           <ConfirmDelete
@@ -148,6 +175,112 @@ export default async function JobCardDetailPage({
           </select>
           <button className="btn-secondary btn-sm mt-2">Assign</button>
         </form>
+      </div>
+
+      {/* Workshop stage ─────────────────────────────────────────────────────── */}
+      <div className="card">
+        <h2 className="font-semibold mb-3">Workshop stage</h2>
+        <div className="flex flex-wrap gap-2">
+          {PIPELINE_STAGES.map((stage) => {
+            const active = jobCard.status === stage.value;
+            return (
+              <form key={stage.value} action={setJobCardStatus.bind(null, jobCard.id, stage.value)}>
+                <button
+                  disabled={active}
+                  className={
+                    active
+                      ? "rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground"
+                      : "rounded-full border border-border bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                  }
+                >
+                  {stage.label}
+                </button>
+              </form>
+            );
+          })}
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          {terminal
+            ? `This job is ${sm.label.toLowerCase()}. Pick a stage above to reopen it.`
+            : "Use “Complete & write service record” below to move to Collected."}
+        </p>
+      </div>
+
+      {/* Bay · priority · estimate ──────────────────────────────────────────── */}
+      <div className="grid gap-4 md:grid-cols-3">
+        <form action={setJobCardBay.bind(null, jobCard.id)} className="card space-y-2">
+          <label className="label" htmlFor="bayId">Workshop bay</label>
+          <select id="bayId" name="bayId" className="input" defaultValue={jobCard.bayId ?? ""}>
+            <option value="">Unassigned</option>
+            {bays.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+          <button className="btn-secondary btn-sm">Set bay</button>
+        </form>
+        <form action={setJobCardPriority.bind(null, jobCard.id)} className="card space-y-2">
+          <label className="label" htmlFor="priority">Priority</label>
+          <select id="priority" name="priority" className="input" defaultValue={jobCard.priority}>
+            {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+          </select>
+          <button className="btn-secondary btn-sm">Set priority</button>
+        </form>
+        <form action={setJobCardEstimate.bind(null, jobCard.id)} className="card space-y-2">
+          <label className="label">Labour estimate</label>
+          <div className="grid grid-cols-2 gap-2">
+            <input name="estimatedHours" inputMode="decimal" className="input tabular-nums" placeholder="Hours" defaultValue={jobCard.estimatedHours ?? ""} />
+            <input name="labourRate" inputMode="decimal" className="input tabular-nums" placeholder={`R${(defaultRateCents / 100).toFixed(0)}/h`} defaultValue={jobCard.labourRateCents != null ? (jobCard.labourRateCents / 100).toFixed(2) : ""} />
+          </div>
+          <button className="btn-secondary btn-sm">Save estimate</button>
+        </form>
+      </div>
+
+      {/* Technician time clock ──────────────────────────────────────────────── */}
+      <div className="card space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="font-semibold">⏱ Technician time</h2>
+            <p className="text-xs text-muted-foreground">
+              Estimated {jobCard.estimatedHours != null ? `${jobCard.estimatedHours} h` : "—"} · Logged{" "}
+              <span className="tabular-nums text-foreground">{actualHours} h</span> · Labour value{" "}
+              <span className="text-foreground">{formatZAR(timeLabourCents)}</span> @ R{(rateCents / 100).toFixed(0)}/h
+              {jobCard.estimatedHours != null && actualHours > jobCard.estimatedHours && (
+                <span className="ml-1 text-amber-400">· over estimate</span>
+              )}
+            </p>
+          </div>
+          {!terminal &&
+            (myRunning ? (
+              <form action={stopTimeEntry.bind(null, jobCard.id)}>
+                <button className="btn bg-red-600 text-white hover:bg-red-700">■ Stop my clock</button>
+              </form>
+            ) : (
+              <form action={startTimeEntry.bind(null, jobCard.id)}>
+                <button className="btn bg-emerald-700 text-white hover:bg-emerald-600">▶ Start my clock</button>
+              </form>
+            ))}
+        </div>
+        {jobCard.timeEntries.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No time logged yet.</p>
+        ) : (
+          <div className="divide-y divide-border text-sm">
+            {jobCard.timeEntries.map((e) => (
+              <div key={e.id} className="flex items-center justify-between gap-3 py-1.5">
+                <span className="min-w-0 truncate text-muted-foreground">
+                  {e.technician?.name ?? "—"} · {formatDateTime(e.startedAt)}{e.note ? ` · ${e.note}` : ""}
+                </span>
+                <span className="flex items-center gap-2 shrink-0">
+                  {e.endedAt ? (
+                    <span className="tabular-nums font-medium text-foreground">{hoursBetween(e.startedAt, e.endedAt)} h</span>
+                  ) : (
+                    <span className="text-emerald-400">running…</span>
+                  )}
+                  <form action={deleteTimeEntry.bind(null, e.id, jobCard.id)}>
+                    <button className="text-xs text-slate-600 hover:text-red-500">✕</button>
+                  </form>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="card">
@@ -238,7 +371,7 @@ export default async function JobCardDetailPage({
                       {formatZAR(Math.round(i.qty * i.unitPriceCents))}
                     </td>
                     <td className="text-right">
-                      {jobCard.status !== "completed" && (
+                      {!terminal && (
                         <ConfirmDelete
                           action={deleteJobCardItem.bind(null, i.id, jobCard.id)}
                           title={`Remove “${i.description}”?`}
@@ -253,7 +386,7 @@ export default async function JobCardDetailPage({
               </tbody>
             </table>
 
-            {jobCard.status !== "completed" && (
+            {!terminal && (
               <JobCardItemForm
                 action={addJobCardItem.bind(null, jobCard.id)}
                 parts={parts.map((p) => ({
@@ -283,7 +416,7 @@ export default async function JobCardDetailPage({
             </div>
           </div>
 
-          {jobCard.status !== "completed" ? (
+          {!terminal ? (
             <div className="card border-emerald-500/30">
               <h2 className="font-semibold mb-1">Complete job card</h2>
               <p className="text-xs text-slate-400 mb-4">

@@ -41,6 +41,7 @@ model User {
   libraryVersions    LibraryVersion[]
   quotesCreated      Quote[]          @relation("QuoteCreator")
   jobCardsAsTech     JobCard[]        @relation("JobCardTechnician")
+  jobCardTimeEntries JobCardTimeEntry[] @relation("JobCardTimeTechnician")
   campaignsCreated   Campaign[]       @relation("CampaignCreator")
 }
 
@@ -762,7 +763,8 @@ model ServiceRecord {
 model JobCard {
   id          String    @id @default(cuid())
   number      Int       @unique
-  status      String    @default("open") // open | in_progress | completed
+  // Workshop stages: booking | checkin | diagnosis | approval | repair | qc | ready | collected | cancelled
+  status      String    @default("booking")
   description String
   kmIn        Int?
   openedAt    DateTime  @default(now())
@@ -770,6 +772,13 @@ model JobCard {
   notes       String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+
+  // Workshop depth (phase 1)
+  priority        String @default("normal") // low | normal | high | urgent
+  estimatedHours  Float?
+  labourRateCents Int? // per-job override; falls back to the workshop default setting
+  bayId           String?
+  bay             WorkshopBay? @relation(fields: [bayId], references: [id], onDelete: SetNull)
 
   deletedAt     DateTime?
   deletedByName String?
@@ -794,6 +803,37 @@ model JobCard {
   items         JobCardItem[]
   serviceRecord ServiceRecord?
   documents     Document[]
+  timeEntries   JobCardTimeEntry[]
+
+  @@index([bayId])
+}
+
+model WorkshopBay {
+  id        String   @id @default(cuid())
+  name      String
+  color     String   @default("#0ea5e9")
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  notes     String?
+  createdAt DateTime @default(now())
+
+  jobCards JobCard[]
+}
+
+model JobCardTimeEntry {
+  id        String    @id @default(cuid())
+  startedAt DateTime  @default(now())
+  endedAt   DateTime? // null while the clock is running
+  note      String?
+  createdAt DateTime  @default(now())
+
+  jobCardId    String
+  jobCard      JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  technicianId String
+  technician   User    @relation("JobCardTimeTechnician", fields: [technicianId], references: [id])
+
+  @@index([jobCardId])
+  @@index([technicianId, endedAt])
 }
 
 model JobCardItem {
