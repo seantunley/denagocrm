@@ -1,5 +1,5 @@
 import { PageSkeleton } from "@/components/visual-system";
 
-export default function LoadingQuotes() {
+export default function LoadingCampaigns() {
   return <PageSkeleton variant="list" />;
 }

@@ -8,6 +8,8 @@ import { lineItemColKeys } from "@/lib/doceditor/model";
 import { ConditionField } from "@/lib/docbuilder/ConditionField";
 import { validateExpression } from "@/lib/docbuilder/expr";
 import { saveLibraryItem } from "@/app/actions/doclibrary";
+import { TextPromptDialog } from "@/components/TextPromptDialog";
+import { toast } from "sonner";
 
 const lbl = "block text-[11px] font-medium text-slate-500 mb-1";
 const inp = "w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-800 focus:border-orange-400 focus:outline-none";
@@ -133,11 +135,18 @@ function BlockProps({ block, floating }: { block: DocumentBlock; floating: boole
       {block.type === "table" && <p className="p-3 text-xs text-slate-400">Edit table cells inline on the page.</p>}
       {block.type === "pageBreak" && <p className="p-3 text-xs text-slate-400">Forces the next content onto a new page.</p>}
       <div className="space-y-2 p-3">
-        <button
-          type="button"
-          onClick={async () => { const name = prompt("Save this block to the content library as:"); if (name?.trim()) { await saveLibraryItem({ name: name.trim(), category: "", blocks: [block] }); alert("Saved to library — open the Library tab (left) to reuse it."); } }}
-          className="w-full rounded-md border border-slate-300 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
-        >💾 Save to content library</button>
+        <TextPromptDialog
+          trigger={<button type="button" className="w-full rounded-md border border-slate-300 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Save to content library</button>}
+          title="Save reusable content"
+          description="Give this block a clear name so your team can find it in the Library palette."
+          label="Library item name"
+          placeholder="e.g. Standard warranty terms"
+          submitLabel="Save to library"
+          onSubmit={async (name) => {
+            await saveLibraryItem({ name, category: "", blocks: [block] });
+            toast.success("Saved to the content library");
+          }}
+        />
         <button type="button" onClick={() => remove(block.id)} className="w-full rounded-md border border-red-200 py-1.5 text-sm text-red-600 hover:bg-red-50">Delete block</button>
       </div>
     </>
