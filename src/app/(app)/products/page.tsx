@@ -1,11 +1,20 @@
 import Link from "next/link";
-import { Plus } from "lucide-react";
+import { Boxes, Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import ModalTrigger from "@/components/Modal";
 import ProductForm from "@/components/ProductForm";
 import { formatZAR } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
+import {
+  MobileDataCard,
+  MobileDataField,
+  MobileDataFields,
+  MobileDataHeader,
+  MobileDataList,
+  ResponsiveDataView,
+} from "@/components/responsive-patterns";
+import { EmptyState, StatusPill } from "@/components/visual-system";
 
 export default async function ProductsPage() {
   const products = await prisma.product.findMany({
@@ -17,12 +26,40 @@ export default async function ProductsPage() {
     <div className="space-y-5">
       <PageHeader title="Product catalogue" description={`${products.filter((product) => product.active).length} active Denago models`}>
         <ModalTrigger label={<><Plus className="size-4" />New product</>} title="New product" buttonClass={buttonVariants({ size: "sm" })}>
-          <ProductForm />
+          <ProductForm variant="dialog" />
         </ModalTrigger>
       </PageHeader>
 
-      <div className="card p-0 overflow-x-auto">
-        <table className="table-base">
+      {products.length === 0 ? (
+        <EmptyState
+          icon={Boxes}
+          title="Your catalogue is ready for its first model"
+          description="Add the Denago models your team sells so stock, quotes, leads and customer vehicles all use the same product data."
+          action={<Link href="/products/new" className={buttonVariants({ size: "sm" })}><Plus className="size-4" />Add first product</Link>}
+        />
+      ) : (
+        <ResponsiveDataView
+          mobile={
+            <MobileDataList>
+              {products.map((product) => (
+                <MobileDataCard key={product.id}>
+                  <MobileDataHeader
+                    title={<Link href={`/products/${product.id}`} className="text-primary hover:underline">{product.name}</Link>}
+                    detail={product.sku || product.category || "Catalogue product"}
+                    aside={<StatusPill tone={product.active ? "success" : "neutral"}>{product.active ? "Active" : "Archived"}</StatusPill>}
+                  />
+                  <MobileDataFields>
+                    <MobileDataField label="Base price">{product.basePriceCents ? formatZAR(product.basePriceCents) : "Not set"}</MobileDataField>
+                    <MobileDataField label="Usage">{product._count.leads} leads · {product._count.vehicles} vehicles</MobileDataField>
+                    <MobileDataField label="Colours" wide>{product.colors.length ? product.colors.map((color) => color.name).join(", ") : "No choices configured"}</MobileDataField>
+                  </MobileDataFields>
+                </MobileDataCard>
+              ))}
+            </MobileDataList>
+          }
+          desktop={
+            <div className="card p-0 overflow-x-auto">
+              <table className="table-base">
           <thead>
             <tr>
               <th>Model</th>
@@ -35,13 +72,6 @@ export default async function ProductsPage() {
             </tr>
           </thead>
           <tbody>
-            {products.length === 0 && (
-              <tr>
-                <td colSpan={7} className="text-center text-slate-400 py-8">
-                  No products yet — add your Denago models.
-                </td>
-              </tr>
-            )}
             {products.map((p) => (
               <tr key={p.id}>
                 <td>
@@ -65,21 +95,16 @@ export default async function ProductsPage() {
                 <td>{p._count.leads}</td>
                 <td>{p._count.vehicles}</td>
                 <td>
-                  <span
-                    className={`badge ${
-                      p.active
-                        ? "bg-emerald-500/15 text-emerald-300"
-                        : "bg-slate-800 text-slate-400"
-                    }`}
-                  >
-                    {p.active ? "Active" : "Archived"}
-                  </span>
+                  <StatusPill tone={p.active ? "success" : "neutral"}>{p.active ? "Active" : "Archived"}</StatusPill>
                 </td>
               </tr>
             ))}
           </tbody>
-        </table>
-      </div>
+              </table>
+            </div>
+          }
+        />
+      )}
     </div>
   );
 }

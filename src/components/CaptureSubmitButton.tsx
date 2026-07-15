@@ -1,20 +1,22 @@
 "use client";
 
-import { CarFront, LoaderCircle, PackagePlus, Wrench } from "lucide-react";
+import { CarFront, LoaderCircle, PackagePlus, Shapes, Wrench } from "lucide-react";
 import { useFormStatus } from "react-dom";
 
-export type CaptureKind = "stock" | "vehicle" | "part";
+export type CaptureKind = "stock" | "vehicle" | "part" | "product";
 
 const icons = {
   stock: PackagePlus,
   vehicle: CarFront,
   part: Wrench,
+  product: Shapes,
 };
 
 const pendingLabels = {
   stock: "Adding stock unit…",
   vehicle: "Registering vehicle…",
   part: "Adding part…",
+  product: "Creating product…",
 };
 
 export default function CaptureSubmitButton({ label, kind }: { label: string; kind: CaptureKind }) {
