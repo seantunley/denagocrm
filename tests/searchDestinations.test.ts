@@ -7,14 +7,14 @@ test("finds Settings destinations by their visible labels", () => {
   const results = matchSearchDestinations("library", destinations);
 
   assert.equal(results[0]?.label, "Library");
-  assert.equal(results[0]?.href, "/library");
+  assert.equal(results[0]?.href, "/settings?tab=library");
 });
 
 test("finds Settings destinations by descriptive keywords", () => {
   const destinations = getSearchDestinations({ modules: "", isAdmin: true });
 
   assert.equal(matchSearchDestinations("restore", destinations)[0]?.href, "/settings/backup-recovery");
-  assert.equal(matchSearchDestinations("document studio", destinations)[0]?.href, "/settings/documents");
+  assert.equal(matchSearchDestinations("document studio", destinations)[0]?.href, "/document-studio");
 });
 
 test("does not expose administrator Settings destinations to members", () => {

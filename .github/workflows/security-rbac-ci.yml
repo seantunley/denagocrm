@@ -1,28 +1,13 @@
-name: Security and RBAC validation
+name: CI — build, test & validate
 
+# Runs on every pull request and on pushes to main. Previously this suite was
+# path-filtered to security-related files, so most PRs merged with no automated
+# checks at all. It now guards every change.
 on:
   push:
     branches:
-      - agent/security-rbac-complete
+      - main
   pull_request:
-    paths:
-      - "src/lib/auth.ts"
-      - "src/lib/session.ts"
-      - "src/lib/rateLimit.ts"
-      - "src/lib/userSecurity.ts"
-      - "src/lib/permissions.ts"
-      - "src/lib/audit.ts"
-      - "src/app/actions/accessControl.ts"
-      - "src/app/actions/security.ts"
-      - "src/app/actions/settings.ts"
-      - "src/app/login/actions.ts"
-      - "src/app/actions/portal.ts"
-      - "prisma/**"
-      - "scripts/test-security.ts"
-      - "scripts/verify-governance.ts"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/security-rbac-ci.yml"
   workflow_dispatch:
 
 permissions:
@@ -102,6 +87,9 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      - name: Unit tests
+        run: npm run test:unit
 
       - name: Production build
         env:
