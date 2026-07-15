@@ -223,7 +223,7 @@ export default async function ReportsPage({
       },
     }),
     prisma.jobCard.findMany({
-      where: { ...jobScope, status: "completed", completedAt: { gte: from, lt: to } },
+      where: { ...jobScope, completedAt: { gte: from, lt: to } },
       select: { completedAt: true },
     }),
     prisma.user.findMany({

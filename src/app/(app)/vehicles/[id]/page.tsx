@@ -19,6 +19,8 @@ import {
 import { contactName, formatDate, formatDateTime } from "@/lib/format";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
 import { computeWarranty, warrantyColors, warrantyLabels, claimColors, claimStatuses } from "@/lib/warranty";
+import { analyzeBattery } from "@/lib/battery";
+import { BatteryHealthChart } from "@/components/BatteryHealthChart";
 
 export default async function VehicleDetailPage({
   params,
@@ -274,6 +276,15 @@ export default async function VehicleDetailPage({
                   : s >= 60
                     ? "bg-amber-500/15 text-amber-300"
                     : "bg-red-500/15 text-red-300";
+            const analysis = analyzeBattery(checks, {
+              purchaseDate: vehicle.purchaseDate,
+              warrantyMonths: vehicle.warrantyMonths,
+              now: new Date(),
+            });
+            const chartPoints = checks
+              .filter((c) => c.stateOfHealth != null)
+              .map((c) => ({ soh: c.stateOfHealth as number }))
+              .reverse();
             return (
               <div className="card">
                 <div className="flex items-center justify-between mb-4">
@@ -284,6 +295,26 @@ export default async function VehicleDetailPage({
                     </span>
                   )}
                 </div>
+                {chartPoints.length > 0 && (
+                  <div className="mb-4 space-y-2">
+                    <BatteryHealthChart points={chartPoints} />
+                    <div className="flex flex-wrap gap-1.5 text-xs">
+                      <span className={`badge ${sohColor(analysis.latestSoh)}`}>{analysis.headline}</span>
+                      {analysis.degradationPerMonth != null && analysis.degradationPerMonth > 0 && (
+                        <span className="badge bg-slate-800 text-slate-300">−{analysis.degradationPerMonth}%/mo</span>
+                      )}
+                      {analysis.projectedMonthsToWarning != null && (
+                        <span className="badge bg-amber-500/15 text-amber-300">~{analysis.projectedMonthsToWarning} mo to 60%</span>
+                      )}
+                      {analysis.warrantyEligible && (
+                        <span className="badge bg-sky-500/15 text-sky-300">⚠ Warranty claim eligible</span>
+                      )}
+                      {analysis.replacementOpportunity && (
+                        <span className="badge bg-red-500/15 text-red-300">🔁 Replacement opportunity</span>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <form
                   action={addBatteryCheck.bind(null, vehicle.id)}
                   className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4"
