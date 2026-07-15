@@ -90,6 +90,8 @@ export default async function LeadsPage() {
       noNextStep: l._count.activities === 0,
       ageDays: Math.floor((Date.now() - l.stageEnteredAt.getTime()) / 86400000),
       testDrive: (() => {
+        // Hide the booking once the lead is parked before the test-drive stage.
+        if (testDriveStage && s.order < testDriveStage.order) return null;
         const td = l.activities[0];
         if (!td) return null;
         const saDate = new Date(td.dueDate.getTime() + 2 * 60 * 60 * 1000);

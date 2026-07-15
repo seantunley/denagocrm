@@ -16,6 +16,12 @@ const nextConfig: NextConfig = {
     "/jobcards/**": [CHROMIUM_FILES],
     "/document-studio": [CHROMIUM_FILES],
     "/settings/documents/**": [CHROMIUM_FILES],
+    // Completion SEALS the final PDF via chromium too, wherever the last signature
+    // lands: the in-person hub surface (/signatures/[id]/sign/…), the public
+    // customer link (/api/signing), and the legacy link (/api/sign). #57 covered
+    // send but not these, so completion would still hit the chromium error.
+    "/signatures/**": [CHROMIUM_FILES],
+    "/api/signing/**": [CHROMIUM_FILES],
     "/api/sign/**": [CHROMIUM_FILES],
   },
   async headers() {

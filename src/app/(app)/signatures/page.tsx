@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requireOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { formatDate } from "@/lib/format";
+import { formatDate, formatDateTime } from "@/lib/format";
 import { ApprovalActions } from "./ApprovalActions";
 import { PageHeader } from "@/components/page-header";
 import { ShieldCheck } from "lucide-react";
@@ -28,6 +28,22 @@ const RECIPIENT_STATUS: Record<string, { dot: string; label: string }> = {
   sent: { dot: "bg-amber-400", label: "sent, not signed" },
   pending: { dot: "bg-slate-500", label: "not sent" },
 };
+
+// A precise per-signer state line: signed/declined/opened(not signed)/sent(not
+// opened)/not sent — with the exact date + time so you can see where a request
+// is stuck.
+function signerDetail(x: {
+  status: string;
+  signedAt: Date | null;
+  viewedAt: Date | null;
+  declinedAt: Date | null;
+}): string {
+  if (x.status === "signed" && x.signedAt) return `signed ${formatDateTime(x.signedAt)}`;
+  if (x.status === "declined") return x.declinedAt ? `declined ${formatDateTime(x.declinedAt)}` : "declined";
+  if (x.viewedAt) return `opened ${formatDateTime(x.viewedAt)} · not signed`;
+  if (x.status === "sent") return "sent · not opened yet";
+  return "not sent yet";
+}
 
 function median(nums: number[]): number | null {
   if (nums.length === 0) return null;
@@ -125,8 +141,8 @@ export default async function SignaturesPage() {
                     <div className="mt-0.5 text-[11px] text-muted-foreground">
                       {signed}/{signers.length} signed · {r.ordering}
                       {viewers.length > 0 ? ` · ${viewers.length} viewer${viewers.length > 1 ? "s" : ""}` : ""}
-                      {r.sentAt ? ` · sent ${formatDate(r.sentAt)}` : ""}
-                      {r.completedAt ? ` · completed ${formatDate(r.completedAt)}` : ` · updated ${formatDate(r.updatedAt)}`}
+                      {r.sentAt ? ` · sent ${formatDateTime(r.sentAt)}` : ""}
+                      {r.completedAt ? ` · completed ${formatDateTime(r.completedAt)}` : ` · updated ${formatDateTime(r.updatedAt)}`}
                     </div>
                     {signers.length > 0 && (
                       <div className="mt-1.5 h-1 w-full max-w-xs overflow-hidden rounded-full bg-border/60" aria-hidden="true">
@@ -142,7 +158,7 @@ export default async function SignaturesPage() {
                             <span className={`size-1.5 shrink-0 rounded-full ${meta.dot}`} aria-hidden="true" />
                             {x.name}
                             {x.role === "approver" ? " (approver)" : ""}
-                            <span className="text-muted-foreground/60">· {isNext ? "up next" : x.status === "signed" && x.signedAt ? `signed ${formatDate(x.signedAt)}` : meta.label}</span>
+                            <span className="text-muted-foreground/60">· {isNext ? `up next · ${signerDetail(x)}` : signerDetail(x)}</span>
                           </span>
                         );
                       })}

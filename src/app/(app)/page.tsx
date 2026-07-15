@@ -330,10 +330,21 @@ export default async function DashboardPage() {
     .filter((x) => x.due.status === "overdue" || x.due.status === "due_soon")
     .sort((a, b) => (a.due.status === "overdue" ? -1 : 1) - (b.due.status === "overdue" ? -1 : 1));
 
-  // One chronological feed: new leads + logged communications together
+  // Quote + signing lifecycle events (created, sent, countersigned, signed, …)
+  // live in the audit log, not communications — pull them so the feed shows the
+  // whole picture, not just calls/notes/new leads.
+  const recentActivity = await prisma.auditLog.findMany({
+    where: { OR: [{ action: { startsWith: "quote." } }, { action: { startsWith: "signing." } }] },
+    orderBy: { createdAt: "desc" },
+    take: 8,
+    select: { id: true, action: true, summary: true, createdAt: true, contactId: true, leadId: true },
+  });
+
+  // One chronological feed: new leads + logged communications + quote/signing events
   const feed = [
     ...recentLeads.map((l) => ({ kind: "lead" as const, when: l.createdAt, lead: l })),
     ...recentComms.map((c) => ({ kind: "comm" as const, when: c.occurredAt, comm: c })),
+    ...recentActivity.map((a) => ({ kind: "audit" as const, when: a.createdAt, audit: a })),
   ]
     .sort((a, b) => b.when.getTime() - a.when.getTime())
     .slice(0, 8);
@@ -629,7 +640,7 @@ export default async function DashboardPage() {
                               {f.lead.status === "open" ? f.lead.stage.name : f.lead.status}
                             </span>
                           </li>
-                        ) : (
+                        ) : f.kind === "comm" ? (
                           <li key={`c-${f.comm.id}`} className="flex items-center gap-2 py-1.5">
                             <span className="size-1.5 shrink-0 rounded-full bg-sky-400" />
                             <p className="min-w-0 flex-1 truncate text-[13px]">
@@ -657,6 +668,23 @@ export default async function DashboardPage() {
                                 {" · "}
                                 {f.comm.body.slice(0, 56)} · {formatDateTime(f.comm.occurredAt)}
                               </span>
+                            </p>
+                          </li>
+                        ) : (
+                          <li key={`a-${f.audit.id}`} className="flex items-center gap-2 py-1.5">
+                            <span className="size-1.5 shrink-0 rounded-full bg-amber-400" />
+                            <p className="min-w-0 flex-1 truncate text-[13px]">
+                              <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                                {f.audit.action.startsWith("signing") ? "Signing" : "Quote"} ·{" "}
+                              </span>
+                              {f.audit.leadId ? (
+                                <Link href={`/leads/${f.audit.leadId}`} className="font-medium text-foreground hover:text-primary">{f.audit.summary}</Link>
+                              ) : f.audit.contactId ? (
+                                <Link href={`/contacts/${f.audit.contactId}`} className="font-medium text-foreground hover:text-primary">{f.audit.summary}</Link>
+                              ) : (
+                                <span className="font-medium text-foreground">{f.audit.summary}</span>
+                              )}
+                              <span className="text-[11px] text-muted-foreground"> · {formatDateTime(f.audit.createdAt)}</span>
                             </p>
                           </li>
                         )
