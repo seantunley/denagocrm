@@ -17,10 +17,12 @@ import {
   deleteWarrantyClaim,
 } from "@/app/actions/warranty";
 import { contactName, formatDate, formatDateTime } from "@/lib/format";
-import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
-import { computeWarranty, warrantyColors, warrantyLabels, claimColors, claimStatuses } from "@/lib/warranty";
+import { computeDue, dueLabels } from "@/lib/serviceDue";
 import { analyzeBattery } from "@/lib/battery";
 import { BatteryHealthChart } from "@/components/BatteryHealthChart";
+import { computeWarranty, warrantyColors, warrantyLabels, claimColors, claimStatuses } from "@/lib/warranty";
+import { EntityDetailShell } from "@/components/entity-detail-shell";
+import { StatusPill } from "@/components/visual-system";
 
 export default async function VehicleDetailPage({
   params,
@@ -49,25 +51,21 @@ export default async function VehicleDetailPage({
   const path = `/vehicles/${vehicle.id}`;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold tracking-[-0.035em]">
-              {vehicle.model}
-              {vehicle.color ? ` — ${vehicle.color}` : ""}
-            </h1>
-            <span className={`badge ${dueColors[due.status]}`}>{dueLabels[due.status]}</span>
-          </div>
-          <p className="text-sm text-slate-400 mt-0.5">
-            Owner:{" "}
-            <Link href={`/contacts/${vehicle.contactId}`} className="text-orange-400 hover:underline">
-              {contactName(vehicle.contact)}
-            </Link>
-            {vehicle.vin ? ` · VIN ${vehicle.vin}` : ""}
-          </p>
-        </div>
-        <div className="flex gap-2">
+    <EntityDetailShell
+      backHref="/vehicles"
+      backLabel="Vehicles"
+      eyebrow={vehicle.regNumber ? `Registration ${vehicle.regNumber}` : "Vehicle record"}
+      title={<>{vehicle.model}{vehicle.color ? ` — ${vehicle.color}` : ""}</>}
+      status={<StatusPill tone={due.status === "overdue" ? "danger" : due.status === "due_soon" ? "warning" : "success"}>{dueLabels[due.status]}</StatusPill>}
+      description={<>Owner: <Link href={`/contacts/${vehicle.contactId}`} className="text-primary hover:underline">{contactName(vehicle.contact)}</Link></>}
+      meta={vehicle.vin ? `VIN ${vehicle.vin}` : "VIN not recorded"}
+      facts={[
+        { label: "Current km", value: due.currentKm != null ? `${due.currentKm.toLocaleString()} km` : "Not recorded" },
+        { label: "Next service", value: formatDate(due.nextDueDate) },
+        { label: "Service due at", value: due.nextDueKm != null ? `${due.nextDueKm.toLocaleString()} km` : "Not set" },
+        { label: "Job cards", value: vehicle.jobCards.length },
+      ]}
+      actions={<>
           <Link
             href={`/jobcards/new?vehicleId=${vehicle.id}`}
             className="btn-primary"
@@ -82,8 +80,8 @@ export default async function VehicleDetailPage({
             title={`Delete vehicle ${vehicle.model}?`}
             description="The vehicle (with its service history and job cards) moves to the Trash and can be restored for 60 days."
           />
-        </div>
-      </div>
+        </>}
+    >
 
       <div className="grid md:grid-cols-4 gap-4">
         <div className="card">
@@ -457,6 +455,6 @@ export default async function VehicleDetailPage({
           )}
         </div>
       </div>
-    </div>
+    </EntityDetailShell>
   );
 }

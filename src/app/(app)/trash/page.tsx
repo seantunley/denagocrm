@@ -1,9 +1,20 @@
 import { differenceInCalendarDays, addDays } from "date-fns";
+import { ArchiveRestore, Trash2 } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { restoreFromTrash } from "@/app/actions/trash";
 import { TRASH_RETENTION_DAYS, type TrashModel } from "@/lib/trash";
 import { contactName, formatDateTime } from "@/lib/format";
+import { PageHeader } from "@/components/page-header";
+import {
+  MobileDataCard,
+  MobileDataField,
+  MobileDataFields,
+  MobileDataHeader,
+  MobileDataList,
+  ResponsiveDataView,
+} from "@/components/responsive-patterns";
+import { EmptyState, StatusPill } from "@/components/visual-system";
 
 type Row = {
   model: TrashModel;
@@ -68,20 +79,46 @@ export default async function TrashPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-[-0.035em]">🗑 Trash</h1>
-        <p className="text-sm text-slate-400 mt-1">
-          Deleted items are kept for {TRASH_RETENTION_DAYS} days, then removed permanently.
-        </p>
-      </div>
+      <PageHeader
+        title="Trash"
+        description={`${rows.length} deleted item${rows.length === 1 ? "" : "s"} · Items are retained for ${TRASH_RETENTION_DAYS} days before permanent removal.`}
+      />
 
       {rows.length === 0 ? (
-        <div className="card text-center py-10">
-          <p className="text-slate-400">The trash is empty.</p>
-        </div>
+        <EmptyState
+          icon={Trash2}
+          title="Trash is empty"
+          description="Deleted contacts, leads, vehicles, documents and catalogue records will appear here during their recovery window."
+        />
       ) : (
-        <div className="card p-0 overflow-x-auto">
-          <table className="table-base">
+        <ResponsiveDataView
+          mobile={
+            <MobileDataList>
+              {rows.map((row) => {
+                const daysLeft = Math.max(0, differenceInCalendarDays(addDays(row.deletedAt, TRASH_RETENTION_DAYS), new Date()));
+                return (
+                  <MobileDataCard key={`${row.model}-${row.id}`}>
+                    <MobileDataHeader
+                      title={row.label}
+                      detail={row.detail}
+                      aside={<StatusPill tone={daysLeft <= 7 ? "danger" : "neutral"}>{daysLeft} days</StatusPill>}
+                    />
+                    <MobileDataFields>
+                      <MobileDataField label="Deleted by">{row.deletedByName ?? "Unknown"}</MobileDataField>
+                      <MobileDataField label="Deleted">{formatDateTime(row.deletedAt)}</MobileDataField>
+                      <MobileDataField label="Reason" wide>{row.deleteReason ?? "No reason recorded"}</MobileDataField>
+                    </MobileDataFields>
+                    <form action={restoreFromTrash.bind(null, row.model, row.id)}>
+                      <button className="btn-secondary w-full"><ArchiveRestore className="size-4" />Restore item</button>
+                    </form>
+                  </MobileDataCard>
+                );
+              })}
+            </MobileDataList>
+          }
+          desktop={
+            <div className="card p-0 overflow-x-auto">
+              <table className="table-base">
             <thead>
               <tr>
                 <th>Item</th>
@@ -108,25 +145,21 @@ export default async function TrashPage() {
                     </td>
                     <td className="text-slate-400 text-xs">{formatDateTime(r.deletedAt)}</td>
                     <td>
-                      <span
-                        className={`badge ${
-                          daysLeft <= 7 ? "bg-red-500/15 text-red-300" : "bg-slate-800 text-slate-300"
-                        }`}
-                      >
-                        {daysLeft} days
-                      </span>
+                      <StatusPill tone={daysLeft <= 7 ? "danger" : "neutral"}>{daysLeft} days</StatusPill>
                     </td>
                     <td>
                       <form action={restoreFromTrash.bind(null, r.model, r.id)}>
-                        <button className="btn-secondary btn-sm">↩ Restore</button>
+                        <button className="btn-secondary btn-sm"><ArchiveRestore className="size-3.5" />Restore</button>
                       </form>
                     </td>
                   </tr>
                 );
               })}
             </tbody>
-          </table>
-        </div>
+              </table>
+            </div>
+          }
+        />
       )}
     </div>
   );

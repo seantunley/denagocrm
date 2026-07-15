@@ -5,7 +5,6 @@ import dynamic from "next/dynamic";
 import {
   BookMarked,
   Braces,
-  Check,
   Eye,
   EyeOff,
   Loader2,
@@ -22,6 +21,7 @@ import { cn } from "@/lib/utils";
 import type { MergeFieldDef } from "@/lib/mergeFields";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/shadcn/style.css";
+import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 
 const BlockNoteInner = dynamic(() => import("./StudioEditorInner"), {
   ssr: false,
@@ -95,14 +95,9 @@ export default function StudioEditor({
   }, []);
 
   return (
-    <div
-      className={cn(
-        "overflow-hidden rounded-2xl border border-border bg-[#0d1110] shadow-[0_24px_80px_rgba(0,0,0,.28)]",
-        fullscreen && "fixed inset-0 z-[70] rounded-none",
-      )}
-    >
-      <div className="flex min-h-16 flex-wrap items-center gap-2 border-b border-white/[0.08] bg-[#111614] px-3 py-2.5 sm:px-4">
-        <input
+    <BuilderWorkspaceShell fullscreen={fullscreen} className="min-h-0">
+      <BuilderWorkspaceBar
+        title={<input
           value={title}
           onChange={(event) => {
             setTitle(event.target.value);
@@ -111,9 +106,10 @@ export default function StudioEditor({
           readOnly={readOnly}
           aria-label="Document title"
           className="min-w-40 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1.5 text-base font-semibold text-white outline-none transition-colors hover:border-white/10 focus:border-primary/50 sm:text-lg"
-        />
-
-        <SaveIndicator status={status} readOnly={readOnly} />
+        />}
+        description="Document Studio · white document canvas with Denago workspace controls"
+        status={<BuilderSaveStatus status={status === "dirty" ? "Unsaved changes" : status} readOnly={readOnly} />}
+      >
 
         {!readOnly && (
           <div className="flex items-center rounded-lg border border-white/10 bg-white/[0.035] p-0.5">
@@ -136,7 +132,7 @@ export default function StudioEditor({
           </ToolbarButton>
         </div>
         {headerRight && <div className="flex items-center">{headerRight}</div>}
-      </div>
+      </BuilderWorkspaceBar>
 
       <div className={cn("relative grid min-h-[65vh]", toolsOpen && !readOnly ? "md:grid-cols-[minmax(0,1fr)_19rem]" : "grid-cols-1")}>
         <main className="min-w-0 overflow-auto bg-[#171c1a] p-2 sm:p-5">
@@ -192,20 +188,10 @@ export default function StudioEditor({
           </aside>
         )}
       </div>
-    </div>
+    </BuilderWorkspaceShell>
   );
 }
 
 function ToolbarButton({ label, active = false, onClick, children }: { label: string; active?: boolean; onClick: () => void; children: React.ReactNode }) {
   return <button type="button" title={label} aria-label={label} aria-pressed={active || undefined} onClick={onClick} className={cn("grid size-8 place-items-center rounded-md text-slate-400 transition hover:bg-white/7 hover:text-white", active && "bg-primary/15 text-primary")}>{children}</button>;
-}
-
-function SaveIndicator({ status, readOnly }: { status: "saved" | "saving" | "dirty"; readOnly: boolean }) {
-  if (readOnly) return <span className="rounded-full border border-white/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Read only</span>;
-  return (
-    <span className="flex items-center gap-1.5 whitespace-nowrap text-xs text-slate-400" role="status" aria-live="polite">
-      {status === "saving" ? <Loader2 className="size-3.5 animate-spin text-primary" /> : status === "saved" ? <Check className="size-3.5 text-emerald-400" /> : <span className="size-2 rounded-full bg-amber-400" />}
-      {status === "saving" ? "Saving…" : status === "saved" ? "Saved" : "Unsaved"}
-    </span>
-  );
 }

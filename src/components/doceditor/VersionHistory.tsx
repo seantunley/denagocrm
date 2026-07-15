@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { publishBuilderVersion, restoreBuilderVersion, listBuilderVersionsAction } from "@/app/actions/docbuilder";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 type Version = { id: string; version: number; label: string | null; publishedBy: string | null; publishedAt: string };
 
@@ -24,7 +25,6 @@ export function VersionHistory({ id, save }: { id: string; save: () => Promise<v
     setBusy(null);
   };
   const restore = async (versionId: string) => {
-    if (!confirm("Restore this version? Your current draft will be replaced (you can re-restore any version).")) return;
     setBusy(versionId);
     await restoreBuilderVersion(id, versionId);
     window.location.reload();
@@ -58,9 +58,13 @@ export function VersionHistory({ id, save }: { id: string; save: () => Promise<v
                     <li key={v.id} className="rounded-md border border-slate-200 p-2">
                       <div className="flex items-center justify-between">
                         <span className="text-sm font-medium text-slate-800">v{v.version}{v.label ? ` · ${v.label}` : ""}</span>
-                        <button type="button" disabled={busy === v.id} onClick={() => restore(v.id)} className="rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-60">
-                          {busy === v.id ? "…" : "Restore"}
-                        </button>
+                        <ConfirmActionDialog
+                          trigger={<button type="button" disabled={busy === v.id} className="rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-60">{busy === v.id ? "…" : "Restore"}</button>}
+                          title={`Restore version ${v.version}?`}
+                          description="Your current draft will be replaced. Published versions remain in history, so you can restore another version later."
+                          confirmLabel="Restore version"
+                          onConfirm={() => restore(v.id)}
+                        />
                       </div>
                       <div className="mt-0.5 text-[11px] text-slate-400">{new Date(v.publishedAt).toLocaleString()}{v.publishedBy ? ` · ${v.publishedBy}` : ""}</div>
                     </li>

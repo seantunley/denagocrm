@@ -10,6 +10,7 @@ import {
   surveyTypeLabel,
 } from "@/lib/surveyTypes";
 import { PageHeader } from "@/components/page-header";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 
 export const dynamic = "force-dynamic";
 
@@ -92,7 +93,7 @@ export default async function SurveysPage() {
         </p>
       </div>
 
-      <div className="card p-0 overflow-x-auto">
+      <ResponsiveEntityTable>
         <table className="table-base">
           <thead>
             <tr>
@@ -109,7 +110,7 @@ export default async function SurveysPage() {
           <tbody>
             {surveys.length === 0 && (
               <tr>
-                <td colSpan={8} className="text-center text-slate-400 py-8">
+                <td data-empty colSpan={8} className="text-center text-slate-400 py-8">
                   No surveys yet — create your first one above.
                 </td>
               </tr>
@@ -120,7 +121,7 @@ export default async function SurveysPage() {
               const rate = live.length ? Math.round((done / live.length) * 100) : 0;
               return (
                 <tr key={s.id}>
-                  <td>
+                  <td data-primary data-label="Survey">
                     <Link href={`/surveys/${s.id}`} className="font-medium text-orange-400 hover:underline">
                       {s.title}
                     </Link>
@@ -128,17 +129,17 @@ export default async function SurveysPage() {
                       <span className="badge bg-slate-800 text-slate-500 ml-2">inactive</span>
                     )}
                   </td>
-                  <td>
+                  <td data-label="Type">
                     <span className="badge bg-orange-600/15 text-orange-300">
                       {surveyTypeLabel(s.type)}
                     </span>
                   </td>
-                  <td className="text-slate-400 text-xs">{triggerLabel(s.trigger)}</td>
-                  <td className="text-right">{live.length}</td>
-                  <td className="text-right">{done}</td>
-                  <td className="text-right">{rate}%</td>
-                  <td className="text-slate-400">{formatDate(s.createdAt)}</td>
-                  <td className="text-right">
+                  <td data-label="Sends" className="text-slate-400 text-xs">{triggerLabel(s.trigger)}</td>
+                  <td data-label="Sent" className="text-right">{live.length}</td>
+                  <td data-label="Responses" className="text-right">{done}</td>
+                  <td data-label="Rate" className="text-right">{rate}%</td>
+                  <td data-label="Created" className="text-slate-400">{formatDate(s.createdAt)}</td>
+                  <td data-actions className="text-right">
                     <form action={deleteSurvey}>
                       <input type="hidden" name="id" value={s.id} />
                       <button className="text-xs text-red-400 hover:text-red-300">Delete</button>
@@ -149,7 +150,7 @@ export default async function SurveysPage() {
             })}
           </tbody>
         </table>
-      </div>
+      </ResponsiveEntityTable>
     </div>
   );
 }

@@ -22,6 +22,19 @@ export function MobileDataList({ children, className }: { children: ReactNode; c
   return <div className={cn("divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card", className)}>{children}</div>;
 }
 
+/**
+ * A semantic table on desktop that becomes a deliberate labelled record list
+ * on phones. Cells opt into their mobile role with data-label, data-primary,
+ * and data-actions attributes instead of relying on global table rewrites.
+ */
+export function ResponsiveEntityTable({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <div data-slot="responsive-entity-table" className={cn("overflow-x-auto rounded-2xl border border-border bg-card", className)}>
+      {children}
+    </div>
+  );
+}
+
 export function MobileDataCard({
   children,
   className,

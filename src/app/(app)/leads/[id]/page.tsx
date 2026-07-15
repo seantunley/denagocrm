@@ -10,7 +10,7 @@ import {
   updateLead,
 } from "@/app/actions/leads";
 import LeadForm from "@/components/LeadForm";
-import { createQuoteFromLeadInEditor } from "@/app/actions/quotes";
+import { createQuoteFromLead } from "@/app/actions/quotes";
 import CommsTimeline from "@/components/CommsTimeline";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
@@ -27,6 +27,9 @@ import { requireUser } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { quoteTotalCents } from "@/lib/pricing";
+import { EntityDetailShell } from "@/components/entity-detail-shell";
+import { StatusPill } from "@/components/visual-system";
+import { Car, Check, FileText } from "lucide-react";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
 
@@ -92,41 +95,36 @@ export default async function LeadDetailPage({
   // notes (pre-migration) are still filtered out of the comms timeline.
   const comms = lead.communications.filter((c) => c.subject !== RESEARCH_SUBJECT);
 
-  const statusBadge =
-    lead.status === "won"
-      ? "bg-emerald-500/15 text-emerald-300"
-      : lead.status === "lost"
-      ? "bg-red-500/15 text-red-300"
-      : "bg-blue-500/15 text-blue-300";
-
   return (
-    <div className="space-y-6">
+    <>
       <MarkLeadViewed leadId={lead.id} viewed={alreadyViewed} />
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold tracking-[-0.035em]">{lead.title}</h1>
-            <span className={`badge ${statusBadge}`}>
-              {lead.status === "open" ? lead.stage.name : lead.status.toUpperCase()}
-            </span>
-          </div>
-          <p className="text-sm text-slate-400 mt-0.5">
-            {lead.name} · {lead.source} · added {formatDate(lead.createdAt)}
-          </p>
-        </div>
-        <div className="flex gap-2 flex-wrap">
+      <EntityDetailShell
+        backHref="/leads"
+        backLabel="Leads"
+        eyebrow="Sales opportunity"
+        title={lead.title}
+        status={<StatusPill tone={lead.status === "won" ? "success" : lead.status === "lost" ? "danger" : "info"}>{lead.status === "open" ? lead.stage.name : lead.status}</StatusPill>}
+        description={`${lead.name} · ${lead.source}`}
+        meta={`Added ${formatDate(lead.createdAt)}${lead.assignedTo ? ` · Owner: ${lead.assignedTo.name}` : " · Unassigned"}`}
+        facts={[
+          { label: "Estimated value", value: lead.valueCents ? formatZAR(lead.valueCents) : "Not set" },
+          { label: "Product", value: lead.product?.name || "Not selected" },
+          { label: "Activities", value: lead.activities.filter((activity) => activity.status === "planned").length },
+          { label: "Quotes", value: lead.quotes.length },
+        ]}
+        actions={<>
           {lead.status === "open" && (
             <>
-              <form action={createQuoteFromLeadInEditor.bind(null, lead.id)}>
-                <button className="btn-primary">📄 Create quote</button>
+              <form action={createQuoteFromLead.bind(null, lead.id)}>
+                <button className="btn-primary"><FileText className="size-4" />Create quote</button>
               </form>
               <form action={markWon.bind(null, lead.id)}>
                 <button className="btn bg-emerald-700 text-white hover:bg-emerald-600">
-                  ✓ Mark won
+                  <Check className="size-4" />Mark won
                 </button>
               </form>
               <ModalTrigger
-                label="✗ Mark lost"
+                label="Mark lost"
                 title={`Why was “${lead.title}” lost?`}
                 buttonClass="btn-danger"
               >
@@ -157,15 +155,15 @@ export default async function LeadDetailPage({
             className="btn-secondary"
             title="Print a test-drive indemnity for this customer to sign"
           >
-            🚗 Indemnity
+            <Car className="size-4" />Indemnity
           </Link>
           <ConfirmDelete
             action={deleteLead.bind(null, lead.id)}
             title={`Delete lead “${lead.title}”?`}
             description="The lead moves to the Trash and can be restored for 60 days."
           />
-        </div>
-      </div>
+        </>}
+      >
 
       {lead.status === "won" && (
         <div className="card bg-emerald-500/10 border-emerald-500/30 flex items-center justify-between gap-4 flex-wrap">
@@ -311,7 +309,7 @@ export default async function LeadDetailPage({
                     <div className="flex items-center justify-between mb-3">
                       <h2 className="font-semibold">Quotes</h2>
                       {lead.status === "open" && (
-                        <form action={createQuoteFromLeadInEditor.bind(null, lead.id)}>
+                        <form action={createQuoteFromLead.bind(null, lead.id)}>
                           <button className="btn-secondary btn-sm">+ Create quote</button>
                         </form>
                       )}
@@ -447,6 +445,7 @@ export default async function LeadDetailPage({
           }
         />
       </div>
-    </div>
+      </EntityDetailShell>
+    </>
   );
 }

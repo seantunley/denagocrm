@@ -3,6 +3,8 @@ import { requireOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { formatDate } from "@/lib/format";
 import { ApprovalActions } from "./ApprovalActions";
+import { PageHeader } from "@/components/page-header";
+import { ShieldCheck } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -56,10 +58,10 @@ export default async function SignaturesPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Signatures</h1>
-        <p className="mt-0.5 text-sm text-muted-foreground">Send documents for signing, track progress, and keep an audit trail — all in-house.</p>
-      </div>
+      <PageHeader
+        title="Signatures"
+        description="Send documents for signing, track progress, and keep a complete in-house audit trail."
+      />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <div className={stat}><div className="text-2xl font-bold text-foreground">{total}</div><div className="text-xs text-muted-foreground">Total</div></div>
@@ -71,7 +73,7 @@ export default async function SignaturesPage() {
 
       {pendingApprovals.length > 0 && (
         <div className={`${card} border-amber-500/30 bg-amber-500/[0.06]`}>
-          <h2 className="mb-2 text-sm font-semibold text-amber-200">🛡 Pending approvals ({pendingApprovals.length})</h2>
+          <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-amber-200"><ShieldCheck className="size-4" aria-hidden="true" />Pending approvals ({pendingApprovals.length})</h2>
           <ul className="divide-y divide-border/50">
             {pendingApprovals.map((s) => (
               <li key={s.id} className="flex flex-wrap items-center gap-3 py-2.5">

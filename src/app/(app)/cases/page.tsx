@@ -4,6 +4,9 @@ import { basePrisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { getAccessibleCaseIds, requireAnyPermission } from "@/lib/permissions";
+import { MobileDataCard, MobileDataField, MobileDataFields, MobileDataHeader, MobileDataList, ResponsiveDataView } from "@/components/responsive-patterns";
+import { EmptyState, StatusPill } from "@/components/visual-system";
+import { MessagesSquare } from "lucide-react";
 
 type CaseRow = {
   id: string;
@@ -47,7 +50,21 @@ export default async function CustomerCasesPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Customer cases" description={`${cases.length} accessible portal support, warranty, delivery and document requests.`} />
-      <div className="card p-0 overflow-x-auto">
+      {cases.length === 0 ? <EmptyState icon={MessagesSquare} title="No customer cases" description="Accessible portal support, warranty, delivery and document requests will appear here." /> : <ResponsiveDataView
+        mobile={<MobileDataList>{cases.map((item) => <MobileDataCard key={item.id}>
+          <MobileDataHeader
+            title={<Link href={`/cases/${item.id}`} className="text-primary">C-{item.number.toString()} · {item.subject}</Link>}
+            detail={<>{item.contactName}{item.vehicleModel ? ` · ${item.vehicleModel}` : ""}</>}
+            aside={Number(item.unreadCount) > 0 ? <StatusPill tone="warning">{Number(item.unreadCount)} new</StatusPill> : undefined}
+          />
+          <MobileDataFields>
+            <MobileDataField label="Type"><span className="capitalize">{item.type}</span></MobileDataField>
+            <MobileDataField label="Priority"><span className="capitalize">{item.priority}</span></MobileDataField>
+            <MobileDataField label="Status"><StatusPill tone={item.status === "resolved" || item.status === "closed" ? "success" : "info"}>{item.status.replaceAll("_", " ")}</StatusPill></MobileDataField>
+            <MobileDataField label="Updated">{formatDateTime(item.updatedAt)}</MobileDataField>
+          </MobileDataFields>
+        </MobileDataCard>)}</MobileDataList>}
+        desktop={<div className="card p-0 overflow-x-auto">
         <table className="table-base">
           <thead><tr><th>Case</th><th>Customer</th><th>Type</th><th>Priority</th><th>Status</th><th>Updated</th></tr></thead>
           <tbody>
@@ -64,7 +81,8 @@ export default async function CustomerCasesPage() {
             ))}
           </tbody>
         </table>
-      </div>
+      </div>}
+      />}
     </div>
   );
 }

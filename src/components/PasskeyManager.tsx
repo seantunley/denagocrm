@@ -6,6 +6,7 @@ import { startRegistration } from "@simplewebauthn/browser";
 import { Fingerprint, Plus, Trash2, KeyRound } from "lucide-react";
 import { removePasskey } from "@/app/actions/passkeys";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
+import { TextPromptDialog } from "@/components/TextPromptDialog";
 
 export type PasskeyRow = {
   id: string;
@@ -30,7 +31,7 @@ export default function PasskeyManager({ passkeys }: { passkeys: PasskeyRow[] })
     typeof window !== "undefined" &&
     typeof window.PublicKeyCredential !== "undefined";
 
-  async function enrol() {
+  async function enrol(nickname: string) {
     setError(null);
     setBusy(true);
     try {
@@ -39,10 +40,6 @@ export default function PasskeyManager({ passkeys }: { passkeys: PasskeyRow[] })
       const options = await optRes.json();
 
       const attestation = await startRegistration({ optionsJSON: options });
-
-      const defaultName =
-        /iPhone|iPad|Android/.test(navigator.userAgent) ? "Phone" : "This device";
-      const nickname = window.prompt("Name this passkey", defaultName) ?? defaultName;
 
       const verifyRes = await fetch("/api/auth/passkey/register/verify", {
         method: "POST",
@@ -102,12 +99,14 @@ export default function PasskeyManager({ passkeys }: { passkeys: PasskeyRow[] })
       )}
 
       {supported ? (
-        <button
-          type="button"
-          onClick={enrol}
-          disabled={busy}
-          className="btn-primary btn-sm inline-flex items-center gap-1.5"
-        >
+        <TextPromptDialog
+          title="Name this passkey"
+          description="Use a name that helps you recognise the phone, tablet or computer later."
+          label="Device name"
+          defaultValue={/iPhone|iPad|Android/.test(navigator.userAgent) ? "Phone" : "This device"}
+          submitLabel="Continue"
+          onSubmit={enrol}
+          trigger={<button type="button" disabled={busy} className="btn-primary btn-sm inline-flex items-center gap-1.5">
           {busy ? (
             <>
               <Fingerprint className="size-4 animate-pulse" /> Waiting for device…
@@ -117,7 +116,8 @@ export default function PasskeyManager({ passkeys }: { passkeys: PasskeyRow[] })
               <Plus className="size-4" /> Add a passkey
             </>
           )}
-        </button>
+          </button>}
+        />
       ) : (
         <p className="text-xs text-amber-300/90">
           This browser doesn&apos;t support passkeys. Try Safari, Chrome or Edge on a device with

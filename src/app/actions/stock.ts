@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireLeadAccess, requirePermission, requireQuoteAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
@@ -84,6 +85,7 @@ export async function addStockUnit(formData: FormData) {
     user,
   });
   revalidatePath("/stock");
+  redirect("/stock");
 }
 
 export async function updateStockUnit(id: string, formData: FormData) {

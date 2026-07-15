@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { createJourney } from "@/app/actions/journeys";
+import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 
 export type JourneyOption = { id: string; name: string };
 
@@ -196,6 +197,16 @@ export default function JourneyBuilder({
       <input type="hidden" name="entryConditions" value={JSON.stringify(entryConditions)} />
       <input type="hidden" name="definition" value={JSON.stringify(definition)} />
 
+      <BuilderWorkspaceShell className="min-h-0">
+        <BuilderWorkspaceBar
+          title={defaults.name || "New journey"}
+          description="Configure enrollment, entry rules and the ordered customer journey."
+          status={<BuilderSaveStatus status="Unsaved changes" />}
+        >
+          <button className="btn-primary btn-sm">{submitLabel}</button>
+        </BuilderWorkspaceBar>
+        <div className="space-y-5 bg-[#0f1412] p-3 sm:p-5">
+
       <div className="grid md:grid-cols-2 gap-3">
         <div>
           <label className="label">Journey name</label>
@@ -346,7 +357,8 @@ export default function JourneyBuilder({
         ))}
       </div>
 
-      <button className="btn-primary">{submitLabel}</button>
+        </div>
+      </BuilderWorkspaceShell>
     </form>
   );
 }

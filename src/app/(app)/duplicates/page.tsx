@@ -1,8 +1,11 @@
 import Link from "next/link";
+import { ContactRound, ScanSearch } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { mergeContacts } from "@/app/actions/merge";
 import { contactName, formatDate } from "@/lib/format";
 import { getAccessibleContactIds, requirePermission } from "@/lib/permissions";
+import { PageHeader } from "@/components/page-header";
+import { EmptyState } from "@/components/visual-system";
 
 type ContactRow = Awaited<ReturnType<typeof getContacts>>[number];
 
@@ -34,15 +37,18 @@ export default async function DuplicatesPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-[-0.035em]">Duplicate contacts</h1>
-        <p className="text-sm text-slate-400 mt-1">
-          Accessible contacts sharing the same email or phone number. Choose which record to keep; linked history moves and duplicates go to Trash.
-        </p>
-      </div>
+      <PageHeader
+        title="Duplicate contacts"
+        description={`${duplicateGroups.length} possible duplicate group${duplicateGroups.length === 1 ? "" : "s"} found across the contacts you can access.`}
+      />
 
       {duplicateGroups.length === 0 ? (
-        <div className="card text-center py-10"><p className="text-slate-400">No accessible duplicates found. 🎉</p></div>
+        <EmptyState
+          icon={ScanSearch}
+          title="No duplicate contacts found"
+          description="Accessible contacts currently have distinct email addresses and phone numbers. This check updates as customer data changes."
+          action={<Link href="/contacts" className="btn-secondary"><ContactRound className="size-4" />Return to contacts</Link>}
+        />
       ) : (
         duplicateGroups.map((group) => (
           <div key={group.key} className="card">

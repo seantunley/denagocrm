@@ -101,11 +101,12 @@ export default function QuickCreateDialog() {
                 contacts={options.contacts}
                 users={options.users}
                 submitLabel="Create lead"
+                variant="dialog"
               />
             )}
 
             {kind === "contact" && (
-              <ContactForm action={createContact} users={options.users} submitLabel="Create contact" />
+              <ContactForm action={createContact} users={options.users} submitLabel="Create contact" variant="dialog" />
             )}
 
             {kind === "jobcard" && <JobCardForm vehicles={options.vehicles} />}
@@ -117,6 +118,7 @@ export default function QuickCreateDialog() {
                 products={options.products}
                 submitLabel="Register vehicle"
                 showInitialKm
+                variant="dialog"
               />
             )}
 

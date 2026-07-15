@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { sendRequest, voidRequest, remindRecipient, updateRecipientContact } from "@/app/actions/signhub";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 export function SendVoidBar({ requestId, status }: { requestId: string; status: string }) {
   const router = useRouter();
@@ -20,10 +21,14 @@ export function SendVoidBar({ requestId, status }: { requestId: string; status: 
         </button>
       )}
       {!closed && (
-        <button type="button" disabled={pending} className="btn-secondary btn-sm"
-          onClick={() => { if (confirm("Void this signing request? It can no longer be signed.")) start(async () => { await voidRequest(requestId); router.refresh(); }); }}>
-          Void
-        </button>
+        <ConfirmActionDialog
+          trigger={<button type="button" disabled={pending} className="btn-secondary btn-sm">Void</button>}
+          title="Void signing request?"
+          description="Recipients will no longer be able to sign this request. The audit record will remain available."
+          confirmLabel="Void request"
+          destructive
+          onConfirm={async () => { await voidRequest(requestId); router.refresh(); }}
+        />
       )}
       {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
     </div>

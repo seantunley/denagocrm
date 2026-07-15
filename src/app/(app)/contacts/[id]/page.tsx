@@ -19,12 +19,14 @@ import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { formatDateTime } from "@/lib/format";
 import { requireUser } from "@/lib/auth";
 import { contactHealth } from "@/lib/healthData";
-import { healthColors, healthLabels } from "@/lib/health";
+import { healthLabels } from "@/lib/health";
 import { recordConsent, anonymizeContact } from "@/app/actions/privacy";
 import { CONSENT_TYPES } from "@/lib/consent";
 import { isSmtpConfigured, renderTemplate, contactVars } from "@/lib/email";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
+import { EntityDetailShell } from "@/components/entity-detail-shell";
+import { StatusPill } from "@/components/visual-system";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
 
@@ -102,38 +104,21 @@ export default async function ContactDetailPage({
   const health = await contactHealth(contact.id);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-semibold tracking-[-0.035em]">{contactName(contact)}</h1>
-            <span
-              className={`badge ${healthColors[health.tier]}`}
-              title={health.reasons.join(" · ") || "No signals yet"}
-            >
-              {healthLabels[health.tier]} · {health.score}
-            </span>
-            {contact.tags.map((t) => (
-              <span
-                key={t.id}
-                className="badge text-white"
-                style={{ backgroundColor: t.color }}
-              >
-                {t.name}
-              </span>
-            ))}
-          </div>
-          <p className="text-sm text-slate-400 mt-0.5">
-            {[contact.email, contact.phone, contact.city].filter(Boolean).join(" · ") || "No details"}
-          </p>
-          <p className="text-xs text-slate-500 mt-0.5">
-            {contact.owner ? `Owner: ${contact.owner.name}` : "No owner assigned"}
-            {" · added"}
-            {contact.createdBy ? ` by ${contact.createdBy.name}` : ""} at{" "}
-            {formatDateTime(contact.createdAt)}
-          </p>
-        </div>
-        <div className="flex gap-2">
+    <EntityDetailShell
+      backHref="/contacts"
+      backLabel="Contacts"
+      eyebrow={contact.isCompany ? "Company account" : "Customer profile"}
+      title={contactName(contact)}
+      status={<StatusPill tone={health.tier === "healthy" ? "success" : health.tier === "at_risk" ? "danger" : "warning"}>{healthLabels[health.tier]} · {health.score}</StatusPill>}
+      description={[contact.email, contact.phone, contact.city].filter(Boolean).join(" · ") || "No contact details recorded"}
+      meta={`${contact.owner ? `Owner: ${contact.owner.name}` : "No owner assigned"} · added${contact.createdBy ? ` by ${contact.createdBy.name}` : ""} at ${formatDateTime(contact.createdAt)}`}
+      facts={[
+        { label: "Vehicles", value: contact.vehicles.length },
+        { label: "Open leads", value: contact.leads.filter((lead) => lead.status === "open").length },
+        { label: "Activities", value: contact.activities.filter((activity) => activity.status === "planned").length },
+        { label: "Documents", value: contact.documents.length },
+      ]}
+      actions={<>
           <Link href={`/contacts/${contact.id}/edit`} className="btn-secondary">
             Edit
           </Link>
@@ -142,8 +127,8 @@ export default async function ContactDetailPage({
             title={`Delete contact ${contactName(contact)}?`}
             description="The contact moves to the Trash and can be restored for 60 days. Their vehicles and job cards stay in place."
           />
-        </div>
-      </div>
+        </>}
+    >
 
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 min-w-0">
@@ -575,6 +560,6 @@ export default async function ContactDetailPage({
           }
         />
       </div>
-    </div>
+    </EntityDetailShell>
   );
 }
