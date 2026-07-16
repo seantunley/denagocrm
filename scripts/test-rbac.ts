@@ -71,11 +71,19 @@ async function main() {
   });
 
   try {
+    // The scoped user needs view_owned across ALL tested domains. role_sales_rep
+    // covers leads/contacts/quotes/documents/cases/activities; role_technician adds
+    // the workshop domains (vehicles/jobcards) — both are scoped roles with NO
+    // view_all, so this exercises own/team/outside scoping across every domain
+    // without granting any production role extra privileges.
     await prisma.$executeRaw`
       INSERT INTO "UserRole" ("userId", "roleId") VALUES
         (${ids.salesUser}, 'role_sales_rep'),
+        (${ids.salesUser}, 'role_technician'),
         (${ids.teammate}, 'role_sales_rep'),
-        (${ids.outsider}, 'role_sales_rep')
+        (${ids.teammate}, 'role_technician'),
+        (${ids.outsider}, 'role_sales_rep'),
+        (${ids.outsider}, 'role_technician')
     `;
     await prisma.$executeRaw`
       INSERT INTO "Team" ("id", "name", "active", "managerId")
