@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { del, list, put } from "@vercel/blob";
 import {
   exportAllData,
+  stringifyBackup,
   type AssetReference,
   type PortableBackup,
   verifyPortableBackup,
@@ -152,7 +153,7 @@ export async function GET(req: NextRequest) {
     const failedAssets = assets.filter((asset) => asset.status === "failed");
     const skippedAssets = assets.filter((asset) => asset.status === "skipped");
     const degradedAssets = [...failedAssets, ...skippedAssets];
-    const packagePayload = JSON.stringify({ portable, assets });
+    const packagePayload = stringifyBackup({ portable, assets });
     const encrypted = encryptValue(packagePayload);
     const stamp = startedAt.toISOString().replace(/[:.]/g, "-");
 
