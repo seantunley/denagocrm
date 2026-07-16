@@ -68,8 +68,8 @@ function BriefCitations({ citations }: { citations: unknown }) {
 export default async function CompetitorDetailPage({ params }: { params: Promise<{ id: string }> }) {
   await requirePermission("competitors.view");
   const { id } = await params;
-  const competitor = await prisma.competitor.findUnique({
-    where: { id },
+  const competitor = await prisma.competitor.findFirst({
+    where: { id, deletedAt: null },
     include: {
       sources: { orderBy: { createdAt: "asc" } },
       changes: {

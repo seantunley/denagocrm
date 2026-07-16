@@ -330,7 +330,9 @@ export async function dueSourceIds(limit = 25): Promise<string[]> {
 }
 
 export async function pendingChangeCount(): Promise<number> {
-  return prisma.competitorChange.count({ where: { status: "new" } });
+  // Only count pending changes belonging to a live competitor (findUnique/count
+  // are not soft-delete-filtered by the extension).
+  return prisma.competitorChange.count({ where: { status: "new", competitor: { deletedAt: null } } });
 }
 
 // ── AI research layer (strong model + web search) ────────────────────────────
@@ -417,7 +419,7 @@ export type DiscoverResult = { ok: boolean; created: number; skipped: number; er
 /** Strong model + web search: find the competitor's real footprint (site pages
  *  + social profiles) and auto-create the sources to watch. Run once / on demand. */
 export async function discoverSources(competitorId: string, createdById?: string | null): Promise<DiscoverResult> {
-  const competitor = await prisma.competitor.findUnique({ where: { id: competitorId } });
+  const competitor = await prisma.competitor.findFirst({ where: { id: competitorId, deletedAt: null } });
   if (!competitor) return { ok: false, created: 0, skipped: 0, error: "Competitor not found" };
 
   const system = `You are a competitive-intelligence researcher for Denago, an electric-vehicle (golf cart / low-speed vehicle) dealer in Cape Town, South Africa. Given a competitor company, use web search to find its real online footprint. Identify:
@@ -486,8 +488,8 @@ export type ResearchResult = { ok: boolean; briefId?: string; error?: string };
 /** Strong model + web search: write a fresh intelligence brief, cross-checked
  *  against our own recently-detected page changes. Weekly / on demand. */
 export async function researchCompetitor(competitorId: string, createdById?: string | null): Promise<ResearchResult> {
-  const competitor = await prisma.competitor.findUnique({
-    where: { id: competitorId },
+  const competitor = await prisma.competitor.findFirst({
+    where: { id: competitorId, deletedAt: null },
     include: { sources: { where: { active: true }, select: { label: true, url: true, sourceType: true } } },
   });
   if (!competitor) return { ok: false, error: "Competitor not found" };
