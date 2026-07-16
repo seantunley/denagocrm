@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { requireOwner } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
@@ -50,7 +50,7 @@ function BriefCitations({ citations }: { citations: unknown }) {
 }
 
 export default async function CompetitorDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireOwner();
+  await requirePermission("competitors.view");
   const { id } = await params;
   const competitor = await prisma.competitor.findUnique({
     where: { id },

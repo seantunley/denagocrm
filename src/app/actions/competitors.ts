@@ -3,14 +3,14 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { collectSource, discoverSources, researchCompetitor } from "@/lib/competitors";
 
 const str = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
 
 export async function createCompetitor(formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("competitors.manage");
   const name = str(formData, "name");
   if (!name) throw new Error("Give the competitor a name");
   const website = str(formData, "website") || null;
@@ -29,7 +29,7 @@ export async function createCompetitor(formData: FormData) {
 }
 
 export async function updateCompetitor(id: string, formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("competitors.manage");
   const name = str(formData, "name");
   if (!name) throw new Error("Name is required");
   const tierRaw = parseInt(str(formData, "tier") || "2", 10);
@@ -50,7 +50,7 @@ export async function updateCompetitor(id: string, formData: FormData) {
 }
 
 export async function deleteCompetitor(id: string) {
-  const user = await requireOwner();
+  const user = await requirePermission("competitors.manage");
   const competitor = await prisma.competitor.findUnique({ where: { id } });
   await prisma.competitor.update({ where: { id }, data: { deletedAt: new Date() } });
   await logAudit({ action: "competitor.deleted", summary: `Deleted competitor "${competitor?.name ?? id}"`, user });
@@ -58,7 +58,7 @@ export async function deleteCompetitor(id: string) {
 }
 
 export async function addSource(competitorId: string, formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("competitors.manage");
   const url = str(formData, "url");
   const label = str(formData, "label") || url;
   if (!/^https?:\/\//i.test(url)) throw new Error("Enter a full http(s) URL");
@@ -75,21 +75,21 @@ export async function addSource(competitorId: string, formData: FormData) {
 }
 
 export async function deleteSource(competitorId: string, sourceId: string) {
-  await requireOwner();
+  await requirePermission("competitors.manage");
   await prisma.competitorSource.delete({ where: { id: sourceId } });
   revalidatePath(`/competitors/${competitorId}`);
 }
 
 /** Run one source right now (manual "check now"). */
 export async function runSourceNow(competitorId: string, sourceId: string) {
-  await requireOwner();
+  await requirePermission("competitors.manage");
   await collectSource(sourceId);
   revalidatePath(`/competitors/${competitorId}`);
 }
 
 /** Strong-model discovery: find the competitor's pages + social profiles. */
 export async function discoverSourcesNow(competitorId: string) {
-  const user = await requireOwner();
+  const user = await requirePermission("competitors.research");
   const result = await discoverSources(competitorId, user.id);
   await logAudit({
     action: "competitor.discovered",
@@ -105,7 +105,7 @@ export async function discoverSourcesNow(competitorId: string) {
 
 /** Strong-model deep research: write a fresh intelligence brief. */
 export async function researchNow(competitorId: string) {
-  const user = await requireOwner();
+  const user = await requirePermission("competitors.research");
   const result = await researchCompetitor(competitorId, user.id);
   await logAudit({
     action: "competitor.researched",
@@ -118,7 +118,7 @@ export async function researchNow(competitorId: string) {
 }
 
 export async function reviewChange(competitorId: string, changeId: string, decision: "reviewed" | "dismissed") {
-  const user = await requireOwner();
+  const user = await requirePermission("competitors.review");
   await prisma.competitorChange.update({
     where: { id: changeId },
     data: { status: decision, reviewedById: user.id, reviewedAt: new Date() },

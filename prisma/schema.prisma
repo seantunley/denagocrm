@@ -1659,6 +1659,7 @@ model CompetitorSource {
   lastStatus    String? // ok | error
   lastError     String?
   contentHash   String? // hash of the last successful snapshot
+  collectingAt  DateTime? // collection lease: set while a run holds this source, cleared after
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @default(now()) @updatedAt
 

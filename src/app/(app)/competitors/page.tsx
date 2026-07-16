@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Radar, Plus } from "lucide-react";
-import { requireOwner } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { PageHeader } from "@/components/page-header";
 import ModalTrigger from "@/components/Modal";
@@ -18,7 +18,7 @@ const TIER_LABEL: Record<number, string> = {
 };
 
 export default async function CompetitorsPage() {
-  await requireOwner();
+  await requirePermission("competitors.view");
   const [competitors, pending] = await Promise.all([
     prisma.competitor.findMany({
       orderBy: [{ tier: "asc" }, { name: "asc" }],

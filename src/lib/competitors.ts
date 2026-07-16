@@ -1,10 +1,11 @@
 import "server-only";
 import crypto from "crypto";
+import { z } from "zod";
 import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { logError } from "./errorLog";
 import { recordAiUsage } from "./systemHealth";
-import { saveFile } from "./storage";
+import { safeFetchText } from "./safeFetch";
 
 // CRM-native competitor monitoring. Fetch a public page, normalise to visible
 // text, hash it, and only when the hash changes do we snapshot, diff, apply
@@ -94,7 +95,15 @@ export function assessMateriality(added: string[], removed: string[]): { materia
 }
 
 // ── LLM classification (material changes only) ───────────────────────────────
-type ClassifyResult = { is_material: boolean; category: string; materiality: Materiality; summary: string };
+// Validated with Zod rather than hand-coerced. is_material is REQUIRED (no catch)
+// so a malformed response fails closed instead of silently defaulting.
+const classifySchema = z.object({
+  is_material: z.boolean(),
+  category: z.enum(["pricing", "product", "messaging", "hiring", "other"]).catch("other"),
+  materiality: z.enum(["noise", "minor", "important", "critical"]).catch("minor"),
+  summary: z.string().catch("").transform((s) => s.slice(0, 500)),
+});
+type ClassifyResult = z.infer<typeof classifySchema>;
 
 async function aiClassifyChange(input: {
   competitorName: string;
@@ -129,17 +138,20 @@ async function aiClassifyChange(input: {
     const json = await res.json();
     void recordAiUsage(json.usage);
     const content: string = json.content?.[0]?.text ?? "{}";
-    const match = content.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(match ? match[0] : "{}");
-    const materiality: Materiality = ["noise", "minor", "important", "critical"].includes(parsed.materiality)
-      ? parsed.materiality
-      : "minor";
-    return {
-      is_material: Boolean(parsed.is_material),
-      category: String(parsed.category ?? "other").slice(0, 40),
-      materiality,
-      summary: String(parsed.summary ?? "").slice(0, 500),
-    };
+    const jsonText = content.match(/\{[\s\S]*\}/)?.[0] ?? "{}";
+    let raw: unknown;
+    try {
+      raw = JSON.parse(jsonText);
+    } catch {
+      await logError("competitor-ai", "Classification returned non-JSON");
+      return null;
+    }
+    const parsed = classifySchema.safeParse(raw);
+    if (!parsed.success) {
+      await logError("competitor-ai", "Classification failed schema validation", JSON.stringify(parsed.error.issues).slice(0, 300));
+      return null;
+    }
+    return parsed.data;
   } catch (err) {
     await logError("competitor-ai", err);
     return null;
@@ -149,8 +161,29 @@ async function aiClassifyChange(input: {
 // ── Collection ───────────────────────────────────────────────────────────────
 export type CollectResult = { ok: boolean; changed: boolean; changeId?: string; error?: string };
 
-/** Fetch one source, snapshot on change, and record a classified change. */
+/**
+ * Fetch one source, snapshot on change, and record a classified change.
+ * Wrapped in a collection lease so an overlapping manual + cron run can't
+ * double-process the same source (duplicate snapshots, changes, notifications).
+ * A stale lease (crashed run) auto-expires after 10 minutes.
+ */
 export async function collectSource(sourceId: string): Promise<CollectResult> {
+  const leaseCutoff = new Date(Date.now() - 10 * 60 * 1000);
+  const claim = await prisma.competitorSource.updateMany({
+    where: { id: sourceId, OR: [{ collectingAt: null }, { collectingAt: { lt: leaseCutoff } }] },
+    data: { collectingAt: new Date() },
+  });
+  if (claim.count === 0) return { ok: true, changed: false }; // another run already holds the lease
+  try {
+    return await collectSourceInner(sourceId);
+  } finally {
+    await prisma.competitorSource
+      .updateMany({ where: { id: sourceId }, data: { collectingAt: null } })
+      .catch(() => {});
+  }
+}
+
+async function collectSourceInner(sourceId: string): Promise<CollectResult> {
   const source = await prisma.competitorSource.findUnique({ where: { id: sourceId }, include: { competitor: true } });
   if (!source) return { ok: false, changed: false, error: "Source not found" };
 
@@ -162,19 +195,20 @@ export async function collectSource(sourceId: string): Promise<CollectResult> {
     return { ok: false, changed: false, error };
   };
 
-  if (!isSafeUrl(source.url)) return fail("Unsafe or invalid URL");
-
   let html: string;
   try {
-    const res = await fetch(source.url, {
-      signal: AbortSignal.timeout(20000),
-      redirect: "follow",
-      headers: { "User-Agent": "DenagoCRM-CompetitorWatch/1.0 (+https://crm.denagocpt.co.za)" },
+    // safeFetchText enforces the SSRF guard (DNS + private-IP blocking, redirect
+    // re-validation, port allow-list, connect-time DNS pin) and a hard byte cap.
+    const res = await safeFetchText(source.url, {
+      maxBytes: 3_000_000,
+      timeoutMs: 20_000,
+      userAgent: "DenagoCRM-CompetitorWatch/1.0 (+https://crm.denagocpt.co.za)",
     });
-    if (!res.ok) return fail(`HTTP ${res.status}`);
-    const ct = res.headers.get("content-type") ?? "";
-    if (ct && !/text|html|xml|json/i.test(ct)) return fail(`Unsupported content-type: ${ct.slice(0, 60)}`);
-    html = (await res.text()).slice(0, 3_000_000);
+    if (res.status < 200 || res.status >= 300) return fail(`HTTP ${res.status}`);
+    if (res.contentType && !/text|html|xml|json/i.test(res.contentType)) {
+      return fail(`Unsupported content-type: ${res.contentType.slice(0, 60)}`);
+    }
+    html = res.text;
   } catch (err) {
     return fail(err instanceof Error ? err.message : "Fetch failed");
   }
@@ -193,7 +227,8 @@ export async function collectSource(sourceId: string): Promise<CollectResult> {
   }
 
   const prev = await prisma.competitorSnapshot.findFirst({ where: { sourceId }, orderBy: { fetchedAt: "desc" } });
-  const rawRef = await saveFile(Buffer.from(html, "utf8"), "competitor-snapshot.html", "text/html").catch(() => null);
+  // Raw HTML is NOT persisted: the old path wrote it to a public Blob URL. The
+  // normalised cleanText below is the diff/evidence source and lives in the DB.
   const snapshot = await prisma.competitorSnapshot.create({
     data: {
       competitorId: source.competitorId,
@@ -201,7 +236,7 @@ export async function collectSource(sourceId: string): Promise<CollectResult> {
       contentHash: hash,
       title,
       cleanText: text.slice(0, 200_000),
-      rawRef,
+      rawRef: null,
       wordCount: text.split(/\s+/).filter(Boolean).length,
     },
   });
@@ -227,9 +262,12 @@ export async function collectSource(sourceId: string): Promise<CollectResult> {
       })
     : null;
 
-  const materiality: Materiality = ai?.materiality ?? (material ? "important" : "minor");
-  // Rules found nothing and (if consulted) the LLM called it noise → drop it.
-  if (!material || materiality === "noise") return { ok: true, changed: false };
+  // Suppression ladder: rules found nothing → drop; the LLM explicitly judged it
+  // immaterial → drop (honours is_material, not just materiality); noise → drop.
+  if (!material) return { ok: true, changed: false };
+  if (ai && !ai.is_material) return { ok: true, changed: false };
+  const materiality: Materiality = ai?.materiality ?? "important";
+  if (materiality === "noise") return { ok: true, changed: false };
 
   const change = await prisma.competitorChange.create({
     data: {
