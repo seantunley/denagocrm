@@ -41,6 +41,12 @@ jobs:
       CRON_SECRET: ci-cron-secret
       NEXT_PUBLIC_APP_URL: http://localhost:3000
       NODE_ENV: test
+      # Disposable credentials for the throwaway CI database. The seed no longer
+      # hardcodes an owner, so provide one here (governance checks require an owner
+      # / a user with roles.manage). NOT production secrets.
+      INITIAL_ADMIN_EMAIL: ci-admin@example.invalid
+      INITIAL_ADMIN_NAME: CI Administrator
+      INITIAL_ADMIN_PASSWORD: ci-only-password-at-least-14-chars
 
     steps:
       - name: Checkout
