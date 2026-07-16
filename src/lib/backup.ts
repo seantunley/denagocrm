@@ -127,7 +127,9 @@ export async function exportAllData(): Promise<PortableBackup> {
   const contactTagLinks = await exportContactTagLinks();
   const assetReferences = collectAssetReferences(data);
   const modelCounts = Object.fromEntries(Object.entries(data).map(([name, rows]) => [name, rows.length]));
-  const canonicalData = stringifyBackup({ data, contactTagLinks, assetReferences });
+  // tableColumns is part of the hashed canonical payload — tampering with the
+  // column manifest must invalidate the checksum, not pass as "extra metadata".
+  const canonicalData = stringifyBackup({ data, contactTagLinks, assetReferences, tableColumns });
 
   return {
     metadata: {
@@ -161,6 +163,7 @@ export function verifyPortableBackup(backup: PortableBackup): { ok: boolean; err
     data: backup.data,
     contactTagLinks: backup.contactTagLinks,
     assetReferences: backup.assetReferences,
+    tableColumns: backup.metadata?.tableColumns,
   }));
   if (actualHash !== backup.metadata?.dataSha256) errors.push("Backup checksum mismatch");
   if ((backup.assetReferences?.length ?? 0) !== backup.metadata?.assetReferenceCount) {

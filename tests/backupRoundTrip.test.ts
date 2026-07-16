@@ -27,7 +27,7 @@ test("backup round-trips out-of-model columns and BigInt values (restore-ready)"
     PipelineStage: [
       { id: "s1", name: "New", pipelineId: "p1", defaultProbability: 10, staleAfterDays: 7, isClosed: false },
     ],
-    CustomerCase: [{ id: "c1", number: 7n }],
+    CustomerCase: [{ id: "c1", number: BigInt(7) }],
   };
 
   const serialized = stringifyBackup({ data });
@@ -45,5 +45,5 @@ test("backup round-trips out-of-model columns and BigInt values (restore-ready)"
 
   // BigInt values are reconstructed as real bigints (not strings/tags):
   assert.equal(typeof restored.data.CustomerCase[0].number, "bigint");
-  assert.equal(restored.data.CustomerCase[0].number, 7n);
+  assert.equal(restored.data.CustomerCase[0].number, BigInt(7));
 });
