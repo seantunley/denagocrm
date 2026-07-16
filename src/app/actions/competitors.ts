@@ -65,6 +65,9 @@ export async function addSource(competitorId: string, formData: FormData) {
   if (!isSafeUrl(url)) throw new Error("Enter a valid public http(s) URL");
   const rawType = str(formData, "sourceType");
   const sourceType = DISCOVERABLE_TYPES.includes(rawType) ? rawType : "page";
+  // The parent competitor must exist and be live before we create a child row.
+  const competitor = await prisma.competitor.findFirst({ where: { id: competitorId, deletedAt: null }, select: { id: true } });
+  if (!competitor) throw new Error("Competitor not found");
   // Prevent duplicate canonical URLs on the same competitor.
   const dupe = await prisma.competitorSource.findFirst({ where: { competitorId, url } });
   if (dupe) throw new Error("That URL is already watched for this competitor");
@@ -77,13 +80,24 @@ export async function addSource(competitorId: string, formData: FormData) {
 
 export async function deleteSource(competitorId: string, sourceId: string) {
   await requirePermission("competitors.manage");
-  await prisma.competitorSource.delete({ where: { id: sourceId } });
+  // Scope the delete to the parent competitor (and require it live) so a mismatched
+  // competitorId/sourceId pair can't delete another competitor's source.
+  const result = await prisma.competitorSource.deleteMany({
+    where: { id: sourceId, competitorId, competitor: { deletedAt: null } },
+  });
+  if (result.count !== 1) throw new Error("Source not found");
   revalidatePath(`/competitors/${competitorId}`);
 }
 
 /** Run one source right now (manual "check now"). */
 export async function runSourceNow(competitorId: string, sourceId: string) {
   await requirePermission("competitors.manage");
+  // Confirm the source belongs to this (live) competitor before collecting.
+  const source = await prisma.competitorSource.findFirst({
+    where: { id: sourceId, competitorId, competitor: { deletedAt: null } },
+    select: { id: true },
+  });
+  if (!source) throw new Error("Source not found");
   await collectSource(sourceId);
   revalidatePath(`/competitors/${competitorId}`);
 }
@@ -120,10 +134,12 @@ export async function researchNow(competitorId: string) {
 
 export async function reviewChange(competitorId: string, changeId: string, decision: "reviewed" | "dismissed") {
   const user = await requirePermission("competitors.review");
-  await prisma.competitorChange.update({
-    where: { id: changeId },
+  // Scope the update to the parent (live) competitor; count===1 confirms the pair.
+  const result = await prisma.competitorChange.updateMany({
+    where: { id: changeId, competitorId, competitor: { deletedAt: null } },
     data: { status: decision, reviewedById: user.id, reviewedAt: new Date() },
   });
+  if (result.count !== 1) throw new Error("Change not found");
   revalidatePath(`/competitors/${competitorId}`);
   revalidatePath("/competitors");
 }
