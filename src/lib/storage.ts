@@ -21,11 +21,21 @@ import { put, del, get } from "@vercel/blob";
 
 const UPLOAD_DIR = path.join(process.cwd(), "storage", "uploads");
 
-const blobConfigured = () => Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+const privateMode = () => process.env.BLOB_PRIVATE === "true";
+const publicToken = () => process.env.BLOB_READ_WRITE_TOKEN;
 const privateToken = () => process.env.BLOB_PRIVATE_READ_WRITE_TOKEN;
-// Private writes require BOTH the flag and a private-store token — never silently
-// fall back to writing a "private" blob into the public store.
-const writePrivate = () => process.env.BLOB_PRIVATE === "true" && Boolean(privateToken());
+
+// A blob served from a private store lives on a `*.private.blob.vercel-storage.com`
+// host; a legacy public blob lives on `*.blob.vercel-storage.com`. Deletion must use
+// the token for the store the object actually lives in — the SDK otherwise defaults to
+// OIDC / BLOB_READ_WRITE_TOKEN and would silently no-op on a private object.
+const isPrivateBlobRef = (ref: string) => {
+  try {
+    return new URL(ref).hostname.endsWith(".private.blob.vercel-storage.com");
+  } catch {
+    return false;
+  }
+};
 
 export async function saveFile(
   buffer: Buffer,
@@ -35,19 +45,29 @@ export async function saveFile(
   const ext = path.extname(originalName).slice(0, 12);
   const storedName = crypto.randomUUID() + ext;
 
-  if (blobConfigured()) {
-    const blob = writePrivate()
-      ? await put(`uploads/${storedName}`, buffer, {
-          access: "private",
-          contentType,
-          addRandomSuffix: false,
-          token: privateToken(),
-        })
-      : await put(`uploads/${storedName}`, buffer, {
-          access: "public",
-          contentType,
-          addRandomSuffix: false,
-        });
+  // Private mode fails CLOSED: if the flag is on we must have a private-store token,
+  // otherwise we'd either write a "private" file into a public store or fall through
+  // to local disk — both silently defeat the privacy guarantee. Throw instead.
+  if (privateMode()) {
+    const token = privateToken();
+    if (!token) {
+      throw new Error("BLOB_PRIVATE=true requires BLOB_PRIVATE_READ_WRITE_TOKEN");
+    }
+    const blob = await put(`uploads/${storedName}`, buffer, {
+      access: "private",
+      contentType,
+      addRandomSuffix: false,
+      token,
+    });
+    return blob.url;
+  }
+
+  if (publicToken()) {
+    const blob = await put(`uploads/${storedName}`, buffer, {
+      access: "public", // unguessable URL; downloads still go through our auth route
+      contentType,
+      addRandomSuffix: false,
+    });
     return blob.url;
   }
 
@@ -91,7 +111,13 @@ export async function readFile(ref: string): Promise<Buffer> {
 
 export async function deleteFile(ref: string): Promise<void> {
   if (isBlobRef(ref)) {
-    await del(ref).catch(() => {});
+    // Pick the token for the store the object lives in. A private-file deletion
+    // failure is NOT swallowed — a leaked private object is a real problem.
+    const token = isPrivateBlobRef(ref) ? privateToken() : publicToken();
+    if (!token) {
+      throw new Error(`No Blob token available to delete ${isPrivateBlobRef(ref) ? "private" : "public"} object`);
+    }
+    await del(ref, { token });
     return;
   }
   await fs.unlink(path.join(UPLOAD_DIR, ref)).catch(() => {});
