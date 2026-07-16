@@ -2,6 +2,7 @@ import { cache } from "react";
 import { cookies, headers } from "next/headers";
 import crypto from "crypto";
 import { redirect } from "next/navigation";
+import { NextResponse } from "next/server";
 import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { hasModule, type ModuleId } from "./access";
@@ -56,6 +57,39 @@ export async function requireUser() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   return user;
+}
+
+/**
+ * API-route authentication. Unlike requireUser (which redirects to /login — an
+ * HTML response wrong for API clients), these throw an ApiAuthError so the route
+ * can return a proper JSON 401/403. They run the SAME fresh DB checks as
+ * getCurrentUser (device/session revocation, disabled account, session version),
+ * so an API route must never assume "the proxy already authenticated this".
+ */
+export class ApiAuthError extends Error {
+  constructor(public status: 401 | 403) {
+    super(status === 403 ? "Forbidden" : "Unauthorized");
+  }
+}
+
+export async function requireApiUser() {
+  const user = await getCurrentUser();
+  if (!user) throw new ApiAuthError(401);
+  return user;
+}
+
+export async function requireApiOwner() {
+  const user = await requireApiUser();
+  if (user.role !== "owner") throw new ApiAuthError(403);
+  return user;
+}
+
+/** Turn an ApiAuthError into its JSON response; returns null for anything else. */
+export function apiAuthErrorResponse(err: unknown): NextResponse | null {
+  if (err instanceof ApiAuthError) {
+    return NextResponse.json({ error: err.message }, { status: err.status });
+  }
+  return null;
 }
 
 export async function requireOwner() {
