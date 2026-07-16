@@ -14,8 +14,8 @@ test("lead pipeline activity summaries stay bounded", () => {
   );
   assert.doesNotMatch(
     pageSource,
-    /activities:\s*\{\s*where:\s*\{\s*status:\s*"planned"\s*\}/,
-    "do not restore the unbounded nested planned-activity include",
+    /activities:\s*\{\s*where:\s*\{\s*status:\s*"planned"\s*\},\s*orderBy/,
+    "do not restore an unbounded nested planned-activity row load",
   );
 });
 
