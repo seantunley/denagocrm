@@ -13,6 +13,19 @@ const RSTATUS: Record<string, string> = {
   pending: "text-slate-400", sent: "text-blue-300", viewed: "text-indigo-300", signed: "text-emerald-300", declined: "text-red-300",
 };
 
+/**
+ * A "sent"/"reminded" event carries the per-channel delivery result in its
+ * metadata ({ ok, error }). Surface it so a failed email/WhatsApp is visible
+ * instead of looking identical to a successful send.
+ */
+function deliveryOf(e: { type: string; channel: string | null; metadata: unknown }): { ok: boolean; error?: string } | null {
+  if ((e.type !== "sent" && e.type !== "reminded") || !e.channel) return null;
+  const m = e.metadata as Record<string, unknown> | null;
+  if (!m || typeof m !== "object" || !("ok" in m)) return null;
+  const error = typeof m.error === "string" ? m.error : undefined;
+  return { ok: Boolean(m.ok), error };
+}
+
 export default async function SignatureDetail({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
   const { id } = await params;
@@ -77,16 +90,29 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
       <div className={card}>
         <p className="mb-3 text-sm font-semibold text-foreground">Audit trail</p>
         <ol className="space-y-2">
-          {req.events.map((e) => (
-            <li key={e.id} className="flex items-start gap-3 text-[12px]">
-              <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary/70" />
-              <div>
-                <span className="font-medium text-foreground">{e.type.replace("_", " ")}</span>
-                <span className="text-muted-foreground"> · {e.actor}{e.channel ? ` · ${e.channel}` : ""}{e.ip ? ` · ${e.ip}` : ""}</span>
-                <div className="text-[10px] text-muted-foreground/70">{formatDateTime(e.createdAt)}</div>
-              </div>
-            </li>
-          ))}
+          {req.events.map((e) => {
+            const delivery = deliveryOf(e);
+            const failed = delivery ? !delivery.ok : false;
+            return (
+              <li key={e.id} className="flex items-start gap-3 text-[12px]">
+                <span className={`mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full ${failed ? "bg-red-400" : "bg-primary/70"}`} />
+                <div className="min-w-0">
+                  <span className="font-medium text-foreground">{e.type.replace("_", " ")}</span>
+                  <span className="text-muted-foreground"> · {e.actor}{e.channel ? ` · ${e.channel}` : ""}{e.ip ? ` · ${e.ip}` : ""}</span>
+                  {delivery && (
+                    delivery.ok ? (
+                      <span className="ml-1.5 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">✓ delivered</span>
+                    ) : (
+                      <span className="ml-1.5 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-red-300">
+                        ✕ failed{delivery.error ? ` — ${delivery.error}` : ""}
+                      </span>
+                    )
+                  )}
+                  <div className="text-[10px] text-muted-foreground/70">{formatDateTime(e.createdAt)}</div>
+                </div>
+              </li>
+            );
+          })}
         </ol>
       </div>
     </EntityDetailShell>
