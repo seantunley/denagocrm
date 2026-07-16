@@ -9,33 +9,38 @@ import { standardQuoteTemplate } from "@/lib/doceditor/factory";
  * shape, which the current editor's parseDocument() can't read — so it fell back
  * to a blank document (the "blank quote" symptom).
  *
- * NON-DESTRUCTIVE: we only ever repair OUR OWN system seed — the row this seeder
- * created, identified by a null createdById. Templates authored by a user through
- * createBuilderTemplate() always carry a createdById (and legacy Puck ones also
- * fail parseDocument), so they are NEVER overwritten here — repairing by "most
- * recently updated, unparseable" would silently clobber a user's customised
- * Puck-era layout. If there is no system seed we create one (default only when the
- * quote key is otherwise empty, so we never fight a user's chosen default).
+ * NON-DESTRUCTIVE — we never overwrite an existing row's data. A row with a null
+ * createdById is a system row, but an author-less row may be an UNTOUCHED seed OR a
+ * dealer who edited the default in the old builder (saveBuilderData doesn't stamp an
+ * author), whose legacy Puck JSON also fails parseDocument. We can't tell those
+ * apart, so instead of repairing in place we CLONE: if no *valid* system template
+ * exists we add a fresh standard one (and demote any stale/unparseable system rows so
+ * a broken layout isn't left as the default) while preserving the old row's data for
+ * recovery. We also never override a user's explicitly chosen default.
  */
 export async function ensureBuilderSeeded(): Promise<void> {
   try {
     const rows = await prisma.docBuilderTemplate.findMany({
       where: { key: "quote", deletedAt: null },
-      select: { id: true, data: true, createdById: true },
+      select: { id: true, data: true, createdById: true, isDefault: true },
     });
-    // Our seed has no author; anything with a createdById is user-authored.
-    const seed = rows.find((r) => r.createdById === null);
-    if (!seed) {
-      await prisma.docBuilderTemplate.create({
-        data: { name: "Quotation", key: "quote", isDefault: rows.length === 0, data: standardQuoteTemplate() as object },
-      });
-    } else if (!parseDocument(seed.data)) {
-      // Repair only the legacy/unparseable system seed — in place.
-      await prisma.docBuilderTemplate.update({
-        where: { id: seed.id },
-        data: { data: standardQuoteTemplate() as object },
+    const systemRows = rows.filter((r) => r.createdById === null);
+    // Idempotent: a valid system template already exists → nothing to do.
+    if (systemRows.some((r) => parseDocument(r.data))) return;
+
+    // Demote any stale/unparseable system rows so a broken layout isn't left as the
+    // default — but PRESERVE their data (could be a dealer's edited legacy layout).
+    if (systemRows.length > 0) {
+      await prisma.docBuilderTemplate.updateMany({
+        where: { key: "quote", createdById: null, deletedAt: null },
+        data: { isDefault: false },
       });
     }
+    // Take over the default only if a stale system row held it, or nothing else does.
+    const becomeDefault = systemRows.some((r) => r.isDefault) || !rows.some((r) => r.isDefault);
+    await prisma.docBuilderTemplate.create({
+      data: { name: "Quotation", key: "quote", isDefault: becomeDefault, data: standardQuoteTemplate() as object },
+    });
   } catch {
     // table not migrated yet — ignore so the page still renders
   }
