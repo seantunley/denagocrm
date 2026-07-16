@@ -26,6 +26,11 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const migrationsDir = join(root, "prisma", "migrations");
 const schemaPath = join(root, "prisma");
 
+// Arbitrary 32-bit constant. A session advisory lock on this key serialises
+// concurrent runs (e.g. two overlapping Vercel deploys) so they cannot apply
+// migrations simultaneously.
+const MIGRATION_LOCK_KEY = 913472651;
+
 /** Migration directories with a migration.sql, ordered by their numeric prefix. */
 function orderedMigrations() {
   return readdirSync(migrationsDir)
@@ -33,8 +38,7 @@ function orderedMigrations() {
     .sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10));
 }
 
-async function appliedNames() {
-  const prisma = new PrismaClient();
+async function appliedNames(prisma) {
   try {
     const rows = await prisma.$queryRawUnsafe(
       'SELECT "migration_name" FROM "_prisma_migrations" WHERE "finished_at" IS NOT NULL',
@@ -43,8 +47,6 @@ async function appliedNames() {
   } catch {
     // Table absent → brand-new database, nothing applied yet.
     return new Set();
-  } finally {
-    await prisma.$disconnect();
   }
 }
 
@@ -53,27 +55,48 @@ function run(cmd, args) {
 }
 
 async function main() {
-  const migrations = orderedMigrations();
-  const applied = await appliedNames();
+  // A session advisory lock must be held on a DIRECT (non-pooled) connection —
+  // it is not reliable through a transaction pooler. Fall back to DATABASE_URL
+  // where no unpooled URL is configured (e.g. CI's direct Postgres).
+  const directUrl = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
+  const prisma = new PrismaClient(directUrl ? { datasources: { db: { url: directUrl } } } : undefined);
+  let locked = false;
 
-  const pending = migrations.filter((name) => !applied.has(name));
-  console.log(
-    `${migrations.length} migrations on disk, ${applied.size} already applied, ${pending.length} pending${DRY_RUN ? " (dry run)" : ""}.`,
-  );
-
-  for (const name of migrations) {
-    if (applied.has(name)) continue;
-    if (DRY_RUN) {
-      console.log(`would apply  ${name}`);
-      continue;
+  try {
+    if (!DRY_RUN) {
+      // Blocks until any other in-flight migration run releases the lock.
+      // pg_advisory_lock returns void, so wrap it in a subquery returning a
+      // scalar Prisma can deserialise.
+      await prisma.$queryRawUnsafe(`SELECT 1 AS ok FROM (SELECT pg_advisory_lock(${MIGRATION_LOCK_KEY})) _lock`);
+      locked = true;
     }
-    console.log(`applying     ${name}`);
-    run("npx", ["prisma", "db", "execute", "--schema", schemaPath, "--file", join(migrationsDir, name, "migration.sql")]);
-    run("npx", ["prisma", "migrate", "resolve", "--schema", schemaPath, "--applied", name]);
-  }
 
-  if (pending.length === 0) console.log("Database is up to date — nothing to apply.");
-  else if (!DRY_RUN) console.log(`Applied ${pending.length} migration(s).`);
+    const migrations = orderedMigrations();
+    const applied = await appliedNames(prisma);
+    const pending = migrations.filter((name) => !applied.has(name));
+    console.log(
+      `${migrations.length} migrations on disk, ${applied.size} already applied, ${pending.length} pending${DRY_RUN ? " (dry run)" : ""}.`,
+    );
+
+    for (const name of migrations) {
+      if (applied.has(name)) continue;
+      if (DRY_RUN) {
+        console.log(`would apply  ${name}`);
+        continue;
+      }
+      console.log(`applying     ${name}`);
+      run("npx", ["prisma", "db", "execute", "--schema", schemaPath, "--file", join(migrationsDir, name, "migration.sql")]);
+      run("npx", ["prisma", "migrate", "resolve", "--schema", schemaPath, "--applied", name]);
+    }
+
+    if (pending.length === 0) console.log("Database is up to date — nothing to apply.");
+    else if (!DRY_RUN) console.log(`Applied ${pending.length} migration(s).`);
+  } finally {
+    if (locked) {
+      await prisma.$queryRawUnsafe(`SELECT pg_advisory_unlock(${MIGRATION_LOCK_KEY})`).catch(() => {});
+    }
+    await prisma.$disconnect();
+  }
 }
 
 main().catch((err) => {
