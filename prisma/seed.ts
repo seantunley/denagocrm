@@ -5,18 +5,47 @@ import crypto from "crypto";
 const prisma = new PrismaClient();
 
 async function main() {
-  // Default admin user
-  const passwordHash = await bcrypt.hash("denago123", 10);
-  await prisma.user.upsert({
-    where: { email: "sean@tunley.co.za" },
-    update: { role: "owner" },
-    create: {
-      name: "Sean Tunley",
-      email: "sean@tunley.co.za",
-      passwordHash,
-      role: "owner",
-    },
-  });
+  // Initial owner — credentials come from the environment, never hardcoded.
+  //  - production: refuses to run without INITIAL_ADMIN_EMAIL + a >=14-char password
+  //  - preview deployments: never create a privileged owner
+  //  - local/dev with an email but no password: a random one-time password is printed
+  // Existing users' passwords are never overwritten.
+  const adminEmail = process.env.INITIAL_ADMIN_EMAIL?.trim();
+  const adminName = process.env.INITIAL_ADMIN_NAME?.trim() || "Administrator";
+  const adminPassword = process.env.INITIAL_ADMIN_PASSWORD;
+  const vercelEnv = process.env.VERCEL_ENV; // production | preview | development | undefined
+  const isProduction = vercelEnv === "production" || process.env.NODE_ENV === "production";
+
+  const upsertOwner = async (email: string, name: string, passwordHash: string) => {
+    await prisma.user.upsert({
+      where: { email },
+      update: { role: "owner" }, // never overwrite an existing user's password
+      create: { name, email, passwordHash, role: "owner" },
+    });
+  };
+
+  if (vercelEnv === "preview") {
+    console.log("Seed: preview deployment — not creating an owner account.");
+  } else if (adminEmail && adminPassword) {
+    if (adminPassword.length < 14) {
+      throw new Error("INITIAL_ADMIN_PASSWORD must be at least 14 characters.");
+    }
+    await upsertOwner(adminEmail, adminName, await bcrypt.hash(adminPassword, 10));
+    console.log(`Seed: ensured owner ${adminEmail}.`);
+  } else if (isProduction) {
+    throw new Error(
+      "Refusing to seed an owner in production: set INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD (>= 14 chars).",
+    );
+  } else if (adminEmail) {
+    const generated = crypto.randomBytes(18).toString("base64url");
+    await upsertOwner(adminEmail, adminName, await bcrypt.hash(generated, 10));
+    console.log(
+      `Seed: created dev owner ${adminEmail} with a random password:\n    ${generated}\n` +
+        "(set INITIAL_ADMIN_PASSWORD to choose your own; existing passwords are never overwritten)",
+    );
+  } else {
+    console.log("Seed: no INITIAL_ADMIN_EMAIL set — skipping owner creation.");
+  }
 
   // Pipeline stages. NOTE: migration 52 added the required PipelineStage.pipelineId
   // (and a default "pipeline_default_retail" pipeline) but schema.prisma has not
@@ -118,7 +147,6 @@ async function main() {
   }
 
   console.log("Seed complete.");
-  console.log("Login: sean@tunley.co.za / denago123  (change this password!)");
 }
 
 main()

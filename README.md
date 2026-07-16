@@ -30,10 +30,19 @@ npx prisma migrate dev     # creates the SQLite database and runs the seed
 npm run dev                # http://localhost:3000
 ```
 
-Default login (created by the seed — **change the password in Settings**):
+### Initial owner account
 
-- Email: `sean@tunley.co.za`
-- Password: `denago123`
+The seed creates the initial owner **only** from environment variables — there is no
+default password in the repository:
+
+- `INITIAL_ADMIN_EMAIL` — owner login email
+- `INITIAL_ADMIN_PASSWORD` — owner password (**≥ 14 characters**)
+- `INITIAL_ADMIN_NAME` — display name (optional)
+
+In **production** the seed refuses to run without these. On **preview** deployments it
+never creates a privileged owner. In **local dev**, if you set `INITIAL_ADMIN_EMAIL`
+without a password, a random one-time password is printed to the console (existing
+users' passwords are never overwritten).
 
 ## Configuration
 
