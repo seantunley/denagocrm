@@ -13,7 +13,7 @@
     "test:journeys": "node --import tsx --test tests/journeyTypes.test.ts",
     "check:visual": "node scripts/check-visual-consistency.mjs",
     "prisma:generate": "prisma generate --schema ./prisma",
-    "prisma:migrate": "prisma migrate deploy --schema ./prisma",
+    "prisma:migrate": "node scripts/apply-migrations.mjs",
     "prisma:validate": "prisma validate --schema ./prisma",
     "verify:governance": "tsx scripts/verify-governance.ts",
     "test:security": "tsx scripts/test-security.ts",
