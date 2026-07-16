@@ -77,7 +77,7 @@ curl -X POST https://<your-domain>/api/intake \
 
 1. **Settings → Email (SMTP)**: enter your mailbox details (e.g. `sales@denagocpt.co.za`), then click "Send test email to me".
 2. **Settings → Email templates**: a starter "New enquiry welcome" template is seeded; placeholders `{{first_name}}`, `{{model}}`, `{{color}}`, `{{value}}`, `{{user_name}}` fill from the lead.
-3. **Settings → Automations**: two starter rules are seeded (call new leads within a day; nudge quiet leads after 4 days). Idle rules run when the dashboard loads, or schedule an external cron to hit `GET /api/cron/automations?key=<intake API key>` every few hours.
+3. **Settings → Automations**: two starter rules are seeded (call new leads within a day; nudge quiet leads after 4 days). Idle rules run when the dashboard loads. On Vercel, `vercel.json` crons invoke the routes automatically. To trigger from an external scheduler, send `Authorization: Bearer <CRON_SECRET>` (cron routes no longer accept a `?key=` query-string secret or the public intake key).
 
 ## Tech notes
 
