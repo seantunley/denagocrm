@@ -80,6 +80,11 @@ export function CaptureSection({
   );
 }
 
+type NativeCaptureControlProps = {
+  id?: string;
+  "aria-describedby"?: string;
+};
+
 export function CaptureField({
   label,
   hint,
@@ -91,23 +96,33 @@ export function CaptureField({
   wide?: boolean;
   children: ReactNode;
 }) {
-  // Associate the caption with its control so clicking the label focuses the
-  // field and screen readers pair them. Only safe for a single native control;
-  // icon-wrapped inputs and radio groups keep the caption as a visible label.
   const fieldId = useId();
-  const asElement = isValidElement(children) ? (children as ReactElement<{ id?: string }>) : null;
+  const hintId = hint ? `${fieldId}-hint` : undefined;
+  const asElement = isValidElement(children) ? (children as ReactElement<NativeCaptureControlProps>) : null;
   const canAssociate =
     asElement !== null &&
     typeof asElement.type === "string" &&
     ["input", "select", "textarea"].includes(asElement.type) &&
     asElement.props.id === undefined;
+  const className = cn("min-w-0", wide && "sm:col-span-2");
+
+  if (canAssociate && asElement) {
+    const describedBy = [asElement.props["aria-describedby"], hintId].filter(Boolean).join(" ") || undefined;
+    return (
+      <div className={className}>
+        <label className="label" htmlFor={fieldId}>{label}</label>
+        {cloneElement(asElement, { id: fieldId, "aria-describedby": describedBy })}
+        {hint && <p id={hintId} className="mt-1.5 text-[11px] leading-4 text-muted-foreground">{hint}</p>}
+      </div>
+    );
+  }
 
   return (
-    <div className={cn("min-w-0", wide && "sm:col-span-2")}>
-      <label className="label" htmlFor={canAssociate ? fieldId : undefined}>{label}</label>
-      {canAssociate && asElement ? cloneElement(asElement, { id: fieldId }) : children}
-      {hint && <p className="mt-1.5 text-[11px] leading-4 text-muted-foreground">{hint}</p>}
-    </div>
+    <fieldset className={cn(className, "m-0 min-w-0 border-0 p-0")} aria-describedby={hintId}>
+      <legend className="label">{label}</legend>
+      {children}
+      {hint && <p id={hintId} className="mt-1.5 text-[11px] leading-4 text-muted-foreground">{hint}</p>}
+    </fieldset>
   );
 }
 

@@ -31,7 +31,8 @@ export default function ConfirmActionDialog({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  async function confirm() {
+  async function handleConfirm() {
+    if (busy) return;
     setBusy(true);
     try {
       await onConfirm();
@@ -42,9 +43,9 @@ export default function ConfirmActionDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(next) => { if (!busy || next) setOpen(next); }}>
       <DialogTrigger asChild>{trigger}</DialogTrigger>
-      <ResponsiveDialogContent className="sm:max-w-md">
+      <ResponsiveDialogContent className="sm:max-w-md" aria-busy={busy}>
         <DialogHeader className="text-left">
           <span
             className={cn(
@@ -65,7 +66,7 @@ export default function ConfirmActionDialog({
           </DialogClose>
           <button
             type="button"
-            onClick={confirm}
+            onClick={handleConfirm}
             disabled={busy}
             className={destructive ? "btn-danger" : "btn-primary"}
           >
