@@ -24,20 +24,40 @@ export async function ensureBuilderSeeded(): Promise<void> {
       where: { key: "quote", deletedAt: null },
       select: { id: true, data: true, createdById: true, isDefault: true },
     });
-    const systemRows = rows.filter((r) => r.createdById === null);
-    // Idempotent: a valid system template already exists → nothing to do.
-    if (systemRows.some((r) => parseDocument(r.data))) return;
+    const parsed = rows.map((r) => ({ ...r, ok: parseDocument(r.data) !== null }));
+    const validSystem = parsed.filter((r) => r.createdById === null && r.ok);
 
-    // Demote any stale/unparseable system rows so a broken layout isn't left as the
-    // default — but PRESERVE their data (could be a dealer's edited legacy layout).
-    if (systemRows.length > 0) {
+    if (validSystem.length > 0) {
+      // A valid system template already exists — but the default must still be a
+      // RENDERABLE row. A broken/unparseable system row could have been re-made default
+      // (e.g. via setDefaultBuilderTemplate) after a prior repair, so on the idempotent
+      // path we still demote a bad default and promote a valid one.
+      const currentDefault = parsed.find((r) => r.isDefault);
+      const badDefault = !currentDefault || (currentDefault.createdById === null && !currentDefault.ok);
+      if (badDefault) {
+        await prisma.docBuilderTemplate.updateMany({
+          where: { key: "quote", createdById: null, deletedAt: null },
+          data: { isDefault: false },
+        });
+        await prisma.docBuilderTemplate.update({
+          where: { id: validSystem[0].id },
+          data: { isDefault: true },
+        });
+      }
+      return;
+    }
+
+    // No valid system template. Preserve any unparseable system rows (could be a
+    // dealer's edited legacy layout) and add a fresh standard one.
+    const invalidSystem = parsed.filter((r) => r.createdById === null && !r.ok);
+    if (invalidSystem.length > 0) {
       await prisma.docBuilderTemplate.updateMany({
         where: { key: "quote", createdById: null, deletedAt: null },
         data: { isDefault: false },
       });
     }
     // Take over the default only if a stale system row held it, or nothing else does.
-    const becomeDefault = systemRows.some((r) => r.isDefault) || !rows.some((r) => r.isDefault);
+    const becomeDefault = invalidSystem.some((r) => r.isDefault) || !parsed.some((r) => r.isDefault);
     await prisma.docBuilderTemplate.create({
       data: { name: "Quotation", key: "quote", isDefault: becomeDefault, data: standardQuoteTemplate() as object },
     });
