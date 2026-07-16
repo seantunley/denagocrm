@@ -3,6 +3,7 @@ import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { sendEmail } from "./email";
 import { logAudit } from "./audit";
+import { canContactPerson } from "./consentGuard";
 
 const ANNIVERSARY_MARKER = "Purchase anniversary";
 const WINBACK_MARKER = "Win-back";
@@ -42,6 +43,8 @@ async function anniversaryJourney(now: Date): Promise<number> {
     if (years < 1) continue;
     const c = v.contact;
     if (!c.email) continue;
+    // Anniversary emails are marketing — respect opt-out (previously unchecked).
+    if (!(await canContactPerson({ contactId: c.id, channel: "email", purpose: "marketing" }))) continue;
     if (await recentlyMessaged(c.id, ANNIVERSARY_MARKER, 300)) continue;
 
     const subject = `Happy ${years}-year anniversary with your ${v.model}! 🎉`;
@@ -73,7 +76,9 @@ async function winBackJourney(now: Date): Promise<number> {
   let sent = 0;
   for (const v of vehicles) {
     const c = v.contact;
-    if (done.has(c.id) || !c.email || c.marketingOptOut) continue;
+    if (done.has(c.id) || !c.email) continue;
+    // Central consent check (also honours portal marketing preferences).
+    if (!(await canContactPerson({ contactId: c.id, channel: "email", purpose: "marketing" }))) continue;
 
     const lastService = v.serviceRecords[0]?.serviceDate ?? null;
     const baseline = lastService ?? v.purchaseDate;
