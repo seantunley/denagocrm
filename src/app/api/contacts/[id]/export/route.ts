@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requireApiOwner, apiAuthErrorResponse } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 
 /** POPIA data-subject access request: full personal-data export as JSON. */
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const user = await requireOwner();
+  let user;
+  try {
+    user = await requireApiOwner(); // JSON 401/403 (not an HTML redirect) for this download route
+  } catch (err) {
+    const res = apiAuthErrorResponse(err);
+    if (res) return res;
+    throw err;
+  }
   const { id } = await params;
 
   const contact = await prisma.contact.findUnique({
