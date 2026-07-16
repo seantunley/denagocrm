@@ -10,18 +10,22 @@ import { put, del, get } from "@vercel/blob";
  * - Self-hosted / local dev: files live on disk under storage/uploads.
  *
  * PRIVATE STORAGE (staged rollout): sensitive assets must not be reachable by a
- * direct public URL. When BLOB_PRIVATE=true, new uploads are written with
- * access:"private" (reachable only through the authenticated get() API). readFile
- * always attempts a private, authenticated read first and falls back to a public
- * fetch, so legacy public blobs keep working. The flag is opt-in so it can be
- * verified on a preview deployment before flipping production; then existing
- * public blobs are migrated (scripts/migrate-blobs-private — see PR notes).
+ * direct public URL. Vercel Blob access is configured at the STORE level, so a
+ * private blob belongs in a dedicated private store with its own token. When
+ * BLOB_PRIVATE=true AND BLOB_PRIVATE_READ_WRITE_TOKEN is set, new uploads are
+ * written to the private store; reads try the private store (authenticated get())
+ * first and fall back to a public fetch, so legacy public blobs keep working. The
+ * flag is opt-in so it can be verified on a preview deployment before flipping
+ * production; existing public blobs are then migrated (scripts/migrate-blobs-private).
  */
 
 const UPLOAD_DIR = path.join(process.cwd(), "storage", "uploads");
 
 const blobConfigured = () => Boolean(process.env.BLOB_READ_WRITE_TOKEN);
-const blobPrivate = () => process.env.BLOB_PRIVATE === "true";
+const privateToken = () => process.env.BLOB_PRIVATE_READ_WRITE_TOKEN;
+// Private writes require BOTH the flag and a private-store token — never silently
+// fall back to writing a "private" blob into the public store.
+const writePrivate = () => process.env.BLOB_PRIVATE === "true" && Boolean(privateToken());
 
 export async function saveFile(
   buffer: Buffer,
@@ -32,11 +36,18 @@ export async function saveFile(
   const storedName = crypto.randomUUID() + ext;
 
   if (blobConfigured()) {
-    const blob = await put(`uploads/${storedName}`, buffer, {
-      access: blobPrivate() ? "private" : "public",
-      contentType,
-      addRandomSuffix: false,
-    });
+    const blob = writePrivate()
+      ? await put(`uploads/${storedName}`, buffer, {
+          access: "private",
+          contentType,
+          addRandomSuffix: false,
+          token: privateToken(),
+        })
+      : await put(`uploads/${storedName}`, buffer, {
+          access: "public",
+          contentType,
+          addRandomSuffix: false,
+        });
     return blob.url;
   }
 
@@ -60,15 +71,15 @@ async function streamToBuffer(stream: ReadableStream<Uint8Array>): Promise<Buffe
 
 export async function readFile(ref: string): Promise<Buffer> {
   if (isBlobRef(ref)) {
-    // Authenticated private read first (blobs written with access:"private");
-    // fall back to a public fetch for legacy public blobs.
-    if (blobConfigured()) {
+    // Authenticated read from the private store first (blobs written there); fall
+    // back to a public fetch for legacy public blobs.
+    if (privateToken()) {
       try {
         const pathname = new URL(ref).pathname.replace(/^\/+/, "");
-        const result = await get(pathname, { access: "private", token: process.env.BLOB_READ_WRITE_TOKEN });
+        const result = await get(pathname, { access: "private", token: privateToken() });
         if (result?.stream) return await streamToBuffer(result.stream);
       } catch {
-        // Not a private blob (or unavailable as private) → try the public path.
+        // Not in the private store (or unavailable) → try the public path.
       }
     }
     const res = await fetch(ref);

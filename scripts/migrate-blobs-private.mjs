@@ -1,30 +1,31 @@
-// One-time migration: re-store existing PUBLIC Vercel Blob assets as PRIVATE and
-// repoint the database at the new private refs. Pairs with the storage change
-// (BLOB_PRIVATE) so pre-existing customer files stop being reachable by direct
-// public URL.
+// One-time migration: move existing PUBLIC Vercel Blob assets into a PRIVATE Blob
+// store and repoint the database. Vercel Blob access is STORE-LEVEL, so this needs
+// two stores/tokens:
+//   BLOB_LEGACY_PUBLIC_READ_WRITE_TOKEN  — read + delete from the existing public store
+//   BLOB_PRIVATE_READ_WRITE_TOKEN        — write + read the new private store
 //
-// ⚠️  UNVERIFIED / DESTRUCTIVE — it deletes the old public objects. It has NOT
-//     been run against a real Blob store. REQUIRED before using on production:
-//       1. Enable BLOB_PRIVATE=true and deploy.
-//       2. `node scripts/migrate-blobs-private.mjs`            (dry run — reports only)
-//       3. Run it against a PREVIEW/staging store first and confirm files still
-//          open in-app and the old public URLs now 401/404.
-//       4. Take a fresh backup, then `node scripts/migrate-blobs-private.mjs --apply`.
+// ⚠️  UNVERIFIED / DESTRUCTIVE — deletes the old public objects. Not run against a
+//     real Blob store. Required before production use:
+//       1. Provision a private Blob store; set both tokens.
+//       2. Dry run:  node scripts/migrate-blobs-private.mjs
+//       3. Validate on a PREVIEW/staging store; confirm files still open in-app and
+//          old public URLs return 401/404.
+//       4. Take a fresh backup, then:  node scripts/migrate-blobs-private.mjs --apply
 //
-// Safety properties:
-//  - dry-run by default; only --apply mutates.
-//  - per ref: download (public) → put private → VERIFY private read → update the
-//    DB row → only THEN delete the old public object.
-//  - idempotent: a ref that is no longer publicly fetchable (already private or
-//    gone) is skipped, so re-running is safe.
+// Per-ref sequence (fail-closed):
+//   fetch old public → sha256 → upload private → read private back → verify sha256
+//   → update DB reference → delete old public → confirm old URL inaccessible → done.
+// A delete failure (or an old URL that is still reachable) is recorded as FAILED —
+// never swallowed — because an undeleted public object defeats the whole purpose.
 
 import { PrismaClient } from "@prisma/client";
 import { put, del, get } from "@vercel/blob";
+import crypto from "node:crypto";
 
 const APPLY = process.argv.includes("--apply");
-const TOKEN = process.env.BLOB_READ_WRITE_TOKEN;
+const LEGACY_TOKEN = process.env.BLOB_LEGACY_PUBLIC_READ_WRITE_TOKEN || process.env.BLOB_READ_WRITE_TOKEN;
+const PRIVATE_TOKEN = process.env.BLOB_PRIVATE_READ_WRITE_TOKEN;
 
-// (table, column) pairs that hold a storage ref. Mirrors backup.ts asset refs.
 const TARGETS = [
   ["Document", "storedName"],
   ["LibraryVersion", "storedName"],
@@ -41,6 +42,8 @@ const TARGETS = [
 
 const isPublicBlobUrl = (v) =>
   typeof v === "string" && /^https:\/\/[^/]+\.blob\.vercel-storage\.com\//.test(v);
+const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
+const pathnameOf = (url) => new URL(url).pathname.replace(/^\/+/, "");
 
 async function streamToBuffer(stream) {
   const reader = stream.getReader();
@@ -54,12 +57,17 @@ async function streamToBuffer(stream) {
 }
 
 async function main() {
-  if (!TOKEN) throw new Error("BLOB_READ_WRITE_TOKEN is required");
+  if (!APPLY) {
+    console.log("DRY RUN — reporting only. Re-run with --apply to migrate.");
+  } else {
+    if (!LEGACY_TOKEN) throw new Error("BLOB_LEGACY_PUBLIC_READ_WRITE_TOKEN (or BLOB_READ_WRITE_TOKEN) is required");
+    if (!PRIVATE_TOKEN) throw new Error("BLOB_PRIVATE_READ_WRITE_TOKEN is required");
+  }
+
   const prisma = new PrismaClient();
-  let scanned = 0;
-  let migrated = 0;
-  let skipped = 0;
-  let failed = 0;
+  let scanned = 0, migrated = 0, skipped = 0, failed = 0;
+  const failures = [];
+  const fail = (where, msg) => { failed++; failures.push(`${where}: ${msg}`); console.error(`FAILED ${where}: ${msg}`); };
 
   try {
     for (const [table, column] of TARGETS) {
@@ -76,55 +84,70 @@ async function main() {
         const ref = row.ref;
         if (!isPublicBlobUrl(ref)) continue;
         scanned++;
+        const where = `${table}.${column}#${row.id}`;
 
-        // Idempotency: only migrate refs that are still PUBLICLY fetchable.
-        const res = await fetch(ref).catch(() => null);
-        if (!res || !res.ok) {
-          skipped++;
-          continue; // already private, or gone
-        }
-        const buf = Buffer.from(await res.arrayBuffer());
+        // Idempotency: only migrate refs still PUBLICLY fetchable.
+        const src = await fetch(ref).catch(() => null);
+        if (!src || !src.ok) { skipped++; continue; } // already private, or gone
+        const sourceBuf = Buffer.from(await src.arrayBuffer());
+        const sourceHash = sha256(sourceBuf);
 
         if (!APPLY) {
           migrated++;
-          console.log(`would migrate ${table}.${column} #${row.id} (${buf.length} bytes)`);
+          console.log(`would migrate ${where} (${sourceBuf.length} bytes)`);
           continue;
         }
 
+        // 1. Upload into the PRIVATE store.
+        let newUrl;
         try {
-          const pathname = new URL(ref).pathname.replace(/^\/+/, "");
-          const blob = await put(pathname, buf, { access: "private", addRandomSuffix: true });
-          // Verify the private read before we touch the DB or delete anything.
-          const check = await get(new URL(blob.url).pathname.replace(/^\/+/, ""), { access: "private", token: TOKEN });
-          if (!check?.stream) throw new Error("private verification read failed");
-          const verified = await streamToBuffer(check.stream);
-          if (verified.length !== buf.length) throw new Error("verification size mismatch");
+          const blob = await put(pathnameOf(ref), sourceBuf, { access: "private", addRandomSuffix: true, token: PRIVATE_TOKEN });
+          newUrl = blob.url;
+        } catch (e) { fail(where, `private upload: ${e.message}`); continue; }
 
-          await prisma.$executeRawUnsafe(
-            `UPDATE "${table}" SET "${column}" = $1 WHERE "id" = $2`,
-            blob.url,
-            row.id,
-          );
-          await del(ref).catch(() => {}); // remove the old public object
-          migrated++;
-          console.log(`migrated ${table}.${column} #${row.id}`);
+        // 2. Read it back from the private store and verify SHA-256.
+        try {
+          const check = await get(pathnameOf(newUrl), { access: "private", token: PRIVATE_TOKEN });
+          if (!check?.stream) throw new Error("private read returned no stream");
+          const destBuf = await streamToBuffer(check.stream);
+          if (sha256(destBuf) !== sourceHash) throw new Error("SHA-256 mismatch after private upload");
         } catch (e) {
-          failed++;
-          console.error(`FAILED ${table}.${column} #${row.id}: ${e.message}`);
+          fail(where, `private verify: ${e.message}`);
+          await del(newUrl, { token: PRIVATE_TOKEN }).catch(() => {}); // roll back the private copy
+          continue;
         }
+
+        // 3. Repoint the database at the private blob.
+        try {
+          await prisma.$executeRawUnsafe(`UPDATE "${table}" SET "${column}" = $1 WHERE "id" = $2`, newUrl, row.id);
+        } catch (e) { fail(where, `db update: ${e.message}`); continue; }
+
+        // 4. Delete the old PUBLIC object — a failure here is NOT swallowed: the
+        // old public URL would remain accessible, defeating the migration.
+        try {
+          await del(ref, { token: LEGACY_TOKEN });
+        } catch (e) {
+          fail(where, `PUBLIC OBJECT NOT DELETED — still accessible at ${ref}: ${e.message}`);
+          continue;
+        }
+        // 5. Confirm it is actually gone.
+        const after = await fetch(ref).catch(() => null);
+        if (after && after.ok) { fail(where, `old public URL still reachable after delete: ${ref}`); continue; }
+
+        migrated++;
+        console.log(`migrated ${where}`);
       }
     }
   } finally {
     await prisma.$disconnect();
   }
 
-  console.log(
-    `\n${APPLY ? "Applied" : "Dry run"}: scanned ${scanned}, ${APPLY ? "migrated" : "would migrate"} ${migrated}, skipped ${skipped}, failed ${failed}.`,
-  );
-  if (failed > 0) process.exitCode = 1;
+  console.log(`\n${APPLY ? "Applied" : "Dry run"}: scanned ${scanned}, ${APPLY ? "migrated" : "would migrate"} ${migrated}, skipped ${skipped}, failed ${failed}.`);
+  if (failures.length) {
+    console.error(`\n${failures.length} unresolved item(s) — investigate before considering the migration complete:`);
+    for (const f of failures) console.error(`  - ${f}`);
+    process.exitCode = 1;
+  }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+main().catch((err) => { console.error(err); process.exit(1); });
