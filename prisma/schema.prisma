@@ -1637,9 +1637,12 @@ model Competitor {
   updatedAt   DateTime  @default(now()) @updatedAt
   deletedAt   DateTime?
 
+  lastResearchedAt DateTime? // last AI deep-research pass (weekly cadence)
+
   sources   CompetitorSource[]
   snapshots CompetitorSnapshot[]
   changes   CompetitorChange[]
+  briefs    CompetitorBrief[]
 
   @@index([status, name])
 }
@@ -1705,5 +1708,24 @@ model CompetitorChange {
   source     CompetitorSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
 
   @@index([status, createdAt])
+  @@index([competitorId, createdAt])
+}
+
+// AI-authored intelligence brief — the "research" layer that a strong model
+// (web search) produces on discovery and on a weekly cadence. Separate from
+// CompetitorChange (which is the cheap daily page-diff signal).
+model CompetitorBrief {
+  id           String   @id @default(cuid())
+  competitorId String
+  kind         String   @default("research") // research | discovery
+  headline     String?
+  body         String // markdown-ish plain text briefing
+  citations    Json? // [{ title, url }]
+  model        String? // model that produced it
+  createdById  String? // set when a user triggered it, null for cron
+  createdAt    DateTime @default(now())
+
+  competitor Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+
   @@index([competitorId, createdAt])
 }

@@ -1,10 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSetting } from "@/lib/settings";
-import { collectSource, dueSourceIds } from "@/lib/competitors";
+import {
+  collectSource,
+  competitorsDueForResearch,
+  competitorsNeedingDiscovery,
+  discoverSources,
+  dueSourceIds,
+  researchCompetitor,
+} from "@/lib/competitors";
 
 export const maxDuration = 300;
 
-/** Daily competitor watch — checks the due public pages, snapshots on change. */
+/**
+ * Daily competitor watch. Three layers on a cost ladder:
+ *  1. cheap daily page-diff of due public pages (Haiku classifies material changes)
+ *  2. auto-discovery (strong model + web search) for competitors with no sources
+ *  3. weekly deep-research brief (strong model + web search), a couple per run
+ * Layers 2–3 are capped per run to bound token spend and stay within maxDuration.
+ */
 export async function GET(req: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;
   const authHeader = req.headers.get("authorization");
@@ -18,6 +31,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // 1. Cheap page-diff watch.
   const ids = await dueSourceIds(25);
   let changed = 0;
   let errors = 0;
@@ -29,5 +43,19 @@ export async function GET(req: NextRequest) {
     await new Promise((r) => setTimeout(r, 1500));
   }
 
-  return NextResponse.json({ ok: true, checked: ids.length, changed, errors });
+  // 2. Auto-discover a couple of competitors that have no sources yet.
+  let discovered = 0;
+  for (const id of await competitorsNeedingDiscovery(2)) {
+    const res = await discoverSources(id).catch(() => ({ ok: false }));
+    if (res.ok) discovered += 1;
+  }
+
+  // 3. Weekly deep-research brief for a couple of due competitors.
+  let researched = 0;
+  for (const id of await competitorsDueForResearch(2)) {
+    const res = await researchCompetitor(id).catch(() => ({ ok: false }));
+    if (res.ok) researched += 1;
+  }
+
+  return NextResponse.json({ ok: true, checked: ids.length, changed, errors, discovered, researched });
 }

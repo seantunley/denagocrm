@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
-import { collectSource } from "@/lib/competitors";
+import { collectSource, discoverSources, researchCompetitor } from "@/lib/competitors";
 
 const str = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
 
@@ -84,6 +84,36 @@ export async function deleteSource(competitorId: string, sourceId: string) {
 export async function runSourceNow(competitorId: string, sourceId: string) {
   await requireOwner();
   await collectSource(sourceId);
+  revalidatePath(`/competitors/${competitorId}`);
+}
+
+/** Strong-model discovery: find the competitor's pages + social profiles. */
+export async function discoverSourcesNow(competitorId: string) {
+  const user = await requireOwner();
+  const result = await discoverSources(competitorId, user.id);
+  await logAudit({
+    action: "competitor.discovered",
+    summary: result.ok
+      ? `AI discovery added ${result.created} source(s)`
+      : `AI discovery failed: ${result.error ?? "unknown"}`,
+    user,
+    entityType: "Competitor",
+    entityId: competitorId,
+  });
+  revalidatePath(`/competitors/${competitorId}`);
+}
+
+/** Strong-model deep research: write a fresh intelligence brief. */
+export async function researchNow(competitorId: string) {
+  const user = await requireOwner();
+  const result = await researchCompetitor(competitorId, user.id);
+  await logAudit({
+    action: "competitor.researched",
+    summary: result.ok ? "AI intelligence brief created" : `AI research failed: ${result.error ?? "unknown"}`,
+    user,
+    entityType: "Competitor",
+    entityId: competitorId,
+  });
   revalidatePath(`/competitors/${competitorId}`);
 }
 
