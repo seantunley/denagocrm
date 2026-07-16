@@ -11,21 +11,17 @@ import { createLead } from "@/app/actions/leads";
 import { contactName, formatZAR } from "@/lib/format";
 
 export default async function LeadsPage() {
+  const now = new Date();
   const [stages, products, contacts, users] = await Promise.all([
     prisma.pipelineStage.findMany({
       orderBy: { order: "asc" },
       include: {
         leads: {
           where: { status: "open", deletedAt: null },
-          orderBy: { createdAt: "desc" }, // newest leads on top of every column
+          orderBy: { createdAt: "desc" },
           include: {
             product: true,
             assignedTo: true,
-            activities: {
-              where: { status: "planned", type: "test_drive", dueDate: { gte: new Date() } },
-              orderBy: { dueDate: "asc" },
-              take: 1,
-            },
             _count: { select: { activities: { where: { status: "planned" } } } },
           },
         },
@@ -40,92 +36,140 @@ export default async function LeadsPage() {
     prisma.user.findMany({ orderBy: { name: "asc" } }),
   ]);
 
-  const forecast = await getDailyForecast();
+  const leadIds = stages.flatMap((stage) => stage.leads.map((lead) => lead.id));
+  const [nextActivities, futureTestDrives, forecast] = await Promise.all([
+    leadIds.length
+      ? prisma.activity.findMany({
+          where: { leadId: { in: leadIds }, status: "planned" },
+          orderBy: [{ leadId: "asc" }, { dueDate: "asc" }],
+          distinct: ["leadId"],
+          select: { leadId: true, summary: true, dueDate: true },
+        })
+      : [],
+    leadIds.length
+      ? prisma.activity.findMany({
+          where: {
+            leadId: { in: leadIds },
+            status: "planned",
+            type: "test_drive",
+            dueDate: { gte: now },
+          },
+          orderBy: [{ leadId: "asc" }, { dueDate: "asc" }],
+          distinct: ["leadId"],
+          select: { leadId: true, dueDate: true },
+        })
+      : [],
+    getDailyForecast(),
+  ]);
 
-  // Active signing requests for these leads' quotes → a "quote sent · waiting for
-  // X" badge on the card. Clears automatically once signing completes or is voided.
-  const leadIds = stages.flatMap((s) => s.leads.map((l) => l.id));
+  const nextActivityByLead = new Map(nextActivities.map((activity) => [activity.leadId, activity]));
+  const testDriveByLead = new Map(futureTestDrives.map((activity) => [activity.leadId, activity]));
+
   const signingByLead = new Map<string, { label: string }>();
   if (leadIds.length) {
     const leadQuotes = await prisma.quote.findMany({
       where: { leadId: { in: leadIds }, deletedAt: null },
       select: { id: true, leadId: true },
     });
-    const quoteToLead = new Map(leadQuotes.map((q) => [q.id, q.leadId]));
-    const quoteIds = leadQuotes.map((q) => q.id);
+    const quoteToLead = new Map(leadQuotes.map((quote) => [quote.id, quote.leadId]));
+    const quoteIds = leadQuotes.map((quote) => quote.id);
     if (quoteIds.length) {
       const requests = await prisma.signatureRequest.findMany({
-        where: { quoteId: { in: quoteIds }, deletedAt: null, status: { in: ["sent", "viewed", "in_progress"] } },
+        where: {
+          quoteId: { in: quoteIds },
+          deletedAt: null,
+          status: { in: ["sent", "viewed", "in_progress"] },
+        },
         orderBy: { updatedAt: "desc" },
         include: { recipients: { orderBy: { order: "asc" } } },
       });
-      for (const req of requests) {
-        const leadId = req.quoteId ? quoteToLead.get(req.quoteId) : null;
-        if (!leadId || signingByLead.has(leadId)) continue; // most-recent request wins
-        const next = req.recipients.find((r) => r.role !== "viewer" && r.status !== "signed" && r.status !== "declined");
+      for (const request of requests) {
+        const leadId = request.quoteId ? quoteToLead.get(request.quoteId) : null;
+        if (!leadId || signingByLead.has(leadId)) continue;
+        const nextRecipient = request.recipients.find(
+          (recipient) => recipient.role !== "viewer" && recipient.status !== "signed" && recipient.status !== "declined",
+        );
         signingByLead.set(leadId, {
-          label: next ? `Quote sent · waiting for ${next.name.split(" ")[0]}` : "Quote fully signed",
+          label: nextRecipient ? `Quote sent · waiting for ${nextRecipient.name.split(" ")[0]}` : "Quote fully signed",
         });
       }
     }
   }
 
-  // The test-drive booking belongs to the test-drive stage; hide it on cards
-  // parked before that stage. (Restored — lost in the #67/#68 merge.)
-  const testDriveStage = stages.find((s) => /test/i.test(s.name)) ?? null;
+  const testDriveStage = stages.find((stage) => /test/i.test(stage.name)) ?? null;
 
-  const boardStages: KanbanStage[] = stages.map((s) => ({
-    id: s.id,
-    name: s.name,
-    color: s.color,
-    leads: s.leads.map((l) => ({
-      id: l.id,
-      title: l.title,
-      name: l.name,
-      valueCents: l.valueCents,
-      quantity: l.quantity,
-      source: l.source,
-      color: l.color,
-      productId: l.productId,
-      productName: l.product?.name ?? null,
-      assignee: l.assignedTo?.name ?? null,
-      research: l.research,
-      isNew: !l.viewedAt && l.createdAt.getTime() > Date.now() - 3 * 24 * 60 * 60 * 1000,
-      noNextStep: l._count.activities === 0,
-      ageDays: Math.floor((Date.now() - l.stageEnteredAt.getTime()) / 86400000),
-      testDrive: (() => {
-        // Hide the booking once the lead is parked before the test-drive stage.
-        if (testDriveStage && s.order < testDriveStage.order) return null;
-        const td = l.activities[0];
-        if (!td) return null;
-        const saDate = new Date(td.dueDate.getTime() + 2 * 60 * 60 * 1000);
-        const dateKey = saDate.toISOString().slice(0, 10);
-        const wx = forecast.get(dateKey);
-        const hasTime = td.dueDate.getUTCHours() !== 0 || td.dueDate.getUTCMinutes() !== 0;
+  const boardStages: KanbanStage[] = stages.map((stage) => ({
+    id: stage.id,
+    name: stage.name,
+    color: stage.color,
+    leads: stage.leads.map((lead) => {
+      const nextActivity = nextActivityByLead.get(lead.id) ?? null;
+      const signing = signingByLead.get(lead.id) ?? null;
+      const overdue = Boolean(nextActivity && nextActivity.dueDate < now);
+      const nextStep = (() => {
+        if (!nextActivity && !signing) return null;
+        if (!nextActivity) {
+          return { summary: signing!.label, when: "Signing in progress", overdue: false };
+        }
+        const saDate = new Date(nextActivity.dueDate.getTime() + 2 * 60 * 60 * 1000);
+        const hasTime = nextActivity.dueDate.getUTCHours() !== 0 || nextActivity.dueDate.getUTCMinutes() !== 0;
+        const label =
+          saDate.toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" }) +
+          (hasTime ? ` at ${saDate.toISOString().slice(11, 16)}` : "");
         return {
-          when:
-            saDate.toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" }) +
-            (hasTime ? ` ${saDate.toISOString().slice(11, 16)}` : ""),
-          weather: wx ? `${wx.icon} ${wx.maxTemp}°${wx.rainChance >= 30 ? ` · ${wx.rainChance}% rain` : ""}` : null,
-          date: dateKey,
+          summary: signing ? `${nextActivity.summary} · ${signing.label}` : nextActivity.summary,
+          when: overdue ? `Overdue · ${label}` : label,
+          overdue,
         };
-      })(),
-      signing: signingByLead.get(l.id) ?? null,
-    })),
+      })();
+
+      return {
+        id: lead.id,
+        title: lead.title,
+        name: lead.name,
+        valueCents: lead.valueCents,
+        quantity: lead.quantity,
+        source: lead.source,
+        color: lead.color,
+        productId: lead.productId,
+        productName: lead.product?.name ?? null,
+        assignee: lead.assignedTo?.name ?? null,
+        research: lead.research,
+        isNew: !lead.viewedAt && lead.createdAt.getTime() > now.getTime() - 3 * 24 * 60 * 60 * 1000,
+        noNextStep: lead._count.activities === 0 || overdue,
+        ageDays: Math.floor((now.getTime() - lead.stageEnteredAt.getTime()) / 86400000),
+        nextStep,
+        testDrive: (() => {
+          if (testDriveStage && stage.order < testDriveStage.order) return null;
+          const testDrive = testDriveByLead.get(lead.id);
+          if (!testDrive) return null;
+          const saDate = new Date(testDrive.dueDate.getTime() + 2 * 60 * 60 * 1000);
+          const dateKey = saDate.toISOString().slice(0, 10);
+          const weather = forecast.get(dateKey);
+          const hasTime = testDrive.dueDate.getUTCHours() !== 0 || testDrive.dueDate.getUTCMinutes() !== 0;
+          return {
+            when:
+              saDate.toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" }) +
+              (hasTime ? ` ${saDate.toISOString().slice(11, 16)}` : ""),
+            weather: weather
+              ? `${weather.icon} ${weather.maxTemp}°${weather.rainChance >= 30 ? ` · ${weather.rainChance}% rain` : ""}`
+              : null,
+            date: dateKey,
+          };
+        })(),
+      };
+    }),
   }));
 
-  const openCount = boardStages.reduce((n, s) => n + s.leads.length, 0);
+  const openCount = boardStages.reduce((count, stage) => count + stage.leads.length, 0);
   const totalOpenValue = boardStages.reduce(
-    (n, s) => n + s.leads.reduce((a, l) => a + l.valueCents, 0),
-    0
+    (total, stage) => total + stage.leads.reduce((stageTotal, lead) => stageTotal + lead.valueCents, 0),
+    0,
   );
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title="Leads"
-        description={`${openCount} open · ${formatZAR(totalOpenValue)} in pipeline`}
-      >
+      <PageHeader title="Leads" description={`${openCount} open · ${formatZAR(totalOpenValue)} in pipeline`}>
         <Button asChild variant="ghost" size="sm">
           <Link href="/leads/closed">
             <Trophy className="size-4" />
@@ -150,23 +194,22 @@ export default async function LeadsPage() {
         >
           <LeadForm
             action={createLead}
-            products={products.map((p) => ({
-              id: p.id,
-              name: p.name,
-              basePriceCents: p.basePriceCents,
-              colors: p.colors.map((c) => c.name),
+            products={products.map((product) => ({
+              id: product.id,
+              name: product.name,
+              basePriceCents: product.basePriceCents,
+              colors: product.colors.map((color) => color.name),
             }))}
-            stages={stages.map((s) => ({ id: s.id, name: s.name }))}
-            contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
-            users={users.map((u) => ({ id: u.id, name: u.name }))}
+            stages={stages.map((stage) => ({ id: stage.id, name: stage.name }))}
+            contacts={contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }))}
+            users={users.map((user) => ({ id: user.id, name: user.name }))}
             submitLabel="Create lead"
-            variant="dialog"
           />
         </ModalTrigger>
       </PageHeader>
       <KanbanBoard
         stages={boardStages}
-        products={products.map((p) => ({ id: p.id, name: p.name }))}
+        products={products.map((product) => ({ id: product.id, name: product.name }))}
       />
     </div>
   );
