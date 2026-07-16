@@ -7,6 +7,7 @@ import { parseDocument, type DocumentModel } from "@/lib/doceditor/model";
 import { renderDocumentHtml, renderSigningSheets, type RenderCtx, type StampField } from "@/lib/doceditor/serialize";
 import { htmlToPdf } from "@/lib/customDocs";
 import { readFile } from "@/lib/storage";
+import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import type { SignatureRequest } from "@prisma/client";
 
 let logoCache: string | null | undefined;
@@ -21,18 +22,25 @@ function logoDataUri(): string | undefined {
 
 /** Build the merge context for a request's linked record (quote / job card), if any. */
 export async function bindCtx(quoteId: string | null, jobCardId: string | null): Promise<RenderCtx> {
+  // Inject the editable Company Profile as {{company.*}} tokens so the brand
+  // footer (and any company token) resolves dynamically. Record-specific tokens
+  // still win on any overlap.
+  const withCompany = async (ctx: RenderCtx): Promise<RenderCtx> => {
+    if (!ctx) return ctx;
+    return { ...ctx, tokens: { ...companyTokens(await getCompanyProfile()), ...ctx.tokens } };
+  };
   if (quoteId) {
     const q = await prisma.quote.findUnique({
       where: { id: quoteId },
       include: { items: true, lead: { include: { product: true } }, contact: true, createdBy: true },
     });
-    if (q) return buildQuoteContext(q);
+    if (q) return withCompany(buildQuoteContext(q));
   } else if (jobCardId) {
     const jc = await prisma.jobCard.findUnique({
       where: { id: jobCardId },
       include: { items: true, vehicle: true, contact: true, technician: true },
     });
-    if (jc) return buildJobCardContext(jc);
+    if (jc) return withCompany(buildJobCardContext(jc));
   }
   return null;
 }
