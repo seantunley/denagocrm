@@ -7,23 +7,32 @@ import { standardQuoteTemplate } from "@/lib/doceditor/factory";
  * Ensure the standard builder template exists AND is stored in the current
  * doceditor DocumentModel format. The old seed wrote the Puck-era `starterTemplate`
  * shape, which the current editor's parseDocument() can't read — so it fell back
- * to a blank document (the "blank quote" symptom). A legacy/unparseable seed is
- * repaired in place with the real branded layout; any template whose data already
- * parses as a valid DocumentModel (i.e. anything a user has edited) is left alone.
+ * to a blank document (the "blank quote" symptom).
+ *
+ * NON-DESTRUCTIVE: we only ever repair OUR OWN system seed — the row this seeder
+ * created, identified by a null createdById. Templates authored by a user through
+ * createBuilderTemplate() always carry a createdById (and legacy Puck ones also
+ * fail parseDocument), so they are NEVER overwritten here — repairing by "most
+ * recently updated, unparseable" would silently clobber a user's customised
+ * Puck-era layout. If there is no system seed we create one (default only when the
+ * quote key is otherwise empty, so we never fight a user's chosen default).
  */
 export async function ensureBuilderSeeded(): Promise<void> {
   try {
-    const existing = await prisma.docBuilderTemplate.findFirst({
+    const rows = await prisma.docBuilderTemplate.findMany({
       where: { key: "quote", deletedAt: null },
-      orderBy: { updatedAt: "desc" },
+      select: { id: true, data: true, createdById: true },
     });
-    if (!existing) {
+    // Our seed has no author; anything with a createdById is user-authored.
+    const seed = rows.find((r) => r.createdById === null);
+    if (!seed) {
       await prisma.docBuilderTemplate.create({
-        data: { name: "Quotation", key: "quote", isDefault: true, data: standardQuoteTemplate() as object },
+        data: { name: "Quotation", key: "quote", isDefault: rows.length === 0, data: standardQuoteTemplate() as object },
       });
-    } else if (!parseDocument(existing.data)) {
+    } else if (!parseDocument(seed.data)) {
+      // Repair only the legacy/unparseable system seed — in place.
       await prisma.docBuilderTemplate.update({
-        where: { id: existing.id },
+        where: { id: seed.id },
         data: { data: standardQuoteTemplate() as object },
       });
     }
