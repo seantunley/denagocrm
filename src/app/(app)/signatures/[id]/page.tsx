@@ -22,8 +22,11 @@ function deliveryOf(e: { type: string; channel: string | null; metadata: unknown
   if ((e.type !== "sent" && e.type !== "reminded") || !e.channel) return null;
   const m = e.metadata as Record<string, unknown> | null;
   if (!m || typeof m !== "object" || !("ok" in m)) return null;
-  const error = typeof m.error === "string" ? m.error : undefined;
-  return { ok: Boolean(m.ok), error };
+  // Cap the provider error before it reaches the UI.
+  const error = typeof m.error === "string" ? m.error.slice(0, 120) : undefined;
+  // Strict identity — Boolean("false") is true, so historical/malformed string
+  // metadata must NOT be shown as a success.
+  return { ok: m.ok === true, error };
 }
 
 export default async function SignatureDetail({ params }: { params: Promise<{ id: string }> }) {
@@ -101,7 +104,7 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
                   <span className="text-muted-foreground"> · {e.actor}{e.channel ? ` · ${e.channel}` : ""}{e.ip ? ` · ${e.ip}` : ""}</span>
                   {delivery && (
                     delivery.ok ? (
-                      <span className="ml-1.5 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">✓ delivered</span>
+                      <span className="ml-1.5 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300" title="Accepted by the provider — not a confirmed delivery">✓ sent</span>
                     ) : (
                       <span className="ml-1.5 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-red-300">
                         ✕ failed{delivery.error ? ` — ${delivery.error}` : ""}
