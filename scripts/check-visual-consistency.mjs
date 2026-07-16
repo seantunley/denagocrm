@@ -48,7 +48,7 @@ async function sourceFiles(directory) {
   for (const entry of entries) {
     const absolute = path.join(directory, entry.name);
     if (entry.isDirectory()) files.push(...await sourceFiles(absolute));
-    else if (/\.(?:ts|tsx)$/.test(entry.name)) files.push(absolute);
+    else if (/\.(?:js|jsx|ts|tsx)$/.test(entry.name)) files.push(absolute);
   }
   return files;
 }
@@ -59,8 +59,8 @@ for (const absolute of await sourceFiles(sourceRoot)) {
   const source = await readFile(absolute, "utf8");
 
   // Bare or window.-prefixed native dialogs only — the negative lookbehind keeps
-  // member calls like logger.alert()/prompt() on other objects from matching.
-  const nativeDialog = source.match(/(?<![.\w])(?:window\.)?(?:alert|prompt)\s*\(|\bwindow\.confirm\s*\(/);
+  // member calls like logger.alert()/confirm()/prompt() on other objects from matching.
+  const nativeDialog = source.match(/(?<![.\w])(?:window\.)?(?:alert|confirm|prompt)\s*\(/);
   if (nativeDialog) failures.push(`${relative}: native browser dialogs are not part of the product feedback system`);
 
   const isStaffRoute = relative.startsWith("src/app/(app)/");
