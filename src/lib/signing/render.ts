@@ -22,12 +22,15 @@ function logoDataUri(): string | undefined {
 
 /** Build the merge context for a request's linked record (quote / job card), if any. */
 export async function bindCtx(quoteId: string | null, jobCardId: string | null): Promise<RenderCtx> {
-  // Inject the editable Company Profile as {{company.*}} tokens so the brand
-  // footer (and any company token) resolves dynamically. Record-specific tokens
-  // still win on any overlap.
+  // Inject the editable Company Profile as {{company.*}} tokens so the brand footer
+  // resolves dynamically — even when a document is sent for signing with NO linked
+  // record (the signer sheets and final signed PDF re-render from snapshotJson, so an
+  // unbound null context would print literal placeholders). Record-specific tokens
+  // still win on overlap; bound:false keeps conditionals as the placeholder layout.
   const withCompany = async (ctx: RenderCtx): Promise<RenderCtx> => {
-    if (!ctx) return ctx;
-    return { ...ctx, tokens: { ...companyTokens(await getCompanyProfile()), ...ctx.tokens } };
+    const company = companyTokens(await getCompanyProfile());
+    if (!ctx) return { tokens: company, items: [], vars: {}, bound: false };
+    return { ...ctx, tokens: { ...company, ...ctx.tokens }, bound: true };
   };
   if (quoteId) {
     const q = await prisma.quote.findUnique({
@@ -42,7 +45,8 @@ export async function bindCtx(quoteId: string | null, jobCardId: string | null):
     });
     if (jc) return withCompany(buildJobCardContext(jc));
   }
-  return null;
+  // No linked record → still resolve the global brand tokens (unbound).
+  return withCompany(null);
 }
 
 /** Render the frozen document of a signature request to print-ready HTML, bound to its record. */

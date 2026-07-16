@@ -19,8 +19,10 @@ import { renderDocumentHtml, renderEmailHtml, type RenderCtx } from "./serialize
  */
 async function withCompany(ctx: RenderCtx): Promise<RenderCtx> {
   const company = companyTokens(await getCompanyProfile());
-  if (!ctx) return { tokens: company, items: [], vars: {} };
-  return { ...ctx, tokens: { ...company, ...ctx.tokens } };
+  // Unbound: carry company tokens only, but mark bound:false so conditionals/showIf
+  // columns render as the placeholder layout rather than evaluating an empty scope.
+  if (!ctx) return { tokens: company, items: [], vars: {}, bound: false };
+  return { ...ctx, tokens: { ...company, ...ctx.tokens }, bound: true };
 }
 
 let logoCache: string | null | undefined;

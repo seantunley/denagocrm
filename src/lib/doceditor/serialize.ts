@@ -14,7 +14,16 @@ import { PAGE_SIZES } from "./model";
 import { plateToHtmlBody } from "@/lib/docbuilder/plateSerialize";
 import { evaluateCondition } from "@/lib/docbuilder/expr";
 
-export type RenderCtx = { tokens: Record<string, string>; items: { cells: { value: string }[]; qty?: number; unitPrice?: number; discountPct?: number }[]; vars: Record<string, unknown> } | null;
+export type RenderCtx = {
+  tokens: Record<string, string>;
+  items: { cells: { value: string }[]; qty?: number; unitPrice?: number; discountPct?: number }[];
+  vars: Record<string, unknown>;
+  // True only when bound to a real CRM record. A context may be non-null yet unbound
+  // — carrying just record-independent global tokens ({{company.*}}) for a "No record"
+  // preview — in which case conditionals and showIf columns must render as the
+  // placeholder layout, NOT be evaluated against an empty scope.
+  bound?: boolean;
+} | null;
 
 function esc(s: unknown): string {
   // Attribute-safe: also escape quotes so values interpolated into style/src/attr can't break out.
@@ -157,8 +166,9 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       </div>`;
     case "lineItems": {
       const rows = ctx?.items ?? [];
-      // Conditional columns: when bound to a record, drop columns whose condition is false.
-      const cols = ctx ? block.columns.filter((c) => evaluateCondition(c.showIf, ctx.vars)) : block.columns;
+      // Conditional columns: only when bound to a record, drop columns whose condition
+      // is false. An unbound (globals-only) preview keeps all columns as a placeholder.
+      const cols = ctx?.bound ? block.columns.filter((c) => evaluateCondition(c.showIf, ctx.vars)) : block.columns;
       const head = `<tr>${cols.map((c) => `<th style="text-align:${c.align};background:${block.headerBg};color:${block.headerColor};padding:7px 9px;font-size:8pt;letter-spacing:.5px;text-transform:uppercase">${esc(c.header)}</th>`).join("")}</tr>`;
       const body = rows.length
         ? rows.map((r, i) => `<tr style="background:${i % 2 ? "#f8fafc" : "#fff"}">${cols.map((c) => `<td style="text-align:${c.align};padding:7px 9px;border-bottom:.5px solid #e2e8f0">${esc(lineItemCell(c.key, r, block.vatRate))}</td>`).join("")}</tr>`).join("")
@@ -173,7 +183,8 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       return `<div style="border-top:1.5px solid ${block.accent};padding-top:8px;margin:6px 0;text-align:center">${block.lines.map((l, i) => `<div style="font-size:${i === 0 ? 9 : 8}pt;font-weight:${i === 0 ? 700 : 400};color:${i === 0 ? "#334155" : "#64748b"}">${esc(tok(l.text, ctx))}</div>`).join("")}</div>`;
 
     case "conditional": {
-      if (ctx && !evaluateCondition(block.when, ctx.vars)) return "";
+      // Only prune when bound to a record; an unbound preview renders all branches.
+      if (ctx?.bound && !evaluateCondition(block.when, ctx.vars)) return "";
       return `<div>${block.blocks.map((c) => blockHtml(c, ctx, style, logoDataUri)).join("")}</div>`;
     }
   }
