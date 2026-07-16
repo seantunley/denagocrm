@@ -102,3 +102,9 @@ jobs:
 
       - name: Run security integration tests
         run: npm run test:security
+
+      - name: Run RBAC integration tests
+        # Cross-user visibility across leads, contacts, quotes, vehicles, job
+        # cards, documents, cases and activities. Previously defined but never
+        # executed by CI.
+        run: npm run test:rbac
