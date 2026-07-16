@@ -15,6 +15,7 @@ import {
   Check,
   TriangleAlert,
   ArrowRight,
+  FileSignature,
   type LucideIcon,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
@@ -191,6 +192,17 @@ function dailySeries(dates: Date[], daysInSeries: number, value?: (i: number) =>
 const pctDelta = (cur: number, prev: number): number | null =>
   prev === 0 ? (cur > 0 ? 100 : null) : Math.round(((cur - prev) / prev) * 100);
 
+/** Label + badge tone for a quote's live signing state. */
+const SIGN_STATE: Record<
+  string,
+  { label: (r: { signedCount: number; totalSigners: number; waitingFor: string | null }) => string; pill: string }
+> = {
+  sent: { label: (r) => `Sent · waiting for ${r.waitingFor}`, pill: "bg-blue-500/10 text-blue-300" },
+  viewed: { label: (r) => `Opened · waiting for ${r.waitingFor}`, pill: "bg-indigo-500/10 text-indigo-300" },
+  partial: { label: (r) => `${r.signedCount}/${r.totalSigners} signed · waiting for ${r.waitingFor}`, pill: "bg-amber-500/10 text-amber-300" },
+  signed: { label: () => "Fully signed", pill: "bg-emerald-500/10 text-emerald-300" },
+};
+
 /* ── page ─────────────────────────────────────────────────────────── */
 
 export default async function DashboardPage() {
@@ -339,6 +351,59 @@ export default async function DashboardPage() {
     take: 8,
     select: { id: true, action: true, summary: true, createdAt: true, contactId: true, leadId: true },
   });
+
+  // Quotes currently out for signature → a live-status card. The card is rendered
+  // only when at least one quote signing request is active (sent/viewed/in progress).
+  const activeSignRequests = await prisma.signatureRequest.findMany({
+    where: { quoteId: { not: null }, deletedAt: null, status: { in: ["sent", "viewed", "in_progress"] } },
+    orderBy: { updatedAt: "desc" },
+    take: 12,
+    select: {
+      quoteId: true,
+      status: true,
+      recipients: { orderBy: { order: "asc" }, select: { name: true, role: true, status: true, viewedAt: true } },
+    },
+  });
+  const signQuoteIds = [...new Set(activeSignRequests.map((r) => r.quoteId).filter((v): v is string => Boolean(v)))];
+  const signQuotes = signQuoteIds.length
+    ? await prisma.quote.findMany({
+        where: { id: { in: signQuoteIds }, deletedAt: null },
+        select: {
+          id: true,
+          number: true,
+          lead: { select: { name: true } },
+          contact: { select: { firstName: true, lastName: true, isCompany: true, company: true } },
+        },
+      })
+    : [];
+  const signQuoteById = new Map(signQuotes.map((q) => [q.id, q]));
+
+  const signingRows = activeSignRequests
+    .map((r) => {
+      const q = r.quoteId ? signQuoteById.get(r.quoteId) : null;
+      if (!q) return null;
+      const signers = r.recipients.filter((x) => x.role !== "viewer");
+      const next = signers.find((x) => x.status !== "signed" && x.status !== "declined");
+      const signedCount = signers.filter((x) => x.status === "signed").length;
+      const anyViewed = r.status === "viewed" || r.status === "in_progress" || signers.some((x) => x.viewedAt);
+      const state: "sent" | "viewed" | "partial" | "signed" = !next
+        ? "signed"
+        : signedCount > 0
+        ? "partial"
+        : anyViewed
+        ? "viewed"
+        : "sent";
+      return {
+        id: q.id,
+        number: q.number,
+        who: q.lead?.name ?? (q.contact ? contactName(q.contact) : "customer"),
+        waitingFor: next ? next.name.split(" ")[0] : null,
+        signedCount,
+        totalSigners: signers.length,
+        state,
+      };
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null);
 
   // One chronological feed: new leads + logged communications + quote/signing events
   const feed = [
@@ -566,6 +631,30 @@ export default async function DashboardPage() {
                   />
 
                   <div className="space-y-4">
+                  {signingRows.length > 0 && (
+                    <SectionCard title="Out for signature" action={{ href: "/signatures", label: "Signatures" }}>
+                      <ul className="divide-y divide-border/50">
+                        {signingRows.map((s) => {
+                          const meta = SIGN_STATE[s.state];
+                          return (
+                            <li key={s.id} className="flex items-center gap-2.5 py-1.5">
+                              <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                                <FileSignature className="size-3.5" />
+                              </span>
+                              <p className="min-w-0 flex-1 truncate text-[13px]">
+                                <Link href={`/quotes/${s.id}`} className="font-medium text-foreground hover:text-primary">
+                                  Q-{s.number}
+                                </Link>
+                                <span className="text-[11px] text-muted-foreground"> — {s.who}</span>
+                              </p>
+                              <span className={`badge shrink-0 ${meta.pill}`}>{meta.label(s)}</span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </SectionCard>
+                  )}
+
                   <SectionCard title="Needs attention" action={{ href: "/leads", label: "Board" }}>
                     {noNextLeads.length === 0 && staleQuotes.length === 0 ? (
                       <p className="py-2 text-xs text-muted-foreground/70">
