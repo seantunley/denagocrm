@@ -1,19 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runSecurityChecks } from "@/lib/securityRunbook";
 import { sendPushToAll } from "@/lib/push";
-import { getSetting } from "@/lib/settings";
+import { isAuthorizedCron } from "@/lib/cronAuth";
 
 export const maxDuration = 60;
 
-/** Monthly security runbook (Vercel cron). Same auth pattern as the others. */
+/** Monthly security runbook (Vercel cron — CRON_SECRET via Authorization header). */
 export async function GET(req: NextRequest) {
-  const cronSecret = process.env.CRON_SECRET;
-  const authHeader = req.headers.get("authorization");
-  const viaCronSecret = Boolean(cronSecret) && authHeader === `Bearer ${cronSecret}`;
-  const apiKey = await getSetting("INTAKE_API_KEY");
-  const provided = req.nextUrl.searchParams.get("key") ?? req.headers.get("x-api-key");
-  const viaApiKey = Boolean(apiKey) && provided === apiKey;
-  if (!viaCronSecret && !viaApiKey) {
+  if (!isAuthorizedCron(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

@@ -7,7 +7,7 @@ import { runQuoteSigningReminders } from "@/lib/signingReminders";
 import { syncFacebookLeads } from "@/lib/metaLeadSync";
 import { syncGoogleReviews } from "@/lib/googleReviews";
 import { syncInboundEmail } from "@/lib/imapSync";
-import { getSetting } from "@/lib/settings";
+import { isAuthorizedCron } from "@/lib/cronAuth";
 import { logError } from "@/lib/errorLog";
 import { runAutoResearch } from "@/lib/ai";
 import { runActivityReminders } from "@/lib/activityReminders";
@@ -18,23 +18,12 @@ import { runAiHealthIfDue, runBackupWatchdog } from "@/lib/systemHealth";
 import { basePrisma } from "@/lib/db";
 
 /**
- * Runs idle-lead automation rules. Call periodically (cron, uptime monitor):
- *   GET /api/cron/automations?key=<INTAKE_API_KEY>
- * Vercel Cron authenticates via "Authorization: Bearer <CRON_SECRET>" instead.
+ * Runs idle-lead automation rules. Invoked by Vercel Cron with
+ *   Authorization: Bearer <CRON_SECRET>
  * The dashboard also runs these opportunistically on load.
  */
 export async function GET(req: NextRequest) {
-  const cronSecret = process.env.CRON_SECRET;
-  const authHeader = req.headers.get("authorization");
-  const viaCronSecret =
-    Boolean(cronSecret) && authHeader === `Bearer ${cronSecret}`;
-
-  const apiKey = await getSetting("INTAKE_API_KEY");
-  const provided =
-    req.nextUrl.searchParams.get("key") ?? req.headers.get("x-api-key");
-  const viaApiKey = Boolean(apiKey) && provided === apiKey;
-
-  if (!viaCronSecret && !viaApiKey) {
+  if (!isAuthorizedCron(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const fired = await runIdleAutomations();
