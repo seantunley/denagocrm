@@ -1,5 +1,5 @@
+import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { getSetting } from "@/lib/settings";
 import {
   collectSource,
   competitorsDueForResearch,
@@ -11,6 +11,19 @@ import {
 
 export const maxDuration = 300;
 
+// CRON_SECRET only (constant-time), matching the other cron routes — no intake
+// key, no query-string secret. Swap for the shared isAuthorizedCron() helper
+// once PR #83 (cron auth) merges.
+function isAuthorizedCron(req: NextRequest): boolean {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+  const provided = req.headers.get("authorization") ?? "";
+  const expected = `Bearer ${secret}`;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 /**
  * Daily competitor watch. Three layers on a cost ladder:
  *  1. cheap daily page-diff of due public pages (Haiku classifies material changes)
@@ -19,15 +32,7 @@ export const maxDuration = 300;
  * Layers 2–3 are capped per run to bound token spend and stay within maxDuration.
  */
 export async function GET(req: NextRequest) {
-  const cronSecret = process.env.CRON_SECRET;
-  const authHeader = req.headers.get("authorization");
-  const viaCronSecret = Boolean(cronSecret) && authHeader === `Bearer ${cronSecret}`;
-
-  const apiKey = await getSetting("INTAKE_API_KEY");
-  const provided = req.nextUrl.searchParams.get("key") ?? req.headers.get("x-api-key");
-  const viaApiKey = Boolean(apiKey) && provided === apiKey;
-
-  if (!viaCronSecret && !viaApiKey) {
+  if (!isAuthorizedCron(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

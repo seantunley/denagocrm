@@ -3,6 +3,7 @@ import dnsCb from "node:dns";
 import dns from "node:dns/promises";
 import net from "node:net";
 import { Agent } from "undici";
+import ipaddr from "ipaddr.js";
 
 /**
  * SSRF-hardened fetch for pulling untrusted public URLs (competitor pages, etc.).
@@ -23,39 +24,28 @@ const MAX_REDIRECTS = 4;
 const DEFAULT_MAX_BYTES = 3_000_000;
 const DEFAULT_TIMEOUT_MS = 20_000;
 
-/** True for any IP we must never connect to (private, loopback, link-local, CGNAT, metadata, multicast). */
+/**
+ * True for any IP we must never connect to. Uses ipaddr.js so every form is
+ * handled robustly — including all IPv4-mapped IPv6 encodings (::ffff:127.0.0.1
+ * AND the hex form ::ffff:7f00:1), 6to4/Teredo, unique-local, CGNAT, etc. Only a
+ * genuine global unicast address is treated as safe.
+ */
 export function isPrivateIp(ip: string): boolean {
-  if (net.isIPv4(ip)) {
-    const p = ip.split(".").map(Number);
-    if (p.some((n) => Number.isNaN(n))) return true;
-    if (p[0] === 0) return true; // "this" network
-    if (p[0] === 10) return true; // private
-    if (p[0] === 127) return true; // loopback
-    if (p[0] === 169 && p[1] === 254) return true; // link-local incl. 169.254.169.254 (cloud metadata)
-    if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true; // private
-    if (p[0] === 192 && p[1] === 168) return true; // private
-    if (p[0] === 192 && p[1] === 0 && p[2] === 0) return true; // IETF protocol assignments
-    if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return true; // CGNAT
-    if (p[0] >= 224) return true; // multicast + reserved (224-255)
-    return false;
+  let addr: ipaddr.IPv4 | ipaddr.IPv6;
+  try {
+    addr = ipaddr.parse(ip);
+  } catch {
+    return true; // unparseable → refuse
   }
-  if (net.isIPv6(ip)) {
-    const h = ip.toLowerCase();
-    if (h === "::1" || h === "::") return true; // loopback / unspecified
-    if (h.startsWith("fe80")) return true; // link-local
-    if (h.startsWith("fc") || h.startsWith("fd")) return true; // unique-local
-    if (h.startsWith("fec0")) return true; // deprecated site-local
-    if (h.startsWith("ff")) return true; // multicast
-    if (h.startsWith("2001:db8")) return true; // documentation
-    if (h.startsWith("64:ff9b")) return true; // NAT64 (could bridge to private)
-    if (h.startsWith("::ffff:")) {
-      // IPv4-mapped IPv6 — validate the embedded v4
-      const tail = h.split("::ffff:")[1] ?? "";
-      if (tail.includes(".")) return isPrivateIp(tail);
-    }
-    return false;
+  // Collapse IPv4-mapped IPv6 to its embedded IPv4 and range-check that.
+  if (addr.kind() === "ipv6") {
+    const v6 = addr as ipaddr.IPv6;
+    if (v6.isIPv4MappedAddress()) addr = v6.toIPv4Address();
   }
-  return true; // not a recognisable IP → refuse
+  // ipaddr.js labels only publicly-routable unicast as "unicast"; every other
+  // range (private, loopback, linkLocal, uniqueLocal, reserved, multicast,
+  // carrierGradeNat, 6to4, teredo, …) is unsafe for an outbound SSRF-guarded fetch.
+  return addr.range() !== "unicast";
 }
 
 /** Hostnames we refuse outright, before any DNS. */
