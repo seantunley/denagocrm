@@ -47,16 +47,23 @@ test("every non-public API route authenticates via an approved guard", () => {
   const routes = walk(API_DIR);
   assert.ok(routes.length > 5, "expected to find API routes");
 
+  // A guard must be INVOKED (name followed by `(`), not merely imported or named
+  // in a comment. `\w*` lets a prefix match its variants (requireCrmOrWorkshop,
+  // portalCanAccessDocument, …).
+  const GUARD_CALL = new RegExp(`\\b(?:${APPROVED_GUARDS.join("|")})\\w*\\s*\\(`);
+  // A token route must actually look the token up / validate it — not just
+  // mention the word "token".
+  const TOKEN_VERIFY = /where:\s*\{\s*token\b|isValid\w*Token|verif\w*Token/i;
+
   const offenders: string[] = [];
   for (const file of routes) {
     const rel = file.slice(API_DIR.length + 1).replace(/\\/g, "/");
     if (PUBLIC_PREFIXES.some((p) => rel.startsWith(p))) continue;
 
     const src = readFileSync(file, "utf8");
-    // Token-based routes authenticate by validating the URL token itself.
-    const tokenAuthed = rel.includes("[token]") && /token/i.test(src);
-    const guarded = APPROVED_GUARDS.some((g) => src.includes(g));
-    if (!tokenAuthed && !guarded) offenders.push(rel);
+    const guarded = GUARD_CALL.test(src);
+    const tokenAuthed = rel.includes("[token]") && TOKEN_VERIFY.test(src);
+    if (!guarded && !tokenAuthed) offenders.push(rel);
   }
 
   assert.deepEqual(
