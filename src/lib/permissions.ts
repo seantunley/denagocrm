@@ -27,6 +27,7 @@ export const PERMISSIONS = [
   "portal_access.manage", "privacy.export",
   "teams.view", "teams.manage", "roles.view", "roles.manage",
   "audit.view", "audit.export", "journeys.manage", "workshop.manage",
+  "competitors.view", "competitors.manage", "competitors.review", "competitors.research",
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number];

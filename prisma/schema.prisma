@@ -1618,3 +1618,115 @@ model CannedReply {
 
   @@index([mailboxId])
 }
+
+// ── Competitor intelligence ──────────────────────────────────────────────────
+// CRM-native, low-noise competitor monitoring: watch a few public pages per
+// competitor, snapshot only on change, and AI-classify material changes for
+// review. Single-tenant. Added by migration 72_competitor_intelligence.
+
+model Competitor {
+  id          String    @id @default(cuid())
+  name        String
+  website     String?
+  description String?
+  tier        Int       @default(2) // 1 critical · 2 important · 3 peripheral
+  status      String    @default("active") // active | archived
+  notes       String?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
+  deletedAt   DateTime?
+
+  lastResearchedAt DateTime? // last AI deep-research pass (weekly cadence)
+
+  sources   CompetitorSource[]
+  snapshots CompetitorSnapshot[]
+  changes   CompetitorChange[]
+  briefs    CompetitorBrief[]
+
+  @@index([status, name])
+}
+
+model CompetitorSource {
+  id            String    @id @default(cuid())
+  competitorId  String
+  label         String
+  url           String
+  sourceType    String    @default("page") // page | pricing | changelog | blog
+  active        Boolean   @default(true)
+  lastCheckedAt DateTime?
+  lastChangedAt DateTime?
+  lastStatus    String? // ok | error
+  lastError     String?
+  contentHash   String? // hash of the last successful snapshot
+  collectingAt  DateTime? // collection lease: set while a run holds this source, cleared after
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @default(now()) @updatedAt
+
+  competitor Competitor           @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  snapshots  CompetitorSnapshot[]
+  changes    CompetitorChange[]
+
+  @@index([competitorId])
+  @@index([active, lastCheckedAt])
+}
+
+model CompetitorSnapshot {
+  id           String   @id @default(cuid())
+  competitorId String
+  sourceId     String
+  contentHash  String
+  title        String?
+  cleanText    String // normalised visible text (also used for diffing)
+  rawRef       String? // storage ref of the raw HTML
+  wordCount    Int      @default(0)
+  fetchedAt    DateTime @default(now())
+
+  competitor Competitor       @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  source     CompetitorSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([sourceId, fetchedAt])
+}
+
+model CompetitorChange {
+  id             String    @id @default(cuid())
+  competitorId   String
+  sourceId       String
+  prevSnapshotId String?
+  snapshotId     String
+  status         String    @default("new") // new | reviewed | dismissed
+  materiality    String    @default("minor") // noise | minor | important | critical
+  category       String? // pricing | product | messaging | hiring | other
+  summary        String?
+  evidenceBefore String?
+  evidenceAfter  String?
+  aiJson         Json?
+  reviewedById   String?
+  reviewedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  competitor Competitor       @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  source     CompetitorSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([competitorId, createdAt])
+}
+
+// AI-authored intelligence brief — the "research" layer that a strong model
+// (web search) produces on discovery and on a weekly cadence. Separate from
+// CompetitorChange (which is the cheap daily page-diff signal).
+model CompetitorBrief {
+  id           String   @id @default(cuid())
+  competitorId String
+  kind         String   @default("research") // research | discovery
+  headline     String?
+  body         String // markdown-ish plain text briefing
+  citations    Json? // [{ title, url }]
+  model        String? // model that produced it
+  createdById  String? // set when a user triggered it, null for cron
+  createdAt    DateTime @default(now())
+
+  competitor Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+
+  @@index([competitorId, createdAt])
+}

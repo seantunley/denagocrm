@@ -34,6 +34,7 @@ import {
   HeartPulse,
   Gift,
   PenLine,
+  Radar,
   type LucideIcon,
 } from "lucide-react";
 
@@ -113,6 +114,7 @@ export function buildNav(
   if (isAdmin) {
     automationLinks.push({ href: "/chatbot", label: "Chatbot", icon: Bot });
     automationLinks.push({ href: "/bot-builder", label: "Flow builder", icon: Network });
+    automationLinks.push({ href: "/competitors", label: "Competitors", icon: Radar });
   }
   if (automationLinks.length) groups.push({ key: "automation", label: "Automation", links: automationLinks });
 

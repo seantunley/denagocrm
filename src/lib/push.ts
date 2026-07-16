@@ -30,6 +30,7 @@ export const PUSH_KINDS = [
   { id: "review", label: "Google reviews", desc: "A new review appears" },
   { id: "email_in", label: "Email replies", desc: "A customer replies to an email (IMAP)" },
   { id: "referral", label: "Referral fees", desc: "A referred deal is won — fee due" },
+  { id: "competitor", label: "Competitor changes", desc: "A material change on a monitored competitor page" },
   { id: "system_error", label: "System errors", desc: "Something in the CRM failed (throttled to 1/30min)" },
   { id: "security", label: "Security & AI health", desc: "Monthly runbook results and AI/billing problems — route to whoever owns security" },
   { id: "backup", label: "Backup failures", desc: "The nightly backup missed its window (throttled to 1/day)" },
