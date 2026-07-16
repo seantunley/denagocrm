@@ -1,4 +1,4 @@
-import { requireOwner } from "@/lib/auth";
+import { requireApiOwner, apiAuthErrorResponse } from "@/lib/auth";
 import { generateDocEditorExport, type ExportFormat } from "@/lib/doceditor/generate";
 
 export const runtime = "nodejs";
@@ -8,7 +8,7 @@ const FORMATS: ExportFormat[] = ["html", "email", "doc"];
 
 /** Export a doc-editor template as static HTML, email-safe HTML, or Word (.doc). */
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  await requireOwner();
+  try { await requireApiOwner(); } catch (err) { const r = apiAuthErrorResponse(err); if (r) return r; throw err; }
   const { id } = await ctx.params;
   const url = new URL(req.url);
   const fmt = url.searchParams.get("format");

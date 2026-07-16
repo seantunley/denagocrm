@@ -1,4 +1,4 @@
-import { requireOwner } from "@/lib/auth";
+import { requireApiOwner, apiAuthErrorResponse } from "@/lib/auth";
 import { generateDocEditorPdf } from "@/lib/doceditor/generate";
 
 export const runtime = "nodejs";
@@ -7,7 +7,7 @@ export const maxDuration = 60;
 
 /** Read-only renderer → Chromium PDF for the doc-editor model (quote-bindable). */
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  await requireOwner();
+  try { await requireApiOwner(); } catch (err) { const r = apiAuthErrorResponse(err); if (r) return r; throw err; }
   const { id } = await ctx.params;
   const url = new URL(req.url);
   const res = await generateDocEditorPdf({ templateId: id, quoteId: url.searchParams.get("quote") });

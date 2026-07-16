@@ -14,13 +14,19 @@ const API_DIR = join(process.cwd(), "src", "app", "api");
 // (their own secret/signature). Prefixes are matched against the route path
 // relative to src/app/api.
 const PUBLIC_PREFIXES = [
-  "auth/",          // passkey / login endpoints (run before a session exists)
+  "auth/passkey/auth/", // login CEREMONY only (runs before a session exists).
+  //                       NOT auth/passkey/register/* — those manage a signed-in
+  //                       user's passkeys and must call a guard.
   "bookings",       // public booking widget
   "service-lookup", // public VIN service lookup
   "intake",         // website form intake (X-Api-Key)
   "webhooks/",      // provider webhooks (signature verified)
   "cron/",          // cron routes (CRON_SECRET)
 ];
+
+// NOTE: this proves an authENTICATION guard is invoked; it does not prove
+// record-level authoriZation. A stronger form (route-policy manifest or AST
+// inspection) is tracked as a follow-up.
 
 // Any of these in a route's source counts as an approved auth/authorization call.
 const APPROVED_GUARDS = [
