@@ -27,6 +27,36 @@ export type PortableBackup = {
 const lowerFirst = (value: string) => value.charAt(0).toLowerCase() + value.slice(1);
 const sha256 = (value: string | Buffer) => crypto.createHash("sha256").update(value).digest("hex");
 
+// Some columns are BigInt (e.g. CustomerCase.number autoincrement, Passkey.counter).
+// Plain JSON.stringify throws "Do not know how to serialize a BigInt" the moment
+// such a row exists, which silently broke every nightly backup. Encode BigInt as a
+// self-describing tag so the export succeeds AND a restore can reconstruct the exact
+// value. Both export and verify MUST use this so their checksums agree.
+const BIGINT_TAG = "$bigint";
+function backupReplacer(_key: string, value: unknown) {
+  return typeof value === "bigint" ? { [BIGINT_TAG]: value.toString() } : value;
+}
+export function stringifyBackup(value: unknown): string {
+  return JSON.stringify(value, backupReplacer);
+}
+/** Walk a parsed backup, turning {"$bigint":"…"} tags back into real BigInt values. */
+export function reviveBackupBigInts<T>(value: T): T {
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (node && typeof node === "object") {
+      const obj = node as Record<string, unknown>;
+      if (typeof obj[BIGINT_TAG] === "string" && Object.keys(obj).length === 1) {
+        return BigInt(obj[BIGINT_TAG] as string);
+      }
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(obj)) out[k] = walk(v);
+      return out;
+    }
+    return node;
+  };
+  return walk(value) as T;
+}
+
 /**
  * Exports every Prisma model through the raw client. This intentionally uses the
  * Prisma DMMF so newly-added models are included automatically instead of being
@@ -83,7 +113,7 @@ export async function exportAllData(): Promise<PortableBackup> {
   const contactTagLinks = await exportContactTagLinks();
   const assetReferences = collectAssetReferences(data);
   const modelCounts = Object.fromEntries(Object.entries(data).map(([name, rows]) => [name, rows.length]));
-  const canonicalData = JSON.stringify({ data, contactTagLinks, assetReferences });
+  const canonicalData = stringifyBackup({ data, contactTagLinks, assetReferences });
 
   return {
     metadata: {
@@ -112,7 +142,7 @@ export function verifyPortableBackup(backup: PortableBackup): { ok: boolean; err
     errors.push("Model counts do not match the manifest");
   }
 
-  const actualHash = sha256(JSON.stringify({
+  const actualHash = sha256(stringifyBackup({
     data: backup.data,
     contactTagLinks: backup.contactTagLinks,
     assetReferences: backup.assetReferences,
