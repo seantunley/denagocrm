@@ -63,6 +63,23 @@ export async function renderInstanceHtml(instance: {
   const body = await editor.blocksToFullHTML(instance.contentJson as any);
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
+  // Header logo + footer are driven by the editable Company Profile (the single
+  // source of truth) — not hard-coded — so changing Settings > Company updates
+  // finalized Studio documents too.
+  const company = await getCompanyProfile();
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za";
+  const logoSrc = company.logoUrl?.trim() || `${appUrl}/branding/denago-cape-town-logo.png`;
+  const footer = escapeHtml(
+    [
+      [company.name, company.tagline].filter((s) => s && s.trim()).join(" — "),
+      company.address,
+      company.phone,
+      company.email,
+    ]
+      .filter((s) => s && s.trim())
+      .join(" · "),
+  );
+
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${escapeHtml(instance.title)}</title>
 <style>
@@ -84,13 +101,12 @@ export async function renderInstanceHtml(instance: {
 </style></head>
 <body>
   <div class="doc-header">
-    <img src="${process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za"}/branding/denago-cape-town-logo.png" alt="Denago Cape Town" />
+    <img src="${escapeHtml(logoSrc)}" alt="${escapeHtml(company.name)}" />
     <div class="title">${escapeHtml(instance.title)}</div>
   </div>
   ${body}
   <div class="doc-footer">
-    Denago Cape Town — Authorized Denago EV Dealer · Unit 55, M5 Freeway Business Park, Maitland ·
-    073 789 3438 · sales@denagocpt.co.za
+    ${footer}
   </div>
 </body></html>`;
 }
