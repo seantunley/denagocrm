@@ -27,7 +27,7 @@ export default async function CompanyProfilePage() {
     <SettingsWorkspace
       current="company"
       title="Company profile"
-      description="Your business details — the single source of truth for every document's branded footer and the {{company.*}} merge fields. Change them here and every quote, invoice and agreement updates."
+      description="Your business details — the single source of truth for the {{company.*}} merge fields and the branded footer in documents that use them (the Document Builder, e-signature documents and Document Studio). The built-in quote/invoice/agreement print templates are being migrated to read from here."
       groups={SETTINGS_NAV_GROUPS}
     >
       <form action={saveCompanyProfile} className="card max-w-2xl space-y-4 p-5">

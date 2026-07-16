@@ -5,11 +5,15 @@
 export type MergeFieldDef = { key: string; label: string; group: string };
 
 export const MERGE_FIELDS: MergeFieldDef[] = [
-  // Company
+  // Company (from the editable Company Profile — keep in sync with companyTokens())
   { key: "company.name", label: "Company name", group: "Company" },
+  { key: "company.tagline", label: "Company tagline", group: "Company" },
   { key: "company.phone", label: "Company phone", group: "Company" },
   { key: "company.email", label: "Company email", group: "Company" },
   { key: "company.address", label: "Company address", group: "Company" },
+  { key: "company.website", label: "Company website", group: "Company" },
+  { key: "company.facebook", label: "Company Facebook", group: "Company" },
+  { key: "company.instagram", label: "Company Instagram", group: "Company" },
   // Customer
   { key: "customer.name", label: "Customer full name", group: "Customer" },
   { key: "customer.firstName", label: "Customer first name", group: "Customer" },
