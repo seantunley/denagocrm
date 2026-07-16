@@ -13,11 +13,14 @@ import { renderDocumentHtml, renderEmailHtml, type RenderCtx } from "./serialize
  * Fold the editable Company Profile in as {{company.*}} tokens, exactly as the
  * signing path's bindCtx() does — otherwise the builder preview/export/PDF path
  * renders literal {{company.name}} placeholders in the FROM card and footer.
- * Record-specific tokens still win on any overlap.
+ * Because these tokens don't depend on a bound record, they are resolved even when
+ * NO quote/job card is bound (list preview / "No record" export), where ctx would
+ * otherwise be null. Record-specific tokens still win on any overlap.
  */
 async function withCompany(ctx: RenderCtx): Promise<RenderCtx> {
-  if (!ctx) return ctx;
-  return { ...ctx, tokens: { ...companyTokens(await getCompanyProfile()), ...ctx.tokens } };
+  const company = companyTokens(await getCompanyProfile());
+  if (!ctx) return { tokens: company, items: [], vars: {} };
+  return { ...ctx, tokens: { ...company, ...ctx.tokens } };
 }
 
 let logoCache: string | null | undefined;
@@ -46,14 +49,17 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
       where: { id: quoteId },
       include: { items: true, lead: { include: { product: true } }, contact: true, createdBy: true },
     });
-    if (q) { ctx = await withCompany(buildQuoteContext(q)); title = `${doc.title} — Q-${q.number}`; qId = q.id; contactId = q.contactId; }
+    if (q) { ctx = buildQuoteContext(q); title = `${doc.title} — Q-${q.number}`; qId = q.id; contactId = q.contactId; }
   } else if (jobCardId) {
     const jc = await prisma.jobCard.findUnique({
       where: { id: jobCardId },
       include: { items: true, vehicle: true, contact: true, technician: true },
     });
-    if (jc) { ctx = await withCompany(buildJobCardContext(jc)); title = `${doc.title} — Job #${jc.number}`; jId = jc.id; contactId = jc.contactId; }
+    if (jc) { ctx = buildJobCardContext(jc); title = `${doc.title} — Job #${jc.number}`; jId = jc.id; contactId = jc.contactId; }
   }
+  // Fold in company tokens once — including the unbound case (ctx still null), so the
+  // record-independent brand tokens resolve in list previews and "No record" exports.
+  ctx = await withCompany(ctx);
   return { doc, ctx, title, quoteId: qId, jobCardId: jId, contactId };
 }
 
