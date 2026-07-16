@@ -24,12 +24,28 @@ const MATERIALITY_TONE: Record<string, "danger" | "warning" | "info" | "neutral"
   noise: "neutral",
 };
 
+/** Only http(s) URLs are safe to render as a citation link (blocks javascript:/data: etc.). */
+function safeHttpUrl(url: unknown): string | null {
+  if (typeof url !== "string") return null;
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" || u.protocol === "https:" ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Render the citation chips a web-search brief came back with. */
 function BriefCitations({ citations }: { citations: unknown }) {
   if (!Array.isArray(citations) || citations.length === 0) return null;
-  const cites = citations
-    .filter((c): c is { title?: string; url: string } => Boolean(c) && typeof (c as { url?: unknown }).url === "string")
-    .slice(0, 8);
+  const cites: { title?: string; url: string }[] = [];
+  for (const c of citations) {
+    const url = safeHttpUrl((c as { url?: unknown })?.url);
+    if (!url) continue;
+    const t = (c as { title?: unknown })?.title;
+    cites.push({ title: typeof t === "string" ? t : undefined, url });
+    if (cites.length >= 8) break;
+  }
   if (cites.length === 0) return null;
   return (
     <div className="mt-2 flex flex-wrap gap-1.5">

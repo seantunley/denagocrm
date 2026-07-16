@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
-import { collectSource, discoverSources, researchCompetitor } from "@/lib/competitors";
+import { collectSource, discoverSources, researchCompetitor, isSafeUrl, DISCOVERABLE_TYPES } from "@/lib/competitors";
 
 const str = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
 
@@ -61,14 +61,15 @@ export async function addSource(competitorId: string, formData: FormData) {
   const user = await requirePermission("competitors.manage");
   const url = str(formData, "url");
   const label = str(formData, "label") || url;
-  if (!/^https?:\/\//i.test(url)) throw new Error("Enter a full http(s) URL");
+  // Same SSRF-safe validator used by the watcher — rejects private/internal hosts.
+  if (!isSafeUrl(url)) throw new Error("Enter a valid public http(s) URL");
+  const rawType = str(formData, "sourceType");
+  const sourceType = DISCOVERABLE_TYPES.includes(rawType) ? rawType : "page";
+  // Prevent duplicate canonical URLs on the same competitor.
+  const dupe = await prisma.competitorSource.findFirst({ where: { competitorId, url } });
+  if (dupe) throw new Error("That URL is already watched for this competitor");
   await prisma.competitorSource.create({
-    data: {
-      competitorId,
-      url,
-      label,
-      sourceType: str(formData, "sourceType") || "page",
-    },
+    data: { competitorId, url, label, sourceType },
   });
   await logAudit({ action: "competitor.source_added", summary: `Watching ${url}`, user, entityType: "Competitor", entityId: competitorId });
   revalidatePath(`/competitors/${competitorId}`);

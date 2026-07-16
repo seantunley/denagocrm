@@ -15,7 +15,7 @@ import { safeFetchText } from "./safeFetch";
 export type Materiality = "noise" | "minor" | "important" | "critical";
 
 // ── Fetch safety (SSRF guard) ────────────────────────────────────────────────
-function isSafeUrl(raw: string): boolean {
+export function isSafeUrl(raw: string): boolean {
   let u: URL;
   try {
     u = new URL(raw);
