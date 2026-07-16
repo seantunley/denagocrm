@@ -20,11 +20,14 @@ export async function canContactPerson(input: {
   channel: ContactChannel;
   purpose: ContactPurpose;
 }): Promise<boolean> {
-  const contact = await prisma.contact.findUnique({
-    where: { id: input.contactId },
+  // findFirst (not findUnique) so the soft-delete extension applies; plus an
+  // explicit deletedAt filter — findUnique is NOT covered by the extension, so it
+  // would return a soft-deleted contact.
+  const contact = await prisma.contact.findFirst({
+    where: { id: input.contactId, deletedAt: null },
     select: { marketingOptOut: true },
   });
-  if (!contact) return false; // unknown or soft-deleted
+  if (!contact) return false; // unknown or soft-deleted → never contact
   if (input.purpose !== "marketing") return true;
   if (contact.marketingOptOut) return false;
 
