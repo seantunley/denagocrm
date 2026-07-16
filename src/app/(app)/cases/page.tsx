@@ -11,6 +11,7 @@ import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { EmptyState, StatusPill } from "@/components/visual-system";
 import { cn } from "@/lib/utils";
+import MobileFilterDrawer from "@/components/MobileFilterDrawer";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +56,7 @@ export default async function CasesPage({ searchParams }: { searchParams: Promis
     : [];
 
   const activeFolder = filters.folder ?? "open";
+  const activeFilterCount = [sp.mailbox, sp.assignee, sp.tag, sp.type].filter(Boolean).length;
 
   return (
     <div className="space-y-5">
@@ -73,9 +75,39 @@ export default async function CasesPage({ searchParams }: { searchParams: Promis
         )}
       </PageHeader>
 
+      <MobileFilterDrawer title="Queues and filters" description="Choose a ticket folder, mailbox or tag." activeCount={activeFilterCount}>
+        <div className="space-y-5">
+          <nav className="space-y-1">
+            {FOLDERS.map((folder) => {
+              const count = (counts as Record<string, number>)[folder.key];
+              const active = activeFolder === folder.key;
+              return (
+                <Link key={folder.key} href={qs(sp, { folder: folder.key })} className={cn("flex items-center justify-between rounded-lg px-3 py-2 text-sm", active ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:bg-white/[0.04]") }>
+                  <span className="flex items-center gap-2"><Inbox className="size-4" />{folder.label}</span>
+                  {typeof count === "number" && count > 0 && <span className="text-xs tabular-nums">{count}</span>}
+                </Link>
+              );
+            })}
+          </nav>
+          {mailboxes.length > 0 && (
+            <div className="space-y-1">
+              <p className="px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Mailboxes</p>
+              <Link href={qs(sp, { mailbox: "" })} className={cn("block rounded-lg px-3 py-2 text-sm", !filters.mailboxSlug ? "bg-white/[0.05] font-medium" : "text-muted-foreground")}>All mailboxes</Link>
+              {mailboxes.map((mailbox) => <Link key={mailbox.id} href={qs(sp, { mailbox: mailbox.slug })} className={cn("flex items-center gap-2 rounded-lg px-3 py-2 text-sm", filters.mailboxSlug === mailbox.slug ? "bg-white/[0.05] font-medium" : "text-muted-foreground")}><span className="size-2.5 rounded-full" style={{ backgroundColor: mailbox.color }} />{mailbox.name}</Link>)}
+            </div>
+          )}
+          {tags.length > 0 && (
+            <div>
+              <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Tags</p>
+              <div className="flex flex-wrap gap-1.5">{tags.map((tag) => <Link key={tag.id} href={qs(sp, { tag: filters.tag === tag.slug ? "" : tag.slug })} className={cn("rounded-full border px-2 py-1 text-xs", filters.tag === tag.slug ? "border-primary/40 bg-primary/10 text-primary" : "border-white/10 text-muted-foreground")}>{tag.name}</Link>)}</div>
+            </div>
+          )}
+        </div>
+      </MobileFilterDrawer>
+
       <div className="grid gap-5 lg:grid-cols-[15rem_minmax(0,1fr)]">
         {/* Folder / mailbox sidebar */}
-        <aside className="space-y-5 lg:sticky lg:top-4 lg:self-start">
+        <aside className="hidden space-y-5 lg:sticky lg:top-4 lg:block lg:self-start">
           <nav className="card space-y-0.5 p-2">
             {FOLDERS.map((f) => {
               const count = (counts as Record<string, number>)[f.key];

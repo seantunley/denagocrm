@@ -9,8 +9,9 @@ import {
 } from "@/app/actions/helpdesk";
 import ModalTrigger from "@/components/Modal";
 import { buttonVariants } from "@/components/ui/button";
-import { PageHeader } from "@/components/page-header";
 import { StatusPill, EmptyState } from "@/components/visual-system";
+import { SettingsWorkspace } from "@/components/settings-workspace";
+import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 
 export const dynamic = "force-dynamic";
 
@@ -76,11 +77,12 @@ export default async function HelpdeskSettingsPage() {
   const mailboxName = (id: string | null) => (id ? mailboxes.find((mailbox) => mailbox.id === id)?.name ?? "Unknown mailbox" : "All mailboxes");
 
   return (
-    <div className="space-y-10">
-      <PageHeader
+    <SettingsWorkspace
+      current="helpdesk"
+      groups={SETTINGS_NAV_GROUPS}
         title="Help desk"
         description="Configure the shared mailboxes, saved replies and tags used across customer support tickets."
-      />
+    >
 
       {/* Mailboxes ─────────────────────────────────────────────────────────── */}
       <section className="space-y-3">
@@ -176,6 +178,6 @@ export default async function HelpdeskSettingsPage() {
           </div>
         )}
       </section>
-    </div>
+    </SettingsWorkspace>
   );
 }

@@ -58,6 +58,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     items: [
       { key: "team", label: "Team & access", href: "/settings/access", keywords: ["users", "staff", "members", "roles", "permissions"] },
       { key: "portal-access", label: "Portal access", href: "/settings/portal-access", keywords: ["customer portal", "delegation", "profile requests"] },
+      { key: "helpdesk", label: "Help desk", href: "/settings/helpdesk", keywords: ["support", "mailboxes", "saved replies", "ticket tags"] },
       { key: "documents", label: "Documents", href: "/settings/documents", keywords: ["templates", "document studio"] },
       { key: "signing-workflows", label: "Signing workflows", href: "/settings/signing-workflows", keywords: ["approval", "signing", "workflow", "e-sign"] },
       { key: "security", label: "Security", href: "/settings/security", keywords: ["security checks", "surface exposure"] },

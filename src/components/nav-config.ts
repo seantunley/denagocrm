@@ -42,7 +42,7 @@ export function buildNav(
 ) {
   const mods = new Set(modules.split(",").map((module) => module.trim()).filter(Boolean));
   const permissions = new Set(permissionList);
-  const module = (id: string) => isAdmin || mods.has(id);
+  const hasModule = (id: string) => isAdmin || mods.has(id);
   const can = (...keys: string[]) => isAdmin || keys.some((key) => permissions.has(key));
 
   const topLinks: NavLink[] = [{ href: "/", label: "Dashboard", icon: LayoutDashboard }];
@@ -57,7 +57,7 @@ export function buildNav(
   const groups: NavGroup[] = [];
 
   const socialLinks: NavLink[] = [];
-  if (can("inbox.view", "inbox.reply") || (permissionList.length === 0 && module("inbox"))) {
+  if (can("inbox.view", "inbox.reply") || (permissionList.length === 0 && hasModule("inbox"))) {
     socialLinks.push({ href: "/inbox", label: "Inbox", icon: MessageSquare });
   }
   if (socialLinks.length) groups.push({ key: "social", label: "Social", links: socialLinks });
