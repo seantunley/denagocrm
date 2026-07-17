@@ -1,22 +1,66 @@
 import { requireApiOwner, apiAuthErrorResponse } from "@/lib/auth";
-import { generateDocEditorExport, type ExportFormat } from "@/lib/doceditor/generate";
+import { getBuilderTemplate } from "@/lib/docbuilder/store";
+import {
+  bindingParams,
+  parseBuilderRecord,
+  recordMatchesTemplate,
+} from "@/lib/docbuilder/recordBinding";
+import {
+  generateDocEditorExport,
+  type ExportFormat,
+} from "@/lib/doceditor/generate";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const FORMATS: ExportFormat[] = ["html", "email", "doc"];
 
-/** Export a doc-editor template as static HTML, email-safe HTML, or Word (.doc). */
-export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  try { await requireApiOwner(); } catch (err) { const r = apiAuthErrorResponse(err); if (r) return r; throw err; }
-  const { id } = await ctx.params;
-  const url = new URL(req.url);
-  const fmt = url.searchParams.get("format");
-  const format: ExportFormat = FORMATS.includes(fmt as ExportFormat) ? (fmt as ExportFormat) : "html";
-  const res = await generateDocEditorExport({ templateId: id, quoteId: url.searchParams.get("quote"), format });
-  if (!res) return new Response("Not found", { status: 404 });
-  const filename = `${res.title.replace(/[^a-z0-9]+/gi, "-")}.${res.ext}`;
-  return new Response(res.content, {
-    headers: { "Content-Type": res.mime, "Content-Disposition": `attachment; filename="${filename}"` },
+export async function GET(
+  request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  try {
+    await requireApiOwner();
+  } catch (error) {
+    const response = apiAuthErrorResponse(error);
+    if (response) return response;
+    throw error;
+  }
+
+  const { id } = await context.params;
+  const template = await getBuilderTemplate(id);
+  if (!template) return new Response("Not found", { status: 404 });
+  const url = new URL(request.url);
+  const value = url.searchParams.get("record");
+  const record = value
+    ? parseBuilderRecord(value)
+    : url.searchParams.get("job")
+      ? { kind: "jobcard" as const, id: url.searchParams.get("job")! }
+      : url.searchParams.get("quote")
+        ? { kind: "quote" as const, id: url.searchParams.get("quote")! }
+        : null;
+  if (value && !record) return new Response("Invalid record", { status: 400 });
+  if (record && !recordMatchesTemplate(template.key, record.kind)) {
+    return new Response("Record type does not match this template", {
+      status: 400,
+    });
+  }
+
+  const requested = url.searchParams.get("format");
+  const format: ExportFormat = FORMATS.includes(requested as ExportFormat)
+    ? (requested as ExportFormat)
+    : "html";
+  const result = await generateDocEditorExport({
+    templateId: id,
+    ...bindingParams(record ? `${record.kind}:${record.id}` : null),
+    format,
+  });
+  if (!result) return new Response("Not found", { status: 404 });
+  const filename = `${result.title.replace(/[^a-z0-9]+/gi, "-")}.${result.ext}`;
+  return new Response(result.content, {
+    headers: {
+      "Content-Type": result.mime,
+      "Content-Disposition": `attachment; filename="${filename}"`,
+    },
   });
 }
