@@ -1,5 +1,8 @@
 name: CI — build, test & validate
 
+# Runs on every pull request and on pushes to main. Previously this suite was
+# path-filtered to security-related files, so most PRs merged with no automated
+# checks at all. It now guards every change.
 on:
   push:
     branches:
@@ -8,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   validate:
@@ -38,6 +41,9 @@ jobs:
       CRON_SECRET: ci-cron-secret
       NEXT_PUBLIC_APP_URL: http://localhost:3000
       NODE_ENV: test
+      # Disposable credentials for the throwaway CI database. The seed no longer
+      # hardcodes an owner, so provide one here (governance checks require an owner
+      # / a user with roles.manage). NOT production secrets.
       INITIAL_ADMIN_EMAIL: ci-admin@example.invalid
       INITIAL_ADMIN_NAME: CI Administrator
       INITIAL_ADMIN_PASSWORD: ci-only-password-at-least-14-chars
@@ -45,52 +51,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Apply one-time stock transaction typing repair
-        if: github.event_name == 'pull_request' && github.base_ref == 'agent/stock-operations-platform'
-        shell: bash
-        run: |
-          git fetch origin main agent/stock-operations-platform
-          git checkout -B agent/stock-operations-platform origin/agent/stock-operations-platform
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('src/lib/stockPlatform.ts')
-          text = path.read_text()
-          old = 'async function recordMovement(tx: Prisma.TransactionClient, input: MovementInput) {'
-          new = 'async function recordMovement(tx: Pick<Prisma.TransactionClient, "$executeRaw">, input: MovementInput) {'
-          if old in text:
-              path.write_text(text.replace(old, new, 1))
-          PY
-          git checkout origin/main -- src/lib/db.ts
-          if git diff --quiet; then
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/lib/stockPlatform.ts src/lib/db.ts
-          git commit -m "Narrow stock transaction typing"
-          git push origin HEAD:agent/stock-operations-platform
-
-      - name: Capture Git tree diagnostics
-        shell: bash
-        run: |
-          git fetch origin main:refs/remotes/origin/main agent/stock-operations-platform:refs/remotes/origin/agent/stock-operations-platform
-          {
-            echo "feature_commit=$(git rev-parse refs/remotes/origin/agent/stock-operations-platform)"
-            echo "feature_tree=$(git rev-parse 'refs/remotes/origin/agent/stock-operations-platform^{tree}')"
-            echo "main_commit=$(git rev-parse refs/remotes/origin/main)"
-            echo "main_tree=$(git rev-parse 'refs/remotes/origin/main^{tree}')"
-          } > git-trees.txt
-          cat git-trees.txt
-
-      - name: Upload Git tree diagnostics
-        uses: actions/upload-artifact@v4
-        with:
-          name: stock-git-tree-diagnostics
-          path: git-trees.txt
-          if-no-files-found: error
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -108,33 +68,23 @@ jobs:
         run: npm run prisma:generate
 
       - name: Apply migrations (same unified script as preview & production)
+        # scripts/apply-migrations.mjs is the exact command Vercel runs, so CI,
+        # preview and production apply migrations identically — in true NUMERIC
+        # order (Prisma's lexical `migrate deploy` mis-orders the non-zero-padded
+        # prefixes: 10_dealer_signature before 4_quotes → "relation Quote does not
+        # exist"). Running it here against a completely empty PostgreSQL IS the
+        # shared empty-database migration test. It also runs each migration's
+        # data-seeding INSERTs (RBAC in 52/53) the governance checks depend on.
         run: node scripts/apply-migrations.mjs
 
       - name: Seed baseline data
+        # governance + security checks also assert on a default pipeline + admin
+        # user, which the seed provides on top of the migration-seeded RBAC rows.
+        # `seed` lives under package.json#prisma.seed, so invoke via prisma.
         run: npx prisma db seed
 
-      - name: Capture TypeScript diagnostics
-        id: typecheck
-        shell: bash
-        run: |
-          set +e
-          npm run typecheck -- --pretty false > typecheck.log 2>&1
-          code=$?
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          exit 0
-
-      - name: Upload TypeScript diagnostics
-        uses: actions/upload-artifact@v4
-        with:
-          name: stock-typecheck-diagnostics
-          path: typecheck.log
-          if-no-files-found: error
-
-      - name: Enforce Type check
-        if: steps.typecheck.outputs.exit_code != '0'
-        run: |
-          cat typecheck.log
-          exit 1
+      - name: Type check
+        run: npm run typecheck
 
       - name: Lint
         run: npm run lint
@@ -154,4 +104,7 @@ jobs:
         run: npm run test:security
 
       - name: Run RBAC integration tests
+        # Cross-user visibility across leads, contacts, quotes, vehicles, job
+        # cards, documents, cases and activities. Previously defined but never
+        # executed by CI.
         run: npm run test:rbac
