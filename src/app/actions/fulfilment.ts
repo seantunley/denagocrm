@@ -8,6 +8,8 @@ import { logAudit } from "@/lib/audit";
 import { runLeadAutomations } from "@/lib/automations";
 import { saveFile } from "@/lib/storage";
 import { contactName } from "@/lib/format";
+import { assertQuoteHasAllocatedStock, assertQuoteStockReady } from "@/lib/stockPlatform";
+import { finalizeStockBackedDelivery } from "@/lib/stockDelivery";
 
 const MAX_FILE = 4 * 1024 * 1024;
 
@@ -85,9 +87,10 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
     include: { contact: true, lead: { include: { product: true } }, items: true },
   });
   if (!quote.depositPaidAt || quote.deliveryScheduledFor) return;
+  const stock = await assertQuoteHasAllocatedStock(quoteId);
   const dateRaw = String(formData.get("date") ?? "").trim();
   if (!dateRaw) return;
-  const when = new Date(dateRaw);
+  const when = new Date(`${dateRaw}T09:00:00+02:00`);
   if (isNaN(when.getTime())) return;
   const file = pickFile(formData);
   if (file && file.size <= MAX_FILE) {
@@ -101,7 +104,7 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
       type: "todo",
       category: "workshop",
       summary: `🚚 Delivery — ${model} to ${who}`,
-      note: `Fulfilment of quote Q-${quote.number}.`,
+      note: `Fulfilment of quote Q-${quote.number}. Allocated stock: ${stock.stockNumber ?? stock.serial ?? stock.stockUnitId}.`,
       dueDate: when,
       assignedToId: user.id,
       createdById: user.id,
@@ -111,13 +114,14 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
   });
   await logAudit({
     action: "fulfilment.delivery_scheduled",
-    summary: `Q-${quote.number} delivery scheduled for ${when.toLocaleDateString("en-ZA")} — on the workshop calendar`,
+    summary: `Q-${quote.number} delivery scheduled for ${when.toLocaleDateString("en-ZA")} with allocated stock ${stock.stockNumber ?? stock.serial ?? stock.stockUnitId}`,
     contactId: quote.contactId,
     leadId: quote.leadId,
     user,
   });
   revalidatePath("/deliveries");
   revalidatePath(`/quotes/${quoteId}`);
+  revalidatePath(`/stock/${stock.stockUnitId}`);
   revalidatePath("/workshop-calendar");
 }
 
@@ -153,6 +157,7 @@ export async function markDelivered(quoteId: string, formData: FormData) {
     include: { lead: true },
   });
   if (!quote.deliveryScheduledFor || quote.deliveredAt) return;
+  const assignment = await assertQuoteStockReady(quoteId);
   const file = pickFile(formData);
   if (file && file.size <= MAX_FILE) {
     await attachStageDocument(quoteId, quote.contactId, "delivery-note", `Delivery note — Q-${quote.number} — ${file.name}`, file, user.id);
@@ -185,19 +190,25 @@ export async function markDelivered(quoteId: string, formData: FormData) {
     }
   }
 
-  await prisma.quote.update({
-    where: { id: quoteId },
-    data: { deliveredAt: new Date(), deliveredByName, deliveryChecklist, deliverySignatureRef },
+  const completed = await finalizeStockBackedDelivery({
+    quoteId,
+    deliveredByName,
+    deliveryChecklist,
+    deliverySignatureRef,
+    actor: { id: user.id, name: user.name },
   });
   if (quote.leadId) await runLeadAutomations("delivered", quote.leadId).catch(() => {});
   await logAudit({
     action: "fulfilment.delivered",
-    summary: `Q-${quote.number} delivered 🎉 — register the vehicle to start its service life`,
+    summary: `Q-${quote.number} delivered with stock ${assignment.stockNumber ?? assignment.serial ?? assignment.stockUnitId} — customer vehicle registered automatically`,
     contactId: quote.contactId,
     leadId: quote.leadId,
     user,
   });
   revalidatePath("/deliveries");
   revalidatePath(`/quotes/${quoteId}`);
-  redirect(`/vehicles/new?contactId=${quote.contactId ?? ""}&productId=${quote.lead?.productId ?? ""}&color=${encodeURIComponent(quote.lead?.color ?? "")}`);
+  revalidatePath(`/stock/${completed.stockUnitId}`);
+  revalidatePath("/stock");
+  if (completed.vehicleId) redirect(`/vehicles/${completed.vehicleId}`);
+  redirect(`/stock/${completed.stockUnitId}`);
 }
