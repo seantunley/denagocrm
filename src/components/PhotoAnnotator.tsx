@@ -91,6 +91,7 @@ function AnnotatorModal({
   const [tool, setTool] = useState<Tool>("pen");
   const [color, setColor] = useState(COLORS[0]);
   const [sizeKey, setSizeKey] = useState("m");
+  const [textValue, setTextValue] = useState("");
   const [saving, setSaving] = useState(false);
 
   // Load the base image same-origin (untainted canvas → we can export the flatten).
@@ -147,7 +148,7 @@ function AnnotatorModal({
     if (!dims) return;
     const p = toNat(e);
     if (tool === "text") {
-      const text = window.prompt("Label text")?.trim();
+      const text = textValue.trim();
       if (text) setShapes((s) => [...s, { type: "text", color, size: textPx, x: p.x, y: p.y, text }]);
       return;
     }
@@ -238,6 +239,15 @@ function AnnotatorModal({
           {toolBtn("arrow", "Arrow", "↗")}
           {toolBtn("text", "Text label", "T")}
         </div>
+        {tool === "text" && (
+          <input
+            type="text"
+            value={textValue}
+            onChange={(e) => setTextValue(e.target.value)}
+            placeholder="Type a label, then click the photo"
+            className="w-56 rounded-md border border-white/15 bg-white/[0.06] px-2 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-orange-500/60 focus:outline-none"
+          />
+        )}
         <div className="mx-1 h-6 w-px bg-white/10" />
         <div className="flex items-center gap-1">
           {COLORS.map((c) => (
