@@ -317,6 +317,7 @@ export default function CalendarWorkspace({
   events,
   canManage,
   slotConfig,
+  bookingCountsByDate = {},
 }: {
   mode: "sales" | "workshop";
   monthKey: string;
@@ -329,6 +330,9 @@ export default function CalendarWorkspace({
   events: CalendarWorkspaceEvent[];
   canManage: boolean;
   slotConfig: SlotConfig | null;
+  // Bookings per date from an UNFILTERED source (all technicians), so capacity maths
+  // aren't undercounted for RBAC-scoped users who can't see every booking.
+  bookingCountsByDate?: Record<string, number>;
 }) {
   const router = useRouter();
   const basePath =
@@ -400,15 +404,6 @@ export default function CalendarWorkspace({
     return grouped;
   }, [visibleEvents]);
 
-  const allEventsByDate = useMemo(() => {
-    const grouped = new Map<string, CalendarWorkspaceEvent[]>();
-    for (const event of events) {
-      const existing = grouped.get(event.dateKey) ?? [];
-      existing.push(event);
-      grouped.set(event.dateKey, existing);
-    }
-    return grouped;
-  }, [events]);
 
   const selectedIndex = Math.max(
     0,
@@ -434,19 +429,25 @@ export default function CalendarWorkspace({
     const monthEvents = events.filter((event) =>
       inMonthKeys.has(event.dateKey),
     );
+    // Only dates the public booking engine actually offers contribute open capacity:
+    // a configured weekday, not in the past, and within the booking horizon.
+    const horizonMax = slotConfig
+      ? shiftDateKey(todayKey, slotConfig.horizonDays)
+      : todayKey;
     const openSlots = slotConfig
       ? days
           .filter(
             (day) =>
               day.inMonth &&
-              slotConfig.days.includes(isoWeekday(day.key)),
+              slotConfig.days.includes(isoWeekday(day.key)) &&
+              day.key >= todayKey &&
+              day.key <= horizonMax,
           )
           .reduce((total, day) => {
             const capacity =
               slotConfig.times.length * slotConfig.capacity;
-            const booked = (allEventsByDate.get(day.key) ?? []).filter(
-              (event) => event.status === "planned",
-            ).length;
+            // Unfiltered booking count so hidden bookings still consume capacity.
+            const booked = bookingCountsByDate[day.key] ?? 0;
             return total + Math.max(0, capacity - booked);
           }, 0)
       : 0;
@@ -469,7 +470,7 @@ export default function CalendarWorkspace({
         .length,
       openSlots,
     };
-  }, [allEventsByDate, days, events, mode, slotConfig, todayKey]);
+  }, [bookingCountsByDate, days, events, mode, slotConfig, todayKey]);
 
   function openEvent(event: CalendarWorkspaceEvent) {
     setSelectedEvent(event);
@@ -477,8 +478,14 @@ export default function CalendarWorkspace({
   }
 
   function createActivity(dateKey = selectedDate) {
+    // Workshop bookings must land on a real configured slot, otherwise the booking
+    // engine won't mark any public slot taken and the day can be double-booked.
+    const defaultTime =
+      mode === "workshop" && slotConfig?.times.length
+        ? slotConfig.times[0]
+        : "09:00";
     openQuickCreate("calendar", {
-      dueDate: `${dateKey}T09:00`,
+      dueDate: `${dateKey}T${defaultTime}`,
       workshop: mode === "workshop",
       revalidate: basePath,
     });
@@ -574,9 +581,9 @@ export default function CalendarWorkspace({
       return null;
     }
     const capacity = slotConfig.times.length * slotConfig.capacity;
-    const booked = (allEventsByDate.get(dateKey) ?? []).filter(
-      (event) => event.status === "planned",
-    ).length;
+    // Unfiltered booking count so a slot taken by another (hidden) technician still
+    // shows as occupied capacity for RBAC-scoped users.
+    const booked = bookingCountsByDate[dateKey] ?? 0;
     return {
       capacity,
       booked,

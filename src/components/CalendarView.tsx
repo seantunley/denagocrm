@@ -53,7 +53,7 @@ export default async function CalendarView({
     format(gridEnd, "yyyy-MM-dd"),
   );
 
-  const [activities, slotConfig] = await Promise.all([
+  const [activities, slotConfig, bookingCountRows] = await Promise.all([
     prisma.activity.findMany({
       where: {
         dueDate: { gte: queryBounds.start, lt: queryBounds.end },
@@ -72,7 +72,33 @@ export default async function CalendarView({
       orderBy: { dueDate: "asc" },
     }),
     mode === "workshop" ? getSlotConfig() : Promise.resolve(null),
+    // Aggregate capacity source: EVERY planned workshop booking in the window,
+    // deliberately NOT filtered by the RBAC activityIds — slot/open-capacity maths must
+    // reflect all bookings (a slot taken by another technician still occupies public
+    // capacity). We select only dueDate, so no inaccessible event details are exposed.
+    mode === "workshop"
+      ? prisma.activity.findMany({
+          where: {
+            dueDate: { gte: queryBounds.start, lt: queryBounds.end },
+            status: "planned",
+            category: "workshop",
+          },
+          select: { dueDate: true },
+        })
+      : Promise.resolve([] as { dueDate: Date }[]),
   ]);
+
+  // Bookings per calendar day (Africa/Johannesburg), from the unfiltered source above.
+  const bookingCountsByDate: Record<string, number> = {};
+  for (const row of bookingCountRows) {
+    const key = row.dueDate.toLocaleDateString("en-CA", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      timeZone: "Africa/Johannesburg",
+    });
+    bookingCountsByDate[key] = (bookingCountsByDate[key] ?? 0) + 1;
+  }
 
   const events: CalendarWorkspaceEvent[] = activities.map((activity) => {
     // Date-only activities are stored at UTC midnight. Timed activities follow
@@ -166,6 +192,7 @@ export default async function CalendarView({
       events={events}
       canManage={canManage}
       slotConfig={slotConfig}
+      bookingCountsByDate={bookingCountsByDate}
     />
   );
 }
