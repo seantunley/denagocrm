@@ -5,6 +5,14 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireLeadAccess, requirePermission, requireQuoteAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
+import {
+  getCustomStockStatuses,
+  getStockStatuses,
+  isSystemStockStatus,
+  saveCustomStockStatuses,
+  slugifyStatus,
+  type StockStatusOption,
+} from "@/lib/stockStatuses";
 
 const rand = (value: FormDataEntryValue | null) =>
   Math.round(parseFloat(String(value ?? "0").replace(/[^0-9.]/g, "")) * 100) || 0;
@@ -13,6 +21,60 @@ const date = (value: FormDataEntryValue | null) => {
   const raw = str(value);
   return raw ? new Date(`${raw}T00:00:00+02:00`) : null;
 };
+
+/* ── Custom stock statuses ─────────────────────────────────────────────────
+   Built-in statuses (incoming/available/reserved/sold) are fixed; these manage
+   the user's own organizational labels. */
+
+export async function addStockStatus(formData: FormData) {
+  const user = await requirePermission("stock.manage");
+  const label = str(formData.get("label"));
+  const color = str(formData.get("color")) || "#64748b";
+  if (!label) return;
+  const slug = slugifyStatus(label);
+  if (!slug || isSystemStockStatus(slug)) {
+    throw new Error("That status name is reserved — pick another.");
+  }
+  const custom = await getCustomStockStatuses();
+  if (custom.some((s) => s.slug === slug)) return; // already exists — no-op
+  const next: StockStatusOption[] = [...custom, { slug, label, color, system: false }];
+  await saveCustomStockStatuses(next);
+  await logAudit({ action: "stock.status_added", summary: `Added stock status “${label}”`, user });
+  revalidatePath("/stock");
+}
+
+export async function removeStockStatus(slug: string) {
+  const user = await requirePermission("stock.manage");
+  if (isSystemStockStatus(slug)) throw new Error("Built-in statuses can't be removed.");
+  const custom = await getCustomStockStatuses();
+  await saveCustomStockStatuses(custom.filter((s) => s.slug !== slug));
+  // Don't strand units on a label that no longer exists — move them back to Available.
+  await prisma.stockUnit.updateMany({ where: { status: slug }, data: { status: "available" } });
+  await logAudit({
+    action: "stock.status_removed",
+    summary: `Removed stock status “${slug}” — any units on it were set to Available`,
+    user,
+  });
+  revalidatePath("/stock");
+}
+
+export async function setStockStatus(unitId: string, formData: FormData) {
+  const user = await requirePermission("stock.manage");
+  const slug = str(formData.get("status"));
+  // Reserving / selling carry lead + quote linkage, so they must go through their own
+  // flows (Reserve / Mark sold). Manual set is for incoming/available/custom labels.
+  if (slug === "reserved" || slug === "sold") {
+    throw new Error("Use Reserve or Mark sold for those statuses.");
+  }
+  const statuses = await getStockStatuses();
+  if (!statuses.some((s) => s.slug === slug)) throw new Error("Unknown status.");
+  await prisma.stockUnit.update({
+    where: { id: unitId },
+    data: { status: slug, reservedForLeadId: null, soldQuoteId: null, soldAt: null },
+  });
+  await logAudit({ action: "stock.status_set", summary: `Changed a stock unit's status to “${slug}”`, user });
+  revalidatePath("/stock");
+}
 
 export async function createPurchaseOrder(formData: FormData) {
   const user = await requirePermission("stock.manage");

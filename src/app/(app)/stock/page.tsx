@@ -11,27 +11,20 @@ import {
   addStockUnit,
   updateStockUnit,
   reserveUnit,
-  releaseUnit,
   markUnitSold,
   deleteStockUnit,
+  addStockStatus,
+  removeStockStatus,
+  setStockStatus,
 } from "@/app/actions/stock";
+import { getStockStatuses } from "@/lib/stockStatuses";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
+import { Settings2 } from "lucide-react";
 
-const STATUS_BADGE: Record<string, string> = {
-  incoming: "bg-sky-500/15 text-sky-300",
-  available: "bg-emerald-500/15 text-emerald-300",
-  reserved: "bg-amber-500/15 text-amber-300",
-  sold: "bg-slate-700 text-slate-300",
-};
-const STATUS_LABEL: Record<string, string> = {
-  incoming: "On order",
-  available: "Available",
-  reserved: "Reserved",
-  sold: "Sold",
-};
-const FILTERS = ["all", "available", "incoming", "reserved", "sold"] as const;
+/** Translucent pill background from a status hex colour (e.g. #34d399 -> #34d39926). */
+const statusStyle = (color: string) => ({ backgroundColor: `${color}26`, color });
 
 function ProductSelect({ products }: { products: { id: string; name: string }[] }) {
   return (
@@ -48,7 +41,14 @@ export default async function StockPage({
   searchParams: Promise<{ status?: string }>;
 }) {
   const { status } = await searchParams;
-  const filter = FILTERS.includes(status as (typeof FILTERS)[number]) ? status! : "all";
+  const statuses = await getStockStatuses();
+  const statusMap = new Map(statuses.map((s) => [s.slug, s]));
+  const labelOf = (slug: string) => statusMap.get(slug)?.label ?? slug;
+  const colorOf = (slug: string) => statusMap.get(slug)?.color ?? "#64748b";
+  const filterSlugs = ["all", ...statuses.map((s) => s.slug)];
+  // Statuses a user can set by hand — reserving/selling go through their own flows.
+  const assignable = statuses.filter((s) => s.slug !== "reserved" && s.slug !== "sold");
+  const filter = filterSlugs.includes(status ?? "") ? status! : "all";
 
   const [products, leads, units, openPos, counts] = await Promise.all([
     prisma.product.findMany({ where: { active: true }, orderBy: { name: "asc" }, include: { colors: true } }),
@@ -124,6 +124,45 @@ export default async function StockPage({
               variant="dialog"
             />
           </ModalTrigger>
+          <ModalTrigger label={<><Settings2 className="size-4" />Statuses</>} title="Stock statuses" buttonClass={buttonVariants({ variant: "outline", size: "sm" })}>
+            <div className="space-y-4">
+              <div className="card space-y-2">
+                <p className="text-sm font-semibold">Current statuses</p>
+                <ul className="divide-y divide-slate-800">
+                  {statuses.map((s) => (
+                    <li key={s.slug} className="flex items-center gap-2 py-2">
+                      <span className="badge" style={statusStyle(s.color)}>{s.label}</span>
+                      {s.system ? (
+                        <span className="ml-auto text-[11px] text-slate-500">Built-in · locked</span>
+                      ) : (
+                        <form action={removeStockStatus.bind(null, s.slug)} className="ml-auto">
+                          <button className="btn-danger btn-sm">Remove</button>
+                        </form>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-[11px] text-slate-500">
+                  The four built-in statuses drive receiving, reserving and selling, so they can&apos;t be removed.
+                  Removing a custom status moves any units on it back to <b>Available</b>.
+                </p>
+              </div>
+              <form action={addStockStatus} className="card space-y-3">
+                <p className="text-sm font-semibold">Add a status</p>
+                <div className="grid grid-cols-[1fr_auto] gap-3 items-end">
+                  <div>
+                    <label className="label">Name</label>
+                    <input name="label" className="input" placeholder="e.g. In transit, Damaged, Demo" required />
+                  </div>
+                  <div>
+                    <label className="label">Colour</label>
+                    <input name="color" type="color" defaultValue="#64748b" className="input h-10 w-16 p-1" />
+                  </div>
+                </div>
+                <button className="btn-primary btn-sm">Add status</button>
+              </form>
+            </div>
+          </ModalTrigger>
       </PageHeader>
 
       {/* Summary */}
@@ -135,7 +174,7 @@ export default async function StockPage({
             className="card p-4 hover:border-slate-700 transition-colors"
           >
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-              {STATUS_LABEL[s]}
+              {labelOf(s)}
             </p>
             <p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{countOf(s)}</p>
           </Link>
@@ -174,7 +213,7 @@ export default async function StockPage({
 
       {/* Filter chips */}
       <div className="flex gap-2 flex-wrap">
-        {FILTERS.map((f) => (
+        {filterSlugs.map((f) => (
           <Link
             key={f}
             href={f === "all" ? "/stock" : `/stock?status=${f}`}
@@ -182,7 +221,7 @@ export default async function StockPage({
               filter === f ? "bg-orange-600 text-white" : "bg-slate-800 text-slate-300"
             }`}
           >
-            {f === "all" ? "All" : STATUS_LABEL[f]}
+            {f === "all" ? "All" : labelOf(f)}
           </Link>
         ))}
       </div>
@@ -215,7 +254,7 @@ export default async function StockPage({
                 <td data-label="Colour">{u.color ?? "—"}</td>
                 <td data-label="Serial / VIN" className="text-slate-400">{u.serial ?? "—"}</td>
                 <td data-label="Status">
-                  <span className={`badge ${STATUS_BADGE[u.status]}`}>{STATUS_LABEL[u.status]}</span>
+                  <span className="badge" style={statusStyle(colorOf(u.status))}>{labelOf(u.status)}</span>
                 </td>
                 <td data-label="Reserved / sold for" className="text-slate-400">
                   {u.reservedForLead ? (
@@ -270,14 +309,9 @@ export default async function StockPage({
                         </form>
                       )}
 
-                      <div className="card space-y-2">
+                      <div className="card space-y-3">
                         <p className="font-semibold text-sm">Status</p>
                         <div className="flex gap-2 flex-wrap">
-                          {u.status !== "available" && (
-                            <form action={releaseUnit.bind(null, u.id)}>
-                              <button className="btn-secondary btn-sm">Set available</button>
-                            </form>
-                          )}
                           {u.status !== "sold" && (
                             <form action={markUnitSold.bind(null, u.id)}>
                               <button className="btn bg-emerald-700 text-white hover:bg-emerald-600 btn-sm">
@@ -289,6 +323,18 @@ export default async function StockPage({
                             <button className="btn-danger btn-sm">Remove</button>
                           </form>
                         </div>
+                        {/* Set any organizational status (reserving / selling use their own flows above). */}
+                        <form action={setStockStatus.bind(null, u.id)} className="flex items-end gap-2">
+                          <div className="flex-1">
+                            <label className="label">Set status</label>
+                            <select name="status" className="input" defaultValue={assignable.some((s) => s.slug === u.status) ? u.status : "available"}>
+                              {assignable.map((s) => (
+                                <option key={s.slug} value={s.slug}>{s.label}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <button className="btn-secondary btn-sm">Apply</button>
+                        </form>
                       </div>
                     </div>
                   </ModalTrigger>
