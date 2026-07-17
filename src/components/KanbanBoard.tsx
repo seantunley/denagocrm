@@ -110,6 +110,7 @@ function LeadCard({ lead, dragging }: { lead: KanbanLead; dragging?: boolean }) 
         dragging
           ? "rotate-1 cursor-grabbing shadow-2xl ring-1 ring-primary/50"
           : "cursor-grab hover:-translate-y-px hover:border-primary/35 hover:shadow-lg hover:shadow-black/20",
+        lead.isNew && !dragging && "animate-new-lead-glow",
       )}
     >
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/15 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
