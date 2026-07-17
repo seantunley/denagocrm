@@ -146,14 +146,14 @@ export default async function SettingsPage({
       {tab === "pipeline" && (
         <div className="card">
           <h2 className="font-semibold mb-1">Pipeline stages</h2>
-          <p className="text-xs text-slate-400 mb-4">
+          <p className="text-xs text-muted-foreground mb-4">
             The columns of your leads board, in order. Stages holding leads can&apos;t be deleted.
           </p>
           <ul className="space-y-2 mb-4">
             {stages.map((s, i) => (
               <li key={s.id} className="flex items-center gap-2">
                 <form action={renameStage.bind(null, s.id)} className="flex items-center gap-2 flex-1">
-                  <input type="color" name="color" defaultValue={s.color} className="h-8 w-10 rounded cursor-pointer border border-slate-800" />
+                  <input type="color" name="color" defaultValue={s.color} className="h-8 w-10 rounded cursor-pointer border border-border" />
                   <input name="name" defaultValue={s.name} className="input flex-1" />
                   <button className="btn-secondary btn-sm">Save</button>
                 </form>
@@ -180,7 +180,7 @@ export default async function SettingsPage({
             ))}
           </ul>
           <form action={createStage} className="flex gap-2">
-            <input type="color" name="color" defaultValue="#64748b" className="h-9 w-10 rounded cursor-pointer border border-slate-800" />
+            <input type="color" name="color" defaultValue="#64748b" className="h-9 w-10 rounded cursor-pointer border border-border" />
             <input name="name" className="input flex-1" placeholder="New stage name…" required />
             <button className="btn-primary">Add stage</button>
           </form>
@@ -190,7 +190,7 @@ export default async function SettingsPage({
       {tab === "account" && (
         <div className="max-w-3xl space-y-6">
           <div className="flex items-center gap-3">
-            <div className="h-11 w-11 shrink-0 rounded-full bg-orange-600 flex items-center justify-center font-bold text-white">
+            <div className="h-11 w-11 shrink-0 rounded-full bg-primary flex items-center justify-center font-bold text-white">
               {currentUser.name
                 .split(/\s+/)
                 .map((p) => p[0])
@@ -203,17 +203,17 @@ export default async function SettingsPage({
                 {currentUser.name}
                 <span
                   className={`badge ${
-                    isOwner ? "bg-orange-500/15 text-orange-300" : "bg-slate-800 text-slate-300"
+                    isOwner ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"
                   }`}
                 >
                   {isOwner ? "Owner" : "Member"}
                 </span>
               </p>
-              <p className="text-xs text-slate-400 truncate">{currentUser.email}</p>
+              <p className="text-xs text-muted-foreground truncate">{currentUser.email}</p>
             </div>
           </div>
 
-          <div className="card p-0 divide-y divide-slate-800">
+          <div className="card p-0 divide-y divide-border/50">
             <details>
               <summary className="flex items-center justify-between gap-4 px-5 py-4 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
                 <span className="text-sm font-medium">Password</span>
@@ -255,7 +255,7 @@ export default async function SettingsPage({
                       {myPasskeys.length}
                     </span>
                   ) : (
-                    <span className="badge bg-slate-800 text-slate-400">None</span>
+                    <span className="badge bg-muted text-muted-foreground">None</span>
                   )}
                 </span>
                 <span className="btn-secondary btn-sm">
@@ -280,7 +280,7 @@ export default async function SettingsPage({
                 <span className="btn-secondary btn-sm">Manage</span>
               </summary>
               <div className="px-5 pb-5">
-                <p className="text-xs text-slate-400 mb-3">
+                <p className="text-xs text-muted-foreground mb-3">
                   A notification on this device when a lead, DM or signed quote comes in.
                 </p>
                 <PushToggle />
@@ -344,17 +344,17 @@ export default async function SettingsPage({
                       <p className="font-medium">
                         {u.name}
                         {u.id === currentUser.id && (
-                          <span className="text-xs text-slate-500 ml-1.5">(you)</span>
+                          <span className="text-xs text-muted-foreground ml-1.5">(you)</span>
                         )}
                       </p>
-                      <p className="text-xs text-slate-400">{u.email}</p>
+                      <p className="text-xs text-muted-foreground">{u.email}</p>
                     </td>
                     <td>
                       <span
                         className={`badge ${
                           u.role === "owner"
-                            ? "bg-orange-500/15 text-orange-300"
-                            : "bg-slate-800 text-slate-300"
+                            ? "bg-primary/15 text-primary"
+                            : "bg-muted text-muted-foreground"
                         }`}
                       >
                         {u.role === "owner" ? "Admin" : "Member"}
@@ -387,7 +387,7 @@ export default async function SettingsPage({
           </div>
 
           {isOwner && (
-            <div className="card p-0 divide-y divide-slate-800">
+            <div className="card p-0 divide-y divide-border/50">
               <details>
                 <summary className="flex items-center justify-between gap-4 px-5 py-4 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
                   <span className="text-sm font-medium">Add a team member</span>
@@ -404,7 +404,7 @@ export default async function SettingsPage({
               >
                 <div>
                   <p className="text-sm font-medium">Auto sign-out after inactivity</p>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-muted-foreground">
                     Everyone re-signs in at least every {ABSOLUTE_SESSION_HOURS}h regardless.
                   </p>
                 </div>
@@ -432,14 +432,14 @@ export default async function SettingsPage({
 
       {tab === "notifications" && (
         <div className="max-w-3xl">
-          <div className="card p-0 divide-y divide-slate-800">
+          <div className="card p-0 divide-y divide-border/50">
             <details>
               <summary className="flex items-center justify-between gap-4 px-5 py-4 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
                 <span className="text-sm font-medium">Push on this device</span>
                 <span className="btn-secondary btn-sm">Manage</span>
               </summary>
               <div className="px-5 pb-5">
-                <p className="text-xs text-slate-400 mb-3">
+                <p className="text-xs text-muted-foreground mb-3">
                   Each phone/computer opts in separately. Install the app on your phone for
                   lock-screen notifications.
                 </p>
@@ -449,7 +449,7 @@ export default async function SettingsPage({
 
             <form action={saveNotificationPrefs} className="px-5 py-4">
               <p className="text-sm font-medium">What sends a notification</p>
-              <p className="text-xs text-slate-500 mb-3">
+              <p className="text-xs text-muted-foreground mb-3">
                 Applies to the whole team&apos;s devices. Untick to silence a type everywhere.
               </p>
               <div className="space-y-2.5">
@@ -464,7 +464,7 @@ export default async function SettingsPage({
                     />
                     <span className="text-sm leading-5">
                       {k.label}
-                      <span className="block text-xs text-slate-500">{k.desc}</span>
+                      <span className="block text-xs text-muted-foreground">{k.desc}</span>
                     </span>
                   </label>
                 ))}
@@ -478,7 +478,7 @@ export default async function SettingsPage({
       {tab === "system" && (
         <div className="w-full space-y-4">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <p className="text-sm text-slate-400 max-w-2xl">
+            <p className="text-sm text-muted-foreground max-w-2xl">
               System errors from syncs, webhooks, email/SMS and unhandled crashes. Identical errors
               are grouped. Auto-purged after 30 days; a push fires on the first error in any
               30-minute window.
@@ -493,15 +493,15 @@ export default async function SettingsPage({
           {errorLogs.length > 0 && (
             <div className="grid grid-cols-3 gap-3">
               <div className="card py-3">
-                <p className="text-xs uppercase tracking-wide text-slate-400">Events</p>
+                <p className="text-xs uppercase tracking-wide text-muted-foreground">Events</p>
                 <p className="text-2xl font-semibold tracking-[-0.03em] mt-0.5">{errorStats.total}</p>
               </div>
               <div className="card py-3">
-                <p className="text-xs uppercase tracking-wide text-slate-400">Distinct issues</p>
+                <p className="text-xs uppercase tracking-wide text-muted-foreground">Distinct issues</p>
                 <p className="text-2xl font-semibold tracking-[-0.03em] mt-0.5">{errorStats.distinct}</p>
               </div>
               <div className="card py-3">
-                <p className="text-xs uppercase tracking-wide text-slate-400">Last 24h</p>
+                <p className="text-xs uppercase tracking-wide text-muted-foreground">Last 24h</p>
                 <p className={`text-2xl font-semibold tracking-[-0.03em] mt-0.5 ${errorStats.last24h > 0 ? "text-amber-300" : ""}`}>
                   {errorStats.last24h}
                 </p>
@@ -511,7 +511,7 @@ export default async function SettingsPage({
 
           <div className="card p-0 overflow-x-auto">
             {errorGroups.length === 0 ? (
-              <p className="text-sm text-slate-400 p-5">No errors on record. 🎉</p>
+              <p className="text-sm text-muted-foreground p-5">No errors on record. 🎉</p>
             ) : (
               <table className="table-base min-w-[720px]">
                 <thead>
@@ -530,18 +530,18 @@ export default async function SettingsPage({
                       </td>
                       <td>
                         <details>
-                          <summary className="cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-sm text-slate-200 hover:text-white">
+                          <summary className="cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-sm text-foreground hover:text-white">
                             {g.message}
                           </summary>
                           <div className="mt-2 space-y-1">
-                            <p className="text-[11px] text-slate-500">
+                            <p className="text-[11px] text-muted-foreground">
                               {g.count > 1
                                 ? `${g.count} occurrences · first ${formatDateTime(g.first)} · last ${formatDateTime(g.last)}`
                                 : formatDateTime(g.last)}
                             </p>
-                            {g.context && <p className="text-xs text-slate-400">{g.context}</p>}
+                            {g.context && <p className="text-xs text-muted-foreground">{g.context}</p>}
                             {g.stack && (
-                              <pre className="text-[10px] text-slate-500 whitespace-pre-wrap max-h-40 overflow-y-auto rounded bg-black/20 p-2">
+                              <pre className="text-[10px] text-muted-foreground whitespace-pre-wrap max-h-40 overflow-y-auto rounded bg-black/20 p-2">
                                 {g.stack}
                               </pre>
                             )}
@@ -552,10 +552,10 @@ export default async function SettingsPage({
                         {g.count > 1 ? (
                           <span className="badge bg-amber-500/15 text-amber-300 tabular-nums">×{g.count}</span>
                         ) : (
-                          <span className="text-slate-500 tabular-nums">1</span>
+                          <span className="text-muted-foreground tabular-nums">1</span>
                         )}
                       </td>
-                      <td className="w-40 text-[11px] text-slate-400 whitespace-nowrap">
+                      <td className="w-40 text-[11px] text-muted-foreground whitespace-nowrap">
                         {relTime(g.last)}
                       </td>
                     </tr>
@@ -569,7 +569,7 @@ export default async function SettingsPage({
 
       {tab === "email" && (
         <div className="max-w-3xl">
-          <div className="card p-0 divide-y divide-slate-800">
+          <div className="card p-0 divide-y divide-border/50">
             <Row
               title="Email sending (SMTP)"
               status={
@@ -580,7 +580,7 @@ export default async function SettingsPage({
                 )
               }
             >
-              <p className="text-xs text-slate-400 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 Used for all outgoing email. Works with any SMTP provider (your denagocpt.co.za
                 mailbox, Google Workspace, Resend, SendGrid).
               </p>
@@ -602,7 +602,7 @@ export default async function SettingsPage({
                       defaultChecked={setting("SMTP_SECURE") === "true"}
                       className="h-4 w-4"
                     />
-                    <label htmlFor="secure" className="text-sm text-slate-400">
+                    <label htmlFor="secure" className="text-sm text-muted-foreground">
                       SSL (port 465)
                     </label>
                   </div>
@@ -641,7 +641,7 @@ export default async function SettingsPage({
                 )
               }
             >
-              <p className="text-xs text-slate-400 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 Customer replies land on their record automatically (checked every 15 minutes,
                 read-only — nothing is moved or marked in the mailbox). Unknown senders are left
                 alone. Usually the same details as SMTP with port 993.
@@ -664,7 +664,7 @@ export default async function SettingsPage({
                       defaultChecked={setting("IMAP_SECURE") !== "false"}
                       className="h-4 w-4"
                     />
-                    <label htmlFor="imap-secure" className="text-sm text-slate-400">SSL</label>
+                    <label htmlFor="imap-secure" className="text-sm text-muted-foreground">SSL</label>
                   </div>
                 </div>
                 <div>
@@ -687,11 +687,11 @@ export default async function SettingsPage({
                 setting("SERVICE_REMINDER_ENABLED") === "true" ? (
                   <span className="badge bg-emerald-500/15 text-emerald-300">On</span>
                 ) : (
-                  <span className="badge bg-slate-800 text-slate-400">Off</span>
+                  <span className="badge bg-muted text-muted-foreground">Off</span>
                 )
               }
             >
-              <p className="text-xs text-slate-400 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 Customers whose vehicle is due for a service get one automatic email per
                 due-cycle. Placeholders: <code>{"{{first_name}}"}</code>,{" "}
                 <code>{"{{model}}"}</code>, <code>{"{{due_date}}"}</code>,{" "}
@@ -706,7 +706,7 @@ export default async function SettingsPage({
                     defaultChecked={setting("SERVICE_REMINDER_ENABLED") === "true"}
                     className="h-4 w-4"
                   />
-                  <label htmlFor="sr-enabled" className="text-sm text-slate-300">
+                  <label htmlFor="sr-enabled" className="text-sm text-muted-foreground">
                     Enabled
                   </label>
                 </div>
@@ -736,17 +736,17 @@ export default async function SettingsPage({
                 setting("LIFECYCLE_WINBACK_ENABLED") === "true" ? (
                   <span className="badge bg-emerald-500/15 text-emerald-300">On</span>
                 ) : (
-                  <span className="badge bg-slate-800 text-slate-400">Off</span>
+                  <span className="badge bg-muted text-muted-foreground">Off</span>
                 )
               }
             >
-              <p className="text-xs text-slate-400 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 Automatic, self-throttled emails to cart owners. Anniversary wishes go out on the
                 purchase date each year; win-back reaches owners who haven&apos;t serviced or been in
                 touch for over a year. Requires SMTP.
               </p>
               <form action={saveLifecycleSettings} className="flex items-center gap-6 flex-wrap">
-                <label className="flex items-center gap-2 text-sm text-slate-300">
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
                   <input
                     type="checkbox"
                     name="anniversary"
@@ -755,7 +755,7 @@ export default async function SettingsPage({
                   />
                   Purchase anniversary
                 </label>
-                <label className="flex items-center gap-2 text-sm text-slate-300">
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
                   <input
                     type="checkbox"
                     name="winback"
@@ -771,18 +771,18 @@ export default async function SettingsPage({
             <Row
               title="Email templates"
               status={
-                <span className="badge bg-slate-800 text-slate-300">{templates.length}</span>
+                <span className="badge bg-muted text-muted-foreground">{templates.length}</span>
               }
               action="Manage"
             >
-              <p className="text-xs text-slate-400 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 Placeholders: <code>{"{{name}}"}</code>, <code>{"{{first_name}}"}</code>,{" "}
                 <code>{"{{model}}"}</code>, <code>{"{{color}}"}</code>, <code>{"{{value}}"}</code>,{" "}
                 <code>{"{{user_name}}"}</code> — filled from the lead/contact when sending.
               </p>
               <div className="space-y-3 mb-4">
                 {templates.map((t) => (
-                  <details key={t.id} className="rounded-lg border border-slate-800 bg-slate-800/40">
+                  <details key={t.id} className="rounded-lg border border-border bg-muted/40">
                     <summary className="px-4 py-2.5 cursor-pointer text-sm font-medium">
                       {t.name}
                     </summary>
@@ -804,7 +804,7 @@ export default async function SettingsPage({
                   </details>
                 ))}
               </div>
-              <details className="rounded-lg border border-slate-800 bg-slate-800/40">
+              <details className="rounded-lg border border-border bg-muted/40">
                 <summary className="px-4 py-2.5 cursor-pointer text-sm font-medium">
                   + New template
                 </summary>
@@ -828,9 +828,9 @@ export default async function SettingsPage({
 
       {tab === "import" && (
         <div className="max-w-3xl">
-          <div className="card p-0 divide-y divide-slate-800">
+          <div className="card p-0 divide-y divide-border/50">
             <Row title="Import contacts from CSV" action="Import">
-              <p className="text-xs text-slate-400 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 Upload a CSV with a header row. Recognised columns: Name (or First Name / Last
                 Name), Email, Phone, WhatsApp, Company, Address, Suburb, City, Province, Postal
                 Code, Notes, Source. Contacts matching an existing email or phone are skipped —
@@ -844,17 +844,17 @@ export default async function SettingsPage({
 
       {tab === "quotes" && (
         <div className="max-w-3xl">
-          <div className="card p-0 divide-y divide-slate-800">
+          <div className="card p-0 divide-y divide-border/50">
             <Row
               title="Quote defaults"
               status={
-                <span className="badge bg-slate-800 text-slate-300">
+                <span className="badge bg-muted text-muted-foreground">
                   valid {setting("QUOTE_VALID_DAYS") || "7"} days
                 </span>
               }
               action="Edit"
             >
-              <p className="text-xs text-slate-400 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 Applied to new quotes; each quote can still be adjusted individually.
               </p>
               <form action={saveQuoteDefaults} className="space-y-4 max-w-xl">
@@ -879,7 +879,7 @@ export default async function SettingsPage({
                       "Prices include VAT. Delivery arranged on acceptance. E&OE."
                     }
                   />
-                  <p className="text-xs text-slate-500 mt-1">
+                  <p className="text-xs text-muted-foreground mt-1">
                     Each line becomes its own bullet point on the printed quote.
                   </p>
                 </div>
@@ -892,18 +892,18 @@ export default async function SettingsPage({
 
       {tab === "workshop" && (
         <div className="max-w-3xl">
-          <div className="card p-0 divide-y divide-slate-800">
+          <div className="card p-0 divide-y divide-border/50">
             <Row
               title="Online booking slots"
               status={
-                <span className="badge bg-slate-800 text-slate-300">
+                <span className="badge bg-muted text-muted-foreground">
                   {(setting("BOOKING_SLOT_TIMES") || "08:00,10:00,12:00,14:00").split(",").length}{" "}
                   per day
                 </span>
               }
               action="Edit"
             >
-              <p className="text-xs text-slate-400 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 Customers booking a service on denagocpt.co.za can only pick these slots. A slot
                 disappears from the website the moment it&apos;s taken.
               </p>
@@ -923,7 +923,7 @@ export default async function SettingsPage({
                       ["1", "Mon"], ["2", "Tue"], ["3", "Wed"], ["4", "Thu"],
                       ["5", "Fri"], ["6", "Sat"], ["7", "Sun"],
                     ].map(([val, label]) => (
-                      <label key={val} className="flex items-center gap-1.5 text-sm text-slate-300">
+                      <label key={val} className="flex items-center gap-1.5 text-sm text-muted-foreground">
                         <input
                           type="checkbox"
                           name="days"
@@ -971,7 +971,7 @@ export default async function SettingsPage({
 
       {tab === "integrations" && (
         <div className="max-w-3xl">
-          <div className="card p-0 divide-y divide-slate-800">
+          <div className="card p-0 divide-y divide-border/50">
             <Row
               title="Facebook & Instagram (Meta)"
               status={
@@ -982,20 +982,20 @@ export default async function SettingsPage({
                 )
               }
             >
-              <p className="text-xs text-slate-400 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 Powers lead ads and Messenger/Instagram DMs. Webhook (leadgen + messages fields):
               </p>
               <div className="space-y-3">
                 <div>
                   <label className="label">Webhook callback URL</label>
-                  <code className="block text-sm bg-slate-800 rounded-lg px-3 py-2">
+                  <code className="block text-sm bg-muted rounded-lg px-3 py-2">
                     https://crm.denagocpt.co.za/api/webhooks/meta
                   </code>
                 </div>
                 <div>
                   <label className="label">Verify token</label>
                   <div className="flex gap-2">
-                    <code className="flex-1 text-sm bg-slate-800 rounded-lg px-3 py-2 break-all">
+                    <code className="flex-1 text-sm bg-muted rounded-lg px-3 py-2 break-all">
                       {setting("META_VERIFY_TOKEN") || "—"}
                     </code>
                     <form action={regenerateSetting.bind(null, "META_VERIFY_TOKEN")}>
@@ -1044,7 +1044,7 @@ export default async function SettingsPage({
                 )
               }
             >
-              <p className="text-xs text-slate-400 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 Connect your dedicated WhatsApp number: add the <b>WhatsApp</b> product in your
                 Meta app, register the number, subscribe the webhook below to the <b>messages</b>{" "}
                 field (same verify token and app secret as above).
@@ -1052,7 +1052,7 @@ export default async function SettingsPage({
               <div className="space-y-3">
                 <div>
                   <label className="label">Webhook callback URL</label>
-                  <code className="block text-sm bg-slate-800 rounded-lg px-3 py-2">
+                  <code className="block text-sm bg-muted rounded-lg px-3 py-2">
                     https://crm.denagocpt.co.za/api/webhooks/whatsapp
                   </code>
                 </div>
@@ -1096,7 +1096,7 @@ export default async function SettingsPage({
                 )
               }
             >
-              <p className="text-xs text-slate-400 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 New reviews appear in the Social inbox with a push notification. Needs a Google
                 Cloud API key with the <b>Places API (New)</b> enabled, plus your Place ID.
               </p>
@@ -1141,7 +1141,7 @@ export default async function SettingsPage({
                 )
               }
             >
-              <p className="text-xs text-slate-400 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 Sends OTPs to customers verifying their vehicle on the website booking form.
                 Create a free account at bulksms.com → Settings → Developer → API Tokens.
                 Without this, codes fall back to the customer&apos;s registered email.
@@ -1187,7 +1187,7 @@ export default async function SettingsPage({
                 )
               }
             >
-              <p className="text-xs text-slate-400 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 Powers the ✨ message check, 🔎 lead research and (optionally) automatic research
                 on new leads. Suggestions only — the AI never changes data. Get a key at
                 console.anthropic.com.
@@ -1209,7 +1209,7 @@ export default async function SettingsPage({
                 </form>
                 <form action={saveSetting} className="flex items-center gap-2">
                   <input type="hidden" name="key" value="AI_AUTO_RESEARCH" />
-                  <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                  <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
                     <input
                       type="checkbox"
                       name="value"
@@ -1229,7 +1229,7 @@ export default async function SettingsPage({
               status={<span className="badge bg-emerald-500/15 text-emerald-300">Active</span>}
               action="View"
             >
-              <p className="text-xs text-slate-400 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 POST leads from the website or landing pages with the <code>X-Api-Key</code>{" "}
                 header. Fields: name (required), email, phone, message, model, color, source.
               </p>
@@ -1237,7 +1237,7 @@ export default async function SettingsPage({
                 <div>
                   <label className="label">API key</label>
                   <div className="flex gap-2">
-                    <code className="flex-1 text-sm bg-slate-800 rounded-lg px-3 py-2 break-all">
+                    <code className="flex-1 text-sm bg-muted rounded-lg px-3 py-2 break-all">
                       {setting("INTAKE_API_KEY") || "—"}
                     </code>
                     <form action={regenerateSetting.bind(null, "INTAKE_API_KEY")}>
