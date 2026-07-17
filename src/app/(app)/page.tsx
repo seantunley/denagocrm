@@ -16,6 +16,7 @@ import {
   TriangleAlert,
   ArrowRight,
   FileSignature,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
@@ -242,6 +243,7 @@ export default async function DashboardPage() {
     myOverdue,
     noNextLeads,
     staleQuotes,
+    newLeadsCount,
   ] = await Promise.all([
     prisma.lead.count({ where: { status: "open" } }),
     prisma.lead.aggregate({ where: { status: "open" }, _sum: { valueCents: true } }),
@@ -330,6 +332,8 @@ export default async function DashboardPage() {
       orderBy: { createdAt: "asc" },
       take: 5,
     }),
+    // Brand-new leads: open and never opened by anyone yet (viewedAt still null).
+    prisma.lead.count({ where: { status: "open", viewedAt: null } }),
   ]);
 
   const salesToday = todayAll.filter((a) => a.category !== "workshop");
@@ -588,23 +592,55 @@ export default async function DashboardPage() {
                 {statGrid(salesStats)}
 
                 <div className="grid items-stretch gap-4 lg:grid-cols-3">
-                  <div className="min-w-0 rounded-xl border border-border bg-card p-4 shadow-sm lg:col-span-2">
-                    <div className="mb-3 flex items-center justify-between">
-                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                        Pipeline snapshot
-                      </p>
-                      <Link
-                        href="/leads"
-                        className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-                      >
-                        Board
+                  <div className="grid min-w-0 gap-4 sm:grid-cols-3 lg:col-span-2">
+                    {/* Brand-new leads — untouched since they came in */}
+                    <Link
+                      href="/leads"
+                      className={`group flex min-w-0 flex-col justify-between rounded-xl border p-4 shadow-sm transition-colors sm:col-span-1 ${
+                        newLeadsCount > 0
+                          ? "border-emerald-500/30 bg-emerald-500/[0.07] hover:border-emerald-500/50"
+                          : "border-border bg-card hover:border-primary/30"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                          Brand-new
+                        </p>
+                        <Sparkles className={`size-4 ${newLeadsCount > 0 ? "text-emerald-400" : "text-muted-foreground"}`} />
+                      </div>
+                      <div className="mt-2">
+                        <div className={`text-3xl font-bold tabular-nums ${newLeadsCount > 0 ? "text-emerald-300" : "text-foreground"}`}>
+                          {newLeadsCount}
+                        </div>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          {newLeadsCount === 1 ? "lead not opened yet" : "leads not opened yet"}
+                        </p>
+                      </div>
+                      <span className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary group-hover:underline">
+                        {newLeadsCount > 0 ? "Review now" : "All caught up"}
                         <ArrowRight className="size-3" />
-                      </Link>
+                      </span>
+                    </Link>
+
+                    {/* Pipeline snapshot */}
+                    <div className="min-w-0 rounded-xl border border-border bg-card p-4 shadow-sm sm:col-span-2">
+                      <div className="mb-3 flex items-center justify-between">
+                        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                          Pipeline snapshot
+                        </p>
+                        <Link
+                          href="/leads"
+                          className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                        >
+                          Board
+                          <ArrowRight className="size-3" />
+                        </Link>
+                      </div>
+                      <PipelineSnapshot
+                        segments={segments}
+                        totalValue={formatZARCompact(openValue._sum.valueCents ?? 0)}
+                      />
                     </div>
-                    <PipelineSnapshot
-                      segments={segments}
-                      totalValue={formatZARCompact(openValue._sum.valueCents ?? 0)}
-                    />
                   </div>
                   <div className="min-w-0 rounded-xl border border-border bg-card p-4 shadow-sm">
                     <div className="mb-3 flex items-center justify-between">
