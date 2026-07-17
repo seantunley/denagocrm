@@ -47,6 +47,7 @@ import {
   DialogTitle,
   ResponsiveDialogContent,
 } from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { shiftDateKey } from "@/lib/calendarDates";
 import { cn } from "@/lib/utils";
 
@@ -183,66 +184,124 @@ function EventCard({
   const done = event.status === "done";
 
   return (
-    <button
-      type="button"
-      draggable={canManage && !done}
-      onDragStart={(dragEvent) => {
-        dragEvent.dataTransfer.effectAllowed = "move";
-        dragEvent.dataTransfer.setData("text/calendar-event", event.id);
-        onDragStart(event.id);
-      }}
-      onClick={() => onOpen(event)}
-      className={cn(
-        "group/event w-full overflow-hidden rounded-lg border text-left transition hover:-translate-y-px hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60",
-        done
-          ? "border-border bg-muted/45 text-muted-foreground"
-          : event.overdue
-            ? "border-red-500/30 bg-red-500/10 text-red-100"
-            : event.workshop
-              ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-100"
-              : config.tone,
-        compact ? "px-2 py-1.5" : "p-3",
-        canManage && !done && "cursor-grab active:cursor-grabbing",
-      )}
-      aria-label={`${event.summary}, ${event.dateLabel}${
-        event.time ? ` at ${event.time}` : ""
-      }`}
-    >
-      <div className="flex min-w-0 items-start gap-2">
-        <Icon
+    <Tooltip delayDuration={180}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          draggable={canManage && !done}
+          onDragStart={(dragEvent) => {
+            dragEvent.dataTransfer.effectAllowed = "move";
+            dragEvent.dataTransfer.setData("text/calendar-event", event.id);
+            onDragStart(event.id);
+          }}
+          onClick={() => onOpen(event)}
           className={cn(
-            "mt-0.5 shrink-0",
-            compact ? "size-3" : "size-4",
+            "group/event w-full overflow-hidden rounded-lg border text-left transition hover:-translate-y-px hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60",
+            done
+              ? "border-border bg-muted/45 text-muted-foreground"
+              : event.overdue
+                ? "border-red-500/30 bg-red-500/10 text-red-100"
+                : event.workshop
+                  ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-100"
+                  : config.tone,
+            compact ? "px-2 py-1.5" : "p-3",
+            canManage && !done && "cursor-grab active:cursor-grabbing",
           )}
-        />
-        <div className="min-w-0 flex-1">
-          <p
-            className={cn(
-              "truncate font-medium",
-              compact ? "text-[11px] leading-4" : "text-sm",
-              done && "line-through",
-            )}
-          >
-            {event.time && (
-              <span className="mr-1.5 tabular-nums opacity-75">
-                {event.time}
-              </span>
-            )}
-            {event.summary}
-          </p>
-          {!compact && (
-            <div className="mt-1.5 flex min-w-0 items-center gap-2 text-[11px] opacity-70">
-              <span className="truncate">
-                {event.who ?? eventType(event.type).label}
-              </span>
-              <span aria-hidden="true">·</span>
-              <span className="truncate">{event.assignee}</span>
+          aria-label={`${event.summary}, ${event.dateLabel}${event.time ? ` at ${event.time}` : ""}`}
+        >
+          <div className="flex min-w-0 items-start gap-2">
+            <Icon className={cn("mt-0.5 shrink-0", compact ? "size-3" : "size-4")} />
+            <div className="min-w-0 flex-1">
+              <p className={cn("truncate font-medium", compact ? "text-[11px] leading-4" : "text-sm", done && "line-through")}>
+                {event.time && <span className="mr-1.5 tabular-nums opacity-75">{event.time}</span>}
+                {event.summary}
+              </p>
+              {!compact && (
+                <div className="mt-1.5 flex min-w-0 items-center gap-2 text-[11px] opacity-70">
+                  <span className="truncate">{event.who ?? eventType(event.type).label}</span>
+                  <span aria-hidden="true">·</span>
+                  <span className="truncate">{event.assignee}</span>
+                </div>
+              )}
             </div>
-          )}
+            {done && <Check className="size-3.5 shrink-0" />}
+          </div>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={8} className="hidden w-80 max-w-[calc(100vw-2rem)] border-border p-0 shadow-2xl lg:block">
+        <div className="overflow-hidden rounded-lg">
+          <div className="border-b border-border bg-card/95 p-3.5">
+            <div className="flex items-start gap-2.5">
+              <span className={cn("mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg border", event.workshop ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200" : config.tone)}>
+                <Icon className="size-3.5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold leading-5 text-popover-foreground">{event.summary}</p>
+                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span>{event.dateLabel}{event.time ? ` · ${event.time}` : " · All day"}</span>
+                  <span className={cn(
+                    "rounded-full px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide",
+                    done
+                      ? "bg-emerald-500/15 text-emerald-300"
+                      : event.overdue
+                        ? "bg-red-500/15 text-red-300"
+                        : "bg-muted text-muted-foreground",
+                  )}>
+                    {done ? "Completed" : event.overdue ? "Overdue" : "Planned"}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2 bg-popover p-3.5 text-[11px] text-muted-foreground">
+            {event.who && (
+              <p className="flex items-center gap-2">
+                <User className="size-3.5 shrink-0 text-primary" />
+                <span className="truncate font-medium text-popover-foreground">{event.who}</span>
+              </p>
+            )}
+            {event.context && (
+              <p className="flex items-center gap-2">
+                <Car className="size-3.5 shrink-0" />
+                <span className="truncate">{event.context}</span>
+              </p>
+            )}
+            {event.phone && (
+              <p className="flex items-center gap-2">
+                <Phone className="size-3.5 shrink-0" />
+                <span>{event.phone}</span>
+              </p>
+            )}
+            {event.email && (
+              <p className="flex min-w-0 items-center gap-2">
+                <Mail className="size-3.5 shrink-0" />
+                <span className="truncate">{event.email}</span>
+              </p>
+            )}
+            {event.location && (
+              <p className="flex items-center gap-2">
+                <MapPin className="size-3.5 shrink-0" />
+                <span className="truncate">{event.location}</span>
+              </p>
+            )}
+            {event.note && (
+              <p className="flex items-start gap-2 border-t border-border pt-2">
+                <StickyNote className="mt-0.5 size-3.5 shrink-0" />
+                <span className="line-clamp-3 leading-5">{event.note}</span>
+              </p>
+            )}
+            <div className="flex items-center justify-between gap-3 border-t border-border pt-2">
+              <p className="flex min-w-0 items-center gap-2">
+                <span className="grid size-5 shrink-0 place-items-center rounded-full bg-primary/15 text-[8px] font-bold text-primary">{initials(event.assignee)}</span>
+                <span className="truncate">{event.assignee}</span>
+              </p>
+              <span className="shrink-0 font-medium text-primary">Click for details</span>
+            </div>
+          </div>
         </div>
-        {done && <Check className="size-3.5 shrink-0" />}
-      </div>
-    </button>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
