@@ -40,6 +40,7 @@ import { generateDocEditorDocument } from "@/app/actions/doceditor";
 import { activeRecordRequest } from "@/lib/signing/record";
 import JobCardItemForm from "@/components/JobCardItemForm";
 import { AnnotatablePhoto, type AnnData } from "@/components/PhotoAnnotator";
+import { CameraCapture } from "@/components/CameraCapture";
 import { uploadJobCardPhotos } from "@/app/actions/jobcards";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import {
@@ -322,10 +323,13 @@ export default async function JobCardDetailPage({
                   sides.
                 </p>
               </div>
-              <form action={uploadJobCardPhotos.bind(null, jobCard.id)} className="flex items-center gap-2">
-                <input type="file" name="files" multiple required accept="image/*" capture="environment" className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-                <button className="btn-primary btn-sm">Upload</button>
-              </form>
+              <div className="flex items-center gap-2 flex-wrap">
+                <CameraCapture action={uploadJobCardPhotos.bind(null, jobCard.id)} />
+                <form action={uploadJobCardPhotos.bind(null, jobCard.id)} className="flex items-center gap-2">
+                  <input type="file" name="files" multiple required accept="image/*" capture="environment" className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
+                  <button className="btn-primary btn-sm">Upload</button>
+                </form>
+              </div>
             </div>
             {jobCard.documents.filter((d) => d.tag === "checkin-photo").length === 0 ? (
               <p className="text-xs text-slate-500">No photos yet — snap them at check-in.</p>
@@ -686,10 +690,13 @@ export default async function JobCardDetailPage({
                 <h2 className="font-semibold">📸 Check-out photos</h2>
                 <p className="text-xs text-slate-400">Condition AFTER the work — proof of hand-over state.</p>
               </div>
-              <form action={uploadCheckoutPhotos.bind(null, jobCard.id)} className="flex items-center gap-2">
-                <input type="file" name="files" multiple required accept="image/*" capture="environment" className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-                <button className="btn-primary btn-sm">Upload</button>
-              </form>
+              <div className="flex items-center gap-2 flex-wrap">
+                <CameraCapture action={uploadCheckoutPhotos.bind(null, jobCard.id)} />
+                <form action={uploadCheckoutPhotos.bind(null, jobCard.id)} className="flex items-center gap-2">
+                  <input type="file" name="files" multiple required accept="image/*" capture="environment" className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
+                  <button className="btn-primary btn-sm">Upload</button>
+                </form>
+              </div>
             </div>
             {jobCard.documents.filter((d) => d.tag === "checkout-photo").length === 0 ? (
               <p className="text-xs text-slate-500">No check-out photos yet.</p>
