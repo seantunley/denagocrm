@@ -4,9 +4,26 @@ import path from "path";
 import { prisma } from "@/lib/db";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
+import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import { htmlToPdf } from "@/lib/customDocs";
 import { parseDocument, type DocumentModel } from "./model";
 import { renderDocumentHtml, renderEmailHtml, type RenderCtx } from "./serialize";
+
+/**
+ * Fold the editable Company Profile in as {{company.*}} tokens, exactly as the
+ * signing path's bindCtx() does — otherwise the builder preview/export/PDF path
+ * renders literal {{company.name}} placeholders in the FROM card and footer.
+ * Because these tokens don't depend on a bound record, they are resolved even when
+ * NO quote/job card is bound (list preview / "No record" export), where ctx would
+ * otherwise be null. Record-specific tokens still win on any overlap.
+ */
+async function withCompany(ctx: RenderCtx): Promise<RenderCtx> {
+  const company = companyTokens(await getCompanyProfile());
+  // Unbound: carry company tokens only, but mark bound:false so conditionals/showIf
+  // columns render as the placeholder layout rather than evaluating an empty scope.
+  if (!ctx) return { tokens: company, items: [], vars: {}, bound: false };
+  return { ...ctx, tokens: { ...company, ...ctx.tokens }, bound: true };
+}
 
 let logoCache: string | null | undefined;
 function logoDataUri(): string | undefined {
@@ -42,6 +59,9 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
     });
     if (jc) { ctx = buildJobCardContext(jc); title = `${doc.title} — Job #${jc.number}`; jId = jc.id; contactId = jc.contactId; }
   }
+  // Fold in company tokens once — including the unbound case (ctx still null), so the
+  // record-independent brand tokens resolve in list previews and "No record" exports.
+  ctx = await withCompany(ctx);
   return { doc, ctx, title, quoteId: qId, jobCardId: jId, contactId };
 }
 

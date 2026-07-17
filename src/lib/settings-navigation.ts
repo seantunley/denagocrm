@@ -56,6 +56,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
   {
     label: "Organisation",
     items: [
+      { key: "company", label: "Company profile", href: "/settings/company", keywords: ["business", "address", "phone", "branding", "footer", "logo", "details"] },
       { key: "team", label: "Team & access", href: "/settings/access", keywords: ["users", "staff", "members", "roles", "permissions"] },
       { key: "portal-access", label: "Portal access", href: "/settings/portal-access", keywords: ["customer portal", "delegation", "profile requests"] },
       { key: "documents", label: "Documents", href: "/settings/documents", keywords: ["templates", "document studio"] },
