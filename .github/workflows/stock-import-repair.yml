@@ -1,0 +1,36 @@
+name: Stock import repair
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.base_ref == 'agent/stock-operations-platform'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Add missing stock workspace icon import
+        shell: bash
+        run: |
+          git fetch origin agent/stock-operations-platform
+          git checkout -B agent/stock-operations-platform origin/agent/stock-operations-platform
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/app/(app)/stock/page.tsx')
+          text = path.read_text()
+          old = '  CalendarClock,\n  Download,'
+          new = '  CalendarClock,\n  ClipboardCheck,\n  Download,'
+          if old in text:
+              path.write_text(text.replace(old, new, 1))
+          PY
+          if git diff --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add 'src/app/(app)/stock/page.tsx'
+          git commit -m "Fix stock workspace icon import"
+          git push origin HEAD:agent/stock-operations-platform
