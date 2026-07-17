@@ -1,6 +1,10 @@
 "use client";
 
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type {
+  ButtonHTMLAttributes,
+  MouseEvent,
+  ReactNode,
+} from "react";
 import {
   openQuickCreate,
   type QuickCreateKind,
@@ -9,13 +13,19 @@ import {
 export function QuickCreateButton({
   kind,
   children,
+  onClick,
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   kind: QuickCreateKind;
   children: ReactNode;
 }) {
+  function handleClick(event: MouseEvent<HTMLButtonElement>) {
+    onClick?.(event);
+    if (!event.defaultPrevented) openQuickCreate(kind);
+  }
+
   return (
-    <button type="button" onClick={() => openQuickCreate(kind)} {...props}>
+    <button {...props} type="button" onClick={handleClick}>
       {children}
     </button>
   );
