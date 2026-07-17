@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogHeader,
@@ -20,6 +21,12 @@ import { scheduleActivity } from "@/app/actions/activities";
 
 export type QuickCreateKind = "lead" | "contact" | "calendar" | "quote" | "jobcard" | "vehicle";
 
+export type CalendarCreateDefaults = {
+  dueDate?: string;
+  workshop?: boolean;
+  revalidate?: string;
+};
+
 const TITLES: Record<QuickCreateKind, string> = {
   lead: "New lead",
   contact: "New contact",
@@ -29,8 +36,8 @@ const TITLES: Record<QuickCreateKind, string> = {
   vehicle: "Register vehicle",
 };
 
-export function openQuickCreate(kind: QuickCreateKind) {
-  window.dispatchEvent(new CustomEvent("denago:quick-create", { detail: kind }));
+export function openQuickCreate(kind: QuickCreateKind, defaults?: CalendarCreateDefaults) {
+  window.dispatchEvent(new CustomEvent("denago:quick-create", { detail: { kind, defaults } }));
 }
 
 type Options = {
@@ -48,10 +55,21 @@ type Options = {
  */
 export default function QuickCreateDialog() {
   const [kind, setKind] = useState<QuickCreateKind | null>(null);
+  const [calendarDefaults, setCalendarDefaults] = useState<CalendarCreateDefaults>({});
   const [options, setOptions] = useState<Options | null>(null);
 
   useEffect(() => {
-    const onOpen = (e: Event) => setKind((e as CustomEvent).detail as QuickCreateKind);
+    const onOpen = (event: Event) => {
+      const detail = (event as CustomEvent<QuickCreateKind | { kind: QuickCreateKind; defaults?: CalendarCreateDefaults }>).detail;
+      // Keep accepting the original string event shape for older callers.
+      if (typeof detail === "string") {
+        setKind(detail);
+        setCalendarDefaults({});
+        return;
+      }
+      setKind(detail.kind);
+      setCalendarDefaults(detail.defaults ?? {});
+    };
     window.addEventListener("denago:quick-create", onOpen);
     return () => window.removeEventListener("denago:quick-create", onOpen);
   }, []);
@@ -59,7 +77,7 @@ export default function QuickCreateDialog() {
   useEffect(() => {
     if (!kind || options) return;
     fetch("/api/quick-create")
-      .then((r) => r.json())
+      .then((response) => response.json())
       .then(setOptions)
       .catch(() => setOptions(null));
   }, [kind, options]);
@@ -67,11 +85,26 @@ export default function QuickCreateDialog() {
   const input =
     "w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20";
 
+  function close() {
+    setKind(null);
+    setCalendarDefaults({});
+  }
+
+  async function scheduleCalendar(formData: FormData) {
+    try {
+      await scheduleActivity(formData);
+      close();
+      toast.success("Activity scheduled");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not schedule activity");
+    }
+  }
+
   if (kind === "quote" && options) {
     return (
       <QuoteEditorDialog
         open
-        onOpenChange={(next) => !next && setKind(null)}
+        onOpenChange={(next) => !next && close()}
         contacts={options.contacts}
         products={options.products}
         defaults={options.quoteDefaults}
@@ -80,7 +113,7 @@ export default function QuickCreateDialog() {
   }
 
   return (
-    <Dialog open={!!kind} onOpenChange={(o) => !o && setKind(null)}>
+    <Dialog open={Boolean(kind)} onOpenChange={(open) => !open && close()}>
       <ResponsiveDialogContent className="sm:max-w-2xl">
         <DialogHeader className="text-left">
           <DialogTitle>{kind ? TITLES[kind] : ""}</DialogTitle>
@@ -123,12 +156,20 @@ export default function QuickCreateDialog() {
             )}
 
             {kind === "calendar" && (
-              <form action={scheduleActivity} className="space-y-4">
-                <input type="hidden" name="revalidate" value="/" />
-                <div className="grid grid-cols-2 gap-3">
+              <form action={scheduleCalendar} className="space-y-4">
+                <input type="hidden" name="revalidate" value={calendarDefaults.revalidate ?? "/"} />
+                <div className="rounded-xl border border-border bg-card/45 p-4">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">Schedule the next step</p>
+                  <p className="mt-1 text-sm text-muted-foreground">Add the owner, customer context and location so the diary is useful to the whole team.</p>
+                </div>
+                <div>
+                  <label className="label">What needs to happen? *</label>
+                  <input name="summary" className={input} required placeholder="e.g. Product demo for the estate manager" autoFocus />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <label className="label">Type</label>
-                    <select name="type" className={input} defaultValue="call">
+                    <select name="type" className={input} defaultValue={calendarDefaults.workshop ? "meeting" : "call"}>
                       <option value="call">Call</option>
                       <option value="whatsapp">WhatsApp</option>
                       <option value="email">Email</option>
@@ -139,35 +180,42 @@ export default function QuickCreateDialog() {
                   </div>
                   <div>
                     <label className="label">When *</label>
-                    <input type="datetime-local" name="dueDate" className={input} required />
+                    <input type="datetime-local" name="dueDate" className={input} defaultValue={calendarDefaults.dueDate} required />
                   </div>
                 </div>
-                <div>
-                  <label className="label">What *</label>
-                  <input name="summary" className={input} required placeholder="e.g. Demo for the estate manager" />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-3 sm:grid-cols-2">
                   <div>
-                    <label className="label">Contact (optional)</label>
+                    <label className="label">Customer or contact</label>
                     <select name="contactId" className={input} defaultValue="">
                       <option value="">—</option>
-                      {options.contacts.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.label}
-                        </option>
+                      {options.contacts.map((contact) => (
+                        <option key={contact.id} value={contact.id}>{contact.label}</option>
                       ))}
                     </select>
                   </div>
                   <div>
-                    <label className="label">Location (optional)</label>
-                    <input name="location" className={input} placeholder="Showroom, address…" />
+                    <label className="label">Assign to</label>
+                    <select name="assignedToId" className={input} defaultValue="">
+                      <option value="">Me</option>
+                      {options.users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+                    </select>
                   </div>
                 </div>
-                <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <input type="checkbox" name="workshop" className="h-4 w-4 accent-orange-600" />
-                  Workshop calendar (service job)
-                </label>
-                <button className="btn-primary">Schedule</button>
+                <div>
+                  <label className="label">Location</label>
+                  <input name="location" className={input} placeholder="Showroom, workshop or customer address" />
+                </div>
+                <div>
+                  <label className="label">Internal note</label>
+                  <textarea name="note" className={`${input} min-h-20 resize-y`} placeholder="Preparation, customer request or handover detail…" />
+                </div>
+                <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <input type="checkbox" name="workshop" className="h-4 w-4 accent-orange-600" defaultChecked={calendarDefaults.workshop} />
+                    Workshop booking
+                  </label>
+                  <button className="btn-primary">Schedule activity</button>
+                </div>
               </form>
             )}
           </>

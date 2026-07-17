@@ -9,6 +9,7 @@ import {
   type PermissionUser,
 } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
+import { reserveSlot } from "@/lib/bookingSlots";
 
 const str = (formData: FormData, key: string) => {
   const value = String(formData.get(key) ?? "").trim();
@@ -17,20 +18,32 @@ const str = (formData: FormData, key: string) => {
 
 async function assertLinks(
   user: PermissionUser,
-  links: { leadId?: string | null; contactId?: string | null }
+  links: { leadId?: string | null; contactId?: string | null },
 ) {
-  if (links.leadId && !(await canAccessLead(user, links.leadId))) throw new Error("Lead access denied");
-  if (links.contactId && !(await canAccessContact(user, links.contactId))) throw new Error("Contact access denied");
+  if (links.leadId && !(await canAccessLead(user, links.leadId))) {
+    throw new Error("Lead access denied");
+  }
+  if (links.contactId && !(await canAccessContact(user, links.contactId))) {
+    throw new Error("Contact access denied");
+  }
 }
 
 async function requireActivityAccess(id: string) {
   const user = await requirePermission("activities.manage");
-  const activity = await prisma.activity.findUniqueOrThrow({ where: { id }, include: { lead: true } });
-  const directlyOwned = activity.assignedToId === user.id || activity.createdById === user.id;
+  const activity = await prisma.activity.findUniqueOrThrow({
+    where: { id },
+    include: { lead: true },
+  });
+  const directlyOwned =
+    activity.assignedToId === user.id || activity.createdById === user.id;
   const linkedAllowed =
     (activity.leadId ? await canAccessLead(user, activity.leadId) : false) ||
-    (activity.contactId ? await canAccessContact(user, activity.contactId) : false);
-  if (user.role !== "owner" && !directlyOwned && !linkedAllowed) throw new Error("Activity access denied");
+    (activity.contactId
+      ? await canAccessContact(user, activity.contactId)
+      : false);
+  if (user.role !== "owner" && !directlyOwned && !linkedAllowed) {
+    throw new Error("Activity access denied");
+  }
   return { user, activity };
 }
 
@@ -41,24 +54,71 @@ export async function scheduleActivity(formData: FormData) {
   const leadId = str(formData, "leadId");
   const contactId = str(formData, "contactId");
   await assertLinks(user, { leadId, contactId });
+
   const rawDue = str(formData, "dueDate");
-  const activity = await prisma.activity.create({
-    data: {
-      type: str(formData, "type") ?? "todo",
-      category: formData.get("workshop") === "on" ? "workshop" : null,
-      summary,
-      note: str(formData, "note"),
-      dueDate: rawDue ? (rawDue.includes("T") ? new Date(`${rawDue}:00+02:00`) : new Date(rawDue)) : new Date(),
-      location: str(formData, "location"),
-      leadId,
-      contactId,
-      assignedToId: str(formData, "assignedToId") ?? user.id,
-      createdById: user.id,
-    },
-  });
-  const assignee = activity.assignedToId === user.id
-    ? user
-    : await prisma.user.findUnique({ where: { id: activity.assignedToId } });
+  const type = str(formData, "type") ?? "todo";
+  const note = str(formData, "note");
+  const location = str(formData, "location");
+  const assignedToId = str(formData, "assignedToId") ?? user.id;
+  const workshop = formData.get("workshop") === "on";
+
+  let activity;
+  if (workshop) {
+    if (!rawDue || !rawDue.includes("T")) {
+      throw new Error("Pick a configured workshop date and time");
+    }
+    try {
+      activity = await reserveSlot({
+        date: rawDue.slice(0, 10),
+        time: rawDue.slice(11, 16),
+        summary,
+        note,
+        location,
+        type,
+        contactId,
+        leadId,
+        assignedToId,
+        userId: user.id,
+      });
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "";
+      if (code === "SLOT_TAKEN") {
+        throw new Error(
+          "That workshop time has just filled up. Pick another available slot.",
+        );
+      }
+      if (code === "SLOT_INVALID") {
+        throw new Error(
+          "That workshop slot is no longer available. Pick a future configured date and time.",
+        );
+      }
+      throw error;
+    }
+  } else {
+    activity = await prisma.activity.create({
+      data: {
+        type,
+        category: null,
+        summary,
+        note,
+        dueDate: rawDue
+          ? rawDue.includes("T")
+            ? new Date(`${rawDue}:00+02:00`)
+            : new Date(rawDue)
+          : new Date(),
+        location,
+        leadId,
+        contactId,
+        assignedToId,
+        createdById: user.id,
+      },
+    });
+  }
+
+  const assignee =
+    activity.assignedToId === user.id
+      ? user
+      : await prisma.user.findUnique({ where: { id: activity.assignedToId } });
   await logAudit({
     action: "activity.scheduled",
     summary: `Scheduled ${activity.type}: “${summary}”${activity.location ? ` at ${activity.location}` : ""} — assigned to ${assignee?.name ?? user.name}`,
@@ -71,10 +131,7 @@ export async function scheduleActivity(formData: FormData) {
   revalidatePath("/");
 }
 
-async function finishActivity(
-  id: string,
-  note: string
-) {
+async function finishActivity(id: string, note: string) {
   const { user } = await requireActivityAccess(id);
   const activity = await prisma.activity.update({
     where: { id },
@@ -119,14 +176,19 @@ export type CompleteAssessment = {
   leadName: string | null;
 };
 
-export async function completeActivityAssess(id: string, note: string): Promise<CompleteAssessment> {
+export async function completeActivityAssess(
+  id: string,
+  note: string,
+): Promise<CompleteAssessment> {
   const activity = await finishActivity(id, note);
   revalidatePath("/activities");
   revalidatePath("/");
   revalidatePath("/calendar");
   let needsNextStep = false;
   if (activity.lead && activity.lead.status === "open") {
-    const remaining = await prisma.activity.count({ where: { leadId: activity.leadId, status: "planned" } });
+    const remaining = await prisma.activity.count({
+      where: { leadId: activity.leadId, status: "planned" },
+    });
     needsNextStep = remaining === 0;
   }
   return {
@@ -139,11 +201,13 @@ export async function completeActivityAssess(id: string, note: string): Promise<
 
 export async function rescheduleActivity(
   id: string,
-  when: string
+  when: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const { user } = await requireActivityAccess(id);
   const dueDate = new Date(when.includes("T") ? `${when}:00+02:00` : when);
-  if (isNaN(dueDate.getTime())) return { ok: false, error: "Pick a valid date" };
+  if (isNaN(dueDate.getTime())) {
+    return { ok: false, error: "Pick a valid date" };
+  }
   const activity = await prisma.activity.update({
     where: { id },
     data: { dueDate, reminderSentAt: null },
@@ -151,7 +215,16 @@ export async function rescheduleActivity(
   });
   await logAudit({
     action: "activity.rescheduled",
-    summary: `Rescheduled ${activity.type} “${activity.summary}” to ${dueDate.toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`,
+    summary: `Rescheduled ${activity.type} “${activity.summary}” to ${dueDate.toLocaleString(
+      "en-ZA",
+      {
+        timeZone: "Africa/Johannesburg",
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      },
+    )}`,
     leadId: activity.leadId,
     contactId: activity.contactId ?? activity.lead?.contactId,
     user,
@@ -171,10 +244,22 @@ export async function scheduleFollowUp(data: {
 }): Promise<{ ok: boolean; error?: string }> {
   const user = await requirePermission("activities.manage");
   await assertLinks(user, data);
-  const dueDate = new Date(data.when.includes("T") ? `${data.when}:00+02:00` : data.when);
-  if (isNaN(dueDate.getTime())) return { ok: false, error: "Pick a valid date" };
-  const label = data.summary?.trim() ||
-    ({ call: "Follow-up call", email: "Follow-up email", whatsapp: "WhatsApp follow-up", meeting: "Meeting", test_drive: "Test Drive", todo: "Follow up" }[data.type]) ||
+  const dueDate = new Date(
+    data.when.includes("T") ? `${data.when}:00+02:00` : data.when,
+  );
+  if (isNaN(dueDate.getTime())) {
+    return { ok: false, error: "Pick a valid date" };
+  }
+  const label =
+    data.summary?.trim() ||
+    ({
+      call: "Follow-up call",
+      email: "Follow-up email",
+      whatsapp: "WhatsApp follow-up",
+      meeting: "Meeting",
+      test_drive: "Test Drive",
+      todo: "Follow up",
+    }[data.type]) ||
     "Follow up";
   const activity = await prisma.activity.create({
     data: {
@@ -202,7 +287,10 @@ export async function scheduleFollowUp(data: {
 
 export async function cancelActivity(id: string, revalidate: string) {
   await requireActivityAccess(id);
-  await prisma.activity.update({ where: { id }, data: { status: "canceled" } });
+  await prisma.activity.update({
+    where: { id },
+    data: { status: "canceled" },
+  });
   revalidatePath(revalidate);
   revalidatePath("/activities");
   revalidatePath("/");

@@ -1,4 +1,4 @@
-import { addDays, format } from "date-fns";
+import { addDays } from "date-fns";
 import { prisma } from "./db";
 import { getSetting } from "./settings";
 
@@ -31,21 +31,36 @@ export async function getSlotConfig(): Promise<SlotConfig> {
 }
 
 export function slotDateTime(date: string, time: string): Date {
-  return new Date(`${date}T${time}:00`);
+  return new Date(`${date}T${time}:00+02:00`);
+}
+
+function johannesburgTime(date: Date): string {
+  return date.toLocaleTimeString("en-GB", {
+    timeZone: "Africa/Johannesburg",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 /** ISO weekday 1–7 for a yyyy-mm-dd. */
 function isoDay(date: string): number {
-  const d = new Date(`${date}T12:00:00`).getDay();
+  const d = new Date(`${date}T12:00:00+02:00`).getUTCDay();
   return d === 0 ? 7 : d;
 }
 
 /** Availability for one day: each configured slot with taken/free state. */
 export async function getDayAvailability(date: string) {
   const config = await getSlotConfig();
-  if (!isoDayAllowed(date, config)) return { date, open: false, slots: [] as { time: string; available: boolean }[] };
+  if (!isoDayAllowed(date, config)) {
+    return {
+      date,
+      open: false,
+      slots: [] as { time: string; available: boolean }[],
+    };
+  }
 
-  const dayStart = new Date(`${date}T00:00:00`);
+  const dayStart = new Date(`${date}T00:00:00+02:00`);
   const dayEnd = addDays(dayStart, 1);
   const existing = await prisma.activity.findMany({
     where: {
@@ -60,7 +75,7 @@ export async function getDayAvailability(date: string) {
   const slots = config.times.map((time) => {
     const dt = slotDateTime(date, time);
     const takenCount = existing.filter(
-      (a) => format(a.dueDate, "HH:mm") === time
+      (activity) => johannesburgTime(activity.dueDate) === time,
     ).length;
     return {
       time,
@@ -86,6 +101,9 @@ export async function reserveSlot(input: {
   contactId: string | null;
   leadId: string | null;
   userId: string;
+  assignedToId?: string | null;
+  type?: string | null;
+  location?: string | null;
 }) {
   const config = await getSlotConfig();
   if (!config.times.includes(input.time)) throw new Error("SLOT_INVALID");
@@ -104,14 +122,15 @@ export async function reserveSlot(input: {
     if (taken >= config.capacity) throw new Error("SLOT_TAKEN");
     return tx.activity.create({
       data: {
-        type: "meeting",
+        type: input.type ?? "meeting",
         category: "workshop",
         summary: input.summary,
         note: input.note,
         dueDate: dt,
+        location: input.location ?? null,
         contactId: input.contactId,
         leadId: input.leadId,
-        assignedToId: input.userId,
+        assignedToId: input.assignedToId ?? input.userId,
         createdById: input.userId,
       },
     });
