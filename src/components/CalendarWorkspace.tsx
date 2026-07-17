@@ -479,11 +479,24 @@ export default function CalendarWorkspace({
 
   function createActivity(dateKey = selectedDate) {
     // Workshop bookings must land on a real configured slot, otherwise the booking
-    // engine won't mark any public slot taken and the day can be double-booked.
-    const defaultTime =
-      mode === "workshop" && slotConfig?.times.length
-        ? slotConfig.times[0]
-        : "09:00";
+    // engine won't mark any public slot taken and the day can be double-booked. For
+    // today, skip slots that have already elapsed — getDayAvailability only offers
+    // future slots, so pre-filling a passed time would create an overdue booking.
+    let defaultTime = "09:00";
+    if (mode === "workshop" && slotConfig?.times.length) {
+      const times = slotConfig.times;
+      if (dateKey === todayKey) {
+        const nowHM = new Date().toLocaleTimeString("en-GB", {
+          timeZone: "Africa/Johannesburg",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        });
+        defaultTime = times.find((t) => t > nowHM) ?? times[0];
+      } else {
+        defaultTime = times[0];
+      }
+    }
     openQuickCreate("calendar", {
       dueDate: `${dateKey}T${defaultTime}`,
       workshop: mode === "workshop",
