@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Boxes,
   CalendarClock,
+  ClipboardCheck,
   Download,
   MapPin,
   Package,
