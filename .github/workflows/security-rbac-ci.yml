@@ -83,8 +83,28 @@ jobs:
         # `seed` lives under package.json#prisma.seed, so invoke via prisma.
         run: npx prisma db seed
 
-      - name: Type check
-        run: npm run typecheck
+      - name: Capture TypeScript diagnostics
+        id: typecheck
+        shell: bash
+        run: |
+          set +e
+          npm run typecheck -- --pretty false > typecheck.log 2>&1
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload TypeScript diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: stock-typecheck-diagnostics
+          path: typecheck.log
+          if-no-files-found: error
+
+      - name: Enforce Type check
+        if: steps.typecheck.outputs.exit_code != '0'
+        run: |
+          cat typecheck.log
+          exit 1
 
       - name: Lint
         run: npm run lint
