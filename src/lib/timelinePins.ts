@@ -15,7 +15,9 @@ export type TimelinePin = {
 export async function getTimelinePins(
   targets: Array<{ kind: TimelinePinKind; itemId: string }>,
 ): Promise<TimelinePin[]> {
-  const itemIds = [...new Set(targets.map((target) => target.itemId).filter(Boolean))];
+  const itemIds = [
+    ...new Set(targets.map((target) => target.itemId).filter(Boolean)),
+  ];
   if (itemIds.length === 0) return [];
 
   const rows = await prisma.$queryRaw<
@@ -80,4 +82,14 @@ export async function toggleTimelinePin(
 
     return { pinned: true, pinnedAt };
   });
+}
+
+export async function removeTimelinePin(
+  kind: TimelinePinKind,
+  itemId: string,
+): Promise<void> {
+  await prisma.$executeRaw(Prisma.sql`
+    DELETE FROM "TimelinePin"
+    WHERE "kind" = ${kind} AND "itemId" = ${itemId}
+  `);
 }
