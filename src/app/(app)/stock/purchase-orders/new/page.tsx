@@ -1,11 +1,18 @@
 import Link from "next/link";
-import { ArrowLeft, CircleDollarSign, PackageCheck, ShoppingCart, Truck } from "lucide-react";
+import { ArrowLeft, CircleDollarSign, PackageCheck, ShoppingCart, Truck, type LucideIcon } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
 import { createPurchaseOrder } from "@/app/actions/stock";
 import PurchaseOrderBuilder from "@/components/PurchaseOrderBuilder";
 import { PageHeader } from "@/components/page-header";
 import { SectionHeading, Surface } from "@/components/visual-system";
+
+const purchaseJourney: Array<{ icon: LucideIcon; title: string; detail: string }> = [
+  { icon: ShoppingCart, title: "Build the order", detail: "Add every model and colour with its quantity and unit cost." },
+  { icon: Truck, title: "Track supplier progress", detail: "Confirm, mark in transit and update expected arrival dates." },
+  { icon: PackageCheck, title: "Receive actual units", detail: "Partial receipts create only the physical units that arrived." },
+  { icon: CircleDollarSign, title: "Calculate landed cost", detail: "Freight, duties and receiving overhead flow into unit valuation." },
+];
 
 export default async function NewPurchaseOrderPage() {
   await requirePermission("stock.manage");
@@ -34,15 +41,10 @@ export default async function NewPurchaseOrderPage() {
           <Surface className="p-5">
             <SectionHeading title="Controlled purchasing" description="The order records commercial intent; stock units only become live inventory when physically received." />
             <ol className="mt-5 space-y-4">
-              {[
-                [ShoppingCart, "Build the order", "Add every model and colour with its quantity and unit cost."],
-                [Truck, "Track supplier progress", "Confirm, mark in transit and update expected arrival dates."],
-                [PackageCheck, "Receive actual units", "Partial receipts create only the physical units that arrived."],
-                [CircleDollarSign, "Calculate landed cost", "Freight, duties and receiving overhead flow into unit valuation."],
-              ].map(([Icon, title, detail], index) => (
-                <li key={String(title)} className="flex gap-3">
+              {purchaseJourney.map(({ icon: Icon, title, detail }, index) => (
+                <li key={title} className="flex gap-3">
                   <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-border bg-muted/40 text-muted-foreground"><Icon className="size-4" /></span>
-                  <div><p className="text-sm font-medium text-foreground">{index + 1}. {String(title)}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{String(detail)}</p></div>
+                  <div><p className="text-sm font-medium text-foreground">{index + 1}. {title}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{detail}</p></div>
                 </li>
               ))}
             </ol>
