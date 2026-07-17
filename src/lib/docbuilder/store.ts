@@ -72,10 +72,29 @@ export async function ensureBuilderSeeded(): Promise<void> {
         },
       });
     } catch (error) {
-      // Keep pages usable before migrations complete, but never hide a partial seed
-      // failure. Continue with the remaining document types and leave an actionable log.
       console.error(`Could not seed builder template "${key}"`, error);
     }
+  }
+}
+
+/**
+ * Resolve the builder template that should drive an operational document. The
+ * explicit default wins, with the most recently updated valid row as fallback.
+ */
+export async function defaultBuilderTemplateId(
+  key: string,
+): Promise<string | null> {
+  try {
+    await ensureBuilderSeeded();
+    const rows = await prisma.docBuilderTemplate.findMany({
+      where: { key, deletedAt: null },
+      orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
+      select: { id: true, data: true },
+    });
+    return rows.find((row) => parseDocument(row.data) !== null)?.id ?? null;
+  } catch (error) {
+    console.error(`Could not resolve default builder template "${key}"`, error);
+    return null;
   }
 }
 
