@@ -1,15 +1,11 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
+import { formatDate } from "@/lib/format";
+import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import type { DocumentModel } from "@/lib/doceditor/model";
+import { freezeDocumentGlobals } from "@/lib/signing/freezeDocument";
 import { newSignToken } from "./tokens";
-
-/**
- * Core signing-request service. Turns a document (its recipients + placed fields
- * + an unsigned PDF) into a persisted SignatureRequest envelope with per-recipient
- * tokens and an audit trail. Dispatch (email/WhatsApp) and the signing surface are
- * separate phases — this only creates the request in `draft`.
- */
 
 export type RequestSource = {
   documentId?: string | null;
@@ -28,7 +24,11 @@ export async function createSignatureRequestFromDoc(opts: {
   message?: string;
   createdById?: string | null;
 }): Promise<{ id: string; recipients: number; fields: number }> {
-  const { doc, source } = opts;
+  const { source } = opts;
+  const frozenDoc = freezeDocumentGlobals(opts.doc, {
+    ...companyTokens(await getCompanyProfile()),
+    "date.today": formatDate(new Date()),
+  });
 
   const request = await prisma.signatureRequest.create({
     data: {
@@ -41,51 +41,71 @@ export async function createSignatureRequestFromDoc(opts: {
       jobCardId: source.jobCardId ?? null,
       contactId: source.contactId ?? null,
       templateId: source.templateId ?? null,
-      snapshotJson: doc as object, // frozen layout — the signer always sees what was sent
+      snapshotJson: frozenDoc as object,
       unsignedPdfRef: opts.unsignedPdfRef,
       createdById: opts.createdById ?? null,
     },
   });
 
-  // Recipients — assign signing order by document order; map doc-recipient id → row id.
   const idMap = new Map<string, string>();
-  for (let i = 0; i < doc.recipients.length; i++) {
-    const r = doc.recipients[i];
+  for (let index = 0; index < frozenDoc.recipients.length; index += 1) {
+    const recipient = frozenDoc.recipients[index];
     const row = await prisma.signatureRecipient.create({
       data: {
         requestId: request.id,
-        name: r.name || `Recipient ${i + 1}`,
-        email: r.email || null,
-        role: r.role,
-        order: i,
-        color: r.color,
+        name: recipient.name || `Recipient ${index + 1}`,
+        email: recipient.email || null,
+        role: recipient.role,
+        order: index,
+        color: recipient.color,
         token: newSignToken(),
       },
     });
-    idMap.set(r.id, row.id);
+    idMap.set(recipient.id, row.id);
   }
 
-  // Fields — flatten page overlay fields, remap recipient ids.
-  const fieldsData = doc.pages.flatMap((page, p) =>
-    page.overlayFields.map((f) => ({
+  const fieldsData = frozenDoc.pages.flatMap((page, pageIndex) =>
+    page.overlayFields.map((field) => ({
       requestId: request.id,
-      recipientId: f.recipientId ? idMap.get(f.recipientId) ?? null : null,
-      kind: f.kind,
-      page: p,
-      x: f.anchor.x,
-      y: f.anchor.y,
-      width: f.width,
-      height: f.height,
-      required: f.required,
-      label: f.label,
-    }))
+      recipientId: field.recipientId
+        ? idMap.get(field.recipientId) ?? null
+        : null,
+      kind: field.kind,
+      page: pageIndex,
+      x: field.anchor.x,
+      y: field.anchor.y,
+      width: field.width,
+      height: field.height,
+      required: field.required,
+      label: field.label,
+    })),
   );
-  if (fieldsData.length) await prisma.signatureField.createMany({ data: fieldsData });
+  if (fieldsData.length) {
+    await prisma.signatureField.createMany({ data: fieldsData });
+  }
 
   await prisma.signatureEvent.create({
-    data: { requestId: request.id, type: "created", actor: "system", metadata: { title: opts.title, recipients: doc.recipients.length, fields: fieldsData.length } },
+    data: {
+      requestId: request.id,
+      type: "created",
+      actor: "system",
+      metadata: {
+        title: opts.title,
+        recipients: frozenDoc.recipients.length,
+        fields: fieldsData.length,
+      },
+    },
   });
-  await logAudit({ action: "signing.create", summary: `Created signature request “${opts.title}”`, entityType: "SignatureRequest", entityId: request.id });
+  await logAudit({
+    action: "signing.create",
+    summary: `Created signature request “${opts.title}”`,
+    entityType: "SignatureRequest",
+    entityId: request.id,
+  });
 
-  return { id: request.id, recipients: doc.recipients.length, fields: fieldsData.length };
+  return {
+    id: request.id,
+    recipients: frozenDoc.recipients.length,
+    fields: fieldsData.length,
+  };
 }
