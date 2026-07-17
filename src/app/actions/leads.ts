@@ -11,6 +11,7 @@ import { logAudit, logAuditStrict } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { topPosition } from "@/lib/leadPos";
 import { triggerSurvey } from "@/lib/surveys";
+import { removeTimelinePin } from "@/lib/timelinePins";
 import {
   hasPermission,
   requireLeadAccess,
@@ -218,6 +219,7 @@ export async function moveLead(leadId: string, stageId: string) {
       orderBy: { dueDate: "desc" },
     });
     if (booking) {
+      await removeTimelinePin("activity", booking.id);
       await prisma.activity.delete({ where: { id: booking.id } });
       await logAudit({
         action: "lead.test_drive_cancelled",
