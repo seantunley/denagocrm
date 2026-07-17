@@ -266,6 +266,30 @@
   .animate-shake { animation: none; }
 }
 
+/* New-lead glow — a soft pulsing emerald halo so freshly-arrived leads stand
+   out on a board full of otherwise identical cards. Attach .animate-new-lead-glow. */
+@keyframes new-lead-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 1px color-mix(in oklab, #10b981 45%, transparent),
+                0 0 12px -2px color-mix(in oklab, #10b981 40%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 1px color-mix(in oklab, #10b981 75%, transparent),
+                0 0 22px 0px color-mix(in oklab, #10b981 60%, transparent);
+  }
+}
+.animate-new-lead-glow {
+  border-color: color-mix(in oklab, #10b981 55%, var(--border)) !important;
+  animation: new-lead-glow 2.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-new-lead-glow {
+    animation: none;
+    box-shadow: 0 0 0 1px color-mix(in oklab, #10b981 60%, transparent),
+                0 0 14px -2px color-mix(in oklab, #10b981 50%, transparent);
+  }
+}
+
 /* Internal workspace contract. Bespoke modules keep their layouts while
    inheriting the same hierarchy, rhythm, depth and interaction language. */
 .denago-workspace {
