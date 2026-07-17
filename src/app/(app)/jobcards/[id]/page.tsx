@@ -39,6 +39,7 @@ import { listBuilderTemplates } from "@/lib/docbuilder/store";
 import { generateDocEditorDocument } from "@/app/actions/doceditor";
 import { activeRecordRequest } from "@/lib/signing/record";
 import JobCardItemForm from "@/components/JobCardItemForm";
+import { AnnotatablePhoto, type AnnData } from "@/components/PhotoAnnotator";
 import { uploadJobCardPhotos } from "@/app/actions/jobcards";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import {
@@ -333,10 +334,15 @@ export default async function JobCardDetailPage({
                 {jobCard.documents
                   .filter((d) => d.tag === "checkin-photo")
                   .map((d) => (
-                    <a key={d.id} href={d.storedName} target="_blank">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={d.storedName} alt={d.fileName} className="h-24 w-24 object-cover rounded-lg border border-slate-700 hover:border-orange-500 transition-colors" />
-                    </a>
+                    <AnnotatablePhoto
+                      key={d.id}
+                      doc={{
+                        id: d.id,
+                        fileName: d.fileName,
+                        annotated: !!d.annotatedStoredName,
+                        annotations: (d.annotations as unknown as AnnData | null) ?? null,
+                      }}
+                    />
                   ))}
               </div>
             )}
@@ -690,10 +696,15 @@ export default async function JobCardDetailPage({
             ) : (
               <div className="flex gap-2 flex-wrap">
                 {jobCard.documents.filter((d) => d.tag === "checkout-photo").map((d) => (
-                  <a key={d.id} href={d.storedName} target="_blank">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={d.storedName} alt={d.fileName} className="h-24 w-24 object-cover rounded-lg border border-slate-700 hover:border-orange-500 transition-colors" />
-                  </a>
+                  <AnnotatablePhoto
+                    key={d.id}
+                    doc={{
+                      id: d.id,
+                      fileName: d.fileName,
+                      annotated: !!d.annotatedStoredName,
+                      annotations: (d.annotations as unknown as AnnData | null) ?? null,
+                    }}
+                  />
                 ))}
               </div>
             )}
