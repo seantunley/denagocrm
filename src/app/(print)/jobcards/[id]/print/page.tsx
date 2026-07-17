@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { requireJobCardReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
@@ -11,11 +12,12 @@ export default async function JobCardPrintPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tpl?: string }>;
+  searchParams: Promise<{ tpl?: string; photos?: string }>;
 }) {
   const { id } = await params;
   await requireJobCardReadAccess(id);
-  const { tpl: tplId } = await searchParams;
+  const { tpl: tplId, photos } = await searchParams;
+  const showPhotos = photos === "1";
   const jobCard = await prisma.jobCard.findUnique({
     where: { id },
     include: {
@@ -23,10 +25,18 @@ export default async function JobCardPrintPage({
       contact: true,
       items: true,
       serviceRecord: { include: { performedBy: true } },
+      documents: {
+        where: { deletedAt: null, tag: { in: ["checkin-photo", "checkout-photo"] } },
+        orderBy: { createdAt: "asc" },
+      },
     },
   });
   if (!jobCard) notFound();
   const tpl = await getDocTemplate("jobcard", tplId);
+  const conditionPhotos = jobCard.documents;
+  const photoHref = showPhotos
+    ? `/jobcards/${id}/print${tplId ? `?tpl=${tplId}` : ""}`
+    : `/jobcards/${id}/print?photos=1${tplId ? `&tpl=${tplId}` : ""}`;
 
   const partsTotal = jobCard.items
     .filter((i) => i.kind === "part")
@@ -48,6 +58,22 @@ export default async function JobCardPrintPage({
   return (
     <>
       <PrintActions backHref={`/jobcards/${jobCard.id}`} backLabel="Back to job card" />
+      {conditionPhotos.length > 0 && (
+        <div className="print:hidden mx-auto max-w-3xl px-6 pt-2 text-sm">
+          <Link
+            href={photoHref}
+            className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+              showPhotos
+                ? "border-orange-500/40 bg-orange-500/10 text-orange-300"
+                : "border-slate-700 text-slate-300 hover:border-slate-500"
+            }`}
+          >
+            {showPhotos ? "✓ Condition photos included" : "📷 Include condition photos"}
+            <span className="text-slate-500">({conditionPhotos.length})</span>
+          </Link>
+          <p className="mt-1 text-[11px] text-slate-500">Off by default — toggle before printing to append the check-in / check-out photos.</p>
+        </div>
+      )}
       <style>{`
         @page { margin: 12mm; }
         @media print { * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; } }
@@ -196,6 +222,31 @@ export default async function JobCardPrintPage({
           <div className="mb-6">
             <p className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Notes</p>
             <p className="whitespace-pre-wrap text-slate-600">{jobCard.notes}</p>
+          </div>
+        )}
+
+        {/* Condition photos — opt-in via ?photos=1 (marked-up version when present) */}
+        {showPhotos && conditionPhotos.length > 0 && (
+          <div className="mb-6" style={{ breakInside: "avoid" }}>
+            <p className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">
+              Condition photos
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              {conditionPhotos.map((d) => (
+                <figure key={d.id} style={{ breakInside: "avoid" }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={d.annotatedStoredName ?? d.storedName}
+                    alt={d.fileName}
+                    className="w-full rounded-lg border border-slate-300 object-contain"
+                  />
+                  <figcaption className="mt-0.5 text-[10px] text-slate-500">
+                    {d.tag === "checkout-photo" ? "Check-out" : "Check-in"}
+                    {d.annotatedStoredName ? " · marked up" : ""}
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
           </div>
         )}
 
