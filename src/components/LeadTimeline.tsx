@@ -56,6 +56,7 @@ type Item = {
   when: Date;
   /** Not-yet-completed activity — floats above normal history. */
   pending?: boolean;
+  activityStatus?: string;
   /** Explicit user pin — remains above every other timeline entry until unpinned. */
   pinnedAt?: Date | null;
   pinTarget?: PinTarget;
@@ -119,7 +120,11 @@ export default async function LeadTimeline({
 
   const items: Item[] = [
     ...activities
-      .filter((activity) => activity.status === "planned")
+      .filter(
+        (activity) =>
+          activity.status === "planned" ||
+          Boolean(pinnedAt("activity", activity.id)),
+      )
       .map((activity): Item => ({
         id: `act-${activity.id}`,
         icon: icons[activity.type] ?? icons.activity,
@@ -127,7 +132,8 @@ export default async function LeadTimeline({
         body: activity.location ? `📍 ${activity.location}` : null,
         who: activity.assignedTo?.name ?? "Unassigned",
         when: activity.dueDate,
-        pending: true,
+        pending: activity.status === "planned",
+        activityStatus: activity.status,
         pinnedAt: pinnedAt("activity", activity.id),
         pinTarget: { kind: "activity", itemId: activity.id },
       })),
@@ -255,6 +261,14 @@ export default async function LeadTimeline({
                           {item.when < new Date() ? "Overdue" : "Upcoming"}
                         </span>
                       )}
+                      {item.activityStatus &&
+                        item.activityStatus !== "planned" && (
+                          <span className="mr-2 rounded-full bg-slate-700/70 px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-slate-300">
+                            {item.activityStatus === "done"
+                              ? "Completed"
+                              : "Canceled"}
+                          </span>
+                        )}
                       {item.title}
                     </p>
                     {item.pinTarget && pinAction && (
