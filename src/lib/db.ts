@@ -2,7 +2,7 @@ import { PrismaClient } from "@prisma/client";
 
 const globalForPrisma = globalThis as unknown as {
   basePrisma?: PrismaClient;
-  prisma?: PrismaClient;
+  prisma?: ReturnType<typeof buildClient>;
 };
 
 /** Models with soft-delete (Trash) support. */
@@ -41,10 +41,7 @@ function addAliveFilter(model: string, args: any) {
   return args;
 }
 
-function buildClient(base: PrismaClient): PrismaClient {
-  // The extension only changes query behaviour; it does not add client methods.
-  // Expose the standard PrismaClient contract so transaction callbacks retain
-  // Prisma.TransactionClient typing instead of an incompatible extension type.
+function buildClient(base: PrismaClient) {
   return base.$extends({
     query: {
       $allModels: {
@@ -90,7 +87,7 @@ function buildClient(base: PrismaClient): PrismaClient {
         },
       },
     },
-  }) as unknown as PrismaClient;
+  });
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
@@ -98,7 +95,7 @@ function buildClient(base: PrismaClient): PrismaClient {
 export const basePrisma = globalForPrisma.basePrisma ?? new PrismaClient();
 
 /** Default client: soft-deleted records are hidden from list/count queries. */
-export const prisma: PrismaClient = globalForPrisma.prisma ?? buildClient(basePrisma);
+export const prisma = globalForPrisma.prisma ?? buildClient(basePrisma);
 
 if (process.env.NODE_ENV !== "production") {
   globalForPrisma.basePrisma = basePrisma;

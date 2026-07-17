@@ -197,7 +197,7 @@ type MovementInput = {
   actor: Actor;
 };
 
-async function recordMovement(tx: Prisma.TransactionClient, input: MovementInput) {
+async function recordMovement(tx: Pick<Prisma.TransactionClient, "$executeRaw">, input: MovementInput) {
   await tx.$executeRaw(Prisma.sql`
     INSERT INTO "StockMovement" (
       "id", "stockUnitId", "eventType", "fromStatus", "toStatus",
