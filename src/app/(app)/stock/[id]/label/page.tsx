@@ -30,7 +30,7 @@ export default async function StockLabelPage({ params }: { params: Promise<{ id:
           <div className="flex items-center justify-between gap-4 border-b border-border bg-primary px-7 py-5 text-primary-foreground print:border-black print:bg-black print:text-white">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.22em] opacity-80">Denago Cape Town</p>
-              <h1 className="mt-1 text-3xl font-bold tracking-[-0.045em]">{unit.stockNumber ?? "STOCK UNIT"}</h1>
+              <p className="mt-1 text-3xl font-bold tracking-[-0.045em]">{unit.stockNumber ?? "STOCK UNIT"}</p>
             </div>
             <Package className="size-10" />
           </div>
