@@ -8,6 +8,7 @@ import {
   CalendarClock,
   CircleDollarSign,
   Clock3,
+  FileDown,
   PackageCheck,
   PackagePlus,
   Search,
@@ -65,6 +66,16 @@ export default async function StockPage({
   const params = await searchParams;
   const status = FILTERS.some(([value]) => value === params.status) ? params.status ?? "all" : "all";
 
+  // Print/report link carries whatever filter the board is showing, so the PDF
+  // reports exactly the same subset the user is looking at.
+  const reportParams = new URLSearchParams();
+  if (status !== "all") reportParams.set("status", status);
+  if (params.q) reportParams.set("q", params.q);
+  if (params.product) reportParams.set("product", params.product);
+  if (params.location) reportParams.set("location", params.location);
+  if (params.age) reportParams.set("age", params.age);
+  const reportHref = `/api/pdf/stock-report${reportParams.toString() ? `?${reportParams}` : ""}`;
+
   const [dashboard, products, units, openPos, locations, demand] = await Promise.all([
     stockDashboard(),
     prisma.product.findMany({ where: { active: true }, orderBy: { name: "asc" }, include: { colors: true } }),
@@ -120,6 +131,9 @@ export default async function StockPage({
   return (
     <div className="space-y-6">
       <PageHeader title="Stock operations" description="Control every physical Denago unit from supplier order through reservation, PDI, delivery and warranty activation.">
+        <a href={reportHref} target="_blank" rel="noreferrer" className={buttonVariants({ variant: "outline", size: "sm" })}>
+          <FileDown className="size-4" /> Print report
+        </a>
         {canManage && <>
           <ModalTrigger label={<><ShoppingCart className="size-4" /> Purchase order</>} title="New purchase order" buttonClass={buttonVariants({ size: "sm" })}>
             <StockPurchaseOrderForm products={products.map((product) => ({ id: product.id, name: product.name, colors: product.colors.map((color) => color.name) }))} />
