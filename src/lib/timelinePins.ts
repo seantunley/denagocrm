@@ -4,13 +4,24 @@ import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 
-export type TimelinePinKind = "communication" | "activity";
+export type TimelinePinKind =
+  | "communication"
+  | "activity"
+  | "contact_note"
+  | "lead_note";
 
 export type TimelinePin = {
   kind: TimelinePinKind;
   itemId: string;
   pinnedAt: Date;
 };
+
+const PIN_KINDS = [
+  "communication",
+  "activity",
+  "contact_note",
+  "lead_note",
+] as const;
 
 export async function getTimelinePins(
   targets: Array<{ kind: TimelinePinKind; itemId: string }>,
@@ -26,7 +37,7 @@ export async function getTimelinePins(
     SELECT "kind", "itemId", "pinnedAt"
     FROM "TimelinePin"
     WHERE "itemId" IN (${Prisma.join(itemIds)})
-      AND "kind" IN ('communication', 'activity')
+      AND "kind" IN ('communication', 'activity', 'contact_note', 'lead_note')
   `);
 
   const requested = new Set(
@@ -36,7 +47,7 @@ export async function getTimelinePins(
   return rows
     .filter(
       (row): row is TimelinePin =>
-        (row.kind === "communication" || row.kind === "activity") &&
+        PIN_KINDS.includes(row.kind as TimelinePinKind) &&
         requested.has(`${row.kind}:${row.itemId}`),
     )
     .map((row) => ({
