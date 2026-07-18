@@ -31,9 +31,11 @@ import {
   recordReservationDeposit,
   releaseUnit,
   reserveUnit,
+  setStockUnitLabel,
   transitionStockUnit,
   updateStockUnit,
 } from "@/app/actions/stock";
+import { getStockLabels } from "@/lib/stockLabels";
 import ModalTrigger from "@/components/Modal";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
@@ -49,7 +51,7 @@ import { stockEvents } from "@/lib/stockPlatform";
 type Unit = {
   id: string; productId: string; productName: string; color: string | null; serial: string | null;
   stockNumber: string | null; status: string; costCents: number; landedCostCents: number;
-  salePriceCents: number | null; notes: string | null; location: string | null; condition: string;
+  salePriceCents: number | null; notes: string | null; location: string | null; label: string | null; condition: string;
   batterySerial: string | null; chargerSerial: string | null; odometerKm: number | null;
   pdiStatus: string; pdiCompletedAt: Date | null; arrivedAt: Date | null; soldAt: Date | null;
   deliveredAt: Date | null; warrantyStartAt: Date | null; warrantyEndAt: Date | null;
@@ -80,7 +82,7 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
   const [unit] = await prisma.$queryRaw<Unit[]>(Prisma.sql`
     SELECT su."id", su."productId", p."name" AS "productName", su."color", su."serial",
       su."stockNumber", su."status", su."costCents", su."landedCostCents", su."salePriceCents",
-      su."notes", su."location", su."condition", su."batterySerial", su."chargerSerial", su."odometerKm",
+      su."notes", su."location", su."label", su."condition", su."batterySerial", su."chargerSerial", su."odometerKm",
       su."pdiStatus", su."pdiCompletedAt", su."arrivedAt", su."soldAt", su."deliveredAt",
       su."warrantyStartAt", su."warrantyEndAt", su."purchaseOrderId", po."reference" AS "purchaseOrderReference",
       po."supplier", su."reservedForLeadId", l."name" AS "reservedLeadName", su."soldQuoteId",
@@ -97,11 +99,13 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
   `);
   if (!unit) notFound();
 
-  const [events, leadScope, quoteScope] = await Promise.all([
+  const [events, leadScope, quoteScope, stockLabels] = await Promise.all([
     stockEvents(unit.id),
     getAccessibleLeadIds(user),
     getAccessibleQuoteIds(user),
+    getStockLabels(),
   ]);
+  const labelMeta = stockLabels.find((l) => l.slug === unit.label) ?? null;
   const [leads, quotes] = canManage ? await Promise.all([
     prisma.lead.findMany({
       where: {
@@ -153,6 +157,25 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
         description={`${unit.productName}${unit.color ? ` · ${unit.color}` : ""}${unit.serial ? ` · ${unit.serial}` : " · serial pending"}`}
       >
         <StatusPill tone={meta.tone}>{meta.label}</StatusPill>
+        {labelMeta && (
+          <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: `${labelMeta.color}22`, color: labelMeta.color }}>
+            <Tag className="size-3" /> {labelMeta.label}
+          </span>
+        )}
+        {canManage && (
+          <ModalTrigger label="Label" title="Organisational label" buttonClass={buttonVariants({ variant: "outline", size: "sm" })}>
+            <form action={setStockUnitLabel.bind(null, unit.id)} className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                A label is separate from the lifecycle status — flag demo units, showroom stock, consignment, holds, etc. Manage the list in Settings → Stock.
+              </p>
+              <select name="label" className="input" defaultValue={unit.label ?? ""}>
+                <option value="">No label</option>
+                {stockLabels.map((l) => <option key={l.slug} value={l.slug}>{l.label}</option>)}
+              </select>
+              <button className={buttonVariants({ size: "sm" })}>Save label</button>
+            </form>
+          </ModalTrigger>
+        )}
         {canManage && (
           <ModalTrigger label="Edit details" title="Edit stock unit" buttonClass={buttonVariants({ variant: "outline", size: "sm" })}>
             <form action={updateStockUnit.bind(null, unit.id)} className="space-y-4">

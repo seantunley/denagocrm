@@ -152,6 +152,9 @@ model StockUnit {
   // only — Prisma can't model them; this mirrors migrations 50 & 52.
   stockNumber     String?   @unique
   location        String?
+  // Optional organisational label (demo / showroom / consignment / hold …),
+  // configurable in settings and DISTINCT from the lifecycle `status`.
+  label           String?
   condition       String    @default("new")
   batterySerial   String?
   chargerSerial   String?

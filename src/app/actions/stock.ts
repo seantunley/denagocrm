@@ -11,6 +11,7 @@ import {
   nextStockNumber,
   type StockActor,
 } from "@/lib/stockPlatform";
+import { getStockLabels, saveStockLabels, slugifyLabel } from "@/lib/stockLabels";
 
 const rand = (value: FormDataEntryValue | null) => {
   const parsed = Number.parseFloat(String(value ?? "0").replace(/[^0-9.-]/g, ""));
@@ -528,6 +529,53 @@ export async function deliverStockUnit(id: string, formData: FormData) {
   await logAudit({ action: "stock.delivered", summary: `Delivered ${current.stockNumber ?? current.product.name} to ${contact.firstName}`, contactId: contact.id, leadId: quote.leadId, user });
   revalidatePath(`/contacts/${contact.id}`);
   revalidatePath("/vehicles");
+  refresh(id);
+}
+
+/* ── Organisational labels (distinct from lifecycle status) ─────────────── */
+
+export async function addStockLabel(formData: FormData) {
+  const user = await requirePermission("stock.manage");
+  const label = str(formData.get("label"));
+  const color = str(formData.get("color")) || "#64748b";
+  if (!label) return;
+  const slug = slugifyLabel(label);
+  if (!slug) throw new Error("Give the label a name");
+  const labels = await getStockLabels();
+  if (labels.some((l) => l.slug === slug)) return; // already exists
+  await saveStockLabels([...labels, { slug, label, color }]);
+  await logAudit({ action: "stock.label_added", summary: `Added stock label “${label}”`, user });
+  revalidatePath("/stock");
+  revalidatePath("/settings");
+}
+
+export async function removeStockLabel(slug: string) {
+  const user = await requirePermission("stock.manage");
+  const labels = await getStockLabels();
+  await saveStockLabels(labels.filter((l) => l.slug !== slug));
+  // Clear the label from any units carrying it so none are left on a missing label.
+  await prisma.stockUnit.updateMany({ where: { label: slug }, data: { label: null } });
+  await logAudit({ action: "stock.label_removed", summary: `Removed stock label “${slug}”`, user });
+  revalidatePath("/stock");
+  revalidatePath("/settings");
+}
+
+export async function setStockUnitLabel(id: string, formData: FormData) {
+  const user = await requirePermission("stock.manage");
+  const current = await activeUnit(id);
+  const slug = str(formData.get("label")) || null;
+  if (slug) {
+    const labels = await getStockLabels();
+    if (!labels.some((l) => l.slug === slug)) throw new Error("Unknown stock label");
+  }
+  await prisma.stockUnit.update({ where: { id }, data: { label: slug } });
+  await addStockEvent({
+    stockUnitId: id,
+    eventType: "unit.labelled",
+    detail: slug ? `Label set to ${slug}` : "Label cleared",
+    actor: actor(user),
+  });
+  await logAudit({ action: "stock.unit_labelled", summary: `${slug ? `Labelled ${current.stockNumber ?? current.product.name} “${slug}”` : `Cleared the label on ${current.stockNumber ?? current.product.name}`}`, user });
   refresh(id);
 }
 

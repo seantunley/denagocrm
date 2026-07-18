@@ -86,6 +86,7 @@ export type StockUnitRecord = {
   salePriceCents: number | null;
   notes: string | null;
   location: string | null;
+  label: string | null;
   condition: string;
   batterySerial: string | null;
   chargerSerial: string | null;
@@ -139,7 +140,7 @@ export async function listStockUnits(filters: {
     SELECT
       su."id", su."productId", p."name" AS "productName", su."color", su."serial",
       su."stockNumber", su."status", su."costCents", su."landedCostCents", su."salePriceCents",
-      su."notes", su."location", su."condition", su."batterySerial", su."chargerSerial",
+      su."notes", su."location", su."label", su."condition", su."batterySerial", su."chargerSerial",
       su."odometerKm", su."pdiStatus", su."arrivedAt", su."soldAt", su."deliveredAt",
       su."createdAt", su."updatedAt", su."purchaseOrderId", po."reference" AS "purchaseOrderReference",
       su."reservedForLeadId", l."name" AS "reservedLeadName", su."soldQuoteId",

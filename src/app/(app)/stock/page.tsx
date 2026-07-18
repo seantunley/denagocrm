@@ -29,6 +29,7 @@ import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { EmptyState, FeedbackBanner, MetricCard, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import { listStockUnits, stockDashboard } from "@/lib/stockPlatform";
+import { getStockLabels } from "@/lib/stockLabels";
 
 const STATUS: Record<string, { label: string; tone: "neutral" | "success" | "warning" | "danger" | "info" }> = {
   incoming: { label: "Incoming", tone: "info" },
@@ -94,6 +95,9 @@ export default async function StockPage({
     `),
   ]);
 
+  const stockLabels = await getStockLabels();
+  const labelBySlug = new Map(stockLabels.map((l) => [l.slug, l]));
+
   const alerts = dashboard.expiringReservations + dashboard.overduePurchaseOrders + dashboard.missingSerial + dashboard.aged60;
   const queueCards: QueueCard[] = [
     { label: "Allocated", value: dashboard.allocated, icon: Boxes, href: "/stock?status=allocated" },
@@ -157,7 +161,7 @@ export default async function StockPage({
                   const meta = STATUS[unit.status] ?? { label: unit.status.replaceAll("_", " "), tone: "neutral" as const };
                   return <tr key={unit.id}>
                     <td data-primary data-label="Unit"><Link href={`/stock/${unit.id}`} className="font-medium text-foreground hover:text-primary">{unit.stockNumber ?? unit.productName}</Link><p className="mt-0.5 text-xs text-muted-foreground">{unit.productName}{unit.color ? ` · ${unit.color}` : ""}{unit.serial ? ` · ${unit.serial}` : " · serial pending"}</p></td>
-                    <td data-label="Status"><StatusPill tone={meta.tone}>{meta.label}</StatusPill></td>
+                    <td data-label="Status"><div className="flex flex-wrap items-center gap-1.5"><StatusPill tone={meta.tone}>{meta.label}</StatusPill>{unit.label && labelBySlug.has(unit.label) && <span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium" style={{ backgroundColor: `${labelBySlug.get(unit.label)!.color}22`, color: labelBySlug.get(unit.label)!.color }}>{labelBySlug.get(unit.label)!.label}</span>}</div></td>
                     <td data-label="Customer / quote" className="text-sm text-muted-foreground">{unit.reservedForLeadId ? <Link href={`/leads/${unit.reservedForLeadId}`} className="text-primary hover:underline">{unit.reservedLeadName ?? "Lead"}</Link> : unit.soldQuoteId ? <Link href={`/quotes/${unit.soldQuoteId}`} className="text-primary hover:underline">Q-{unit.quoteNumber}</Link> : "—"}{unit.reservationExpiresAt && <p className="text-[11px]">Expires {unit.reservationExpiresAt.toLocaleDateString("en-ZA")}</p>}</td>
                     <td data-label="Location" className="text-sm text-muted-foreground">{unit.location ?? "—"}</td>
                     <td data-label="Age" className={unit.ageDays >= 60 ? "font-semibold text-amber-300" : "text-muted-foreground"}>{unit.ageDays}d</td>
