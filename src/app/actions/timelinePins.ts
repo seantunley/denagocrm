@@ -38,3 +38,28 @@ export async function toggleActivityPin(id: string, path: string) {
   });
   revalidatePath(path);
 }
+
+export async function toggleContactNotePin(contactId: string, path: string) {
+  const user = await requirePermission("contacts.manage");
+  const contact = await prisma.contact.findUniqueOrThrow({
+    where: { id: contactId },
+    select: { id: true, firstName: true, lastName: true, notes: true },
+  });
+
+  if (user.role !== "owner" && !(await canAccessContact(user, contact.id))) {
+    throw new Error("Contact access denied");
+  }
+  if (!contact.notes?.trim()) {
+    throw new Error("This contact has no original note to pin");
+  }
+
+  const result = await toggleTimelinePin("contact_note", contact.id, user.id);
+  const name = [contact.firstName, contact.lastName].filter(Boolean).join(" ");
+  await logAudit({
+    action: result.pinned ? "contact.note_pinned" : "contact.note_unpinned",
+    summary: `${result.pinned ? "Pinned" : "Unpinned"} the original note for ${name || "contact"}`,
+    contactId: contact.id,
+    user,
+  });
+  revalidatePath(path);
+}
