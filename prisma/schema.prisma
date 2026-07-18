@@ -43,6 +43,23 @@ model User {
   jobCardsAsTech     JobCard[]        @relation("JobCardTechnician")
   jobCardTimeEntries JobCardTimeEntry[] @relation("JobCardTimeTechnician")
   campaignsCreated   Campaign[]       @relation("CampaignCreator")
+  timelinePins       TimelinePin[]
+}
+
+// User-pinned timeline entries (communications / activities) that float to the
+// top of a contact's Live timeline until unpinned. Polymorphic itemId (no FK) so
+// it can reference either a Communication or an Activity; app code clears the pin
+// when the underlying item is deleted. Read/written via raw SQL in lib/timelinePins.
+model TimelinePin {
+  id         String   @id
+  kind       String // communication | activity
+  itemId     String
+  pinnedAt   DateTime @default(now())
+  pinnedById String
+  pinnedBy   User     @relation(fields: [pinnedById], references: [id], onDelete: Cascade)
+
+  @@unique([kind, itemId])
+  @@index([pinnedAt])
 }
 
 model AppSetting {
