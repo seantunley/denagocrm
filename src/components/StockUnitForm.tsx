@@ -3,10 +3,12 @@
 import { useState } from "react";
 import {
   BadgeDollarSign,
+  BatteryCharging,
   Boxes,
   CircleCheck,
   Fingerprint,
   Gauge,
+  MapPin,
   PackagePlus,
   Palette,
 } from "lucide-react";
@@ -55,7 +57,7 @@ export default function StockUnitForm({
           icon={PackagePlus}
           eyebrow="Floor stock intake"
           title={product?.name ?? "Choose the Denago model"}
-          description="Register one physical unit already on site. It becomes available stock as soon as it is saved."
+          description="Register one physical unit already on site with its identity, equipment, condition and valuation basis."
           summary={[
             { label: "State", value: "Available" },
             { label: "Identity", value: serial.trim() || "Serial pending" },
@@ -72,9 +74,7 @@ export default function StockUnitForm({
         <CaptureField label="Product / model *" wide>
           <select name="productId" className="input" required value={productId} onChange={(event) => onProductChange(event.target.value)}>
             <option value="" disabled>Select model…</option>
-            {products.map((item) => (
-              <option key={item.id} value={item.id}>{item.name}</option>
-            ))}
+            {products.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </CaptureField>
         <CaptureField label="Colour" hint="Use a catalogue colour where one is configured." wide>
@@ -102,10 +102,10 @@ export default function StockUnitForm({
 
       <CaptureSection
         icon={Fingerprint}
-        title="Unit identity & cost"
-        description="Serial data distinguishes this physical unit; cost supports stock valuation and margin reporting."
+        title="Unit identity & valuation"
+        description="Serial data distinguishes this physical unit; acquisition cost supports inventory and margin reporting."
       >
-        <CaptureField label="Serial / VIN" hint="Capture the manufacturer identifier exactly as shown on the unit.">
+        <CaptureField label="Serial / VIN" hint="Must be unique across active stock.">
           <input
             name="serial"
             className="input font-mono uppercase"
@@ -118,39 +118,49 @@ export default function StockUnitForm({
         <CaptureField label="Acquisition cost (R)">
           <div className="relative">
             <BadgeDollarSign className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              name="cost"
-              className="input pl-10 tabular-nums"
-              inputMode="decimal"
-              value={cost}
-              onChange={(event) => setCost(event.target.value)}
-              placeholder="0.00"
-            />
+            <input name="cost" className="input pl-10 tabular-nums" inputMode="decimal" value={cost} onChange={(event) => setCost(event.target.value)} placeholder="0.00" />
           </div>
+        </CaptureField>
+        <CaptureField label="Condition">
+          <select name="condition" className="input" defaultValue="new">
+            <option value="new">New</option>
+            <option value="demo">Demo</option>
+            <option value="used">Used</option>
+            <option value="consignment">Consignment</option>
+            <option value="damaged">Damaged</option>
+          </select>
+        </CaptureField>
+        <CaptureField label="Odometer / km">
+          <input name="odometerKm" type="number" min="0" className="input" placeholder="0" />
         </CaptureField>
       </CaptureSection>
 
       <CaptureSection
-        icon={Boxes}
-        title="Availability & context"
-        description="Confirm how this intake affects live stock and leave any useful internal context."
+        icon={BatteryCharging}
+        title="Supplied equipment"
+        description="Capture the serialized equipment handed over with this cart."
       >
+        <CaptureField label="Battery serial"><input name="batterySerial" className="input font-mono" placeholder="Battery identifier" /></CaptureField>
+        <CaptureField label="Charger serial"><input name="chargerSerial" className="input font-mono" placeholder="Charger identifier" /></CaptureField>
+      </CaptureSection>
+
+      <CaptureSection
+        icon={MapPin}
+        title="Availability & context"
+        description="Choose the physical location and leave useful operational context."
+      >
+        <CaptureField label="Location" wide>
+          <input name="location" className="input" placeholder="Showroom, warehouse, yard or branch" />
+        </CaptureField>
         <div className="flex items-start gap-3 rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3 sm:col-span-2">
-          <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-emerald-400/10 text-emerald-300">
-            <CircleCheck className="size-4" />
-          </span>
+          <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-emerald-400/10 text-emerald-300"><CircleCheck className="size-4" /></span>
           <div>
             <p className="text-sm font-medium text-emerald-100">Available immediately</p>
-            <p className="mt-1 text-xs leading-5 text-emerald-100/70">The arrival time is recorded automatically and this unit becomes reservable for an open lead.</p>
+            <p className="mt-1 text-xs leading-5 text-emerald-100/70">The arrival time is recorded automatically and the unit becomes reservable for a matching open lead.</p>
           </div>
         </div>
         <CaptureField label="Internal notes" wide>
-          <textarea
-            name="notes"
-            className="input min-h-28 resize-y"
-            rows={4}
-            placeholder="Condition, accessories, storage instructions or supplier context"
-          />
+          <textarea name="notes" className="input min-h-28 resize-y" rows={4} placeholder="Condition, accessories, storage instructions or supplier context" />
         </CaptureField>
       </CaptureSection>
 

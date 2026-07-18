@@ -40,6 +40,8 @@ import { PUSH_KINDS } from "@/lib/push";
 import AutomationsPage from "../automations/page";
 import ProductsPage from "../products/page";
 import LibraryPage from "../library/page";
+import { addStockLabel, removeStockLabel } from "@/app/actions/stock";
+import { getStockLabels } from "@/lib/stockLabels";
 import {
   SETTINGS_NAV_GROUPS,
   SETTINGS_TABS,
@@ -78,6 +80,7 @@ export default async function SettingsPage({
     prisma.appSetting.findMany(),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
   ]);
+  const stockLabels = await getStockLabels();
   const setting = (key: string) => {
     const raw = settings.find((s) => s.key === key)?.value ?? "";
     try {
@@ -966,6 +969,47 @@ export default async function SettingsPage({
       )}
 
       {tab === "automations" && <AutomationsPage />}
+      {tab === "stock" && (
+        <div className="max-w-3xl space-y-4">
+          <div className="card">
+            <h2 className="font-semibold mb-1">Stock labels</h2>
+            <p className="text-xs text-muted-foreground mb-4">
+              Organisational labels are <b>separate</b> from a unit&apos;s lifecycle status (incoming →
+              delivered). Use them to flag demo units, showroom stock, consignment, management holds and
+              the like. Removing a label clears it from any units carrying it.
+            </p>
+            {stockLabels.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No labels yet — add one below.</p>
+            ) : (
+              <ul className="divide-y divide-border/50">
+                {stockLabels.map((l) => (
+                  <li key={l.slug} className="flex items-center gap-2 py-2">
+                    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: `${l.color}22`, color: l.color }}>{l.label}</span>
+                    <form action={removeStockLabel.bind(null, l.slug)} className="ml-auto">
+                      <button className="btn-danger btn-sm">Remove</button>
+                    </form>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <form action={addStockLabel} className="card space-y-3">
+            <h2 className="font-semibold">Add a label</h2>
+            <div className="grid grid-cols-[1fr_auto] items-end gap-3">
+              <div>
+                <label className="label">Name</label>
+                <input name="label" className="input" placeholder="e.g. Demo unit, Consignment, Management hold" required />
+              </div>
+              <div>
+                <label className="label">Colour</label>
+                <input name="color" type="color" defaultValue="#8b5cf6" className="input h-10 w-16 p-1" />
+              </div>
+            </div>
+            <button className="btn-primary">Add label</button>
+          </form>
+        </div>
+      )}
+
       {tab === "products" && <ProductsPage />}
       {tab === "library" && <LibraryPage />}
 

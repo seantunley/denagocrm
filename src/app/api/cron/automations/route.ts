@@ -16,11 +16,11 @@ import { runSurveyQueue } from "@/lib/surveys";
 import { runLifecycleJourneys } from "@/lib/lifecycleJourneys";
 import { runAiHealthIfDue, runBackupWatchdog } from "@/lib/systemHealth";
 import { basePrisma } from "@/lib/db";
+import { expireReservations } from "@/lib/stockPlatform";
 
 /**
- * Runs idle-lead automation rules. Invoked by Vercel Cron with
+ * Runs recurring operational queues. Invoked by Vercel Cron with
  *   Authorization: Bearer <CRON_SECRET>
- * The dashboard also runs these opportunistically on load.
  */
 export async function GET(req: NextRequest) {
   if (!isAuthorizedCron(req)) {
@@ -37,6 +37,10 @@ export async function GET(req: NextRequest) {
   const campaignSent = await runCampaignQueue().catch((e) => { logError("campaign-queue", e); return -1; });
   const surveysSent = await runSurveyQueue().catch((e) => { logError("survey-queue", e); return -1; });
   const lifecycleSent = await runLifecycleJourneys().catch((e) => { logError("lifecycle-journeys", e); return -1; });
+  const stockActor = await basePrisma.user.findFirst({ where: { role: "owner" }, orderBy: { createdAt: "asc" }, select: { id: true, name: true } });
+  const stockReservationsExpired = stockActor
+    ? await expireReservations(stockActor).catch((e) => { logError("stock-reservation-expiry", e); return -1; })
+    : 0;
   await runAiHealthIfDue().catch((e) => logError("ai-health", e));
   await runBackupWatchdog().catch(() => {});
   await basePrisma.errorLog
@@ -55,5 +59,6 @@ export async function GET(req: NextRequest) {
     surveysSent,
     lifecycleSent,
     activityReminders,
+    stockReservationsExpired,
   });
 }
