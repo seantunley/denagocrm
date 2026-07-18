@@ -176,7 +176,7 @@ export default async function LeadTimeline({
       <div className="mb-4">
         <h2 className="font-semibold">Live timeline</h2>
         <p className="mt-0.5 text-xs text-slate-500">
-          Pin an important note or action to keep it at the top until it is unpinned.
+          Use the pin button on any note or action to keep it at the top until it is unpinned.
         </p>
       </div>
 
@@ -201,6 +201,7 @@ export default async function LeadTimeline({
             name="pin"
             className="size-3.5 rounded border-slate-700 bg-slate-900 accent-orange-500"
           />
+          <Pin className="size-3.5 text-orange-400" />
           Pin this note to the top
         </label>
         <button className="btn-secondary btn-sm w-full">+ Add note</button>
@@ -231,10 +232,10 @@ export default async function LeadTimeline({
               return (
                 <li
                   key={item.id}
-                  className={`ml-5 rounded-lg px-2 py-2 ${
+                  className={`group ml-5 rounded-xl px-3 py-2.5 transition-colors ${
                     isPinned
-                      ? "border border-orange-500/30 bg-orange-500/[0.07]"
-                      : "border border-transparent"
+                      ? "border border-orange-400/35 bg-gradient-to-r from-orange-500/[0.10] to-amber-400/[0.04] shadow-[0_0_0_1px_rgba(251,146,60,0.04)]"
+                      : "border border-transparent hover:border-slate-700/80 hover:bg-slate-900/35"
                   }`}
                 >
                   <span
@@ -251,8 +252,8 @@ export default async function LeadTimeline({
                   <div className="flex items-start gap-2">
                     <p className="min-w-0 flex-1 break-words text-sm text-slate-200 [overflow-wrap:anywhere]">
                       {isPinned && (
-                        <span className="mr-2 inline-flex items-center gap-1 rounded-full bg-orange-500/15 px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-orange-300">
-                          <Pin className="size-2.5" />
+                        <span className="mr-2 inline-flex items-center gap-1 rounded-full border border-orange-400/20 bg-orange-500/15 px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-orange-300">
+                          <Pin className="size-2.5 fill-current" />
                           Pinned
                         </span>
                       )}
@@ -278,23 +279,29 @@ export default async function LeadTimeline({
                           title={
                             isPinned
                               ? "Unpin from the top"
-                              : "Pin to the top"
+                              : "Pin this entry to the top"
                           }
                           aria-label={
                             isPinned
                               ? "Unpin timeline entry"
                               : "Pin timeline entry"
                           }
-                          className={`inline-flex size-7 items-center justify-center rounded-md transition-colors ${
+                          className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400/60 ${
                             isPinned
-                              ? "bg-orange-500/15 text-orange-300 hover:bg-orange-500/25"
-                              : "text-slate-500 hover:bg-slate-800 hover:text-slate-200"
+                              ? "border-orange-400/30 bg-orange-500/15 text-orange-200 shadow-sm hover:border-orange-400/50 hover:bg-orange-500/25"
+                              : "border-slate-700/80 bg-slate-900/60 text-slate-400 opacity-80 hover:border-orange-400/35 hover:bg-orange-500/10 hover:text-orange-200 group-hover:opacity-100"
                           }`}
                         >
                           {isPinned ? (
-                            <PinOff className="size-3.5" />
+                            <>
+                              <PinOff className="size-3.5" />
+                              <span>Unpin</span>
+                            </>
                           ) : (
-                            <Pin className="size-3.5" />
+                            <>
+                              <Pin className="size-3.5" />
+                              <span>Pin</span>
+                            </>
                           )}
                         </button>
                       </form>
