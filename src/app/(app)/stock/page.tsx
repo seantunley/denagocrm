@@ -23,6 +23,7 @@ import StockUnitForm from "@/components/StockUnitForm";
 import StockPurchaseOrderForm from "@/components/StockPurchaseOrderForm";
 import { formatZAR } from "@/lib/format";
 import { receivePurchaseOrder, cancelPurchaseOrder, addStockUnit } from "@/app/actions/stock";
+import { StockReceiveForm } from "@/components/StockReceiveForm";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
@@ -71,7 +72,17 @@ export default async function StockPage({
     prisma.purchaseOrder.findMany({
       where: { deletedAt: null, status: { in: ["ordered", "partially_received"] } },
       orderBy: [{ expectedAt: "asc" }, { orderedAt: "asc" }],
-      include: { _count: { select: { units: true } }, units: { where: { deletedAt: null, status: "incoming" }, take: 1, include: { product: true } } },
+      include: {
+        _count: { select: { units: { where: { deletedAt: null, status: "incoming" } } } },
+        units: { where: { deletedAt: null, status: "incoming" }, take: 1, include: { product: true } },
+        lines: {
+          orderBy: { createdAt: "asc" },
+          include: {
+            product: { select: { name: true } },
+            _count: { select: { units: { where: { deletedAt: null, status: "incoming" } } } },
+          },
+        },
+      },
       take: 12,
     }),
     prisma.$queryRaw<Array<{ location: string }>>(Prisma.sql`
@@ -182,7 +193,7 @@ export default async function StockPage({
             {openPos.length === 0 ? <p className="mt-4 text-sm text-muted-foreground">No supplier orders are currently outstanding.</p> : <ul className="mt-4 divide-y divide-border">{openPos.map((po) => {
               const overdue = Boolean(po.expectedAt && po.expectedAt < new Date());
               return <li key={po.id} className="py-3 first:pt-0 last:pb-0"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-medium">{po.reference || `${po.supplier} order`}</p><p className="mt-0.5 text-xs text-muted-foreground">{po._count.units} unit{po._count.units === 1 ? "" : "s"}{po.expectedAt ? ` · due ${po.expectedAt.toLocaleDateString("en-ZA")}` : ""}</p></div>{overdue && <StatusPill tone="danger">Overdue</StatusPill>}</div>
-                {canManage && <div className="mt-2 flex gap-2"><form action={receivePurchaseOrder.bind(null, po.id)}><button className="btn-primary btn-sm">Receive</button></form><ModalTrigger label="Cancel" title="Cancel purchase order" buttonClass="btn-secondary btn-sm"><form action={cancelPurchaseOrder.bind(null, po.id)} className="space-y-3"><p className="text-sm text-muted-foreground">Only outstanding incoming units will be removed. Previously received units remain in stock.</p><div><label className="label">Reason *</label><textarea name="reason" className="input min-h-24" required /></div><button className="btn-danger">Cancel order</button></form></ModalTrigger></div>}
+                {canManage && <div className="mt-2 flex gap-2">{po.lines.length > 0 ? <ModalTrigger label="Receive" title={`Receive — ${po.reference || `${po.supplier} order`}`} buttonClass="btn-primary btn-sm"><StockReceiveForm action={receivePurchaseOrder.bind(null, po.id)} lines={po.lines.map((line) => ({ id: line.id, name: line.product.name, color: line.color, ordered: line.orderedQty, received: line.receivedQty, outstanding: line._count.units }))} /></ModalTrigger> : <form action={receivePurchaseOrder.bind(null, po.id)}><button className="btn-primary btn-sm">Receive</button></form>}<ModalTrigger label="Cancel" title="Cancel purchase order" buttonClass="btn-secondary btn-sm"><form action={cancelPurchaseOrder.bind(null, po.id)} className="space-y-3"><p className="text-sm text-muted-foreground">Only outstanding incoming units will be removed. Previously received units remain in stock.</p><div><label className="label">Reason *</label><textarea name="reason" className="input min-h-24" required /></div><button className="btn-danger">Cancel order</button></form></ModalTrigger></div>}
               </li>;
             })}</ul>}
           </Surface>
