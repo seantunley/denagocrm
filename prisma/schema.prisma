@@ -43,6 +43,8 @@ model User {
   jobCardsAsTech     JobCard[]        @relation("JobCardTechnician")
   jobCardTimeEntries JobCardTimeEntry[] @relation("JobCardTimeTechnician")
   campaignsCreated   Campaign[]       @relation("CampaignCreator")
+  stockReservations  StockReservation[]
+  goodsReceipts      GoodsReceipt[]
 }
 
 model AppSetting {
@@ -97,11 +99,12 @@ model Product {
   deletedByName String?
   deleteReason  String?
 
-  colors     ProductColor[]
-  leads      Lead[]
-  vehicles   Vehicle[]
-  stockUnits StockUnit[]
-  quoteItems QuoteItem[]
+  colors             ProductColor[]
+  leads              Lead[]
+  vehicles           Vehicle[]
+  stockUnits         StockUnit[]
+  quoteItems         QuoteItem[]
+  purchaseOrderLines PurchaseOrderLine[]
 }
 
 model PurchaseOrder {
@@ -115,6 +118,10 @@ model PurchaseOrder {
   createdAt  DateTime    @default(now())
   deletedAt  DateTime?
   units      StockUnit[]
+
+  lines         PurchaseOrderLine[]
+  goodsReceipts GoodsReceipt[]
+  stockEvents   StockEvent[]
 }
 
 model StockUnit {
@@ -138,8 +145,127 @@ model StockUnit {
   soldQuoteId       String?
   soldQuote         Quote?         @relation("StockSold", fields: [soldQuoteId], references: [id], onDelete: SetNull)
 
+  // Stock operations platform (phases 1-4). Partial/expression unique indexes
+  // (active serial on UPPER(serial), partial stockNumber) live in the migration
+  // only — Prisma can't model them; this mirrors migrations 50 & 52.
+  stockNumber     String?   @unique
+  location        String?
+  condition       String    @default("new")
+  batterySerial   String?
+  chargerSerial   String?
+  odometerKm      Int?
+  landedCostCents Int       @default(0)
+  salePriceCents  Int?
+  pdiStatus       String    @default("not_started")
+  pdiCompletedAt  DateTime?
+  deliveredAt     DateTime?
+  warrantyStartAt DateTime?
+  warrantyEndAt   DateTime?
+  updatedAt       DateTime  @default(now()) @updatedAt
+
+  reservations      StockReservation[]
+  events            StockEvent[]
+  goodsReceiptLines GoodsReceiptLine[]
+
   @@index([status])
   @@index([productId])
+  @@index([location, status], map: "StockUnit_location_status_idx")
+  @@index([arrivedAt], map: "StockUnit_arrivedAt_idx")
+}
+
+model StockReservation {
+  id                   String    @id @default(cuid())
+  stockUnitId          String
+  stockUnit            StockUnit @relation(fields: [stockUnitId], references: [id], onDelete: Cascade)
+  leadId               String
+  lead                 Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  quoteId              String?
+  quote                Quote?    @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  status               String    @default("active")
+  reservedAt           DateTime  @default(now())
+  expiresAt            DateTime?
+  depositRequiredCents Int       @default(0)
+  depositReceivedAt    DateTime?
+  releasedAt           DateTime?
+  releaseReason        String?
+  reservedById         String
+  reservedBy           User      @relation(fields: [reservedById], references: [id], onDelete: Restrict)
+
+  // One active reservation per unit is enforced by a partial unique index
+  // (StockReservation_active_unit_key WHERE status='active') in the migration.
+  @@index([status, expiresAt], map: "StockReservation_expiry_idx")
+  @@index([leadId, status], map: "StockReservation_lead_idx")
+}
+
+model StockEvent {
+  id              String         @id @default(cuid())
+  stockUnitId     String?
+  stockUnit       StockUnit?     @relation(fields: [stockUnitId], references: [id], onDelete: SetNull)
+  purchaseOrderId String?
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+  eventType       String
+  fromStatus      String?
+  toStatus        String?
+  leadId          String?
+  quoteId         String?
+  reason          String?
+  detail          String?
+  costBeforeCents Int?
+  costAfterCents  Int?
+  performedById   String
+  performedByName String
+  occurredAt      DateTime       @default(now())
+
+  @@index([stockUnitId, occurredAt(sort: Desc)], map: "StockEvent_unit_time_idx")
+  @@index([purchaseOrderId, occurredAt(sort: Desc)], map: "StockEvent_po_time_idx")
+}
+
+model PurchaseOrderLine {
+  id              String        @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product       @relation(fields: [productId], references: [id], onDelete: Restrict)
+  color           String?
+  orderedQty      Int
+  receivedQty     Int           @default(0)
+  unitCostCents   Int           @default(0)
+  freightCents    Int           @default(0)
+  notes           String?
+  createdAt       DateTime      @default(now())
+
+  goodsReceiptLines GoodsReceiptLine[]
+
+  @@index([purchaseOrderId], map: "PurchaseOrderLine_po_idx")
+}
+
+model GoodsReceipt {
+  id              String        @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  reference       String?
+  receivedAt      DateTime      @default(now())
+  receivedById    String
+  receivedBy      User          @relation(fields: [receivedById], references: [id], onDelete: Restrict)
+  notes           String?
+
+  lines GoodsReceiptLine[]
+
+  @@index([purchaseOrderId, receivedAt(sort: Desc)], map: "GoodsReceipt_po_idx")
+}
+
+model GoodsReceiptLine {
+  id                  String             @id @default(cuid())
+  goodsReceiptId      String
+  goodsReceipt        GoodsReceipt       @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+  purchaseOrderLineId String?
+  purchaseOrderLine   PurchaseOrderLine? @relation(fields: [purchaseOrderLineId], references: [id], onDelete: SetNull)
+  stockUnitId         String
+  stockUnit           StockUnit          @relation(fields: [stockUnitId], references: [id], onDelete: Restrict)
+  accepted            Boolean            @default(true)
+  conditionNote       String?
+
+  @@index([goodsReceiptId], map: "GoodsReceiptLine_receipt_idx")
 }
 
 model ProductColor {
@@ -349,6 +475,7 @@ model Lead {
   quotes         Quote[]
   researchNotes  ResearchNote[]
   reservedStock  StockUnit[]    @relation("StockReserved")
+  stockReservations StockReservation[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -487,6 +614,7 @@ model Quote {
   items     QuoteItem[]
   fees      QuoteFee[]
   soldStock StockUnit[] @relation("StockSold")
+  stockReservations StockReservation[]
 }
 
 model QuoteItem {

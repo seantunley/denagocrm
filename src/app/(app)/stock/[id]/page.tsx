@@ -242,7 +242,7 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
 
                 {unit.status === "ready_for_delivery" && (
                   <ModalTrigger label="Complete delivery" title="Customer handover" buttonClass="btn bg-emerald-700 text-white hover:bg-emerald-600">
-                    <form action={deliverStockUnit.bind(null, unit.id)} className="space-y-4"><p className="text-sm text-muted-foreground">This creates the customer's vehicle record, files the sale value and starts the warranty.</p><div><label className="label">Warranty months</label><input name="warrantyMonths" type="number" min="0" defaultValue="12" className="input" /></div><button className="btn bg-emerald-700 text-white hover:bg-emerald-600">Confirm delivered</button></form>
+                    <form action={deliverStockUnit.bind(null, unit.id)} className="space-y-4"><p className="text-sm text-muted-foreground">This creates the customer&apos;s vehicle record, files the sale value and starts the warranty.</p><div><label className="label">Warranty months</label><input name="warrantyMonths" type="number" min="0" defaultValue="12" className="input" /></div><button className="btn bg-emerald-700 text-white hover:bg-emerald-600">Confirm delivered</button></form>
                   </ModalTrigger>
                 )}
 
