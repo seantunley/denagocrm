@@ -6,9 +6,9 @@ import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   pointerWithin,
-  rectIntersection,
   useDraggable,
   useDroppable,
   useSensor,
@@ -260,12 +260,14 @@ function LeadCard({ lead, dragging }: { lead: KanbanLead; dragging?: boolean }) 
 
 function DraggableCard({ lead }: { lead: KanbanLead }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: lead.id });
+  // No touch-action:none on the card: the TouchSensor's press-delay decides drag
+  // vs scroll, so leaving native touch scrolling on lets the board/columns scroll.
   return (
     <div
       ref={setNodeRef}
       {...listeners}
       {...attributes}
-      className={cn("touch-none", isDragging && "opacity-30")}
+      className={cn("select-none", isDragging && "opacity-30")}
     >
       <LeadCard lead={lead} />
     </div>
@@ -350,7 +352,12 @@ export default function KanbanBoard({
   useEffect(() => setStages(initial), [initial]);
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    // Mouse: start dragging after an 8px move — precise, no delay.
+    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
+    // Touch: require a short press-and-hold before dragging. A quick swipe (which
+    // moves past the tolerance before the delay elapses) is treated as a scroll,
+    // so the board/columns scroll normally instead of grabbing a card by accident.
+    useSensor(TouchSensor, { activationConstraint: { delay: 220, tolerance: 8 } }),
     useSensor(KeyboardSensor),
   );
 
@@ -455,9 +462,24 @@ export default function KanbanBoard({
     });
   }
 
+  // Columns are laid out left→right, so the drop target is simply the column under
+  // the pointer. Prefer pointerWithin; when the pointer is over a gap or a header
+  // (not inside any droppable rect), fall back to the column whose horizontal centre
+  // is nearest the pointer's X — NOT rectIntersection, which measures the dragged
+  // card's full-column-width rect and biases the target a whole column to the side.
   const collisionDetection: CollisionDetection = (args) => {
     const byPointer = pointerWithin(args);
-    return byPointer.length > 0 ? byPointer : rectIntersection(args);
+    if (byPointer.length > 0) return byPointer;
+    const x = args.pointerCoordinates?.x;
+    if (x == null) return [];
+    let best: { id: (typeof args.droppableContainers)[number]["id"]; dist: number } | null = null;
+    for (const container of args.droppableContainers) {
+      const rect = args.droppableRects.get(container.id);
+      if (!rect) continue;
+      const dist = Math.abs(x - (rect.left + rect.width / 2));
+      if (!best || dist < best.dist) best = { id: container.id, dist };
+    }
+    return best ? [{ id: best.id }] : [];
   };
 
   return (
