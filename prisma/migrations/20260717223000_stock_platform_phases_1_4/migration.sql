@@ -1,5 +1,19 @@
 -- Stock platform phases 1-4: integrity, reservations, purchasing, fulfilment and intelligence.
 
+-- === Reconciliation (idempotent; a complete no-op on a clean database) ===
+-- Some databases received an earlier, INCOMPATIBLE stock schema out-of-band (its
+-- tables use different columns — e.g. GoodsReceiptLine."receiptId" vs
+-- "goodsReceiptId", PurchaseOrderLine."sortOrder" vs "freightCents"). Those tables
+-- are empty, so drop the ones this migration (re)creates and let the definitions
+-- below rebuild them with the correct columns. CASCADE also removes any dependent
+-- foreign keys (e.g. StockUnit."purchaseOrderLineId"'s constraint). DROP IF EXISTS
+-- means this does nothing on a database that never saw the earlier schema.
+DROP TABLE IF EXISTS "GoodsReceiptLine" CASCADE;
+DROP TABLE IF EXISTS "GoodsReceipt" CASCADE;
+DROP TABLE IF EXISTS "PurchaseOrderLine" CASCADE;
+DROP TABLE IF EXISTS "StockReservation" CASCADE;
+DROP TABLE IF EXISTS "StockEvent" CASCADE;
+
 ALTER TABLE "StockUnit"
   ADD COLUMN IF NOT EXISTS "stockNumber" TEXT,
   ADD COLUMN IF NOT EXISTS "location" TEXT,
