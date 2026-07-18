@@ -62,6 +62,12 @@ type Item = {
   pinTarget?: PinTarget;
 };
 
+function activityStatusLabel(status: string) {
+  if (status === "done") return "Completed";
+  if (status === "canceled" || status === "cancelled") return "Cancelled";
+  return status.replaceAll("_", " ");
+}
+
 export default async function LeadTimeline({
   leadId,
   contactId,
@@ -119,24 +125,21 @@ export default async function LeadTimeline({
     pinByTarget.get(`${kind}:${itemId}`) ?? null;
 
   const items: Item[] = [
-    ...activities
-      .filter(
-        (activity) =>
-          activity.status === "planned" ||
-          Boolean(pinnedAt("activity", activity.id)),
-      )
-      .map((activity): Item => ({
-        id: `act-${activity.id}`,
-        icon: icons[activity.type] ?? icons.activity,
-        title: activity.summary,
-        body: activity.location ? `📍 ${activity.location}` : null,
-        who: activity.assignedTo?.name ?? "Unassigned",
-        when: activity.dueDate,
-        pending: activity.status === "planned",
-        activityStatus: activity.status,
-        pinnedAt: pinnedAt("activity", activity.id),
-        pinTarget: { kind: "activity", itemId: activity.id },
-      })),
+    // Keep completed and cancelled activities in the feed as first-class rows.
+    // They can now be pinned later instead of disappearing as soon as their
+    // workflow status changes.
+    ...activities.map((activity): Item => ({
+      id: `act-${activity.id}`,
+      icon: icons[activity.type] ?? icons.activity,
+      title: activity.summary,
+      body: activity.location ? `📍 ${activity.location}` : null,
+      who: activity.assignedTo?.name ?? "Unassigned",
+      when: activity.dueDate,
+      pending: activity.status === "planned",
+      activityStatus: activity.status,
+      pinnedAt: pinnedAt("activity", activity.id),
+      pinTarget: { kind: "activity", itemId: activity.id },
+    })),
     ...audit.map((entry): Item => ({
       id: `a-${entry.id}`,
       icon: icons[entry.action.split(".")[0]] ?? "•",
@@ -176,7 +179,7 @@ export default async function LeadTimeline({
       <div className="mb-4">
         <h2 className="font-semibold">Live timeline</h2>
         <p className="mt-0.5 text-xs text-slate-500">
-          Pin an important note or action to keep it at the top until it is unpinned.
+          Pin any note or activity to keep it at the top until it is unpinned.
         </p>
       </div>
 
@@ -231,10 +234,10 @@ export default async function LeadTimeline({
               return (
                 <li
                   key={item.id}
-                  className={`ml-5 rounded-lg px-2 py-2 ${
+                  className={`group ml-5 rounded-xl border px-3 py-2.5 transition-all ${
                     isPinned
-                      ? "border border-orange-500/30 bg-orange-500/[0.07]"
-                      : "border border-transparent"
+                      ? "border-orange-400/35 bg-gradient-to-r from-orange-500/[0.12] to-orange-500/[0.04] shadow-[0_8px_24px_-18px_rgba(251,146,60,0.9)]"
+                      : "border-transparent hover:border-slate-700/80 hover:bg-slate-900/30"
                   }`}
                 >
                   <span
@@ -248,11 +251,11 @@ export default async function LeadTimeline({
                   >
                     {item.icon}
                   </span>
-                  <div className="flex items-start gap-2">
+                  <div className="flex items-start gap-2.5">
                     <p className="min-w-0 flex-1 break-words text-sm text-slate-200 [overflow-wrap:anywhere]">
                       {isPinned && (
-                        <span className="mr-2 inline-flex items-center gap-1 rounded-full bg-orange-500/15 px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-orange-300">
-                          <Pin className="size-2.5" />
+                        <span className="mr-2 inline-flex items-center gap-1 rounded-full border border-orange-400/25 bg-orange-500/15 px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-orange-200">
+                          <Pin className="size-2.5 fill-current" />
                           Pinned
                         </span>
                       )}
@@ -264,9 +267,7 @@ export default async function LeadTimeline({
                       {item.activityStatus &&
                         item.activityStatus !== "planned" && (
                           <span className="mr-2 rounded-full bg-slate-700/70 px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-slate-300">
-                            {item.activityStatus === "done"
-                              ? "Completed"
-                              : "Canceled"}
+                            {activityStatusLabel(item.activityStatus)}
                           </span>
                         )}
                       {item.title}
@@ -285,17 +286,26 @@ export default async function LeadTimeline({
                               ? "Unpin timeline entry"
                               : "Pin timeline entry"
                           }
-                          className={`inline-flex size-7 items-center justify-center rounded-md transition-colors ${
+                          className={`inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400/70 ${
                             isPinned
-                              ? "bg-orange-500/15 text-orange-300 hover:bg-orange-500/25"
-                              : "text-slate-500 hover:bg-slate-800 hover:text-slate-200"
+                              ? "border-orange-400/40 bg-orange-500/15 text-orange-200 shadow-sm shadow-orange-950/30 hover:bg-orange-500/25"
+                              : "border-slate-700/80 bg-slate-900/70 text-slate-400 hover:border-orange-400/40 hover:bg-orange-500/10 hover:text-orange-200"
                           }`}
                         >
-                          {isPinned ? (
-                            <PinOff className="size-3.5" />
-                          ) : (
-                            <Pin className="size-3.5" />
-                          )}
+                          <span
+                            className={`grid size-5 place-items-center rounded-full ${
+                              isPinned
+                                ? "bg-orange-400/20"
+                                : "bg-slate-800 group-hover:bg-orange-400/10"
+                            }`}
+                          >
+                            {isPinned ? (
+                              <PinOff className="size-3.5" />
+                            ) : (
+                              <Pin className="size-3.5" />
+                            )}
+                          </span>
+                          {isPinned ? "Unpin" : "Pin"}
                         </button>
                       </form>
                     )}
