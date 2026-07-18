@@ -87,7 +87,7 @@ export default async function ProductDetailPage({
               defaultChecked={product.active}
               className="h-4 w-4"
             />
-            <label htmlFor="active" className="text-sm text-slate-400">
+            <label htmlFor="active" className="text-sm text-muted-foreground">
               Active (available for new leads)
             </label>
           </div>
@@ -98,17 +98,17 @@ export default async function ProductDetailPage({
           <h2 className="font-semibold mb-4">Colours</h2>
           <ul className="space-y-2 mb-4">
             {product.colors.length === 0 && (
-              <li className="text-sm text-slate-400">No colours defined.</li>
+              <li className="text-sm text-muted-foreground">No colours defined.</li>
             )}
             {product.colors.map((c) => (
               <li key={c.id} className="flex items-center justify-between gap-2">
-                <span className="badge bg-slate-800 text-slate-300">{c.name}</span>
+                <span className="badge bg-muted text-muted-foreground">{c.name}</span>
                 <ConfirmDelete
                   action={deleteProductColor.bind(null, c.id, product.id)}
                   title={`Remove colour ${c.name}?`}
                   description="This cannot be undone."
                   trigger="✕"
-                  triggerClass="text-xs text-slate-600 hover:text-red-500 cursor-pointer"
+                  triggerClass="text-xs text-muted-foreground hover:text-red-500 cursor-pointer"
                 />
               </li>
             ))}
@@ -117,7 +117,7 @@ export default async function ProductDetailPage({
             <input name="name" className="input" placeholder="Add colour…" required />
             <button className="btn-secondary">Add</button>
           </form>
-          <p className="text-xs text-slate-400 mt-3">
+          <p className="text-xs text-muted-foreground mt-3">
             Used by {product._count.leads} lead(s) and {product._count.vehicles} vehicle(s).
           </p>
         </div>

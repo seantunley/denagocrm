@@ -40,7 +40,7 @@ function DocumentCard({ doc }: { doc: DocWithVersions }) {
             {doc.name}{" "}
             <StatusPill className="ml-1" tone="info">v{latest?.version ?? 0} · latest</StatusPill>
           </p>
-          <p className="text-xs text-slate-400">
+          <p className="text-xs text-muted-foreground">
             {doc.category ?? "Document"} · {latest ? humanSize(latest.sizeBytes) : ""} · updated{" "}
             {formatDateTime(doc.updatedAt)}
             {latest ? ` by ${latest.uploadedBy.name}` : ""}
@@ -63,30 +63,30 @@ function DocumentCard({ doc }: { doc: DocWithVersions }) {
           title={`Delete “${doc.name}”?`}
           description="The document and all its versions move to the Trash for 60 days."
           trigger="Remove"
-          triggerClass="text-xs text-slate-600 hover:text-red-500 cursor-pointer"
+          triggerClass="text-xs text-muted-foreground hover:text-red-500 cursor-pointer"
         />
       </div>
 
       {doc.versions.length > 1 && (
         <details className="mt-3">
-          <summary className="text-xs font-medium text-orange-400 cursor-pointer hover:underline">
+          <summary className="text-xs font-medium text-primary cursor-pointer hover:underline">
             Version history ({doc.versions.length})
           </summary>
-          <ul className="mt-2 divide-y divide-slate-800">
+          <ul className="mt-2 divide-y divide-border/50">
             {doc.versions.map((v) => (
               <li key={v.id} className="py-2 flex items-center gap-3 text-sm">
                 <span
                   className={`badge ${
                     v.id === doc.versions[0]?.id
-                      ? "bg-orange-500/15 text-orange-300"
-                      : "bg-slate-800 text-slate-400"
+                      ? "bg-primary/15 text-primary"
+                      : "bg-muted text-muted-foreground"
                   }`}
                 >
                   v{v.version}
                 </span>
                 <div className="flex-1 min-w-0">
                   <p className="truncate">{v.fileName}</p>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-muted-foreground">
                     {humanSize(v.sizeBytes)} · {formatDateTime(v.createdAt)} · {v.uploadedBy.name}
                     {v.note ? ` — ${v.note}` : ""}
                   </p>
@@ -164,7 +164,7 @@ export default async function LibraryPage({
           (g) =>
             g.docs.length > 0 && (
               <div key={g.category} className="space-y-3">
-                <h2 className="text-sm font-bold uppercase tracking-widest text-slate-500 pt-2">
+                <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground pt-2">
                   {g.category} <span className="font-normal">({g.docs.length})</span>
                 </h2>
                 {g.docs.map((doc) => (

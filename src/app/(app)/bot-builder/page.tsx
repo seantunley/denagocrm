@@ -49,7 +49,7 @@ export default async function BotBuilderPage() {
                 <input
                   name="name"
                   defaultValue={f.name}
-                  className="bg-transparent font-semibold text-slate-100 w-full outline-none focus:bg-slate-800 rounded px-1 -mx-1"
+                  className="bg-transparent font-semibold text-foreground w-full outline-none focus:bg-muted rounded px-1 -mx-1"
                 />
               </form>
               {f.active ? (
@@ -60,7 +60,7 @@ export default async function BotBuilderPage() {
                 </form>
               )}
             </div>
-            <p className="text-xs text-slate-500">Updated {f.updatedAt.toLocaleDateString("en-ZA")}</p>
+            <p className="text-xs text-muted-foreground">Updated {f.updatedAt.toLocaleDateString("en-ZA")}</p>
             <div className="flex gap-2 flex-wrap">
               <Link href={`/bot-builder/${f.id}`} className="btn-primary btn-sm">🎨 Edit</Link>
               <form action={duplicateFlow.bind(null, f.id)}>
