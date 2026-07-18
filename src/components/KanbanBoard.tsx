@@ -6,6 +6,7 @@ import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
+  MeasuringStrategy,
   MouseSensor,
   TouchSensor,
   pointerWithin,
@@ -278,8 +279,11 @@ function Column({ stage }: { stage: KanbanStage }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const total = stage.leads.reduce((sum, lead) => sum + lead.valueCents, 0);
 
+  // Droppable is the WHOLE column (header + body), so the pointer-X drop detection
+  // has the full column width/height to work with.
   return (
     <section
+      ref={setNodeRef}
       id={`pipeline-stage-${stage.id}`}
       className="flex w-[min(88vw,22rem)] shrink-0 snap-start flex-col overflow-hidden rounded-2xl border border-border bg-card/35 shadow-sm md:w-[320px]"
       aria-labelledby={`pipeline-stage-title-${stage.id}`}
@@ -308,7 +312,6 @@ function Column({ stage }: { stage: KanbanStage }) {
         </p>
       </header>
       <div
-        ref={setNodeRef}
         className={cn(
           "min-h-[26rem] flex-1 space-y-2.5 p-2.5 transition-colors",
           isOver ? "bg-primary/[0.07] ring-1 ring-inset ring-primary/35" : "bg-background/20",
@@ -462,24 +465,28 @@ export default function KanbanBoard({
     });
   }
 
-  // Columns are laid out left→right, so the drop target is simply the column under
-  // the pointer. Prefer pointerWithin; when the pointer is over a gap or a header
-  // (not inside any droppable rect), fall back to the column whose horizontal centre
-  // is nearest the pointer's X — NOT rectIntersection, which measures the dragged
-  // card's full-column-width rect and biases the target a whole column to the side.
+  // The board is a horizontal, scrollable strip of columns, so the drop target is
+  // ALWAYS "the column whose horizontal span the pointer is over" — resolved purely
+  // from the pointer's live X against freshly-measured column rects (DndContext uses
+  // MeasuringStrategy.Always below). This avoids the one-column offset you get from
+  // pointerWithin/rectIntersection against stale rects while the strip is scrolled.
   const collisionDetection: CollisionDetection = (args) => {
-    const byPointer = pointerWithin(args);
-    if (byPointer.length > 0) return byPointer;
     const x = args.pointerCoordinates?.x;
-    if (x == null) return [];
-    let best: { id: (typeof args.droppableContainers)[number]["id"]; dist: number } | null = null;
+    if (x == null) return pointerWithin(args); // keyboard / no pointer
+    let inside: (typeof args.droppableContainers)[number]["id"] | null = null;
+    let nearest: { id: (typeof args.droppableContainers)[number]["id"]; dist: number } | null = null;
     for (const container of args.droppableContainers) {
       const rect = args.droppableRects.get(container.id);
       if (!rect) continue;
+      if (x >= rect.left && x <= rect.left + rect.width) {
+        inside = container.id;
+        break;
+      }
       const dist = Math.abs(x - (rect.left + rect.width / 2));
-      if (!best || dist < best.dist) best = { id: container.id, dist };
+      if (!nearest || dist < nearest.dist) nearest = { id: container.id, dist };
     }
-    return best ? [{ id: best.id }] : [];
+    if (inside) return [{ id: inside }];
+    return nearest ? [{ id: nearest.id }] : [];
   };
 
   return (
@@ -588,6 +595,9 @@ export default function KanbanBoard({
         id="leads-board"
         sensors={sensors}
         collisionDetection={collisionDetection}
+        // Re-measure column rects continuously so horizontal scrolling can't leave
+        // the drop detection reading stale positions (the source of the offset).
+        measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
         onDragCancel={() => setActiveLead(null)}
