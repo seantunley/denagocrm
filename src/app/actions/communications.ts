@@ -3,6 +3,27 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireCrmOrWorkshop } from "@/lib/auth";
+import { canAccessContact, canAccessLead } from "@/lib/permissions";
+import {
+  removeTimelinePin,
+  toggleTimelinePin,
+} from "@/lib/timelinePins";
+
+async function assertCommunicationAccess(
+  user: Awaited<ReturnType<typeof requireCrmOrWorkshop>>,
+  communication: { contactId: string | null; leadId: string | null },
+) {
+  if (user.role === "owner") return;
+  const allowed =
+    (!communication.contactId && !communication.leadId) ||
+    (communication.contactId
+      ? await canAccessContact(user, communication.contactId)
+      : false) ||
+    (communication.leadId
+      ? await canAccessLead(user, communication.leadId)
+      : false);
+  if (!allowed) throw new Error("Communication access denied");
+}
 
 export async function addCommunication(formData: FormData) {
   const user = await requireCrmOrWorkshop();
@@ -13,18 +34,25 @@ export async function addCommunication(formData: FormData) {
   const body = String(formData.get("body") ?? "").trim();
   const file = formData.get("image");
   const hasFile =
-    file && typeof file === "object" && (file as File).size > 0 && (file as File).size <= 4 * 1024 * 1024;
+    file &&
+    typeof file === "object" &&
+    (file as File).size > 0 &&
+    (file as File).size <= 4 * 1024 * 1024;
   if (!body && !hasFile) return;
 
   let attachmentUrl: string | null = null;
   if (hasFile && (file as File).type.startsWith("image/")) {
     const { saveFile } = await import("@/lib/storage");
     const f = file as File;
-    attachmentUrl = await saveFile(Buffer.from(await f.arrayBuffer()), f.name || "note.png", f.type);
+    attachmentUrl = await saveFile(
+      Buffer.from(await f.arrayBuffer()),
+      f.name || "note.png",
+      f.type,
+    );
   }
 
   const occurredAtRaw = str("occurredAt");
-  await prisma.communication.create({
+  const communication = await prisma.communication.create({
     data: {
       type: str("type") ?? "note",
       direction: str("direction"),
@@ -38,7 +66,37 @@ export async function addCommunication(formData: FormData) {
       userId: user.id,
     },
   });
+
+  if (formData.get("pin") === "on") {
+    await toggleTimelinePin("communication", communication.id, user.id);
+  }
+
   revalidatePath(String(formData.get("revalidate") ?? "/"));
+}
+
+export async function toggleCommunicationPin(id: string, path: string) {
+  const user = await requireCrmOrWorkshop();
+  const communication = await prisma.communication.findUniqueOrThrow({
+    where: { id },
+    select: {
+      contactId: true,
+      leadId: true,
+      type: true,
+      body: true,
+    },
+  });
+  await assertCommunicationAccess(user, communication);
+
+  const result = await toggleTimelinePin("communication", id, user.id);
+  const { logAudit } = await import("@/lib/audit");
+  await logAudit({
+    action: result.pinned ? "communication.pinned" : "communication.unpinned",
+    summary: `${result.pinned ? "Pinned" : "Unpinned"} ${communication.type} entry: “${communication.body.slice(0, 80)}${communication.body.length > 80 ? "…" : ""}”`,
+    contactId: communication.contactId,
+    leadId: communication.leadId,
+    user,
+  });
+  revalidatePath(path);
 }
 
 /**
@@ -65,9 +123,20 @@ export async function markThreadRead(
   revalidatePath("/inbox");
 }
 
-export async function deleteCommunication(id: string, path: string, formData: FormData) {
+export async function deleteCommunication(
+  id: string,
+  path: string,
+  formData: FormData,
+) {
   const user = await requireCrmOrWorkshop();
-  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+  const reason =
+    String(formData.get("reason") ?? "").trim() || "No reason given";
+  const communication = await prisma.communication.findUniqueOrThrow({
+    where: { id },
+    select: { contactId: true, leadId: true },
+  });
+  await assertCommunicationAccess(user, communication);
+  await removeTimelinePin("communication", id);
   const comm = await prisma.communication.delete({ where: { id } });
   const { logAudit } = await import("@/lib/audit");
   await logAudit({

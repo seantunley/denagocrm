@@ -18,13 +18,6 @@ import { Megaphone } from "lucide-react";
 // First send batch runs inside the send action — give it room.
 export const maxDuration = 60;
 
-const STATUS_BADGE: Record<string, string> = {
-  draft: "bg-slate-800 text-slate-400",
-  queued: "bg-sky-500/15 text-sky-300",
-  sending: "bg-amber-500/15 text-amber-300",
-  sent: "bg-emerald-500/15 text-emerald-300",
-};
-
 function criteriaSummary(c: SegmentCriteria): string {
   const parts: string[] = [];
   if (c.source) parts.push(`source ${c.source}`);
@@ -135,23 +128,23 @@ export default async function CampaignsPage() {
         </thead>
         <tbody>
           {campaigns.length === 0 && (
-            <tr><td colSpan={7} className="text-center text-slate-400 py-8">No campaigns yet.</td></tr>
+            <tr><td colSpan={7} className="text-center text-muted-foreground py-8">No campaigns yet.</td></tr>
           )}
           {campaigns.map((c) => {
             const oRate = c.sentCount > 0 ? Math.round((c.openCount / c.sentCount) * 100) : 0;
             const cRate = c.sentCount > 0 ? Math.round((c.clickCount / c.sentCount) * 100) : 0;
             return (
               <tr key={c.id}>
-                <td><span className={`badge ${STATUS_BADGE[c.status] ?? "bg-slate-800"}`}>{c.status}</span></td>
+                <td><StatusPill tone={c.status === "sent" ? "success" : c.status === "sending" ? "warning" : c.status === "queued" ? "info" : "neutral"}>{c.status}</StatusPill></td>
                 <td>
-                  <Link href={`/campaigns/${c.id}`} className="font-medium text-orange-400 hover:underline">{c.name}</Link>
-                  <span className="text-xs text-slate-500 ml-2 uppercase">{c.channel}</span>
+                  <Link href={`/campaigns/${c.id}`} className="font-medium text-primary hover:underline">{c.name}</Link>
+                  <span className="text-xs text-muted-foreground ml-2 uppercase">{c.channel}</span>
                 </td>
-                <td className="text-slate-400">{c.audience}</td>
+                <td className="text-muted-foreground">{c.audience}</td>
                 <td className="text-right">{c.sentCount}/{c.recipientCount}</td>
                 <td className="text-right">{c.channel === "email" && c.sentCount > 0 ? `${oRate}%` : "—"}</td>
                 <td className="text-right">{c.channel === "email" && c.sentCount > 0 ? `${cRate}%` : "—"}</td>
-                <td className="text-slate-400 text-xs">{formatDateTime(c.createdAt)}</td>
+                <td className="text-muted-foreground text-xs">{formatDateTime(c.createdAt)}</td>
               </tr>
             );
           })}
@@ -166,18 +159,18 @@ export default async function CampaignsPage() {
     <div className="space-y-4">
       <SegmentBuilder tags={tags.map((t) => ({ id: t.id, name: t.name }))} />
       <div className="card p-0">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 px-4 pt-4">Saved audiences</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground px-4 pt-4">Saved audiences</p>
         {segments.length === 0 ? (
-          <p className="text-sm text-slate-400 p-4">No saved audiences yet — build one above.</p>
+          <p className="text-sm text-muted-foreground p-4">No saved audiences yet — build one above.</p>
         ) : (
-          <ul className="divide-y divide-slate-800 mt-2">
+          <ul className="divide-y divide-border/50 mt-2">
             {segments.map((s) => (
               <li key={s.id} className="px-4 py-3 flex items-center gap-3">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium">{s.name}</p>
-                  <p className="text-xs text-slate-400">{criteriaSummary(s.criteria)}</p>
+                  <p className="text-xs text-muted-foreground">{criteriaSummary(s.criteria)}</p>
                 </div>
-                <span className="text-sm text-slate-400">{s.count} recipient{s.count === 1 ? "" : "s"}</span>
+                <span className="text-sm text-muted-foreground">{s.count} recipient{s.count === 1 ? "" : "s"}</span>
                 <form action={deleteSegment.bind(null, s.id)}>
                   <button className="btn-secondary btn-sm">Delete</button>
                 </form>
@@ -193,10 +186,10 @@ export default async function CampaignsPage() {
   const subscribers = (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subscribed</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{reachable}</p></div>
-        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Unsubscribed</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{optedOut}</p></div>
+        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Subscribed</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{reachable}</p></div>
+        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Unsubscribed</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{optedOut}</p></div>
       </div>
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-muted-foreground">
         Subscribers are customers who haven&apos;t opted out. They&apos;re the base every campaign
         draws from; opted-out customers are always excluded.
       </p>
@@ -205,13 +198,13 @@ export default async function CampaignsPage() {
           <thead><tr><th>Customer</th><th>Email</th><th>Phone</th><th></th></tr></thead>
           <tbody>
             {subscribed.length === 0 && (
-              <tr><td colSpan={4} className="text-center text-slate-400 py-8">No subscribers yet.</td></tr>
+              <tr><td colSpan={4} className="text-center text-muted-foreground py-8">No subscribers yet.</td></tr>
             )}
             {subscribed.map((c) => (
               <tr key={c.id}>
-                <td><Link href={`/contacts/${c.id}`} className="text-orange-400 hover:underline">{contactName(c)}</Link></td>
-                <td className="text-slate-400">{c.email ?? "—"}</td>
-                <td className="text-slate-400">{c.whatsapp ?? c.phone ?? "—"}</td>
+                <td><Link href={`/contacts/${c.id}`} className="text-primary hover:underline">{contactName(c)}</Link></td>
+                <td className="text-muted-foreground">{c.email ?? "—"}</td>
+                <td className="text-muted-foreground">{c.whatsapp ?? c.phone ?? "—"}</td>
                 <td className="text-right">
                   <form action={setMarketingOptOut.bind(null, c.id, true)}>
                     <button className="btn-secondary btn-sm">Unsubscribe</button>
@@ -225,12 +218,12 @@ export default async function CampaignsPage() {
       {unsubscribed.length > 0 && (
         <details className="card p-0">
           <summary className="px-4 py-3 text-sm font-medium cursor-pointer">Unsubscribed ({optedOut})</summary>
-          <ul className="divide-y divide-slate-800">
+          <ul className="divide-y divide-border/50">
             {unsubscribed.map((c) => (
               <li key={c.id} className="px-4 py-2.5 flex items-center gap-3">
                 <span className="flex-1 min-w-0 text-sm">
-                  <Link href={`/contacts/${c.id}`} className="text-orange-400 hover:underline">{contactName(c)}</Link>
-                  <span className="text-xs text-slate-500 ml-2">{c.email ?? c.phone ?? ""}</span>
+                  <Link href={`/contacts/${c.id}`} className="text-primary hover:underline">{contactName(c)}</Link>
+                  <span className="text-xs text-muted-foreground ml-2">{c.email ?? c.phone ?? ""}</span>
                 </span>
                 <form action={setMarketingOptOut.bind(null, c.id, false)}>
                   <button className="btn-secondary btn-sm">Resubscribe</button>
@@ -252,32 +245,32 @@ export default async function CampaignsPage() {
   const analytics = (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Campaigns</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{agg._count}</p></div>
-        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Messages sent</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{totalSent}</p></div>
-        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Avg open rate</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{openRate}%</p></div>
-        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Avg click rate</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{clickRate}%</p></div>
-        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subscribers</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{reachable}</p></div>
-        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Unsubscribed</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{optedOut}</p></div>
+        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Campaigns</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{agg._count}</p></div>
+        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Messages sent</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{totalSent}</p></div>
+        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Avg open rate</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{openRate}%</p></div>
+        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Avg click rate</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{clickRate}%</p></div>
+        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Subscribers</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{reachable}</p></div>
+        <div className="card"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Unsubscribed</p><p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{optedOut}</p></div>
       </div>
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-muted-foreground">
         Open rates are approximate (mail privacy features auto-load or block the tracking pixel).
         Clicks are the reliable signal. Per-campaign detail is on each campaign&apos;s page.
       </p>
       <div className="card p-0 overflow-x-auto">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 px-4 pt-4">Recent email campaigns</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground px-4 pt-4">Recent email campaigns</p>
         <table className="table-base mt-2">
           <thead><tr><th>Campaign</th><th className="text-right">Sent</th><th className="text-right">Open %</th><th className="text-right">Click %</th></tr></thead>
           <tbody>
             {campaigns.filter((c) => c.channel === "email").slice(0, 10).map((c) => (
               <tr key={c.id}>
-                <td><Link href={`/campaigns/${c.id}`} className="text-orange-400 hover:underline">{c.name}</Link></td>
+                <td><Link href={`/campaigns/${c.id}`} className="text-primary hover:underline">{c.name}</Link></td>
                 <td className="text-right">{c.sentCount}</td>
                 <td className="text-right">{c.sentCount > 0 ? Math.round((c.openCount / c.sentCount) * 100) : 0}%</td>
                 <td className="text-right">{c.sentCount > 0 ? Math.round((c.clickCount / c.sentCount) * 100) : 0}%</td>
               </tr>
             ))}
             {campaigns.filter((c) => c.channel === "email").length === 0 && (
-              <tr><td colSpan={4} className="text-center text-slate-400 py-6">No email campaigns yet.</td></tr>
+              <tr><td colSpan={4} className="text-center text-muted-foreground py-6">No email campaigns yet.</td></tr>
             )}
           </tbody>
         </table>

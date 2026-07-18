@@ -9,9 +9,9 @@ import { StatusPill } from "@/components/visual-system";
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="card">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
       <p className="text-2xl font-semibold tracking-[-0.035em] mt-1">{value}</p>
-      {sub && <p className="text-xs text-slate-500">{sub}</p>}
+      {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
     </div>
   );
 }
@@ -62,7 +62,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
       </div>
 
       {isEmail && (
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-muted-foreground">
           Open rates are approximate — some mail apps (e.g. Apple Mail Privacy Protection) auto-load
           the tracking pixel, and image-blocking hides it. Clicks are the reliable signal.
         </p>
@@ -71,14 +71,14 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
       {isEmail && campaign.htmlBody && (
         <details className="card">
           <summary className="font-semibold cursor-pointer text-sm">Preview email</summary>
-          <div className="mt-3 rounded-lg overflow-hidden border border-slate-800 bg-white">
+          <div className="mt-3 rounded-lg overflow-hidden border border-border bg-white">
             <iframe title="Email preview" srcDoc={campaign.htmlBody} className="w-full h-[480px]" />
           </div>
         </details>
       )}
 
       <div className="card p-0 overflow-x-auto">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 px-4 pt-4">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground px-4 pt-4">
           Recipients {campaign.recipients.length >= 100 ? "(first 100)" : ""}
         </p>
         <table className="table-base mt-2">
@@ -94,24 +94,16 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
             {campaign.recipients.map((r) => (
               <tr key={r.id}>
                 <td>
-                  <Link href={`/contacts/${r.contactId}`} className="text-orange-400 hover:underline">
+                  <Link href={`/contacts/${r.contactId}`} className="text-primary hover:underline">
                     {contactName(r.contact)}
                   </Link>
                 </td>
                 <td>
-                  <span
-                    className={`badge ${
-                      r.status === "sent"
-                        ? "bg-emerald-500/15 text-emerald-300"
-                        : r.status === "failed"
-                        ? "bg-red-500/15 text-red-300"
-                        : "bg-slate-800 text-slate-400"
-                    }`}
-                  >
+                  <StatusPill tone={r.status === "sent" ? "success" : r.status === "failed" ? "danger" : "neutral"}>
                     {r.status}
-                  </span>
+                  </StatusPill>
                   {r.status === "failed" && r.error ? (
-                    <span className="text-xs text-slate-500 ml-2">{r.error}</span>
+                    <span className="text-xs text-muted-foreground ml-2">{r.error}</span>
                   ) : null}
                 </td>
                 {isEmail && <td className="text-right">{r.openCount || "—"}</td>}

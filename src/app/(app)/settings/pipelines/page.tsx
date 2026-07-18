@@ -57,7 +57,7 @@ export default async function PipelineSettingsPage() {
               <label className="label">Description</label>
               <input name="description" className="input" placeholder="Optional" />
             </div>
-            <label className="flex items-center gap-2 text-sm text-slate-300">
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
               <input type="checkbox" name="isDefault" className="h-4 w-4" /> Make this the default pipeline
             </label>
             <button className="btn-primary w-full">Create pipeline</button>
@@ -66,7 +66,7 @@ export default async function PipelineSettingsPage() {
       }
     >
 
-      <div className="card p-0 divide-y divide-slate-800">
+      <div className="card p-0 divide-y divide-border/50">
       {pipelines.map((pipeline) => {
         const stages = stagesByPipeline.get(pipeline.id) ?? [];
         return (
@@ -74,9 +74,9 @@ export default async function PipelineSettingsPage() {
             <summary className="flex items-center justify-between gap-4 px-5 py-4 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
               <span className="text-sm font-medium flex items-center gap-2 flex-wrap">
                 {pipeline.name}
-                {pipeline.isDefault && <span className="badge bg-orange-500/15 text-orange-300">Default</span>}
-                {!pipeline.active && <span className="badge bg-slate-800 text-slate-400">Paused</span>}
-                <span className="text-xs font-normal text-slate-500">
+                {pipeline.isDefault && <span className="badge bg-primary/15 text-primary">Default</span>}
+                {!pipeline.active && <span className="badge bg-muted text-muted-foreground">Paused</span>}
+                <span className="text-xs font-normal text-muted-foreground">
                   {stages.length} stage{stages.length === 1 ? "" : "s"}{pipeline.description ? ` · ${pipeline.description}` : ""}
                 </span>
               </span>
@@ -95,15 +95,15 @@ export default async function PipelineSettingsPage() {
               )}
             </div>
 
-            <details className="rounded-lg border border-slate-800 p-3">
-              <summary className="cursor-pointer text-sm font-medium text-orange-400">Edit pipeline</summary>
+            <details className="rounded-lg border border-border p-3">
+              <summary className="cursor-pointer text-sm font-medium text-primary">Edit pipeline</summary>
               <form action={editSalesPipeline.bind(null, pipeline.id)} className="grid md:grid-cols-5 gap-3 mt-4 items-end">
                 <label className="space-y-1 md:col-span-2">
-                  <span className="text-xs text-slate-400">Name</span>
+                  <span className="text-xs text-muted-foreground">Name</span>
                   <input name="name" className="input" required defaultValue={pipeline.name} />
                 </label>
                 <label className="space-y-1">
-                  <span className="text-xs text-slate-400">Type</span>
+                  <span className="text-xs text-muted-foreground">Type</span>
                   <input name="type" className="input" defaultValue={pipeline.type} />
                 </label>
                 <label className="flex items-center gap-2 text-sm pb-2">
@@ -113,7 +113,7 @@ export default async function PipelineSettingsPage() {
                   <input type="checkbox" name="isDefault" defaultChecked={pipeline.isDefault} /> Default
                 </label>
                 <label className="space-y-1 md:col-span-4">
-                  <span className="text-xs text-slate-400">Description</span>
+                  <span className="text-xs text-muted-foreground">Description</span>
                   <input name="description" className="input" defaultValue={pipeline.description ?? ""} />
                 </label>
                 <button className="btn-primary">Save</button>
@@ -127,35 +127,35 @@ export default async function PipelineSettingsPage() {
                   <div key={stage.id} className="flex items-stretch gap-1.5">
                     <div className="flex flex-col justify-center gap-1">
                       <form action={moveStage.bind(null, pipeline.id, stage.id, "up")}>
-                        <button disabled={i === 0} title="Move up" aria-label={`Move ${stage.name} up`} className="flex size-6 items-center justify-center rounded-md border border-slate-800 text-slate-400 hover:border-orange-500/40 hover:text-orange-400 disabled:opacity-25 disabled:hover:border-slate-800 disabled:hover:text-slate-400">↑</button>
+                        <button disabled={i === 0} title="Move up" aria-label={`Move ${stage.name} up`} className="flex size-6 items-center justify-center rounded-md border border-border text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-25 disabled:hover:border-border disabled:hover:text-muted-foreground">↑</button>
                       </form>
                       <form action={moveStage.bind(null, pipeline.id, stage.id, "down")}>
-                        <button disabled={i === stages.length - 1} title="Move down" aria-label={`Move ${stage.name} down`} className="flex size-6 items-center justify-center rounded-md border border-slate-800 text-slate-400 hover:border-orange-500/40 hover:text-orange-400 disabled:opacity-25 disabled:hover:border-slate-800 disabled:hover:text-slate-400">↓</button>
+                        <button disabled={i === stages.length - 1} title="Move down" aria-label={`Move ${stage.name} down`} className="flex size-6 items-center justify-center rounded-md border border-border text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-25 disabled:hover:border-border disabled:hover:text-muted-foreground">↓</button>
                       </form>
                     </div>
-                    <details className="flex-1 rounded-lg border border-slate-800 p-3">
+                    <details className="flex-1 rounded-lg border border-border p-3">
                     <summary className="cursor-pointer flex items-center gap-3 list-none">
                       <span className="w-3 h-3 rounded-full" style={{ backgroundColor: stage.color }} />
                       <span className="font-medium flex-1">{stage.order + 1}. {stage.name}</span>
-                      <span className="text-xs text-slate-500">{stage.defaultProbability}% probability</span>
-                      {stage.staleAfterDays && <span className="text-xs text-slate-500">stale after {stage.staleAfterDays}d</span>}
-                      {stage.isClosed && <span className="badge bg-slate-800 text-slate-300">{stage.closedStatus || "closed"}</span>}
+                      <span className="text-xs text-muted-foreground">{stage.defaultProbability}% probability</span>
+                      {stage.staleAfterDays && <span className="text-xs text-muted-foreground">stale after {stage.staleAfterDays}d</span>}
+                      {stage.isClosed && <span className="badge bg-muted text-muted-foreground">{stage.closedStatus || "closed"}</span>}
                     </summary>
                     <form action={editSalesPipelineStage.bind(null, stage.id)} className="grid md:grid-cols-6 gap-3 mt-4 items-end">
                       <label className="space-y-1 md:col-span-2">
-                        <span className="text-xs text-slate-400">Name</span>
+                        <span className="text-xs text-muted-foreground">Name</span>
                         <input name="name" className="input" required defaultValue={stage.name} />
                       </label>
                       <label className="space-y-1">
-                        <span className="text-xs text-slate-400">Colour</span>
+                        <span className="text-xs text-muted-foreground">Colour</span>
                         <input name="color" type="color" className="input h-10" defaultValue={stage.color} />
                       </label>
                       <label className="space-y-1">
-                        <span className="text-xs text-slate-400">Probability</span>
+                        <span className="text-xs text-muted-foreground">Probability</span>
                         <input name="defaultProbability" type="number" min="0" max="100" className="input" defaultValue={stage.defaultProbability} />
                       </label>
                       <label className="space-y-1">
-                        <span className="text-xs text-slate-400">Stale after days</span>
+                        <span className="text-xs text-muted-foreground">Stale after days</span>
                         <input name="staleAfterDays" type="number" min="1" className="input" defaultValue={stage.staleAfterDays ?? ""} />
                       </label>
                       <button className="btn-secondary">Save stage</button>
@@ -163,7 +163,7 @@ export default async function PipelineSettingsPage() {
                         <input type="checkbox" name="isClosed" defaultChecked={stage.isClosed} /> Closed stage
                       </label>
                       <label className="space-y-1 md:col-span-2">
-                        <span className="text-xs text-slate-400">Closed result</span>
+                        <span className="text-xs text-muted-foreground">Closed result</span>
                         <select name="closedStatus" className="input" defaultValue={stage.closedStatus ?? ""}>
                           <option value="">Not applicable</option>
                           <option value="won">Won</option>
@@ -174,27 +174,27 @@ export default async function PipelineSettingsPage() {
                     </details>
                   </div>
                 ))}
-                {stages.length === 0 && <p className="text-sm text-slate-500">No stages yet.</p>}
+                {stages.length === 0 && <p className="text-sm text-muted-foreground">No stages yet.</p>}
               </div>
             </div>
 
-            <details className="rounded-lg border border-dashed border-slate-700 p-3">
+            <details className="rounded-lg border border-dashed border-border p-3">
               <summary className="cursor-pointer text-sm font-medium">+ Add stage</summary>
               <form action={createSalesPipelineStage.bind(null, pipeline.id)} className="grid md:grid-cols-6 gap-3 mt-4 items-end">
                 <label className="space-y-1 md:col-span-2">
-                  <span className="text-xs text-slate-400">Name</span>
+                  <span className="text-xs text-muted-foreground">Name</span>
                   <input name="name" className="input" required />
                 </label>
                 <label className="space-y-1">
-                  <span className="text-xs text-slate-400">Colour</span>
+                  <span className="text-xs text-muted-foreground">Colour</span>
                   <input name="color" type="color" className="input h-10" defaultValue="#64748b" />
                 </label>
                 <label className="space-y-1">
-                  <span className="text-xs text-slate-400">Probability</span>
+                  <span className="text-xs text-muted-foreground">Probability</span>
                   <input name="defaultProbability" type="number" min="0" max="100" className="input" defaultValue="10" />
                 </label>
                 <label className="space-y-1">
-                  <span className="text-xs text-slate-400">Stale after days</span>
+                  <span className="text-xs text-muted-foreground">Stale after days</span>
                   <input name="staleAfterDays" type="number" min="1" className="input" />
                 </label>
                 <button className="btn-primary">Add stage</button>
@@ -202,7 +202,7 @@ export default async function PipelineSettingsPage() {
                   <input type="checkbox" name="isClosed" /> Closed stage
                 </label>
                 <label className="space-y-1 md:col-span-2">
-                  <span className="text-xs text-slate-400">Closed result</span>
+                  <span className="text-xs text-muted-foreground">Closed result</span>
                   <select name="closedStatus" className="input" defaultValue="">
                     <option value="">Not applicable</option>
                     <option value="won">Won</option>

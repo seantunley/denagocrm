@@ -86,13 +86,13 @@ export default async function PortalAccessPage() {
           {profileRequests.map((request) => (
             <div key={request.id} className="card space-y-3">
               <div className="flex items-start justify-between gap-3 flex-wrap">
-                <div><p className="font-medium">{request.contactName}</p><p className="text-xs text-slate-500">Submitted {formatDateTime(request.createdAt)}</p></div>
+                <div><p className="font-medium">{request.contactName}</p><p className="text-xs text-muted-foreground">Submitted {formatDateTime(request.createdAt)}</p></div>
                 <span className="badge bg-amber-500/15 text-amber-300">Pending</span>
               </div>
               <dl className="grid sm:grid-cols-2 gap-x-5 gap-y-2 text-sm">
-                {Object.entries(request.changes).map(([key, value]) => <div key={key}><dt className="text-xs text-slate-500">{key}</dt><dd>{value == null || value === "" ? "—" : String(value)}</dd></div>)}
+                {Object.entries(request.changes).map(([key, value]) => <div key={key}><dt className="text-xs text-muted-foreground">{key}</dt><dd>{value == null || value === "" ? "—" : String(value)}</dd></div>)}
               </dl>
-              {request.note && <p className="text-sm text-slate-400">Customer note: {request.note}</p>}
+              {request.note && <p className="text-sm text-muted-foreground">Customer note: {request.note}</p>}
               <div className="grid md:grid-cols-2 gap-3">
                 <form action={reviewPortalProfileRequest.bind(null, request.id, "approved")} className="flex gap-2">
                   <input name="reviewNote" className="input" placeholder="Optional approval note" />
@@ -133,13 +133,13 @@ export default async function PortalAccessPage() {
         <table className="table-base">
           <thead><tr><th>Portal user</th><th>Target</th><th>Role</th><th>Status</th><th>Granted</th><th></th></tr></thead>
           <tbody>
-            {grants.length === 0 && <tr><td data-empty colSpan={6} className="text-center py-8 text-slate-400">No delegated portal access grants.</td></tr>}
+            {grants.length === 0 && <tr><td data-empty colSpan={6} className="text-center py-8 text-muted-foreground">No delegated portal access grants.</td></tr>}
             {grants.map((grant) => (
               <tr key={grant.id}>
                 <td data-primary data-label="Portal user">{grant.viewerName}</td>
-                <td data-label="Target">{grant.targetName}<p className="text-xs text-slate-500 capitalize">{grant.targetType}</p></td>
+                <td data-label="Target">{grant.targetName}<p className="text-xs text-muted-foreground capitalize">{grant.targetType}</p></td>
                 <td data-label="Role" className="capitalize">{grant.role}</td>
-                <td data-label="Status"><span className={`badge ${grant.active ? "bg-emerald-500/15 text-emerald-300" : "bg-slate-800 text-slate-500"}`}>{grant.active ? "Active" : "Revoked"}</span></td>
+                <td data-label="Status"><span className={`badge ${grant.active ? "bg-emerald-500/15 text-emerald-300" : "bg-muted text-muted-foreground"}`}>{grant.active ? "Active" : "Revoked"}</span></td>
                 <td data-label="Granted">{formatDateTime(grant.createdAt)}</td>
                 <td data-actions>{grant.active && <form action={revokePortalAccess.bind(null, grant.id)}><button className="text-red-400 text-sm">Revoke</button></form>}</td>
               </tr>

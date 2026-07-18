@@ -141,8 +141,8 @@ export default async function JourneysPage() {
                     <StatusPill>{journey.category}</StatusPill>
                     {draft && <StatusPill tone="info">draft v{draft.version}</StatusPill>}
                   </div>
-                  <p className="text-sm text-slate-400 mt-1">{journey.description || "No description"}</p>
-                  <p className="text-xs text-slate-500 mt-2">
+                  <p className="text-sm text-muted-foreground mt-1">{journey.description || "No description"}</p>
+                  <p className="text-xs text-muted-foreground mt-2">
                     Trigger: {triggerLabel((published ?? editable)?.trigger ?? "unknown")} · Active version: {journey.activeVersion ?? "none"} · Runs: {journey._count.runs}
                   </p>
                 </div>
@@ -161,8 +161,8 @@ export default async function JourneysPage() {
               </div>
 
               {editable && (
-                <details className="rounded-lg border border-slate-800 p-4">
-                  <summary className="cursor-pointer text-sm font-medium text-orange-400">
+                <details className="rounded-lg border border-border p-4">
+                  <summary className="cursor-pointer text-sm font-medium text-primary">
                     Edit {draft ? `draft v${draft.version}` : "as a new draft"}
                   </summary>
                   <div className="mt-5">
@@ -193,14 +193,14 @@ export default async function JourneysPage() {
                   <tr key={run.id}>
                     <td className="font-medium">{run.journey.name}</td>
                     <td>
-                      {run.leadId ? <Link className="text-orange-400 hover:underline" href={`/leads/${run.leadId}`}>Lead</Link>
-                        : run.contactId ? <Link className="text-orange-400 hover:underline" href={`/contacts/${run.contactId}`}>Contact</Link>
+                      {run.leadId ? <Link className="text-primary hover:underline" href={`/leads/${run.leadId}`}>Lead</Link>
+                        : run.contactId ? <Link className="text-primary hover:underline" href={`/contacts/${run.contactId}`}>Contact</Link>
                         : run.entityType}
                     </td>
                     <td>v{run.journeyVersion.version}</td>
                     <td><StatusPill tone={statusTone(run.status)}>{run.status}</StatusPill></td>
-                    <td className="text-xs text-slate-400">{run.currentStepId ?? "—"}</td>
-                    <td className="text-xs text-slate-400">{formatDateTime(run.createdAt)}</td>
+                    <td className="text-xs text-muted-foreground">{run.currentStepId ?? "—"}</td>
+                    <td className="text-xs text-muted-foreground">{formatDateTime(run.createdAt)}</td>
                     <td className="text-xs text-red-300 max-w-64 truncate">{run.lastError ?? "—"}</td>
                     <td>
                       <div className="flex gap-2">

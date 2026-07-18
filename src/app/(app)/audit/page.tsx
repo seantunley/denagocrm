@@ -96,37 +96,37 @@ export default async function AuditPage({
 
       <form className="card grid md:grid-cols-6 gap-3 items-end">
         <label className="space-y-1">
-          <span className="text-xs text-slate-400">Event</span>
+          <span className="text-xs text-muted-foreground">Event</span>
           <select name="type" className="input" defaultValue={type ?? ""}>
             <option value="">All events</option>
             {eventTypes.map((item) => <option key={item.value} value={item.value}>{item.value}</option>)}
           </select>
         </label>
         <label className="space-y-1">
-          <span className="text-xs text-slate-400">Entity</span>
+          <span className="text-xs text-muted-foreground">Entity</span>
           <select name="entity" className="input" defaultValue={entityType ?? ""}>
             <option value="">All entities</option>
             {entityTypes.map((item) => <option key={item.value} value={item.value}>{item.value}</option>)}
           </select>
         </label>
         <label className="space-y-1">
-          <span className="text-xs text-slate-400">Actor</span>
+          <span className="text-xs text-muted-foreground">Actor</span>
           <select name="actor" className="input" defaultValue={actor ?? ""}>
             <option value="">All actors</option>
             {actors.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </label>
         <label className="space-y-1">
-          <span className="text-xs text-slate-400">From</span>
+          <span className="text-xs text-muted-foreground">From</span>
           <input name="from" type="date" className="input" defaultValue={typeof params.from === "string" ? params.from : ""} />
         </label>
         <label className="space-y-1">
-          <span className="text-xs text-slate-400">To</span>
+          <span className="text-xs text-muted-foreground">To</span>
           <input name="to" type="date" className="input" defaultValue={typeof params.to === "string" ? params.to : ""} />
         </label>
         <button className="btn-primary">Filter</button>
         <label className="space-y-1 md:col-span-5">
-          <span className="text-xs text-slate-400">Search summary or entity ID</span>
+          <span className="text-xs text-muted-foreground">Search summary or entity ID</span>
           <input name="q" className="input" defaultValue={query ?? ""} />
         </label>
         <Link href="/audit" className="btn-secondary text-center">Clear</Link>
@@ -137,18 +137,18 @@ export default async function AuditPage({
           <thead><tr><th>When</th><th>Actor</th><th>Event</th><th>Entity</th><th>Summary</th><th>Changes</th><th>Context</th></tr></thead>
           <tbody>
             {events.length === 0 && (
-              <tr><td colSpan={7} className="text-center py-8 text-slate-400">No audit events match the filters.</td></tr>
+              <tr><td colSpan={7} className="text-center py-8 text-muted-foreground">No audit events match the filters.</td></tr>
             )}
             {events.map((event) => {
               const href = entityHref(event);
               return (
                 <tr key={event.id}>
                   <td className="whitespace-nowrap">{formatDateTime(event.createdAt)}</td>
-                  <td>{event.actorName}<p className="text-xs text-slate-500">{event.actorType}</p></td>
+                  <td>{event.actorName}<p className="text-xs text-muted-foreground">{event.actorType}</p></td>
                   <td><code className="text-xs">{event.eventType}</code></td>
                   <td>
                     {href ? (
-                      <Link href={href} className="text-orange-400 hover:underline">
+                      <Link href={href} className="text-primary hover:underline">
                         {event.entityType} · {event.entityId}
                       </Link>
                     ) : (
@@ -158,7 +158,7 @@ export default async function AuditPage({
                   <td className="max-w-sm">{event.summary}</td>
                   <td>
                     <details>
-                      <summary className="cursor-pointer text-xs text-orange-400">
+                      <summary className="cursor-pointer text-xs text-primary">
                         {event.changedFieldsJson?.length ?? 0} fields
                       </summary>
                       <pre className="mt-2 text-[11px] max-w-lg overflow-auto whitespace-pre-wrap">
@@ -168,7 +168,7 @@ export default async function AuditPage({
                   </td>
                   <td>
                     <details>
-                      <summary className="cursor-pointer text-xs text-slate-400">Request</summary>
+                      <summary className="cursor-pointer text-xs text-muted-foreground">Request</summary>
                       <div className="mt-2 text-[11px] max-w-xs break-all">
                         <p>Source: {event.source}</p><p>IP: {event.ipAddress ?? "—"}</p>
                         <p>Correlation: {event.correlationId ?? "—"}</p><p>User agent: {event.userAgent ?? "—"}</p>
@@ -181,7 +181,7 @@ export default async function AuditPage({
           </tbody>
         </table>
       </div>
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-muted-foreground">
         Showing up to 500 newest matching events. AuditEvent rows are protected from UPDATE and DELETE by database triggers.
       </p>
     </div>

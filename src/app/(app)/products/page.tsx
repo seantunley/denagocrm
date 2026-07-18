@@ -75,16 +75,16 @@ export default async function ProductsPage() {
             {products.map((p) => (
               <tr key={p.id}>
                 <td>
-                  <Link href={`/products/${p.id}`} className="font-medium text-orange-400 hover:underline">
+                  <Link href={`/products/${p.id}`} className="font-medium text-primary hover:underline">
                     {p.name}
                   </Link>
-                  {p.sku && <span className="text-xs text-slate-400 ml-2">{p.sku}</span>}
+                  {p.sku && <span className="text-xs text-muted-foreground ml-2">{p.sku}</span>}
                 </td>
                 <td>{p.category ?? "—"}</td>
                 <td>
                   <div className="flex gap-1 flex-wrap">
                     {p.colors.map((c) => (
-                      <span key={c.id} className="badge bg-slate-800 text-slate-400">
+                      <span key={c.id} className="badge bg-muted text-muted-foreground">
                         {c.name}
                       </span>
                     ))}
