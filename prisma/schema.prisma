@@ -144,6 +144,8 @@ model StockUnit {
   reservedForLead   Lead?          @relation("StockReserved", fields: [reservedForLeadId], references: [id], onDelete: SetNull)
   soldQuoteId       String?
   soldQuote         Quote?         @relation("StockSold", fields: [soldQuoteId], references: [id], onDelete: SetNull)
+  purchaseOrderLineId String?
+  purchaseOrderLine   PurchaseOrderLine? @relation(fields: [purchaseOrderLineId], references: [id], onDelete: SetNull)
 
   // Stock operations platform (phases 1-4). Partial/expression unique indexes
   // (active serial on UPPER(serial), partial stockNumber) live in the migration
@@ -171,6 +173,7 @@ model StockUnit {
   @@index([productId])
   @@index([location, status], map: "StockUnit_location_status_idx")
   @@index([arrivedAt], map: "StockUnit_arrivedAt_idx")
+  @@index([purchaseOrderLineId], map: "StockUnit_po_line_idx")
 }
 
 model StockReservation {
@@ -235,6 +238,7 @@ model PurchaseOrderLine {
   createdAt       DateTime      @default(now())
 
   goodsReceiptLines GoodsReceiptLine[]
+  units             StockUnit[]
 
   @@index([purchaseOrderId], map: "PurchaseOrderLine_po_idx")
 }

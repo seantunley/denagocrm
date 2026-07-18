@@ -1,6 +1,5 @@
 import "server-only";
 
-import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 
@@ -55,19 +54,23 @@ export async function addStockEvent(input: {
   costAfterCents?: number | null;
   actor: StockActor;
 }) {
-  await prisma.$executeRaw(Prisma.sql`
-    INSERT INTO "StockEvent" (
-      "id", "stockUnitId", "purchaseOrderId", "eventType", "fromStatus", "toStatus",
-      "leadId", "quoteId", "reason", "detail", "costBeforeCents", "costAfterCents",
-      "performedById", "performedByName"
-    ) VALUES (
-      ${randomUUID()}, ${input.stockUnitId ?? null}, ${input.purchaseOrderId ?? null},
-      ${input.eventType}, ${input.fromStatus ?? null}, ${input.toStatus ?? null},
-      ${input.leadId ?? null}, ${input.quoteId ?? null}, ${input.reason ?? null},
-      ${input.detail ?? null}, ${input.costBeforeCents ?? null}, ${input.costAfterCents ?? null},
-      ${input.actor.id}, ${input.actor.name}
-    )
-  `);
+  await prisma.stockEvent.create({
+    data: {
+      stockUnitId: input.stockUnitId ?? null,
+      purchaseOrderId: input.purchaseOrderId ?? null,
+      eventType: input.eventType,
+      fromStatus: input.fromStatus ?? null,
+      toStatus: input.toStatus ?? null,
+      leadId: input.leadId ?? null,
+      quoteId: input.quoteId ?? null,
+      reason: input.reason ?? null,
+      detail: input.detail ?? null,
+      costBeforeCents: input.costBeforeCents ?? null,
+      costAfterCents: input.costAfterCents ?? null,
+      performedById: input.actor.id,
+      performedByName: input.actor.name,
+    },
+  });
 }
 
 export type StockUnitRecord = {
@@ -211,17 +214,28 @@ export async function stockDashboard(): Promise<StockDashboard> {
 }
 
 export async function expireReservations(actor: StockActor) {
-  const expired = await prisma.$queryRaw<Array<{ id: string; stockUnitId: string; leadId: string }>>(Prisma.sql`
-    UPDATE "StockReservation"
-    SET "status" = 'expired', "releasedAt" = NOW(), "releaseReason" = 'Reservation expired automatically'
-    WHERE "status" = 'active' AND "expiresAt" IS NOT NULL AND "expiresAt" < NOW()
-    RETURNING "id", "stockUnitId", "leadId"
-  `);
-  for (const reservation of expired) {
-    await prisma.$executeRaw(Prisma.sql`
-      UPDATE "StockUnit" SET "status" = 'available', "reservedForLeadId" = NULL, "updatedAt" = NOW()
-      WHERE "id" = ${reservation.stockUnitId} AND "status" = 'reserved' AND "deletedAt" IS NULL
-    `);
+  // StockReservation is authoritative; the unit's cached status/reservedForLeadId is
+  // cleared in the same transaction so the two never diverge.
+  const due = await prisma.stockReservation.findMany({
+    where: { status: "active", expiresAt: { lt: new Date() } },
+    select: { id: true, stockUnitId: true, leadId: true },
+  });
+  let expired = 0;
+  for (const reservation of due) {
+    const done = await prisma.$transaction(async (tx) => {
+      const claim = await tx.stockReservation.updateMany({
+        where: { id: reservation.id, status: "active" },
+        data: { status: "expired", releasedAt: new Date(), releaseReason: "Reservation expired automatically" },
+      });
+      if (claim.count !== 1) return false;
+      await tx.stockUnit.updateMany({
+        where: { id: reservation.stockUnitId, status: "reserved", deletedAt: null },
+        data: { status: "available", reservedForLeadId: null },
+      });
+      return true;
+    });
+    if (!done) continue;
+    expired += 1;
     await addStockEvent({
       stockUnitId: reservation.stockUnitId,
       eventType: "reservation.expired",
@@ -232,7 +246,7 @@ export async function expireReservations(actor: StockActor) {
       actor,
     });
   }
-  return expired.length;
+  return expired;
 }
 
 export async function nextStockNumber(): Promise<string> {
