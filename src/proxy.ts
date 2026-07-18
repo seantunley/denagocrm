@@ -12,6 +12,8 @@ const PUBLIC_PATHS = [
   "/login",
   "/api/auth/passkey/auth", // passkey (WebAuthn) login options + verify — pre-session
   "/api/webhooks",
+  "/tg", // Telegram Mini App launcher — establishes the session, so pre-session
+  "/api/telegram", // Mini App auth + link handshake (initData-verified, pre-session)
   "/api/intake",
   "/api/cron",
   "/api/bookings",

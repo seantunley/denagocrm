@@ -23,6 +23,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     items: [
       { key: "account", label: "My Account", keywords: ["profile", "password", "signature"] },
       { key: "notifications", label: "Notifications", keywords: ["alerts", "push", "email preferences"] },
+      { key: "telegram", label: "Telegram", href: "/settings/telegram", keywords: ["mini app", "telegram", "phone app", "link", "mobile"] },
     ],
   },
   {

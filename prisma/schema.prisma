@@ -27,6 +27,9 @@ model User {
   mobile            String?
   signatureHtml     String? // custom override; blank = branded template
   drawnSignatureRef String? // saved handwritten signature for countersigning documents
+  telegramUserId      String?   @unique // linked Telegram account → Mini App auto-login
+  telegramLinkCode    String? // one-time code, generated in web Settings, entered in the Mini App
+  telegramLinkExpires DateTime?
   createdAt         DateTime  @default(now())
 
   communications     Communication[]
