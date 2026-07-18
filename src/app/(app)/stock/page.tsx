@@ -167,7 +167,7 @@ export default async function StockPage({
           </div>
           <div className="mt-4">
             {units.length === 0 ? <EmptyState icon={Boxes} title="No matching stock" description="Adjust the filters or add a physical unit to begin tracking it." /> : <ResponsiveEntityTable>
-              <table className="table-base"><thead><tr><th>Unit</th><th>Status</th><th>Customer / quote</th><th>Location</th><th>Age</th>{canManage && <th className="text-right">Landed cost</th>}<th></th></tr></thead>
+              <table className="table-base"><thead><tr><th>Unit</th><th>Status</th><th>Customer / quote</th><th>Location</th><th className="whitespace-nowrap">Age</th>{canManage && <th className="whitespace-nowrap text-right">Landed cost</th>}<th></th></tr></thead>
                 <tbody>{units.map((unit) => {
                   const meta = STATUS[unit.status] ?? { label: unit.status.replaceAll("_", " "), tone: "neutral" as const };
                   return <tr key={unit.id}>
@@ -175,9 +175,9 @@ export default async function StockPage({
                     <td data-label="Status"><div className="flex flex-wrap items-center gap-1.5"><StatusPill tone={meta.tone}>{meta.label}</StatusPill>{unit.label && labelBySlug.has(unit.label) && <span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium" style={{ backgroundColor: `${labelBySlug.get(unit.label)!.color}22`, color: labelBySlug.get(unit.label)!.color }}>{labelBySlug.get(unit.label)!.label}</span>}</div></td>
                     <td data-label="Customer / quote" className="text-sm text-muted-foreground">{unit.reservedForLeadId ? <Link href={`/leads/${unit.reservedForLeadId}`} className="text-primary hover:underline">{unit.reservedLeadName ?? "Lead"}</Link> : unit.soldQuoteId ? <Link href={`/quotes/${unit.soldQuoteId}`} className="text-primary hover:underline">Q-{unit.quoteNumber}</Link> : "—"}{unit.reservationExpiresAt && <p className="text-[11px]">Expires {unit.reservationExpiresAt.toLocaleDateString("en-ZA")}</p>}</td>
                     <td data-label="Location" className="text-sm text-muted-foreground">{unit.location ?? "—"}</td>
-                    <td data-label="Age" className={unit.ageDays >= 60 ? "font-semibold text-amber-300" : "text-muted-foreground"}>{unit.ageDays}d</td>
-                    {canManage && <td data-label="Landed cost" className="text-right tabular-nums">{formatZAR(unit.landedCostCents || unit.costCents)}</td>}
-                    <td data-actions className="text-right"><Link href={`/stock/${unit.id}`} className="btn-secondary btn-sm">Open <ArrowRight className="size-3.5" /></Link></td>
+                    <td data-label="Age" className={`whitespace-nowrap ${unit.ageDays >= 60 ? "font-semibold text-amber-300" : "text-muted-foreground"}`}>{unit.ageDays}d</td>
+                    {canManage && <td data-label="Landed cost" className="whitespace-nowrap text-right tabular-nums">{formatZAR(unit.landedCostCents || unit.costCents)}</td>}
+                    <td data-actions className="text-right"><Link href={`/stock/${unit.id}`} className="btn-secondary btn-sm inline-flex items-center gap-1 whitespace-nowrap">Open <ArrowRight className="size-3.5" /></Link></td>
                   </tr>;
                 })}</tbody>
               </table>
