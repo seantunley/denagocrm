@@ -63,3 +63,28 @@ export async function toggleContactNotePin(contactId: string, path: string) {
   });
   revalidatePath(path);
 }
+
+export async function toggleLeadNotePin(leadId: string, path: string) {
+  const user = await requirePermission("leads.edit");
+  const lead = await prisma.lead.findUniqueOrThrow({
+    where: { id: leadId },
+    select: { id: true, title: true, notes: true, contactId: true },
+  });
+
+  if (user.role !== "owner" && !(await canAccessLead(user, lead.id))) {
+    throw new Error("Lead access denied");
+  }
+  if (!lead.notes?.trim()) {
+    throw new Error("This lead has no original note to pin");
+  }
+
+  const result = await toggleTimelinePin("lead_note", lead.id, user.id);
+  await logAudit({
+    action: result.pinned ? "lead.note_pinned" : "lead.note_unpinned",
+    summary: `${result.pinned ? "Pinned" : "Unpinned"} the original note for “${lead.title}”`,
+    leadId: lead.id,
+    contactId: lead.contactId,
+    user,
+  });
+  revalidatePath(path);
+}
