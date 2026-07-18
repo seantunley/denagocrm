@@ -9,8 +9,9 @@ import { logAudit } from "@/lib/audit";
 import { sendReviewRequest } from "@/lib/reviewRequests";
 import { triggerSurvey } from "@/lib/surveys";
 import { softDeleteRecord } from "@/lib/trash";
-import { saveFile } from "@/lib/storage";
+import { saveFile, deleteFile } from "@/lib/storage";
 import { parseRands } from "@/lib/format";
+import { Prisma } from "@prisma/client";
 import { STAGE_VALUES, PRIORITY_VALUES, stageMeta } from "@/lib/workshop-constants";
 import {
   requireJobCardAccess,
@@ -51,6 +52,58 @@ export async function uploadJobCardPhotos(jobCardId: string, formData: FormData)
     });
   }
   revalidatePath(`/jobcards/${jobCardId}`);
+}
+
+/**
+ * Saves markup for a check-in / check-out condition photo: the re-editable vector
+ * shapes (so it can be reopened and adjusted) plus a flattened image with the markup
+ * burned in (for display / print / PDF). The original photo is never touched.
+ */
+export async function saveCheckinAnnotation(formData: FormData) {
+  const documentId = String(formData.get("documentId") ?? "");
+  const image = formData.get("image");
+  if (!documentId || !(image instanceof File) || image.size === 0) {
+    throw new Error("Missing annotation image");
+  }
+  const ext = image.type === "image/jpeg" ? "jpg" : image.type === "image/png" ? "png" : null;
+  if (image.size > 10 * 1024 * 1024 || !ext) {
+    throw new Error("Invalid annotation image");
+  }
+
+  const doc = await prisma.document.findUniqueOrThrow({ where: { id: documentId } });
+  if (!doc.jobCardId || (doc.tag !== "checkin-photo" && doc.tag !== "checkout-photo")) {
+    throw new Error("Not a condition photo");
+  }
+  const user = await requireJobCardAccess(doc.jobCardId, "jobcards.manage");
+
+  let annotations: Prisma.InputJsonValue;
+  try {
+    annotations = JSON.parse(String(formData.get("annotations") ?? "null")) as Prisma.InputJsonValue;
+  } catch {
+    throw new Error("Invalid annotation data");
+  }
+
+  const buf = Buffer.from(await image.arrayBuffer());
+  const storedName = await saveFile(buf, `annotated-${doc.id}.${ext}`, image.type);
+  const previous = doc.annotatedStoredName;
+
+  await prisma.document.update({
+    where: { id: doc.id },
+    data: { annotations, annotatedStoredName: storedName },
+  });
+
+  // Replace, don't accumulate: drop the previous flattened version once the new one is stored.
+  if (previous && previous !== storedName) {
+    await deleteFile(previous).catch(() => {});
+  }
+
+  await logAudit({
+    action: "jobcard.photo.annotate",
+    summary: `Marked up a check-in photo (pre-work condition)`,
+    contactId: doc.contactId,
+    user,
+  });
+  revalidatePath(`/jobcards/${doc.jobCardId}`);
 }
 
 export async function createJobCard(formData: FormData) {

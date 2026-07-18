@@ -667,6 +667,13 @@ model Document {
   quoteId      String? // fulfilment paperwork (invoice, proof of payment, delivery note)
   tag          String? // invoice | pop | delivery-note
   replacedById String? // newer version of this file (repository versioning)
+
+  // Re-editable image markup (job-card check-in photos): vector shapes so the
+  // markup can be reopened and adjusted; annotatedStoredName is the flattened
+  // image with the markup burned in, used for display / print / PDF.
+  annotations         Json?
+  annotatedStoredName String?
+
   uploadedById String
   uploadedBy   User     @relation(fields: [uploadedById], references: [id])
 }
