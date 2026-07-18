@@ -201,12 +201,15 @@ function AnnotatorModal({
     if (!cvs || !dims) return;
     setSaving(true);
     try {
-      const blob = await new Promise<Blob | null>((res) => cvs.toBlob(res, "image/png"));
+      // Export JPEG (not PNG): the canvas is opaque (the photo fills it), and a
+      // natural-size PNG of a high-res phone photo can blow past the 10 MB save
+      // limit. JPEG at 0.9 keeps markup legible while staying well under it.
+      const blob = await new Promise<Blob | null>((res) => cvs.toBlob(res, "image/jpeg", 0.9));
       if (!blob) throw new Error("Could not render the marked-up image");
       const fd = new FormData();
       fd.set("documentId", documentId);
       fd.set("annotations", JSON.stringify({ w: dims.w, h: dims.h, shapes } satisfies AnnData));
-      fd.set("image", blob, "annotated.png");
+      fd.set("image", blob, "annotated.jpg");
       await saveCheckinAnnotation(fd);
       onSaved();
     } catch {

@@ -27,8 +27,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
   const annotated = new URL(req.url).searchParams.get("v") === "annotated";
   const ref = annotated && doc.annotatedStoredName ? doc.annotatedStoredName : doc.storedName;
-  // The flattened markup is always a PNG; the original keeps its own mime type.
-  const mimeType = annotated && doc.annotatedStoredName ? "image/png" : doc.mimeType;
+  // The flattened markup is stored as JPEG (older ones may be PNG); the original
+  // keeps its own mime type. Derive the annotated type from the stored extension.
+  const annotatedMime = /\.png(?:$|\?)/i.test(ref) ? "image/png" : "image/jpeg";
+  const mimeType = annotated && doc.annotatedStoredName ? annotatedMime : doc.mimeType;
 
   const SAFE_INLINE = /^image\/(png|jpe?g|gif|webp|avif)$/i;
   if (!SAFE_INLINE.test(mimeType)) {

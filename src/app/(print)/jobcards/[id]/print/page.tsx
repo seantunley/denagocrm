@@ -236,7 +236,7 @@ export default async function JobCardPrintPage({
                 <figure key={d.id} style={{ breakInside: "avoid" }}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={d.annotatedStoredName ?? d.storedName}
+                    src={`/api/jobcard-photo/${d.id}${d.annotatedStoredName ? "?v=annotated" : ""}`}
                     alt={d.fileName}
                     className="w-full rounded-lg border border-slate-300 object-contain"
                   />

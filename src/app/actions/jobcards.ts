@@ -65,7 +65,8 @@ export async function saveCheckinAnnotation(formData: FormData) {
   if (!documentId || !(image instanceof File) || image.size === 0) {
     throw new Error("Missing annotation image");
   }
-  if (image.size > 10 * 1024 * 1024 || image.type !== "image/png") {
+  const ext = image.type === "image/jpeg" ? "jpg" : image.type === "image/png" ? "png" : null;
+  if (image.size > 10 * 1024 * 1024 || !ext) {
     throw new Error("Invalid annotation image");
   }
 
@@ -83,7 +84,7 @@ export async function saveCheckinAnnotation(formData: FormData) {
   }
 
   const buf = Buffer.from(await image.arrayBuffer());
-  const storedName = await saveFile(buf, `annotated-${doc.id}.png`, "image/png");
+  const storedName = await saveFile(buf, `annotated-${doc.id}.${ext}`, image.type);
   const previous = doc.annotatedStoredName;
 
   await prisma.document.update({
