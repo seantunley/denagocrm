@@ -59,6 +59,34 @@ export default async function DeliveriesPage() {
   const hasDoc = (quoteId: string, tag: string) =>
     docs.some((document) => document.quoteId === quoteId && document.tag === tag);
 
+  // Stock-readiness signal: which allocated unit (if any) is furthest from handover.
+  // Non-disruptive — the quote-fulfilment flow is unchanged; this just links the two.
+  const stockUnits = await prisma.stockUnit.findMany({
+    where: { soldQuoteId: { in: quotes.map((quote) => quote.id) }, deletedAt: null },
+    select: { id: true, soldQuoteId: true, status: true },
+  });
+  const STOCK_RANK: Record<string, number> = { allocated: 0, pdi: 1, ready_for_delivery: 2, delivered: 3, sold: 3 };
+  const stockByQuote = new Map<string, { status: string; unitId: string; count: number }>();
+  for (const unit of stockUnits) {
+    if (!unit.soldQuoteId) continue;
+    const existing = stockByQuote.get(unit.soldQuoteId);
+    if (!existing) stockByQuote.set(unit.soldQuoteId, { status: unit.status, unitId: unit.id, count: 1 });
+    else {
+      existing.count += 1;
+      if ((STOCK_RANK[unit.status] ?? 0) < (STOCK_RANK[existing.status] ?? 0)) {
+        existing.status = unit.status;
+        existing.unitId = unit.id;
+      }
+    }
+  }
+  const STOCK_CHIP: Record<string, { label: string; cls: string }> = {
+    allocated: { label: "Stock allocated", cls: "border-blue-500/30 bg-blue-500/10 text-blue-300" },
+    pdi: { label: "In PDI", cls: "border-amber-500/30 bg-amber-500/10 text-amber-300" },
+    ready_for_delivery: { label: "Ready to hand over", cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" },
+    delivered: { label: "Handed over", cls: "border-border bg-muted/40 text-muted-foreground" },
+    sold: { label: "Handed over", cls: "border-border bg-muted/40 text-muted-foreground" },
+  };
+
   const colOf = (quote: (typeof quotes)[number]): Col =>
     !quote.invoicedAt ? "invoice" : !quote.depositPaidAt ? "deposit" : !quote.deliveryScheduledFor ? "schedule" : "deliver";
 
@@ -183,6 +211,20 @@ export default async function DeliveriesPage() {
                             )}
                           </div>
                         )}
+
+                        {stockByQuote.has(quote.id) && (() => {
+                          const s = stockByQuote.get(quote.id)!;
+                          const meta = STOCK_CHIP[s.status] ?? { label: s.status.replaceAll("_", " "), cls: "border-border bg-muted/40 text-muted-foreground" };
+                          return (
+                            <Link
+                              href={`/stock/${s.unitId}`}
+                              className={`mt-2 inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${meta.cls}`}
+                              title="Allocated stock — open the unit"
+                            >
+                              <PackageCheck className="size-2.5" /> {meta.label}{s.count > 1 ? ` · ${s.count} units` : ""}
+                            </Link>
+                          );
+                        })()}
 
                         {canManage && column.key === "invoice" && (
                           <form action={markInvoiced.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
