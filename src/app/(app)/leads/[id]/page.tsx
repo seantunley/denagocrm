@@ -29,6 +29,7 @@ import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format
 import { quoteTotalCents } from "@/lib/pricing";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
+import { leadAttribution, isAdClick } from "@/lib/attribution";
 import { Car, Check, FileText } from "lucide-react";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
@@ -94,6 +95,10 @@ export default async function LeadDetailPage({
   // Research is stored on the lead itself (Research tab). Legacy research
   // notes (pre-migration) are still filtered out of the comms timeline.
   const comms = lead.communications.filter((c) => c.subject !== RESEARCH_SUBJECT);
+
+  // Marketing attribution the website captured with the enquiry (ad click / UTMs).
+  const attribution = leadAttribution(lead.raw);
+  const fromAd = isAdClick(attribution);
 
   return (
     <>
@@ -237,6 +242,47 @@ export default async function LeadDetailPage({
                         )}
                       </dl>
                     </div>
+
+                    {attribution && (
+                      <div className="card">
+                        <div className="flex items-center justify-between mb-3">
+                          <h2 className="font-semibold">Marketing origin</h2>
+                          {fromAd && (
+                            <span className="badge bg-blue-500/15 text-blue-300">Google Ads click</span>
+                          )}
+                        </div>
+                        <dl className="space-y-2 text-sm max-w-xl">
+                          {[
+                            ["Source", attribution.utm_source],
+                            ["Medium", attribution.utm_medium],
+                            ["Campaign", attribution.utm_campaign],
+                            ["Keyword", attribution.utm_term],
+                            ["Ad variant", attribution.utm_content],
+                            ["Landing page", attribution.landingPage],
+                            ["Referrer", attribution.referrer],
+                            ["Captured", attribution.capturedAt ? formatDateTime(new Date(attribution.capturedAt)) : null],
+                          ].map(([label, value]) =>
+                            value ? (
+                              <div key={label as string} className="flex justify-between gap-4">
+                                <dt className="text-slate-400 shrink-0">{label}</dt>
+                                <dd className="text-right font-medium break-all">{value as string}</dd>
+                              </div>
+                            ) : null
+                          )}
+                          {attribution.gclid && (
+                            <div className="flex justify-between gap-4">
+                              <dt className="text-slate-400 shrink-0">GCLID</dt>
+                              <dd
+                                className="text-right font-mono text-xs text-slate-500 break-all"
+                                title="Google click ID — used by the Ads conversion export when this lead is won"
+                              >
+                                {attribution.gclid}
+                              </dd>
+                            </div>
+                          )}
+                        </dl>
+                      </div>
+                    )}
 
                     {lead.raw && (
                       <details className="card">
