@@ -40,7 +40,7 @@ export async function toggleActivityPin(id: string, path: string) {
 }
 
 export async function toggleContactNotePin(contactId: string, path: string) {
-  const user = await requirePermission("contacts.manage");
+  const user = await requirePermission("contacts.edit");
   const contact = await prisma.contact.findUniqueOrThrow({
     where: { id: contactId },
     select: { id: true, firstName: true, lastName: true, notes: true },
