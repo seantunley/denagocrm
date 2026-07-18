@@ -6,6 +6,7 @@ import {
 import {
   toggleActivityPin,
   toggleContactNotePin,
+  toggleLeadNotePin,
 } from "@/app/actions/timelinePins";
 import { formatDateTime } from "@/lib/format";
 import {
@@ -57,10 +58,8 @@ type Item = {
   image?: string | null;
   who: string;
   when: Date;
-  /** Not-yet-completed activity — floats above normal history. */
   pending?: boolean;
   activityStatus?: string;
-  /** Explicit user pin — rendered in the dedicated pinned shelf. */
   pinnedAt?: Date | null;
   pinTarget?: PinTarget;
 };
@@ -111,6 +110,14 @@ export default async function LeadTimeline({
   }[];
   creationNote: { text: string; when: Date; who: string } | null;
 }) {
+  const originalNoteTarget: PinTarget | null = creationNote
+    ? contactId
+      ? { kind: "contact_note", itemId: contactId }
+      : leadId
+        ? { kind: "lead_note", itemId: leadId }
+        : null
+    : null;
+
   const targets: Array<{ kind: TimelinePinKind; itemId: string }> = [
     ...activities.map((activity) => ({
       kind: "activity" as const,
@@ -120,9 +127,7 @@ export default async function LeadTimeline({
       kind: "communication" as const,
       itemId: communication.id,
     })),
-    ...(creationNote && contactId
-      ? [{ kind: "contact_note" as const, itemId: contactId }]
-      : []),
+    ...(originalNoteTarget ? [originalNoteTarget] : []),
   ];
   const pins = await getTimelinePins(targets);
   const pinByTarget = new Map(
@@ -169,14 +174,14 @@ export default async function LeadTimeline({
           {
             id: "creation-note",
             icon: icons.creation,
-            title: "Original contact note",
+            title: contactId ? "Original contact note" : "Original lead note",
             body: creationNote.text,
             who: creationNote.who,
             when: creationNote.when,
-            pinnedAt: contactId ? pinnedAt("contact_note", contactId) : null,
-            pinTarget: contactId
-              ? { kind: "contact_note" as const, itemId: contactId }
-              : undefined,
+            pinnedAt: originalNoteTarget
+              ? pinnedAt(originalNoteTarget.kind, originalNoteTarget.itemId)
+              : null,
+            pinTarget: originalNoteTarget ?? undefined,
           } satisfies Item,
         ]
       : []),
@@ -194,7 +199,9 @@ export default async function LeadTimeline({
           ? toggleCommunicationPin.bind(null, item.pinTarget.itemId, revalidate)
           : item.pinTarget?.kind === "contact_note"
             ? toggleContactNotePin.bind(null, item.pinTarget.itemId, revalidate)
-            : null;
+            : item.pinTarget?.kind === "lead_note"
+              ? toggleLeadNotePin.bind(null, item.pinTarget.itemId, revalidate)
+              : null;
 
     return (
       <li
