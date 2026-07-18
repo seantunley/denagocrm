@@ -93,7 +93,10 @@ function collectAssetReferences(data: Record<string, unknown[]>): AssetReference
     if (!refs.has(key)) refs.set(key, { ref, kind });
   };
 
-  for (const row of (data.Document ?? []) as Array<Record<string, unknown>>) add(row.storedName, "document");
+  for (const row of (data.Document ?? []) as Array<Record<string, unknown>>) {
+    add(row.storedName, "document");
+    add(row.annotatedStoredName, "document-annotation");
+  }
   for (const row of (data.LibraryVersion ?? []) as Array<Record<string, unknown>>) add(row.storedName, "library-version");
   for (const row of (data.Communication ?? []) as Array<Record<string, unknown>>) add(row.attachmentUrl, "communication-attachment");
   for (const row of (data.User ?? []) as Array<Record<string, unknown>>) add(row.drawnSignatureRef, "user-signature");
