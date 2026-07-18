@@ -491,8 +491,10 @@ export async function deliverStockUnit(id: string, formData: FormData) {
   });
   const contact = quote?.contact ?? quote?.lead?.contact ?? null;
   if (!quote || quote.status !== "accepted" || !contact) throw new Error("The accepted quote must be linked to a contact before delivery");
-  const salePriceCents = quote.items.filter((item) => item.productId === current.productId && item.selected)
-    .reduce((sum, item) => sum + Math.round(item.qty * item.unitPriceCents * (1 - item.discountPct / 100)), 0);
+  // Per-UNIT selling price for this one physical cart — NOT the whole quote line
+  // (qty × price), which would over-state revenue for multi-quantity quotes.
+  const saleLine = quote.items.find((item) => item.productId === current.productId && item.selected);
+  const salePriceCents = saleLine ? Math.round(saleLine.unitPriceCents * (1 - saleLine.discountPct / 100)) : 0;
   const warrantyMonths = Math.max(0, integer(formData.get("warrantyMonths"), 12));
   const deliveredAt = new Date();
   const warrantyEndAt = warrantyMonths ? new Date(deliveredAt.getFullYear(), deliveredAt.getMonth() + warrantyMonths, deliveredAt.getDate()) : null;

@@ -16,6 +16,36 @@ ALTER TABLE "StockUnit"
   ADD COLUMN IF NOT EXISTS "warrantyEndAt" TIMESTAMP(3),
   ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
 
+-- Normalise + de-duplicate active serials BEFORE the unique index so this cannot
+-- fail on legacy data quality. Blank serials become NULL; remaining serials are
+-- trimmed/whitespace-stripped/upper-cased; the oldest active record keeps a
+-- duplicated identifier while later duplicates are flagged in notes and cleared.
+UPDATE "StockUnit" SET "serial" = NULL WHERE "serial" IS NOT NULL AND TRIM("serial") = '';
+UPDATE "StockUnit"
+SET "serial" = UPPER(REGEXP_REPLACE(TRIM("serial"), '\s+', '', 'g'))
+WHERE "serial" IS NOT NULL;
+WITH ranked AS (
+  SELECT "id", "serial",
+    ROW_NUMBER() OVER (
+      PARTITION BY UPPER("serial")
+      ORDER BY COALESCE("arrivedAt", "createdAt") ASC, "id" ASC
+    ) AS duplicate_rank
+  FROM "StockUnit"
+  WHERE "serial" IS NOT NULL AND "deletedAt" IS NULL
+), duplicates AS (
+  SELECT "id", "serial" FROM ranked WHERE duplicate_rank > 1
+)
+UPDATE "StockUnit" AS unit
+SET
+  "notes" = CONCAT_WS(
+    E'\n',
+    NULLIF(unit."notes", ''),
+    'Migration warning: duplicate active serial ' || duplicates."serial" || ' was cleared — verify the physical identifier.'
+  ),
+  "serial" = NULL
+FROM duplicates
+WHERE unit."id" = duplicates."id";
+
 CREATE UNIQUE INDEX IF NOT EXISTS "StockUnit_active_serial_key"
   ON "StockUnit" (UPPER("serial"))
   WHERE "serial" IS NOT NULL AND "deletedAt" IS NULL;
@@ -123,3 +153,25 @@ SET "status" = 'partially_received'
 WHERE po."status" = 'ordered'
   AND EXISTS (SELECT 1 FROM "StockUnit" su WHERE su."purchaseOrderId" = po."id" AND su."status" <> 'incoming' AND su."deletedAt" IS NULL)
   AND EXISTS (SELECT 1 FROM "StockUnit" su WHERE su."purchaseOrderId" = po."id" AND su."status" = 'incoming' AND su."deletedAt" IS NULL);
+
+-- Backfill authoritative reservations for units already reserved under the legacy
+-- cache. StockReservation is the source of truth, so without this a legacy reserved
+-- unit would have no reservation row: deposits, auto-expiry and reservation reporting
+-- would all miss it. Legacy rows have no original reserver or expiry, so we use the
+-- oldest user as a documented migration actor and leave expiresAt NULL (no auto-expiry).
+INSERT INTO "StockReservation" (
+  "id", "stockUnitId", "leadId", "status", "reservedAt", "expiresAt", "reservedById"
+)
+SELECT
+  'legacy-res-' || su."id", su."id", su."reservedForLeadId", 'active',
+  COALESCE(su."arrivedAt", su."createdAt"), NULL,
+  (SELECT "id" FROM "User" ORDER BY "createdAt" ASC LIMIT 1)
+FROM "StockUnit" su
+WHERE su."reservedForLeadId" IS NOT NULL
+  AND su."status" = 'reserved'
+  AND su."deletedAt" IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM "StockReservation" r
+    WHERE r."stockUnitId" = su."id" AND r."status" = 'active'
+  )
+ON CONFLICT DO NOTHING;
