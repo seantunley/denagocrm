@@ -22,6 +22,8 @@ const PUBLIC_PREFIXES = [
   "intake",         // website form intake (X-Api-Key)
   "webhooks/",      // provider webhooks (signature verified)
   "cron/",          // cron routes (CRON_SECRET)
+  "telegram/auth/", // Mini App auto-login — verifies signed Telegram initData (pre-session)
+  "telegram/link/", // Mini App account linking — signed initData + one-time code (pre-session)
 ];
 
 // NOTE: this proves an authENTICATION guard is invoked; it does not prove
