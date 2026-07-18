@@ -1,4 +1,4 @@
-import { Send, ExternalLink } from "lucide-react";
+import { Send, ExternalLink, FileDown } from "lucide-react";
 import { requireUser } from "@/lib/auth";
 import { getBotUsername } from "@/lib/telegramMiniApp";
 import { getSetting } from "@/lib/settings";
@@ -35,11 +35,21 @@ export default async function TelegramSettingsPage() {
         <TelegramLinkPanel linked={linked} telegramUserId={user.telegramUserId} />
 
         <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
-          <div className="flex items-center gap-3">
-            <span className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <Send className="size-5" />
-            </span>
-            <p className="text-sm font-semibold text-foreground">One-time setup (owner)</p>
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Send className="size-5" />
+              </span>
+              <p className="text-sm font-semibold text-foreground">One-time setup (owner)</p>
+            </div>
+            <a
+              href="/api/pdf/telegram-setup"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+            >
+              <FileDown className="size-3.5" /> Setup guide (PDF)
+            </a>
           </div>
           <ol className="mt-4 list-decimal space-y-2 pl-5 text-sm text-muted-foreground">
             <li>
