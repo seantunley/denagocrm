@@ -1,0 +1,328 @@
+[
+  {
+    "slug": "leads-pipeline-overview",
+    "title": "The lead pipeline board",
+    "summary": "Read your sales pipeline at a glance and move deals forward by dragging cards between stages.",
+    "category": "crm",
+    "audience": "everyone",
+    "keywords": ["leads", "pipeline", "kanban", "board", "stages", "opportunities", "deals"],
+    "body": [
+      {"type": "p", "text": "The **Leads** page is a Kanban board. Each column is a pipeline stage, and each card is an open sales opportunity. The header shows how many leads are open and the total value sitting in your pipeline."},
+      {"type": "h", "text": "Reading a lead card"},
+      {"type": "list", "items": [
+        "**Customer name** and, below it, the product and colour and the opportunity title",
+        "**Deal value** in Rand, with a **×N** badge when the quantity is more than one",
+        "**Assignee** avatar showing who owns the lead",
+        "**Next step** — the soonest planned activity, or an amber \"No next step scheduled\" warning",
+        "A **New** pill on leads you have not opened yet (created in the last 3 days)",
+        "An amber \"N days in stage\" flag once a card has sat in one stage for 7 days or more",
+        "A **test drive** chip (with weather for the day) and a **signing** chip when a quote has been sent for signature"
+      ]},
+      {"type": "h", "text": "Moving a lead"},
+      {"type": "steps", "items": [
+        "Grab a card and drag it into another stage column.",
+        "Release it — the move saves automatically and any stage automations run.",
+        "Dragging into the test-drive stage opens a booking dialog (see the test-drive article)."
+      ]},
+      {"type": "callout", "tone": "info", "text": "Moving a lead back to a stage before the test-drive stage cancels any test drive already booked for it, so a stale appointment never lingers on the card."},
+      {"type": "h", "text": "Focusing the board"},
+      {"type": "list", "items": [
+        "**Search** filters cards by customer, product, source or next step",
+        "**All owners** narrows the board to one salesperson",
+        "**Needs attention** shows only leads with no next step, an overdue step, or 7+ days in stage",
+        "**Clear** resets every filter"
+      ]},
+      {"type": "callout", "tone": "warning", "text": "Changing a lead's stage needs the change-stage permission, and moving a lead into a different pipeline needs the change-pipeline permission. Without them the move is rejected."},
+      {"type": "p", "text": "Use **Won / Lost** for closed deals and **List view** for a filterable table. Both are in the page header alongside **New lead**."}
+    ]
+  },
+  {
+    "slug": "leads-create-a-lead",
+    "title": "Creating a new lead",
+    "summary": "Capture a sales opportunity, set its value and stage, and link or auto-create the customer contact.",
+    "category": "crm",
+    "audience": "everyone",
+    "keywords": ["new lead", "create lead", "opportunity", "capture", "add lead"],
+    "body": [
+      {"type": "p", "text": "Open **New lead** from the board header to log an opportunity. Only the customer name is strictly required; everything else sharpens forecasting and follow-up."},
+      {"type": "steps", "items": [
+        "Enter the customer **name** (required), plus email and phone where you have them.",
+        "Pick the **product** and **colour**, set **quantity**, and estimate the **value**.",
+        "Choose the **pipeline stage** — leave it blank to drop into the first open stage of the default pipeline.",
+        "Set the **source** (e.g. website, WhatsApp, walk-in) and assign an owner.",
+        "Add opening **notes** if useful, then submit."
+      ]},
+      {"type": "callout", "tone": "info", "text": "Every lead is tied to a contact. If you do not pick one, the system links an existing contact matching the email or phone, or creates a new contact from the lead's name and details."},
+      {"type": "callout", "tone": "warning", "text": "Creating a lead needs the create-lead permission. Assigning it to someone other than yourself needs the assign permission — otherwise the lead is assigned to you."},
+      {"type": "p", "text": "You cannot create a lead directly into a closed (won/lost) stage — use **Mark won** or **Mark lost** on the lead instead."}
+    ]
+  },
+  {
+    "slug": "leads-working-a-lead",
+    "title": "Working a lead through to close",
+    "summary": "Use the lead detail page to quote, communicate, track activities and mark the deal won or lost.",
+    "category": "crm",
+    "audience": "everyone",
+    "keywords": ["lead detail", "mark won", "mark lost", "reopen", "quote", "activities", "communications", "research"],
+    "body": [
+      {"type": "p", "text": "Click a lead to open its detail page. The header shows the current stage (or won/lost status), estimated value, product, and counts of planned activities and quotes."},
+      {"type": "h", "text": "Actions on an open lead"},
+      {"type": "list", "items": [
+        "**Create quote** — starts a quote from the lead",
+        "**Mark won** — closes the deal as won; if the lead has no contact yet, one is created, and you land on that contact",
+        "**Mark lost** — requires a reason (e.g. bought elsewhere, too expensive, no response)",
+        "**Indemnity** — prints a test-drive indemnity form for the customer to sign",
+        "**Delete** — moves the lead to Trash, restorable for 60 days"
+      ]},
+      {"type": "p", "text": "A closed lead shows **Reopen** instead, which returns it to open and clears any lost reason. After a win, a banner offers to **register the vehicle** so service tracking can begin."},
+      {"type": "h", "text": "The tabs"},
+      {"type": "table", "headers": ["Tab", "What you do there"], "rows": [
+        ["Details", "Review and edit the lead's fields; view the raw intake payload for web-captured leads"],
+        ["Customer", "Link the lead to a contact or change the linked contact"],
+        ["Activities", "Schedule and complete calls, meetings and follow-ups"],
+        ["Quotes", "See every quote and its status; create a new one"],
+        ["Communications", "Send email, message on WhatsApp, and read the conversation timeline"],
+        ["Research", "Generate an AI briefing on the lead and the company behind the email"]
+      ]},
+      {"type": "p", "text": "The right-hand timeline stitches together the audit trail, communications and activities so you can see the full history of the deal in one place."},
+      {"type": "callout", "tone": "warning", "text": "Marking won, marking lost and reopening are each permission-gated. If a button is missing, you do not hold that permission."}
+    ]
+  },
+  {
+    "slug": "leads-test-drives",
+    "title": "Booking a test drive from the board",
+    "summary": "Drag a lead into the test-drive stage to capture the model, date, time and location in one step.",
+    "category": "crm",
+    "audience": "everyone",
+    "keywords": ["test drive", "booking", "appointment", "weather", "showroom"],
+    "body": [
+      {"type": "p", "text": "The test-drive stage is special: moving a lead into it prompts you to book the appointment so it is never lost."},
+      {"type": "steps", "items": [
+        "Drag the lead into the test-drive stage column.",
+        "In the dialog, choose the **model to drive** (or keep the current one).",
+        "Set the **date**, **time** and **location** — the default is the Denago Cape Town showroom.",
+        "Choose **Book & move** to move the lead and create the appointment, or **Cancel — don't move** to abandon the change."
+      ]},
+      {"type": "p", "text": "The booking becomes a planned test-drive activity on the lead and appears on the calendar. The card then shows the appointment chip, along with the weather forecast for that day when available."},
+      {"type": "callout", "tone": "tip", "text": "Need to print an indemnity for the drive? Use the **Indemnity** button on the lead detail page."}
+    ]
+  },
+  {
+    "slug": "leads-list-and-saved-views",
+    "title": "The lead list and saved views",
+    "summary": "Filter accessible leads into a table, save a filter set as a named view, and review won and lost deals.",
+    "category": "crm",
+    "audience": "everyone",
+    "keywords": ["lead list", "filters", "saved view", "won", "lost", "closed leads", "table"],
+    "body": [
+      {"type": "p", "text": "**List view** (from the board header) is a filterable table of the leads you can access — an alternative to the board when you want to slice by value, age or source."},
+      {"type": "h", "text": "Filtering"},
+      {"type": "list", "items": [
+        "**Status** — open, won or lost",
+        "**Source** — Facebook, Instagram, website, WhatsApp, referral, manual or walk-in",
+        "**Pipeline** and **Stage**",
+        "**Value at least** and **Created in last N days**"
+      ]},
+      {"type": "h", "text": "Saving a view"},
+      {"type": "steps", "items": [
+        "Apply the filters you want.",
+        "Enter a name in the **Name this view** box and choose **Save view**.",
+        "The view appears as a chip you can click to return to it; the **×** beside it deletes it."
+      ]},
+      {"type": "p", "text": "The **Won & lost** page lists completed opportunities with their close date and, for lost deals, the reason. If you have the reopen permission, each row offers a **Reopen** button to bring work back into play."}
+    ]
+  },
+  {
+    "slug": "contacts-overview",
+    "title": "Browsing and creating contacts",
+    "summary": "Search customers and companies, switch between card and list views, and add new contacts with tags.",
+    "category": "crm",
+    "audience": "everyone",
+    "keywords": ["contacts", "customers", "companies", "search", "tags", "new contact"],
+    "body": [
+      {"type": "p", "text": "**Contacts** (\"Customer relationships\") is your directory of customers and companies. The summary strip shows how many contacts are shown, how many vehicles they own, and how many open opportunities they have."},
+      {"type": "h", "text": "Finding people"},
+      {"type": "list", "items": [
+        "**Search** matches name, company, email or phone",
+        "Toggle between **Cards** and **List** views",
+        "Each card shows tags, vehicle and open-lead counts, primary contact detail and the owner"
+      ]},
+      {"type": "h", "text": "Adding a contact"},
+      {"type": "steps", "items": [
+        "Choose **New contact**.",
+        "Enter at least a first name; add company, email, phone, WhatsApp and a full address as needed.",
+        "Mark **Is company** for business accounts, set the source and owner, and add comma-separated **tags** (each tag gets a colour automatically).",
+        "Save to open the new contact's profile."
+      ]},
+      {"type": "callout", "tone": "info", "text": "Creating contacts, and the **Duplicates** tool, are permission-gated — those buttons only appear if you hold the create and merge permissions. What you see is also limited to the contacts you are allowed to access."}
+    ]
+  },
+  {
+    "slug": "contacts-profile",
+    "title": "Inside a customer profile",
+    "summary": "Work a contact across activities, vehicles, leads, communications, referrals, documents and POPIA privacy.",
+    "category": "crm",
+    "audience": "everyone",
+    "keywords": ["contact detail", "customer", "referrals", "documents", "consent", "popia", "health", "vehicles"],
+    "body": [
+      {"type": "p", "text": "Open a contact to see everything about the relationship. The header carries a health status pill and score, and the fact strip counts vehicles, open leads, planned activities and documents."},
+      {"type": "h", "text": "The tabs"},
+      {"type": "table", "headers": ["Tab", "What it holds"], "rows": [
+        ["Details", "Contact details, address, source and free-text notes"],
+        ["Activities", "Planned and completed follow-ups for this customer"],
+        ["Vehicles", "Registered carts with service-due badges; add a vehicle"],
+        ["Leads", "Every linked opportunity and its value and status"],
+        ["Communications", "Email composer, WhatsApp panel and the conversation timeline"],
+        ["Research", "AI briefings on the customer"],
+        ["Referrals", "The customer's referral code, WhatsApp share link, and referrals they have made"],
+        ["Documents", "Files attached to the customer"],
+        ["Privacy", "POPIA consent records and a data export"]
+      ]},
+      {"type": "h", "text": "Referrals"},
+      {"type": "p", "text": "Each customer has a unique referral code you can copy or share by WhatsApp. New leads captured with the code are tracked here; when a referred deal is won the fee becomes **due**, and you can **Redeem** it by recording what was given."},
+      {"type": "h", "text": "Privacy (POPIA)"},
+      {"type": "list", "items": [
+        "Record **consent** as granted or withdrawn, with a source",
+        "**Export data** downloads everything held on the contact",
+        "**Right to erasure** redacts personal details everywhere and moves the contact to Trash"
+      ]},
+      {"type": "callout", "tone": "warning", "text": "Erasing personal data is owner-only and cannot be undone — use it only on a valid POPIA erasure request. Vehicles, job cards and safety records are kept but de-identified for warranty and legal reasons."},
+      {"type": "p", "text": "**Edit** changes the profile; **Delete** moves the contact to Trash for 60 days while leaving their vehicles and job cards in place."}
+    ]
+  },
+  {
+    "slug": "contacts-merge-duplicates",
+    "title": "Finding and merging duplicate contacts",
+    "summary": "Spot contacts that share an email or phone and merge them into one clean record.",
+    "category": "crm",
+    "audience": "managers",
+    "keywords": ["duplicates", "merge", "deduplicate", "clean data", "contacts"],
+    "body": [
+      {"type": "p", "text": "The **Duplicates** page groups accessible contacts that share the same email address or phone number, so you can consolidate split records."},
+      {"type": "steps", "items": [
+        "Review each group — the shared email or phone is shown, with each contact's lead, vehicle and communication counts to help you judge which is the master.",
+        "On the record you want to keep, choose **Keep this one → merge others in**.",
+        "The other contacts are merged into it and then removed."
+      ]},
+      {"type": "p", "text": "Merging moves every linked lead, vehicle, job card, quote, communication, activity, document and audit entry onto the kept contact, and copies over any tags. Blank fields on the kept contact are filled from the duplicates. The merged-away contacts are soft-deleted with a \"Merged into…\" reason."},
+      {"type": "callout", "tone": "warning", "text": "This tool requires the merge permission and access to every contact in the group. Check you are keeping the right record before merging — the action reassigns all history to it."}
+    ]
+  },
+  {
+    "slug": "activities-queue",
+    "title": "Working your activity queue",
+    "summary": "Track planned follow-ups grouped by overdue, due today and upcoming, and close them with an outcome.",
+    "category": "crm",
+    "audience": "everyone",
+    "keywords": ["activities", "follow-up", "tasks", "calls", "meetings", "todo", "overdue"],
+    "body": [
+      {"type": "p", "text": "**Activities** is your queue of planned follow-ups. Metric cards summarise how many are planned, overdue, due today and upcoming."},
+      {"type": "h", "text": "Scope, search and grouping"},
+      {"type": "list", "items": [
+        "Switch between **Mine** and **Accessible** to see just your work or everything you can access",
+        "**Search** matches the activity, customer, linked lead or owner; **type** filters by call, email, WhatsApp, meeting, test drive or to-do",
+        "Work is grouped into **Needs attention** (past due), **Due today** and **Coming up**"
+      ]},
+      {"type": "h", "text": "Closing an activity"},
+      {"type": "steps", "items": [
+        "Add an optional **outcome note** in the activity's row.",
+        "Choose **Done** to complete it — a note is saved to the customer's communication timeline.",
+        "Use the trash icon to **cancel** an activity you no longer need."
+      ]},
+      {"type": "callout", "tone": "info", "text": "Viewing activities needs the view permission; creating, completing and cancelling need the manage permission. The **New activity** button and the Done/cancel controls only appear if you can manage activities."}
+    ]
+  },
+  {
+    "slug": "activities-calendar",
+    "title": "The sales calendar",
+    "summary": "See planned and completed activities on a month grid and schedule new work, including workshop slots.",
+    "category": "crm",
+    "audience": "everyone",
+    "keywords": ["calendar", "schedule", "appointments", "month view", "activities", "booking slots"],
+    "body": [
+      {"type": "p", "text": "The **Calendar** lays your activities out on a month grid, in South African time. It shows both planned and completed work so past appointments stay visible; only cancelled items are hidden."},
+      {"type": "list", "items": [
+        "Navigate between months from the calendar controls",
+        "Sales activities appear here; workshop-category bookings live on the workshop calendar instead",
+        "If you can manage activities you can schedule and edit directly from the calendar"
+      ]},
+      {"type": "h", "text": "Scheduling an activity"},
+      {"type": "steps", "items": [
+        "Give the activity a **summary** and pick a **type**.",
+        "Set the **due date** (and time), a **location**, and who it is **assigned to**.",
+        "Optionally tie it to a lead or contact, then save."
+      ]},
+      {"type": "callout", "tone": "tip", "text": "Marking a lead's activity done when it was the last one open prompts you to schedule the next step, so leads never go quiet."}
+    ]
+  },
+  {
+    "slug": "fleets-management",
+    "title": "Managing fleets",
+    "summary": "Group carts for estates, golf courses, resorts and business accounts and track their service and warranty.",
+    "category": "crm",
+    "audience": "everyone",
+    "keywords": ["fleets", "estate", "golf course", "resort", "business", "carts", "vehicles", "service", "warranty"],
+    "body": [
+      {"type": "p", "text": "**Fleets** groups vehicles under an account — an estate, golf course, resort, business or other. Each fleet has its own workspace showing cart-by-cart service and warranty status."},
+      {"type": "h", "text": "Creating a fleet"},
+      {"type": "steps", "items": [
+        "On the Fleets page, enter a **fleet name**.",
+        "Pick the **type** and, optionally, a **primary contact**.",
+        "Choose **Create fleet**."
+      ]},
+      {"type": "h", "text": "The fleet workspace"},
+      {"type": "list", "items": [
+        "Headline counts for total carts, carts due for service, and carts in warranty",
+        "A cart table with a **service** badge and **warranty** badge per vehicle",
+        "**Add a cart** from the list of unassigned vehicles, or **Remove** one from the fleet",
+        "**Fleet details** to rename, change type or contact, and add notes"
+      ]},
+      {"type": "callout", "tone": "info", "text": "Deleting a fleet keeps its carts — the vehicles simply become unassigned again."}
+    ]
+  },
+  {
+    "slug": "customer-health",
+    "title": "Reading customer health",
+    "summary": "A blended score ranks customers as VIP, healthy, watch or at-risk to prioritise care and win-backs.",
+    "category": "crm",
+    "audience": "everyone",
+    "keywords": ["health", "vip", "at risk", "score", "retention", "win-back", "customer care"],
+    "body": [
+      {"type": "p", "text": "**Customer health** blends ownership, service recency, sentiment, referrals and open issues into a single score so you know who to look after and who to win back."},
+      {"type": "h", "text": "The tiers"},
+      {"type": "table", "headers": ["Tier", "Meaning"], "rows": [
+        ["VIP", "Highest-value relationships"],
+        ["Healthy", "Engaged and on track"],
+        ["Watch", "Needs proactive attention"],
+        ["At risk", "Prioritise win-back activity"]
+      ]},
+      {"type": "p", "text": "The KPI row counts customers in each tier. Below it, two lists surface the top **VIP customers** (highest scores) and the customers most **at risk** (lowest scores), each with the reasons that drove the score. Click any name to open their profile."},
+      {"type": "callout", "tone": "info", "text": "Scores update automatically as ownership, service, feedback and support activity change — there is nothing to recalculate by hand. The same health pill also appears at the top of each contact profile."}
+    ]
+  },
+  {
+    "slug": "search-and-command-menu",
+    "title": "Global search and the command menu",
+    "summary": "Search every record type you can access, and jump anywhere with the keyboard command menu.",
+    "category": "crm",
+    "audience": "everyone",
+    "keywords": ["search", "global search", "command menu", "cmd k", "ctrl k", "quick actions", "navigation"],
+    "body": [
+      {"type": "p", "text": "**Search** looks across the contacts, leads, quotes, vehicles, job cards, customer cases, documents and products you are permitted to access, grouping the results by type."},
+      {"type": "list", "items": [
+        "Search by name, company, email, phone, city, model, VIN or registration",
+        "Enter a number to find a quote (Q-), a case (C-) or a job card by its number",
+        "Results are always scoped to what your permissions allow — nothing inaccessible is shown"
+      ]},
+      {"type": "h", "text": "The command menu"},
+      {"type": "p", "text": "Press **Ctrl+K** (or **⌘K**) anywhere to open the command menu for fast keyboard navigation."},
+      {"type": "list", "items": [
+        "**Quick actions** — new lead, new contact, new job card (where permitted) and search",
+        "**Go to** — jump to any page or module in the app",
+        "**Settings** — open a settings area directly",
+        "Admins also get quick access to **Trash**"
+      ]},
+      {"type": "callout", "tone": "tip", "text": "The command menu only lists actions you have permission for, so it doubles as a shortcut to whatever you actually use most."}
+    ]
+  }
+]

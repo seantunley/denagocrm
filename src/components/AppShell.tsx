@@ -16,6 +16,7 @@ import {
   ChevronsUpDown,
 } from "lucide-react";
 import Nav from "@/components/Nav";
+import SidebarHelpSettings from "@/components/SidebarHelpSettings";
 import ClockWeather from "@/components/ClockWeather";
 import CommandMenu, { openCommandMenu } from "@/components/CommandMenu";
 import QuickActions from "@/components/QuickActions";
@@ -82,8 +83,9 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0 }: { user: Shel
         <Nav modules={user.modules} isAdmin={isOwner} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting }} />
       </div>
 
-      {/* User */}
-      <div className="border-t border-sidebar-border p-3">
+      {/* Help, Settings & user */}
+      <div className="space-y-1 border-t border-sidebar-border p-3">
+        <SidebarHelpSettings isOwner={isOwner} />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent">
