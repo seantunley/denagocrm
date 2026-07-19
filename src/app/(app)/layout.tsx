@@ -6,7 +6,8 @@ import AppShell from "@/components/AppShell";
 
 export default async function AppLayout({
   children,
-}: Readonly<{ children: React.ReactNode }>) {
+  modal,
+}: Readonly<{ children: React.ReactNode; modal?: React.ReactNode }>) {
   const user = await requireUser();
   const [inboxWaiting, casesWaiting, permissions] = await Promise.all([
     awaitingReplyCount().catch(() => 0),
@@ -26,6 +27,7 @@ export default async function AppLayout({
       casesWaiting={casesWaiting}
     >
       {children}
+      {modal}
     </AppShell>
   );
 }
