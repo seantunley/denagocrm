@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { deleteContact } from "@/app/actions/contacts";
 import CommsTimeline from "@/components/CommsTimeline";
+import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
@@ -145,6 +146,7 @@ export default async function ContactDetailPage({
                 key: "details",
                 label: "Details",
                 content: (
+                  <div className="space-y-6">
                   <div className="card">
                     <h2 className="font-semibold mb-3">Details</h2>
                     <dl className="space-y-2 text-sm max-w-xl">
@@ -174,6 +176,8 @@ export default async function ContactDetailPage({
                         {contact.notes}
                       </p>
                     )}
+                  </div>
+                  <CustomFieldsCard entity="contact" recordId={contact.id} />
                   </div>
                 ),
               },

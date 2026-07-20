@@ -1891,3 +1891,40 @@ model CompetitorBrief {
 
   @@index([competitorId, createdAt])
 }
+
+// ─── Custom fields (Path A, Phase 2) ─────────────────────────────────
+// EAV layer that lets a workspace add its own fields to core objects, so the
+// CRM fits non-automotive businesses without code changes. One definition per
+// (entity, key); one value per (definition, record). Tenant-agnostic for now
+// (single tenant); Phase 4 adds tenant scoping.
+model CustomFieldDef {
+  id        String   @id @default(cuid())
+  entity    String // contact | lead | quote | case
+  key       String // machine key, unique within an entity
+  label     String
+  type      String   @default("text") // text | textarea | number | date | select | checkbox | url
+  options   Json? // string[] for select
+  required  Boolean  @default(false)
+  order     Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  values CustomFieldValue[]
+
+  @@unique([entity, key])
+  @@index([entity, active, order])
+}
+
+model CustomFieldValue {
+  id        String   @id @default(cuid())
+  defId     String
+  recordId  String // id of the target contact / lead / quote / case
+  value     String? // stored as text; coerced by the field's type on read
+  updatedAt DateTime @updatedAt
+
+  def CustomFieldDef @relation(fields: [defId], references: [id], onDelete: Cascade)
+
+  @@unique([defId, recordId])
+  @@index([recordId])
+}
