@@ -91,6 +91,18 @@ export const MODULE_REGISTRY: AppModule[] = [
   },
 ];
 
+/**
+ * Document `tag` values that are automotive-owned delivery paperwork. These docs
+ * are linked to a contact/quote (not a vehicle), so a plain vehicleId check misses
+ * them — when the automotive pack is off they must still be treated as automotive
+ * (hidden and not downloadable). Written by src/app/actions/fulfilment.ts.
+ */
+export const AUTOMOTIVE_DELIVERY_TAGS = [
+  "delivery-note",
+  "delivery-photo",
+  "delivery-signature",
+] as const;
+
 export const ALL_MODULE_IDS: ModuleId[] = MODULE_REGISTRY.map((m) => m.id);
 
 /** Modules an owner may toggle (everything except mandatory core). */
