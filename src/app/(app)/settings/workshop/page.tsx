@@ -1,5 +1,7 @@
+import { notFound } from "next/navigation";
 import { Plus, Pencil, Warehouse, Wrench, Package } from "lucide-react";
 import { requirePermission } from "@/lib/permissions";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { prisma } from "@/lib/db";
 import { getDefaultLabourRateCents } from "@/lib/workshop";
 import {
@@ -75,6 +77,7 @@ function PackageForm({ pkg }: { pkg?: { id: string; name: string; description: s
 }
 
 export default async function WorkshopSettingsPage() {
+  if (!(await isModuleEnabled("automotive"))) notFound();
   await requirePermission("workshop.manage");
   const [rateCents, bays, packages] = await Promise.all([
     getDefaultLabourRateCents(),

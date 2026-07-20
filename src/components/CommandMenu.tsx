@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/command";
 import { buildNav } from "@/components/nav-config";
 import { isPathEnabled } from "@/lib/modules/registry";
-import { SETTINGS_NAV_GROUPS, settingsHref } from "@/lib/settings-navigation";
+import { SETTINGS_NAV_GROUPS, settingsHref, settingsItemEnabled } from "@/lib/settings-navigation";
 
 export function openCommandMenu() {
   window.dispatchEvent(new Event("denago:open-command"));
@@ -46,7 +46,9 @@ export default function CommandMenu({
   ].filter((action) => packOn(action.href));
   const settingsGroups = SETTINGS_NAV_GROUPS.map((group) => ({
     ...group,
-    items: group.items.filter((item) => isAdmin || item.key === "account"),
+    items: group.items.filter(
+      (item) => (isAdmin || item.key === "account") && settingsItemEnabled(item, enabledSet),
+    ),
   })).filter((group) => group.items.length > 0);
 
   useEffect(() => {

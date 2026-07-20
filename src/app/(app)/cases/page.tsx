@@ -49,6 +49,7 @@ import {
   hasPermission,
   requireAnyPermission,
 } from "@/lib/permissions";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -101,12 +102,13 @@ export default async function CasesPage({
     type: sp.type ?? null,
   };
 
-  const [tickets, counts, mailboxes, tags, canCreate] = await Promise.all([
+  const [tickets, counts, mailboxes, tags, canCreate, automotiveOn] = await Promise.all([
     listTickets(user, filters),
     folderCounts(user, filters),
     listMailboxes(),
     listTags(),
     hasPermission(user, "cases.create"),
+    isModuleEnabled("automotive"),
   ]);
 
   const contactIds = canCreate ? await getAccessibleContactIds(user) : [];
@@ -367,7 +369,7 @@ export default async function CasesPage({
             />
           ) : (
             <Surface className="divide-y divide-border/70">
-              {tickets.map((ticket) => <TicketRow key={ticket.id} ticket={ticket} />)}
+              {tickets.map((ticket) => <TicketRow key={ticket.id} ticket={ticket} automotiveOn={automotiveOn} />)}
             </Surface>
           )}
         </main>
@@ -376,7 +378,7 @@ export default async function CasesPage({
   );
 }
 
-function TicketRow({ ticket }: { ticket: TicketListRow }) {
+function TicketRow({ ticket, automotiveOn }: { ticket: TicketListRow; automotiveOn: boolean }) {
   const status = statusMeta(ticket.status);
   const priority = priorityMeta(ticket.priority);
   const waitingOnUs = ticket.lastReplyBy === "customer";
@@ -422,7 +424,7 @@ function TicketRow({ ticket }: { ticket: TicketListRow }) {
                   <CircleUserRound className="size-3.5 shrink-0" />
                   <span className="truncate">{ticket.contactName}</span>
                 </span>
-                {ticket.vehicleModel && (
+                {automotiveOn && ticket.vehicleModel && (
                   <>
                     <span aria-hidden="true">·</span>
                     <span>{ticket.vehicleModel}</span>

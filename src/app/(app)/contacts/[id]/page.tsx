@@ -38,7 +38,10 @@ export default async function ContactDetailPage({
 }) {
   const { id } = await params;
   const user = await requireUser();
-  const automotiveOn = await isModuleEnabled("automotive");
+  const [automotiveOn, marketingOn] = await Promise.all([
+    isModuleEnabled("automotive"),
+    isModuleEnabled("marketing"),
+  ]);
   const contact = await prisma.contact.findUnique({
     where: { id },
     include: {
@@ -75,18 +78,20 @@ export default async function ContactDetailPage({
       include: { versions: { orderBy: { version: "desc" }, take: 1 } },
     }),
   ]);
-  const referralCode = await ensureReferralCode(contact.id);
-  const [referralsMade, referredIn] = await Promise.all([
-    prisma.referral.findMany({
-      where: { referrerId: contact.id },
-      include: { lead: true, contact: true },
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.referral.findFirst({
-      where: { OR: [{ contactId: contact.id }, { lead: { contactId: contact.id } }] },
-      include: { referrer: true },
-    }),
-  ]);
+  const referralCode = marketingOn ? await ensureReferralCode(contact.id) : "";
+  const [referralsMade, referredIn] = marketingOn
+    ? await Promise.all([
+        prisma.referral.findMany({
+          where: { referrerId: contact.id },
+          include: { lead: true, contact: true },
+          orderBy: { createdAt: "desc" },
+        }),
+        prisma.referral.findFirst({
+          where: { OR: [{ contactId: contact.id }, { lead: { contactId: contact.id } }] },
+          include: { referrer: true },
+        }),
+      ])
+    : [[], null];
   const libraryDocs = libraryDocuments
     .filter((d) => d.versions[0])
     .map((d) => ({ id: d.versions[0].id, label: `${d.name} (v${d.versions[0].version})` }));
@@ -127,7 +132,7 @@ export default async function ContactDetailPage({
           <ConfirmDelete
             action={deleteContact.bind(null, contact.id)}
             title={`Delete contact ${contactName(contact)}?`}
-            description="The contact moves to the Trash and can be restored for 60 days. Their vehicles and job cards stay in place."
+            description={`The contact moves to the Trash and can be restored for 60 days.${automotiveOn ? " Their vehicles and job cards stay in place." : ""}`}
           />
         </>}
     >
@@ -340,7 +345,7 @@ export default async function ContactDetailPage({
                   </div>
                 ),
               },
-              {
+              ...(marketingOn ? [{
                 key: "referrals",
                 label: "Referrals",
                 count: referralsMade.length,
@@ -450,7 +455,7 @@ export default async function ContactDetailPage({
                     </div>
                   </>
                 ),
-              },
+              }] : []),
               {
                 key: "documents",
                 label: "Documents",
