@@ -7,7 +7,9 @@ import { advanceWorkflow } from "@/lib/signflow/runtime";
 /** Called after a recipient signs: complete the request if everyone's done, else advance. */
 export async function advanceAfterSignature(requestId: string): Promise<void> {
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } });
-  if (!req) return;
+  // Never advance a closed request. If a void/decline landed after the signer's
+  // claim committed, this stops it short of completeSignatureRequest().
+  if (!req || req.status === "completed" || req.status === "voided" || req.status === "declined") return;
   // Interpreter-driven workflows (approvals / branches) advance node-by-node.
   if (req.workflowGraphJson) { await advanceWorkflow(requestId); return; }
   const signers = req.recipients.filter((r) => r.role !== "viewer");

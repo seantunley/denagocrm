@@ -41,6 +41,36 @@ function requireRecordSigningAccess(kind: Kind, id: string): Promise<PermissionU
     : requireJobCardAccess(id, "jobcards.manage");
 }
 
+/**
+ * Validate that the underlying record is still in an active, signable lifecycle
+ * state. Runs BEFORE any existing-request lookup so a trashed / superseded /
+ * already-signed / expired record is rejected even when it still has an open
+ * request attached. `findUnique` isn't soft-delete filtered and view_all access
+ * is unrestricted, so these checks are explicit. Returns the quote's leadId for
+ * audit attribution on success.
+ */
+async function checkRecordActive(
+  kind: Kind,
+  id: string,
+): Promise<{ error: string | null; leadId: string | null }> {
+  if (kind === "quote") {
+    const quote = await prisma.quote.findUnique({ where: { id } });
+    if (!quote || quote.deletedAt) return { error: "Quote not found.", leadId: null };
+    if (quote.supersededAt) {
+      return { error: "This quote was superseded by a revision — sign the current version.", leadId: null };
+    }
+    if (quote.signedAt) return { error: "This quote has already been signed.", leadId: null };
+    if (quoteExpired(quote.validUntil)) {
+      return { error: "This quote has expired — issue an updated quote first.", leadId: null };
+    }
+    return { error: null, leadId: quote.leadId };
+  }
+  const jobCard = await prisma.jobCard.findUnique({ where: { id } });
+  if (!jobCard || jobCard.deletedAt) return { error: "Job card not found.", leadId: null };
+  if (jobCard.signedAt) return { error: "This job card has already been signed.", leadId: null };
+  return { error: null, leadId: null };
+}
+
 export async function startRecordSigning(
   kind: Kind,
   id: string,
@@ -50,6 +80,13 @@ export async function startRecordSigning(
   const quoteId = kind === "quote" ? id : null;
   const jobCardId = kind === "jobcard" ? id : null;
 
+  // Validate the record's lifecycle FIRST — a trashed / superseded / signed /
+  // expired record must be rejected even if it still has an open request, so
+  // this runs before the existing-request short-circuit below.
+  const active = await checkRecordActive(kind, id);
+  if (active.error) return { ok: false, error: active.error };
+  const sendLeadId = active.leadId;
+
   const existing = await activeRecordRequest({ quoteId, jobCardId });
   if (
     existing &&
@@ -57,34 +94,6 @@ export async function startRecordSigning(
     existing.status !== "declined"
   ) {
     return { ok: true, requestId: existing.requestId };
-  }
-
-  let sendLeadId: string | null = null;
-  if (kind === "quote") {
-    // findUnique isn't soft-delete filtered and view_all access is unrestricted,
-    // so reject a trashed or superseded quote explicitly — never start signing on
-    // a record that's out of the active lifecycle.
-    const quote = await prisma.quote.findUnique({ where: { id } });
-    if (!quote || quote.deletedAt) return { ok: false, error: "Quote not found." };
-    if (quote.supersededAt) {
-      return { ok: false, error: "This quote was superseded by a revision — sign the current version." };
-    }
-    if (quote.signedAt) {
-      return { ok: false, error: "This quote has already been signed." };
-    }
-    if (quoteExpired(quote.validUntil)) {
-      return {
-        ok: false,
-        error: "This quote has expired — issue an updated quote first.",
-      };
-    }
-    sendLeadId = quote.leadId;
-  } else {
-    const jobCard = await prisma.jobCard.findUnique({ where: { id } });
-    if (!jobCard || jobCard.deletedAt) return { ok: false, error: "Job card not found." };
-    if (jobCard.signedAt) {
-      return { ok: false, error: "This job card has already been signed." };
-    }
   }
 
   // Quote signing uses the editable builder template. Job cards deliberately stay
@@ -244,11 +253,17 @@ export async function resendRecordSigning(
   id: string,
 ): Promise<Result> {
   const user = await requireRecordSigningAccess(kind, id);
+  // Same lifecycle gate as start — never re-dispatch signing on a record that's
+  // been trashed, superseded or already signed.
+  const active = await checkRecordActive(kind, id);
+  if (active.error) return { ok: false, error: active.error };
   const state = await activeRecordRequest({
     quoteId: kind === "quote" ? id : null,
     jobCardId: kind === "jobcard" ? id : null,
   });
-  if (!state || state.status === "completed") {
+  // A completed / declined / voided request is closed — resending would resurrect
+  // it (force it back to "sent" and re-notify a declined recipient).
+  if (!state || ["completed", "declined", "voided"].includes(state.status)) {
     return { ok: false, error: "No active request to resend." };
   }
   const { notified } = await dispatchRequest(state.requestId);

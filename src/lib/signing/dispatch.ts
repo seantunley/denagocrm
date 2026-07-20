@@ -53,7 +53,10 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
 /** Send the request: mark sent, and notify the right recipients for the ordering. */
 export async function dispatchRequest(requestId: string): Promise<{ notified: number }> {
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: { orderBy: { order: "asc" } } } });
-  if (!req) return { notified: 0 };
+  // Refuse to (re)dispatch a closed request. Otherwise a declined/completed/voided
+  // request would be forced back to "sent" and its already-declined recipients
+  // re-notified, resurrecting a request that can never complete.
+  if (!req || req.status === "completed" || req.status === "declined" || req.status === "voided") return { notified: 0 };
   await prisma.signatureRequest.update({ where: { id: requestId }, data: { status: "sent", sentAt: req.sentAt ?? new Date() } });
 
   const signers = req.recipients.filter((r) => r.role !== "viewer" && r.status !== "signed");

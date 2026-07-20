@@ -48,7 +48,11 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     where: { id: requestId },
     include: { recipients: { orderBy: { order: "asc" } } },
   });
-  if (!req || req.status === "completed") return;
+  // A request that is already closed (completed, voided or declined) must never
+  // be completed. Voiding races with the final signer's transaction: the signer
+  // commits the recipient + fields, then calls this outside that lock, so a void
+  // can land in between. Reject here AND re-check with a conditional claim below.
+  if (!req || req.status === "completed" || req.status === "voided" || req.status === "declined") return;
   const doc = parseDocument(req.snapshotJson);
   if (!doc) return;
   const ctx = await bindCtx(req.quoteId, req.jobCardId);
@@ -90,10 +94,19 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       })
     : null;
 
-  await prisma.signatureRequest.update({
-    where: { id: requestId },
+  // Conditionally claim completion: only transition a still-open request. If a
+  // concurrent void/decline closed it after our initial read, count === 0 and we
+  // abort BEFORE running post-completion or emailing the sealed PDF — otherwise a
+  // caller could receive a successful "voided" result while the document is still
+  // distributed as completed. Drop the signed document we optimistically created.
+  const claimed = await prisma.signatureRequest.updateMany({
+    where: { id: requestId, status: { notIn: ["completed", "voided", "declined"] } },
     data: { status: "completed", completedAt: new Date(), signedPdfRef: storedName, signedPdfHash: hash, signedDocId: document?.id ?? null },
   });
+  if (claimed.count === 0) {
+    if (document) await prisma.document.delete({ where: { id: document.id } }).catch(() => {});
+    return;
+  }
   await logSignEvent(requestId, { type: "completed", actor: "system", metadata: { hash } });
 
   // Fire CRM side-effects (quote accepted → lead won, job card signed). Parity
