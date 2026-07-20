@@ -57,6 +57,7 @@ export default function QuickCreateDialog() {
   const [kind, setKind] = useState<QuickCreateKind | null>(null);
   const [calendarDefaults, setCalendarDefaults] = useState<CalendarCreateDefaults>({});
   const [options, setOptions] = useState<Options | null>(null);
+  const [calendarType, setCalendarType] = useState<string>("call");
 
   useEffect(() => {
     const onOpen = (event: Event) => {
@@ -81,6 +82,11 @@ export default function QuickCreateDialog() {
       .then(setOptions)
       .catch(() => setOptions(null));
   }, [kind, options]);
+
+  // Reset the calendar type to a sensible default whenever the dialog re-opens.
+  useEffect(() => {
+    setCalendarType(calendarDefaults.workshop ? "meeting" : "call");
+  }, [calendarDefaults]);
 
   const input =
     "w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20";
@@ -169,12 +175,13 @@ export default function QuickCreateDialog() {
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <label className="label">Type</label>
-                    <select name="type" className={input} defaultValue={calendarDefaults.workshop ? "meeting" : "call"}>
+                    <select name="type" className={input} value={calendarType} onChange={(e) => setCalendarType(e.target.value)}>
                       <option value="call">Call</option>
                       <option value="whatsapp">WhatsApp</option>
                       <option value="email">Email</option>
                       <option value="meeting">Meeting</option>
                       <option value="test_drive">Test drive</option>
+                      <option value="follow_up">Follow-up</option>
                       <option value="todo">To-do</option>
                     </select>
                   </div>
@@ -206,8 +213,19 @@ export default function QuickCreateDialog() {
                   <input name="location" className={input} placeholder="Showroom, workshop or customer address" />
                 </div>
                 <div>
-                  <label className="label">Internal note</label>
-                  <textarea name="note" className={`${input} min-h-20 resize-y`} placeholder="Preparation, customer request or handover detail…" />
+                  <label className="label">
+                    {calendarType === "follow_up" ? "Follow-up note *" : "Internal note"}
+                  </label>
+                  <textarea
+                    name="note"
+                    className={`${input} min-h-20 resize-y`}
+                    required={calendarType === "follow_up"}
+                    placeholder={
+                      calendarType === "follow_up"
+                        ? "e.g. Customer will get back to us in 2 weeks after speaking to their partner"
+                        : "Preparation, customer request or handover detail…"
+                    }
+                  />
                 </div>
                 <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
                   <label className="flex items-center gap-2 text-sm text-muted-foreground">

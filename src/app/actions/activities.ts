@@ -10,6 +10,12 @@ import {
 } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { reserveSlot } from "@/lib/bookingSlots";
+import { ensureTimelinePin } from "@/lib/timelinePins";
+import {
+  FOLLOW_UP_TYPE,
+  ensureFollowUpTime,
+  followUpValidationError,
+} from "@/lib/followUp";
 
 const str = (formData: FormData, key: string) => {
   const value = String(formData.get(key) ?? "").trim();
@@ -95,17 +101,29 @@ export async function scheduleActivity(formData: FormData) {
       throw error;
     }
   } else {
+    let dueDate: Date;
+    if (type === FOLLOW_UP_TYPE) {
+      // A follow-up MUST have a note and a real, future time — the latter so the
+      // existing hour-before reminder push (which skips midnight) fires.
+      dueDate = rawDue
+        ? new Date(`${ensureFollowUpTime(rawDue)}:00+02:00`)
+        : new Date(NaN);
+      const problem = followUpValidationError({ note, dueDate }, new Date());
+      if (problem) throw new Error(problem);
+    } else {
+      dueDate = rawDue
+        ? rawDue.includes("T")
+          ? new Date(`${rawDue}:00+02:00`)
+          : new Date(rawDue)
+        : new Date();
+    }
     activity = await prisma.activity.create({
       data: {
         type,
         category: null,
         summary,
         note,
-        dueDate: rawDue
-          ? rawDue.includes("T")
-            ? new Date(`${rawDue}:00+02:00`)
-            : new Date(rawDue)
-          : new Date(),
+        dueDate,
         location,
         leadId,
         contactId,
@@ -113,6 +131,12 @@ export async function scheduleActivity(formData: FormData) {
         createdById: user.id,
       },
     });
+  }
+
+  // Auto-pin a new follow-up to the top of the timeline. It stays pinned until
+  // manually unpinned (we never auto-unpin, even on completion).
+  if (activity.type === FOLLOW_UP_TYPE) {
+    await ensureTimelinePin("activity", activity.id, user.id);
   }
 
   const assignee =

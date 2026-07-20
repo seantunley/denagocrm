@@ -13,6 +13,7 @@ import {
   MapPin,
   MessageCircle,
   Phone,
+  Repeat,
   Search,
   Trash2,
   UserRound,
@@ -67,6 +68,11 @@ const ACTIVITY_TYPES: Record<string, ActivityMeta> = {
     label: "Test drive",
     icon: Car,
     tone: "border-amber-400/20 bg-amber-400/10 text-amber-300",
+  },
+  follow_up: {
+    label: "Follow-up",
+    icon: Repeat,
+    tone: "border-violet-400/20 bg-violet-400/10 text-violet-300",
   },
   todo: {
     label: "To-do",

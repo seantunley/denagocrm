@@ -3,6 +3,7 @@ import { prisma } from "./db";
 import { logAudit } from "./audit";
 import { sendEmail, renderTemplate, leadVars } from "./email";
 import { sendPushToAll } from "./push";
+import { FOLLOW_UP_TYPE, isOpenFutureFollowUp } from "./followUp";
 
 export const LEAD_TRIGGERS = [
   "lead_created",
@@ -190,16 +191,22 @@ export async function runLeadAutomations(
 /**
  * Fires idle-lead rules: open leads untouched for N days.
  * Each rule fires at most once per lead. Returns how many rules fired.
+ *
+ * A lead with an OPEN (status "planned") follow-up whose due date is still in
+ * the FUTURE is never treated as gone quiet — the rep has an explicit check-back
+ * scheduled, so the "lead has gone quiet" nudge is suppressed until the
+ * follow-up is due. Other idle-lead behaviour is unchanged.
  */
 export async function runIdleAutomations(): Promise<number> {
   let fired = 0;
+  const now = new Date();
   const rules = await prisma.automationRule.findMany({
     where: { active: true, trigger: "lead_idle" },
   });
   for (const rule of rules) {
     const days = rule.idleDays ?? 3;
     const idleLeads = await prisma.lead.findMany({
-      where: { status: "open", updatedAt: { lt: subDays(new Date(), days) } },
+      where: { status: "open", updatedAt: { lt: subDays(now, days) } },
       include: { product: true, assignedTo: true, stage: true },
     });
     for (const lead of idleLeads) {
@@ -208,6 +215,14 @@ export async function runIdleAutomations(): Promise<number> {
       });
       if (already) continue;
       if (!conditionsHold(rule, lead)) continue;
+
+      // Suppress the gone-quiet nudge while an open, future follow-up exists.
+      const plannedFollowUps = await prisma.activity.findMany({
+        where: { leadId: lead.id, type: FOLLOW_UP_TYPE, status: "planned" },
+        select: { type: true, status: true, dueDate: true },
+      });
+      if (plannedFollowUps.some((a) => isOpenFutureFollowUp(a, now))) continue;
+
       try {
         const note = await applyRule(rule, lead, 0);
         await logRule(rule.id, lead.id, note, rule.name, lead.contactId);
