@@ -11,7 +11,11 @@ export function GET() {
       name: "Denago Messages",
       short_name: "Messages",
       description: "Customer messaging & help desk for Denago Cape Town",
-      start_url: "/messages",
+      // Permission-aware landing (see /messages/start): routes the installed app
+      // to Chats or Help desk depending on what the user can access, so a
+      // cases-only help-desk user isn't bounced out on launch. Scope/id stay
+      // "/messages" so this remains one installed app.
+      start_url: "/messages/start",
       scope: "/messages",
       id: "/messages",
       display: "standalone",
