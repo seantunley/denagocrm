@@ -1,4 +1,5 @@
 import { subDays } from "date-fns";
+import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
 import { deleteFile } from "./storage";
 import { type CustomEntity } from "./customFields";
@@ -97,6 +98,14 @@ export async function purgeTrash(): Promise<number> {
     contact: "contact",
   };
 
+  // Postgres table names for the FOR UPDATE lock below — a fixed whitelist,
+  // because they interpolate as raw SQL identifiers and must never be user input.
+  const tableName: Partial<Record<TrashModel, string>> = {
+    quote: "Quote",
+    lead: "Lead",
+    contact: "Contact",
+  };
+
   // children before parents so FK cascades behave predictably
   for (const model of ["quote", "jobCard", "vehicle", "lead", "contact", "product"] as TrashModel[]) {
     const entity = customEntityFor[model];
@@ -108,18 +117,6 @@ export async function purgeTrash(): Promise<number> {
       continue;
     }
 
-    // Delete the parent rows AND their custom values in one transaction so a
-    // failed parent delete can't leave a recoverable record stripped of its
-    // custom data. Two subtleties matter:
-    //   1. The parent delete is guarded by `deletedAt < cutoff` (NOT a raw id
-    //      list), so a record RESTORED between the candidate scan and this
-    //      transaction is no longer stale and is left untouched — no purge of a
-    //      record that is no longer in the trash.
-    //   2. Custom values are deleted only for rows we ACTUALLY removed. deleteMany
-    //      can't return ids, so after the delete we re-read which candidates
-    //      survived (were restored) and subtract them; the remainder are the
-    //      truly-deleted ids. This keeps custom-value deletion in lockstep with
-    //      the parent rows even under a concurrent restore.
     const staleIds: string[] = (
       await delegate(model)
         .findMany({ where: { deletedAt: { lt: cutoff } }, select: { id: true } })
@@ -127,30 +124,57 @@ export async function purgeTrash(): Promise<number> {
     ).map((r: { id: string }) => r.id);
     if (staleIds.length === 0) continue;
 
+    const table = tableName[model]!;
+    // Stored blobs to remove AFTER the row transaction commits. File deletion is
+    // irreversible, so it must never happen inside the tx — a rolled-back purge
+    // must not lose its files.
+    let orphanFiles: string[] = [];
+
     try {
       const res = await basePrisma.$transaction(async (tx) => {
-        /* eslint-disable @typescript-eslint/no-explicit-any */
-        const del = await (tx as any)[model].deleteMany({
-          where: { id: { in: staleIds }, deletedAt: { lt: cutoff } },
-        });
-        const survivors: { id: string }[] = await (tx as any)[model].findMany({
-          where: { id: { in: staleIds } },
-          select: { id: true },
-        });
-        /* eslint-enable @typescript-eslint/no-explicit-any */
-        const survivorIds = new Set(survivors.map((r) => r.id));
-        const deletedIds = staleIds.filter((id) => !survivorIds.has(id));
-        if (deletedIds.length > 0) {
-          await tx.customFieldValue.deleteMany({
-            where: { recordId: { in: deletedIds }, def: { entity } },
+        // Lock the still-stale rows FOR UPDATE. A restore clears deletedAt via an
+        // UPDATE on the same row, which now blocks until we commit — so we never
+        // purge a record that left the trash mid-pass, and (for contacts) never
+        // delete a restored contact's children. Records restored before we lock
+        // fail the `deletedAt < cutoff` predicate and are excluded outright.
+        const locked = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+          SELECT "id" FROM ${Prisma.raw(`"${table}"`)}
+          WHERE "id" IN (${Prisma.join(staleIds)}) AND "deletedAt" < ${cutoff}
+          FOR UPDATE`);
+        const ids = locked.map((r) => r.id);
+        if (ids.length === 0) return { count: 0 };
+
+        // Contact has ON DELETE RESTRICT children (support cases + portal uploads)
+        // that otherwise block the delete and silently defeat retention / POPIA
+        // cleanup — the contact would linger forever. Purge them first (uploads
+        // before cases: PortalUpload.caseId → CustomerCase is SET NULL, and the
+        // upload is the customer's own data). Capture upload blobs for post-commit
+        // removal. The other portal tables are ON DELETE CASCADE, so they go with
+        // the contact automatically.
+        if (model === "contact") {
+          const uploads = await tx.portalUpload.findMany({
+            where: { contactId: { in: ids } },
+            select: { storedName: true },
           });
+          orphanFiles = uploads.map((u) => u.storedName);
+          await tx.portalUpload.deleteMany({ where: { contactId: { in: ids } } });
+          await tx.customerCase.deleteMany({ where: { contactId: { in: ids } } });
         }
-        return del;
+
+        // Custom values (EAV, no FK → no cascade) for exactly the rows removed.
+        await tx.customFieldValue.deleteMany({
+          where: { recordId: { in: ids }, def: { entity } },
+        });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (tx as any)[model].deleteMany({ where: { id: { in: ids } } });
       });
       purged += res.count;
     } catch {
-      // parent + custom values rolled back together; nothing purged this pass
+      // parent + children + custom values roll back together; nothing purged
+      continue;
     }
+
+    for (const stored of orphanFiles) await deleteFile(stored).catch(() => {});
   }
   return purged;
 }

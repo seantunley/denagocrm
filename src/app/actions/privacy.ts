@@ -5,7 +5,7 @@ import { prisma, basePrisma } from "@/lib/db";
 import { requireContactAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { CONSENT_TYPES } from "@/lib/consent";
-import { deleteCustomValuesFor } from "@/lib/customFields";
+import { type CustomEntity } from "@/lib/customFields";
 
 export async function recordConsent(contactId: string, formData: FormData) {
   const user = await requireContactAccess(contactId, "contacts.edit");
@@ -48,31 +48,6 @@ export async function anonymizeContact(contactId: string) {
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) return;
 
-  await prisma.contact.update({
-    where: { id: contactId },
-    data: {
-      firstName: "Redacted",
-      lastName: null,
-      company: null,
-      email: null,
-      phone: null,
-      whatsapp: null,
-      address: null,
-      suburb: null,
-      city: null,
-      province: null,
-      postalCode: null,
-      notes: null,
-      marketingOptOut: true,
-      deletedAt: new Date(),
-      deletedByName: user.name,
-      deleteReason: "POPIA erasure request",
-    },
-  });
-  await prisma.lead.updateMany({
-    where: { contactId },
-    data: { name: "Redacted", email: null, phone: null },
-  });
   // Custom-field values can hold PII (e.g. ID number) — erase them too, for the
   // contact and for each of its leads, quotes and cases. These key on the record
   // id with no FK, so nothing cascades; gather ids via basePrisma so trashed
@@ -82,20 +57,57 @@ export async function anonymizeContact(contactId: string) {
     basePrisma.quote.findMany({ where: { contactId }, select: { id: true } }).then((r) => r.map((x) => x.id)),
     basePrisma.customerCase.findMany({ where: { contactId }, select: { id: true } }).then((r) => r.map((x) => x.id)),
   ]);
-  await deleteCustomValuesFor("contact", [contactId]);
-  await deleteCustomValuesFor("lead", leadIds);
-  await deleteCustomValuesFor("quote", quoteIds);
-  await deleteCustomValuesFor("case", caseIds);
-  await prisma.consentRecord.create({
-    data: {
-      contactId,
-      type: "data_processing",
-      granted: false,
-      source: "admin",
-      note: "Erasure request",
-      createdById: user.id,
-    },
-  });
+
+  // Erasure must be all-or-nothing: the redaction, the custom-value deletes and
+  // the withdrawal-of-consent record commit together, so we can never leave a
+  // half-anonymised contact without the consent proof that it happened. Run on
+  // basePrisma so soft-deleted leads are redacted too (the filtered client would
+  // skip them). Irreversible stored-file cleanup, if any, would run post-commit.
+  const erase = (ids: string[], entity: CustomEntity) =>
+    ids.length
+      ? [basePrisma.customFieldValue.deleteMany({ where: { recordId: { in: ids }, def: { entity } } })]
+      : [];
+  await basePrisma.$transaction([
+    basePrisma.contact.update({
+      where: { id: contactId },
+      data: {
+        firstName: "Redacted",
+        lastName: null,
+        company: null,
+        email: null,
+        phone: null,
+        whatsapp: null,
+        address: null,
+        suburb: null,
+        city: null,
+        province: null,
+        postalCode: null,
+        notes: null,
+        marketingOptOut: true,
+        deletedAt: new Date(),
+        deletedByName: user.name,
+        deleteReason: "POPIA erasure request",
+      },
+    }),
+    basePrisma.lead.updateMany({
+      where: { contactId },
+      data: { name: "Redacted", email: null, phone: null },
+    }),
+    ...erase([contactId], "contact"),
+    ...erase(leadIds, "lead"),
+    ...erase(quoteIds, "quote"),
+    ...erase(caseIds, "case"),
+    basePrisma.consentRecord.create({
+      data: {
+        contactId,
+        type: "data_processing",
+        granted: false,
+        source: "admin",
+        note: "Erasure request",
+        createdById: user.id,
+      },
+    }),
+  ]);
   await logAudit({
     action: "privacy.erased",
     summary: "POPIA erasure — personal data redacted for a contact",
