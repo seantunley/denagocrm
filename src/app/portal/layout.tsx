@@ -1,8 +1,13 @@
 import Image from "next/image";
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import PortalNav from "@/components/PortalNav";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 
-export default function PortalLayout({ children }: { children: React.ReactNode }) {
+export default async function PortalLayout({ children }: { children: React.ReactNode }) {
+  // The customer portal is itself an optional module; when switched off in
+  // Settings → Modules the whole portal (including login) is unavailable.
+  if (!(await isModuleEnabled("portal"))) notFound();
   return (
     <div className="portal-shell relative min-h-screen overflow-hidden bg-[#090b0a] text-slate-100">
       <div className="portal-shell-ambient pointer-events-none fixed -right-48 -top-56 size-[600px] rounded-full bg-orange-600/[0.08] blur-[120px]" />

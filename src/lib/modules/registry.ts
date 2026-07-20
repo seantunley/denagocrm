@@ -18,7 +18,8 @@ export type ModuleId =
   | "marketing"
   | "automation"
   | "automotive"
-  | "commerce";
+  | "commerce"
+  | "portal";
 
 export type AppModule = {
   id: ModuleId;
@@ -81,6 +82,12 @@ export const MODULE_REGISTRY: AppModule[] = [
     label: "Stock & inventory",
     description: "Stock units, products and purchase orders.",
     routePrefixes: ["/stock", "/products"],
+  },
+  {
+    id: "portal",
+    label: "Customer portal",
+    description: "Customer-facing self-service portal: documents, profile and support.",
+    routePrefixes: ["/portal"],
   },
 ];
 
