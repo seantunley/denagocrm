@@ -227,6 +227,8 @@ export async function recordInboundWhatsApp(
       userId: firstUser.id,
     },
   });
+  const { reopenThreadOnInbound } = await import("@/lib/reopenThread");
+  await reopenThreadOnInbound(contactId, leadId, "whatsapp");
 
   // Notify on every inbound — WhatsApp is the primary contact channel. Opens the
   // Messages app so replies aren't lost in the CRM.

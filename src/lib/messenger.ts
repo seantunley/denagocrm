@@ -289,6 +289,8 @@ export async function recordInboundDm(
         },
       });
     }
+    const { reopenThreadOnInbound } = await import("@/lib/reopenThread");
+    await reopenThreadOnInbound(contact.id, leadId, platform);
   }
   const pushBody =
     text ||
