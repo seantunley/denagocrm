@@ -4,6 +4,7 @@ import AutoRefresh from "@/components/AutoRefresh";
 import { listTickets } from "@/lib/helpdesk";
 import { statusMeta } from "@/lib/helpdesk-constants";
 import { StatusPill } from "@/components/visual-system";
+import InstallAppButton from "@/components/InstallAppButton";
 import { formatDateTime } from "@/lib/format";
 
 export const metadata = { title: "Help desk — Denago Messages" };
@@ -21,6 +22,8 @@ export default async function MessagesCasesPage() {
           {tickets.length} open {tickets.length === 1 ? "case" : "cases"}
         </p>
       </div>
+
+      <InstallAppButton />
 
       {tickets.length === 0 ? (
         <div className="card max-w-2xl text-sm text-slate-400">
