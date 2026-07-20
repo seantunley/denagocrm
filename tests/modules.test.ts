@@ -71,6 +71,9 @@ test("moduleForPath maps routes to the owning pack (unknown → core)", () => {
   assert.equal(moduleForPath("/inbox"), "inbox");
   assert.equal(moduleForPath("/messages"), "inbox");
   assert.equal(moduleForPath("/messages/cases"), "support");
+  // The Messages-PWA landing route is core so the module guard never blocks it
+  // before its permission-aware redirect runs (longest-prefix beats "/messages").
+  assert.equal(moduleForPath("/messages/start"), "core");
   assert.equal(moduleForPath("/cases"), "support");
   assert.equal(moduleForPath("/campaigns"), "marketing");
   assert.equal(moduleForPath("/chatbot"), "automation");

@@ -42,6 +42,11 @@ export const MODULE_REGISTRY: AppModule[] = [
       "/documents", "/signatures", "/signing-workflows", "/duplicates",
       "/reports", "/targets", "/forecast", "/search", "/audit", "/trash",
       "/settings", "/help", "/library", "/document-studio", "/health",
+      // The Messages-PWA landing route redirects to Chats/Help desk by
+      // permission, so it must be reachable whether Inbox or Support is the
+      // enabled pack — classify it core. Longest-prefix match keeps it here
+      // ("/messages/start" > "/messages") while plain "/messages" stays inbox.
+      "/messages/start",
     ],
   },
   {
