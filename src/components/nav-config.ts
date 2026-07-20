@@ -7,6 +7,7 @@ import {
   SquareKanban,
   FileText,
   FolderOpen,
+  Library,
   Truck,
   Users,
   ListChecks,
@@ -79,6 +80,7 @@ export function buildNav(
   if (can("documents.view_all", "documents.view_owned", "documents.upload", "documents.manage", "document_templates.manage")) {
     crmLinks.push({ href: "/documents", label: "Documents", icon: FolderOpen });
   }
+  crmLinks.push({ href: "/library", label: "Document library", icon: Library });
   if (crmLinks.length) groups.push({ key: "crm", label: "CRM", links: crmLinks });
 
   const marketingLinks: NavLink[] = [];

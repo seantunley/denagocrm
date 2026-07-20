@@ -49,7 +49,6 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     items: [
       { key: "products", label: "Products", keywords: ["catalog", "pricing"] },
       { key: "stock", label: "Stock labels", keywords: ["stock", "inventory", "labels", "demo", "consignment", "showroom"] },
-      { key: "library", label: "Library", keywords: ["document library", "files", "attachments"] },
     ],
   },
   {

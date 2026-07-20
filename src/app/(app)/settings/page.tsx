@@ -39,7 +39,6 @@ import { decryptValue } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
 import AutomationsPage from "../automations/page";
 import ProductsPage from "../products/page";
-import LibraryPage from "../library/page";
 import { addStockLabel, removeStockLabel } from "@/app/actions/stock";
 import { getStockLabels } from "@/lib/stockLabels";
 import {
@@ -1011,7 +1010,6 @@ export default async function SettingsPage({
       )}
 
       {tab === "products" && <ProductsPage />}
-      {tab === "library" && <LibraryPage />}
 
       {tab === "integrations" && (
         <div className="max-w-3xl">
