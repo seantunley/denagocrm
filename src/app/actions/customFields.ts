@@ -12,7 +12,6 @@ import {
 } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import {
-  CUSTOM_ENTITY_IDS,
   isCustomEntity,
   isFieldType,
   slugifyKey,
@@ -146,5 +145,3 @@ export async function saveCustomFieldValues(
   }
   revalidatePath(`${basePath[entity]}/${recordId}`);
 }
-
-export { CUSTOM_ENTITY_IDS };

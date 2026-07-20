@@ -16,6 +16,7 @@ import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
 import LeadTimeline from "@/components/LeadTimeline";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import MarkLeadViewed from "@/components/MarkLeadViewed";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
 import Tabs from "@/components/Tabs";
@@ -250,6 +251,8 @@ export default async function LeadDetailPage({
                         </pre>
                       </details>
                     )}
+
+                    <CustomFieldsCard entity="lead" recordId={lead.id} />
                   </>
                 ),
               },
