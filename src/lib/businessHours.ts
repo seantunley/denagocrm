@@ -51,16 +51,33 @@ export function nextStepDueDate(
     Date.UTC(sast.getUTCFullYear(), sast.getUTCMonth(), sast.getUTCDate())
   );
   day.setUTCDate(day.getUTCDate() + days);
-  if (opts.skipWeekends) {
+
+  const skipWeekend = () => {
+    if (!opts.skipWeekends) return;
     const dow = day.getUTCDay(); // 0 = Sunday, 6 = Saturday
     if (dow === 6) day.setUTCDate(day.getUTCDate() + 2);
     else if (dow === 0) day.setUTCDate(day.getUTCDate() + 1);
-  }
-  const yyyy = day.getUTCFullYear();
-  const mm = String(day.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(day.getUTCDate()).padStart(2, "0");
-  const HH = String(hour).padStart(2, "0");
+  };
   // Build from an explicit +02:00 offset so the moment is fixed regardless of
   // where the code runs (see moveLeadToTestDrive in src/app/actions/leads.ts).
-  return new Date(`${yyyy}-${mm}-${dd}T${HH}:00:00+02:00`);
+  const build = () => {
+    const yyyy = day.getUTCFullYear();
+    const mm = String(day.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(day.getUTCDate()).padStart(2, "0");
+    const HH = String(hour).padStart(2, "0");
+    return new Date(`${yyyy}-${mm}-${dd}T${HH}:00:00+02:00`);
+  };
+
+  skipWeekend();
+  let due = build();
+  // A same-day schedule (e.g. activityDueDays=0) can land in the past once the
+  // configured hour has already passed; roll forward a (week)day so the task —
+  // and its hour-before push via runActivityReminders (dueDate > now) — is
+  // always in the future.
+  if (due.getTime() <= base.getTime()) {
+    day.setUTCDate(day.getUTCDate() + 1);
+    skipWeekend();
+    due = build();
+  }
+  return due;
 }

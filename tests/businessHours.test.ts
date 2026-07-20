@@ -74,11 +74,20 @@ test("applies the days offset in SAST", () => {
   assert.equal(p.hour, 9);
 });
 
-test("days offset of 0 keeps the same SAST day at the configured hour", () => {
-  const base = new Date("2026-01-06T23:30:00+02:00"); // Tuesday night SAST
+test("days offset of 0 keeps the same SAST day when the hour is still ahead", () => {
+  const base = new Date("2026-01-06T07:00:00+02:00"); // Tuesday 07:00 SAST, before 09:00
   const p = sastParts(nextStepDueDate(base, 0, { hour: 9, skipWeekends: true }));
-  assert.equal(p.day, 6); // same Tuesday
+  assert.equal(p.day, 6); // same Tuesday, 09:00 still in the future
   assert.equal(p.hour, 9);
+});
+
+test("days offset of 0 rolls to the next day once the configured hour has passed", () => {
+  const base = new Date("2026-01-06T23:30:00+02:00"); // Tuesday night SAST, after 09:00
+  const due = nextStepDueDate(base, 0, { hour: 9, skipWeekends: true });
+  const p = sastParts(due);
+  assert.equal(p.day, 7); // rolls forward to Wednesday
+  assert.equal(p.hour, 9);
+  assert.ok(due.getTime() > base.getTime(), "due must be in the future");
 });
 
 test("rolls a Saturday result forward to Monday when skipWeekends is on", () => {
