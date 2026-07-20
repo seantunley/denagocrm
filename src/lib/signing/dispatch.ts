@@ -27,6 +27,11 @@ function escapeText(s: string): string { return s.replace(/&/g, "&amp;").replace
 export async function notifyRecipient(recipientId: string, opts?: { reminder?: boolean }): Promise<void> {
   const r = await prisma.signatureRecipient.findUnique({ where: { id: recipientId }, include: { request: true } });
   if (!r || r.role === "viewer") return;
+  // Never notify for a request that has closed, or a recipient who already
+  // signed/declined — the request can close (void/decline/complete) between
+  // dispatch's claim and this external email/WhatsApp send.
+  if (r.request.status === "completed" || r.request.status === "declined" || r.request.status === "voided") return;
+  if (r.status === "signed" || r.status === "declined") return;
   const url = signUrl(r.token);
   const verb = opts?.reminder ? "Reminder — please sign" : "Please sign your document";
   const evType = opts?.reminder ? "reminded" : "sent";
@@ -53,11 +58,17 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
 /** Send the request: mark sent, and notify the right recipients for the ordering. */
 export async function dispatchRequest(requestId: string): Promise<{ notified: number }> {
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: { orderBy: { order: "asc" } } } });
-  // Refuse to (re)dispatch a closed request. Otherwise a declined/completed/voided
-  // request would be forced back to "sent" and its already-declined recipients
-  // re-notified, resurrecting a request that can never complete.
-  if (!req || req.status === "completed" || req.status === "declined" || req.status === "voided") return { notified: 0 };
-  await prisma.signatureRequest.update({ where: { id: requestId }, data: { status: "sent", sentAt: req.sentAt ?? new Date() } });
+  if (!req) return { notified: 0 };
+  // CONDITIONALLY claim the (re)send: only move a still-open request to "sent".
+  // A read-check + unconditional update was a TOCTOU — a concurrent void/decline
+  // could close the request between the two, and the unconditional update would
+  // force it back to "sent", resurrecting a dead signing link and re-notifying
+  // declined recipients. count !== 1 → it just closed; do nothing.
+  const claimed = await prisma.signatureRequest.updateMany({
+    where: { id: requestId, status: { notIn: ["completed", "declined", "voided"] } },
+    data: { status: "sent", sentAt: req.sentAt ?? new Date() },
+  });
+  if (claimed.count !== 1) return { notified: 0 };
 
   const signers = req.recipients.filter((r) => r.role !== "viewer" && r.status !== "signed");
   const targets = req.ordering === "sequential" ? signers.slice(0, 1) : signers;

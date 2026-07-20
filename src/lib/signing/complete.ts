@@ -5,7 +5,7 @@ import { parseDocument } from "@/lib/doceditor/model";
 import { renderDocumentHtml, type StampField } from "@/lib/doceditor/serialize";
 import { htmlToPdf } from "@/lib/customDocs";
 import { sealPdf } from "@/lib/pdf/seal";
-import { saveFile, readFile } from "@/lib/storage";
+import { saveFile, readFile, deleteFile } from "@/lib/storage";
 import { sendEmail } from "@/lib/email";
 import { formatDateTime } from "@/lib/format";
 import { bindCtx, logoDataUri } from "./render";
@@ -84,51 +84,62 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   const hash = crypto.createHash("sha256").update(pdf).digest("hex");
   const storedName = await saveFile(pdf, `${req.title} (signed).pdf`, "application/pdf");
 
-  const uploaderId = req.createdById || (await prisma.user.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } }))?.id;
-  const document = uploaderId
-    ? await prisma.document.create({
-        data: {
-          fileName: `${req.title} (signed).pdf`, storedName, mimeType: "application/pdf", sizeBytes: pdf.length,
-          quoteId: req.quoteId, jobCardId: req.jobCardId, contactId: req.contactId, tag: "signed", uploadedById: uploaderId,
-        },
-      })
-    : null;
+  // Keep the sealed PDF blob ONLY if this call successfully claims completion.
+  // saveFile ran before the claim, so the losing paths need a paired cleanup:
+  // Document.create throws, or the claim is lost to a concurrent void/decline.
+  // Once the claim succeeds (committed) the completion is durable and the file
+  // must stay even if a post-completion side-effect or email later throws.
+  let committed = false;
+  try {
+    const uploaderId = req.createdById || (await prisma.user.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } }))?.id;
+    const document = uploaderId
+      ? await prisma.document.create({
+          data: {
+            fileName: `${req.title} (signed).pdf`, storedName, mimeType: "application/pdf", sizeBytes: pdf.length,
+            quoteId: req.quoteId, jobCardId: req.jobCardId, contactId: req.contactId, tag: "signed", uploadedById: uploaderId,
+          },
+        })
+      : null;
 
-  // Conditionally claim completion: only transition a still-open request. If a
-  // concurrent void/decline closed it after our initial read, count === 0 and we
-  // abort BEFORE running post-completion or emailing the sealed PDF — otherwise a
-  // caller could receive a successful "voided" result while the document is still
-  // distributed as completed. Drop the signed document we optimistically created.
-  const claimed = await prisma.signatureRequest.updateMany({
-    where: { id: requestId, status: { notIn: ["completed", "voided", "declined"] } },
-    data: { status: "completed", completedAt: new Date(), signedPdfRef: storedName, signedPdfHash: hash, signedDocId: document?.id ?? null },
-  });
-  if (claimed.count === 0) {
-    if (document) await prisma.document.delete({ where: { id: document.id } }).catch(() => {});
-    return;
-  }
-  await logSignEvent(requestId, { type: "completed", actor: "system", metadata: { hash } });
-
-  // Fire CRM side-effects (quote accepted → lead won, job card signed). Parity
-  // with the legacy /sign flow. Best-effort: never unwinds the completed request.
-  const firstSigner = req.recipients.find((r) => r.status === "signed" && r.role !== "viewer");
-  await runPostCompletion({
-    id: req.id,
-    title: req.title,
-    quoteId: req.quoteId,
-    jobCardId: req.jobCardId,
-    signedByName: firstSigner?.signedName || firstSigner?.name || null,
-    signedPdfHash: hash,
-    signedDocId: document?.id ?? null,
-  });
-
-  // Email the sealed PDF to every recipient with an address.
-  for (const r of req.recipients) {
-    if (!r.email) continue;
-    await sendEmail({
-      to: r.email, subject: `Completed & signed: ${req.title}`,
-      text: `Hi ${r.name},\n\nEveryone has signed "${req.title}". The final sealed PDF is attached.\n\nDenago Cape Town`,
-      attachments: [{ filename: `${req.title}.pdf`, content: pdf, contentType: "application/pdf" }],
+    // Conditionally claim completion: only transition a still-open request. If a
+    // concurrent void/decline closed it after our initial read, count === 0 and
+    // we abort BEFORE running post-completion or emailing the sealed PDF —
+    // otherwise a caller could receive a successful "voided" result while the
+    // document is still distributed as completed. Drop the optimistic document.
+    const claimed = await prisma.signatureRequest.updateMany({
+      where: { id: requestId, status: { notIn: ["completed", "voided", "declined"] } },
+      data: { status: "completed", completedAt: new Date(), signedPdfRef: storedName, signedPdfHash: hash, signedDocId: document?.id ?? null },
     });
+    if (claimed.count === 0) {
+      if (document) await prisma.document.delete({ where: { id: document.id } }).catch(() => {});
+      return;
+    }
+    committed = true;
+    await logSignEvent(requestId, { type: "completed", actor: "system", metadata: { hash } });
+
+    // Fire CRM side-effects (quote accepted → lead won, job card signed). Parity
+    // with the legacy /sign flow. Best-effort: never unwinds the completed request.
+    const firstSigner = req.recipients.find((r) => r.status === "signed" && r.role !== "viewer");
+    await runPostCompletion({
+      id: req.id,
+      title: req.title,
+      quoteId: req.quoteId,
+      jobCardId: req.jobCardId,
+      signedByName: firstSigner?.signedName || firstSigner?.name || null,
+      signedPdfHash: hash,
+      signedDocId: document?.id ?? null,
+    });
+
+    // Email the sealed PDF to every recipient with an address.
+    for (const r of req.recipients) {
+      if (!r.email) continue;
+      await sendEmail({
+        to: r.email, subject: `Completed & signed: ${req.title}`,
+        text: `Hi ${r.name},\n\nEveryone has signed "${req.title}". The final sealed PDF is attached.\n\nDenago Cape Town`,
+        attachments: [{ filename: `${req.title}.pdf`, content: pdf, contentType: "application/pdf" }],
+      });
+    }
+  } finally {
+    if (!committed) await deleteFile(storedName).catch(() => {});
   }
 }
