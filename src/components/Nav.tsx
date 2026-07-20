@@ -46,14 +46,21 @@ export default function Nav({
   modules = "crm,workshop,reports,inbox",
   isAdmin = false,
   permissions = [],
+  enabledModules,
   badges = {},
 }: {
   modules?: string;
   isAdmin?: boolean;
   permissions?: string[];
+  enabledModules?: string[];
   badges?: Record<string, number>;
 }) {
-  const { topLinks, groups } = buildNav(modules, isAdmin, permissions);
+  const { topLinks, groups } = buildNav(
+    modules,
+    isAdmin,
+    permissions,
+    enabledModules ? new Set(enabledModules) : undefined,
+  );
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 

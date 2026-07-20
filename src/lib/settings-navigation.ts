@@ -20,6 +20,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "Workspace",
     items: [
       { key: "overview", label: "Settings overview", keywords: ["home", "all settings", "configuration"] },
+      { key: "modules", label: "Modules", href: "/settings/modules", keywords: ["features", "packs", "enable", "disable", "automotive", "workshop", "inbox", "add-ons"] },
     ],
   },
   {

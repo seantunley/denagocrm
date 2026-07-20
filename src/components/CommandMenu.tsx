@@ -23,14 +23,21 @@ export default function CommandMenu({
   modules,
   isAdmin,
   permissions = [],
+  enabledModules,
 }: {
   modules: string;
   isAdmin: boolean;
   permissions?: string[];
+  enabledModules?: string[];
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const { topLinks, groups } = buildNav(modules, isAdmin);
+  const { topLinks, groups } = buildNav(
+    modules,
+    isAdmin,
+    [],
+    enabledModules ? new Set(enabledModules) : undefined,
+  );
   const granted = new Set(permissions);
   const can = (...keys: string[]) => isAdmin || keys.some((key) => granted.has(key));
   const quickActions = [

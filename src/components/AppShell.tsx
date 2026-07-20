@@ -47,7 +47,7 @@ function initials(name: string) {
     .join("");
 }
 
-function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0 }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number }) {
+function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; enabledModules?: string[] }) {
   const isOwner = user.role === "owner";
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-sidebar">
@@ -80,7 +80,7 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0 }: { user: Shel
 
       {/* Nav */}
       <div className="relative flex-1 overflow-y-auto px-3 py-3">
-        <Nav modules={user.modules} isAdmin={isOwner} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting }} />
+        <Nav modules={user.modules} isAdmin={isOwner} enabledModules={enabledModules} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting }} />
       </div>
 
       {/* Help, Settings & user */}
@@ -194,11 +194,13 @@ export default function AppShell({
   user,
   inboxWaiting = 0,
   casesWaiting = 0,
+  enabledModules,
   children,
 }: {
   user: ShellUser;
   inboxWaiting?: number;
   casesWaiting?: number;
+  enabledModules?: string[];
   children: ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -207,7 +209,7 @@ export default function AppShell({
   return (
     <TooltipProvider delayDuration={250}>
     <div className="min-h-screen">
-      <CommandMenu modules={user.modules} isAdmin={user.role === "owner"} permissions={user.permissions} />
+      <CommandMenu modules={user.modules} isAdmin={user.role === "owner"} permissions={user.permissions} enabledModules={enabledModules} />
       <QuickCreateDialog />
       <Toaster />
 
@@ -240,7 +242,7 @@ export default function AppShell({
       <Sheet key={pathname} open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="left" className="w-72 border-sidebar-border p-0">
           <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} />
+          <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} enabledModules={enabledModules} />
         </SheetContent>
       </Sheet>
 
