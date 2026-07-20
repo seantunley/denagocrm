@@ -10,11 +10,31 @@ import {
 } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { reserveSlot } from "@/lib/bookingSlots";
+import { ensureTimelinePin } from "@/lib/timelinePins";
+import {
+  FOLLOW_UP_TYPE,
+  ensureFollowUpTime,
+  followUpDueDateError,
+  followUpValidationError,
+} from "@/lib/followUp";
 
 const str = (formData: FormData, key: string) => {
   const value = String(formData.get(key) ?? "").trim();
   return value === "" ? null : value;
 };
+
+// Refresh the lead/contact detail pages whose overdue/pending state depends on
+// an activity, so completing/cancelling/rescheduling from ANY surface updates
+// the record's Live timeline.
+function revalidateRecordPages(activity: {
+  leadId: string | null;
+  contactId: string | null;
+  lead?: { contactId: string | null } | null;
+}) {
+  if (activity.leadId) revalidatePath(`/leads/${activity.leadId}`);
+  const contactId = activity.contactId ?? activity.lead?.contactId;
+  if (contactId) revalidatePath(`/contacts/${contactId}`);
+}
 
 async function assertLinks(
   user: PermissionUser,
@@ -95,17 +115,29 @@ export async function scheduleActivity(formData: FormData) {
       throw error;
     }
   } else {
+    let dueDate: Date;
+    if (type === FOLLOW_UP_TYPE) {
+      // A follow-up MUST have a note and a real, future time — the latter so the
+      // existing hour-before reminder push (which skips midnight) fires.
+      dueDate = rawDue
+        ? new Date(`${ensureFollowUpTime(rawDue)}:00+02:00`)
+        : new Date(NaN);
+      const problem = followUpValidationError({ note, dueDate }, new Date());
+      if (problem) throw new Error(problem);
+    } else {
+      dueDate = rawDue
+        ? rawDue.includes("T")
+          ? new Date(`${rawDue}:00+02:00`)
+          : new Date(rawDue)
+        : new Date();
+    }
     activity = await prisma.activity.create({
       data: {
         type,
         category: null,
         summary,
         note,
-        dueDate: rawDue
-          ? rawDue.includes("T")
-            ? new Date(`${rawDue}:00+02:00`)
-            : new Date(rawDue)
-          : new Date(),
+        dueDate,
         location,
         leadId,
         contactId,
@@ -113,6 +145,12 @@ export async function scheduleActivity(formData: FormData) {
         createdById: user.id,
       },
     });
+  }
+
+  // Auto-pin a new follow-up to the top of the timeline. It stays pinned until
+  // manually unpinned (we never auto-unpin, even on completion).
+  if (activity.type === FOLLOW_UP_TYPE) {
+    await ensureTimelinePin("activity", activity.id, user.id);
   }
 
   const assignee =
@@ -159,6 +197,7 @@ async function finishActivity(id: string, note: string) {
       },
     });
   }
+  revalidateRecordPages(activity);
   return activity;
 }
 
@@ -232,6 +271,7 @@ export async function rescheduleActivity(
   revalidatePath("/activities");
   revalidatePath("/");
   revalidatePath("/calendar");
+  revalidateRecordPages(activity);
   return { ok: true };
 }
 
@@ -287,38 +327,55 @@ export async function scheduleFollowUp(data: {
 
 export async function cancelActivity(id: string, revalidate: string) {
   await requireActivityAccess(id);
-  await prisma.activity.update({
+  const activity = await prisma.activity.update({
     where: { id },
     data: { status: "canceled" },
+    include: { lead: true },
   });
   revalidatePath(revalidate);
   revalidatePath("/activities");
   revalidatePath("/");
+  revalidateRecordPages(activity);
 }
 
 export async function updateActivity(id: string, formData: FormData) {
   const { user } = await requireActivityAccess(id);
   const summary = String(formData.get("summary") ?? "").trim();
   if (!summary) return;
+  const type = str(formData, "type") ?? "todo";
   const rawDue = str(formData, "dueDate");
+
+  // Editing an existing follow-up must preserve its "real future time"
+  // invariant: the hour-before reminder push skips midnight, so a follow-up
+  // edited to 00:00 or a past time would silently miss its nudge. The edit form
+  // neither submits nor persists a note, so we enforce ONLY the due-date rule
+  // here — we never newly require a note nor touch the existing one.
+  let duePatch = {};
+  if (rawDue) {
+    let dueDate: Date;
+    if (type === FOLLOW_UP_TYPE) {
+      dueDate = new Date(`${ensureFollowUpTime(rawDue)}:00+02:00`);
+      const problem = followUpDueDateError(dueDate, new Date());
+      if (problem) throw new Error(problem);
+    } else {
+      dueDate = rawDue.endsWith("T00:00")
+        ? new Date(rawDue.slice(0, 10))
+        : rawDue.includes("T")
+          ? new Date(`${rawDue}:00+02:00`)
+          : new Date(rawDue);
+    }
+    duePatch = { dueDate, reminderSentAt: null };
+  }
+
   const activity = await prisma.activity.update({
     where: { id },
     data: {
-      type: str(formData, "type") ?? "todo",
+      type,
       category: formData.get("workshop") === "on" ? "workshop" : null,
       summary,
       location: str(formData, "location"),
       assignedToId: str(formData, "assignedToId") ?? user.id,
-      ...(rawDue
-        ? {
-            dueDate: rawDue.endsWith("T00:00")
-              ? new Date(rawDue.slice(0, 10))
-              : rawDue.includes("T")
-                ? new Date(`${rawDue}:00+02:00`)
-                : new Date(rawDue),
-            reminderSentAt: null,
-          }
-        : {}),
+      ...duePatch,
     },
   });
   await logAudit({

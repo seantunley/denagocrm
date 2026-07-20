@@ -9,6 +9,7 @@ export const activityIcons: Record<string, string> = {
   meeting: "🤝",
   whatsapp: "💬",
   test_drive: "🚗",
+  follow_up: "🔁",
   todo: "☑️",
 };
 
@@ -71,7 +72,7 @@ export default function ActivityPanel({
         {leadId && <input type="hidden" name="leadId" value={leadId} />}
         {contactId && <input type="hidden" name="contactId" value={contactId} />}
         <input type="hidden" name="revalidate" value={revalidate} />
-        <ActivityTypeFields />
+        <ActivityTypeFields followUpNote />
         <div className="col-span-1 md:col-span-2">
           <label className="label">What needs doing?</label>
           <input name="summary" className="input" required placeholder="e.g. Follow up on quote" />

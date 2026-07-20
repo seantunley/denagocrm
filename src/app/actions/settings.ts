@@ -6,6 +6,7 @@ import crypto from "crypto";
 import { basePrisma, prisma } from "@/lib/db";
 import { createSessionCookie, requireUser, requireOwner } from "@/lib/auth";
 import { putSetting } from "@/lib/settings";
+import { setNextStepScheduling } from "@/lib/nextStepConfig";
 import { PUSH_KINDS } from "@/lib/push";
 import { logAuditStrict } from "@/lib/audit";
 import { bumpUserSessionVersion } from "@/lib/userSecurity";
@@ -166,6 +167,16 @@ export async function saveWorkshopSettings(formData: FormData) {
   for (const [key, value] of Object.entries(entries)) {
     await prisma.appSetting.upsert({ where: { key }, update: { value }, create: { key, value } });
   }
+  revalidatePath("/settings");
+}
+
+export async function saveNextStepScheduling(formData: FormData) {
+  await requireOwner();
+  const hour = parseInt(String(formData.get("hour") ?? ""), 10);
+  // An unchecked checkbox submits nothing, so absence means "don't skip".
+  const skipWeekends = formData.get("skipWeekends") != null;
+  await setNextStepScheduling({ hour, skipWeekends });
+  revalidatePath("/automations");
   revalidatePath("/settings");
 }
 

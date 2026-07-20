@@ -7,6 +7,8 @@ import {
   deleteAutomationRule,
   updateAutomationRule,
 } from "@/app/actions/automations";
+import { saveNextStepScheduling } from "@/app/actions/settings";
+import { getNextStepScheduling } from "@/lib/nextStepConfig";
 import AutomationRuleForm from "@/components/AutomationRuleForm";
 import ModalTrigger from "@/components/Modal";
 import ConfirmDelete from "@/components/ConfirmDelete";
@@ -15,14 +17,16 @@ import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 
 export default async function AutomationsPage() {
-  await requireUser();
-  const [rules, stages, users, templates, logs] = await Promise.all([
+  const user = await requireUser();
+  const [rules, stages, users, templates, logs, scheduling] = await Promise.all([
     prisma.automationRule.findMany({ orderBy: { createdAt: "asc" } }),
     prisma.pipelineStage.findMany({ orderBy: { order: "asc" } }),
     prisma.user.findMany({ orderBy: { name: "asc" } }),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
     prisma.automationLog.findMany({ orderBy: { createdAt: "desc" }, take: 25 }),
+    getNextStepScheduling(),
   ]);
+  const isOwner = user.role === "owner";
 
   const leadIds = [...new Set(logs.map((l) => l.leadId))];
   const leads = await prisma.lead.findMany({ where: { id: { in: leadIds } } });
@@ -119,6 +123,49 @@ export default async function AutomationsPage() {
           </ul>
         )}
       </div>
+
+      {isOwner && (
+        <div className="card">
+          <h2 className="font-semibold mb-1">Next-step scheduling</h2>
+          <p className="text-sm text-slate-400 mb-4">
+            Controls when auto-created follow-up tasks are due.
+          </p>
+          <form
+            action={saveNextStepScheduling}
+            className="grid gap-4 sm:grid-cols-2 sm:items-end"
+          >
+            <div>
+              <label className="label" htmlFor="nss-hour">
+                Work-hour for follow-ups
+              </label>
+              <select
+                id="nss-hour"
+                name="hour"
+                className="input"
+                defaultValue={String(scheduling.hour)}
+              >
+                {Array.from({ length: 24 }, (_, h) => (
+                  <option key={h} value={h}>
+                    {`${String(h).padStart(2, "0")}:00`}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-slate-300">
+              <input
+                type="checkbox"
+                name="skipWeekends"
+                defaultChecked={scheduling.skipWeekends}
+                className="size-4 rounded border-slate-700 bg-slate-900 accent-orange-500"
+              />
+              Skip weekends (roll to Monday)
+            </label>
+            <div className="sm:col-span-2">
+              <button className="btn-primary">Save scheduling</button>
+            </div>
+          </form>
+        </div>
+      )}
 
       <div className="card">
         <h2 className="font-semibold mb-4">Recent runs</h2>

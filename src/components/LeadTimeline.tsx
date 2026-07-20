@@ -1,4 +1,5 @@
-import { Pin, PinOff } from "lucide-react";
+import { Check, Pin, PinOff } from "lucide-react";
+import { completeActivity } from "@/app/actions/activities";
 import {
   addCommunication,
   toggleCommunicationPin,
@@ -14,6 +15,7 @@ import {
   type TimelinePinKind,
 } from "@/lib/timelinePins";
 import { compareTimelineItems } from "@/lib/timelineOrdering";
+import { FOLLOW_UP_TYPE } from "@/lib/followUp";
 import PasteImageInput from "@/components/PasteImageInput";
 
 /* eslint-disable @next/next/no-img-element */
@@ -41,6 +43,7 @@ const icons: Record<string, React.ReactNode> = {
   activity: "✓",
   todo: "✓",
   test_drive: "🚗",
+  follow_up: "🔁",
   document: "📄",
   creation: "🟢",
 };
@@ -59,6 +62,7 @@ type Item = {
   who: string;
   when: Date;
   pending?: boolean;
+  activityId?: string;
   activityStatus?: string;
   pinnedAt?: Date | null;
   pinTarget?: PinTarget;
@@ -103,6 +107,7 @@ export default async function LeadTimeline({
     id: string;
     type: string;
     summary: string;
+    note?: string | null;
     location?: string | null;
     dueDate: Date;
     status: string;
@@ -141,10 +146,16 @@ export default async function LeadTimeline({
       id: `act-${activity.id}`,
       icon: icons[activity.type] ?? icons.activity,
       title: activity.summary,
-      body: activity.location ? `📍 ${activity.location}` : null,
+      body:
+        activity.type === FOLLOW_UP_TYPE && activity.note
+          ? activity.note
+          : activity.location
+            ? `📍 ${activity.location}`
+            : null,
       who: activity.assignedTo?.name ?? "Unassigned",
       when: activity.dueDate,
       pending: activity.status === "planned",
+      activityId: activity.id,
       activityStatus: activity.status,
       pinnedAt: pinnedAt("activity", activity.id),
       pinTarget: { kind: "activity", itemId: activity.id },
@@ -202,6 +213,33 @@ export default async function LeadTimeline({
             : item.pinTarget?.kind === "lead_note"
               ? toggleLeadNotePin.bind(null, item.pinTarget.itemId, revalidate)
               : null;
+
+    const canComplete = Boolean(item.pending && item.activityId);
+
+    const pinButton =
+      item.pinTarget && pinAction ? (
+        <form action={pinAction} className="shrink-0">
+          <button
+            type="submit"
+            title={isPinned ? "Unpin from the top" : "Pin to the top"}
+            aria-label={
+              isPinned ? "Unpin timeline entry" : "Pin timeline entry"
+            }
+            className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400/70 ${
+              isPinned
+                ? "border-orange-400/50 bg-orange-500/20 text-orange-100 shadow-sm shadow-orange-950/30 hover:bg-orange-500/30"
+                : "border-slate-600 bg-slate-800 text-slate-200 hover:border-orange-400/50 hover:bg-orange-500/10 hover:text-orange-100"
+            }`}
+          >
+            {isPinned ? (
+              <PinOff className="size-4" />
+            ) : (
+              <Pin className="size-4" />
+            )}
+            {isPinned ? "Unpin" : "Pin"}
+          </button>
+        </form>
+      ) : null;
 
     return (
       <li
@@ -271,30 +309,33 @@ export default async function LeadTimeline({
             </p>
           </div>
 
-          {item.pinTarget && pinAction && (
-            <form action={pinAction} className="shrink-0">
+          {!canComplete && pinButton}
+        </div>
+
+        {item.pending && item.activityId && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {pinButton}
+            <form
+              action={completeActivity.bind(null, item.activityId)}
+              className="flex min-w-0 flex-1 basis-full flex-wrap items-center gap-2 sm:basis-auto sm:flex-nowrap"
+            >
+              <input type="hidden" name="revalidate" value={revalidate} />
+              <input
+                type="text"
+                name="note"
+                placeholder="Add a note (optional)"
+                className="input h-9 min-w-0 flex-1 basis-full text-xs sm:w-52 sm:basis-auto"
+              />
               <button
                 type="submit"
-                title={isPinned ? "Unpin from the top" : "Pin to the top"}
-                aria-label={
-                  isPinned ? "Unpin timeline entry" : "Pin timeline entry"
-                }
-                className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400/70 ${
-                  isPinned
-                    ? "border-orange-400/50 bg-orange-500/20 text-orange-100 shadow-sm shadow-orange-950/30 hover:bg-orange-500/30"
-                    : "border-slate-600 bg-slate-800 text-slate-200 hover:border-orange-400/50 hover:bg-orange-500/10 hover:text-orange-100"
-                }`}
+                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/50 bg-emerald-500/15 px-3 text-xs font-semibold text-emerald-100 transition-all hover:border-emerald-400/70 hover:bg-emerald-500/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
               >
-                {isPinned ? (
-                  <PinOff className="size-4" />
-                ) : (
-                  <Pin className="size-4" />
-                )}
-                {isPinned ? "Unpin" : "Pin"}
+                <Check className="size-4" />
+                Mark done
               </button>
             </form>
-          )}
-        </div>
+          </div>
+        )}
       </li>
     );
   };
