@@ -2,6 +2,8 @@ import Link from "next/link";
 import { Prisma } from "@prisma/client";
 import { Plus, List, Trophy, Download } from "lucide-react";
 import { prisma } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth";
+import { hasPermission } from "@/lib/permissions";
 import { getDailyForecast } from "@/lib/weather";
 import KanbanBoard, { type KanbanStage } from "@/components/KanbanBoard";
 import ModalTrigger from "@/components/Modal";
@@ -20,6 +22,10 @@ type PlannedActivityRow = {
 
 export default async function LeadsPage() {
   const now = new Date();
+  // Gate the Ads export link to the same permission the API route enforces
+  // (owner or reports.view_all), so staff without it don't see a dead link.
+  const currentUser = await getCurrentUser();
+  const canExportAds = currentUser ? await hasPermission(currentUser, "reports.view_all") : false;
   const [stages, products, contacts, users] = await Promise.all([
     prisma.pipelineStage.findMany({
       orderBy: { order: "asc" },
@@ -189,16 +195,18 @@ export default async function LeadsPage() {
             Won / Lost
           </Link>
         </Button>
-        <Button asChild variant="ghost" size="sm">
-          <a
-            href="/api/export/ads-conversions"
-            download
-            title="Won leads that came from a Google Ads click, as a CSV for Google Ads → Conversions → Uploads"
-          >
-            <Download className="size-4" />
-            Ads export
-          </a>
-        </Button>
+        {canExportAds && (
+          <Button asChild variant="ghost" size="sm">
+            <a
+              href="/api/export/ads-conversions"
+              download
+              title="Won leads that came from a Google Ads click, as a CSV for Google Ads → Conversions → Uploads"
+            >
+              <Download className="size-4" />
+              Ads export
+            </a>
+          </Button>
+        )}
         <Button asChild variant="outline" size="sm">
           <Link href="/leads/list">
             <List className="size-4" />

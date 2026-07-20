@@ -8,6 +8,8 @@ import { syncFacebookLeads } from "@/lib/metaLeadSync";
 import { syncGoogleReviews } from "@/lib/googleReviews";
 import { syncInboundEmail } from "@/lib/imapSync";
 import { isAuthorizedCron } from "@/lib/cronAuth";
+import { getEnabledModuleIds } from "@/lib/modules/enabled";
+import type { ModuleId } from "@/lib/modules/registry";
 import { logError } from "@/lib/errorLog";
 import { runAutoResearch } from "@/lib/ai";
 import { runActivityReminders } from "@/lib/activityReminders";
@@ -26,21 +28,46 @@ export async function GET(req: NextRequest) {
   if (!isAuthorizedCron(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  // Load the enabled module set once, then skip any worker whose owning optional
+  // pack is off — the cron must not keep a disabled module's queues running.
+  // `null` in the response marks "skipped (module off)", distinct from 0 (ran,
+  // nothing to do) and -1 (errored). Ungated workers below are core (no owning
+  // optional module): idle lead automations, quote-signing reminders, inbound
+  // email filing, activity reminders, AI lead enrichment, health/backup.
+  const enabled = await getEnabledModuleIds().catch(() => null);
+  const on = (id: ModuleId) => enabled === null || enabled.has(id);
+
   const fired = await runIdleAutomations();
-  const remindersSent = await runServiceReminders().catch((e) => { logError("service-reminders", e); return -1; });
+  const remindersSent = on("automotive")
+    ? await runServiceReminders().catch((e) => { logError("service-reminders", e); return -1; })
+    : null;
   const quoteReminders = await runQuoteSigningReminders().catch((e) => { logError("quote-reminders", e); return -1; });
-  const fbLeads = await syncFacebookLeads().catch((e) => { logError("meta-lead-sync", e); return -1; });
-  const googleReviews = await syncGoogleReviews().catch((e) => { logError("google-reviews", e); return -1; });
+  const fbLeads = on("marketing")
+    ? await syncFacebookLeads().catch((e) => { logError("meta-lead-sync", e); return -1; })
+    : null;
+  const googleReviews = on("marketing")
+    ? await syncGoogleReviews().catch((e) => { logError("google-reviews", e); return -1; })
+    : null;
   const inboundEmail = await syncInboundEmail().catch((e) => { logError("imap-sync", e); return -1; });
   const activityReminders = await runActivityReminders().catch((e) => { logError("activity-reminders", e); return -1; });
   const aiResearch = await runAutoResearch().catch((e) => { logError("ai-auto-research", e); return -1; });
-  const campaignSent = await runCampaignQueue().catch((e) => { logError("campaign-queue", e); return -1; });
-  const surveysSent = await runSurveyQueue().catch((e) => { logError("survey-queue", e); return -1; });
-  const lifecycleSent = await runLifecycleJourneys().catch((e) => { logError("lifecycle-journeys", e); return -1; });
-  const stockActor = await basePrisma.user.findFirst({ where: { role: "owner" }, orderBy: { createdAt: "asc" }, select: { id: true, name: true } });
-  const stockReservationsExpired = stockActor
-    ? await expireReservations(stockActor).catch((e) => { logError("stock-reservation-expiry", e); return -1; })
-    : 0;
+  const campaignSent = on("marketing")
+    ? await runCampaignQueue().catch((e) => { logError("campaign-queue", e); return -1; })
+    : null;
+  const surveysSent = on("marketing")
+    ? await runSurveyQueue().catch((e) => { logError("survey-queue", e); return -1; })
+    : null;
+  const lifecycleSent = on("marketing")
+    ? await runLifecycleJourneys().catch((e) => { logError("lifecycle-journeys", e); return -1; })
+    : null;
+  const stockActor = on("commerce")
+    ? await basePrisma.user.findFirst({ where: { role: "owner" }, orderBy: { createdAt: "asc" }, select: { id: true, name: true } })
+    : null;
+  const stockReservationsExpired = !on("commerce")
+    ? null
+    : stockActor
+      ? await expireReservations(stockActor).catch((e) => { logError("stock-reservation-expiry", e); return -1; })
+      : 0;
   await runAiHealthIfDue().catch((e) => logError("ai-health", e));
   await runBackupWatchdog().catch(() => {});
   await basePrisma.errorLog

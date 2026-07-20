@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { getCurrentUser } from "@/lib/auth";
+import { hasPermission } from "@/lib/permissions";
+import { logAudit } from "@/lib/audit";
 import { leadAttribution } from "@/lib/attribution";
 
 /**
@@ -16,7 +18,14 @@ import { leadAttribution } from "@/lib/attribution";
  * different upload template, and are rare enough here to skip.
  */
 export async function GET(req: NextRequest) {
-  await requireUser();
+  // This exports every won lead's Google Click ID + deal value — commercially
+  // sensitive attribution data. Gate to owner or reports.view_all; hasPermission
+  // already returns true for owners.
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!(await hasPermission(user, "reports.view_all"))) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
   const conversionName = req.nextUrl.searchParams.get("name") || "Qualified lead (offline)";
 
   const leads = await prisma.lead.findMany({
@@ -46,6 +55,13 @@ export async function GET(req: NextRequest) {
     "Google Click ID,Conversion Name,Conversion Time,Conversion Value,Conversion Currency",
     ...rows,
   ].join("\r\n");
+
+  await logAudit({
+    action: "leads.ads_conversions_exported",
+    summary: `Exported ${rows.length} Google Ads offline conversion(s) (GCLID + deal value)`,
+    user: { id: user.id, name: user.name },
+    source: "app",
+  });
 
   return new NextResponse(csv, {
     headers: {

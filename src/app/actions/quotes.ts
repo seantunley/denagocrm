@@ -403,29 +403,49 @@ export async function createQuoteRevision(quoteId: string) {
   const max = await basePrisma.quote.aggregate({ _max: { number: true } });
   const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
   const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
-  const revision = await prisma.quote.create({
-    data: {
-      number: (max._max.number ?? 1000) + 1,
-      contactId: original.contactId,
-      leadId: original.leadId,
-      createdById: user.id,
-      validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
-      terms: original.terms,
-      revisionOfId: original.id,
-      items: {
-        create: original.items.map((i) => ({
-          description: i.description,
-          qty: i.qty,
-          unitPriceCents: i.unitPriceCents,
-          productId: i.productId,
-          colorPreference: i.colorPreference,
-        })),
-      },
-    },
+  // Custom-field values key on the quote id with no FK, so a revision starts
+  // blank unless we copy them across. Read the originals up front, then create
+  // the revision, clone the values onto its id, and supersede the original — all
+  // in one transaction so a revision never exists without its custom fields.
+  const originalCustomValues = await prisma.customFieldValue.findMany({
+    where: { recordId: original.id, def: { entity: "quote" } },
+    select: { defId: true, value: true },
   });
-  await prisma.quote.update({
-    where: { id: original.id },
-    data: { supersededAt: new Date(), signToken: null, signLinkCreatedAt: null, reminderSentAt: null },
+  const revision = await prisma.$transaction(async (tx) => {
+    const rev = await tx.quote.create({
+      data: {
+        number: (max._max.number ?? 1000) + 1,
+        contactId: original.contactId,
+        leadId: original.leadId,
+        createdById: user.id,
+        validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
+        terms: original.terms,
+        revisionOfId: original.id,
+        items: {
+          create: original.items.map((i) => ({
+            description: i.description,
+            qty: i.qty,
+            unitPriceCents: i.unitPriceCents,
+            productId: i.productId,
+            colorPreference: i.colorPreference,
+          })),
+        },
+      },
+    });
+    if (originalCustomValues.length > 0) {
+      await tx.customFieldValue.createMany({
+        data: originalCustomValues.map((v) => ({
+          defId: v.defId,
+          recordId: rev.id,
+          value: v.value,
+        })),
+      });
+    }
+    await tx.quote.update({
+      where: { id: original.id },
+      data: { supersededAt: new Date(), signToken: null, signLinkCreatedAt: null, reminderSentAt: null },
+    });
+    return rev;
   });
   await logAudit({
     action: "quote.revised",

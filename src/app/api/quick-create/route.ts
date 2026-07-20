@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
+import { getAccessibleContactIds, getAccessibleVehicleIds, hasPermission, hasAnyPermission } from "@/lib/permissions";
 import { contactName } from "@/lib/format";
 import { getSetting } from "@/lib/settings";
 import { isModuleEnabled } from "@/lib/modules/enabled";
@@ -16,28 +17,81 @@ export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // The option lists include pack-owned data (vehicles from automotive, products
-  // from commerce). The route-guard only covers page layouts, so this API must
-  // self-enforce gating: with a pack off, a signed-in user (or a stale form)
-  // must not be able to GET its options. Core options stay available.
-  const [automotiveOn, commerceOn] = await Promise.all([
+  // This endpoint feeds the Quick-Create dialogs. It must not act as an
+  // unguarded metadata directory for any signed-in user: gate the whole payload
+  // behind actually being able to create SOMETHING, then gate each option list
+  // by the specific create/assign permission that consumes it. Combined with the
+  // pack gating (vehicles=automotive, products=commerce) and the accessible-id
+  // scoping (a restricted salesperson never receives the whole org).
+  const [
+    automotiveOn,
+    commerceOn,
+    canCreateLead,
+    canCreateContact,
+    canCreateQuote,
+    canManageVehicles,
+    rawJobcards,
+    canViewVehicles,
+    canScheduleActivity,
+    contactIds,
+    vehicleIds,
+  ] = await Promise.all([
     isModuleEnabled("automotive"),
     isModuleEnabled("commerce"),
+    hasPermission(user, "leads.create"),
+    hasPermission(user, "contacts.create"),
+    hasPermission(user, "quotes.create"),
+    hasPermission(user, "vehicles.manage"),
+    hasPermission(user, "jobcards.manage"),
+    hasAnyPermission(user, "vehicles.view_all", "vehicles.view_owned"),
+    hasPermission(user, "activities.manage"),
+    getAccessibleContactIds(user),
+    getAccessibleVehicleIds(user),
   ]);
 
+  // Creating a job card picks a vehicle, and getAccessibleVehicleIds returns
+  // nothing without a vehicle-view permission — so jobcards.manage alone yields
+  // an empty picker and a dead-end dialog. Treat "can create a job card" as
+  // jobcards.manage AND vehicle-view, matching what QuickActions shows.
+  const canManageJobcards = rawJobcards && canViewVehicles;
+
+  // No create capability at all → nothing to hand out.
+  if (
+    !canCreateLead && !canCreateContact && !canCreateQuote &&
+    !canManageVehicles && !canManageJobcards && !canScheduleActivity
+  ) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  // Which lists this caller may see, by the dialog that consumes each one. The
+  // vehicle list is used ONLY by the job-card dialog (register-vehicle needs
+  // just contacts + products), so it's gated on the job-card capability.
+  const needsContacts = canCreateLead || canCreateQuote || canManageVehicles || canScheduleActivity;
+  const needsProducts = canCreateLead || canCreateQuote || canManageVehicles;
+  const needsUsers = canCreateLead || canCreateContact || canScheduleActivity;
+  const needsVehicles = canManageJobcards;
+  const scoped = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
+
   const [products, stages, contacts, users, vehicles, validDaysRaw, quoteTerms] = await Promise.all([
-    commerceOn
+    commerceOn && needsProducts
       ? prisma.product.findMany({
           where: { active: true },
           include: { colors: true },
           orderBy: { name: "asc" },
         })
       : Promise.resolve([]),
-    prisma.pipelineStage.findMany({ orderBy: { order: "asc" }, select: { id: true, name: true } }),
-    prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
-    prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
-    automotiveOn
+    canCreateLead
+      ? prisma.pipelineStage.findMany({ orderBy: { order: "asc" }, select: { id: true, name: true } })
+      : Promise.resolve([]),
+    needsContacts
+      ? prisma.contact.findMany({ where: scoped(contactIds), orderBy: { firstName: "asc" }, take: 500 })
+      : Promise.resolve([]),
+    needsUsers
+      ? prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } })
+      : Promise.resolve([]),
+    automotiveOn && needsVehicles
       ? prisma.vehicle.findMany({
+          where: scoped(vehicleIds),
           include: { contact: true },
           orderBy: { model: "asc" },
           take: 500,

@@ -1,6 +1,7 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { prisma } from "./db";
+import { isModuleEnabled } from "./modules/enabled";
 
 const secret = () => {
   const s = process.env.SESSION_SECRET;
@@ -44,6 +45,11 @@ export async function clearPortalCookie() {
 
 /** The logged-in customer for the portal, or null. */
 export async function getPortalContact() {
+  // Portal is an optional pack. When it is off, no session resolves — this is
+  // the single choke point every portal page and action funnels through
+  // (directly, or via getPortalScope/requirePortalScope/portalUser), so gating
+  // here makes the whole portal self-reject server-side, not just hide its UI.
+  if (!(await isModuleEnabled("portal"))) return null;
   const store = await cookies();
   const token = store.get(PORTAL_COOKIE)?.value;
   if (!token) return null;

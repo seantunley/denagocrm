@@ -16,6 +16,7 @@ import {
   isFieldType,
   slugifyKey,
   getFieldDefs,
+  parseFieldValue,
   type CustomEntity,
 } from "@/lib/customFields";
 
@@ -138,6 +139,12 @@ export async function saveCustomFieldValues(
     case: "/cases",
   };
 
+  // Parse+validate EVERY field first, collecting mutations and errors. Nothing
+  // is written until all fields pass — otherwise an early field could persist
+  // while a later required/invalid field throws, leaving a half-saved record.
+  type Mutation = { defId: string; value: string | null };
+  const mutations: Mutation[] = [];
+  const errors: string[] = [];
   for (const def of defs) {
     const raw =
       def.type === "checkbox"
@@ -145,18 +152,26 @@ export async function saveCustomFieldValues(
           ? "true"
           : "false"
         : str(formData, `cf_${def.id}`);
-    const empty = def.type === "checkbox" ? false : raw === "";
-    if (def.required && empty) throw new Error(`${def.label} is required`);
-
-    if (empty) {
-      await prisma.customFieldValue.deleteMany({ where: { defId: def.id, recordId } });
-    } else {
-      await prisma.customFieldValue.upsert({
-        where: { defId_recordId: { defId: def.id, recordId } },
-        update: { value: raw },
-        create: { defId: def.id, recordId, value: raw },
-      });
+    const parsed = parseFieldValue(def, raw);
+    if (!parsed.ok) {
+      errors.push(parsed.error);
+      continue;
     }
+    mutations.push({ defId: def.id, value: parsed.value });
   }
+  if (errors.length > 0) throw new Error(errors.join(" "));
+
+  // Apply all upserts/deletes atomically.
+  await prisma.$transaction(
+    mutations.map((m) =>
+      m.value === null
+        ? prisma.customFieldValue.deleteMany({ where: { defId: m.defId, recordId } })
+        : prisma.customFieldValue.upsert({
+            where: { defId_recordId: { defId: m.defId, recordId } },
+            update: { value: m.value },
+            create: { defId: m.defId, recordId, value: m.value },
+          }),
+    ),
+  );
   revalidatePath(`${basePath[entity]}/${recordId}`);
 }

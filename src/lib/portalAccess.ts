@@ -1,5 +1,6 @@
 import { basePrisma } from "./db";
 import { getPortalContact } from "./portal";
+import { isModuleEnabled } from "./modules/enabled";
 
 export type PortalScope = {
   viewerContactId: string;
@@ -60,6 +61,11 @@ export async function getPortalScope(): Promise<PortalScope | null> {
 }
 
 export async function requirePortalScope(): Promise<PortalScope> {
+  // Explicit module gate so every action funnelling through here (profile,
+  // preferences, case create, case message, upload, notification-read) throws a
+  // clear error when the portal pack is off — belt-and-braces with getPortal
+  // Contact() returning null when disabled.
+  if (!(await isModuleEnabled("portal"))) throw new Error("Customer portal is disabled");
   const scope = await getPortalScope();
   if (!scope) throw new Error("Portal authentication required");
   return scope;

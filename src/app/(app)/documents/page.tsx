@@ -11,6 +11,8 @@ import {
   requireAnyPermission,
 } from "@/lib/permissions";
 import { uploadDocument } from "@/app/actions/documents";
+import { isModuleEnabled } from "@/lib/modules/enabled";
+import { nonAutomotiveDocumentWhere } from "@/lib/modules/registry";
 import RepoRow, { type MoveTargets, type RepoDoc } from "@/components/RepoRow";
 import { PageHeader } from "@/components/page-header";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -31,7 +33,7 @@ export default async function DocumentsPage({
     "document_templates.manage"
   );
   const { q, versions } = await searchParams;
-  const [documentIds, contactIds, vehicleIds, quoteIds, canUpload, canManage, canTemplates] =
+  const [documentIds, contactIds, vehicleIds, quoteIds, canUpload, canManage, canTemplates, automotiveOn] =
     await Promise.all([
       getAccessibleDocumentIds(user),
       getAccessibleContactIds(user),
@@ -40,6 +42,7 @@ export default async function DocumentsPage({
       hasPermission(user, "documents.upload"),
       hasPermission(user, "documents.manage"),
       hasPermission(user, "document_templates.manage"),
+      isModuleEnabled("automotive"),
     ]);
 
   const docs = await prisma.document.findMany({
@@ -48,6 +51,12 @@ export default async function DocumentsPage({
         ...(documentIds === null ? [] : [{ id: { in: documentIds } }]),
         ...(versions === "all" ? [] : [{ replacedById: null }]),
         ...(q ? [{ fileName: { contains: q, mode: "insensitive" as const } }] : []),
+        // When automotive is off, drop automotive-owned paperwork from the repo:
+        // vehicle- or job-card-linked docs, plus delivery paperwork (tagged, but
+        // filed against a contact/quote). Null-safe positive filter — see
+        // nonAutomotiveDocumentWhere(); a NOT { tag in […] } would drop core
+        // documents with a NULL tag.
+        ...(automotiveOn ? [] : [nonAutomotiveDocumentWhere()]),
       ],
     },
     orderBy: { createdAt: "desc" },

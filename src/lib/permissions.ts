@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { basePrisma } from "./db";
 import { requireUser } from "./auth";
+import { requireModuleEnabled } from "./modules/enabled";
 
 export const PERMISSIONS = [
   "pipelines.view", "pipelines.manage", "forecast.view", "forecast.manage",
@@ -305,6 +306,11 @@ export async function requireVehicleReadAccess(vehicleId: string): Promise<Permi
 }
 
 export async function requireVehicleAccess(vehicleId: string, permission: PermissionKey = "vehicles.manage"): Promise<PermissionUser> {
+  // Vehicles are automotive-owned. Gating here — the single choke-point every
+  // vehicle mutation and vehicle-targeted document action passes through — makes
+  // the module a real server-side boundary rather than a per-action checklist:
+  // with the pack off, no direct POST can drive vehicle data. Throws when off.
+  await requireModuleEnabled("automotive");
   const user = await requirePermission(permission);
   if (!(await canAccessVehicle(user, vehicleId))) redirect("/vehicles");
   return user;
@@ -342,6 +348,10 @@ export async function requireJobCardReadAccess(jobCardId: string): Promise<Permi
 }
 
 export async function requireJobCardAccess(jobCardId: string, permission: PermissionKey = "jobcards.manage"): Promise<PermissionUser> {
+  // Job cards are automotive-owned; same central-gate reasoning as
+  // requireVehicleAccess — every job-card edit and job-card-targeted document
+  // action funnels through here, so the pack is enforced once. Throws when off.
+  await requireModuleEnabled("automotive");
   const user = await requirePermission(permission);
   if (!(await canAccessJobCard(user, jobCardId))) redirect("/jobcards");
   return user;

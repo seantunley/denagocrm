@@ -76,7 +76,7 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules
             ⌘K
           </kbd>
         </button>
-        <QuickActions modules={user.modules} isAdmin={isOwner} enabledModules={enabledModules} />
+        <QuickActions modules={user.modules} isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} />
       </div>
 
       {/* Nav */}

@@ -42,6 +42,11 @@ export const MODULE_REGISTRY: AppModule[] = [
       "/documents", "/signatures", "/signing-workflows", "/duplicates",
       "/reports", "/targets", "/forecast", "/search", "/audit", "/trash",
       "/settings", "/help", "/library", "/document-studio", "/health",
+      // The Messages-PWA landing route redirects to Chats/Help desk by
+      // permission, so it must be reachable whether Inbox or Support is the
+      // enabled pack — classify it core. Longest-prefix match keeps it here
+      // ("/messages/start" > "/messages") while plain "/messages" stays inbox.
+      "/messages/start",
     ],
   },
   {
@@ -106,6 +111,52 @@ export const AUTOMOTIVE_DELIVERY_TAGS = [
   "delivery-photo",
   "delivery-signature",
 ] as const;
+
+/**
+ * True when a document belongs to the automotive pack — either linked to a
+ * vehicle/job card, or tagged as delivery paperwork (which is filed against a
+ * contact/quote, so the id checks alone miss it). When automotive is off these
+ * docs must be hidden and non-downloadable. Pure + DB-free so the staff repo
+ * (/documents), the staff file API (/api/files) and the portal all share one
+ * definition. Plain contact/quote docs (null id + null/other tag) are core.
+ */
+export function isAutomotiveOwnedDocument(doc: {
+  vehicleId?: string | null;
+  jobCardId?: string | null;
+  tag?: string | null;
+}): boolean {
+  if (doc.vehicleId != null || doc.jobCardId != null) return true;
+  return doc.tag != null && (AUTOMOTIVE_DELIVERY_TAGS as readonly string[]).includes(doc.tag);
+}
+
+/**
+ * Prisma `where` fragments that mirror isAutomotiveOwnedDocument() so the
+ * in-memory predicate and the database filter cannot drift. Returned as plain
+ * object literals (no Prisma import) so this file stays server/client/test-safe.
+ *
+ * nonAutomotiveDocumentWhere() is deliberately NULL-safe: `tag` is nullable, and
+ * `NOT { tag: { in: […] } }` evaluates to UNKNOWN (not TRUE) for a NULL tag in
+ * SQL three-valued logic, which would wrongly drop untagged CORE documents. So
+ * the non-automotive filter is written positively — vehicleId/jobCardId are NULL
+ * AND the tag is either NULL or not one of the delivery tags.
+ */
+export function automotiveDocumentWhere() {
+  return {
+    OR: [
+      { vehicleId: { not: null } },
+      { jobCardId: { not: null } },
+      { tag: { in: [...AUTOMOTIVE_DELIVERY_TAGS] } },
+    ],
+  };
+}
+
+export function nonAutomotiveDocumentWhere() {
+  return {
+    vehicleId: null,
+    jobCardId: null,
+    OR: [{ tag: null }, { tag: { notIn: [...AUTOMOTIVE_DELIVERY_TAGS] } }],
+  };
+}
 
 export const ALL_MODULE_IDS: ModuleId[] = MODULE_REGISTRY.map((m) => m.id);
 

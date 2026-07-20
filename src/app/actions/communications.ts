@@ -8,6 +8,10 @@ import {
   removeTimelinePin,
   toggleTimelinePin,
 } from "@/lib/timelinePins";
+// A client-supplied `channel` is used directly in updateMany, so anything
+// outside SOCIAL_CHANNELS (e.g. "note" or "email") must be rejected before it
+// can bulk-edit non-inbox records.
+import { isSocialChannel } from "@/lib/socialChannels";
 
 async function assertCommunicationAccess(
   user: Awaited<ReturnType<typeof requireCrmOrWorkshop>>,
@@ -51,6 +55,16 @@ export async function addCommunication(formData: FormData) {
     );
   }
 
+  // Access-check the client-supplied links BEFORE writing: without this a user
+  // could attach a communication to any contact/lead id they cannot otherwise
+  // see. Each supplied id must be individually accessible (owners pass through).
+  const contactId = str("contactId");
+  const leadId = str("leadId");
+  if (contactId && !(await canAccessContact(user, contactId)))
+    throw new Error("Contact access denied");
+  if (leadId && !(await canAccessLead(user, leadId)))
+    throw new Error("Lead access denied");
+
   const occurredAtRaw = str("occurredAt");
   const communication = await prisma.communication.create({
     data: {
@@ -61,8 +75,8 @@ export async function addCommunication(formData: FormData) {
       attachmentUrl,
       attachmentType: attachmentUrl ? "image" : null,
       occurredAt: occurredAtRaw ? new Date(occurredAtRaw) : new Date(),
-      contactId: str("contactId"),
-      leadId: str("leadId"),
+      contactId,
+      leadId,
       userId: user.id,
     },
   });
@@ -111,6 +125,7 @@ export async function markThreadRead(
 ) {
   const user = await requireAnyPermission("inbox.view", "inbox.reply");
   if (!contactId && !leadId) return;
+  if (!isSocialChannel(channel)) throw new Error("Unsupported channel");
   if (contactId && !(await canAccessContact(user, contactId)))
     throw new Error("Customer access denied");
   if (leadId && !(await canAccessLead(user, leadId)))
@@ -142,6 +157,7 @@ export async function setThreadArchived(
 ) {
   const user = await requirePermission("inbox.reply");
   if (!contactId && !leadId) return;
+  if (!isSocialChannel(channel)) throw new Error("Unsupported channel");
   if (contactId && !(await canAccessContact(user, contactId)))
     throw new Error("Customer access denied");
   if (leadId && !(await canAccessLead(user, leadId)))
