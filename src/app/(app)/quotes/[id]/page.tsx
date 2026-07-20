@@ -11,6 +11,7 @@ import {
   createQuoteRevision,
 } from "@/app/actions/quotes";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import QuoteVersions from "@/components/QuoteVersions";
 import { uploadDeliveryPhotos } from "@/app/actions/fulfilment";
 import { listBuilderTemplates } from "@/lib/docbuilder/store";
@@ -583,6 +584,8 @@ export default async function QuoteDetailPage({
           </div>
         )}
       </div>
+
+      <CustomFieldsCard entity="quote" recordId={quote.id} />
     </div>
   );
 }

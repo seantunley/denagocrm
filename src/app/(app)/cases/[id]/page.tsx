@@ -18,6 +18,7 @@ import { isModuleEnabled } from "@/lib/modules/enabled";
 import { StatusPill } from "@/components/visual-system";
 import { AutoSubmitSelect } from "@/components/helpdesk/AutoSubmitSelect";
 import { TicketComposer } from "@/components/helpdesk/TicketComposer";
+import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -197,6 +198,8 @@ export default async function TicketDetailPage({ params }: { params: Promise<{ i
               ))}
             </div>
           )}
+
+          <CustomFieldsCard entity="case" recordId={ticket.id} />
         </aside>
       </div>
     </div>
