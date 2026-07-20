@@ -5,6 +5,7 @@ import { sendEmail, renderTemplate, leadVars } from "./email";
 import { sendPushToAll } from "./push";
 import { nextStepDueDate } from "./businessHours";
 import { getNextStepScheduling } from "./nextStepConfig";
+import { FOLLOW_UP_TYPE, isOpenFutureFollowUp } from "./followUp";
 
 export const LEAD_TRIGGERS = [
   "lead_created",
@@ -247,15 +248,20 @@ async function lastEngagementAt(leadId: string, rowUpdatedAt: Date): Promise<Dat
  * not just the row's `updatedAt`. Leads with a quote still pending a decision
  * are never treated as idle. Each rule fires at most once per lead. Returns how
  * many rules fired.
+ *
+ * A lead with an OPEN (status "planned") follow-up whose due date is still in
+ * the future is never treated as gone quiet either — the rep has an explicit
+ * check-back scheduled, so the nudge is suppressed until the follow-up is due.
  */
 export async function runIdleAutomations(): Promise<number> {
   let fired = 0;
+  const now = new Date();
   const rules = await prisma.automationRule.findMany({
     where: { active: true, trigger: "lead_idle" },
   });
   for (const rule of rules) {
     const days = rule.idleDays ?? 3;
-    const cutoff = subDays(new Date(), days);
+    const cutoff = subDays(now, days);
     // Narrow to leads whose own row is already stale; a lead touched more
     // recently than the cutoff is engaged by definition and can't be idle.
     const candidates = await prisma.lead.findMany({
@@ -273,6 +279,13 @@ export async function runIdleAutomations(): Promise<number> {
       // null = quote pending; >= cutoff = real recent engagement. Either way,
       // the lead is not "gone quiet".
       if (lastEngagement === null || lastEngagement >= cutoff) continue;
+
+      // Also suppress the gone-quiet nudge while an open, future follow-up exists.
+      const plannedFollowUps = await prisma.activity.findMany({
+        where: { leadId: lead.id, type: FOLLOW_UP_TYPE, status: "planned" },
+        select: { type: true, status: true, dueDate: true },
+      });
+      if (plannedFollowUps.some((a) => isOpenFutureFollowUp(a, now))) continue;
 
       try {
         const note = await applyRule(rule, lead, 0);

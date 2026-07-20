@@ -12,6 +12,7 @@ import {
   MessageCircle,
   Car,
   Users,
+  Repeat,
   Check,
   TriangleAlert,
   ArrowRight,
@@ -53,6 +54,7 @@ const ACTIVITY_ICONS: Record<string, LucideIcon> = {
   whatsapp: MessageCircle,
   meeting: Users,
   test_drive: Car,
+  follow_up: Repeat,
 };
 
 type DashActivity = {

@@ -15,6 +15,7 @@ import {
   type TimelinePinKind,
 } from "@/lib/timelinePins";
 import { compareTimelineItems } from "@/lib/timelineOrdering";
+import { FOLLOW_UP_TYPE } from "@/lib/followUp";
 import PasteImageInput from "@/components/PasteImageInput";
 
 /* eslint-disable @next/next/no-img-element */
@@ -42,6 +43,7 @@ const icons: Record<string, React.ReactNode> = {
   activity: "✓",
   todo: "✓",
   test_drive: "🚗",
+  follow_up: "🔁",
   document: "📄",
   creation: "🟢",
 };
@@ -105,6 +107,7 @@ export default async function LeadTimeline({
     id: string;
     type: string;
     summary: string;
+    note?: string | null;
     location?: string | null;
     dueDate: Date;
     status: string;
@@ -143,7 +146,12 @@ export default async function LeadTimeline({
       id: `act-${activity.id}`,
       icon: icons[activity.type] ?? icons.activity,
       title: activity.summary,
-      body: activity.location ? `📍 ${activity.location}` : null,
+      body:
+        activity.type === FOLLOW_UP_TYPE && activity.note
+          ? activity.note
+          : activity.location
+            ? `📍 ${activity.location}`
+            : null,
       who: activity.assignedTo?.name ?? "Unassigned",
       when: activity.dueDate,
       pending: activity.status === "planned",

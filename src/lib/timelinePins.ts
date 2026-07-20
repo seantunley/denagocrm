@@ -95,6 +95,28 @@ export async function toggleTimelinePin(
   });
 }
 
+/**
+ * Pins an item unconditionally (never toggles it off). Used to AUTO-PIN a
+ * newly-created follow-up so it floats to the top of the timeline. Idempotent:
+ * if a pin already exists it is left untouched so an existing pinnedAt / manual
+ * unpin decision is preserved.
+ */
+export async function ensureTimelinePin(
+  kind: TimelinePinKind,
+  itemId: string,
+  userId: string,
+): Promise<void> {
+  await prisma.$executeRaw(Prisma.sql`
+    INSERT INTO "TimelinePin" (
+      "id", "kind", "itemId", "pinnedAt", "pinnedById"
+    )
+    VALUES (
+      ${randomUUID()}, ${kind}, ${itemId}, ${new Date()}, ${userId}
+    )
+    ON CONFLICT ("kind", "itemId") DO NOTHING
+  `);
+}
+
 export async function removeTimelinePin(
   kind: TimelinePinKind,
   itemId: string,
