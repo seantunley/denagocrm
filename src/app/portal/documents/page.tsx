@@ -4,6 +4,7 @@ import { basePrisma, prisma } from "@/lib/db";
 import { getPortalContact } from "@/lib/portal";
 import { requirePortalScope } from "@/lib/portalAccess";
 import { isModuleEnabled } from "@/lib/modules/enabled";
+import { AUTOMOTIVE_DELIVERY_TAGS } from "@/lib/modules/registry";
 import { PortalUploadForm } from "@/components/PortalExpansionForms";
 import { formatDate } from "@/lib/format";
 import { EmptyState, PortalPageHeader, SectionHeading, Surface } from "@/components/visual-system";
@@ -54,6 +55,20 @@ export default async function PortalDocumentsPage() {
           ...(automotiveOn && scope.fleetIds.length ? [{ vehicle: { fleetId: { in: scope.fleetIds } } }] : []),
           ...(quoteIds.length ? [{ quoteId: { in: quoteIds } }] : []),
         ],
+        // ...but delivery paperwork and job-card photos reach the customer via the
+        // contact/quote branches above, so when automotive is off also exclude any
+        // doc that is job-card-linked or tagged as delivery paperwork. Invoices,
+        // POPs and plain contact/quote docs (null/other tags) stay visible.
+        ...(automotiveOn
+          ? {}
+          : {
+              NOT: {
+                OR: [
+                  { jobCardId: { not: null } },
+                  { tag: { in: [...AUTOMOTIVE_DELIVERY_TAGS] } },
+                ],
+              },
+            }),
       },
       orderBy: { createdAt: "desc" },
       take: 100,
@@ -62,6 +77,7 @@ export default async function PortalDocumentsPage() {
       SELECT "id", "fileName", "mimeType", "sizeBytes", "createdAt", "status"
       FROM "PortalUpload"
       WHERE "contactId" = ANY(${scope.contactIds}::text[])
+        AND (${automotiveOn}::boolean OR "vehicleId" IS NULL)
       ORDER BY "createdAt" DESC LIMIT 100
     `,
     basePrisma.$queryRaw<CaseRow[]>`

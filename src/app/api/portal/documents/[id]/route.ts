@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { portalCanAccessDocument } from "@/lib/portalAccess";
 import { isModuleEnabled } from "@/lib/modules/enabled";
+import { AUTOMOTIVE_DELIVERY_TAGS } from "@/lib/modules/registry";
 import { readFile } from "@/lib/storage";
 
 export async function GET(
@@ -19,10 +20,19 @@ export async function GET(
   }
   const document = await prisma.document.findFirst({ where: { id, deletedAt: null } });
   if (!document) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  // Vehicle-linked paperwork is automotive-owned; when the pack is off a saved
-  // URL must not still resolve to a delivery/service document.
-  if (document.vehicleId && !(await isModuleEnabled("automotive"))) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  // Automotive-owned paperwork must not resolve when the pack is off, even from a
+  // saved URL. That's not just vehicle-linked docs: delivery paperwork/signatures
+  // (tagged, linked via contact/quote) and job-card photos (linked via jobCardId)
+  // are automotive too. Invoices, POPs and plain contact/quote docs stay downloadable.
+  if (!(await isModuleEnabled("automotive"))) {
+    const isAutomotiveDoc =
+      document.vehicleId != null ||
+      document.jobCardId != null ||
+      (document.tag != null &&
+        (AUTOMOTIVE_DELIVERY_TAGS as readonly string[]).includes(document.tag));
+    if (isAutomotiveDoc) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
   }
   try {
     const bytes = await readFile(document.storedName);
