@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { basePrisma } from "@/lib/db";
 import { requirePortalScope } from "@/lib/portalAccess";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { readFile } from "@/lib/storage";
 
 type UploadRow = {
   id: string;
   contactId: string;
+  vehicleId: string | null;
   fileName: string;
   storedName: string;
   mimeType: string;
@@ -15,17 +17,25 @@ export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  if (!(await isModuleEnabled("portal"))) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
   const scope = await requirePortalScope().catch(() => null);
   if (!scope) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const { id } = await params;
   const rows = await basePrisma.$queryRaw<UploadRow[]>`
-    SELECT "id", "contactId", "fileName", "storedName", "mimeType"
+    SELECT "id", "contactId", "vehicleId", "fileName", "storedName", "mimeType"
     FROM "PortalUpload"
     WHERE "id" = ${id} AND "contactId" = ANY(${scope.contactIds}::text[])
     LIMIT 1
   `;
   const upload = rows[0];
   if (!upload) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  // A vehicle-linked upload is automotive-owned; when the pack is off a saved URL
+  // must stop resolving even though the row still belongs to the contact.
+  if (upload.vehicleId && !(await isModuleEnabled("automotive"))) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
   try {
     const bytes = await readFile(upload.storedName);
     return new NextResponse(new Uint8Array(bytes), {

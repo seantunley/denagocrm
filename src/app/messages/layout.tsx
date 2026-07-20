@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import Image from "next/image";
 import { requireUser } from "@/lib/auth";
+import { assertPathModuleEnabled } from "@/lib/modules/routeGuard";
 import MessagesNav from "@/components/MessagesNav";
 
 export const metadata: Metadata = {
@@ -19,6 +20,7 @@ export const viewport: Viewport = {
 
 export default async function MessagesLayout({ children }: { children: React.ReactNode }) {
   await requireUser();
+  await assertPathModuleEnabled();
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-background text-foreground">
       <header className="flex h-14 shrink-0 items-center gap-2.5 border-b border-sidebar-border bg-sidebar/90 px-4 backdrop-blur-xl">

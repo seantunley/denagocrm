@@ -13,7 +13,8 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { buildNav } from "@/components/nav-config";
-import { SETTINGS_NAV_GROUPS, settingsHref } from "@/lib/settings-navigation";
+import { isPathEnabled } from "@/lib/modules/registry";
+import { SETTINGS_NAV_GROUPS, settingsHref, settingsItemEnabled } from "@/lib/settings-navigation";
 
 export function openCommandMenu() {
   window.dispatchEvent(new Event("denago:open-command"));
@@ -23,25 +24,31 @@ export default function CommandMenu({
   modules,
   isAdmin,
   permissions = [],
+  enabledModules,
 }: {
   modules: string;
   isAdmin: boolean;
   permissions?: string[];
+  enabledModules?: string[];
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const { topLinks, groups } = buildNav(modules, isAdmin);
+  const enabledSet = enabledModules ? new Set(enabledModules) : undefined;
+  const { topLinks, groups } = buildNav(modules, isAdmin, permissions, enabledSet);
   const granted = new Set(permissions);
   const can = (...keys: string[]) => isAdmin || keys.some((key) => granted.has(key));
+  const packOn = (href: string) => !enabledSet || isPathEnabled(href, enabledSet);
   const quickActions = [
     ...(can("leads.create") ? [{ href: "/leads/new", label: "New lead", icon: Plus }] : []),
     ...(can("contacts.create") ? [{ href: "/contacts/new", label: "New contact", icon: Plus }] : []),
     ...(can("jobcards.manage") ? [{ href: "/jobcards/new", label: "New job card", icon: Plus }] : []),
     { href: "/search", label: "Search accessible records", icon: Search },
-  ];
+  ].filter((action) => packOn(action.href));
   const settingsGroups = SETTINGS_NAV_GROUPS.map((group) => ({
     ...group,
-    items: group.items.filter((item) => isAdmin || item.key === "account"),
+    items: group.items.filter(
+      (item) => (isAdmin || item.key === "account") && settingsItemEnabled(item, enabledSet),
+    ),
   })).filter((group) => group.items.length > 0);
 
   useEffect(() => {

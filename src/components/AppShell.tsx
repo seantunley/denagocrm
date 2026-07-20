@@ -36,6 +36,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { logout } from "@/app/login/actions";
 import { APP_VERSION } from "@/lib/version";
 import { cn } from "@/lib/utils";
+import { isPathEnabled } from "@/lib/modules/registry";
 
 type ShellUser = { name: string; role: string; modules: string; permissions: string[] };
 
@@ -47,7 +48,7 @@ function initials(name: string) {
     .join("");
 }
 
-function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0 }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number }) {
+function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; enabledModules?: string[] }) {
   const isOwner = user.role === "owner";
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-sidebar">
@@ -75,12 +76,12 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0 }: { user: Shel
             ⌘K
           </kbd>
         </button>
-        <QuickActions modules={user.modules} isAdmin={isOwner} />
+        <QuickActions modules={user.modules} isAdmin={isOwner} enabledModules={enabledModules} />
       </div>
 
       {/* Nav */}
       <div className="relative flex-1 overflow-y-auto px-3 py-3">
-        <Nav modules={user.modules} isAdmin={isOwner} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting }} />
+        <Nav modules={user.modules} isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting }} />
       </div>
 
       {/* Help, Settings & user */}
@@ -140,19 +141,23 @@ function MobilePrimaryNav({
   user,
   pathname,
   inboxWaiting,
+  enabledModules,
   onMore,
 }: {
   user: ShellUser;
   pathname: string;
   inboxWaiting: number;
+  enabledModules?: string[];
   onMore: () => void;
 }) {
   const modules = new Set(user.modules.split(",").map((item) => item.trim()).filter(Boolean));
   const has = (module: string) => user.role === "owner" || modules.has(module);
+  const enabledSet = enabledModules ? new Set(enabledModules) : undefined;
+  const packOn = (href: string) => !enabledSet || isPathEnabled(href, enabledSet);
   const items = [
     { href: "/", label: "Dashboard", icon: LayoutDashboard, show: true },
-    { href: "/leads", label: "Leads", icon: SquareKanban, show: has("crm") },
-    { href: "/inbox", label: "Inbox", icon: MessageSquare, show: has("inbox"), badge: inboxWaiting },
+    { href: "/leads", label: "Leads", icon: SquareKanban, show: has("crm") && packOn("/leads") },
+    { href: "/inbox", label: "Inbox", icon: MessageSquare, show: has("inbox") && packOn("/inbox"), badge: inboxWaiting },
   ].filter((item) => item.show);
   const active = (href: string) => href === "/" ? pathname === "/" : pathname.startsWith(href);
 
@@ -194,11 +199,13 @@ export default function AppShell({
   user,
   inboxWaiting = 0,
   casesWaiting = 0,
+  enabledModules,
   children,
 }: {
   user: ShellUser;
   inboxWaiting?: number;
   casesWaiting?: number;
+  enabledModules?: string[];
   children: ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -207,7 +214,7 @@ export default function AppShell({
   return (
     <TooltipProvider delayDuration={250}>
     <div className="min-h-screen">
-      <CommandMenu modules={user.modules} isAdmin={user.role === "owner"} permissions={user.permissions} />
+      <CommandMenu modules={user.modules} isAdmin={user.role === "owner"} permissions={user.permissions} enabledModules={enabledModules} />
       <QuickCreateDialog />
       <Toaster />
 
@@ -240,7 +247,7 @@ export default function AppShell({
       <Sheet key={pathname} open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="left" className="w-72 border-sidebar-border p-0">
           <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} />
+          <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} enabledModules={enabledModules} />
         </SheetContent>
       </Sheet>
 
@@ -248,12 +255,13 @@ export default function AppShell({
         user={user}
         pathname={pathname}
         inboxWaiting={inboxWaiting}
+        enabledModules={enabledModules}
         onMore={() => setMobileOpen(true)}
       />
 
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 border-r border-sidebar-border lg:flex lg:flex-col">
-        <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} />
+        <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} enabledModules={enabledModules} />
       </aside>
 
       <main className="relative lg:pl-60">

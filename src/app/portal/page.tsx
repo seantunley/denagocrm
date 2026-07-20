@@ -4,6 +4,7 @@ import { Bell, CarFront, FileCheck2, Headphones, LogOut } from "lucide-react";
 import { basePrisma, prisma } from "@/lib/db";
 import { getPortalContact } from "@/lib/portal";
 import { requirePortalScope } from "@/lib/portalAccess";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { markPortalNotificationRead, portalLogout } from "@/app/actions/portal";
 import ServiceRequestForm from "@/components/ServiceRequestForm";
 import { computeDue, dueLabels, dueColors } from "@/lib/serviceDue";
@@ -41,13 +42,16 @@ export default async function PortalHome() {
   const contact = await getPortalContact();
   if (!contact) redirect("/portal/login");
   const scope = await requirePortalScope();
+  // When the automotive pack is switched off the portal must drop all
+  // vehicle/service/warranty UI too, even while the portal itself stays on.
+  const automotiveOn = await isModuleEnabled("automotive");
 
   const [accessibleContacts, fleets, vehicles, quotes, notifications, caseCounts] = await Promise.all([
     prisma.contact.findMany({
       where: { id: { in: scope.contactIds }, deletedAt: null },
       orderBy: [{ company: "asc" }, { firstName: "asc" }],
     }),
-    scope.fleetIds.length
+    automotiveOn && scope.fleetIds.length
       ? prisma.fleet.findMany({
           where: { id: { in: scope.fleetIds }, deletedAt: null },
           include: { vehicles: { where: { deletedAt: null }, select: { id: true } } },
@@ -103,21 +107,23 @@ export default async function PortalHome() {
         <div>
           <Eyebrow>Your Denago garage</Eyebrow>
           <h1 className="mt-2 text-3xl font-semibold tracking-[-0.045em] sm:text-4xl">Hello, {contact.firstName}</h1>
-          <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">Everything about your vehicles, service, warranty, quotes and deliveries—kept together and easy to follow.</p>
+          <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">{automotiveOn ? "Everything about your vehicles, service, warranty, quotes and deliveries—kept together and easy to follow." : "Your quotes, documents and support—kept together and easy to follow."}</p>
         </div>
           <form action={portalLogout}><Button variant="outline" size="sm" className="border-white/10 bg-white/[0.035]"><LogOut className="size-3.5" />Sign out</Button></form>
         </div>
       </div>
 
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <MetricCard icon={CarFront} label="Vehicles" value={vehicles.length} detail="In your garage" accent />
+        {automotiveOn && (
+          <MetricCard icon={CarFront} label="Vehicles" value={vehicles.length} detail="In your garage" accent />
+        )}
         <MetricCard icon={FileCheck2} label="Quotes to review" value={unsignedQuotes.length} detail={unsignedQuotes.length ? "Awaiting your decision" : "You're up to date"} accent={unsignedQuotes.length > 0} />
         <Link href="/portal/support" className="rounded-2xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-500/15"><MetricCard icon={Headphones} label="Open support" value={Number(caseCounts[0]?.openCount ?? 0)} detail="View conversations" /></Link>
         <MetricCard icon={Bell} label="Unread updates" value={unreadNotifications} detail={unreadNotifications ? "New since your last visit" : "Nothing new"} />
       </section>
 
-      {(accessibleContacts.length > 1 || fleets.length > 0) && (
-        <section className="grid md:grid-cols-2 gap-3">
+      {(accessibleContacts.length > 1 || (automotiveOn && fleets.length > 0)) && (
+        <section className={`grid gap-3 ${automotiveOn ? "md:grid-cols-2" : ""}`}>
           <div className="card">
             <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">Portal access</p>
             <ul className="space-y-2">
@@ -129,19 +135,21 @@ export default async function PortalHome() {
               ))}
             </ul>
           </div>
-          <div className="card">
-            <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">Fleet accounts</p>
-            {fleets.length === 0 ? <p className="text-sm text-slate-400">No fleet accounts linked.</p> : (
-              <ul className="space-y-2">
-                {fleets.map((fleet) => (
-                  <li key={fleet.id} className="text-sm flex justify-between gap-3">
-                    <span>{fleet.name}</span>
-                    <span className="text-slate-500">{fleet.vehicles.length} carts · {scope.roleByFleetId.get(fleet.id) ?? "viewer"}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+          {automotiveOn && (
+            <div className="card">
+              <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">Fleet accounts</p>
+              {fleets.length === 0 ? <p className="text-sm text-slate-400">No fleet accounts linked.</p> : (
+                <ul className="space-y-2">
+                  {fleets.map((fleet) => (
+                    <li key={fleet.id} className="text-sm flex justify-between gap-3">
+                      <span>{fleet.name}</span>
+                      <span className="text-slate-500">{fleet.vehicles.length} carts · {scope.roleByFleetId.get(fleet.id) ?? "viewer"}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </section>
       )}
 
@@ -166,6 +174,7 @@ export default async function PortalHome() {
         </section>
       )}
 
+      {automotiveOn && (
       <section className="space-y-3">
         <div><Eyebrow>Your garage</Eyebrow><h2 className="mt-1 text-lg font-semibold">Vehicles, service and warranty</h2></div>
         {vehicles.length === 0 ? (
@@ -208,6 +217,7 @@ export default async function PortalHome() {
           );
         })}
       </section>
+      )}
 
       {quotes.length > 0 && (
         <section className="space-y-3">
@@ -227,11 +237,13 @@ export default async function PortalHome() {
         </section>
       )}
 
-      <section className="grid lg:grid-cols-2 gap-4">
+      <section className={`grid gap-4 ${automotiveOn ? "lg:grid-cols-2" : ""}`}>
+        {automotiveOn && (
         <div className="space-y-3">
           <div><Eyebrow>Workshop</Eyebrow><h2 className="mt-1 text-lg font-semibold">Book a service</h2></div>
           <div className="card"><ServiceRequestForm vehicles={vehicles.map((vehicle) => ({ id: vehicle.id, label: `${vehicle.model}${vehicle.regNumber ? ` (${vehicle.regNumber})` : ""}` }))} /></div>
         </div>
+        )}
         <div className="card flex flex-col justify-between gap-4">
           <div><h2 className="font-semibold">Need help?</h2><p className="text-sm text-slate-400 mt-2">Open a support, warranty, delivery or document request and track the conversation.</p></div>
           <Link href="/portal/support" className="btn-primary text-center">Open support</Link>

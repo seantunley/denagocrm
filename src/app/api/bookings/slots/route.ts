@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSetting } from "@/lib/settings";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { getDayAvailability, getSlotConfig } from "@/lib/bookingSlots";
 
 const corsHeaders = {
@@ -14,6 +15,10 @@ export async function OPTIONS() {
 
 /** Slot availability for a given day: GET /api/bookings/slots?date=YYYY-MM-DD */
 export async function GET(req: NextRequest) {
+  // Workshop bookings belong to the automotive pack — gone when it's off.
+  if (!(await isModuleEnabled("automotive"))) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
   const apiKey = await getSetting("INTAKE_API_KEY");
   if (!apiKey || req.headers.get("x-api-key") !== apiKey) {
     return NextResponse.json({ error: "Invalid API key" }, { status: 401, headers: corsHeaders });

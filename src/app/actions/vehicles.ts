@@ -8,6 +8,7 @@ import { sendReviewRequest } from "@/lib/reviewRequests";
 import { triggerSurvey } from "@/lib/surveys";
 import { remindVehicleService } from "@/lib/serviceReminders";
 import { softDeleteRecord } from "@/lib/trash";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import {
   requireContactAccess,
   requireVehicleAccess,
@@ -40,6 +41,11 @@ function vehicleData(formData: FormData) {
 }
 
 export async function createVehicle(formData: FormData) {
+  // The automotive pack owns vehicles; a stale quick-create dialog could still POST
+  // this action after the pack is switched off, so reject it server-side.
+  if (!(await isModuleEnabled("automotive"))) {
+    throw new Error("The automotive module is disabled");
+  }
   const data = vehicleData(formData);
   if (!data.contactId) throw new Error("Customer is required");
   const user = await requireContactAccess(data.contactId, "vehicles.manage");

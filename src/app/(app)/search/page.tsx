@@ -2,6 +2,8 @@ import Link from "next/link";
 import { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { isModuleEnabled } from "@/lib/modules/enabled";
+import { AUTOMOTIVE_DELIVERY_TAGS } from "@/lib/modules/registry";
 import { contactName, formatZAR } from "@/lib/format";
 import { getAccessibleDocumentIds } from "@/lib/documentAccess";
 import {
@@ -28,6 +30,11 @@ export default async function SearchPage({
   searchParams: Promise<{ q?: string }>;
 }) {
   const user = await requireUser();
+  const [automotiveOn, supportOn, commerceOn] = await Promise.all([
+    isModuleEnabled("automotive"),
+    isModuleEnabled("support"),
+    isModuleEnabled("commerce"),
+  ]);
   const { q } = await searchParams;
   const term = (q ?? "").trim();
 
@@ -138,7 +145,26 @@ export default async function SearchPage({
     documentIds !== null && documentIds.length === 0
       ? Promise.resolve([])
       : prisma.document.findMany({
-          where: { ...scoped(documentIds), fileName: contains, deletedAt: null },
+          where: {
+            ...scoped(documentIds),
+            fileName: contains,
+            deletedAt: null,
+            // When automotive is off, drop vehicle/job-card/delivery-paperwork
+            // docs before counting and rendering (they're downloadable via
+            // /api/files). NOT{OR} keeps null-tag core docs, mirroring the
+            // portal documents fix.
+            ...(automotiveOn
+              ? {}
+              : {
+                  NOT: {
+                    OR: [
+                      { vehicleId: { not: null } },
+                      { jobCardId: { not: null } },
+                      { tag: { in: [...AUTOMOTIVE_DELIVERY_TAGS] } },
+                    ],
+                  },
+                }),
+          },
           include: { contact: true, vehicle: true },
           orderBy: { createdAt: "desc" },
           take: 20,
@@ -146,8 +172,10 @@ export default async function SearchPage({
     casesPromise,
   ]);
 
-  const total = contacts.length + leads.length + vehicles.length + jobCards.length + quotes.length +
-    products.length + documents.length + cases.length;
+  const total = contacts.length + leads.length + quotes.length + documents.length +
+    (supportOn ? cases.length : 0) +
+    (commerceOn ? products.length : 0) +
+    (automotiveOn ? vehicles.length + jobCards.length : 0);
   const Section = ({ title, children, count }: { title: string; count: number; children: React.ReactNode }) =>
     count === 0 ? null : (
       <div className="card">
@@ -169,24 +197,32 @@ export default async function SearchPage({
       <Section title="Leads" count={leads.length}>
         {leads.map((item) => <li key={item.id} className="py-2"><Link href={`/leads/${item.id}`} className="text-orange-400 hover:underline font-medium">{item.title}</Link><span className="text-xs text-slate-400 ml-2">{item.name} · {item.status === "open" ? item.stage.name : item.status} · {formatZAR(item.valueCents)}</span></li>)}
       </Section>
-      <Section title="Vehicles" count={vehicles.length}>
-        {vehicles.map((item) => <li key={item.id} className="py-2"><Link href={`/vehicles/${item.id}`} className="text-orange-400 hover:underline font-medium">{item.model}</Link><span className="text-xs text-slate-400 ml-2">{[item.vin, contactName(item.contact)].filter(Boolean).join(" · ")}</span></li>)}
-      </Section>
-      <Section title="Job cards" count={jobCards.length}>
-        {jobCards.map((item) => <li key={item.id} className="py-2"><Link href={`/jobcards/${item.id}`} className="text-orange-400 hover:underline font-medium">#{item.number}</Link><span className="text-xs text-slate-400 ml-2">{item.vehicle.model} · {contactName(item.contact)} · {item.description.slice(0, 60)}</span></li>)}
-      </Section>
+      {automotiveOn && (
+        <Section title="Vehicles" count={vehicles.length}>
+          {vehicles.map((item) => <li key={item.id} className="py-2"><Link href={`/vehicles/${item.id}`} className="text-orange-400 hover:underline font-medium">{item.model}</Link><span className="text-xs text-slate-400 ml-2">{[item.vin, contactName(item.contact)].filter(Boolean).join(" · ")}</span></li>)}
+        </Section>
+      )}
+      {automotiveOn && (
+        <Section title="Job cards" count={jobCards.length}>
+          {jobCards.map((item) => <li key={item.id} className="py-2"><Link href={`/jobcards/${item.id}`} className="text-orange-400 hover:underline font-medium">#{item.number}</Link><span className="text-xs text-slate-400 ml-2">{item.vehicle.model} · {contactName(item.contact)} · {item.description.slice(0, 60)}</span></li>)}
+        </Section>
+      )}
       <Section title="Quotes" count={quotes.length}>
         {quotes.map((item) => <li key={item.id} className="py-2"><Link href={`/quotes/${item.id}`} className="text-orange-400 hover:underline font-medium">Q-{item.number}</Link><span className="text-xs text-slate-400 ml-2">{item.contact ? contactName(item.contact) : item.lead?.name} · {item.status}</span></li>)}
       </Section>
-      <Section title="Customer cases" count={cases.length}>
-        {cases.map((item) => <li key={item.id} className="py-2"><Link href={`/cases/${item.id}`} className="text-orange-400 hover:underline font-medium">C-{item.number.toString()} · {item.subject}</Link><span className="text-xs text-slate-400 ml-2">{item.contactName} · {item.status.replaceAll("_", " ")}</span></li>)}
-      </Section>
+      {supportOn && (
+        <Section title="Customer cases" count={cases.length}>
+          {cases.map((item) => <li key={item.id} className="py-2"><Link href={`/cases/${item.id}`} className="text-orange-400 hover:underline font-medium">C-{item.number.toString()} · {item.subject}</Link><span className="text-xs text-slate-400 ml-2">{item.contactName} · {item.status.replaceAll("_", " ")}</span></li>)}
+        </Section>
+      )}
       <Section title="Documents" count={documents.length}>
         {documents.map((item) => <li key={item.id} className="py-2"><a href={`/api/files/${item.id}`} target="_blank" rel="noreferrer" className="text-orange-400 hover:underline font-medium">{item.fileName}</a><span className="text-xs text-slate-400 ml-2">{item.contact ? contactName(item.contact) : item.vehicle?.model ?? "Unfiled"}</span></li>)}
       </Section>
-      <Section title="Products" count={products.length}>
-        {products.map((item) => <li key={item.id} className="py-2"><Link href={`/products/${item.id}`} className="text-orange-400 hover:underline font-medium">{item.name}</Link><span className="text-xs text-slate-400 ml-2">{formatZAR(item.basePriceCents)}</span></li>)}
-      </Section>
+      {commerceOn && (
+        <Section title="Products" count={products.length}>
+          {products.map((item) => <li key={item.id} className="py-2"><Link href={`/products/${item.id}`} className="text-orange-400 hover:underline font-medium">{item.name}</Link><span className="text-xs text-slate-400 ml-2">{formatZAR(item.basePriceCents)}</span></li>)}
+        </Section>
+      )}
     </div>
   );
 }
