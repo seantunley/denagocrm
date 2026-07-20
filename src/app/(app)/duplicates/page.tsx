@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { mergeContacts } from "@/app/actions/merge";
 import { contactName, formatDate } from "@/lib/format";
 import { getAccessibleContactIds, requirePermission } from "@/lib/permissions";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/visual-system";
 
@@ -19,6 +20,7 @@ function getContacts(ids: string[] | null = null) {
 
 export default async function DuplicatesPage() {
   const user = await requirePermission("contacts.merge");
+  const automotiveOn = await isModuleEnabled("automotive");
   const ids = await getAccessibleContactIds(user);
   const contacts = await getContacts(ids);
   const groups = new Map<string, ContactRow[]>();
@@ -62,7 +64,7 @@ export default async function DuplicatesPage() {
                   <div className="flex-1 min-w-0">
                     <Link href={`/contacts/${contact.id}`} className="text-orange-400 hover:underline font-medium">{contactName(contact)}</Link>
                     <p className="text-xs text-slate-400">
-                      {[contact.email, contact.phone].filter(Boolean).join(" · ")} · added {formatDate(contact.createdAt)} · {contact._count.leads} leads · {contact._count.vehicles} vehicles · {contact._count.communications} comms
+                      {[contact.email, contact.phone].filter(Boolean).join(" · ")} · added {formatDate(contact.createdAt)} · {contact._count.leads} leads{automotiveOn ? ` · ${contact._count.vehicles} vehicles` : ""} · {contact._count.communications} comms
                     </p>
                   </div>
                   <form action={mergeContacts.bind(null, contact.id, group.contacts.filter((item) => item.id !== contact.id).map((item) => item.id).join(","))}>

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { contactName, formatZAR } from "@/lib/format";
 import { getAccessibleDocumentIds } from "@/lib/documentAccess";
 import {
@@ -28,6 +29,7 @@ export default async function SearchPage({
   searchParams: Promise<{ q?: string }>;
 }) {
   const user = await requireUser();
+  const automotiveOn = await isModuleEnabled("automotive");
   const { q } = await searchParams;
   const term = (q ?? "").trim();
 
@@ -146,8 +148,9 @@ export default async function SearchPage({
     casesPromise,
   ]);
 
-  const total = contacts.length + leads.length + vehicles.length + jobCards.length + quotes.length +
-    products.length + documents.length + cases.length;
+  const total = contacts.length + leads.length + quotes.length +
+    products.length + documents.length + cases.length +
+    (automotiveOn ? vehicles.length + jobCards.length : 0);
   const Section = ({ title, children, count }: { title: string; count: number; children: React.ReactNode }) =>
     count === 0 ? null : (
       <div className="card">
@@ -169,12 +172,16 @@ export default async function SearchPage({
       <Section title="Leads" count={leads.length}>
         {leads.map((item) => <li key={item.id} className="py-2"><Link href={`/leads/${item.id}`} className="text-orange-400 hover:underline font-medium">{item.title}</Link><span className="text-xs text-slate-400 ml-2">{item.name} · {item.status === "open" ? item.stage.name : item.status} · {formatZAR(item.valueCents)}</span></li>)}
       </Section>
-      <Section title="Vehicles" count={vehicles.length}>
-        {vehicles.map((item) => <li key={item.id} className="py-2"><Link href={`/vehicles/${item.id}`} className="text-orange-400 hover:underline font-medium">{item.model}</Link><span className="text-xs text-slate-400 ml-2">{[item.vin, contactName(item.contact)].filter(Boolean).join(" · ")}</span></li>)}
-      </Section>
-      <Section title="Job cards" count={jobCards.length}>
-        {jobCards.map((item) => <li key={item.id} className="py-2"><Link href={`/jobcards/${item.id}`} className="text-orange-400 hover:underline font-medium">#{item.number}</Link><span className="text-xs text-slate-400 ml-2">{item.vehicle.model} · {contactName(item.contact)} · {item.description.slice(0, 60)}</span></li>)}
-      </Section>
+      {automotiveOn && (
+        <Section title="Vehicles" count={vehicles.length}>
+          {vehicles.map((item) => <li key={item.id} className="py-2"><Link href={`/vehicles/${item.id}`} className="text-orange-400 hover:underline font-medium">{item.model}</Link><span className="text-xs text-slate-400 ml-2">{[item.vin, contactName(item.contact)].filter(Boolean).join(" · ")}</span></li>)}
+        </Section>
+      )}
+      {automotiveOn && (
+        <Section title="Job cards" count={jobCards.length}>
+          {jobCards.map((item) => <li key={item.id} className="py-2"><Link href={`/jobcards/${item.id}`} className="text-orange-400 hover:underline font-medium">#{item.number}</Link><span className="text-xs text-slate-400 ml-2">{item.vehicle.model} · {contactName(item.contact)} · {item.description.slice(0, 60)}</span></li>)}
+        </Section>
+      )}
       <Section title="Quotes" count={quotes.length}>
         {quotes.map((item) => <li key={item.id} className="py-2"><Link href={`/quotes/${item.id}`} className="text-orange-400 hover:underline font-medium">Q-{item.number}</Link><span className="text-xs text-slate-400 ml-2">{item.contact ? contactName(item.contact) : item.lead?.name} · {item.status}</span></li>)}
       </Section>

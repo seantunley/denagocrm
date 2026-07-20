@@ -28,6 +28,7 @@ import {
   requireAnyPermission,
 } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 
 function initials(name: string) {
   return name
@@ -45,6 +46,7 @@ export default async function ContactsPage({
   searchParams: Promise<{ q?: string; view?: string }>;
 }) {
   const user = await requireAnyPermission("contacts.view_all", "contacts.view_owned");
+  const automotiveOn = await isModuleEnabled("automotive");
   const { q, view } = await searchParams;
   const cards = view !== "list";
   const [accessibleIds, canCreate, canMerge] = await Promise.all([
@@ -135,9 +137,9 @@ export default async function ContactsPage({
 
       <section className="relative overflow-hidden rounded-2xl border border-white/[0.07] bg-card shadow-sm">
         <div className="pointer-events-none absolute -left-24 -top-28 size-72 rounded-full bg-orange-500/[0.07] blur-3xl" />
-        <div className="relative grid divide-y divide-border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+        <div className={cn("relative grid divide-y divide-border sm:divide-x sm:divide-y-0", automotiveOn ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
           <SummaryStat icon={UsersRound} value={contacts.length} label={q ? "Matching contacts" : "Contacts shown"} />
-          <SummaryStat icon={CarFront} value={vehicleCount} label="Linked vehicles" />
+          {automotiveOn && <SummaryStat icon={CarFront} value={vehicleCount} label="Linked vehicles" />}
           <SummaryStat icon={ArrowRight} value={leadCount} label="Open opportunities" accent={leadCount > 0} />
         </div>
       </section>
@@ -173,11 +175,11 @@ export default async function ContactsPage({
       ) : cards ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {contacts.map((contact) => (
-            <ContactCard key={contact.id} contact={contact} />
+            <ContactCard key={contact.id} contact={contact} automotiveOn={automotiveOn} />
           ))}
         </div>
       ) : (
-        <ContactTable contacts={contacts} />
+        <ContactTable contacts={contacts} automotiveOn={automotiveOn} />
       )}
     </div>
   );
@@ -210,7 +212,7 @@ type ContactWithRelations = Awaited<ReturnType<typeof prisma.contact.findMany<{
   include: { tags: true; owner: true; _count: { select: { vehicles: true; leads: true } } };
 }>>>[number];
 
-function ContactCard({ contact }: { contact: ContactWithRelations }) {
+function ContactCard({ contact, automotiveOn }: { contact: ContactWithRelations; automotiveOn: boolean }) {
   const name = contactName(contact);
   const context = contact.isCompany ? "Company account" : contact.company || contact.city || "Individual customer";
   return (
@@ -237,8 +239,8 @@ function ContactCard({ contact }: { contact: ContactWithRelations }) {
         {contact.tags.length > 3 && <Badge variant="ghost" className="text-[10px] text-muted-foreground">+{contact.tags.length - 3}</Badge>}
       </div>
 
-      <div className="mt-auto grid grid-cols-2 gap-2 pt-3">
-        <MiniMetric icon={CarFront} value={contact._count.vehicles} label="Vehicles" />
+      <div className={cn("mt-auto grid gap-2 pt-3", automotiveOn ? "grid-cols-2" : "grid-cols-1")}>
+        {automotiveOn && <MiniMetric icon={CarFront} value={contact._count.vehicles} label="Vehicles" />}
         <MiniMetric icon={ArrowRight} value={contact._count.leads} label="Open leads" active={contact._count.leads > 0} />
       </div>
 
@@ -254,13 +256,13 @@ function MiniMetric({ icon: Icon, value, label, active = false }: { icon: typeof
   return <div className="rounded-lg border border-border/70 bg-background/35 px-2.5 py-1.5"><div className="flex items-center gap-1.5"><Icon className={cn("size-3.5", active ? "text-orange-400" : "text-muted-foreground")} /><span className="text-sm font-semibold tabular-nums">{value}</span></div><p className="mt-0.5 text-[10px] text-muted-foreground">{label}</p></div>;
 }
 
-function ContactTable({ contacts }: { contacts: ContactWithRelations[] }) {
+function ContactTable({ contacts, automotiveOn }: { contacts: ContactWithRelations[]; automotiveOn: boolean }) {
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-muted/25 text-left text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-            <tr><th className="px-5 py-3">Customer</th><th className="px-4 py-3">Contact</th><th className="px-4 py-3">Relationship</th><th className="px-4 py-3 text-center">Vehicles</th><th className="px-4 py-3 text-center">Leads</th><th className="px-4 py-3">Added</th><th className="w-10" /></tr>
+            <tr><th className="px-5 py-3">Customer</th><th className="px-4 py-3">Contact</th><th className="px-4 py-3">Relationship</th>{automotiveOn && <th className="px-4 py-3 text-center">Vehicles</th>}<th className="px-4 py-3 text-center">Leads</th><th className="px-4 py-3">Added</th><th className="w-10" /></tr>
           </thead>
           <tbody className="divide-y divide-border/70">
             {contacts.map((contact) => {
@@ -270,7 +272,7 @@ function ContactTable({ contacts }: { contacts: ContactWithRelations[] }) {
                   <td className="px-5 py-3.5"><Link href={`/contacts/${contact.id}`} className="flex items-center gap-3"><span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-orange-500/10 text-[10px] font-semibold text-orange-300">{contact.isCompany ? <Building2 className="size-4" /> : initials(name)}</span><span><span className="block font-medium text-foreground group-hover:text-orange-300">{name}</span><span className="block text-xs text-muted-foreground">{contact.company || contact.city || (contact.isCompany ? "Company" : "Customer")}</span></span></Link></td>
                   <td className="px-4 py-3.5"><p className="max-w-60 truncate text-xs text-foreground/85">{contact.email || contact.phone || "No details"}</p>{contact.email && contact.phone && <p className="mt-0.5 text-[11px] text-muted-foreground">{contact.phone}</p>}</td>
                   <td className="px-4 py-3.5"><div className="flex flex-wrap gap-1">{contact.tags.slice(0, 2).map((tag) => <Badge key={tag.id} variant="outline" className="text-[10px] text-muted-foreground"><span className="size-1.5 rounded-full" style={{ backgroundColor: tag.color }} />{tag.name}</Badge>)}{contact.owner && <span className="text-[11px] text-muted-foreground">{contact.tags.length ? "· " : ""}{contact.owner.name}</span>}</div></td>
-                  <td className="px-4 py-3.5 text-center font-medium tabular-nums">{contact._count.vehicles}</td>
+                  {automotiveOn && <td className="px-4 py-3.5 text-center font-medium tabular-nums">{contact._count.vehicles}</td>}
                   <td className="px-4 py-3.5 text-center"><span className={cn("inline-flex min-w-6 justify-center rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums", contact._count.leads ? "bg-orange-400/10 text-orange-300" : "text-muted-foreground")}>{contact._count.leads}</span></td>
                   <td className="whitespace-nowrap px-4 py-3.5 text-xs text-muted-foreground">{formatDate(contact.createdAt)}</td>
                   <td className="pr-4"><Link href={`/contacts/${contact.id}`} aria-label={`Open ${name}`} className="flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition hover:bg-accent hover:text-foreground group-hover:opacity-100 focus:opacity-100"><ArrowRight className="size-3.5" /></Link></td>
