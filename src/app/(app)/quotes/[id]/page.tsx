@@ -288,7 +288,7 @@ export default async function QuoteDetailPage({
         </div>
       )}
 
-      {quote.status === "accepted" && !quote.supersededAt && (
+      {automotiveOn && quote.status === "accepted" && !quote.supersededAt && (
         <div className="card py-3 flex items-center gap-2 flex-wrap">
           <span className="text-xs font-semibold uppercase tracking-wide text-slate-400 mr-1">
             Fulfilment
@@ -338,7 +338,7 @@ export default async function QuoteDetailPage({
       />
       )}
 
-      {quote.status === "accepted" && !quote.supersededAt && (
+      {automotiveOn && quote.status === "accepted" && !quote.supersededAt && (
         <div className="card">
           <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
             <div>

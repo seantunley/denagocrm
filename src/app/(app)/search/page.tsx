@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { isModuleEnabled } from "@/lib/modules/enabled";
+import { AUTOMOTIVE_DELIVERY_TAGS } from "@/lib/modules/registry";
 import { contactName, formatZAR } from "@/lib/format";
 import { getAccessibleDocumentIds } from "@/lib/documentAccess";
 import {
@@ -144,7 +145,26 @@ export default async function SearchPage({
     documentIds !== null && documentIds.length === 0
       ? Promise.resolve([])
       : prisma.document.findMany({
-          where: { ...scoped(documentIds), fileName: contains, deletedAt: null },
+          where: {
+            ...scoped(documentIds),
+            fileName: contains,
+            deletedAt: null,
+            // When automotive is off, drop vehicle/job-card/delivery-paperwork
+            // docs before counting and rendering (they're downloadable via
+            // /api/files). NOT{OR} keeps null-tag core docs, mirroring the
+            // portal documents fix.
+            ...(automotiveOn
+              ? {}
+              : {
+                  NOT: {
+                    OR: [
+                      { vehicleId: { not: null } },
+                      { jobCardId: { not: null } },
+                      { tag: { in: [...AUTOMOTIVE_DELIVERY_TAGS] } },
+                    ],
+                  },
+                }),
+          },
           include: { contact: true, vehicle: true },
           orderBy: { createdAt: "desc" },
           take: 20,

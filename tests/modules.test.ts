@@ -20,6 +20,7 @@ test("moduleForPath maps routes to the owning pack (unknown → core)", () => {
   assert.equal(moduleForPath("/stock"), "commerce");
   assert.equal(moduleForPath("/inbox"), "inbox");
   assert.equal(moduleForPath("/messages"), "inbox");
+  assert.equal(moduleForPath("/messages/cases"), "support");
   assert.equal(moduleForPath("/cases"), "support");
   assert.equal(moduleForPath("/campaigns"), "marketing");
   assert.equal(moduleForPath("/chatbot"), "automation");
