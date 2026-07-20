@@ -6,6 +6,7 @@ import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDo
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { contactName, formatDate } from "@/lib/format";
 import { quoteTotalCents } from "@/lib/pricing";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 
 export default async function DeliveryNotePrintPage({
   params,
@@ -15,6 +16,10 @@ export default async function DeliveryNotePrintPage({
   searchParams: Promise<{ tpl?: string }>;
 }) {
   const { id } = await params;
+  // The (print) layout guard treats /quotes as core, so this automotive delivery
+  // note slips through it. A delivery note is automotive paperwork — 404 it
+  // explicitly when the automotive pack is off.
+  if (!(await isModuleEnabled("automotive"))) notFound();
   await requireQuoteReadAccess(id);
   const { tpl: tplId } = await searchParams;
   const quote = await prisma.quote.findUnique({

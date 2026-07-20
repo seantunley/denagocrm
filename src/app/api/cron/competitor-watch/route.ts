@@ -8,6 +8,7 @@ import {
   dueSourceIds,
   researchCompetitor,
 } from "@/lib/competitors";
+import { getEnabledModuleIds } from "@/lib/modules/enabled";
 
 export const maxDuration = 300;
 
@@ -34,6 +35,13 @@ function isAuthorizedCron(req: NextRequest): boolean {
 export async function GET(req: NextRequest) {
   if (!isAuthorizedCron(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Competitor intelligence (page-diff, discovery, deep research) is the whole
+  // job of this route and is owned by the automation pack — skip it entirely
+  // when that pack is off, keeping the response shape.
+  if (!(await getEnabledModuleIds()).has("automation")) {
+    return NextResponse.json({ ok: true, checked: 0, changed: 0, errors: 0, discovered: 0, researched: 0 });
   }
 
   // 1. Cheap page-diff watch.

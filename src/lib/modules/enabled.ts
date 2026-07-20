@@ -29,6 +29,19 @@ export async function isModuleEnabled(id: ModuleId): Promise<boolean> {
   return (await getEnabledModuleIds()).has(id);
 }
 
+/**
+ * Server-side gate for actions and route handlers that throw on failure. Render-
+ * time gating (only showing a button when a pack is on) is NOT a security
+ * boundary — the action ID is still reachable by a direct POST — so every
+ * module-owned mutation must call this too. Throws when the module is off; the
+ * error surfaces to the caller exactly like an auth failure (`throw new Error`).
+ */
+export async function requireModuleEnabled(id: ModuleId): Promise<void> {
+  if (!(await isModuleEnabled(id))) {
+    throw new Error(`Module "${id}" is disabled`);
+  }
+}
+
 /** Persist module choices as the disabled set (mandatory core can never be disabled). */
 export async function setEnabledModuleIds(enabledIds: string[]): Promise<void> {
   const disabled = OPTIONAL_MODULE_IDS.filter((id) => !enabledIds.includes(id));

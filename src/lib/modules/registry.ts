@@ -107,6 +107,23 @@ export const AUTOMOTIVE_DELIVERY_TAGS = [
   "delivery-signature",
 ] as const;
 
+/**
+ * True when a document belongs to the automotive pack — either linked to a
+ * vehicle/job card, or tagged as delivery paperwork (which is filed against a
+ * contact/quote, so the id checks alone miss it). When automotive is off these
+ * docs must be hidden and non-downloadable. Pure + DB-free so the staff repo
+ * (/documents), the staff file API (/api/files) and the portal all share one
+ * definition. Plain contact/quote docs (null id + null/other tag) are core.
+ */
+export function isAutomotiveOwnedDocument(doc: {
+  vehicleId?: string | null;
+  jobCardId?: string | null;
+  tag?: string | null;
+}): boolean {
+  if (doc.vehicleId != null || doc.jobCardId != null) return true;
+  return doc.tag != null && (AUTOMOTIVE_DELIVERY_TAGS as readonly string[]).includes(doc.tag);
+}
+
 export const ALL_MODULE_IDS: ModuleId[] = MODULE_REGISTRY.map((m) => m.id);
 
 /** Modules an owner may toggle (everything except mandatory core). */

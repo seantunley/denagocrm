@@ -8,7 +8,7 @@ import { logAudit } from "@/lib/audit";
 import { runLeadAutomations } from "@/lib/automations";
 import { saveFile } from "@/lib/storage";
 import { contactName } from "@/lib/format";
-import { isModuleEnabled } from "@/lib/modules/enabled";
+import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
 
 const MAX_FILE = 4 * 1024 * 1024;
 
@@ -80,6 +80,10 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
 }
 
 export async function scheduleDelivery(quoteId: string, formData: FormData) {
+  // Scheduling a delivery is automotive-owned fulfilment (workshop activity +
+  // delivery paperwork). Reachable by direct POST regardless of the UI, so gate
+  // it server-side; throws when the automotive pack is off.
+  await requireModuleEnabled("automotive");
   const user = await requireQuoteAccess(quoteId, "deliveries.manage");
   const quote = await prisma.quote.findUniqueOrThrow({
     where: { id: quoteId },
@@ -153,6 +157,10 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
 }
 
 export async function markDelivered(quoteId: string, formData: FormData) {
+  // Marking delivered files delivery notes/signatures and redirects into vehicle
+  // registration — all automotive-owned. Gate server-side (throws when off) so a
+  // direct POST can't drive automotive fulfilment with the pack disabled.
+  await requireModuleEnabled("automotive");
   const user = await requireQuoteAccess(quoteId, "deliveries.manage");
   const quote = await prisma.quote.findUniqueOrThrow({
     where: { id: quoteId },

@@ -5,6 +5,7 @@ import {
   MODULE_REGISTRY,
   moduleForPath,
   isPathEnabled,
+  isAutomotiveOwnedDocument,
 } from "../src/lib/modules/registry";
 import { buildNav } from "../src/components/nav-config";
 
@@ -50,6 +51,25 @@ test("core paths are always enabled, even outside the enabled set", () => {
 test("buildNav with all modules enabled matches unfiltered", () => {
   const all = new Set(ALL_MODULE_IDS);
   assert.deepEqual(hrefs(all).sort(), hrefs(undefined).sort());
+});
+
+test("isAutomotiveOwnedDocument flags vehicle/job-card/delivery docs, not core docs", () => {
+  // Automotive-owned: vehicle- or job-card-linked, or tagged delivery paperwork
+  // (which is filed against a contact/quote, so ids alone would miss it).
+  assert.equal(isAutomotiveOwnedDocument({ vehicleId: "v1" }), true);
+  assert.equal(isAutomotiveOwnedDocument({ jobCardId: "j1" }), true);
+  assert.equal(isAutomotiveOwnedDocument({ tag: "delivery-note" }), true);
+  assert.equal(isAutomotiveOwnedDocument({ tag: "delivery-photo" }), true);
+  assert.equal(isAutomotiveOwnedDocument({ tag: "delivery-signature" }), true);
+  assert.equal(
+    isAutomotiveOwnedDocument({ vehicleId: null, jobCardId: null, tag: "delivery-note" }),
+    true
+  );
+  // Core: plain contact/quote docs with null or non-delivery tags stay visible.
+  assert.equal(isAutomotiveOwnedDocument({ vehicleId: null, jobCardId: null, tag: null }), false);
+  assert.equal(isAutomotiveOwnedDocument({ tag: "invoice" }), false);
+  assert.equal(isAutomotiveOwnedDocument({ tag: "pop" }), false);
+  assert.equal(isAutomotiveOwnedDocument({}), false);
 });
 
 test("disabling a pack hides its nav but keeps core", () => {

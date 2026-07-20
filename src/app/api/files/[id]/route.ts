@@ -3,6 +3,8 @@ import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessDocument } from "@/lib/documentAccess";
 import { portalCanAccessDocument } from "@/lib/portalAccess";
+import { isModuleEnabled } from "@/lib/modules/enabled";
+import { isAutomotiveOwnedDocument } from "@/lib/modules/registry";
 import { readFile } from "@/lib/storage";
 
 export async function GET(
@@ -19,6 +21,13 @@ export async function GET(
 
   const doc = await prisma.document.findUnique({ where: { id } });
   if (!doc || doc.deletedAt) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  // Record-level access passing isn't enough: when the automotive pack is off,
+  // its paperwork must not resolve even from a saved URL. Mirror the portal file
+  // API — 404 automotive-owned docs (vehicle/job-card linked or delivery-tagged).
+  if (isAutomotiveOwnedDocument(doc) && !(await isModuleEnabled("automotive"))) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
 
   const SAFE_INLINE = /^(image\/(png|jpe?g|gif|webp|avif)|application\/pdf)$/i;
   const inline = SAFE_INLINE.test(doc.mimeType);
