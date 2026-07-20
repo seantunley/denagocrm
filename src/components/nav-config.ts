@@ -73,12 +73,15 @@ export function buildNav(
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/contacts", label: "Contacts", icon: Users });
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/fleets", label: "Fleets", icon: Building2 });
   if (can("activities.view", "activities.manage")) crmLinks.push({ href: "/activities", label: "Activities", icon: ListChecks });
-  if (can("cases.view_all", "cases.view_owned")) crmLinks.push({ href: "/cases", label: "Help desk", icon: Ticket });
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/health", label: "Customer Health", icon: HeartPulse });
   if (can("documents.view_all", "documents.view_owned", "documents.upload", "documents.manage", "document_templates.manage")) {
     crmLinks.push({ href: "/documents", label: "Documents", icon: FolderOpen });
   }
   if (crmLinks.length) groups.push({ key: "crm", label: "CRM", links: crmLinks });
+
+  if (can("cases.view_all", "cases.view_owned")) {
+    groups.push({ key: "helpdesk", label: "Help desk", links: [{ href: "/cases", label: "Help desk", icon: Ticket }] });
+  }
 
   const marketingLinks: NavLink[] = [];
   if (can("campaigns.view", "campaigns.manage")) marketingLinks.push({ href: "/campaigns", label: "Campaigns", icon: Megaphone });
