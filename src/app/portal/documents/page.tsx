@@ -47,8 +47,11 @@ export default async function PortalDocumentsPage() {
         deletedAt: null,
         OR: [
           { contactId: { in: scope.contactIds } },
-          { vehicle: { contactId: { in: scope.contactIds } } },
-          ...(scope.fleetIds.length ? [{ vehicle: { fleetId: { in: scope.fleetIds } } }] : []),
+          // Vehicle/fleet-linked paperwork is automotive-owned; when the pack is
+          // off the customer must not see or download it, so drop those branches
+          // (the contact-owned and quote-linked branches are core and stay).
+          ...(automotiveOn ? [{ vehicle: { contactId: { in: scope.contactIds } } }] : []),
+          ...(automotiveOn && scope.fleetIds.length ? [{ vehicle: { fleetId: { in: scope.fleetIds } } }] : []),
           ...(quoteIds.length ? [{ quoteId: { in: quoteIds } }] : []),
         ],
       },

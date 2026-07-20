@@ -19,6 +19,11 @@ export async function GET(
   }
   const document = await prisma.document.findFirst({ where: { id, deletedAt: null } });
   if (!document) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  // Vehicle-linked paperwork is automotive-owned; when the pack is off a saved
+  // URL must not still resolve to a delivery/service document.
+  if (document.vehicleId && !(await isModuleEnabled("automotive"))) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
   try {
     const bytes = await readFile(document.storedName);
     return new NextResponse(new Uint8Array(bytes), {
