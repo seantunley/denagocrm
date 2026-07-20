@@ -203,9 +203,14 @@ export async function runLeadAutomations(
  * its newest quote. Returns null when a candidate should be skipped entirely
  * because it has a quote still pending a decision (a quote-pending state is not
  * "gone quiet").
+ *
+ * A logged activity's `createdAt` always counts (it is real past engagement),
+ * but a future `dueDate` only counts for OPEN ("planned") activities — a
+ * canceled or completed activity whose due date happens to sit in the future is
+ * not a scheduled touch and must not suppress the gone-quiet nudge.
  */
 async function lastEngagementAt(leadId: string, rowUpdatedAt: Date): Promise<Date | null> {
-  const [pendingQuote, commAgg, activityAgg, quoteAgg] = await Promise.all([
+  const [pendingQuote, commAgg, activityAgg, plannedActivityAgg, quoteAgg] = await Promise.all([
     prisma.quote.findFirst({
       where: {
         leadId,
@@ -222,7 +227,11 @@ async function lastEngagementAt(leadId: string, rowUpdatedAt: Date): Promise<Dat
     }),
     prisma.activity.aggregate({
       where: { leadId },
-      _max: { createdAt: true, dueDate: true },
+      _max: { createdAt: true },
+    }),
+    prisma.activity.aggregate({
+      where: { leadId, status: "planned" },
+      _max: { dueDate: true },
     }),
     prisma.quote.aggregate({
       where: { leadId, deletedAt: null },
@@ -236,7 +245,7 @@ async function lastEngagementAt(leadId: string, rowUpdatedAt: Date): Promise<Dat
   const candidates: Date[] = [rowUpdatedAt];
   if (commAgg._max.occurredAt) candidates.push(commAgg._max.occurredAt);
   if (activityAgg._max.createdAt) candidates.push(activityAgg._max.createdAt);
-  if (activityAgg._max.dueDate) candidates.push(activityAgg._max.dueDate);
+  if (plannedActivityAgg._max.dueDate) candidates.push(plannedActivityAgg._max.dueDate);
   if (quoteAgg._max.updatedAt) candidates.push(quoteAgg._max.updatedAt);
 
   return candidates.reduce((latest, d) => (d > latest ? d : latest), rowUpdatedAt);

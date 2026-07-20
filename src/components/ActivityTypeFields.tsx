@@ -41,7 +41,15 @@ export default function ActivityTypeFields({
           <option value="meeting">🤝 Meeting</option>
           <option value="whatsapp">💬 WhatsApp</option>
           <option value="test_drive">🚗 Test drive</option>
-          <option value="follow_up">🔁 Follow-up</option>
+          {/*
+            Follow-up carries invariants (a required note + auto-pin) that only
+            the create flow enforces, so it is offered only when `followUpNote`
+            is set. The edit form omits that prop, so editing a task into a
+            noteless/unpinned follow-up is impossible.
+          */}
+          {(followUpNote || defaultType === "follow_up") && (
+            <option value="follow_up">🔁 Follow-up</option>
+          )}
           <option value="todo">☑️ To-do</option>
         </select>
       </div>
