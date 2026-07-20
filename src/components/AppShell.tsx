@@ -81,7 +81,7 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules
 
       {/* Nav */}
       <div className="relative flex-1 overflow-y-auto px-3 py-3">
-        <Nav modules={user.modules} isAdmin={isOwner} enabledModules={enabledModules} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting }} />
+        <Nav modules={user.modules} isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting }} />
       </div>
 
       {/* Help, Settings & user */}
