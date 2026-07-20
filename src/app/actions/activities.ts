@@ -242,10 +242,21 @@ export async function rescheduleActivity(
   id: string,
   when: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const { user } = await requireActivityAccess(id);
-  const dueDate = new Date(when.includes("T") ? `${when}:00+02:00` : when);
-  if (isNaN(dueDate.getTime())) {
-    return { ok: false, error: "Pick a valid date" };
+  const { user, activity: existing } = await requireActivityAccess(id);
+  // Preserve the follow-up "real future time" invariant that updateActivity
+  // enforces: the hour-before reminder push skips midnight, so a follow-up
+  // rescheduled to a past/midnight time would silently miss its nudge.
+  let dueDate: Date;
+  if (existing.type === FOLLOW_UP_TYPE) {
+    const normalised = ensureFollowUpTime(when);
+    dueDate = normalised ? new Date(`${normalised}:00+02:00`) : new Date(NaN);
+    const problem = followUpDueDateError(dueDate, new Date());
+    if (problem) return { ok: false, error: problem };
+  } else {
+    dueDate = new Date(when.includes("T") ? `${when}:00+02:00` : when);
+    if (isNaN(dueDate.getTime())) {
+      return { ok: false, error: "Pick a valid date" };
+    }
   }
   const activity = await prisma.activity.update({
     where: { id },

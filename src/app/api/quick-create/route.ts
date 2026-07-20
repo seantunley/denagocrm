@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
+import { getAccessibleContactIds, getAccessibleVehicleIds } from "@/lib/permissions";
 import { contactName } from "@/lib/format";
 import { getSetting } from "@/lib/settings";
 import { isModuleEnabled } from "@/lib/modules/enabled";
@@ -20,10 +21,16 @@ export async function GET() {
   // from commerce). The route-guard only covers page layouts, so this API must
   // self-enforce gating: with a pack off, a signed-in user (or a stale form)
   // must not be able to GET its options. Core options stay available.
-  const [automotiveOn, commerceOn] = await Promise.all([
+  // Scope the record option lists to what this user may actually access — a
+  // restricted salesperson must not receive every contact/vehicle in the org.
+  // null = view-all (no filter); an id list restricts to owned/team records.
+  const [automotiveOn, commerceOn, contactIds, vehicleIds] = await Promise.all([
     isModuleEnabled("automotive"),
     isModuleEnabled("commerce"),
+    getAccessibleContactIds(user),
+    getAccessibleVehicleIds(user),
   ]);
+  const scoped = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
 
   const [products, stages, contacts, users, vehicles, validDaysRaw, quoteTerms] = await Promise.all([
     commerceOn
@@ -34,10 +41,11 @@ export async function GET() {
         })
       : Promise.resolve([]),
     prisma.pipelineStage.findMany({ orderBy: { order: "asc" }, select: { id: true, name: true } }),
-    prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
+    prisma.contact.findMany({ where: scoped(contactIds), orderBy: { firstName: "asc" }, take: 500 }),
     prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
     automotiveOn
       ? prisma.vehicle.findMany({
+          where: scoped(vehicleIds),
           include: { contact: true },
           orderBy: { model: "asc" },
           take: 500,
