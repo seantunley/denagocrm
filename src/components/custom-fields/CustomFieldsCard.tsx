@@ -1,4 +1,4 @@
-import { getFieldsWithValues, type CustomEntity, type FieldDef } from "@/lib/customFields";
+import { getFieldsWithValues, displayValue, type CustomEntity, type FieldDef } from "@/lib/customFields";
 import { saveCustomFieldValues } from "@/app/actions/customFields";
 import { Button } from "@/components/ui/button";
 
@@ -46,12 +46,34 @@ function Field({ def, value }: { def: FieldDef; value: string | null }) {
 export default async function CustomFieldsCard({
   entity,
   recordId,
+  readOnly = false,
 }: {
   entity: CustomEntity;
   recordId: string;
+  readOnly?: boolean;
 }) {
   const fields = await getFieldsWithValues(entity, recordId);
   if (fields.length === 0) return null;
+
+  if (readOnly) {
+    return (
+      <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Custom fields
+        </p>
+        <div className="space-y-3">
+          {fields.map(({ def, value }) => (
+            <div key={def.id}>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                {def.label}
+              </label>
+              <p className="text-sm">{displayValue(def, value)}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <form

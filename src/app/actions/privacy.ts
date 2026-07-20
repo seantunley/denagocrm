@@ -72,10 +72,19 @@ export async function anonymizeContact(contactId: string) {
     where: { contactId },
     data: { name: "Redacted", email: null, phone: null },
   });
-  // Custom-field values can hold PII (e.g. ID number) — erase them too.
+  // Custom-field values can hold PII (e.g. ID number) — erase them too, for the
+  // contact and for each of its leads (lead custom values key on the lead id).
   await prisma.customFieldValue.deleteMany({
     where: { recordId: contactId, def: { entity: "contact" } },
   });
+  const leadIds = (
+    await prisma.lead.findMany({ where: { contactId }, select: { id: true } })
+  ).map((l) => l.id);
+  if (leadIds.length > 0) {
+    await prisma.customFieldValue.deleteMany({
+      where: { recordId: { in: leadIds }, def: { entity: "lead" } },
+    });
+  }
   await prisma.consentRecord.create({
     data: {
       contactId,
