@@ -23,9 +23,27 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
   const recipient = await prisma.signatureRecipient.findUnique({ where: { token }, include: { request: true } });
   if (!recipient) return new Response("Not found", { status: 404 });
   const request = recipient.request;
-  if (request.deletedAt || request.status === "voided" || request.status === "completed") return new Response("This document can no longer be signed.", { status: 409 });
+  // The signing PAGE enforced these; the API must repeat every one — a direct
+  // POST bypasses the page entirely.
+  if (request.deletedAt || request.status === "voided" || request.status === "completed" || request.status === "declined") {
+    return new Response("This document can no longer be signed.", { status: 409 });
+  }
+  if (request.expiresAt && request.expiresAt < new Date()) {
+    return new Response("This signing link has expired.", { status: 409 });
+  }
   if (recipient.status === "signed") return new Response("Already signed", { status: 409 });
+  if (recipient.status === "declined") return new Response("You have declined this document.", { status: 409 });
   if (recipient.role === "viewer") return new Response("View only", { status: 403 });
+
+  // Sequential workflows: block a later signer until every earlier, non-viewer
+  // recipient has signed (the page's "Not your turn yet" rule).
+  if (request.ordering === "sequential") {
+    const earlier = await prisma.signatureRecipient.findFirst({
+      where: { requestId: request.id, role: { not: "viewer" }, order: { lt: recipient.order }, status: { not: "signed" } },
+      select: { id: true },
+    });
+    if (earlier) return new Response("It's not your turn to sign yet.", { status: 409 });
+  }
 
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return new Response("Invalid submission", { status: 400 });
@@ -35,7 +53,31 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
   const requestFields = await prisma.signatureField.findMany({ where: { requestId: request.id } });
   const fillable = new Map(requestFields.filter((f) => f.recipientId === recipient.id || f.recipientId === null).map((f) => [f.id, f]));
 
+  // Required-field validation: every required field this recipient must fill has
+  // to arrive with a value (or already be filled). The page enforced this
+  // client-side; the API must too.
+  const submitted = new Map(fields.filter((f) => f.value && f.value.trim() !== "").map((f) => [f.id, f.value]));
+  const missingRequired = [...fillable.values()].some((f) => f.required && !f.filledAt && !submitted.has(f.id));
+  if (missingRequired) {
+    return new Response("Please complete all required fields before signing.", { status: 400 });
+  }
+
+  // Claim the recipient FIRST, atomically — before writing any field values or
+  // signature files. A losing race (or an already-signed/declined recipient)
+  // fails here and mutates nothing; the old order persisted fields/images before
+  // this guard, so a loser could overwrite the winner's field values.
+  const claimed = await prisma.signatureRecipient.updateMany({
+    where: { id: recipient.id, status: { notIn: ["signed", "declined"] } },
+    data: { status: "signed", signedAt: new Date(), signedName: name, signerIp: meta.ip, signerUserAgent: meta.ua },
+  });
+  if (claimed.count === 0) return new Response("Already signed", { status: 409 });
+
+  // We own the claim — now persist field values + signature images. Decode/store
+  // images first, then commit all field writes (and the recipient's signatureRef)
+  // in one transaction so they land together.
   let signatureRef: string | null = null;
+  const filledAt = new Date();
+  const updates: { id: string; value: string; kind: string }[] = [];
   for (const f of fields) {
     const fieldRow = fillable.get(f.id);
     if (!fieldRow) continue;
@@ -46,16 +88,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
       value = ref;
       if (fieldRow.kind === "signature" && !signatureRef) signatureRef = ref;
     }
-    await prisma.signatureField.update({ where: { id: f.id }, data: { value, filledAt: new Date() } });
-    await logSignEvent(request.id, { type: "field_filled", recipientId: recipient.id, actor: name, channel: "web", metadata: { kind: fieldRow.kind } });
+    updates.push({ id: f.id, value, kind: fieldRow.kind });
   }
-
-  // Atomic claim prevents a double-sign race.
-  const claimed = await prisma.signatureRecipient.updateMany({
-    where: { id: recipient.id, status: { not: "signed" } },
-    data: { status: "signed", signedAt: new Date(), signedName: name, signatureRef, signerIp: meta.ip, signerUserAgent: meta.ua },
-  });
-  if (claimed.count === 0) return new Response("Already signed", { status: 409 });
+  await prisma.$transaction([
+    ...updates.map((u) => prisma.signatureField.update({ where: { id: u.id }, data: { value: u.value, filledAt } })),
+    ...(signatureRef ? [prisma.signatureRecipient.update({ where: { id: recipient.id }, data: { signatureRef } })] : []),
+  ]);
+  for (const u of updates) {
+    await logSignEvent(request.id, { type: "field_filled", recipientId: recipient.id, actor: name, channel: "web", metadata: { kind: u.kind } });
+  }
 
   await logSignEvent(request.id, { type: "signed", recipientId: recipient.id, actor: name, channel: "web", ip: meta.ip, userAgent: meta.ua });
   // Surface the signature on the customer's timeline (audit feed). logSignEvent

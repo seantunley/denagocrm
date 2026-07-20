@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { putSetting } from "@/lib/settings";
 import { requireCrmOrWorkshop, requireOwner } from "@/lib/auth";
+import { canAccessContact, canAccessLead, hasAnyPermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
 import { buildSignature, buildEmailHtml, htmlToText } from "@/lib/signature";
@@ -27,6 +28,15 @@ export async function sendEmailAction(
   if (!to || !subject || !bodyText) {
     return { error: "To, subject and message are required." };
   }
+  // Don't let a caller log an email against — or pull context from — a contact or
+  // lead they can't access. (`to` stays free-form: the CRM legitimately emails
+  // addresses that aren't the record's stored email.)
+  if (contactId && !(await canAccessContact(user, contactId))) {
+    return { error: "You don't have access to that contact." };
+  }
+  if (leadId && !(await canAccessLead(user, leadId))) {
+    return { error: "You don't have access to that lead." };
+  }
   const signature = buildSignature(user);
   const html = buildEmailHtml(bodyHtml, signature);
 
@@ -35,8 +45,14 @@ export async function sendEmailAction(
   const attachments: { filename: string; content: Buffer; contentType?: string }[] = [];
   const attachedNames: string[] = [];
   if (attachIds.length > 0) {
+    // Gate the document library — otherwise any crm/workshop user could read
+    // arbitrary library files off storage and exfiltrate them as attachments to
+    // any address. Also exclude trashed documents.
+    if (!(await hasAnyPermission(user, "library.view", "library.manage"))) {
+      return { error: "You don't have access to the document library." };
+    }
     const versions = await prisma.libraryVersion.findMany({
-      where: { id: { in: attachIds } },
+      where: { id: { in: attachIds }, document: { deletedAt: null } },
       include: { document: true },
     });
     for (const v of versions) {

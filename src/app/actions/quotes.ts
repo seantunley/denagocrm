@@ -293,6 +293,12 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       if (existing.leadId && existing.contactId !== data.contactId) {
         throw new Error("The customer on a lead-linked quote cannot be changed.");
       }
+      // #15: requireQuoteAccess only authorized the quote. Moving an existing
+      // quote onto a DIFFERENT contact requires access to that destination too,
+      // or a user could re-file their quote against a customer they can't access.
+      if (existing.contactId !== data.contactId) {
+        await requireContactAccess(data.contactId, "quotes.edit");
+      }
 
       await tx.quote.update({
         where: { id: existing.id },
@@ -459,7 +465,9 @@ export async function deleteQuoteItem(id: string, quoteId: string, formData: For
   await requireQuoteAccess(quoteId, "quotes.edit");
   void formData;
   if (await quoteLocked(quoteId)) return;
-  await prisma.quoteItem.delete({ where: { id } });
+  // Scope to the authorized quote — deleting by item id alone let a user with
+  // edit access to their quote delete a line off another quote.
+  await prisma.quoteItem.deleteMany({ where: { id, quoteId } });
   revalidatePath(`/quotes/${quoteId}`);
 }
 

@@ -27,7 +27,9 @@ export async function addQuoteFee(quoteId: string, formData: FormData) {
 
 export async function deleteQuoteFee(feeId: string, quoteId: string) {
   await requireQuoteAccess(quoteId, "quotes.edit");
-  await prisma.quoteFee.delete({ where: { id: feeId } }).catch(() => {});
+  // Scope to the authorized quote — deleting by feeId alone let a user with edit
+  // access to their own quote delete a fee off someone else's quote.
+  await prisma.quoteFee.deleteMany({ where: { id: feeId, quoteId } });
   revalidateQuote(quoteId);
 }
 

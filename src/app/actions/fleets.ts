@@ -4,17 +4,20 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
-import { requirePermission, requireVehicleAccess } from "@/lib/permissions";
+import { requirePermission, requireVehicleAccess, requireContactAccess } from "@/lib/permissions";
 
 export async function createFleet(formData: FormData) {
   const user = await requirePermission("fleets.manage");
   const name = String(formData.get("name") ?? "").trim();
   if (!name) throw new Error("Give the fleet a name");
+  // #15: attaching the fleet to a contact requires access to THAT contact.
+  const contactId = String(formData.get("contactId") ?? "").trim() || null;
+  if (contactId) await requireContactAccess(contactId, "fleets.manage");
   const fleet = await prisma.fleet.create({
     data: {
       name,
       type: String(formData.get("type") ?? "").trim() || null,
-      contactId: String(formData.get("contactId") ?? "").trim() || null,
+      contactId,
       createdById: user.id,
     },
   });
@@ -24,12 +27,15 @@ export async function createFleet(formData: FormData) {
 
 export async function updateFleet(id: string, formData: FormData) {
   const user = await requirePermission("fleets.manage");
+  // #15: reassigning the fleet's contact requires access to the destination contact.
+  const contactId = String(formData.get("contactId") ?? "").trim() || null;
+  if (contactId) await requireContactAccess(contactId, "fleets.manage");
   await prisma.fleet.update({
     where: { id },
     data: {
       name: String(formData.get("name") ?? "").trim() || "Untitled fleet",
       type: String(formData.get("type") ?? "").trim() || null,
-      contactId: String(formData.get("contactId") ?? "").trim() || null,
+      contactId,
       notes: String(formData.get("notes") ?? "").trim() || null,
     },
   });
