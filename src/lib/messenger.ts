@@ -313,6 +313,18 @@ export async function recordDmEcho(platform: DmPlatform, recipientId: string, te
   if (!contact) return;
   const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
   if (!firstUser) return;
+
+  // An outbound echo must not resurrect a deliberately-archived thread. The
+  // newest existing row decides the thread's state (matching buildInboxThreads'
+  // grouping): if it's archived, stamp the echo archived too so the whole thread
+  // stays in Archived instead of splitting into a lone active message. Inbound
+  // messages still reopen the thread via reopenThreadOnInbound — unchanged.
+  const latest = await prisma.communication.findFirst({
+    where: { type: platform, contactId: contact.id },
+    orderBy: { occurredAt: "desc" },
+    select: { archivedAt: true },
+  });
+
   await prisma.communication.create({
     data: {
       type: platform,
@@ -320,6 +332,7 @@ export async function recordDmEcho(platform: DmPlatform, recipientId: string, te
       body: text,
       contactId: contact.id,
       userId: firstUser.id,
+      archivedAt: latest?.archivedAt ?? null,
     },
   });
 }

@@ -1,6 +1,7 @@
 import { MessageSquare } from "lucide-react";
 import { prisma, basePrisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { accessibleInboxWhere } from "@/lib/permissions";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
@@ -11,20 +12,25 @@ import { PageHeader } from "@/components/page-header";
 export const metadata = { title: "Social inbox — DenagoCRM" };
 
 export default async function InboxPage() {
-  await requireUser();
+  const user = await requireUser();
+
+  // Scope the inbox to the contacts/leads this user may see — a rep with a
+  // narrow customer scope must not read message bodies for records outside it.
+  // {} for privileged (view_all) users leaves the queries unchanged.
+  const scopeWhere = await accessibleInboxWhere(user);
 
   // Query active and archived separately so a burst of archived test chats can't
   // consume the take budget and starve older active conversations from the inbox.
   const channelWhere = { type: { in: ["whatsapp", "messenger", "instagram"] } };
   const [activeComms, archivedComms, reviews, placeId] = await Promise.all([
     prisma.communication.findMany({
-      where: { ...channelWhere, archivedAt: null },
+      where: { ...channelWhere, ...scopeWhere, archivedAt: null },
       orderBy: { occurredAt: "desc" },
       take: 400,
       include: { contact: true, lead: true },
     }),
     prisma.communication.findMany({
-      where: { ...channelWhere, archivedAt: { not: null } },
+      where: { ...channelWhere, ...scopeWhere, archivedAt: { not: null } },
       orderBy: { occurredAt: "desc" },
       take: 400,
       include: { contact: true, lead: true },
