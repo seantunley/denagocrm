@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/auth";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
+import PushToggle from "@/components/PushToggle";
 import { buildInboxThreads } from "@/lib/inboxThreads";
 
 export const metadata = { title: "Chats — Denago Messages" };
@@ -29,6 +30,18 @@ export default async function MessagesChatsPage() {
           {unread > 0 ? `${unread} unread · ` : ""}WhatsApp, Messenger &amp; Instagram
         </p>
       </div>
+
+      <details className="card">
+        <summary className="cursor-pointer list-none text-sm font-medium">
+          🔔 Notifications
+          <span className="ml-2 text-xs font-normal text-muted-foreground">
+            get pinged on new messages — tap to set up
+          </span>
+        </summary>
+        <div className="mt-3">
+          <PushToggle />
+        </div>
+      </details>
 
       <Tabs
         tabs={[

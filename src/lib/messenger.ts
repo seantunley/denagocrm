@@ -300,7 +300,7 @@ export async function recordInboundDm(
   await sendPushToAll({
     title: platform === "instagram" ? "New Instagram DM 📸" : "New Messenger message 🔵",
     body: `${contact.firstName}${contact.lastName ? ` ${contact.lastName}` : ""}: ${pushBody.slice(0, 80)}`,
-    url: `/contacts/${contact.id}`,
+    url: "/messages",
   }, "dm").catch(() => {});
 }
 

@@ -7,7 +7,7 @@ export const metadata: Metadata = {
   title: "Denago Messages",
   manifest: "/messages/manifest.webmanifest",
   appleWebApp: { capable: true, title: "Denago Messages", statusBarStyle: "black-translucent" },
-  icons: { apple: "/icons/apple-touch-icon.png" },
+  icons: { apple: "/icons/messages-apple-180.png" },
 };
 
 export const viewport: Viewport = {

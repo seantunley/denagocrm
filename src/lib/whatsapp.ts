@@ -212,11 +212,6 @@ export async function recordInboundWhatsApp(
         leadId,
         userName: "System",
       });
-      await sendPushToAll({
-        title: "New WhatsApp lead 💬",
-        body: `${profileName ?? fromDigits}: ${text.slice(0, 80)}`,
-        url: `/leads/${leadId}`,
-      }, "whatsapp").catch(() => {});
     }
   }
 
@@ -232,4 +227,12 @@ export async function recordInboundWhatsApp(
       userId: firstUser.id,
     },
   });
+
+  // Notify on every inbound — WhatsApp is the primary contact channel. Opens the
+  // Messages app so replies aren't lost in the CRM.
+  await sendPushToAll({
+    title: "New WhatsApp message 💬",
+    body: `${profileName ?? "+" + fromDigits}: ${text.slice(0, 80)}`,
+    url: "/messages",
+  }, "whatsapp").catch(() => {});
 }

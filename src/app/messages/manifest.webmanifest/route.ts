@@ -19,9 +19,9 @@ export function GET() {
       background_color: "#020617",
       theme_color: "#020617",
       icons: [
-        { src: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
-        { src: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
-        { src: "/icons/icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+        { src: "/icons/messages-192.png", sizes: "192x192", type: "image/png" },
+        { src: "/icons/messages-512.png", sizes: "512x512", type: "image/png" },
+        { src: "/icons/messages-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
       ],
     },
     { headers: { "Content-Type": "application/manifest+json" } },
