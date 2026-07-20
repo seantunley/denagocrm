@@ -20,6 +20,7 @@ import { activeRecordRequest, isLockedForSigning } from "@/lib/signing/record";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { lineNetCents, quoteTotalCents, quotePricing } from "@/lib/pricing";
 import { addQuoteFee, deleteQuoteFee, setQuoteDeposit, setQuoteTaxMode } from "@/app/actions/cpq";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 
 const statusBadge: Record<string, string> = {
   draft: "bg-slate-800 text-slate-300",
@@ -96,6 +97,7 @@ export default async function QuoteDetailPage({
     },
   });
   if (!quote) notFound();
+  const automotiveOn = await isModuleEnabled("automotive");
   const builderDocs = (await listBuilderTemplates()).filter((t) => t.key === "quote");
   const family = await getQuoteFamily(quote);
   const deliveryPhotos =
@@ -312,7 +314,7 @@ export default async function QuoteDetailPage({
               {s.label}
             </span>
           ))}
-          {!quote.deliveredAt && (
+          {automotiveOn && !quote.deliveredAt && (
             <Link href="/deliveries" className="text-xs text-orange-400 hover:underline ml-auto">
               Manage on the Deliveries board →
             </Link>

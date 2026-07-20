@@ -1,5 +1,7 @@
+import { notFound } from "next/navigation";
 import { Plus, Pencil, MessageSquareText, Tag, Inbox } from "lucide-react";
 import { requirePermission } from "@/lib/permissions";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { listMailboxes, listTags, listCannedReplies } from "@/lib/helpdesk";
 import {
   saveMailbox,
@@ -67,6 +69,7 @@ function CannedReplyForm({ reply, mailboxes }: { reply?: Awaited<ReturnType<type
 }
 
 export default async function HelpdeskSettingsPage() {
+  if (!(await isModuleEnabled("support"))) notFound();
   await requirePermission("cases.manage");
   const [mailboxes, tags, cannedReplies] = await Promise.all([
     listMailboxes(false),

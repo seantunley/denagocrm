@@ -2,6 +2,7 @@ import { differenceInCalendarDays, addDays } from "date-fns";
 import { ArchiveRestore, Trash2 } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { restoreFromTrash } from "@/app/actions/trash";
 import { TRASH_RETENTION_DAYS, type TrashModel } from "@/lib/trash";
 import { contactName, formatDateTime } from "@/lib/format";
@@ -29,15 +30,25 @@ type Row = {
 export default async function TrashPage() {
   await requireUser();
   const notNull = { deletedAt: { not: null } } as const;
+  const [automotiveOn, commerceOn] = await Promise.all([
+    isModuleEnabled("automotive"),
+    isModuleEnabled("commerce"),
+  ]);
 
   const [contacts, leads, vehicles, jobCards, documents, products, libraryDocs, quotes] =
     await Promise.all([
       basePrisma.contact.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
       basePrisma.lead.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
-      basePrisma.vehicle.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
-      basePrisma.jobCard.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
+      automotiveOn
+        ? basePrisma.vehicle.findMany({ where: notNull, orderBy: { deletedAt: "desc" } })
+        : Promise.resolve([]),
+      automotiveOn
+        ? basePrisma.jobCard.findMany({ where: notNull, orderBy: { deletedAt: "desc" } })
+        : Promise.resolve([]),
       basePrisma.document.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
-      basePrisma.product.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
+      commerceOn
+        ? basePrisma.product.findMany({ where: notNull, orderBy: { deletedAt: "desc" } })
+        : Promise.resolve([]),
       basePrisma.libraryDocument.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
       basePrisma.quote.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
     ]);
