@@ -1,12 +1,18 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { portalCanAccessDocument } from "@/lib/portalAccess";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { readFile } from "@/lib/storage";
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  // The customer portal is an optional module; when off, its APIs are gone too,
+  // not just the pages — existing sessions and saved URLs must stop resolving.
+  if (!(await isModuleEnabled("portal"))) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
   const { id } = await params;
   if (!(await portalCanAccessDocument(id))) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });

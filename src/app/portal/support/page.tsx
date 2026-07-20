@@ -4,6 +4,7 @@ import { ArrowRight, Headphones, LifeBuoy, MessagesSquare } from "lucide-react";
 import { basePrisma, prisma } from "@/lib/db";
 import { getPortalContact } from "@/lib/portal";
 import { requirePortalScope } from "@/lib/portalAccess";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { PortalCaseForm } from "@/components/PortalExpansionForms";
 import { contactName, formatDate } from "@/lib/format";
 import { EmptyState, PortalPageHeader, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
@@ -32,6 +33,7 @@ export default async function PortalSupportPage() {
   const contact = await getPortalContact();
   if (!contact) redirect("/portal/login");
   const scope = await requirePortalScope();
+  const automotiveOn = await isModuleEnabled("automotive");
 
   const [contacts, vehicles, cases] = await Promise.all([
     prisma.contact.findMany({ where: { id: { in: scope.contactIds }, deletedAt: null }, orderBy: { firstName: "asc" } }),
@@ -59,13 +61,14 @@ export default async function PortalSupportPage() {
 
   return (
     <div className="space-y-10">
-      <PortalPageHeader eyebrow="We're here to help" title="Support & warranty" description="Submit a request, track its progress and keep the conversation with our team in one secure place." />
+      <PortalPageHeader eyebrow="We're here to help" title={automotiveOn ? "Support & warranty" : "Support"} description="Submit a request, track its progress and keep the conversation with our team in one secure place." />
 
       <Surface className="space-y-5 p-5 sm:p-6">
         <SectionHeading title="Start a new request" description="Tell us what you need and we’ll route it to the right Denago specialist." action={<span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><LifeBuoy className="size-5" /></span>} />
         <PortalCaseForm
+          automotive={automotiveOn}
           contacts={contacts.map((row) => ({ id: row.id, label: contactName(row) }))}
-          vehicles={vehicles.map((row) => ({ id: row.id, label: `${row.model}${row.regNumber ? ` (${row.regNumber})` : ""}` }))}
+          vehicles={automotiveOn ? vehicles.map((row) => ({ id: row.id, label: `${row.model}${row.regNumber ? ` (${row.regNumber})` : ""}` })) : []}
         />
       </Surface>
 

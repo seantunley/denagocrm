@@ -518,8 +518,13 @@ export default async function DashboardPage() {
   const rings: RingDef[] = [
     { label: "Leads", actual: leadsMTD.length, target: tMap.get("leads") ?? 0, display: "int", color: "var(--chart-2)" },
     { label: "Sales", actual: Math.round(wonValueMTD / 100), target: Math.round((tMap.get("sales_value") ?? 0) / 100), display: "zar", color: "var(--chart-1)" },
-    { label: "Deliveries", actual: deliveriesMTD, target: tMap.get("deliveries") ?? 0, display: "int", color: "var(--chart-3)" },
-    { label: "Services", actual: servicesMTD.length, target: tMap.get("services") ?? 0, display: "int", color: "var(--chart-4)" },
+    // Deliveries + Services are automotive-pack metrics — drop them when the pack is off.
+    ...(automotiveOn
+      ? [
+          { label: "Deliveries", actual: deliveriesMTD, target: tMap.get("deliveries") ?? 0, display: "int", color: "var(--chart-3)" } as RingDef,
+          { label: "Services", actual: servicesMTD.length, target: tMap.get("services") ?? 0, display: "int", color: "var(--chart-4)" } as RingDef,
+        ]
+      : []),
   ];
 
   // Proactive system alerts — problems surface HERE before customers notice
