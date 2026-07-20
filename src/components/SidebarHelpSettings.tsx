@@ -20,9 +20,22 @@ import { SETTINGS_NAV_GROUPS, settingsHref } from "@/lib/settings-navigation";
 const ROW =
   "flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground";
 
-export default function SidebarHelpSettings({ isOwner }: { isOwner: boolean }) {
-  // Members only see their own account-level settings; owners see everything.
-  const settingsGroups = isOwner ? SETTINGS_NAV_GROUPS : SETTINGS_NAV_GROUPS.filter((g) => g.label === "You");
+export default function SidebarHelpSettings({
+  isOwner,
+  permissions = [],
+}: {
+  isOwner: boolean;
+  permissions?: string[];
+}) {
+  // Owners see everything; everyone sees their own account-level settings; and
+  // non-owners additionally see any section whose permission they hold (mirrors
+  // each settings page's own guard).
+  const held = new Set(permissions);
+  const canSee = (item: (typeof SETTINGS_NAV_GROUPS)[number]["items"][number]) =>
+    isOwner || item.everyone || (item.permission ? held.has(item.permission) : false);
+  const settingsGroups = SETTINGS_NAV_GROUPS
+    .map((g) => ({ ...g, items: g.items.filter(canSee) }))
+    .filter((g) => g.items.length > 0);
 
   return (
     <div className="space-y-0.5">
