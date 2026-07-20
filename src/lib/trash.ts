@@ -1,6 +1,7 @@
 import { subDays } from "date-fns";
 import { basePrisma } from "./db";
 import { deleteFile } from "./storage";
+import { deleteCustomValuesFor, type CustomEntity } from "./customFields";
 
 export const TRASH_RETENTION_DAYS = 60;
 
@@ -76,12 +77,32 @@ export async function purgeTrash(): Promise<number> {
     purged++;
   }
 
+  // Models whose rows own custom-field values (EAV, no FK → no cascade). When
+  // such a row is permanently purged, its custom values must be deleted in the
+  // same pass or they orphan (and can retain PII long past the retention window).
+  const customEntityFor: Partial<Record<TrashModel, CustomEntity>> = {
+    quote: "quote",
+    lead: "lead",
+    contact: "contact",
+  };
+
   // children before parents so FK cascades behave predictably
   for (const model of ["quote", "jobCard", "vehicle", "lead", "contact", "product"] as TrashModel[]) {
+    const entity = customEntityFor[model];
+    const staleIds: string[] = entity
+      ? (
+          await delegate(model)
+            .findMany({ where: { deletedAt: { lt: cutoff } }, select: { id: true } })
+            .catch(() => [])
+        ).map((r: { id: string }) => r.id)
+      : [];
     const res = await delegate(model)
       .deleteMany({ where: { deletedAt: { lt: cutoff } } })
       .catch(() => ({ count: 0 }));
     purged += res.count;
+    if (entity && staleIds.length > 0) {
+      await deleteCustomValuesFor(entity, staleIds).catch(() => {});
+    }
   }
   return purged;
 }

@@ -1,10 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/db";
+import { prisma, basePrisma } from "@/lib/db";
 import { requireContactAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { CONSENT_TYPES } from "@/lib/consent";
+import { deleteCustomValuesFor } from "@/lib/customFields";
 
 export async function recordConsent(contactId: string, formData: FormData) {
   const user = await requireContactAccess(contactId, "contacts.edit");
@@ -73,18 +74,18 @@ export async function anonymizeContact(contactId: string) {
     data: { name: "Redacted", email: null, phone: null },
   });
   // Custom-field values can hold PII (e.g. ID number) — erase them too, for the
-  // contact and for each of its leads (lead custom values key on the lead id).
-  await prisma.customFieldValue.deleteMany({
-    where: { recordId: contactId, def: { entity: "contact" } },
-  });
-  const leadIds = (
-    await prisma.lead.findMany({ where: { contactId }, select: { id: true } })
-  ).map((l) => l.id);
-  if (leadIds.length > 0) {
-    await prisma.customFieldValue.deleteMany({
-      where: { recordId: { in: leadIds }, def: { entity: "lead" } },
-    });
-  }
+  // contact and for each of its leads, quotes and cases. These key on the record
+  // id with no FK, so nothing cascades; gather ids via basePrisma so trashed
+  // (soft-deleted) records' custom PII is erased as well. Erasure must be total.
+  const [leadIds, quoteIds, caseIds] = await Promise.all([
+    basePrisma.lead.findMany({ where: { contactId }, select: { id: true } }).then((r) => r.map((x) => x.id)),
+    basePrisma.quote.findMany({ where: { contactId }, select: { id: true } }).then((r) => r.map((x) => x.id)),
+    basePrisma.customerCase.findMany({ where: { contactId }, select: { id: true } }).then((r) => r.map((x) => x.id)),
+  ]);
+  await deleteCustomValuesFor("contact", [contactId]);
+  await deleteCustomValuesFor("lead", leadIds);
+  await deleteCustomValuesFor("quote", quoteIds);
+  await deleteCustomValuesFor("case", caseIds);
   await prisma.consentRecord.create({
     data: {
       contactId,
