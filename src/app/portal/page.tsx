@@ -51,7 +51,7 @@ export default async function PortalHome() {
       where: { id: { in: scope.contactIds }, deletedAt: null },
       orderBy: [{ company: "asc" }, { firstName: "asc" }],
     }),
-    scope.fleetIds.length
+    automotiveOn && scope.fleetIds.length
       ? prisma.fleet.findMany({
           where: { id: { in: scope.fleetIds }, deletedAt: null },
           include: { vehicles: { where: { deletedAt: null }, select: { id: true } } },
@@ -122,8 +122,8 @@ export default async function PortalHome() {
         <MetricCard icon={Bell} label="Unread updates" value={unreadNotifications} detail={unreadNotifications ? "New since your last visit" : "Nothing new"} />
       </section>
 
-      {(accessibleContacts.length > 1 || fleets.length > 0) && (
-        <section className="grid md:grid-cols-2 gap-3">
+      {(accessibleContacts.length > 1 || (automotiveOn && fleets.length > 0)) && (
+        <section className={`grid gap-3 ${automotiveOn ? "md:grid-cols-2" : ""}`}>
           <div className="card">
             <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">Portal access</p>
             <ul className="space-y-2">
@@ -135,19 +135,21 @@ export default async function PortalHome() {
               ))}
             </ul>
           </div>
-          <div className="card">
-            <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">Fleet accounts</p>
-            {fleets.length === 0 ? <p className="text-sm text-slate-400">No fleet accounts linked.</p> : (
-              <ul className="space-y-2">
-                {fleets.map((fleet) => (
-                  <li key={fleet.id} className="text-sm flex justify-between gap-3">
-                    <span>{fleet.name}</span>
-                    <span className="text-slate-500">{fleet.vehicles.length} carts · {scope.roleByFleetId.get(fleet.id) ?? "viewer"}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+          {automotiveOn && (
+            <div className="card">
+              <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">Fleet accounts</p>
+              {fleets.length === 0 ? <p className="text-sm text-slate-400">No fleet accounts linked.</p> : (
+                <ul className="space-y-2">
+                  {fleets.map((fleet) => (
+                    <li key={fleet.id} className="text-sm flex justify-between gap-3">
+                      <span>{fleet.name}</span>
+                      <span className="text-slate-500">{fleet.vehicles.length} carts · {scope.roleByFleetId.get(fleet.id) ?? "viewer"}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </section>
       )}
 

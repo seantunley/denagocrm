@@ -12,7 +12,7 @@ export default async function AppLayout({
 }: Readonly<{ children: React.ReactNode; modal?: React.ReactNode }>) {
   const user = await requireUser();
   const [inboxWaiting, casesWaiting, permissions, enabledModules] = await Promise.all([
-    awaitingReplyCount().catch(() => 0),
+    awaitingReplyCount(user).catch(() => 0),
     casesAwaitingCount(user).catch(() => 0),
     getUserPermissionList(user),
     getEnabledModuleIds().catch(() => null),

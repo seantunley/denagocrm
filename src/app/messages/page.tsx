@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireAnyPermission } from "@/lib/permissions";
+import { accessibleInboxWhere, requireAnyPermission } from "@/lib/permissions";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
@@ -9,10 +9,13 @@ import { buildInboxThreads } from "@/lib/inboxThreads";
 export const metadata = { title: "Chats — Denago Messages" };
 
 export default async function MessagesChatsPage() {
-  await requireAnyPermission("inbox.view", "inbox.reply");
+  const user = await requireAnyPermission("inbox.view", "inbox.reply");
+
+  // Scope to the contacts/leads this user may see; {} for view_all users.
+  const scopeWhere = await accessibleInboxWhere(user);
 
   const comms = await prisma.communication.findMany({
-    where: { type: { in: ["whatsapp", "messenger", "instagram"] }, archivedAt: null },
+    where: { type: { in: ["whatsapp", "messenger", "instagram"] }, ...scopeWhere, archivedAt: null },
     orderBy: { occurredAt: "desc" },
     take: 400,
     include: { contact: true, lead: true },

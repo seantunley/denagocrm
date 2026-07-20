@@ -199,6 +199,33 @@ export async function canAccessContact(user: PermissionUser, contactId: string):
   return ids === null || ids.includes(contactId);
 }
 
+/**
+ * Social-inbox WHERE fragment scoping Communications to the contacts/leads a
+ * user may see. Contacts and leads scope independently: a null id list from
+ * either helper means "all of that type" (view_all / owner), which we express
+ * as `{ … : { not: null } }` so a user privileged for one type still sees every
+ * thread of that type — mirroring canAccessContact/canAccessLead, which the
+ * per-thread actions already enforce. Both null → {} (no filter), so fully
+ * privileged users are unchanged. Otherwise an OR over the accessible linkages;
+ * an empty id list yields `in: []`, an impossible match, so a scoped user with
+ * no accessible records leaks nothing.
+ */
+export async function accessibleInboxWhere(
+  user: PermissionUser,
+): Promise<Record<string, unknown>> {
+  const [contactIds, leadIds] = await Promise.all([
+    getAccessibleContactIds(user),
+    getAccessibleLeadIds(user),
+  ]);
+  if (contactIds === null && leadIds === null) return {};
+  return {
+    OR: [
+      contactIds === null ? { contactId: { not: null } } : { contactId: { in: contactIds } },
+      leadIds === null ? { leadId: { not: null } } : { leadId: { in: leadIds } },
+    ],
+  };
+}
+
 export async function requireContactReadAccess(contactId: string): Promise<PermissionUser> {
   const user = await requireAnyPermission("contacts.view_all", "contacts.view_owned");
   if (!(await canAccessContact(user, contactId))) redirect("/contacts");
