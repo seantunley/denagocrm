@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { SettingsChromelessProvider } from "@/components/settings-workspace";
 
 /**
  * Shell for settings opened as an intercepted-route modal. The dialog is
@@ -18,7 +19,9 @@ export default function SettingsModal({ children }: { children: React.ReactNode 
         className="flex h-[88vh] max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden p-0 sm:max-w-5xl"
       >
         <DialogTitle className="sr-only">Settings</DialogTitle>
-        <div className="min-h-0 flex-1 overflow-y-auto p-6 sm:p-8">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-6 sm:p-8">
+          <SettingsChromelessProvider>{children}</SettingsChromelessProvider>
+        </div>
       </DialogContent>
     </Dialog>
   );
