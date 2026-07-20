@@ -11,7 +11,7 @@ export default async function HelpLayout({ children }: { children: React.ReactNo
   }));
 
   return (
-    <div className="grid gap-8 lg:grid-cols-[248px_minmax(0,1fr)]">
+    <div className="grid gap-8 lg:grid-cols-[288px_minmax(0,1fr)]">
       <aside className="hidden lg:sticky lg:top-6 lg:block lg:max-h-[calc(100dvh-3rem)] lg:self-start lg:overflow-y-auto lg:pr-1">
         <HelpNav groups={groups} />
       </aside>

@@ -62,7 +62,7 @@ export default function HelpNav({ groups }: { groups: HelpNavGroup[] }) {
                 pathname === `/help/${a.slug}` && "bg-primary/10 text-primary",
               )}
             >
-              <span className="block truncate">{a.title}</span>
+              <span className="block leading-snug">{a.title}</span>
               <span className="block truncate text-[11px] text-muted-foreground/60">{a.group}</span>
             </Link>
           ))}
@@ -80,7 +80,7 @@ export default function HelpNav({ groups }: { groups: HelpNavGroup[] }) {
                       key={a.slug}
                       href={`/help/${a.slug}`}
                       className={cn(
-                        "truncate rounded-md px-2.5 py-1.5 text-sm transition-colors",
+                        "rounded-md px-2.5 py-1.5 text-sm leading-snug transition-colors",
                         active ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground",
                       )}
                     >
