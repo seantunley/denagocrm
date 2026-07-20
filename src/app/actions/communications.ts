@@ -123,6 +123,30 @@ export async function markThreadRead(
   revalidatePath("/inbox");
 }
 
+/**
+ * Archive (or restore) a whole inbox thread — every message on this channel for
+ * the contact/lead. Archiving hides it from the inbox without deleting anything;
+ * an "Archived" view lists them and can restore. Test conversations that can't be
+ * deleted live here.
+ */
+export async function setThreadArchived(
+  contactId: string | null,
+  leadId: string | null,
+  channel: string,
+  archived: boolean,
+) {
+  await requireCrmOrWorkshop();
+  if (!contactId && !leadId) return;
+  await prisma.communication.updateMany({
+    where: {
+      type: channel,
+      ...(contactId ? { contactId } : { leadId }),
+    },
+    data: { archivedAt: archived ? new Date() : null },
+  });
+  revalidatePath("/inbox");
+}
+
 export async function deleteCommunication(
   id: string,
   path: string,

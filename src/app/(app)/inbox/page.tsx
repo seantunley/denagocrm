@@ -2,7 +2,7 @@ import Link from "next/link";
 import { prisma, basePrisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import InboxReply from "@/components/InboxReply";
-import { markThreadRead } from "@/app/actions/communications";
+import { markThreadRead, setThreadArchived } from "@/app/actions/communications";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import RowModal from "@/components/RowModal";
@@ -53,6 +53,7 @@ export default async function InboxPage() {
     phone: string | null;
     awaiting: boolean;
     unread: boolean;
+    archived: boolean;
     lastAt: Date;
     messages: {
       id: string;
@@ -83,6 +84,9 @@ export default async function InboxPage() {
         // unread    = ...and we haven't even opened it yet (readAt null)
         awaiting: c.direction === "inbound",
         unread: c.direction === "inbound" && c.readAt == null,
+        // The newest message decides: archiving stamps the whole thread, and a
+        // fresh inbound (archivedAt null) naturally brings it back to the inbox.
+        archived: c.archivedAt != null,
         lastAt: c.occurredAt,
         messages: [],
       };
@@ -99,12 +103,14 @@ export default async function InboxPage() {
       });
     }
   }
-  const threadList = [...threads.values()].sort(
+  const allThreads = [...threads.values()].sort(
     (a, b) =>
       Number(b.unread) - Number(a.unread) ||
       Number(b.awaiting) - Number(a.awaiting) ||
       b.lastAt.getTime() - a.lastAt.getTime()
   );
+  const threadList = allThreads.filter((t) => !t.archived);
+  const archivedList = allThreads.filter((t) => t.archived);
 
   return (
     <div className="space-y-5">
@@ -190,6 +196,17 @@ export default async function InboxPage() {
               </div>
             ),
           },
+          {
+            key: "archived",
+            label: "Archived",
+            count: archivedList.length,
+            content: (
+              <ThreadList
+                list={archivedList}
+                empty="Nothing archived. Open a thread and choose Archive to hide test or finished conversations here without deleting them."
+              />
+            ),
+          },
         ]}
       />
     </div>
@@ -206,6 +223,7 @@ type ThreadForList = {
   phone: string | null;
   awaiting: boolean;
   unread: boolean;
+  archived: boolean;
   lastAt: Date;
   messages: {
     id: string;
@@ -267,7 +285,15 @@ function ThreadList({ list, empty }: { list: ThreadForList[]; empty: string }) {
                   <span className="font-semibold">{t.name}</span>
                 )}
                 <span className="text-xs text-slate-500">{meta.label}</span>
-                <span className="text-[11px] text-slate-500 ml-auto">
+                <form
+                  action={setThreadArchived.bind(null, t.contactId, t.leadId, t.channel, !t.archived)}
+                  className="ml-auto"
+                >
+                  <button type="submit" className="btn-secondary btn-sm">
+                    {t.archived ? "Unarchive" : "Archive"}
+                  </button>
+                </form>
+                <span className="text-[11px] text-slate-500">
                   {formatDateTime(t.lastAt)}
                 </span>
               </div>
