@@ -11,6 +11,7 @@ import {
   requirePortalScope,
 } from "@/lib/portalAccess";
 import { saveFile } from "@/lib/storage";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { logAudit } from "@/lib/audit";
 import { sendPushToAll } from "@/lib/push";
 import { contactName } from "@/lib/format";
@@ -138,10 +139,18 @@ export async function createPortalCase(
     const contact = await portalUser();
     const subject = text(formData.get("subject"));
     const description = text(formData.get("description"));
-    const type = text(formData.get("type")) || "support";
+    let type = text(formData.get("type")) || "support";
     const priority = text(formData.get("priority")) || "normal";
-    const vehicleId = text(formData.get("vehicleId")) || null;
+    let vehicleId = text(formData.get("vehicleId")) || null;
     const forContactId = text(formData.get("contactId")) || contact.id;
+
+    // Automotive is optional: a stale/tampered form must not inject automotive
+    // data when the pack is off. Drop any vehicle link and coerce automotive
+    // request types back to generic support.
+    if (!(await isModuleEnabled("automotive"))) {
+      vehicleId = null;
+      if (type === "service" || type === "warranty" || type === "delivery") type = "support";
+    }
 
     if (subject.length < 3 || description.length < 10) {
       return { error: "Add a subject and a little more detail." };
@@ -241,7 +250,10 @@ export async function uploadPortalFile(
     if (!(file instanceof File) || file.size === 0) return { error: "Choose a file." };
     if (file.size > MAX_UPLOAD) return { error: "Files must be 10 MB or smaller." };
     if (!ALLOWED_UPLOAD_TYPES.has(file.type)) return { error: "Upload a PDF, JPG, PNG or WebP file." };
-    const vehicleId = text(formData.get("vehicleId")) || null;
+    // Ignore any posted vehicle link when the automotive pack is off.
+    const vehicleId = (await isModuleEnabled("automotive"))
+      ? text(formData.get("vehicleId")) || null
+      : null;
     const caseId = text(formData.get("caseId")) || null;
     if (vehicleId && !(await portalCanAccessVehicle(vehicleId))) return { error: "Vehicle not found." };
     if (caseId && !(await portalCanAccessCase(caseId))) return { error: "Case not found." };
