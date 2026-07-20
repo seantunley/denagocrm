@@ -54,7 +54,11 @@ export const MODULE_REGISTRY: AppModule[] = [
     id: "support",
     label: "Help desk",
     description: "Customer cases / ticketing.",
-    routePrefixes: ["/cases"],
+    // "/messages/cases" is the Messages-PWA help-desk page; it must belong to
+    // support (not inbox) so longest-prefix match resolves it here and the
+    // messages layout's route guard blocks it when the support pack is off,
+    // while plain "/messages" stays inbox.
+    routePrefixes: ["/cases", "/messages/cases"],
   },
   {
     id: "marketing",

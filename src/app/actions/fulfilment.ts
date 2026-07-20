@@ -8,6 +8,7 @@ import { logAudit } from "@/lib/audit";
 import { runLeadAutomations } from "@/lib/automations";
 import { saveFile } from "@/lib/storage";
 import { contactName } from "@/lib/format";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 
 const MAX_FILE = 4 * 1024 * 1024;
 
@@ -122,6 +123,11 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
 }
 
 export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) {
+  // Delivery photos are automotive-owned paperwork; reject when the pack is off
+  // (matches this file's early-return failure convention). Belt-and-braces with
+  // the automotive-gated UI on the quote page — the action is reachable by a
+  // direct POST regardless of what is rendered.
+  if (!(await isModuleEnabled("automotive"))) return;
   const user = await requireQuoteAccess(quoteId, "deliveries.manage");
   const quote = await prisma.quote.findUniqueOrThrow({ where: { id: quoteId } });
   const files = formData.getAll("files").filter(
