@@ -24,13 +24,25 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
   const reason = parsed.success ? parsed.data.reason : "";
   const meta = await reqMeta();
 
-  // Atomically claim the decline so a concurrent sign/decline can't both win.
-  const claimed = await prisma.signatureRecipient.updateMany({
-    where: { id: recipient.id, status: { notIn: ["signed", "declined"] } },
-    data: { status: "declined", declinedAt: new Date(), declineReason: reason || null },
+  // One transaction that locks the request FOR UPDATE, re-checks it isn't already
+  // voided/completed, claims the recipient decline, and sets the request declined
+  // — all together. This stops a concurrent staff void from being silently
+  // overwritten by a decline (and vice-versa).
+  let aborted: string | null = null;
+  await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<{ status: string; deletedAt: Date | null; expiresAt: Date | null }[]>`
+      SELECT "status", "deletedAt", "expiresAt" FROM "SignatureRequest" WHERE "id" = ${recipient.requestId} FOR UPDATE`;
+    const r = rows[0];
+    if (!r || r.deletedAt || r.status === "voided" || r.status === "completed") { aborted = "Closed"; return; }
+    if (r.expiresAt && r.expiresAt < new Date()) { aborted = "This signing link has expired."; return; }
+    const claimed = await tx.signatureRecipient.updateMany({
+      where: { id: recipient.id, status: { notIn: ["signed", "declined"] } },
+      data: { status: "declined", declinedAt: new Date(), declineReason: reason || null },
+    });
+    if (claimed.count === 0) { aborted = "Already actioned"; return; }
+    await tx.signatureRequest.update({ where: { id: recipient.requestId }, data: { status: "declined", declinedAt: new Date() } });
   });
-  if (claimed.count === 0) return new Response("Already actioned", { status: 409 });
-  await prisma.signatureRequest.update({ where: { id: recipient.requestId }, data: { status: "declined", declinedAt: new Date() } });
+  if (aborted) return new Response(aborted, { status: 409 });
   await logSignEvent(recipient.requestId, { type: "declined", recipientId: recipient.id, actor: recipient.name, channel: "web", ip: meta.ip, userAgent: meta.ua, metadata: { reason } });
   await notifyCreatorDeclined(recipient.requestId, recipient.name, reason);
 

@@ -23,10 +23,6 @@ export async function signAsDealer(
   // change-status permission. Guard the quote's state too: never countersign a
   // trashed, already-countersigned or already customer-signed quote.
   const user = await requireQuoteAccess(quoteId, "quotes.change_status");
-  const existing = await prisma.quote.findUnique({ where: { id: quoteId } });
-  if (!existing || existing.deletedAt) return { error: "Quote not found." };
-  if (existing.dealerSignedAt) return { error: "This quote is already countersigned." };
-  if (existing.signedAt) return { error: "This quote is already signed by the customer." };
   let ref: string | null;
   if (signatureDataUrl) {
     if (!signatureDataUrl.startsWith("data:image/png;base64,") || signatureDataUrl.length > 400_000) {
@@ -47,15 +43,26 @@ export async function signAsDealer(
     ref = saved?.drawnSignatureRef ?? null;
     if (!ref) return { error: "No saved signature yet — draw one first." };
   }
-  const quote = await prisma.quote.update({
-    where: { id: quoteId },
+  // Conditional claim: only the request whose predicate still matches (not
+  // trashed, not already countersigned, not customer-signed, not superseded)
+  // writes the signature. check-then-update let two concurrent countersigns both
+  // see dealerSignedAt === null and overwrite each other.
+  const claimed = await prisma.quote.updateMany({
+    where: { id: quoteId, deletedAt: null, dealerSignedAt: null, signedAt: null, supersededAt: null },
     data: { dealerSignedAt: new Date(), dealerSignedByName: user.name, dealerSignatureRef: ref },
+  });
+  if (claimed.count !== 1) {
+    return { error: "This quote can no longer be countersigned." };
+  }
+  const quote = await prisma.quote.findUnique({
+    where: { id: quoteId },
+    select: { number: true, leadId: true, contactId: true },
   });
   await logAudit({
     action: "quote.dealer_signed",
-    summary: `Quote Q-${quote.number} countersigned for Denago by ${user.name}`,
-    leadId: quote.leadId,
-    contactId: quote.contactId,
+    summary: `Quote Q-${quote?.number ?? "?"} countersigned for Denago by ${user.name}`,
+    leadId: quote?.leadId,
+    contactId: quote?.contactId,
     user,
   });
   revalidatePath(`/quotes/${quoteId}`);

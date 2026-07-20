@@ -524,24 +524,36 @@ export async function reservePart(jobCardId: string, formData: FormData) {
 
 export async function releaseReservation(reservationId: string, jobCardId: string) {
   await requireJobCardAccess(jobCardId, "jobcards.manage");
-  await prisma.partReservation.updateMany({ where: { id: reservationId, jobCardId }, data: { status: "released" } });
+  // Require status "active" so a consumed reservation can't be flipped back to
+  // released (which would leave its stock decrement + job-card line in place and
+  // let it be consumed again).
+  await prisma.partReservation.updateMany({
+    where: { id: reservationId, jobCardId, status: "active" },
+    data: { status: "released" },
+  });
   revalidatePath(`/jobcards/${jobCardId}`);
   revalidatePath("/parts");
 }
 
 export async function consumeReservation(reservationId: string, jobCardId: string) {
   await requireJobCardAccess(jobCardId, "jobcards.manage");
-  // Scope by jobCardId: without it a caller could consume ANOTHER job's
-  // reservation onto this job card and decrement stock for it.
-  const reservation = await prisma.partReservation.findFirst({ where: { id: reservationId, jobCardId, status: "active" }, include: { part: true } });
-  if (!reservation) return;
-  await prisma.$transaction([
-    prisma.jobCardItem.create({
+  // Claim the reservation FIRST with a conditional state transition inside the
+  // transaction: only the request that flips active→consumed (count === 1) may
+  // create the line and decrement stock. Two concurrent consumes can no longer
+  // both read it active and both decrement.
+  await prisma.$transaction(async (tx) => {
+    const claimed = await tx.partReservation.updateMany({
+      where: { id: reservationId, jobCardId, status: "active" },
+      data: { status: "consumed" },
+    });
+    if (claimed.count !== 1) return;
+    const reservation = await tx.partReservation.findUnique({ where: { id: reservationId }, include: { part: true } });
+    if (!reservation) return;
+    await tx.jobCardItem.create({
       data: { jobCardId, kind: "part", description: reservation.part.name, qty: reservation.qty, unitPriceCents: reservation.part.priceCents, partId: reservation.partId },
-    }),
-    prisma.part.update({ where: { id: reservation.partId }, data: { stockQty: { decrement: reservation.qty } } }),
-    prisma.partReservation.update({ where: { id: reservationId }, data: { status: "consumed" } }),
-  ]);
+    });
+    await tx.part.update({ where: { id: reservation.partId }, data: { stockQty: { decrement: reservation.qty } } });
+  });
   revalidatePath(`/jobcards/${jobCardId}`);
   revalidatePath("/parts");
 }

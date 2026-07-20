@@ -6,7 +6,7 @@ import { revalidatePath } from "next/cache";
 import { GET as executeBackup } from "@/app/api/cron/backup/route";
 import { requireOwner } from "@/lib/auth";
 import { type PortableBackup, verifyPortableBackup } from "@/lib/backup";
-import { decryptValue, getSetting, putSetting } from "@/lib/settings";
+import { decryptValue, putSetting } from "@/lib/settings";
 
 export type BackupActionState = {
   ok?: string;
@@ -22,13 +22,14 @@ export async function runBackupNow(
   void _formData;
   await requireOwner();
 
-  const headers = new Headers();
-  if (process.env.CRON_SECRET) {
-    headers.set("authorization", `Bearer ${process.env.CRON_SECRET}`);
-  } else {
-    const apiKey = await getSetting("INTAKE_API_KEY");
-    if (apiKey) headers.set("x-api-key", apiKey);
+  // The backup route now only accepts CRON_SECRET (the intake-key fallback was
+  // removed as a privilege-escalation risk). Without it, sending the intake key
+  // would just 401, so fail with a clear configuration error instead.
+  if (!process.env.CRON_SECRET) {
+    return { error: "Backups aren't configured — CRON_SECRET is not set on the server." };
   }
+  const headers = new Headers();
+  headers.set("authorization", `Bearer ${process.env.CRON_SECRET}`);
 
   try {
     const response = await executeBackup(

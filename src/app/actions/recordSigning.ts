@@ -61,8 +61,14 @@ export async function startRecordSigning(
 
   let sendLeadId: string | null = null;
   if (kind === "quote") {
+    // findUnique isn't soft-delete filtered and view_all access is unrestricted,
+    // so reject a trashed or superseded quote explicitly — never start signing on
+    // a record that's out of the active lifecycle.
     const quote = await prisma.quote.findUnique({ where: { id } });
-    if (!quote) return { ok: false, error: "Quote not found." };
+    if (!quote || quote.deletedAt) return { ok: false, error: "Quote not found." };
+    if (quote.supersededAt) {
+      return { ok: false, error: "This quote was superseded by a revision — sign the current version." };
+    }
     if (quote.signedAt) {
       return { ok: false, error: "This quote has already been signed." };
     }
@@ -75,7 +81,7 @@ export async function startRecordSigning(
     sendLeadId = quote.leadId;
   } else {
     const jobCard = await prisma.jobCard.findUnique({ where: { id } });
-    if (!jobCard) return { ok: false, error: "Job card not found." };
+    if (!jobCard || jobCard.deletedAt) return { ok: false, error: "Job card not found." };
     if (jobCard.signedAt) {
       return { ok: false, error: "This job card has already been signed." };
     }
@@ -267,10 +273,15 @@ export async function voidRecordSigning(
     jobCardId: kind === "jobcard" ? id : null,
   });
   if (!state) return { ok: false, error: "No active request." };
-  await prisma.signatureRequest.update({
-    where: { id: state.requestId },
+  // Conditional void so it can't overwrite a request that a concurrent signer
+  // just completed / declined (or another void).
+  const voided = await prisma.signatureRequest.updateMany({
+    where: { id: state.requestId, status: { notIn: ["completed", "declined", "voided"] } },
     data: { status: "voided" },
   });
+  if (voided.count === 0) {
+    return { ok: false, error: "This request can no longer be voided." };
+  }
   await logSignEvent(state.requestId, {
     type: "voided",
     actor: `Denago: ${user.name}`,
