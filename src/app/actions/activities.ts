@@ -16,6 +16,19 @@ const str = (formData: FormData, key: string) => {
   return value === "" ? null : value;
 };
 
+// Refresh the lead/contact detail pages whose overdue/pending state depends on
+// an activity, so completing/cancelling/rescheduling from ANY surface updates
+// the record's Live timeline.
+function revalidateRecordPages(activity: {
+  leadId: string | null;
+  contactId: string | null;
+  lead?: { contactId: string | null } | null;
+}) {
+  if (activity.leadId) revalidatePath(`/leads/${activity.leadId}`);
+  const contactId = activity.contactId ?? activity.lead?.contactId;
+  if (contactId) revalidatePath(`/contacts/${contactId}`);
+}
+
 async function assertLinks(
   user: PermissionUser,
   links: { leadId?: string | null; contactId?: string | null },
@@ -159,6 +172,7 @@ async function finishActivity(id: string, note: string) {
       },
     });
   }
+  revalidateRecordPages(activity);
   return activity;
 }
 
@@ -232,6 +246,7 @@ export async function rescheduleActivity(
   revalidatePath("/activities");
   revalidatePath("/");
   revalidatePath("/calendar");
+  revalidateRecordPages(activity);
   return { ok: true };
 }
 
@@ -287,13 +302,15 @@ export async function scheduleFollowUp(data: {
 
 export async function cancelActivity(id: string, revalidate: string) {
   await requireActivityAccess(id);
-  await prisma.activity.update({
+  const activity = await prisma.activity.update({
     where: { id },
     data: { status: "canceled" },
+    include: { lead: true },
   });
   revalidatePath(revalidate);
   revalidatePath("/activities");
   revalidatePath("/");
+  revalidateRecordPages(activity);
 }
 
 export async function updateActivity(id: string, formData: FormData) {

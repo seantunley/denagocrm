@@ -1,8 +1,10 @@
-import { addDays, subDays } from "date-fns";
+import { subDays } from "date-fns";
 import { prisma } from "./db";
 import { logAudit } from "./audit";
 import { sendEmail, renderTemplate, leadVars } from "./email";
 import { sendPushToAll } from "./push";
+import { nextStepDueDate } from "./businessHours";
+import { getNextStepScheduling } from "./nextStepConfig";
 
 export const LEAD_TRIGGERS = [
   "lead_created",
@@ -52,11 +54,16 @@ async function applyRule(
   switch (rule.action) {
     case "create_activity": {
       const userId = await fallbackUserId(lead, rule.assignToId);
+      const dueDate = nextStepDueDate(
+        new Date(),
+        rule.activityDueDays ?? 1,
+        await getNextStepScheduling()
+      );
       await prisma.activity.create({
         data: {
           type: rule.activityType ?? "todo",
           summary: `${rule.activitySummary || rule.name} — ${lead.name}`,
-          dueDate: addDays(new Date(), rule.activityDueDays ?? 1),
+          dueDate,
           leadId: lead.id,
           assignedToId: userId,
           createdById: userId,
@@ -188,8 +195,58 @@ export async function runLeadAutomations(
 }
 
 /**
- * Fires idle-lead rules: open leads untouched for N days.
- * Each rule fires at most once per lead. Returns how many rules fired.
+ * The most recent moment a lead saw real engagement. `updatedAt` alone is not
+ * enough — a lead can look stale on its row while a quote was just sent, a
+ * WhatsApp came in, or an activity is scheduled. We take the latest of the
+ * lead row, its newest communication, its newest activity (created or due), and
+ * its newest quote. Returns null when a candidate should be skipped entirely
+ * because it has a quote still pending a decision (a quote-pending state is not
+ * "gone quiet").
+ */
+async function lastEngagementAt(leadId: string, rowUpdatedAt: Date): Promise<Date | null> {
+  const [pendingQuote, commAgg, activityAgg, quoteAgg] = await Promise.all([
+    prisma.quote.findFirst({
+      where: {
+        leadId,
+        status: "sent",
+        signedAt: null,
+        supersededAt: null,
+        deletedAt: null,
+      },
+      select: { id: true },
+    }),
+    prisma.communication.aggregate({
+      where: { leadId },
+      _max: { occurredAt: true },
+    }),
+    prisma.activity.aggregate({
+      where: { leadId },
+      _max: { createdAt: true, dueDate: true },
+    }),
+    prisma.quote.aggregate({
+      where: { leadId, deletedAt: null },
+      _max: { updatedAt: true },
+    }),
+  ]);
+
+  // A quote awaiting the customer's decision means the deal is live, not quiet.
+  if (pendingQuote) return null;
+
+  const candidates: Date[] = [rowUpdatedAt];
+  if (commAgg._max.occurredAt) candidates.push(commAgg._max.occurredAt);
+  if (activityAgg._max.createdAt) candidates.push(activityAgg._max.createdAt);
+  if (activityAgg._max.dueDate) candidates.push(activityAgg._max.dueDate);
+  if (quoteAgg._max.updatedAt) candidates.push(quoteAgg._max.updatedAt);
+
+  return candidates.reduce((latest, d) => (d > latest ? d : latest), rowUpdatedAt);
+}
+
+/**
+ * Fires idle-lead rules: open leads whose last REAL engagement is older than N
+ * days. Engagement means the lead row, communications, activities or quotes —
+ * not just the row's `updatedAt`. Leads with a quote still pending a decision
+ * are never treated as idle. Each rule fires at most once per lead. Returns how
+ * many rules fired.
  */
 export async function runIdleAutomations(): Promise<number> {
   let fired = 0;
@@ -198,16 +255,25 @@ export async function runIdleAutomations(): Promise<number> {
   });
   for (const rule of rules) {
     const days = rule.idleDays ?? 3;
-    const idleLeads = await prisma.lead.findMany({
-      where: { status: "open", updatedAt: { lt: subDays(new Date(), days) } },
+    const cutoff = subDays(new Date(), days);
+    // Narrow to leads whose own row is already stale; a lead touched more
+    // recently than the cutoff is engaged by definition and can't be idle.
+    const candidates = await prisma.lead.findMany({
+      where: { status: "open", updatedAt: { lt: cutoff } },
       include: { product: true, assignedTo: true, stage: true },
     });
-    for (const lead of idleLeads) {
+    for (const lead of candidates) {
       const already = await prisma.automationLog.findFirst({
         where: { ruleId: rule.id, leadId: lead.id },
       });
       if (already) continue;
       if (!conditionsHold(rule, lead)) continue;
+
+      const lastEngagement = await lastEngagementAt(lead.id, lead.updatedAt);
+      // null = quote pending; >= cutoff = real recent engagement. Either way,
+      // the lead is not "gone quiet".
+      if (lastEngagement === null || lastEngagement >= cutoff) continue;
+
       try {
         const note = await applyRule(rule, lead, 0);
         await logRule(rule.id, lead.id, note, rule.name, lead.contactId);
