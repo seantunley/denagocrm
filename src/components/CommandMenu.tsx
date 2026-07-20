@@ -13,6 +13,7 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { buildNav } from "@/components/nav-config";
+import { isPathEnabled } from "@/lib/modules/registry";
 import { SETTINGS_NAV_GROUPS, settingsHref } from "@/lib/settings-navigation";
 
 export function openCommandMenu() {
@@ -32,20 +33,17 @@ export default function CommandMenu({
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const { topLinks, groups } = buildNav(
-    modules,
-    isAdmin,
-    [],
-    enabledModules ? new Set(enabledModules) : undefined,
-  );
+  const enabledSet = enabledModules ? new Set(enabledModules) : undefined;
+  const { topLinks, groups } = buildNav(modules, isAdmin, [], enabledSet);
   const granted = new Set(permissions);
   const can = (...keys: string[]) => isAdmin || keys.some((key) => granted.has(key));
+  const packOn = (href: string) => !enabledSet || isPathEnabled(href, enabledSet);
   const quickActions = [
     ...(can("leads.create") ? [{ href: "/leads/new", label: "New lead", icon: Plus }] : []),
     ...(can("contacts.create") ? [{ href: "/contacts/new", label: "New contact", icon: Plus }] : []),
     ...(can("jobcards.manage") ? [{ href: "/jobcards/new", label: "New job card", icon: Plus }] : []),
     { href: "/search", label: "Search accessible records", icon: Search },
-  ];
+  ].filter((action) => packOn(action.href));
   const settingsGroups = SETTINGS_NAV_GROUPS.map((group) => ({
     ...group,
     items: group.items.filter((item) => isAdmin || item.key === "account"),
