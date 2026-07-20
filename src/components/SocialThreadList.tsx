@@ -128,13 +128,19 @@ export default function SocialThreadList({
                   </div>
                 ))}
               </div>
-              <InboxReply
-                channel={t.channel}
-                contactId={t.contactId}
-                leadId={t.leadId}
-                phone={t.phone}
-                revalidate={revalidate}
-              />
+              {t.archived ? (
+                <p className="mt-3 text-xs text-slate-500">
+                  Archived — restore to reply.
+                </p>
+              ) : (
+                <InboxReply
+                  channel={t.channel}
+                  contactId={t.contactId}
+                  leadId={t.leadId}
+                  phone={t.phone}
+                  revalidate={revalidate}
+                />
+              )}
             </div>
           </RowModal>
         );
