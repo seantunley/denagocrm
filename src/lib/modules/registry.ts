@@ -124,6 +124,35 @@ export function isAutomotiveOwnedDocument(doc: {
   return doc.tag != null && (AUTOMOTIVE_DELIVERY_TAGS as readonly string[]).includes(doc.tag);
 }
 
+/**
+ * Prisma `where` fragments that mirror isAutomotiveOwnedDocument() so the
+ * in-memory predicate and the database filter cannot drift. Returned as plain
+ * object literals (no Prisma import) so this file stays server/client/test-safe.
+ *
+ * nonAutomotiveDocumentWhere() is deliberately NULL-safe: `tag` is nullable, and
+ * `NOT { tag: { in: […] } }` evaluates to UNKNOWN (not TRUE) for a NULL tag in
+ * SQL three-valued logic, which would wrongly drop untagged CORE documents. So
+ * the non-automotive filter is written positively — vehicleId/jobCardId are NULL
+ * AND the tag is either NULL or not one of the delivery tags.
+ */
+export function automotiveDocumentWhere() {
+  return {
+    OR: [
+      { vehicleId: { not: null } },
+      { jobCardId: { not: null } },
+      { tag: { in: [...AUTOMOTIVE_DELIVERY_TAGS] } },
+    ],
+  };
+}
+
+export function nonAutomotiveDocumentWhere() {
+  return {
+    vehicleId: null,
+    jobCardId: null,
+    OR: [{ tag: null }, { tag: { notIn: [...AUTOMOTIVE_DELIVERY_TAGS] } }],
+  };
+}
+
 export const ALL_MODULE_IDS: ModuleId[] = MODULE_REGISTRY.map((m) => m.id);
 
 /** Modules an owner may toggle (everything except mandatory core). */

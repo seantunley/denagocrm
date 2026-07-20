@@ -12,7 +12,7 @@ import {
 } from "@/lib/permissions";
 import { uploadDocument } from "@/app/actions/documents";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { AUTOMOTIVE_DELIVERY_TAGS } from "@/lib/modules/registry";
+import { nonAutomotiveDocumentWhere } from "@/lib/modules/registry";
 import RepoRow, { type MoveTargets, type RepoDoc } from "@/components/RepoRow";
 import { PageHeader } from "@/components/page-header";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -53,20 +53,10 @@ export default async function DocumentsPage({
         ...(q ? [{ fileName: { contains: q, mode: "insensitive" as const } }] : []),
         // When automotive is off, drop automotive-owned paperwork from the repo:
         // vehicle- or job-card-linked docs, plus delivery paperwork (tagged, but
-        // filed against a contact/quote). NOT { OR } keeps null-tag core docs.
-        ...(automotiveOn
-          ? []
-          : [
-              {
-                NOT: {
-                  OR: [
-                    { vehicleId: { not: null } },
-                    { jobCardId: { not: null } },
-                    { tag: { in: [...AUTOMOTIVE_DELIVERY_TAGS] } },
-                  ],
-                },
-              },
-            ]),
+        // filed against a contact/quote). Null-safe positive filter — see
+        // nonAutomotiveDocumentWhere(); a NOT { tag in […] } would drop core
+        // documents with a NULL tag.
+        ...(automotiveOn ? [] : [nonAutomotiveDocumentWhere()]),
       ],
     },
     orderBy: { createdAt: "desc" },

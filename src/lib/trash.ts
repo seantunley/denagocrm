@@ -1,7 +1,7 @@
 import { subDays } from "date-fns";
 import { basePrisma } from "./db";
 import { deleteFile } from "./storage";
-import { deleteCustomValuesFor, type CustomEntity } from "./customFields";
+import { type CustomEntity } from "./customFields";
 
 export const TRASH_RETENTION_DAYS = 60;
 
@@ -89,19 +89,37 @@ export async function purgeTrash(): Promise<number> {
   // children before parents so FK cascades behave predictably
   for (const model of ["quote", "jobCard", "vehicle", "lead", "contact", "product"] as TrashModel[]) {
     const entity = customEntityFor[model];
-    const staleIds: string[] = entity
-      ? (
-          await delegate(model)
-            .findMany({ where: { deletedAt: { lt: cutoff } }, select: { id: true } })
-            .catch(() => [])
-        ).map((r: { id: string }) => r.id)
-      : [];
-    const res = await delegate(model)
-      .deleteMany({ where: { deletedAt: { lt: cutoff } } })
-      .catch(() => ({ count: 0 }));
-    purged += res.count;
-    if (entity && staleIds.length > 0) {
-      await deleteCustomValuesFor(entity, staleIds).catch(() => {});
+    if (!entity) {
+      const res = await delegate(model)
+        .deleteMany({ where: { deletedAt: { lt: cutoff } } })
+        .catch(() => ({ count: 0 }));
+      purged += res.count;
+      continue;
+    }
+
+    // Pin the exact id set, then delete the parent rows AND their custom values
+    // in one transaction. Doing them together is essential: if the parent delete
+    // fails we must NOT have already erased the custom values (that would leave a
+    // recoverable trashed record stripped of its data). Both commit or neither
+    // does. Selecting by id (not deletedAt) keeps the two deletes on the same set.
+    const staleIds: string[] = (
+      await delegate(model)
+        .findMany({ where: { deletedAt: { lt: cutoff } }, select: { id: true } })
+        .catch(() => [])
+    ).map((r: { id: string }) => r.id);
+    if (staleIds.length === 0) continue;
+
+    try {
+      const res = await basePrisma.$transaction(async (tx) => {
+        await tx.customFieldValue.deleteMany({
+          where: { recordId: { in: staleIds }, def: { entity } },
+        });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (tx as any)[model].deleteMany({ where: { id: { in: staleIds } } });
+      });
+      purged += res.count;
+    } catch {
+      // parent + custom values rolled back together; nothing purged this pass
     }
   }
   return purged;

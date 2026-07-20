@@ -6,6 +6,7 @@ import { sendPushToAll } from "./push";
 import { nextStepDueDate } from "./businessHours";
 import { getNextStepScheduling } from "./nextStepConfig";
 import { FOLLOW_UP_TYPE, isOpenFutureFollowUp } from "./followUp";
+import { isModuleEnabled } from "./modules/enabled";
 
 export const LEAD_TRIGGERS = [
   "lead_created",
@@ -175,6 +176,11 @@ export async function runLeadAutomations(
   depth = 0
 ): Promise<void> {
   try {
+    // Automation rules are a Marketing-pack feature (the /automations builder
+    // lives under Marketing). Gate the ENGINE, not each caller, so every
+    // event-based invoker (lead/quote/delivery workflows) is covered at once —
+    // with Marketing off, no rule fires and no activity/email/push is emitted.
+    if (!(await isModuleEnabled("marketing"))) return;
     const lead = await loadLead(leadId);
     if (!lead) return;
     const rules = await prisma.automationRule.findMany({
@@ -279,6 +285,10 @@ async function lastEngagementAt(
  * check-back scheduled, so the nudge is suppressed until the follow-up is due.
  */
 export async function runIdleAutomations(): Promise<number> {
+  // Idle-lead nudges are Marketing-pack automation (the lead_idle rules live in
+  // the /automations builder). The cron calls this unconditionally, so gate here
+  // — with Marketing off, no idle rule fires.
+  if (!(await isModuleEnabled("marketing"))) return 0;
   let fired = 0;
   const now = new Date();
   const rules = await prisma.automationRule.findMany({

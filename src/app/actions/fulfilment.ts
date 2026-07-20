@@ -42,6 +42,10 @@ function pickFile(formData: FormData): File | null {
 }
 
 export async function markInvoiced(quoteId: string, formData: FormData) {
+  // The whole fulfilment pipeline (invoice → deposit → schedule → deliver) is
+  // automotive-owned and drives the automotive /deliveries board. Every stage is
+  // reachable by direct POST, so gate each one server-side; throws when off.
+  await requireModuleEnabled("automotive");
   const user = await requireQuoteAccess(quoteId, "deliveries.manage");
   const quote = await prisma.quote.findUniqueOrThrow({ where: { id: quoteId }, include: { contact: true } });
   if (quote.status !== "accepted" || quote.invoicedAt) return;
@@ -61,6 +65,7 @@ export async function markInvoiced(quoteId: string, formData: FormData) {
 }
 
 export async function markDepositPaid(quoteId: string, formData: FormData) {
+  await requireModuleEnabled("automotive");
   const user = await requireQuoteAccess(quoteId, "deliveries.manage");
   const quote = await prisma.quote.findUniqueOrThrow({ where: { id: quoteId } });
   if (!quote.invoicedAt || quote.depositPaidAt) return;
