@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireUser } from "@/lib/auth";
+import { requireAnyPermission } from "@/lib/permissions";
 import AutoRefresh from "@/components/AutoRefresh";
 import { listTickets } from "@/lib/helpdesk";
 import { statusMeta } from "@/lib/helpdesk-constants";
@@ -9,7 +9,7 @@ import { formatDateTime } from "@/lib/format";
 export const metadata = { title: "Help desk — Denago Messages" };
 
 export default async function MessagesCasesPage() {
-  const user = await requireUser();
+  const user = await requireAnyPermission("cases.view_all", "cases.view_owned");
   const tickets = await listTickets(user, { folder: "open" });
 
   return (

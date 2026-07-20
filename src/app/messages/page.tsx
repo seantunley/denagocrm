@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireAnyPermission } from "@/lib/permissions";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
@@ -9,7 +9,7 @@ import { buildInboxThreads } from "@/lib/inboxThreads";
 export const metadata = { title: "Chats — Denago Messages" };
 
 export default async function MessagesChatsPage() {
-  await requireUser();
+  await requireAnyPermission("inbox.view", "inbox.reply");
 
   const comms = await prisma.communication.findMany({
     where: { type: { in: ["whatsapp", "messenger", "instagram"] }, archivedAt: null },
