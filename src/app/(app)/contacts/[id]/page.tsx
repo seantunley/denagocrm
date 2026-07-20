@@ -25,6 +25,7 @@ import { CONSENT_TYPES } from "@/lib/consent";
 import { isSmtpConfigured, renderTemplate, contactVars } from "@/lib/email";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 
@@ -37,6 +38,7 @@ export default async function ContactDetailPage({
 }) {
   const { id } = await params;
   const user = await requireUser();
+  const automotiveOn = await isModuleEnabled("automotive");
   const contact = await prisma.contact.findUnique({
     where: { id },
     include: {
@@ -113,7 +115,7 @@ export default async function ContactDetailPage({
       description={[contact.email, contact.phone, contact.city].filter(Boolean).join(" · ") || "No contact details recorded"}
       meta={`${contact.owner ? `Owner: ${contact.owner.name}` : "No owner assigned"} · added${contact.createdBy ? ` by ${contact.createdBy.name}` : ""} at ${formatDateTime(contact.createdAt)}`}
       facts={[
-        { label: "Vehicles", value: contact.vehicles.length },
+        ...(automotiveOn ? [{ label: "Vehicles", value: contact.vehicles.length }] : []),
         { label: "Open leads", value: contact.leads.filter((lead) => lead.status === "open").length },
         { label: "Activities", value: contact.activities.filter((activity) => activity.status === "planned").length },
         { label: "Documents", value: contact.documents.length },
@@ -184,7 +186,7 @@ export default async function ContactDetailPage({
                   />
                 ),
               },
-              {
+              ...(automotiveOn ? [{
                 key: "vehicles",
                 label: "Vehicles",
                 count: contact.vehicles.length,
@@ -224,7 +226,7 @@ export default async function ContactDetailPage({
                     )}
                   </div>
                 ),
-              },
+              }] : []),
               {
                 key: "leads",
                 label: "Leads",

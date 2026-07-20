@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { basePrisma } from "@/lib/db";
 import { requirePortalScope } from "@/lib/portalAccess";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { readFile } from "@/lib/storage";
 
 type UploadRow = {
@@ -15,6 +16,9 @@ export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  if (!(await isModuleEnabled("portal"))) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
   const scope = await requirePortalScope().catch(() => null);
   if (!scope) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const { id } = await params;

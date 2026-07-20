@@ -3,6 +3,7 @@ import { Download, FileText, FolderOpen, UploadCloud } from "lucide-react";
 import { basePrisma, prisma } from "@/lib/db";
 import { getPortalContact } from "@/lib/portal";
 import { requirePortalScope } from "@/lib/portalAccess";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { PortalUploadForm } from "@/components/PortalExpansionForms";
 import { formatDate } from "@/lib/format";
 import { EmptyState, PortalPageHeader, SectionHeading, Surface } from "@/components/visual-system";
@@ -21,6 +22,7 @@ export default async function PortalDocumentsPage() {
   const contact = await getPortalContact();
   if (!contact) redirect("/portal/login");
   const scope = await requirePortalScope();
+  const automotiveOn = await isModuleEnabled("automotive");
 
   const quoteIds = (
     await prisma.quote.findMany({
@@ -68,12 +70,13 @@ export default async function PortalDocumentsPage() {
 
   return (
     <div className="space-y-10">
-      <PortalPageHeader eyebrow="Document centre" title="Documents" description="Download your customer, vehicle, quote and delivery documents, or send files securely to our team." />
+      <PortalPageHeader eyebrow="Document centre" title="Documents" description={automotiveOn ? "Download your customer, vehicle, quote and delivery documents, or send files securely to our team." : "Download your documents, or send files securely to our team."} />
 
       <Surface className="space-y-5 p-5 sm:p-6">
         <SectionHeading title="Secure upload" description="Files are attached directly to your customer record and are only visible to the Denago team." action={<span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><UploadCloud className="size-5" /></span>} />
         <PortalUploadForm
-          vehicles={vehicles.map((vehicle) => ({ id: vehicle.id, label: `${vehicle.model}${vehicle.regNumber ? ` (${vehicle.regNumber})` : ""}` }))}
+          automotive={automotiveOn}
+          vehicles={automotiveOn ? vehicles.map((vehicle) => ({ id: vehicle.id, label: `${vehicle.model}${vehicle.regNumber ? ` (${vehicle.regNumber})` : ""}` })) : []}
           cases={cases.map((item) => ({ id: item.id, label: `C-${item.number.toString()} · ${item.subject}` }))}
         />
       </Surface>
