@@ -585,7 +585,7 @@ export default async function QuoteDetailPage({
         )}
       </div>
 
-      <CustomFieldsCard entity="quote" recordId={quote.id} />
+      <CustomFieldsCard entity="quote" recordId={quote.id} readOnly={!editable} />
     </div>
   );
 }

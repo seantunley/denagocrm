@@ -115,6 +115,21 @@ export async function saveCustomFieldValues(
 ) {
   if (!isCustomEntity(entity)) throw new Error("Unknown entity");
   await requireEntityEdit(entity, recordId);
+  // A locked quote is immutable — its custom fields must not change either.
+  // Mirror `quoteLocked` in actions/quotes.ts: frozen once a signing link exists,
+  // it has been signed, it was superseded by a revision, or it has left draft.
+  if (entity === "quote") {
+    const quote = await prisma.quote.findUnique({ where: { id: recordId } });
+    if (
+      !quote ||
+      Boolean(quote.signToken) ||
+      Boolean(quote.signedAt) ||
+      Boolean(quote.supersededAt) ||
+      quote.status !== "draft"
+    ) {
+      throw new Error("This quote is locked and can no longer be edited.");
+    }
+  }
   const defs = await getFieldDefs(entity);
   const basePath: Record<CustomEntity, string> = {
     contact: "/contacts",
