@@ -34,7 +34,14 @@ export default function InstallAppButton() {
 
   useEffect(() => {
     setStandalone(isStandalone());
-    setIsIOS(/iPad|iPhone|iPod/.test(navigator.userAgent) && !("MSStream" in window));
+    // iPhone/iPod still report their own UA, but modern iPadOS Safari
+    // masquerades as desktop macOS ("Macintosh…"). Detect that case by a Mac UA
+    // *with* touch points — real Macs report maxTouchPoints 0 — so the Add to
+    // Home Screen hint still shows on iPads.
+    const ua = navigator.userAgent;
+    const iosPhone = /iPad|iPhone|iPod/.test(ua);
+    const iPadOSAsDesktop = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+    setIsIOS((iosPhone || iPadOSAsDesktop) && !("MSStream" in window));
 
     function onBeforeInstall(e: Event) {
       e.preventDefault();
