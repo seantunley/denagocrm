@@ -48,27 +48,28 @@ export async function anonymizeContact(contactId: string) {
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) return;
 
-  // Custom-field values can hold PII (e.g. ID number) — erase them too, for the
-  // contact and for each of its leads, quotes and cases. These key on the record
-  // id with no FK, so nothing cascades; gather ids via basePrisma so trashed
-  // (soft-deleted) records' custom PII is erased as well. Erasure must be total.
-  const [leadIds, quoteIds, caseIds] = await Promise.all([
-    basePrisma.lead.findMany({ where: { contactId }, select: { id: true } }).then((r) => r.map((x) => x.id)),
-    basePrisma.quote.findMany({ where: { contactId }, select: { id: true } }).then((r) => r.map((x) => x.id)),
-    basePrisma.customerCase.findMany({ where: { contactId }, select: { id: true } }).then((r) => r.map((x) => x.id)),
-  ]);
+  // Erasure runs in ONE interactive transaction and is all-or-nothing. Two things
+  // matter for completeness:
+  //   1. We lock the contact FOR UPDATE first. A new child (lead/quote/case)
+  //      inserted against this contact takes an FK KEY-SHARE lock on its row,
+  //      which now blocks until we commit — so no child can slip in AFTER we
+  //      gather ids but before we finish, and escape the custom-field wipe.
+  //   2. Child ids are gathered INSIDE the transaction (post-lock), and the
+  //      redaction, custom-value deletes and withdrawal-of-consent record all
+  //      commit together — never a half-anonymised contact without consent proof.
+  // Runs on the base client (tx) so soft-deleted leads are redacted too. Custom
+  // values key on the record id with no FK, so nothing cascades — we erase them
+  // for the contact and each of its leads, quotes and cases explicitly.
+  await basePrisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "Contact" WHERE "id" = ${contactId} FOR UPDATE`;
 
-  // Erasure must be all-or-nothing: the redaction, the custom-value deletes and
-  // the withdrawal-of-consent record commit together, so we can never leave a
-  // half-anonymised contact without the consent proof that it happened. Run on
-  // basePrisma so soft-deleted leads are redacted too (the filtered client would
-  // skip them). Irreversible stored-file cleanup, if any, would run post-commit.
-  const erase = (ids: string[], entity: CustomEntity) =>
-    ids.length
-      ? [basePrisma.customFieldValue.deleteMany({ where: { recordId: { in: ids }, def: { entity } } })]
-      : [];
-  await basePrisma.$transaction([
-    basePrisma.contact.update({
+    const [leadIds, quoteIds, caseIds] = await Promise.all([
+      tx.lead.findMany({ where: { contactId }, select: { id: true } }).then((r) => r.map((x) => x.id)),
+      tx.quote.findMany({ where: { contactId }, select: { id: true } }).then((r) => r.map((x) => x.id)),
+      tx.customerCase.findMany({ where: { contactId }, select: { id: true } }).then((r) => r.map((x) => x.id)),
+    ]);
+
+    await tx.contact.update({
       where: { id: contactId },
       data: {
         firstName: "Redacted",
@@ -88,16 +89,23 @@ export async function anonymizeContact(contactId: string) {
         deletedByName: user.name,
         deleteReason: "POPIA erasure request",
       },
-    }),
-    basePrisma.lead.updateMany({
+    });
+    await tx.lead.updateMany({
       where: { contactId },
       data: { name: "Redacted", email: null, phone: null },
-    }),
-    ...erase([contactId], "contact"),
-    ...erase(leadIds, "lead"),
-    ...erase(quoteIds, "quote"),
-    ...erase(caseIds, "case"),
-    basePrisma.consentRecord.create({
+    });
+
+    const erase = async (ids: string[], entity: CustomEntity) => {
+      if (ids.length) {
+        await tx.customFieldValue.deleteMany({ where: { recordId: { in: ids }, def: { entity } } });
+      }
+    };
+    await erase([contactId], "contact");
+    await erase(leadIds, "lead");
+    await erase(quoteIds, "quote");
+    await erase(caseIds, "case");
+
+    await tx.consentRecord.create({
       data: {
         contactId,
         type: "data_processing",
@@ -106,8 +114,8 @@ export async function anonymizeContact(contactId: string) {
         note: "Erasure request",
         createdById: user.id,
       },
-    }),
-  ]);
+    });
+  });
   await logAudit({
     action: "privacy.erased",
     summary: "POPIA erasure — personal data redacted for a contact",

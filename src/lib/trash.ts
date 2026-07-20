@@ -64,27 +64,28 @@ export async function purgeTrash(): Promise<number> {
     where: { deletedAt: { lt: cutoff } },
   });
   for (const doc of staleDocs) {
-    try {
-      await basePrisma.document.delete({ where: { id: doc.id } });
-    } catch {
-      continue; // row survived — leave its file intact, don't count it
-    }
+    // Guard on deletedAt: a document restored between the scan and now cleared
+    // its deletedAt, so the guarded deleteMany matches 0 rows and we skip it —
+    // never purging (or orphaning the file of) a record that left the trash.
+    const { count } = await basePrisma.document
+      .deleteMany({ where: { id: doc.id, deletedAt: { lt: cutoff } } })
+      .catch(() => ({ count: 0 }));
+    if (count === 0) continue; // restored or already gone — keep the file
     await deleteFile(doc.storedName).catch(() => {});
     purged++;
   }
 
-  // library documents: same ordering — the row (which cascades its versions)
-  // goes first; only then do we remove the version files we captured up-front.
+  // library documents: same guarded delete (the row cascades its versions), then
+  // remove the version files we captured up-front.
   const staleLibrary = await basePrisma.libraryDocument.findMany({
     where: { deletedAt: { lt: cutoff } },
     include: { versions: true },
   });
   for (const doc of staleLibrary) {
-    try {
-      await basePrisma.libraryDocument.delete({ where: { id: doc.id } });
-    } catch {
-      continue; // row survived — keep its files
-    }
+    const { count } = await basePrisma.libraryDocument
+      .deleteMany({ where: { id: doc.id, deletedAt: { lt: cutoff } } })
+      .catch(() => ({ count: 0 }));
+    if (count === 0) continue; // restored or already gone — keep its files
     for (const v of doc.versions) await deleteFile(v.storedName).catch(() => {});
     purged++;
   }
@@ -152,12 +153,22 @@ export async function purgeTrash(): Promise<number> {
         // removal. The other portal tables are ON DELETE CASCADE, so they go with
         // the contact automatically.
         if (model === "contact") {
-          const uploads = await tx.portalUpload.findMany({
-            where: { contactId: { in: ids } },
-            select: { storedName: true },
-          });
+          const [uploads, caseRows] = await Promise.all([
+            tx.portalUpload.findMany({ where: { contactId: { in: ids } }, select: { storedName: true } }),
+            tx.customerCase.findMany({ where: { contactId: { in: ids } }, select: { id: true } }),
+          ]);
           orphanFiles = uploads.map((u) => u.storedName);
           await tx.portalUpload.deleteMany({ where: { contactId: { in: ids } } });
+          // Case custom values key on the CASE id (def.entity = "case"), not the
+          // contact, so deleting the cases below would orphan any PII held in a
+          // case custom field. Clear them first. (Leads/quotes are SET NULL on
+          // contact delete — they survive, so their custom values are untouched.)
+          const caseIds = caseRows.map((c) => c.id);
+          if (caseIds.length > 0) {
+            await tx.customFieldValue.deleteMany({
+              where: { recordId: { in: caseIds }, def: { entity: "case" } },
+            });
+          }
           await tx.customerCase.deleteMany({ where: { contactId: { in: ids } } });
         }
 

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
-import { getAccessibleContactIds, getAccessibleVehicleIds, hasPermission } from "@/lib/permissions";
+import { getAccessibleContactIds, getAccessibleVehicleIds, hasPermission, hasAnyPermission } from "@/lib/permissions";
 import { contactName } from "@/lib/format";
 import { getSetting } from "@/lib/settings";
 import { isModuleEnabled } from "@/lib/modules/enabled";
@@ -30,7 +30,8 @@ export async function GET() {
     canCreateContact,
     canCreateQuote,
     canManageVehicles,
-    canManageJobcards,
+    rawJobcards,
+    canViewVehicles,
     canScheduleActivity,
     contactIds,
     vehicleIds,
@@ -42,10 +43,17 @@ export async function GET() {
     hasPermission(user, "quotes.create"),
     hasPermission(user, "vehicles.manage"),
     hasPermission(user, "jobcards.manage"),
+    hasAnyPermission(user, "vehicles.view_all", "vehicles.view_owned"),
     hasPermission(user, "activities.manage"),
     getAccessibleContactIds(user),
     getAccessibleVehicleIds(user),
   ]);
+
+  // Creating a job card picks a vehicle, and getAccessibleVehicleIds returns
+  // nothing without a vehicle-view permission — so jobcards.manage alone yields
+  // an empty picker and a dead-end dialog. Treat "can create a job card" as
+  // jobcards.manage AND vehicle-view, matching what QuickActions shows.
+  const canManageJobcards = rawJobcards && canViewVehicles;
 
   // No create capability at all → nothing to hand out.
   if (
@@ -56,12 +64,12 @@ export async function GET() {
   }
 
   // Which lists this caller may see, by the dialog that consumes each one. The
-  // job-card dialog needs the vehicle list, so a jobcards.manage-only user must
-  // still receive vehicles (both lists are automotive-gated + id-scoped).
+  // vehicle list is used ONLY by the job-card dialog (register-vehicle needs
+  // just contacts + products), so it's gated on the job-card capability.
   const needsContacts = canCreateLead || canCreateQuote || canManageVehicles || canScheduleActivity;
   const needsProducts = canCreateLead || canCreateQuote || canManageVehicles;
   const needsUsers = canCreateLead || canCreateContact || canScheduleActivity;
-  const needsVehicles = canManageVehicles || canManageJobcards;
+  const needsVehicles = canManageJobcards;
   const scoped = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
 
   const [products, stages, contacts, users, vehicles, validDaysRaw, quoteTerms] = await Promise.all([

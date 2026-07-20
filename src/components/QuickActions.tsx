@@ -40,7 +40,11 @@ export default function QuickActions({
   const can = (...keys: string[]) => isAdmin || keys.some((key) => granted.has(key));
   const enabledSet = enabledModules ? new Set(enabledModules) : undefined;
   const packOn = (href: string) => !enabledSet || isPathEnabled(href, enabledSet);
-  const canJobcards = can("jobcards.manage") && packOn("/jobcards");
+  // Creating a job card requires picking a vehicle, and the vehicle picker is
+  // empty without a vehicle-view permission — so require both, or the action is a
+  // dead end (mirrors the /api/quick-create gate).
+  const canJobcards =
+    can("jobcards.manage") && can("vehicles.view_all", "vehicles.view_owned") && packOn("/jobcards");
   const canVehicles = can("vehicles.manage") && packOn("/vehicles");
   const hasCrmActions = can("leads.create", "contacts.create", "activities.manage", "quotes.create");
   const hasWorkshopActions = canJobcards || canVehicles;
