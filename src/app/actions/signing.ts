@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireCrmOrWorkshop } from "@/lib/auth";
+import { requireQuoteAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { saveFile } from "@/lib/storage";
 
@@ -18,7 +18,15 @@ export async function signAsDealer(
   signatureDataUrl: string | null,
   saveForReuse: boolean
 ): Promise<{ ok?: boolean; error?: string }> {
-  const user = await requireCrmOrWorkshop();
+  // Countersigning stamps Denago's signature onto a specific quote and changes
+  // its state, so require access to THAT quote (not just a module) plus a
+  // change-status permission. Guard the quote's state too: never countersign a
+  // trashed, already-countersigned or already customer-signed quote.
+  const user = await requireQuoteAccess(quoteId, "quotes.change_status");
+  const existing = await prisma.quote.findUnique({ where: { id: quoteId } });
+  if (!existing || existing.deletedAt) return { error: "Quote not found." };
+  if (existing.dealerSignedAt) return { error: "This quote is already countersigned." };
+  if (existing.signedAt) return { error: "This quote is already signed by the customer." };
   let ref: string | null;
   if (signatureDataUrl) {
     if (!signatureDataUrl.startsWith("data:image/png;base64,") || signatureDataUrl.length > 400_000) {
@@ -30,7 +38,13 @@ export async function signAsDealer(
       await prisma.user.update({ where: { id: user.id }, data: { drawnSignatureRef: ref } });
     }
   } else {
-    ref = user.drawnSignatureRef;
+    // requireQuoteAccess returns the slim permission user, so read the saved
+    // signature from the DB.
+    const saved = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { drawnSignatureRef: true },
+    });
+    ref = saved?.drawnSignatureRef ?? null;
     if (!ref) return { error: "No saved signature yet — draw one first." };
   }
   const quote = await prisma.quote.update({

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireCrmOrWorkshop } from "@/lib/auth";
+import { requireQuoteAccess, requireJobCardAccess, type PermissionUser } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { saveFile } from "@/lib/storage";
 import { quoteExpired } from "@/lib/quoteExpiry";
@@ -29,12 +29,24 @@ function recordPath(kind: Kind, id: string): string {
   return kind === "quote" ? `/quotes/${id}` : `/jobcards/${id}`;
 }
 
+/**
+ * Record-level authorization for signing lifecycle actions. The old module-only
+ * `requireCrmOrWorkshop()` let any crm/workshop user start/resend/void signing on
+ * ANY quote or job card by id. Signing changes the record's state, so require
+ * access to that specific record plus a change-status/manage permission.
+ */
+function requireRecordSigningAccess(kind: Kind, id: string): Promise<PermissionUser> {
+  return kind === "quote"
+    ? requireQuoteAccess(id, "quotes.change_status")
+    : requireJobCardAccess(id, "jobcards.manage");
+}
+
 export async function startRecordSigning(
   kind: Kind,
   id: string,
   workflowId?: string | null,
 ): Promise<Result> {
-  const user = await requireCrmOrWorkshop();
+  const user = await requireRecordSigningAccess(kind, id);
   const quoteId = kind === "quote" ? id : null;
   const jobCardId = kind === "jobcard" ? id : null;
 
@@ -225,7 +237,7 @@ export async function resendRecordSigning(
   kind: Kind,
   id: string,
 ): Promise<Result> {
-  const user = await requireCrmOrWorkshop();
+  const user = await requireRecordSigningAccess(kind, id);
   const state = await activeRecordRequest({
     quoteId: kind === "quote" ? id : null,
     jobCardId: kind === "jobcard" ? id : null,
@@ -249,7 +261,7 @@ export async function voidRecordSigning(
   kind: Kind,
   id: string,
 ): Promise<Result> {
-  const user = await requireCrmOrWorkshop();
+  const user = await requireRecordSigningAccess(kind, id);
   const state = await activeRecordRequest({
     quoteId: kind === "quote" ? id : null,
     jobCardId: kind === "jobcard" ? id : null,

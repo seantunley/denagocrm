@@ -16,7 +16,6 @@ import {
   decryptValue,
   encryptBytes,
   encryptValue,
-  getSetting,
 } from "@/lib/settings";
 
 export const maxDuration = 300;
@@ -127,14 +126,17 @@ async function recordResult(result: Record<string, unknown>) {
  */
 export async function GET(req: NextRequest) {
   const startedAt = new Date();
+  // Backups export the ENTIRE encrypted database, snapshot assets and purge
+  // trash — administrative maintenance. Only the dedicated CRON_SECRET (sent as a
+  // Bearer header by Vercel Cron) may trigger it. The website intake key
+  // (INTAKE_API_KEY) is a lower-privilege integration secret and must NOT
+  // authorize this; a query-string ?key= is also refused since URLs leak into
+  // logs and telemetry.
   const cronSecret = process.env.CRON_SECRET;
   const authHeader = req.headers.get("authorization");
   const viaCronSecret = Boolean(cronSecret) && authHeader === `Bearer ${cronSecret}`;
-  const apiKey = await getSetting("INTAKE_API_KEY");
-  const provided = req.nextUrl.searchParams.get("key") ?? req.headers.get("x-api-key");
-  const viaApiKey = Boolean(apiKey) && provided === apiKey;
 
-  if (!viaCronSecret && !viaApiKey) {
+  if (!viaCronSecret) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
