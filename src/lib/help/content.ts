@@ -8,6 +8,7 @@ import workshop from "./data/workshop.json";
 import documents from "./data/documents.json";
 import marketing from "./data/marketing.json";
 import commsAutomation from "./data/comms-automation.json";
+import channels from "./data/channels.json";
 import admin from "./data/admin.json";
 
 // Single source of truth for the Help Centre and the printable manual. Getting
@@ -21,6 +22,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...(documents as HelpArticle[]),
   ...(marketing as HelpArticle[]),
   ...(commsAutomation as HelpArticle[]),
+  ...(channels as HelpArticle[]),
   ...(admin as HelpArticle[]),
 ];
 
