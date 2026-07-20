@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Prisma } from "@prisma/client";
-import { Plus, List, Trophy } from "lucide-react";
+import { Plus, List, Trophy, Download } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { getDailyForecast } from "@/lib/weather";
 import KanbanBoard, { type KanbanStage } from "@/components/KanbanBoard";
@@ -188,6 +188,16 @@ export default async function LeadsPage() {
             <Trophy className="size-4" />
             Won / Lost
           </Link>
+        </Button>
+        <Button asChild variant="ghost" size="sm">
+          <a
+            href="/api/export/ads-conversions"
+            download
+            title="Won leads that came from a Google Ads click, as a CSV for Google Ads → Conversions → Uploads"
+          >
+            <Download className="size-4" />
+            Ads export
+          </a>
         </Button>
         <Button asChild variant="outline" size="sm">
           <Link href="/leads/list">
