@@ -79,7 +79,6 @@ export function buildNav(
   if (can("documents.view_all", "documents.view_owned", "documents.upload", "documents.manage", "document_templates.manage")) {
     crmLinks.push({ href: "/documents", label: "Documents", icon: FolderOpen });
   }
-  crmLinks.push({ href: "/library", label: "Document library", icon: Library });
   if (crmLinks.length) groups.push({ key: "crm", label: "CRM", links: crmLinks });
 
   const marketingLinks: NavLink[] = [];
@@ -123,9 +122,9 @@ export function buildNav(
     });
   }
 
-  if (can("document_templates.manage")) {
-    groups.push({ key: "platform", label: "Platform", links: [{ href: "/document-studio", label: "Document Studio", icon: FileText }] });
-  }
+  const platformLinks: NavLink[] = [{ href: "/library", label: "Document library", icon: Library }];
+  if (can("document_templates.manage")) platformLinks.push({ href: "/document-studio", label: "Document Studio", icon: FileText });
+  if (platformLinks.length) groups.push({ key: "platform", label: "Platform", links: platformLinks });
 
   const governanceLinks: NavLink[] = [];
   if (can("audit.view")) governanceLinks.push({ href: "/audit", label: "Audit log", icon: ScrollText });
