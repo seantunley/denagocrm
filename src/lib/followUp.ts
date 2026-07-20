@@ -58,6 +58,26 @@ export function ensureFollowUpTime(
 }
 
 /**
+ * Validates just the DUE-DATE half of the follow-up invariant: the due date
+ * must be a valid moment in the FUTURE. Used when EDITING an existing follow-up,
+ * where no note is submitted or persisted, so only the real-future-time rule is
+ * enforced (the reminder cron skips midnight, so a past/midnight due would miss
+ * its nudge). Returns a human-readable error message, or null when valid.
+ */
+export function followUpDueDateError(
+  dueDate: Date | null,
+  now: Date = new Date(),
+): string | null {
+  if (!dueDate || isNaN(dueDate.getTime())) {
+    return "A follow-up needs a valid future date and time.";
+  }
+  if (dueDate.getTime() <= now.getTime()) {
+    return "A follow-up must be scheduled for a future date and time.";
+  }
+  return null;
+}
+
+/**
  * Validates a follow-up's user input: a note is REQUIRED (capture what the
  * customer said) and the due date must be a valid moment in the FUTURE. Returns
  * a human-readable error message, or null when the follow-up is valid.
@@ -69,11 +89,5 @@ export function followUpValidationError(
   if (!input.note || !input.note.trim()) {
     return "A follow-up needs a note — capture what the customer said they'd get back to you about.";
   }
-  if (!input.dueDate || isNaN(input.dueDate.getTime())) {
-    return "A follow-up needs a valid future date and time.";
-  }
-  if (input.dueDate.getTime() <= now.getTime()) {
-    return "A follow-up must be scheduled for a future date and time.";
-  }
-  return null;
+  return followUpDueDateError(input.dueDate, now);
 }

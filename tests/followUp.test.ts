@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   FOLLOW_UP_TYPE,
   ensureFollowUpTime,
+  followUpDueDateError,
   followUpValidationError,
   isOpenFutureFollowUp,
 } from "../src/lib/followUp";
@@ -92,6 +93,25 @@ test("followUpValidationError: valid follow-up returns null", () => {
     followUpValidationError({ note: "will decide in 2 weeks", dueDate: future }, now),
     null,
   );
+});
+
+test("followUpDueDateError: rejects a past/invalid due date but needs NO note (edit path)", () => {
+  // A note is neither submitted nor persisted on edit, so it is never required.
+  assert.match(followUpDueDateError(past, now) ?? "", /future/i);
+  assert.match(followUpDueDateError(null, now) ?? "", /valid future/i);
+  assert.match(followUpDueDateError(new Date(NaN), now) ?? "", /valid future/i);
+});
+
+test("followUpDueDateError: midnight normalised via ensureFollowUpTime is a valid future time", () => {
+  // Editing a follow-up to a date-only/midnight value: ensureFollowUpTime lifts
+  // it to the default business hour, which must then pass the due-date rule.
+  const normalised = ensureFollowUpTime("2026-08-03T00:00", 9); // -> 2026-08-03T09:00
+  const dueDate = new Date(`${normalised}:00+02:00`);
+  assert.equal(followUpDueDateError(dueDate, now), null);
+});
+
+test("followUpDueDateError: a real future due date returns null", () => {
+  assert.equal(followUpDueDateError(future, now), null);
 });
 
 test("ensureFollowUpTime: keeps a real supplied time", () => {

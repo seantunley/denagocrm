@@ -14,6 +14,7 @@ import { ensureTimelinePin } from "@/lib/timelinePins";
 import {
   FOLLOW_UP_TYPE,
   ensureFollowUpTime,
+  followUpDueDateError,
   followUpValidationError,
 } from "@/lib/followUp";
 
@@ -341,25 +342,40 @@ export async function updateActivity(id: string, formData: FormData) {
   const { user } = await requireActivityAccess(id);
   const summary = String(formData.get("summary") ?? "").trim();
   if (!summary) return;
+  const type = str(formData, "type") ?? "todo";
   const rawDue = str(formData, "dueDate");
+
+  // Editing an existing follow-up must preserve its "real future time"
+  // invariant: the hour-before reminder push skips midnight, so a follow-up
+  // edited to 00:00 or a past time would silently miss its nudge. The edit form
+  // neither submits nor persists a note, so we enforce ONLY the due-date rule
+  // here — we never newly require a note nor touch the existing one.
+  let duePatch = {};
+  if (rawDue) {
+    let dueDate: Date;
+    if (type === FOLLOW_UP_TYPE) {
+      dueDate = new Date(`${ensureFollowUpTime(rawDue)}:00+02:00`);
+      const problem = followUpDueDateError(dueDate, new Date());
+      if (problem) throw new Error(problem);
+    } else {
+      dueDate = rawDue.endsWith("T00:00")
+        ? new Date(rawDue.slice(0, 10))
+        : rawDue.includes("T")
+          ? new Date(`${rawDue}:00+02:00`)
+          : new Date(rawDue);
+    }
+    duePatch = { dueDate, reminderSentAt: null };
+  }
+
   const activity = await prisma.activity.update({
     where: { id },
     data: {
-      type: str(formData, "type") ?? "todo",
+      type,
       category: formData.get("workshop") === "on" ? "workshop" : null,
       summary,
       location: str(formData, "location"),
       assignedToId: str(formData, "assignedToId") ?? user.id,
-      ...(rawDue
-        ? {
-            dueDate: rawDue.endsWith("T00:00")
-              ? new Date(rawDue.slice(0, 10))
-              : rawDue.includes("T")
-                ? new Date(`${rawDue}:00+02:00`)
-                : new Date(rawDue),
-            reminderSentAt: null,
-          }
-        : {}),
+      ...duePatch,
     },
   });
   await logAudit({

@@ -208,33 +208,49 @@ export async function runLeadAutomations(
  * but a future `dueDate` only counts for OPEN ("planned") activities — a
  * canceled or completed activity whose due date happens to sit in the future is
  * not a scheduled touch and must not suppress the gone-quiet nudge.
+ *
+ * Engagement is frequently recorded against the CONTACT rather than the lead:
+ * an inbound WhatsApp matches a contact first, and the contact activity panel
+ * schedules activities with a `contactId` and no `leadId`. So when the lead has
+ * a `contactId` we widen every aggregate to include contact-linked rows too,
+ * otherwise an active customer's lead could still be flagged idle.
  */
-async function lastEngagementAt(leadId: string, rowUpdatedAt: Date): Promise<Date | null> {
+async function lastEngagementAt(
+  leadId: string,
+  contactId: string | null,
+  rowUpdatedAt: Date,
+): Promise<Date | null> {
   const [pendingQuote, commAgg, activityAgg, plannedActivityAgg, quoteAgg] = await Promise.all([
     prisma.quote.findFirst({
       where: {
-        leadId,
         status: "sent",
         signedAt: null,
         supersededAt: null,
         deletedAt: null,
+        OR: [{ leadId }, ...(contactId ? [{ contactId }] : [])],
       },
       select: { id: true },
     }),
     prisma.communication.aggregate({
-      where: { leadId },
+      where: { OR: [{ leadId }, ...(contactId ? [{ contactId }] : [])] },
       _max: { occurredAt: true },
     }),
     prisma.activity.aggregate({
-      where: { leadId },
+      where: { OR: [{ leadId }, ...(contactId ? [{ contactId }] : [])] },
       _max: { createdAt: true },
     }),
     prisma.activity.aggregate({
-      where: { leadId, status: "planned" },
+      where: {
+        status: "planned",
+        OR: [{ leadId }, ...(contactId ? [{ contactId }] : [])],
+      },
       _max: { dueDate: true },
     }),
     prisma.quote.aggregate({
-      where: { leadId, deletedAt: null },
+      where: {
+        deletedAt: null,
+        OR: [{ leadId }, ...(contactId ? [{ contactId }] : [])],
+      },
       _max: { updatedAt: true },
     }),
   ]);
@@ -284,14 +300,27 @@ export async function runIdleAutomations(): Promise<number> {
       if (already) continue;
       if (!conditionsHold(rule, lead)) continue;
 
-      const lastEngagement = await lastEngagementAt(lead.id, lead.updatedAt);
+      const lastEngagement = await lastEngagementAt(
+        lead.id,
+        lead.contactId,
+        lead.updatedAt,
+      );
       // null = quote pending; >= cutoff = real recent engagement. Either way,
       // the lead is not "gone quiet".
       if (lastEngagement === null || lastEngagement >= cutoff) continue;
 
-      // Also suppress the gone-quiet nudge while an open, future follow-up exists.
+      // Also suppress the gone-quiet nudge while an open, future follow-up
+      // exists — including contact-scoped follow-ups (booked from the contact
+      // panel with no leadId).
       const plannedFollowUps = await prisma.activity.findMany({
-        where: { leadId: lead.id, type: FOLLOW_UP_TYPE, status: "planned" },
+        where: {
+          type: FOLLOW_UP_TYPE,
+          status: "planned",
+          OR: [
+            { leadId: lead.id },
+            ...(lead.contactId ? [{ contactId: lead.contactId }] : []),
+          ],
+        },
         select: { type: true, status: true, dueDate: true },
       });
       if (plannedFollowUps.some((a) => isOpenFutureFollowUp(a, now))) continue;
