@@ -19,13 +19,11 @@ import {
   ShieldCheck,
   Wrench,
   Cog,
-  Warehouse,
   Zap,
   Bot,
   Network,
   Ticket,
   LifeBuoy,
-  KeyRound,
   TrendingUp,
   ScrollText,
   GitBranch,
@@ -106,7 +104,6 @@ export function buildNav(
   if (can("jobcards.view_all", "jobcards.view_owned")) workshopLinks.push({ href: "/jobcards", label: "Job Cards", icon: Wrench });
   if (can("jobcards.view_all", "jobcards.view_owned")) workshopLinks.push({ href: "/jobcards/insights", label: "Workshop Insights", icon: TrendingUp });
   if (can("parts.view", "parts.manage")) workshopLinks.push({ href: "/parts", label: "Parts", icon: Cog });
-  if (can("workshop.manage")) workshopLinks.push({ href: "/settings/workshop", label: "Workshop settings", icon: Warehouse });
   if (workshopLinks.length) groups.push({ key: "workshop", label: "Workshop", links: workshopLinks });
 
   const automationLinks: NavLink[] = [];
@@ -123,14 +120,6 @@ export function buildNav(
       key: "helpdesk",
       label: "Help desk",
       links: [{ href: "/settings/helpdesk", label: "Help desk", icon: LifeBuoy }],
-    });
-  }
-
-  if (can("portal_access.manage")) {
-    groups.push({
-      key: "portal-admin",
-      label: "Customer Portal",
-      links: [{ href: "/settings/portal-access", label: "Portal access", icon: KeyRound }],
     });
   }
 

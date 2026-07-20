@@ -37,6 +37,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "Workshop",
     items: [
       { key: "workshop", label: "Bookings & slots", keywords: ["schedule", "calendar", "hours"] },
+      { key: "workshop-settings", label: "Workshop settings", href: "/settings/workshop", keywords: ["bays", "labour rate", "packages", "workshop"] },
     ],
   },
   {
