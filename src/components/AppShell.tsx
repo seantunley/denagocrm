@@ -36,6 +36,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { logout } from "@/app/login/actions";
 import { APP_VERSION } from "@/lib/version";
 import { cn } from "@/lib/utils";
+import { isPathEnabled } from "@/lib/modules/registry";
 
 type ShellUser = { name: string; role: string; modules: string; permissions: string[] };
 
@@ -75,7 +76,7 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules
             ⌘K
           </kbd>
         </button>
-        <QuickActions modules={user.modules} isAdmin={isOwner} />
+        <QuickActions modules={user.modules} isAdmin={isOwner} enabledModules={enabledModules} />
       </div>
 
       {/* Nav */}
@@ -140,19 +141,23 @@ function MobilePrimaryNav({
   user,
   pathname,
   inboxWaiting,
+  enabledModules,
   onMore,
 }: {
   user: ShellUser;
   pathname: string;
   inboxWaiting: number;
+  enabledModules?: string[];
   onMore: () => void;
 }) {
   const modules = new Set(user.modules.split(",").map((item) => item.trim()).filter(Boolean));
   const has = (module: string) => user.role === "owner" || modules.has(module);
+  const enabledSet = enabledModules ? new Set(enabledModules) : undefined;
+  const packOn = (href: string) => !enabledSet || isPathEnabled(href, enabledSet);
   const items = [
     { href: "/", label: "Dashboard", icon: LayoutDashboard, show: true },
-    { href: "/leads", label: "Leads", icon: SquareKanban, show: has("crm") },
-    { href: "/inbox", label: "Inbox", icon: MessageSquare, show: has("inbox"), badge: inboxWaiting },
+    { href: "/leads", label: "Leads", icon: SquareKanban, show: has("crm") && packOn("/leads") },
+    { href: "/inbox", label: "Inbox", icon: MessageSquare, show: has("inbox") && packOn("/inbox"), badge: inboxWaiting },
   ].filter((item) => item.show);
   const active = (href: string) => href === "/" ? pathname === "/" : pathname.startsWith(href);
 
@@ -250,12 +255,13 @@ export default function AppShell({
         user={user}
         pathname={pathname}
         inboxWaiting={inboxWaiting}
+        enabledModules={enabledModules}
         onMore={() => setMobileOpen(true)}
       />
 
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 border-r border-sidebar-border lg:flex lg:flex-col">
-        <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} />
+        <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} enabledModules={enabledModules} />
       </aside>
 
       <main className="relative lg:pl-60">

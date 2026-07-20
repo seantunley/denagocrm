@@ -13,6 +13,7 @@ import {
   BatteryCharging,
 } from "lucide-react";
 import { openQuickCreate } from "@/components/QuickCreateDialog";
+import { isPathEnabled } from "@/lib/modules/registry";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,17 +27,23 @@ import {
 export default function QuickActions({
   isAdmin,
   permissions = [],
+  enabledModules,
 }: {
   modules?: string;
   isAdmin: boolean;
   permissions?: string[];
+  enabledModules?: string[];
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const granted = new Set(permissions);
   const can = (...keys: string[]) => isAdmin || keys.some((key) => granted.has(key));
+  const enabledSet = enabledModules ? new Set(enabledModules) : undefined;
+  const packOn = (href: string) => !enabledSet || isPathEnabled(href, enabledSet);
+  const canJobcards = can("jobcards.manage") && packOn("/jobcards");
+  const canVehicles = can("vehicles.manage") && packOn("/vehicles");
   const hasCrmActions = can("leads.create", "contacts.create", "activities.manage", "quotes.create");
-  const hasWorkshopActions = can("jobcards.manage", "vehicles.manage");
+  const hasWorkshopActions = canJobcards || canVehicles;
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -93,12 +100,12 @@ export default function QuickActions({
         {hasWorkshopActions && (
           <>
             <DropdownMenuLabel className="text-[11px] uppercase tracking-wider text-muted-foreground">Workshop</DropdownMenuLabel>
-            {can("jobcards.manage") && (
+            {canJobcards && (
               <DropdownMenuItem onSelect={() => create("jobcard")}>
                 <Wrench className="size-4" />New job card
               </DropdownMenuItem>
             )}
-            {can("vehicles.manage") && (
+            {canVehicles && (
               <>
                 <DropdownMenuItem onSelect={() => create("vehicle")}>
                   <CarFront className="size-4" />Register vehicle
