@@ -28,6 +28,7 @@ const PUBLIC_PATHS = [
   "/api/portal", // portal document/upload routes self-check the portal session
   "/s", // public survey response pages (token-gated)
   "/manifest.webmanifest",
+  "/messages/manifest.webmanifest", // Denago Messages PWA manifest (no app data)
   "/icons",
   "/sw.js",
   "/robots.txt",

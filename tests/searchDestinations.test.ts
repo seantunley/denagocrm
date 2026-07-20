@@ -4,10 +4,18 @@ import { getSearchDestinations, matchSearchDestinations } from "../src/lib/searc
 
 test("finds Settings destinations by their visible labels", () => {
   const destinations = getSearchDestinations({ modules: "", isAdmin: true });
-  const results = matchSearchDestinations("library", destinations);
+  const results = matchSearchDestinations("backup", destinations);
 
-  assert.equal(results[0]?.label, "Library");
-  assert.equal(results[0]?.href, "/settings?tab=library");
+  assert.equal(results[0]?.label, "Backup & recovery");
+  assert.equal(results[0]?.href, "/settings/backup-recovery");
+});
+
+test("finds the Document library for users with library access", () => {
+  const destinations = getSearchDestinations({ modules: "", isAdmin: true });
+  const results = matchSearchDestinations("document library", destinations);
+
+  assert.equal(results[0]?.label, "Document library");
+  assert.equal(results[0]?.href, "/library");
 });
 
 test("finds Settings destinations by descriptive keywords", () => {
@@ -20,7 +28,11 @@ test("finds Settings destinations by descriptive keywords", () => {
 test("does not expose administrator Settings destinations to members", () => {
   const destinations = getSearchDestinations({ modules: "crm", isAdmin: false });
 
-  assert.equal(matchSearchDestinations("library", destinations).length, 0);
+  // Admin-only Settings sections stay hidden from members…
   assert.equal(matchSearchDestinations("security", destinations).length, 0);
+  assert.equal(matchSearchDestinations("backup", destinations).length, 0);
   assert.equal(matchSearchDestinations("settings", destinations)[0]?.href, "/settings");
+  // …and the Document library link is gated by library.view/manage, so a member
+  // without that permission doesn't see it as a destination either.
+  assert.equal(matchSearchDestinations("document library", destinations).length, 0);
 });

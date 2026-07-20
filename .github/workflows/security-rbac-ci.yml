@@ -7,14 +7,26 @@ on:
   push:
     branches:
       - main
+  # ready_for_review is included so a draft PR that is marked ready still runs
+  # the suite; ordinary draft pushes are skipped by the job-level `if` below.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Only keep the newest run per branch/PR alive; a new push cancels the
+# in-progress run instead of letting both burn Actions minutes to completion.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
+    # Draft PRs skip the heavy suite; it runs once the PR is marked ready for
+    # review (and always on push to main / manual dispatch).
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -92,10 +104,9 @@ jobs:
       - name: Unit tests
         run: npm run test:unit
 
-      - name: Production build
-        env:
-          NODE_ENV: production
-        run: npm run build
+      # Production build is intentionally NOT run here: Vercel builds every PR
+      # preview and push, so a duplicate CI build only burns Actions minutes.
+      # Build breakage surfaces as a red Vercel check on the PR instead.
 
       - name: Verify governance invariants
         run: npm run verify:governance

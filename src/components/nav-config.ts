@@ -7,6 +7,7 @@ import {
   SquareKanban,
   FileText,
   FolderOpen,
+  Library,
   Truck,
   Users,
   ListChecks,
@@ -19,17 +20,12 @@ import {
   ShieldCheck,
   Wrench,
   Cog,
-  Warehouse,
   Zap,
   Bot,
   Network,
   Ticket,
-  LifeBuoy,
-  KeyRound,
   TrendingUp,
   ScrollText,
-  GitBranch,
-  ShieldEllipsis,
   Building2,
   HeartPulse,
   Gift,
@@ -77,12 +73,15 @@ export function buildNav(
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/contacts", label: "Contacts", icon: Users });
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/fleets", label: "Fleets", icon: Building2 });
   if (can("activities.view", "activities.manage")) crmLinks.push({ href: "/activities", label: "Activities", icon: ListChecks });
-  if (can("cases.view_all", "cases.view_owned")) crmLinks.push({ href: "/cases", label: "Customer Cases", icon: Ticket });
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/health", label: "Customer Health", icon: HeartPulse });
   if (can("documents.view_all", "documents.view_owned", "documents.upload", "documents.manage", "document_templates.manage")) {
     crmLinks.push({ href: "/documents", label: "Documents", icon: FolderOpen });
   }
   if (crmLinks.length) groups.push({ key: "crm", label: "CRM", links: crmLinks });
+
+  if (can("cases.view_all", "cases.view_owned")) {
+    groups.push({ key: "helpdesk", label: "Help desk", links: [{ href: "/cases", label: "Help desk", icon: Ticket }] });
+  }
 
   const marketingLinks: NavLink[] = [];
   if (can("campaigns.view", "campaigns.manage")) marketingLinks.push({ href: "/campaigns", label: "Campaigns", icon: Megaphone });
@@ -106,7 +105,6 @@ export function buildNav(
   if (can("jobcards.view_all", "jobcards.view_owned")) workshopLinks.push({ href: "/jobcards", label: "Job Cards", icon: Wrench });
   if (can("jobcards.view_all", "jobcards.view_owned")) workshopLinks.push({ href: "/jobcards/insights", label: "Workshop Insights", icon: TrendingUp });
   if (can("parts.view", "parts.manage")) workshopLinks.push({ href: "/parts", label: "Parts", icon: Cog });
-  if (can("workshop.manage")) workshopLinks.push({ href: "/settings/workshop", label: "Workshop settings", icon: Warehouse });
   if (workshopLinks.length) groups.push({ key: "workshop", label: "Workshop", links: workshopLinks });
 
   const automationLinks: NavLink[] = [];
@@ -118,27 +116,13 @@ export function buildNav(
   }
   if (automationLinks.length) groups.push({ key: "automation", label: "Automation", links: automationLinks });
 
-  if (can("cases.manage")) {
-    groups.push({
-      key: "helpdesk",
-      label: "Help desk",
-      links: [{ href: "/settings/helpdesk", label: "Help desk", icon: LifeBuoy }],
-    });
-  }
-
-  if (can("portal_access.manage")) {
-    groups.push({
-      key: "portal-admin",
-      label: "Customer Portal",
-      links: [{ href: "/settings/portal-access", label: "Portal access", icon: KeyRound }],
-    });
-  }
+  const platformLinks: NavLink[] = [];
+  if (can("library.view", "library.manage")) platformLinks.push({ href: "/library", label: "Document library", icon: Library });
+  if (can("document_templates.manage")) platformLinks.push({ href: "/document-studio", label: "Document Studio", icon: FileText });
+  if (platformLinks.length) groups.push({ key: "platform", label: "Platform", links: platformLinks });
 
   const governanceLinks: NavLink[] = [];
   if (can("audit.view")) governanceLinks.push({ href: "/audit", label: "Audit log", icon: ScrollText });
-  if (can("pipelines.view", "pipelines.manage")) governanceLinks.push({ href: "/settings/pipelines", label: "Pipelines", icon: GitBranch });
-  if (can("roles.view", "roles.manage", "teams.view", "teams.manage")) governanceLinks.push({ href: "/settings/access", label: "Access & roles", icon: ShieldEllipsis });
-  if (can("document_templates.manage")) governanceLinks.push({ href: "/document-studio", label: "Document Studio", icon: FileText });
   if (governanceLinks.length) groups.push({ key: "governance", label: "Governance", links: governanceLinks });
 
   return { topLinks, groups };

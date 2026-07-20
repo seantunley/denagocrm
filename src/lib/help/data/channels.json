@@ -1,0 +1,172 @@
+[
+  {
+    "slug": "connect-channels-overview",
+    "title": "Connecting your social channels: the big picture",
+    "summary": "How WhatsApp, Messenger, Instagram, Telegram and Facebook Lead Ads plug into the CRM, in the order to set them up.",
+    "category": "comms",
+    "audience": "admins",
+    "keywords": ["connect", "channels", "social", "whatsapp", "messenger", "instagram", "telegram", "meta", "facebook", "setup", "integrations", "webhook"],
+    "body": [
+      { "type": "p", "text": "This is the setup counterpart to the **Social inbox**. Once a channel is connected, its messages land in the inbox and (if you switch it on) the chatbot can reply automatically. This overview shows what connects where and the order to do it in; the following articles walk each one step by step." },
+      { "type": "h", "text": "What you can connect" },
+      { "type": "table", "headers": ["Channel", "What it brings in", "Set up in"], "rows": [
+        ["Facebook Messenger", "Page DMs", "Settings → Integrations (Meta)"],
+        ["Instagram", "Instagram DMs", "Settings → Integrations (Meta)"],
+        ["WhatsApp Business", "WhatsApp chats", "Settings → Integrations (WhatsApp)"],
+        ["Facebook & Instagram Lead Ads", "New leads, created automatically", "Settings → Integrations (Meta)"],
+        ["Telegram", "Telegram chats", "Chatbot page (bot token)"],
+        ["Google reviews", "New reviews as inbox items", "Settings → Integrations (Google)"]
+      ] },
+      { "type": "h", "text": "The order that saves time" },
+      { "type": "steps", "items": [
+        "Create and connect your **Meta app** once. Messenger, Instagram, WhatsApp and Lead Ads all run through it, so this is the foundation — see **Step 1 — Create your Meta app**.",
+        "Connect the channels you want on top of that app: **Messenger**, **Instagram**, **WhatsApp** and **Lead Ads**, each in its own article below.",
+        "Connect **Telegram** separately with a bot token — see **Connecting a Telegram bot**.",
+        "Optionally add **Google reviews** so new reviews appear in the inbox.",
+        "Decide per channel whether the **chatbot** should auto-reply — that is a separate switch on the Chatbot page (see **Turning the chatbot on and choosing where it runs**)."
+      ] },
+      { "type": "callout", "tone": "info", "text": "Connecting a channel only makes messages **flow into the inbox** and lets you reply by hand. Automatic replies are controlled separately by the chatbot's master switch and per-channel toggles." },
+      { "type": "callout", "tone": "warning", "text": "Everything here lives under **Settings → Integrations**, which is owner-only. Secrets you paste (tokens, app secret) are stored encrypted and shown as password fields." }
+    ]
+  },
+  {
+    "slug": "connect-meta-app",
+    "title": "Step 1 — Create your Meta app (the foundation for Messenger, Instagram & WhatsApp)",
+    "summary": "Create one Meta app, a permanent System User token and the webhook, then paste the token, app secret and verify token into the CRM.",
+    "category": "comms",
+    "audience": "admins",
+    "keywords": ["meta", "facebook", "app", "system user", "access token", "app secret", "verify token", "webhook", "graph api", "developers"],
+    "body": [
+      { "type": "p", "text": "Messenger, Instagram DMs, WhatsApp and Lead Ads all connect through a single **Meta app**. Set this up once and the individual channels only need a field subscribed on top of it." },
+      { "type": "h", "text": "On Meta's side" },
+      { "type": "steps", "items": [
+        "At **developers.facebook.com**, create a new app of the **Business** type and link it to your Business portfolio.",
+        "Add the products you need: **Webhooks**, plus **Messenger**, **Instagram** and **WhatsApp** for the channels you plan to use.",
+        "In **Business settings → Users → System users**, create a System user and generate a **permanent access token**. Grant it the permissions your channels need: `pages_messaging`, `pages_manage_metadata`, `pages_read_engagement` (Messenger), `instagram_basic`, `instagram_manage_messages` (Instagram), `leads_retrieval` (Lead Ads) and `whatsapp_business_messaging`, `whatsapp_business_management` (WhatsApp).",
+        "Copy the app's **App secret** from **App settings → Basic**."
+      ] },
+      { "type": "callout", "tone": "tip", "text": "Use a **System user** token, not a personal one. Personal tokens expire; a System user token is permanent, so the connection does not silently drop after a day." },
+      { "type": "h", "text": "On the CRM's side" },
+      { "type": "steps", "items": [
+        "Open **Settings → Integrations** and find the **Facebook & Instagram (Meta)** row.",
+        "Copy the **Webhook callback URL** shown there — it is `https://crm.denagocpt.co.za/api/webhooks/meta`.",
+        "Copy the **Verify token** shown in the same panel (use **Regenerate** if you want a fresh one — this invalidates the old one immediately).",
+        "Paste your System user token into **Page access token** and click **Save**.",
+        "Paste your **App secret** into the App secret field and click **Save**. This is what lets the CRM verify that incoming webhooks really came from Meta."
+      ] },
+      { "type": "h", "text": "Point Meta's webhook at the CRM" },
+      { "type": "steps", "items": [
+        "Back in the Meta app under **Webhooks**, add a callback using the URL and Verify token from above. Meta calls the URL once to confirm the token matches — it should verify instantly.",
+        "Subscribe your **Page** to the app so its events are delivered.",
+        "Subscribe the fields your channels use: **messages** (for Messenger and Instagram DMs) and **leadgen** (for Lead Ads)."
+      ] },
+      { "type": "callout", "tone": "info", "text": "When the token is saved, the Meta row in Settings → Integrations flips from **Not set up** to **Connected**. That confirms the CRM has the token — the individual channels still need their field subscribed (next articles)." }
+    ]
+  },
+  {
+    "slug": "connect-messenger",
+    "title": "Connecting Facebook Messenger",
+    "summary": "Subscribe your Facebook Page to the Meta app so Page DMs arrive in the Social inbox.",
+    "category": "comms",
+    "audience": "admins",
+    "keywords": ["messenger", "facebook", "page", "dm", "direct message", "webhook", "messages", "meta"],
+    "body": [
+      { "type": "p", "text": "Messenger rides on the Meta app you set up in **Step 1 — Create your Meta app**. If that row shows **Connected**, you are most of the way there." },
+      { "type": "steps", "items": [
+        "Make sure the **Page access token** you saved belongs to the Facebook Page whose DMs you want.",
+        "In the Meta app, confirm the **Page** is subscribed to the app and that the webhook has the **messages** field subscribed.",
+        "Send a test message to your Page from another account. It should appear in the **Messenger** tab of the Social inbox within a few seconds.",
+        "Reply from the inbox to confirm the round trip works (see **Replying to customers in the inbox**)."
+      ] },
+      { "type": "callout", "tone": "warning", "text": "Before Meta approves the `pages_messaging` permission in App Review, DMs only flow for people who are **admins, developers or testers** of your Meta app. Once approved, the public's messages come through too." },
+      { "type": "callout", "tone": "tip", "text": "If you also want the chatbot to answer Messenger automatically, turn on **Messenger & Instagram DMs** on the Chatbot page — connecting the channel alone does not enable auto-replies." }
+    ]
+  },
+  {
+    "slug": "connect-instagram",
+    "title": "Connecting Instagram DMs",
+    "summary": "Link a professional Instagram account to your Page and allow message access so Instagram DMs reach the inbox.",
+    "category": "comms",
+    "audience": "admins",
+    "keywords": ["instagram", "ig", "dm", "direct message", "professional account", "webhook", "messages", "meta"],
+    "body": [
+      { "type": "p", "text": "Instagram DMs use the same Meta app and the same **messages** webhook field as Messenger. The extra requirement is linking your Instagram account to the Facebook Page and allowing the app to read messages." },
+      { "type": "steps", "items": [
+        "Convert your Instagram account to a **Professional (Business or Creator)** account if it is not already.",
+        "Link that Instagram account to your **Facebook Page** (Page settings → Linked accounts / Instagram).",
+        "In the Meta app, add the **Instagram** product and make sure the System user token carries `instagram_basic` and `instagram_manage_messages`.",
+        "In the Instagram app, go to **Settings → Messages and story replies → Connected tools** (labels vary) and turn on **Allow access to messages**.",
+        "Confirm the webhook has the **messages** field subscribed, then send a test DM to your Instagram account — it should land in the **Instagram** tab of the inbox."
+      ] },
+      { "type": "callout", "tone": "warning", "text": "As with Messenger, before Meta approves the Instagram messaging permissions, DMs only flow for your app's admins, developers and testers. Public DMs come through once App Review is approved." }
+    ]
+  },
+  {
+    "slug": "connect-whatsapp",
+    "title": "Connecting WhatsApp Business (Cloud API)",
+    "summary": "Add the WhatsApp product, register your business number and paste the Phone number ID and token into the CRM.",
+    "category": "comms",
+    "audience": "admins",
+    "keywords": ["whatsapp", "wa", "cloud api", "phone number id", "access token", "webhook", "business", "meta"],
+    "body": [
+      { "type": "p", "text": "WhatsApp connects through the **WhatsApp Cloud API** on the same Meta app. You need a dedicated business phone number — one that is **not** already signed in to the normal WhatsApp or WhatsApp Business phone apps." },
+      { "type": "h", "text": "On Meta's side" },
+      { "type": "steps", "items": [
+        "In your Meta app, add the **WhatsApp** product.",
+        "Under **WhatsApp → API Setup**, register or add your business number and note its **Phone number ID**.",
+        "Make sure your System user token has `whatsapp_business_messaging` (and `whatsapp_business_management`)."
+      ] },
+      { "type": "h", "text": "On the CRM's side" },
+      { "type": "steps", "items": [
+        "Open **Settings → Integrations** and find the **WhatsApp Business (Cloud API)** row.",
+        "Paste the **Phone number ID** and click **Save**.",
+        "Paste your permanent System user **Access token** and click **Save**.",
+        "Copy the WhatsApp **Webhook callback URL** shown there — `https://crm.denagocpt.co.za/api/webhooks/whatsapp`."
+      ] },
+      { "type": "h", "text": "Point Meta's webhook at the CRM" },
+      { "type": "steps", "items": [
+        "In the Meta app, configure the WhatsApp webhook with that callback URL, using the **same Verify token and App secret** as the Meta row.",
+        "Subscribe the webhook to the **messages** field.",
+        "Message your business number from another phone — the chat should appear in the **WhatsApp** tab of the Social inbox."
+      ] },
+      { "type": "callout", "tone": "warning", "text": "The number must be **dedicated** to the Cloud API. If it is still active in a WhatsApp phone app, registration will fail or messages will not route to the CRM." },
+      { "type": "callout", "tone": "info", "text": "Saving the Phone number ID flips the WhatsApp row to **Connected**." }
+    ]
+  },
+  {
+    "slug": "connect-facebook-lead-ads",
+    "title": "Connecting Facebook & Instagram Lead Ads",
+    "summary": "Subscribe the leadgen webhook field so leads from your Facebook and Instagram forms create CRM leads automatically.",
+    "category": "comms",
+    "audience": "admins",
+    "keywords": ["lead ads", "leadgen", "facebook", "instagram", "forms", "leads", "webhook", "meta", "automatic"],
+    "body": [
+      { "type": "p", "text": "Lead Ads use the same Meta app. When someone submits one of your Facebook or Instagram lead forms, Meta calls the CRM webhook and a **lead is created automatically** — no CSV export, no manual entry." },
+      { "type": "steps", "items": [
+        "Confirm the Meta row is **Connected** (see **Step 1 — Create your Meta app**).",
+        "Make sure the System user token carries `leads_retrieval` so the CRM can pull the full form answers back from Meta.",
+        "In the Meta app webhook, subscribe your Page to the **leadgen** field (the CRM's Meta webhook handles both `leadgen` and `messages`).",
+        "Submit a test lead through one of your live forms and check that a new lead appears in the CRM."
+      ] },
+      { "type": "callout", "tone": "info", "text": "Each lead is matched by Meta's leadgen ID, so the same submission is never imported twice. If a lead cannot be fetched (for example a permissions gap), it is logged in the System Log rather than lost silently." },
+      { "type": "callout", "tone": "tip", "text": "The lead's ad name and form are captured with it, so you can see which campaign produced each lead." }
+    ]
+  },
+  {
+    "slug": "connect-google-reviews",
+    "title": "Connecting Google reviews",
+    "summary": "Add a Places API key and your Place ID so new Google reviews show up in the Social inbox.",
+    "category": "comms",
+    "audience": "admins",
+    "keywords": ["google", "reviews", "places api", "place id", "reputation", "inbox"],
+    "body": [
+      { "type": "p", "text": "Not a messaging channel, but it lives in the same **Social inbox**: new Google reviews appear on the **Google Reviews** tab with a push notification, usually within about six hours." },
+      { "type": "steps", "items": [
+        "In Google Cloud, create an **API key** and enable the **Places API (New)**.",
+        "Find your business's **Place ID** (Google's Place ID finder, a string starting with `ChIJ…`).",
+        "Open **Settings → Integrations → Google reviews**, paste the **Places API key** and **Place ID**, and click **Save** on each."
+      ] },
+      { "type": "callout", "tone": "info", "text": "Both values are needed before the row shows **Connected**. Reviews are read-only here — you see the star rating, author and text as they come in." }
+    ]
+  }
+]

@@ -10,7 +10,7 @@ import { prisma } from "./db";
  */
 export async function awaitingReplyCount(): Promise<number> {
   const comms = await prisma.communication.findMany({
-    where: { type: { in: ["whatsapp", "messenger", "instagram"] } },
+    where: { type: { in: ["whatsapp", "messenger", "instagram"] }, archivedAt: null },
     orderBy: { occurredAt: "desc" },
     take: 400,
     select: { contactId: true, leadId: true, type: true, direction: true, readAt: true },

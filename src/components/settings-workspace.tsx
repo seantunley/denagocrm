@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import {
   BellRing,
   BookOpenText,
@@ -36,6 +36,18 @@ const groupIcons: Record<string, LucideIcon> = {
   Data: Database,
 };
 
+/**
+ * When true, SettingsWorkspace renders only the active section (title + content)
+ * and drops the full-page chrome — the settings search bar and the all-categories
+ * nav column. The settings-as-a-modal intercept turns this on so the popup shows
+ * just the section you clicked, not the whole settings page.
+ */
+const SettingsChromeless = createContext(false);
+
+export function SettingsChromelessProvider({ children }: { children: ReactNode }) {
+  return <SettingsChromeless.Provider value={true}>{children}</SettingsChromeless.Provider>;
+}
+
 export function SettingsWorkspace({
   current,
   title,
@@ -51,6 +63,17 @@ export function SettingsWorkspace({
   groups: SettingsGroup[];
   children: ReactNode;
 }) {
+  const chromeless = useContext(SettingsChromeless);
+
+  if (chromeless) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title={title} description={description}>{actions}</PageHeader>
+        <main className="min-w-0 space-y-6">{children}</main>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader title={title} description={description}>{actions}</PageHeader>

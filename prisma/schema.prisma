@@ -742,6 +742,7 @@ model Communication {
   inReplyTo      String? // email In-Reply-To header
   references     String? // email References chain (space-separated Message-IDs)
   readAt         DateTime? // when staff first opened the conversation carrying this inbound message
+  archivedAt     DateTime? // when the thread carrying this message was archived out of the inbox (NULL = active)
 
   contactId String?
   contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
@@ -752,6 +753,7 @@ model Communication {
 
   @@index([conversationId])
   @@index([messageId])
+  @@index([archivedAt])
 }
 
 /// A shared-inbox conversation: groups related messages with a contact (or lead)

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireCrmOrWorkshop } from "@/lib/auth";
-import { canAccessContact, canAccessLead } from "@/lib/permissions";
+import { canAccessContact, canAccessLead, requirePermission, requireAnyPermission } from "@/lib/permissions";
 import {
   removeTimelinePin,
   toggleTimelinePin,
@@ -109,8 +109,12 @@ export async function markThreadRead(
   leadId: string | null,
   channel: string,
 ) {
-  await requireCrmOrWorkshop();
+  const user = await requireAnyPermission("inbox.view", "inbox.reply");
   if (!contactId && !leadId) return;
+  if (contactId && !(await canAccessContact(user, contactId)))
+    throw new Error("Customer access denied");
+  if (leadId && !(await canAccessLead(user, leadId)))
+    throw new Error("Lead access denied");
   await prisma.communication.updateMany({
     where: {
       type: channel,
@@ -121,6 +125,36 @@ export async function markThreadRead(
     data: { readAt: new Date() },
   });
   revalidatePath("/inbox");
+  revalidatePath("/messages");
+}
+
+/**
+ * Archive (or restore) a whole inbox thread — every message on this channel for
+ * the contact/lead. Archiving hides it from the inbox without deleting anything;
+ * an "Archived" view lists them and can restore. Test conversations that can't be
+ * deleted live here.
+ */
+export async function setThreadArchived(
+  contactId: string | null,
+  leadId: string | null,
+  channel: string,
+  archived: boolean,
+) {
+  const user = await requirePermission("inbox.reply");
+  if (!contactId && !leadId) return;
+  if (contactId && !(await canAccessContact(user, contactId)))
+    throw new Error("Customer access denied");
+  if (leadId && !(await canAccessLead(user, leadId)))
+    throw new Error("Lead access denied");
+  await prisma.communication.updateMany({
+    where: {
+      type: channel,
+      ...(contactId ? { contactId } : { leadId }),
+    },
+    data: { archivedAt: archived ? new Date() : null },
+  });
+  revalidatePath("/inbox");
+  revalidatePath("/messages");
 }
 
 export async function deleteCommunication(
