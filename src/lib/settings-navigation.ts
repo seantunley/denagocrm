@@ -26,7 +26,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "You",
     items: [
       { key: "account", label: "My Account", everyone: true, keywords: ["profile", "password", "signature"] },
-      { key: "notifications", label: "Notifications", everyone: true, keywords: ["alerts", "push", "email preferences"] },
+      { key: "notifications", label: "Notifications", keywords: ["alerts", "push", "email preferences"] },
     ],
   },
   {

@@ -116,7 +116,8 @@ export function buildNav(
   }
   if (automationLinks.length) groups.push({ key: "automation", label: "Automation", links: automationLinks });
 
-  const platformLinks: NavLink[] = [{ href: "/library", label: "Document library", icon: Library }];
+  const platformLinks: NavLink[] = [];
+  if (can("library.view", "library.manage")) platformLinks.push({ href: "/library", label: "Document library", icon: Library });
   if (can("document_templates.manage")) platformLinks.push({ href: "/document-studio", label: "Document Studio", icon: FileText });
   if (platformLinks.length) groups.push({ key: "platform", label: "Platform", links: platformLinks });
 

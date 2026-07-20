@@ -10,7 +10,7 @@ test("finds Settings destinations by their visible labels", () => {
   assert.equal(results[0]?.href, "/settings/backup-recovery");
 });
 
-test("finds the Document library in the sidebar (available to everyone)", () => {
+test("finds the Document library for users with library access", () => {
   const destinations = getSearchDestinations({ modules: "", isAdmin: true });
   const results = matchSearchDestinations("document library", destinations);
 
@@ -32,6 +32,7 @@ test("does not expose administrator Settings destinations to members", () => {
   assert.equal(matchSearchDestinations("security", destinations).length, 0);
   assert.equal(matchSearchDestinations("backup", destinations).length, 0);
   assert.equal(matchSearchDestinations("settings", destinations)[0]?.href, "/settings");
-  // …but the Document library is a general sidebar destination, open to everyone.
-  assert.equal(matchSearchDestinations("document library", destinations)[0]?.href, "/library");
+  // …and the Document library link is gated by library.view/manage, so a member
+  // without that permission doesn't see it as a destination either.
+  assert.equal(matchSearchDestinations("document library", destinations).length, 0);
 });

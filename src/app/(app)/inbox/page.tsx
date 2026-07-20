@@ -13,9 +13,18 @@ export const metadata = { title: "Social inbox — DenagoCRM" };
 export default async function InboxPage() {
   await requireUser();
 
-  const [comms, reviews, placeId] = await Promise.all([
+  // Query active and archived separately so a burst of archived test chats can't
+  // consume the take budget and starve older active conversations from the inbox.
+  const channelWhere = { type: { in: ["whatsapp", "messenger", "instagram"] } };
+  const [activeComms, archivedComms, reviews, placeId] = await Promise.all([
     prisma.communication.findMany({
-      where: { type: { in: ["whatsapp", "messenger", "instagram"] } },
+      where: { ...channelWhere, archivedAt: null },
+      orderBy: { occurredAt: "desc" },
+      take: 400,
+      include: { contact: true, lead: true },
+    }),
+    prisma.communication.findMany({
+      where: { ...channelWhere, archivedAt: { not: null } },
       orderBy: { occurredAt: "desc" },
       take: 400,
       include: { contact: true, lead: true },
@@ -24,9 +33,8 @@ export default async function InboxPage() {
     prisma.appSetting.findUnique({ where: { key: "GOOGLE_PLACE_ID" } }),
   ]);
 
-  const allThreads = buildInboxThreads(comms);
-  const threadList = allThreads.filter((t) => !t.archived);
-  const archivedList = allThreads.filter((t) => t.archived);
+  const threadList = buildInboxThreads(activeComms);
+  const archivedList = buildInboxThreads(archivedComms);
 
   return (
     <div className="space-y-5">
