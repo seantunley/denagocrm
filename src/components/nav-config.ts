@@ -27,7 +27,6 @@ import {
   LifeBuoy,
   TrendingUp,
   ScrollText,
-  ShieldEllipsis,
   Building2,
   HeartPulse,
   Gift,
@@ -81,6 +80,7 @@ export function buildNav(
     crmLinks.push({ href: "/documents", label: "Documents", icon: FolderOpen });
   }
   crmLinks.push({ href: "/library", label: "Document library", icon: Library });
+  if (can("document_templates.manage")) crmLinks.push({ href: "/document-studio", label: "Document Studio", icon: FileText });
   if (crmLinks.length) groups.push({ key: "crm", label: "CRM", links: crmLinks });
 
   const marketingLinks: NavLink[] = [];
@@ -126,8 +126,6 @@ export function buildNav(
 
   const governanceLinks: NavLink[] = [];
   if (can("audit.view")) governanceLinks.push({ href: "/audit", label: "Audit log", icon: ScrollText });
-  if (can("roles.view", "roles.manage", "teams.view", "teams.manage")) governanceLinks.push({ href: "/settings/access", label: "Access & roles", icon: ShieldEllipsis });
-  if (can("document_templates.manage")) governanceLinks.push({ href: "/document-studio", label: "Document Studio", icon: FileText });
   if (governanceLinks.length) groups.push({ key: "governance", label: "Governance", links: governanceLinks });
 
   return { topLinks, groups };

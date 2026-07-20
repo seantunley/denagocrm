@@ -31,8 +31,12 @@ export default function SidebarHelpSettings({
   // non-owners additionally see any section whose permission they hold (mirrors
   // each settings page's own guard).
   const held = new Set(permissions);
-  const canSee = (item: (typeof SETTINGS_NAV_GROUPS)[number]["items"][number]) =>
-    isOwner || item.everyone || (item.permission ? held.has(item.permission) : false);
+  const canSee = (item: (typeof SETTINGS_NAV_GROUPS)[number]["items"][number]) => {
+    if (isOwner || item.everyone) return true;
+    if (!item.permission) return false;
+    const need = Array.isArray(item.permission) ? item.permission : [item.permission];
+    return need.some((p) => held.has(p));
+  };
   const settingsGroups = SETTINGS_NAV_GROUPS
     .map((g) => ({ ...g, items: g.items.filter(canSee) }))
     .filter((g) => g.items.length > 0);

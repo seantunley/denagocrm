@@ -5,8 +5,8 @@ export type SettingsNavItem = {
   keywords?: string[];
   /** Visible to every signed-in user (e.g. their own account), not just owners. */
   everyone?: boolean;
-  /** Visible to owners, or to non-owners holding this permission (mirrors the page's own guard). */
-  permission?: string;
+  /** Visible to owners, or to non-owners holding this permission (or any of them). Mirrors the page's own guard. */
+  permission?: string | string[];
 };
 
 export type SettingsNavGroup = {
@@ -62,7 +62,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "Organisation",
     items: [
       { key: "company", label: "Company profile", href: "/settings/company", keywords: ["business", "address", "phone", "branding", "footer", "logo", "details"] },
-      { key: "team", label: "Team & access", href: "/settings/access", keywords: ["users", "staff", "members", "roles", "permissions"] },
+      { key: "team", label: "Team & access", href: "/settings/access", permission: ["teams.view", "roles.view", "teams.manage", "roles.manage"], keywords: ["users", "staff", "members", "roles", "permissions"] },
       { key: "portal-access", label: "Portal access", href: "/settings/portal-access", permission: "portal_access.manage", keywords: ["customer portal", "delegation", "profile requests"] },
       { key: "documents", label: "Documents", href: "/settings/documents", keywords: ["templates", "document studio"] },
       { key: "signing-workflows", label: "Signing workflows", href: "/settings/signing-workflows", keywords: ["approval", "signing", "workflow", "e-sign"] },
