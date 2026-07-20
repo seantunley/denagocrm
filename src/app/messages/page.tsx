@@ -4,6 +4,7 @@ import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
 import PushToggle from "@/components/PushToggle";
+import InstallAppButton from "@/components/InstallAppButton";
 import { buildInboxThreads } from "@/lib/inboxThreads";
 
 export const metadata = { title: "Chats — Denago Messages" };
@@ -30,6 +31,8 @@ export default async function MessagesChatsPage() {
           {unread > 0 ? `${unread} unread · ` : ""}WhatsApp, Messenger &amp; Instagram
         </p>
       </div>
+
+      <InstallAppButton />
 
       <details className="card">
         <summary className="cursor-pointer list-none text-sm font-medium">

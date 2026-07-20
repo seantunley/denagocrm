@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import Image from "next/image";
 import { requireUser } from "@/lib/auth";
 import MessagesNav from "@/components/MessagesNav";
+import RegisterServiceWorker from "@/components/RegisterServiceWorker";
 
 export const metadata: Metadata = {
   title: "Denago Messages",
@@ -21,6 +22,7 @@ export default async function MessagesLayout({ children }: { children: React.Rea
   await requireUser();
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-background text-foreground">
+      <RegisterServiceWorker />
       <header className="flex h-14 shrink-0 items-center gap-2.5 border-b border-sidebar-border bg-sidebar/90 px-4 backdrop-blur-xl">
         <Image
           src="/branding/denago-mark.png"
