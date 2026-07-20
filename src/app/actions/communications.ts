@@ -121,6 +121,7 @@ export async function markThreadRead(
     data: { readAt: new Date() },
   });
   revalidatePath("/inbox");
+  revalidatePath("/messages");
 }
 
 /**
@@ -145,6 +146,7 @@ export async function setThreadArchived(
     data: { archivedAt: archived ? new Date() : null },
   });
   revalidatePath("/inbox");
+  revalidatePath("/messages");
 }
 
 export async function deleteCommunication(
