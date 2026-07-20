@@ -80,7 +80,6 @@ export function buildNav(
     crmLinks.push({ href: "/documents", label: "Documents", icon: FolderOpen });
   }
   crmLinks.push({ href: "/library", label: "Document library", icon: Library });
-  if (can("document_templates.manage")) crmLinks.push({ href: "/document-studio", label: "Document Studio", icon: FileText });
   if (crmLinks.length) groups.push({ key: "crm", label: "CRM", links: crmLinks });
 
   const marketingLinks: NavLink[] = [];
@@ -122,6 +121,10 @@ export function buildNav(
       label: "Help desk",
       links: [{ href: "/settings/helpdesk", label: "Help desk", icon: LifeBuoy }],
     });
+  }
+
+  if (can("document_templates.manage")) {
+    groups.push({ key: "platform", label: "Platform", links: [{ href: "/document-studio", label: "Document Studio", icon: FileText }] });
   }
 
   const governanceLinks: NavLink[] = [];
