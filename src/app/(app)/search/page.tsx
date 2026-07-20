@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/auth";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { AUTOMOTIVE_DELIVERY_TAGS } from "@/lib/modules/registry";
 import { contactName, formatZAR } from "@/lib/format";
+import { isCustomEntity, type CustomEntity } from "@/lib/customFields";
 import { getAccessibleDocumentIds } from "@/lib/documentAccess";
 import {
   getAccessibleCaseIds,
@@ -64,9 +65,39 @@ export default async function SearchPage({
   const contains = { contains: term, mode: "insensitive" as const };
   const asNumber = parseInt(term.replace(/^[qQcC]-?/, ""), 10);
   const scoped = (ids: string[] | null) => ids === null ? {} : { id: { in: ids } };
+
+  // Custom-field value matches. A record surfaces when one of its custom field
+  // values contains the term (e.g. "Membership #" = "12345"). We fetch matching
+  // (recordId, entity) pairs once and group by entity, then OR each entity's ids
+  // into that entity's existing query below. Access scoping stays a top-level AND
+  // on every query, so a custom-field hit never widens what the user may see.
+  const customValueRows = await prisma.customFieldValue.findMany({
+    where: {
+      value: { contains: term, mode: "insensitive" },
+      def: { entity: { in: ["contact", "lead", "quote", "case"] } },
+    },
+    select: { recordId: true, def: { select: { entity: true } } },
+    take: 200,
+  });
+  const customIdsByEntity: Record<CustomEntity, string[]> = { contact: [], lead: [], quote: [], case: [] };
+  for (const row of customValueRows) {
+    const entity = row.def.entity;
+    if (isCustomEntity(entity)) customIdsByEntity[entity].push(row.recordId);
+  }
+  // Fold-in helper: an OR clause matching the custom-field-hit ids for an entity,
+  // or nothing when there were no hits (so the query is identical to before).
+  const customIdMatch = (entity: CustomEntity) =>
+    customIdsByEntity[entity].length > 0 ? [{ id: { in: customIdsByEntity[entity] } }] : [];
+
   const caseNumberCondition = Number.isNaN(asNumber)
     ? Prisma.empty
     : Prisma.sql`OR c."number" = ${BigInt(asNumber)}`;
+  // Case custom-field hits are gated behind supportOn (the Cases section only
+  // renders when support is enabled); folded into the raw case query's OR group.
+  const caseCustomIds = supportOn ? customIdsByEntity.case : [];
+  const caseCustomCondition = caseCustomIds.length > 0
+    ? Prisma.sql`OR c."id" = ANY(${caseCustomIds}::text[])`
+    : Prisma.empty;
 
   const casesPromise: Promise<CaseSearchRow[]> = caseIds !== null && caseIds.length === 0
     ? Promise.resolve([])
@@ -81,6 +112,7 @@ export default async function SearchPage({
             c."subject" ILIKE ${`%${term}%`}
             OR c."description" ILIKE ${`%${term}%`}
             ${caseNumberCondition}
+            ${caseCustomCondition}
           )
         ORDER BY c."updatedAt" DESC
         LIMIT 20
@@ -95,6 +127,7 @@ export default async function SearchPage({
             OR: [
               { firstName: contains }, { lastName: contains }, { company: contains }, { email: contains },
               { phone: contains }, { city: contains },
+              ...customIdMatch("contact"),
             ],
           },
           take: 20,
@@ -104,7 +137,7 @@ export default async function SearchPage({
       : prisma.lead.findMany({
           where: {
             ...scoped(leadIds),
-            OR: [{ title: contains }, { name: contains }, { email: contains }, { phone: contains }],
+            OR: [{ title: contains }, { name: contains }, { email: contains }, { phone: contains }, ...customIdMatch("lead")],
           },
           include: { stage: true },
           take: 20,
@@ -136,6 +169,7 @@ export default async function SearchPage({
               { contact: { firstName: contains } },
               { contact: { lastName: contains } },
               { lead: { title: contains } },
+              ...customIdMatch("quote"),
             ],
           },
           include: { contact: true, lead: true },
