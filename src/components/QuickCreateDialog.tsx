@@ -57,6 +57,7 @@ export default function QuickCreateDialog() {
   const [kind, setKind] = useState<QuickCreateKind | null>(null);
   const [calendarDefaults, setCalendarDefaults] = useState<CalendarCreateDefaults>({});
   const [options, setOptions] = useState<Options | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [calendarType, setCalendarType] = useState<string>("call");
 
   useEffect(() => {
@@ -77,10 +78,34 @@ export default function QuickCreateDialog() {
 
   useEffect(() => {
     if (!kind || options) return;
+    let cancelled = false;
     fetch("/api/quick-create")
-      .then((response) => response.json())
-      .then(setOptions)
-      .catch(() => setOptions(null));
+      .then(async (response) => {
+        // A 403 (no create permission) returns { error } JSON — never treat that
+        // as an options payload, or the forms crash mapping undefined lists.
+        if (!response.ok) {
+          throw new Error(
+            response.status === 403
+              ? "You don't have permission to create items here."
+              : "Could not load the create options."
+          );
+        }
+        return response.json();
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setOptions(data as Options);
+        setLoadError(null);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : "Could not load the create options.";
+        setLoadError(message);
+        toast.error(message);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [kind, options]);
 
   // Reset the calendar type to a sensible default whenever the dialog re-opens.
@@ -94,6 +119,7 @@ export default function QuickCreateDialog() {
   function close() {
     setKind(null);
     setCalendarDefaults({});
+    setLoadError(null);
   }
 
   async function scheduleCalendar(formData: FormData) {
@@ -125,7 +151,9 @@ export default function QuickCreateDialog() {
           <DialogTitle>{kind ? TITLES[kind] : ""}</DialogTitle>
         </DialogHeader>
 
-        {!options ? (
+        {loadError ? (
+          <div className="py-10 text-center text-sm text-muted-foreground">{loadError}</div>
+        ) : !options ? (
           <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
             Loading…

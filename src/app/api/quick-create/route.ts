@@ -30,6 +30,7 @@ export async function GET() {
     canCreateContact,
     canCreateQuote,
     canManageVehicles,
+    canManageJobcards,
     canScheduleActivity,
     contactIds,
     vehicleIds,
@@ -40,20 +41,27 @@ export async function GET() {
     hasPermission(user, "contacts.create"),
     hasPermission(user, "quotes.create"),
     hasPermission(user, "vehicles.manage"),
+    hasPermission(user, "jobcards.manage"),
     hasPermission(user, "activities.manage"),
     getAccessibleContactIds(user),
     getAccessibleVehicleIds(user),
   ]);
 
   // No create capability at all → nothing to hand out.
-  if (!canCreateLead && !canCreateContact && !canCreateQuote && !canManageVehicles && !canScheduleActivity) {
+  if (
+    !canCreateLead && !canCreateContact && !canCreateQuote &&
+    !canManageVehicles && !canManageJobcards && !canScheduleActivity
+  ) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Which lists this caller may see, by the dialog that consumes each one.
+  // Which lists this caller may see, by the dialog that consumes each one. The
+  // job-card dialog needs the vehicle list, so a jobcards.manage-only user must
+  // still receive vehicles (both lists are automotive-gated + id-scoped).
   const needsContacts = canCreateLead || canCreateQuote || canManageVehicles || canScheduleActivity;
   const needsProducts = canCreateLead || canCreateQuote || canManageVehicles;
   const needsUsers = canCreateLead || canCreateContact || canScheduleActivity;
+  const needsVehicles = canManageVehicles || canManageJobcards;
   const scoped = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
 
   const [products, stages, contacts, users, vehicles, validDaysRaw, quoteTerms] = await Promise.all([
@@ -73,7 +81,7 @@ export async function GET() {
     needsUsers
       ? prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } })
       : Promise.resolve([]),
-    automotiveOn && canManageVehicles
+    automotiveOn && needsVehicles
       ? prisma.vehicle.findMany({
           where: scoped(vehicleIds),
           include: { contact: true },
