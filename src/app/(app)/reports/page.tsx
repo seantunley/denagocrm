@@ -11,6 +11,7 @@ import {
 import { TrendingDown, TrendingUp } from "lucide-react";
 import { prisma, basePrisma } from "@/lib/db";
 import { formatZARCompact } from "@/lib/format";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { PageHeader } from "@/components/page-header";
 import ReportFilters from "@/components/reports/ReportFilters";
 import {
@@ -154,6 +155,7 @@ export default async function ReportsPage({
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const user = await requireAnyPermission("reports.view_all", "reports.view_team", "reports.view");
+  const automotiveOn = await isModuleEnabled("automotive");
   const params = await searchParams;
   const { from, to, prevFrom, prevTo } = resolveRange(params);
   const unrestricted = await hasPermission(user, "reports.view_all");
@@ -332,13 +334,15 @@ export default async function ReportsPage({
         </ChartCard>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+      <div className={`grid grid-cols-1 gap-4 ${automotiveOn ? "xl:grid-cols-2" : ""}`}>
         <ChartCard title="Team performance" subtitle="Value of accessible deals won in period, per team member">
           {team.length ? <TeamChart data={team} /> : <p className="py-8 text-center text-xs text-muted-foreground/70">No deals won in this period.</p>}
         </ChartCard>
-        <ChartCard title="Workshop" subtitle="Accessible job cards completed per period">
-          <ServiceChart data={service} />
-        </ChartCard>
+        {automotiveOn && (
+          <ChartCard title="Workshop" subtitle="Accessible job cards completed per period">
+            <ServiceChart data={service} />
+          </ChartCard>
+        )}
       </div>
     </div>
   );

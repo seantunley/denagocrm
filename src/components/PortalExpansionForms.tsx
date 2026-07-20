@@ -54,15 +54,15 @@ export function PortalPreferenceForm({ defaults }: { defaults: { serviceReminder
   );
 }
 
-export function PortalCaseForm({ vehicles, contacts }: { vehicles: Option[]; contacts: Option[] }) {
+export function PortalCaseForm({ vehicles, contacts, automotive = true }: { vehicles: Option[]; contacts: Option[]; automotive?: boolean }) {
   const [state, action, pending] = useActionState(createPortalCase, {});
   return (
     <form action={action} className="space-y-4">
       <div className="grid sm:grid-cols-2 gap-3">
-        <label className="space-y-1"><span className="text-xs text-slate-400">Request type</span><select name="type" className="input"><option value="support">General support</option><option value="service">Service question</option><option value="warranty">Warranty request</option><option value="delivery">Delivery question</option><option value="documents">Document request</option></select></label>
+        <label className="space-y-1"><span className="text-xs text-slate-400">Request type</span><select name="type" className="input"><option value="support">General support</option>{automotive && <><option value="service">Service question</option><option value="warranty">Warranty request</option><option value="delivery">Delivery question</option></>}<option value="documents">Document request</option></select></label>
         <label className="space-y-1"><span className="text-xs text-slate-400">Priority</span><select name="priority" className="input"><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></label>
         {contacts.length > 1 && <label className="space-y-1"><span className="text-xs text-slate-400">Customer/account contact</span><select name="contactId" className="input">{contacts.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>}
-        <label className="space-y-1"><span className="text-xs text-slate-400">Vehicle</span><select name="vehicleId" className="input"><option value="">Not vehicle-specific</option>{vehicles.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+        {automotive && <label className="space-y-1"><span className="text-xs text-slate-400">Vehicle</span><select name="vehicleId" className="input"><option value="">Not vehicle-specific</option>{vehicles.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>}
       </div>
       <label className="space-y-1 block"><span className="text-xs text-slate-400">Subject</span><input name="subject" className="input" required /></label>
       <label className="space-y-1 block"><span className="text-xs text-slate-400">Details</span><textarea name="description" className="input min-h-32" required /></label>
@@ -84,13 +84,13 @@ export function PortalCaseMessageForm({ caseId }: { caseId: string }) {
   );
 }
 
-export function PortalUploadForm({ vehicles, cases }: { vehicles: Option[]; cases: Option[] }) {
+export function PortalUploadForm({ vehicles, cases, automotive = true }: { vehicles: Option[]; cases: Option[]; automotive?: boolean }) {
   const [state, action, pending] = useActionState(uploadPortalFile, {});
   return (
     <form action={action} className="space-y-4">
       <input type="file" name="file" className="input" accept="application/pdf,image/jpeg,image/png,image/webp" required />
       <div className="grid sm:grid-cols-2 gap-3">
-        <label className="space-y-1"><span className="text-xs text-slate-400">Related vehicle</span><select name="vehicleId" className="input"><option value="">None</option>{vehicles.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+        {automotive && <label className="space-y-1"><span className="text-xs text-slate-400">Related vehicle</span><select name="vehicleId" className="input"><option value="">None</option>{vehicles.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>}
         <label className="space-y-1"><span className="text-xs text-slate-400">Related support case</span><select name="caseId" className="input"><option value="">None</option>{cases.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
       </div>
       <p className="text-xs text-slate-500">PDF, JPG, PNG or WebP. Maximum 10 MB.</p>

@@ -8,6 +8,7 @@ import { basePrisma, prisma } from "@/lib/db";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
 import { getPortalContact, setPortalCookie, clearPortalCookie } from "@/lib/portal";
 import { portalCanAccessVehicle, requirePortalScope } from "@/lib/portalAccess";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { sendPushToAll } from "@/lib/push";
 import { logAudit } from "@/lib/audit";
 import { contactName } from "@/lib/format";
@@ -133,6 +134,9 @@ export async function requestService(
   _prev: { ok?: string; error?: string } | undefined,
   formData: FormData
 ): Promise<{ ok?: string; error?: string }> {
+  // Service booking is automotive-owned. The page hides the form when the pack
+  // is off, but a stale open page could still POST — the action must self-reject.
+  if (!(await isModuleEnabled("automotive"))) return { error: "Service booking is not available." };
   const contact = await getPortalContact();
   if (!contact) return { error: "Please sign in again." };
   const vehicleId = str(formData.get("vehicleId")) || null;

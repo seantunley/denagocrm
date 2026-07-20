@@ -1,10 +1,12 @@
 import { requireUser } from "@/lib/auth";
 import HelpNav from "@/components/help/HelpNav";
 import { categoriesWithArticles } from "@/lib/help/content";
+import { getEnabledModuleIds } from "@/lib/modules/enabled";
 
 export default async function HelpLayout({ children }: { children: React.ReactNode }) {
   await requireUser();
-  const groups = categoriesWithArticles().map((c) => ({
+  const enabled = await getEnabledModuleIds();
+  const groups = categoriesWithArticles(enabled).map((c) => ({
     key: c.key,
     label: c.label,
     articles: c.articles.map((a) => ({ slug: a.slug, title: a.title, summary: a.summary, keywords: a.keywords })),

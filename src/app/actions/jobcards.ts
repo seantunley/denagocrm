@@ -13,6 +13,7 @@ import { saveFile, deleteFile } from "@/lib/storage";
 import { parseRands } from "@/lib/format";
 import { Prisma } from "@prisma/client";
 import { STAGE_VALUES, PRIORITY_VALUES, stageMeta } from "@/lib/workshop-constants";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import {
   requireJobCardAccess,
   requireVehicleAccess,
@@ -107,6 +108,11 @@ export async function saveCheckinAnnotation(formData: FormData) {
 }
 
 export async function createJobCard(formData: FormData) {
+  // The automotive pack owns job cards; a stale quick-create dialog could still POST
+  // this action after the pack is switched off, so reject it server-side.
+  if (!(await isModuleEnabled("automotive"))) {
+    throw new Error("The automotive module is disabled");
+  }
   const vehicleId = String(formData.get("vehicleId") ?? "");
   const description = String(formData.get("description") ?? "").trim();
   if (!vehicleId || !description) throw new Error("Vehicle and description are required");

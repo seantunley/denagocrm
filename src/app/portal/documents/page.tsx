@@ -3,6 +3,8 @@ import { Download, FileText, FolderOpen, UploadCloud } from "lucide-react";
 import { basePrisma, prisma } from "@/lib/db";
 import { getPortalContact } from "@/lib/portal";
 import { requirePortalScope } from "@/lib/portalAccess";
+import { isModuleEnabled } from "@/lib/modules/enabled";
+import { AUTOMOTIVE_DELIVERY_TAGS } from "@/lib/modules/registry";
 import { PortalUploadForm } from "@/components/PortalExpansionForms";
 import { formatDate } from "@/lib/format";
 import { EmptyState, PortalPageHeader, SectionHeading, Surface } from "@/components/visual-system";
@@ -21,6 +23,7 @@ export default async function PortalDocumentsPage() {
   const contact = await getPortalContact();
   if (!contact) redirect("/portal/login");
   const scope = await requirePortalScope();
+  const automotiveOn = await isModuleEnabled("automotive");
 
   const quoteIds = (
     await prisma.quote.findMany({
@@ -45,10 +48,27 @@ export default async function PortalDocumentsPage() {
         deletedAt: null,
         OR: [
           { contactId: { in: scope.contactIds } },
-          { vehicle: { contactId: { in: scope.contactIds } } },
-          ...(scope.fleetIds.length ? [{ vehicle: { fleetId: { in: scope.fleetIds } } }] : []),
+          // Vehicle/fleet-linked paperwork is automotive-owned; when the pack is
+          // off the customer must not see or download it, so drop those branches
+          // (the contact-owned and quote-linked branches are core and stay).
+          ...(automotiveOn ? [{ vehicle: { contactId: { in: scope.contactIds } } }] : []),
+          ...(automotiveOn && scope.fleetIds.length ? [{ vehicle: { fleetId: { in: scope.fleetIds } } }] : []),
           ...(quoteIds.length ? [{ quoteId: { in: quoteIds } }] : []),
         ],
+        // ...but delivery paperwork and job-card photos reach the customer via the
+        // contact/quote branches above, so when automotive is off also exclude any
+        // doc that is job-card-linked or tagged as delivery paperwork. Invoices,
+        // POPs and plain contact/quote docs (null/other tags) stay visible.
+        ...(automotiveOn
+          ? {}
+          : {
+              NOT: {
+                OR: [
+                  { jobCardId: { not: null } },
+                  { tag: { in: [...AUTOMOTIVE_DELIVERY_TAGS] } },
+                ],
+              },
+            }),
       },
       orderBy: { createdAt: "desc" },
       take: 100,
@@ -57,6 +77,7 @@ export default async function PortalDocumentsPage() {
       SELECT "id", "fileName", "mimeType", "sizeBytes", "createdAt", "status"
       FROM "PortalUpload"
       WHERE "contactId" = ANY(${scope.contactIds}::text[])
+        AND (${automotiveOn}::boolean OR "vehicleId" IS NULL)
       ORDER BY "createdAt" DESC LIMIT 100
     `,
     basePrisma.$queryRaw<CaseRow[]>`
@@ -68,12 +89,13 @@ export default async function PortalDocumentsPage() {
 
   return (
     <div className="space-y-10">
-      <PortalPageHeader eyebrow="Document centre" title="Documents" description="Download your customer, vehicle, quote and delivery documents, or send files securely to our team." />
+      <PortalPageHeader eyebrow="Document centre" title="Documents" description={automotiveOn ? "Download your customer, vehicle, quote and delivery documents, or send files securely to our team." : "Download your documents, or send files securely to our team."} />
 
       <Surface className="space-y-5 p-5 sm:p-6">
         <SectionHeading title="Secure upload" description="Files are attached directly to your customer record and are only visible to the Denago team." action={<span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><UploadCloud className="size-5" /></span>} />
         <PortalUploadForm
-          vehicles={vehicles.map((vehicle) => ({ id: vehicle.id, label: `${vehicle.model}${vehicle.regNumber ? ` (${vehicle.regNumber})` : ""}` }))}
+          automotive={automotiveOn}
+          vehicles={automotiveOn ? vehicles.map((vehicle) => ({ id: vehicle.id, label: `${vehicle.model}${vehicle.regNumber ? ` (${vehicle.regNumber})` : ""}` })) : []}
           cases={cases.map((item) => ({ id: item.id, label: `C-${item.number.toString()} · ${item.subject}` }))}
         />
       </Surface>

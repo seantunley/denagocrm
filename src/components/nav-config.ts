@@ -33,6 +33,7 @@ import {
   Radar,
   type LucideIcon,
 } from "lucide-react";
+import { isPathEnabled } from "@/lib/modules/registry";
 
 export type NavLink = { href: string; label: string; icon: LucideIcon };
 export type NavGroup = { key: string; label: string; links: NavLink[] };
@@ -40,7 +41,8 @@ export type NavGroup = { key: string; label: string; links: NavLink[] };
 export function buildNav(
   modules: string,
   isAdmin: boolean,
-  permissionList: string[] = []
+  permissionList: string[] = [],
+  enabledModules?: ReadonlySet<string>,
 ) {
   const mods = new Set(modules.split(",").map((m) => m.trim()).filter(Boolean));
   const permissions = new Set(permissionList);
@@ -124,6 +126,16 @@ export function buildNav(
   const governanceLinks: NavLink[] = [];
   if (can("audit.view")) governanceLinks.push({ href: "/audit", label: "Audit log", icon: ScrollText });
   if (governanceLinks.length) groups.push({ key: "governance", label: "Governance", links: governanceLinks });
+
+  // Module gating: hide links belonging to a disabled pack. Omitting
+  // enabledModules (default) shows everything, so existing callers are unchanged.
+  if (enabledModules) {
+    const visibleTop = topLinks.filter((l) => isPathEnabled(l.href, enabledModules));
+    const visibleGroups = groups
+      .map((g) => ({ ...g, links: g.links.filter((l) => isPathEnabled(l.href, enabledModules)) }))
+      .filter((g) => g.links.length > 0);
+    return { topLinks: visibleTop, groups: visibleGroups };
+  }
 
   return { topLinks, groups };
 }

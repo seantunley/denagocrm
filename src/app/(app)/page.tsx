@@ -27,6 +27,7 @@ import { getLastRun } from "@/lib/securityRunbook";
 import { CompleteActivityButton, FollowUpPrompts } from "@/components/proactive/NextStep";
 import Tabs from "@/components/Tabs";
 import { hasModule } from "@/lib/access";
+import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import { formatZARCompact, formatDate, formatDateTime, contactName } from "@/lib/format";
 import { computeDue, dueLabels, dueColors } from "@/lib/serviceDue";
 import { cn } from "@/lib/utils";
@@ -210,8 +211,13 @@ const SIGN_STATE: Record<
 
 export default async function DashboardPage() {
   const user = await requireUser();
+  // Workspace module toggles (Settings → Modules) gate in-page content, not just
+  // nav: the automotive pack owns all the workshop/service UI. Legacy per-user
+  // module flags still gate per-account access on top of this.
+  const enabledModules = await getEnabledModuleIds();
+  const automotiveOn = enabledModules.has("automotive");
   const showSales = hasModule(user, "crm");
-  const showService = hasModule(user, "workshop");
+  const showService = hasModule(user, "workshop") && automotiveOn;
 
   const now = new Date();
   const todayStart = startOfDay(now);
@@ -514,8 +520,13 @@ export default async function DashboardPage() {
   const rings: RingDef[] = [
     { label: "Leads", actual: leadsMTD.length, target: tMap.get("leads") ?? 0, display: "int", color: "var(--chart-2)" },
     { label: "Sales", actual: Math.round(wonValueMTD / 100), target: Math.round((tMap.get("sales_value") ?? 0) / 100), display: "zar", color: "var(--chart-1)" },
-    { label: "Deliveries", actual: deliveriesMTD, target: tMap.get("deliveries") ?? 0, display: "int", color: "var(--chart-3)" },
-    { label: "Services", actual: servicesMTD.length, target: tMap.get("services") ?? 0, display: "int", color: "var(--chart-4)" },
+    // Deliveries + Services are automotive-pack metrics — drop them when the pack is off.
+    ...(automotiveOn
+      ? [
+          { label: "Deliveries", actual: deliveriesMTD, target: tMap.get("deliveries") ?? 0, display: "int", color: "var(--chart-3)" } as RingDef,
+          { label: "Services", actual: servicesMTD.length, target: tMap.get("services") ?? 0, display: "int", color: "var(--chart-4)" } as RingDef,
+        ]
+      : []),
   ];
 
   // Proactive system alerts — problems surface HERE before customers notice
@@ -591,7 +602,7 @@ export default async function DashboardPage() {
             count: salesToday.length,
             content: (
               <div className="space-y-4">
-                {statGrid(salesStats)}
+                {statGrid(automotiveOn ? salesStats : salesStats.filter((s) => s.stat.href !== "/deliveries"))}
 
                 <div className="grid items-stretch gap-4 lg:grid-cols-3">
                   <div className="grid min-w-0 gap-4 sm:grid-cols-3 lg:col-span-2">

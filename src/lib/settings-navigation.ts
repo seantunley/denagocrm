@@ -1,3 +1,5 @@
+import type { ModuleId } from "@/lib/modules/registry";
+
 export type SettingsNavItem = {
   key: string;
   label: string;
@@ -7,6 +9,8 @@ export type SettingsNavItem = {
   everyone?: boolean;
   /** Visible to owners, or to non-owners holding this permission (or any of them). Mirrors the page's own guard. */
   permission?: string | string[];
+  /** Optional feature pack this surface belongs to. Hidden when the module is off. */
+  module?: ModuleId;
 };
 
 export type SettingsNavGroup = {
@@ -20,6 +24,8 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "Workspace",
     items: [
       { key: "overview", label: "Settings overview", keywords: ["home", "all settings", "configuration"] },
+      { key: "modules", label: "Modules", href: "/settings/modules", keywords: ["features", "packs", "enable", "disable", "automotive", "workshop", "inbox", "add-ons"] },
+      { key: "custom-fields", label: "Custom fields", href: "/settings/custom-fields", keywords: ["custom", "fields", "eav", "extra", "attributes", "metadata", "contact fields", "lead fields", "properties"] },
     ],
   },
   {
@@ -40,23 +46,23 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
   {
     label: "Workshop",
     items: [
-      { key: "workshop", label: "Bookings & slots", keywords: ["schedule", "calendar", "hours"] },
-      { key: "workshop-settings", label: "Workshop settings", href: "/settings/workshop", permission: "workshop.manage", keywords: ["bays", "labour rate", "packages", "workshop"] },
+      { key: "workshop", label: "Bookings & slots", module: "automotive", keywords: ["schedule", "calendar", "hours"] },
+      { key: "workshop-settings", label: "Workshop settings", href: "/settings/workshop", permission: "workshop.manage", module: "automotive", keywords: ["bays", "labour rate", "packages", "workshop"] },
     ],
   },
   {
     label: "Catalog",
     items: [
-      { key: "products", label: "Products", keywords: ["catalog", "pricing"] },
-      { key: "stock", label: "Stock labels", keywords: ["stock", "inventory", "labels", "demo", "consignment", "showroom"] },
+      { key: "products", label: "Products", module: "commerce", keywords: ["catalog", "pricing"] },
+      { key: "stock", label: "Stock labels", module: "commerce", keywords: ["stock", "inventory", "labels", "demo", "consignment", "showroom"] },
     ],
   },
   {
     label: "Comms & Marketing",
     items: [
       { key: "email", label: "Email", keywords: ["smtp", "imap", "templates"] },
-      { key: "automations", label: "Automations", keywords: ["rules", "workflows", "triggers"] },
-      { key: "helpdesk", label: "Help desk", href: "/settings/helpdesk", permission: "cases.manage", keywords: ["mailboxes", "saved replies", "tags", "support", "tickets", "cases"] },
+      { key: "automations", label: "Automations", module: "marketing", keywords: ["rules", "workflows", "triggers"] },
+      { key: "helpdesk", label: "Help desk", href: "/settings/helpdesk", permission: "cases.manage", module: "support", keywords: ["mailboxes", "saved replies", "tags", "support", "tickets", "cases"] },
     ],
   },
   {
@@ -80,6 +86,19 @@ export const SETTINGS_TABS = SETTINGS_NAV_GROUPS.flatMap((group) => group.items)
 
 export function settingsHref(item: SettingsNavItem) {
   return item.href ?? `/settings?tab=${encodeURIComponent(item.key)}`;
+}
+
+/**
+ * A settings surface is enabled when it isn't tied to a feature pack, or its
+ * pack is in the enabled set. `enabled === undefined` means "don't filter"
+ * (module gating unknown in this context) so everything shows.
+ */
+export function settingsItemEnabled(
+  item: SettingsNavItem,
+  enabled?: ReadonlySet<string>,
+): boolean {
+  if (!item.module || !enabled) return true;
+  return enabled.has(item.module);
 }
 
 // Aliases used by the visual-consistency components (SettingsNav / search).

@@ -16,6 +16,7 @@ import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
 import LeadTimeline from "@/components/LeadTimeline";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import MarkLeadViewed from "@/components/MarkLeadViewed";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
 import Tabs from "@/components/Tabs";
@@ -27,6 +28,7 @@ import { requireUser } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { quoteTotalCents } from "@/lib/pricing";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { leadAttribution, isAdClick } from "@/lib/attribution";
@@ -56,6 +58,7 @@ export default async function LeadDetailPage({
     },
   });
   if (!lead) notFound();
+  const automotiveOn = await isModuleEnabled("automotive");
   const alreadyViewed = !!lead.viewedAt;
   const [contacts, users, templates, smtpConfigured, audit, waConfigured, libraryDocuments, products, stages] = await Promise.all([
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
@@ -170,7 +173,7 @@ export default async function LeadDetailPage({
         </>}
       >
 
-      {lead.status === "won" && (
+      {automotiveOn && lead.status === "won" && (
         <div className="card bg-emerald-500/10 border-emerald-500/30 flex items-center justify-between gap-4 flex-wrap">
           <p className="text-sm text-emerald-300">
             🎉 Deal won{lead.contact ? ` — customer: ${contactName(lead.contact)}` : ""}.
@@ -294,6 +297,8 @@ export default async function LeadDetailPage({
                         </pre>
                       </details>
                     )}
+
+                    <CustomFieldsCard entity="lead" recordId={lead.id} />
                   </>
                 ),
               },

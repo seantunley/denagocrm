@@ -11,6 +11,7 @@ import {
   createQuoteRevision,
 } from "@/app/actions/quotes";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import QuoteVersions from "@/components/QuoteVersions";
 import { uploadDeliveryPhotos } from "@/app/actions/fulfilment";
 import { listBuilderTemplates } from "@/lib/docbuilder/store";
@@ -20,6 +21,7 @@ import { activeRecordRequest, isLockedForSigning } from "@/lib/signing/record";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { lineNetCents, quoteTotalCents, quotePricing } from "@/lib/pricing";
 import { addQuoteFee, deleteQuoteFee, setQuoteDeposit, setQuoteTaxMode } from "@/app/actions/cpq";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 
 const statusBadge: Record<string, string> = {
   draft: "bg-slate-800 text-slate-300",
@@ -96,6 +98,7 @@ export default async function QuoteDetailPage({
     },
   });
   if (!quote) notFound();
+  const automotiveOn = await isModuleEnabled("automotive");
   const builderDocs = (await listBuilderTemplates()).filter((t) => t.key === "quote");
   const family = await getQuoteFamily(quote);
   const deliveryPhotos =
@@ -286,7 +289,7 @@ export default async function QuoteDetailPage({
         </div>
       )}
 
-      {quote.status === "accepted" && !quote.supersededAt && (
+      {automotiveOn && quote.status === "accepted" && !quote.supersededAt && (
         <div className="card py-3 flex items-center gap-2 flex-wrap">
           <span className="text-xs font-semibold uppercase tracking-wide text-slate-400 mr-1">
             Fulfilment
@@ -312,7 +315,7 @@ export default async function QuoteDetailPage({
               {s.label}
             </span>
           ))}
-          {!quote.deliveredAt && (
+          {automotiveOn && !quote.deliveredAt && (
             <Link href="/deliveries" className="text-xs text-orange-400 hover:underline ml-auto">
               Manage on the Deliveries board →
             </Link>
@@ -336,7 +339,7 @@ export default async function QuoteDetailPage({
       />
       )}
 
-      {quote.status === "accepted" && !quote.supersededAt && (
+      {automotiveOn && quote.status === "accepted" && !quote.supersededAt && (
         <div className="card">
           <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
             <div>
@@ -581,6 +584,8 @@ export default async function QuoteDetailPage({
           </div>
         )}
       </div>
+
+      <CustomFieldsCard entity="quote" recordId={quote.id} readOnly={!editable} />
     </div>
   );
 }

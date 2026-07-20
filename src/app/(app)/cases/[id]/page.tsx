@@ -14,9 +14,11 @@ import {
   setTicketMailbox, addTicketTag, removeTicketTag,
 } from "@/app/actions/helpdesk";
 import { contactName, formatDateTime, formatDate } from "@/lib/format";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { StatusPill } from "@/components/visual-system";
 import { AutoSubmitSelect } from "@/components/helpdesk/AutoSubmitSelect";
 import { TicketComposer } from "@/components/helpdesk/TicketComposer";
+import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -29,10 +31,11 @@ export default async function TicketDetailPage({ params }: { params: Promise<{ i
   const ticket = await getTicketDetail(id);
   if (!ticket) notFound();
   await markCustomerMessagesRead(id);
+  const automotiveOn = await isModuleEnabled("automotive");
 
   const [contact, vehicle, assignees, mailboxes, canned, uploads, otherTickets] = await Promise.all([
     basePrisma.contact.findUnique({ where: { id: ticket.contactId }, select: { id: true, firstName: true, lastName: true, company: true, isCompany: true, email: true, phone: true } }),
-    ticket.vehicleId ? basePrisma.vehicle.findUnique({ where: { id: ticket.vehicleId }, select: { id: true, model: true, regNumber: true } }) : Promise.resolve(null),
+    automotiveOn && ticket.vehicleId ? basePrisma.vehicle.findUnique({ where: { id: ticket.vehicleId }, select: { id: true, model: true, regNumber: true } }) : Promise.resolve(null),
     basePrisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
     listMailboxes(),
     listCannedReplies(ticket.mailboxId),
@@ -167,7 +170,7 @@ export default async function TicketDetailPage({ params }: { params: Promise<{ i
                 {contact.phone && <p className="text-xs text-muted-foreground">{contact.phone}</p>}
               </>
             ) : <p className="text-muted-foreground">Unknown</p>}
-            {vehicle && (
+            {automotiveOn && vehicle && (
               <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Car className="size-3.5" />{vehicle.model}{vehicle.regNumber ? ` · ${vehicle.regNumber}` : ""}</p>
             )}
           </div>
@@ -195,6 +198,8 @@ export default async function TicketDetailPage({ params }: { params: Promise<{ i
               ))}
             </div>
           )}
+
+          <CustomFieldsCard entity="case" recordId={ticket.id} />
         </aside>
       </div>
     </div>

@@ -44,7 +44,9 @@ import { getStockLabels } from "@/lib/stockLabels";
 import {
   SETTINGS_NAV_GROUPS,
   SETTINGS_TABS,
+  settingsItemEnabled,
 } from "@/lib/settings-navigation";
+import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import {
   SettingsIntegrationRow,
   SettingsOverview,
@@ -58,6 +60,10 @@ export default async function SettingsPage({
 }) {
   const currentUser = await requireUser();
   const isAdmin = currentUser.role === "owner";
+  const enabled = await getEnabledModuleIds();
+  const automotiveOn = enabled.has("automotive");
+  const commerceOn = enabled.has("commerce");
+  const marketingOn = enabled.has("marketing");
   // Non-admins get exactly one tab: their own account
   const visibleTabs = isAdmin
     ? SETTINGS_TABS
@@ -133,7 +139,9 @@ export default async function SettingsPage({
 
   const visibleGroups = SETTINGS_NAV_GROUPS.map((g) => ({
     ...g,
-    items: g.items.filter((i) => visibleTabs.some((t) => t.key === i.key)),
+    items: g.items.filter(
+      (i) => visibleTabs.some((t) => t.key === i.key) && settingsItemEnabled(i, enabled),
+    ),
   })).filter((g) => g.items.length > 0);
 
   return (
@@ -683,6 +691,7 @@ export default async function SettingsPage({
               </form>
             </Row>
 
+            {automotiveOn && (
             <Row
               title="Service reminders to customers"
               status={
@@ -730,7 +739,9 @@ export default async function SettingsPage({
                 <button className="btn-primary">Save</button>
               </form>
             </Row>
+            )}
 
+            {marketingOn && (
             <Row
               title="Lifecycle journeys"
               status={
@@ -769,6 +780,7 @@ export default async function SettingsPage({
                 <button className="btn-primary">Save</button>
               </form>
             </Row>
+            )}
 
             <Row
               title="Email templates"
@@ -892,7 +904,7 @@ export default async function SettingsPage({
         </div>
       )}
 
-      {tab === "workshop" && (
+      {tab === "workshop" && automotiveOn && (
         <div className="max-w-3xl">
           <div className="card p-0 divide-y divide-border/50">
             <Row
@@ -967,8 +979,8 @@ export default async function SettingsPage({
         </div>
       )}
 
-      {tab === "automations" && <AutomationsPage />}
-      {tab === "stock" && (
+      {tab === "automations" && marketingOn && <AutomationsPage />}
+      {tab === "stock" && commerceOn && (
         <div className="max-w-3xl space-y-4">
           <div className="card">
             <h2 className="font-semibold mb-1">Stock labels</h2>
@@ -1009,7 +1021,7 @@ export default async function SettingsPage({
         </div>
       )}
 
-      {tab === "products" && <ProductsPage />}
+      {tab === "products" && commerceOn && <ProductsPage />}
 
       {tab === "integrations" && (
         <div className="max-w-3xl">

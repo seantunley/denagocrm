@@ -34,6 +34,15 @@ const PUBLIC_PATHS = [
   "/robots.txt",
 ];
 
+// Forward the pathname to server components (the (app) layout reads it to block
+// routes that belong to a disabled module — a check middleware can't do itself
+// because the enabled-module set lives in the database).
+function allow(req: NextRequest): NextResponse {
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set("x-pathname", req.nextUrl.pathname);
+  return NextResponse.next({ request: { headers: requestHeaders } });
+}
+
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -76,12 +85,12 @@ export async function proxy(req: NextRequest) {
   // absolute 72h cap does not).
   if (result.needsRefresh) {
     const fresh = await refreshSession(result.payload);
-    const res = NextResponse.next();
+    const res = allow(req);
     res.cookies.set(SESSION_COOKIE, fresh, sessionCookieOptions);
     return res;
   }
 
-  return NextResponse.next();
+  return allow(req);
 }
 
 export const config = {

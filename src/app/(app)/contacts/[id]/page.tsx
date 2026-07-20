@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { deleteContact } from "@/app/actions/contacts";
 import CommsTimeline from "@/components/CommsTimeline";
+import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
@@ -25,6 +26,7 @@ import { CONSENT_TYPES } from "@/lib/consent";
 import { isSmtpConfigured, renderTemplate, contactVars } from "@/lib/email";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 
@@ -37,6 +39,10 @@ export default async function ContactDetailPage({
 }) {
   const { id } = await params;
   const user = await requireUser();
+  const [automotiveOn, marketingOn] = await Promise.all([
+    isModuleEnabled("automotive"),
+    isModuleEnabled("marketing"),
+  ]);
   const contact = await prisma.contact.findUnique({
     where: { id },
     include: {
@@ -73,18 +79,20 @@ export default async function ContactDetailPage({
       include: { versions: { orderBy: { version: "desc" }, take: 1 } },
     }),
   ]);
-  const referralCode = await ensureReferralCode(contact.id);
-  const [referralsMade, referredIn] = await Promise.all([
-    prisma.referral.findMany({
-      where: { referrerId: contact.id },
-      include: { lead: true, contact: true },
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.referral.findFirst({
-      where: { OR: [{ contactId: contact.id }, { lead: { contactId: contact.id } }] },
-      include: { referrer: true },
-    }),
-  ]);
+  const referralCode = marketingOn ? await ensureReferralCode(contact.id) : "";
+  const [referralsMade, referredIn] = marketingOn
+    ? await Promise.all([
+        prisma.referral.findMany({
+          where: { referrerId: contact.id },
+          include: { lead: true, contact: true },
+          orderBy: { createdAt: "desc" },
+        }),
+        prisma.referral.findFirst({
+          where: { OR: [{ contactId: contact.id }, { lead: { contactId: contact.id } }] },
+          include: { referrer: true },
+        }),
+      ])
+    : [[], null];
   const libraryDocs = libraryDocuments
     .filter((d) => d.versions[0])
     .map((d) => ({ id: d.versions[0].id, label: `${d.name} (v${d.versions[0].version})` }));
@@ -113,7 +121,7 @@ export default async function ContactDetailPage({
       description={[contact.email, contact.phone, contact.city].filter(Boolean).join(" · ") || "No contact details recorded"}
       meta={`${contact.owner ? `Owner: ${contact.owner.name}` : "No owner assigned"} · added${contact.createdBy ? ` by ${contact.createdBy.name}` : ""} at ${formatDateTime(contact.createdAt)}`}
       facts={[
-        { label: "Vehicles", value: contact.vehicles.length },
+        ...(automotiveOn ? [{ label: "Vehicles", value: contact.vehicles.length }] : []),
         { label: "Open leads", value: contact.leads.filter((lead) => lead.status === "open").length },
         { label: "Activities", value: contact.activities.filter((activity) => activity.status === "planned").length },
         { label: "Documents", value: contact.documents.length },
@@ -125,7 +133,7 @@ export default async function ContactDetailPage({
           <ConfirmDelete
             action={deleteContact.bind(null, contact.id)}
             title={`Delete contact ${contactName(contact)}?`}
-            description="The contact moves to the Trash and can be restored for 60 days. Their vehicles and job cards stay in place."
+            description={`The contact moves to the Trash and can be restored for 60 days.${automotiveOn ? " Their vehicles and job cards stay in place." : ""}`}
           />
         </>}
     >
@@ -138,6 +146,7 @@ export default async function ContactDetailPage({
                 key: "details",
                 label: "Details",
                 content: (
+                  <div className="space-y-6">
                   <div className="card">
                     <h2 className="font-semibold mb-3">Details</h2>
                     <dl className="space-y-2 text-sm max-w-xl">
@@ -168,6 +177,8 @@ export default async function ContactDetailPage({
                       </p>
                     )}
                   </div>
+                  <CustomFieldsCard entity="contact" recordId={contact.id} />
+                  </div>
                 ),
               },
               {
@@ -184,7 +195,7 @@ export default async function ContactDetailPage({
                   />
                 ),
               },
-              {
+              ...(automotiveOn ? [{
                 key: "vehicles",
                 label: "Vehicles",
                 count: contact.vehicles.length,
@@ -224,7 +235,7 @@ export default async function ContactDetailPage({
                     )}
                   </div>
                 ),
-              },
+              }] : []),
               {
                 key: "leads",
                 label: "Leads",
@@ -338,7 +349,7 @@ export default async function ContactDetailPage({
                   </div>
                 ),
               },
-              {
+              ...(marketingOn ? [{
                 key: "referrals",
                 label: "Referrals",
                 count: referralsMade.length,
@@ -448,7 +459,7 @@ export default async function ContactDetailPage({
                     </div>
                   </>
                 ),
-              },
+              }] : []),
               {
                 key: "documents",
                 label: "Documents",
