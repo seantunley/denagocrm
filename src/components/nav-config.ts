@@ -24,7 +24,6 @@ import {
   Bot,
   Network,
   Ticket,
-  LifeBuoy,
   TrendingUp,
   ScrollText,
   Building2,
@@ -74,7 +73,7 @@ export function buildNav(
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/contacts", label: "Contacts", icon: Users });
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/fleets", label: "Fleets", icon: Building2 });
   if (can("activities.view", "activities.manage")) crmLinks.push({ href: "/activities", label: "Activities", icon: ListChecks });
-  if (can("cases.view_all", "cases.view_owned")) crmLinks.push({ href: "/cases", label: "Customer Cases", icon: Ticket });
+  if (can("cases.view_all", "cases.view_owned")) crmLinks.push({ href: "/cases", label: "Help desk", icon: Ticket });
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/health", label: "Customer Health", icon: HeartPulse });
   if (can("documents.view_all", "documents.view_owned", "documents.upload", "documents.manage", "document_templates.manage")) {
     crmLinks.push({ href: "/documents", label: "Documents", icon: FolderOpen });
@@ -113,14 +112,6 @@ export function buildNav(
     automationLinks.push({ href: "/competitors", label: "Competitors", icon: Radar });
   }
   if (automationLinks.length) groups.push({ key: "automation", label: "Automation", links: automationLinks });
-
-  if (can("cases.manage")) {
-    groups.push({
-      key: "helpdesk",
-      label: "Help desk",
-      links: [{ href: "/settings/helpdesk", label: "Help desk", icon: LifeBuoy }],
-    });
-  }
 
   const platformLinks: NavLink[] = [{ href: "/library", label: "Document library", icon: Library }];
   if (can("document_templates.manage")) platformLinks.push({ href: "/document-studio", label: "Document Studio", icon: FileText });

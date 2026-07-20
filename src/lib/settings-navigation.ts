@@ -56,6 +56,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     items: [
       { key: "email", label: "Email", keywords: ["smtp", "imap", "templates"] },
       { key: "automations", label: "Automations", keywords: ["rules", "workflows", "triggers"] },
+      { key: "helpdesk", label: "Help desk", href: "/settings/helpdesk", permission: "cases.manage", keywords: ["mailboxes", "saved replies", "tags", "support", "tickets", "cases"] },
     ],
   },
   {
