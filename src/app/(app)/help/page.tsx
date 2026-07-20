@@ -6,7 +6,8 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
-import { categoriesWithArticles, HELP_ARTICLES } from "@/lib/help/content";
+import { categoriesWithArticles } from "@/lib/help/content";
+import { getEnabledModuleIds } from "@/lib/modules/enabled";
 
 export const metadata: Metadata = { title: "Help & user manual" };
 
@@ -14,12 +15,14 @@ const ICONS: Record<string, LucideIcon> = {
   Compass, SquareKanban, FileText, Package, Wrench, Megaphone, MessageSquare, Bot, FolderOpen, ChartColumnIncreasing, Cog,
 };
 
-export default function HelpHomePage() {
-  const categories = categoriesWithArticles();
+export default async function HelpHomePage() {
+  const enabled = await getEnabledModuleIds();
+  const categories = categoriesWithArticles(enabled);
+  const articleCount = categories.reduce((n, c) => n + c.articles.length, 0);
 
   return (
     <div className="space-y-8">
-      <PageHeader title="Help &amp; user manual" description={`Step-by-step guides for every part of Denago CRM — ${HELP_ARTICLES.length} articles across ${categories.length} areas.`}>
+      <PageHeader title="Help &amp; user manual" description={`Step-by-step guides for every part of Denago CRM — ${articleCount} articles across ${categories.length} areas.`}>
         <Link href="/manual" target="_blank" className={buttonVariants({ variant: "outline", size: "sm" })}>
           <BookOpen className="size-4" /> Full manual (print / PDF)
         </Link>

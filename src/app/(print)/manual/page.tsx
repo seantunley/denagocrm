@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import { requireUser } from "@/lib/auth";
 import ArticleBody from "@/components/help/ArticleBody";
 import PrintButton from "@/components/help/PrintButton";
-import { categoriesWithArticles, HELP_ARTICLES } from "@/lib/help/content";
+import { categoriesWithArticles } from "@/lib/help/content";
+import { getEnabledModuleIds } from "@/lib/modules/enabled";
 
 export const metadata: Metadata = { title: "Denago CRM — User Manual", robots: { index: false, follow: false } };
 
@@ -10,7 +11,9 @@ const AUDIENCE_LABEL: Record<string, string> = { everyone: "", managers: "Manage
 
 export default async function ManualPage() {
   await requireUser();
-  const categories = categoriesWithArticles();
+  const enabled = await getEnabledModuleIds();
+  const categories = categoriesWithArticles(enabled);
+  const articleCount = categories.reduce((n, c) => n + c.articles.length, 0);
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-10 print:py-0">
@@ -23,7 +26,7 @@ export default async function ManualPage() {
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-orange-600">Denago Cape Town</p>
             <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">User Manual</h1>
             <p className="mt-2 text-sm text-slate-500">
-              The complete guide to Denago CRM — {HELP_ARTICLES.length} articles across {categories.length} areas.
+              The complete guide to Denago CRM — {articleCount} articles across {categories.length} areas.
             </p>
           </div>
           <PrintButton />

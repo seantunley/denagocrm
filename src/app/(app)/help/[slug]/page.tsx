@@ -5,6 +5,8 @@ import { ChevronLeft, ChevronRight, ArrowLeft } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import ArticleBody from "@/components/help/ArticleBody";
 import { getArticle, articlesInCategory, HELP_ARTICLES } from "@/lib/help/content";
+import { isArticleEnabled } from "@/lib/help/modules";
+import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import { CATEGORY_LABEL } from "@/lib/help/categories";
 
 export function generateStaticParams() {
@@ -28,7 +30,11 @@ export default async function HelpArticlePage({ params }: { params: Promise<{ sl
   const article = getArticle(slug);
   if (!article) notFound();
 
-  const siblings = articlesInCategory(article.category);
+  // Articles owned by a switched-off module are treated as not found.
+  const enabled = await getEnabledModuleIds();
+  if (!isArticleEnabled(article, enabled)) notFound();
+
+  const siblings = articlesInCategory(article.category, enabled);
   const idx = siblings.findIndex((a) => a.slug === article.slug);
   const prev = idx > 0 ? siblings[idx - 1] : null;
   const next = idx >= 0 && idx < siblings.length - 1 ? siblings[idx + 1] : null;

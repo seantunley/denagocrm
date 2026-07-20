@@ -1,4 +1,6 @@
 import type { HelpArticle, HelpCategoryKey } from "./types";
+import type { ModuleId } from "@/lib/modules/registry";
+import { isArticleEnabled } from "./modules";
 import { HELP_CATEGORIES } from "./categories";
 import { gettingStartedArticles } from "./articles/getting-started";
 import crm from "./data/crm.json";
@@ -32,22 +34,30 @@ export function getArticle(slug: string): HelpArticle | undefined {
   return BY_SLUG.get(slug);
 }
 
-export function articlesInCategory(key: HelpCategoryKey): HelpArticle[] {
-  return HELP_ARTICLES.filter((a) => a.category === key);
+// When an `enabled` module set is passed, articles owned by a disabled pack are
+// dropped (core is always kept); omitting it returns every article unchanged, so
+// existing callers and tests are behaviour-preserving.
+function visibleArticles(enabled?: ReadonlySet<ModuleId>): HelpArticle[] {
+  if (!enabled) return HELP_ARTICLES;
+  return HELP_ARTICLES.filter((a) => isArticleEnabled(a, enabled));
+}
+
+export function articlesInCategory(key: HelpCategoryKey, enabled?: ReadonlySet<ModuleId>): HelpArticle[] {
+  return visibleArticles(enabled).filter((a) => a.category === key);
 }
 
 /** Categories that actually have articles, in display order, with their articles attached. */
-export function categoriesWithArticles(): { key: HelpCategoryKey; label: string; description: string; icon: string; articles: HelpArticle[] }[] {
-  return HELP_CATEGORIES.map((c) => ({ ...c, articles: articlesInCategory(c.key) })).filter((c) => c.articles.length > 0);
+export function categoriesWithArticles(enabled?: ReadonlySet<ModuleId>): { key: HelpCategoryKey; label: string; description: string; icon: string; articles: HelpArticle[] }[] {
+  return HELP_CATEGORIES.map((c) => ({ ...c, articles: articlesInCategory(c.key, enabled) })).filter((c) => c.articles.length > 0);
 }
 
 /** Lightweight relevance search over title, summary, keywords and body text. */
-export function searchArticles(query: string): HelpArticle[] {
+export function searchArticles(query: string, enabled?: ReadonlySet<ModuleId>): HelpArticle[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const terms = q.split(/\s+/).filter(Boolean);
   const scored: { a: HelpArticle; score: number }[] = [];
-  for (const a of HELP_ARTICLES) {
+  for (const a of visibleArticles(enabled)) {
     const haystackStrong = `${a.title} ${a.summary} ${a.keywords.join(" ")}`.toLowerCase();
     const bodyText = a.body
       .map((b) => ("text" in b ? b.text : "items" in b ? b.items.join(" ") : "headers" in b ? `${b.headers.join(" ")} ${b.rows.flat().join(" ")}` : ""))
