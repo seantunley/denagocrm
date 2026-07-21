@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { sendWhatsAppText, waDigits, isWhatsAppConfigured } from "@/lib/whatsapp";
 import { logSignEvent } from "./events";
+import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
 
 const BASE = process.env.SIGN_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za";
 
@@ -27,10 +28,10 @@ function escapeText(s: string): string { return s.replace(/&/g, "&amp;").replace
 export async function notifyRecipient(recipientId: string, opts?: { reminder?: boolean }): Promise<void> {
   const r = await prisma.signatureRecipient.findUnique({ where: { id: recipientId }, include: { request: true } });
   if (!r || r.role === "viewer") return;
-  // Never notify for a request that has closed, or a recipient who already
-  // signed/declined — the request can close (void/decline/complete) between
-  // dispatch's claim and this external email/WhatsApp send.
-  if (r.request.status === "completed" || r.request.status === "declined" || r.request.status === "voided") return;
+  // Never notify for a CLOSED request, or a recipient who already
+  // signed/declined — the request can close (void/decline/expire/reject/
+  // complete) between dispatch's claim and this external email/WhatsApp send.
+  if (isRequestClosed(r.request.status)) return;
   if (r.status === "signed" || r.status === "declined") return;
   const url = signUrl(r.token);
   const verb = opts?.reminder ? "Reminder — please sign" : "Please sign your document";
@@ -65,7 +66,7 @@ export async function dispatchRequest(requestId: string): Promise<{ notified: nu
   // force it back to "sent", resurrecting a dead signing link and re-notifying
   // declined recipients. count !== 1 → it just closed; do nothing.
   const claimed = await prisma.signatureRequest.updateMany({
-    where: { id: requestId, status: { notIn: ["completed", "declined", "voided"] } },
+    where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
     data: { status: "sent", sentAt: req.sentAt ?? new Date() },
   });
   if (claimed.count !== 1) return { notified: 0 };
@@ -73,8 +74,9 @@ export async function dispatchRequest(requestId: string): Promise<{ notified: nu
   const signers = req.recipients.filter((r) => r.role !== "viewer" && r.status !== "signed");
   const targets = req.ordering === "sequential" ? signers.slice(0, 1) : signers;
   for (const r of targets) await notifyRecipient(r.id);
-  // viewers get a copy too
-  for (const v of req.recipients.filter((r) => r.role === "viewer")) if (v.email) await notifyRecipient(v.id);
+  // NOTE: viewers are intentionally NOT notified here. notifyRecipient() returns
+  // early for viewers (they never sign), so the previous per-viewer loop was dead
+  // code. If viewer "for your records" copies are wanted, add a dedicated path.
   return { notified: targets.length };
 }
 

@@ -1,10 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/db";
+import { prisma, basePrisma } from "@/lib/db";
 import { requireQuoteAccess, requireJobCardAccess, type PermissionUser } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
-import { saveFile } from "@/lib/storage";
+import { saveFile, deleteFile } from "@/lib/storage";
+import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "@/lib/signing/status";
 import { quoteExpired } from "@/lib/quoteExpiry";
 import { defaultBuilderTemplateId } from "@/lib/docbuilder/store";
 import { resolveEnvelope } from "@/lib/signing/autoEnvelope";
@@ -87,12 +88,9 @@ export async function startRecordSigning(
   if (active.error) return { ok: false, error: active.error };
   const sendLeadId = active.leadId;
 
+  // Cheap unlocked pre-check to short-circuit the common "already open" case.
   const existing = await activeRecordRequest({ quoteId, jobCardId });
-  if (
-    existing &&
-    existing.status !== "completed" &&
-    existing.status !== "declined"
-  ) {
+  if (existing && !isRequestClosed(existing.status)) {
     return { ok: true, requestId: existing.requestId };
   }
 
@@ -117,38 +115,73 @@ export async function startRecordSigning(
     `${envelope.title}.pdf`,
     "application/pdf",
   );
-  const document = await prisma.document.create({
-    data: {
-      fileName: `${envelope.title}.pdf`,
-      storedName,
-      mimeType: "application/pdf",
-      sizeBytes: pdf.length,
-      quoteId,
-      jobCardId,
-      contactId: envelope.contactId,
-      tag: "for-signing",
-      uploadedById: user.id,
-    },
-  });
 
-  const created = await createSignatureRequestFromDoc({
-    doc: envelope.doc,
-    title: envelope.title,
-    unsignedPdfRef: storedName,
-    source: {
-      documentId: document.id,
-      quoteId,
-      jobCardId,
-      contactId: envelope.contactId,
-    },
-    ordering: envelope.ordering,
-    createdById: user.id,
+  // Serialize the check-and-create with a transaction-scoped advisory lock keyed
+  // on the record: two concurrent starts can't both see "no open request" and
+  // both create a signing link. The document + request + recipients + fields are
+  // created together in the transaction, so a failure can't leave a partial
+  // draft. The loser discards its freshly rendered (now unused) PDF.
+  const lockName = `sign:${kind}:${id}`;
+  let createdRequestId: string | null = null;
+  let reusedRequestId: string | null = null;
+  await basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockName})::bigint)`;
+    const open = await tx.signatureRequest.findFirst({
+      where: {
+        ...(quoteId ? { quoteId } : { jobCardId }),
+        deletedAt: null,
+        status: { notIn: [...CLOSED_REQUEST_STATUSES] },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
+    if (open) {
+      reusedRequestId = open.id;
+      return;
+    }
+    const document = await tx.document.create({
+      data: {
+        fileName: `${envelope.title}.pdf`,
+        storedName,
+        mimeType: "application/pdf",
+        sizeBytes: pdf.length,
+        quoteId,
+        jobCardId,
+        contactId: envelope.contactId,
+        tag: "for-signing",
+        uploadedById: user.id,
+      },
+    });
+    const created = await createSignatureRequestFromDoc({
+      doc: envelope.doc,
+      title: envelope.title,
+      unsignedPdfRef: storedName,
+      source: {
+        documentId: document.id,
+        quoteId,
+        jobCardId,
+        contactId: envelope.contactId,
+      },
+      ordering: envelope.ordering,
+      createdById: user.id,
+      client: tx,
+    });
+    createdRequestId = created.id;
   });
+  if (reusedRequestId) {
+    await deleteFile(storedName).catch(() => {});
+    return { ok: true, requestId: reusedRequestId };
+  }
+  if (!createdRequestId) {
+    await deleteFile(storedName).catch(() => {});
+    return { ok: false, error: "Could not create the signing request." };
+  }
+  const requestId: string = createdRequestId;
 
   if (envelope.customerPhone && envelope.customerEmail) {
     const customer = await prisma.signatureRecipient.findFirst({
       where: {
-        requestId: created.id,
+        requestId,
         email: envelope.customerEmail,
         role: { not: "viewer" },
       },
@@ -167,14 +200,14 @@ export async function startRecordSigning(
     contactId: envelope.contactId,
     leadId: sendLeadId,
     entityType: "SignatureRequest",
-    entityId: created.id,
+    entityId: requestId,
     user,
   });
   revalidatePath(recordPath(kind, id));
 
   if (envelope.frozen && envelope.signers) {
     const recipients = await prisma.signatureRecipient.findMany({
-      where: { requestId: created.id },
+      where: { requestId: requestId },
       orderBy: { order: "asc" },
     });
     for (
@@ -188,15 +221,15 @@ export async function startRecordSigning(
       });
     }
     await prisma.signatureRequest.update({
-      where: { id: created.id },
+      where: { id: requestId },
       data: {
         workflowGraphJson: envelope.frozen as object,
         currentNodeId: null,
       },
     });
-    await advanceWorkflow(created.id);
+    await advanceWorkflow(requestId);
     const after = await prisma.signatureRequest.findUnique({
-      where: { id: created.id },
+      where: { id: requestId },
       select: { currentNodeId: true },
     });
     const currentNode = after?.currentNodeId
@@ -204,48 +237,48 @@ export async function startRecordSigning(
       : undefined;
     if (currentNode?.type === "signer") {
       const recipient = await prisma.signatureRecipient.findFirst({
-        where: { requestId: created.id, nodeId: currentNode.id },
+        where: { requestId: requestId, nodeId: currentNode.id },
       });
       if (recipient) {
         return {
           ok: true,
-          requestId: created.id,
-          signFirstUrl: `/signatures/${created.id}/sign/${recipient.id}`,
+          requestId: requestId,
+          signFirstUrl: `/signatures/${requestId}/sign/${recipient.id}`,
           modal: true,
         };
       }
     }
     return {
       ok: true,
-      requestId: created.id,
-      signFirstUrl: `/signatures/${created.id}`,
+      requestId: requestId,
+      signFirstUrl: `/signatures/${requestId}`,
     };
   }
 
   if (envelope.signers) {
     return {
       ok: true,
-      requestId: created.id,
-      signFirstUrl: `/signatures/${created.id}`,
+      requestId: requestId,
+      signFirstUrl: `/signatures/${requestId}`,
     };
   }
 
   if (envelope.cosign) {
     const dealer = await prisma.signatureRecipient.findFirst({
-      where: { requestId: created.id, order: 0 },
+      where: { requestId: requestId, order: 0 },
     });
     return {
       ok: true,
-      requestId: created.id,
+      requestId: requestId,
       signFirstUrl: dealer
-        ? `/signatures/${created.id}/sign/${dealer.id}`
+        ? `/signatures/${requestId}/sign/${dealer.id}`
         : undefined,
       modal: true,
     };
   }
 
-  const { notified } = await dispatchRequest(created.id);
-  return { ok: true, requestId: created.id, notified };
+  const { notified } = await dispatchRequest(requestId);
+  return { ok: true, requestId: requestId, notified };
 }
 
 export async function resendRecordSigning(
@@ -261,9 +294,10 @@ export async function resendRecordSigning(
     quoteId: kind === "quote" ? id : null,
     jobCardId: kind === "jobcard" ? id : null,
   });
-  // A completed / declined / voided request is closed — resending would resurrect
-  // it (force it back to "sent" and re-notify a declined recipient).
-  if (!state || ["completed", "declined", "voided"].includes(state.status)) {
+  // A closed request (completed / declined / voided / expired / rejected) must
+  // not be resent — resending would resurrect it (force it back to "sent" and
+  // re-notify a declined recipient).
+  if (!state || isRequestClosed(state.status)) {
     return { ok: false, error: "No active request to resend." };
   }
   const { notified } = await dispatchRequest(state.requestId);
@@ -291,7 +325,7 @@ export async function voidRecordSigning(
   // Conditional void so it can't overwrite a request that a concurrent signer
   // just completed / declined (or another void).
   const voided = await prisma.signatureRequest.updateMany({
-    where: { id: state.requestId, status: { notIn: ["completed", "declined", "voided"] } },
+    where: { id: state.requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
     data: { status: "voided" },
   });
   if (voided.count === 0) {
