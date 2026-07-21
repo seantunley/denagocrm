@@ -23,12 +23,16 @@ async function main() {
   // AFTER it (this owner, CI) get their membership via the shared provisioning
   // service, the same one the data import uses.
   const upsertOwner = async (email: string, name: string, passwordHash: string) => {
-    const user = await prisma.user.upsert({
-      where: { email },
-      update: { role: "owner" }, // never overwrite an existing user's password
-      create: { name, email, passwordHash, role: "owner" },
+    // One transaction so the owner and their founding membership commit together —
+    // an interrupted seed can never leave a tenantless owner.
+    await prisma.$transaction(async (tx) => {
+      const user = await tx.user.upsert({
+        where: { email },
+        update: { role: "owner" }, // never overwrite an existing user's password
+        create: { name, email, passwordHash, role: "owner" },
+      });
+      await ensureFoundingMembership(tx, user.id);
     });
-    await ensureFoundingMembership(prisma, user.id);
   };
 
   if (vercelEnv === "preview") {

@@ -44,7 +44,12 @@ ALTER TABLE "UserSession" ADD COLUMN IF NOT EXISTS "tenantId" TEXT;
 CREATE INDEX IF NOT EXISTS "UserSession_tenantId_idx" ON "UserSession"("tenantId");
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'UserSession_tenantId_fkey') THEN
+  -- Scope to the UserSession relation: conname is unique per table, not globally,
+  -- so a same-named constraint on another relation must not make this skip the FK.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'UserSession_tenantId_fkey' AND conrelid = '"UserSession"'::regclass
+  ) THEN
     ALTER TABLE "UserSession"
       ADD CONSTRAINT "UserSession_tenantId_fkey"
       FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE SET NULL ON UPDATE CASCADE;
