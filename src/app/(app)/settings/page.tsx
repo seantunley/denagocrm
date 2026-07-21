@@ -24,6 +24,8 @@ import {
 } from "@/app/actions/emails";
 import TestEmailButton from "@/components/TestEmailButton";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import SecretReveal from "@/components/SecretReveal";
+import ClearSecret from "@/components/ClearSecret";
 import ImportContactsForm from "@/components/ImportContactsForm";
 import PushToggle from "@/components/PushToggle";
 import SecurityPanel from "@/components/SecurityPanel";
@@ -623,8 +625,11 @@ export default async function SettingsPage({
                 </div>
                 <div>
                   <label className="label">Password</label>
-                  {/* Never echo the stored secret — blank means "keep it" (see saveSmtpSettings). */}
-                  <input name="pass" type="password" autoComplete="off" className="input" placeholder={setting("SMTP_PASS") ? "•••••••• saved — leave blank to keep" : ""} />
+                  {/* Never echo the stored secret — blank means "keep it" (see saveSmtpSettings). Clear = no-password config. */}
+                  <div className="flex gap-2">
+                    <input name="pass" type="password" autoComplete="new-password" className="input flex-1" placeholder={setting("SMTP_PASS") ? "•••••••• saved — leave blank to keep" : ""} />
+                    {setting("SMTP_PASS") ? <ClearSecret settingKey="SMTP_PASS" label="SMTP password" /> : null}
+                  </div>
                 </div>
                 <div className="md:col-span-2">
                   <label className="label">From address</label>
@@ -684,8 +689,11 @@ export default async function SettingsPage({
                 </div>
                 <div>
                   <label className="label">Password</label>
-                  {/* Never echo the stored secret — blank means "keep it" (see saveImapSettings). */}
-                  <input name="pass" type="password" autoComplete="off" className="input" placeholder={setting("IMAP_PASS") ? "•••••••• saved — leave blank to keep" : ""} />
+                  {/* Never echo the stored secret — blank means "keep it" (see saveImapSettings). Clear = no-password config. */}
+                  <div className="flex gap-2">
+                    <input name="pass" type="password" autoComplete="new-password" className="input flex-1" placeholder={setting("IMAP_PASS") ? "•••••••• saved — leave blank to keep" : ""} />
+                    {setting("IMAP_PASS") ? <ClearSecret settingKey="IMAP_PASS" label="IMAP password" /> : null}
+                  </div>
                 </div>
                 <div className="md:col-span-2">
                   <button className="btn-primary">Save incoming email</button>
@@ -1051,9 +1059,7 @@ export default async function SettingsPage({
                 <div>
                   <label className="label">Verify token</label>
                   <div className="flex gap-2">
-                    <code className="flex-1 text-sm bg-muted rounded-lg px-3 py-2 break-all">
-                      {setting("META_VERIFY_TOKEN") || "—"}
-                    </code>
+                    <SecretReveal settingKey="META_VERIFY_TOKEN" isSet={Boolean(setting("META_VERIFY_TOKEN"))} />
                     <form action={regenerateSetting.bind(null, "META_VERIFY_TOKEN")}>
                       <button className="btn-secondary">Regenerate</button>
                     </form>
@@ -1067,12 +1073,13 @@ export default async function SettingsPage({
                     <input
                       name="value"
                       type="password"
-                      autoComplete="off"
+                      autoComplete="new-password"
                       className="input"
                       placeholder={setting("META_PAGE_ACCESS_TOKEN") ? "•••••••• saved — leave blank to keep" : "EAAG…"}
                     />
                   </div>
                   <button className="btn-primary">Save</button>
+                  {setting("META_PAGE_ACCESS_TOKEN") ? <ClearSecret settingKey="META_PAGE_ACCESS_TOKEN" label="Meta page access token" /> : null}
                 </form>
                 <form action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="META_APP_SECRET" />
@@ -1082,12 +1089,13 @@ export default async function SettingsPage({
                     <input
                       name="value"
                       type="password"
-                      autoComplete="off"
+                      autoComplete="new-password"
                       className="input"
                       placeholder={setting("META_APP_SECRET") ? "•••••••• saved — leave blank to keep" : "From Meta app → Settings → Basic"}
                     />
                   </div>
                   <button className="btn-primary">Save</button>
+                  {setting("META_APP_SECRET") ? <ClearSecret settingKey="META_APP_SECRET" label="Meta app secret" /> : null}
                 </form>
               </div>
             </Row>
@@ -1135,12 +1143,13 @@ export default async function SettingsPage({
                     <input
                       name="value"
                       type="password"
-                      autoComplete="off"
+                      autoComplete="new-password"
                       className="input"
                       placeholder={setting("WA_ACCESS_TOKEN") ? "•••••••• saved — leave blank to keep" : "EAAG…"}
                     />
                   </div>
                   <button className="btn-primary">Save</button>
+                  {setting("WA_ACCESS_TOKEN") ? <ClearSecret settingKey="WA_ACCESS_TOKEN" label="WhatsApp access token" /> : null}
                 </form>
               </div>
             </Row>
@@ -1168,12 +1177,13 @@ export default async function SettingsPage({
                     <input
                       name="value"
                       type="password"
-                      autoComplete="off"
+                      autoComplete="new-password"
                       className="input"
                       placeholder={setting("GOOGLE_PLACES_API_KEY") ? "•••••••• saved — leave blank to keep" : "AIza…"}
                     />
                   </div>
                   <button className="btn-primary">Save</button>
+                  {setting("GOOGLE_PLACES_API_KEY") ? <ClearSecret settingKey="GOOGLE_PLACES_API_KEY" label="Google Places API key" /> : null}
                 </form>
                 <form action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="GOOGLE_PLACE_ID" />
@@ -1228,12 +1238,13 @@ export default async function SettingsPage({
                     <input
                       name="value"
                       type="password"
-                      autoComplete="off"
+                      autoComplete="new-password"
                       className="input"
                       placeholder={setting("BULKSMS_TOKEN_SECRET") ? "•••••••• saved — leave blank to keep" : "Shown once when the token is created"}
                     />
                   </div>
                   <button className="btn-primary">Save</button>
+                  {setting("BULKSMS_TOKEN_SECRET") ? <ClearSecret settingKey="BULKSMS_TOKEN_SECRET" label="BulkSMS token secret" /> : null}
                 </form>
               </div>
             </Row>
@@ -1262,12 +1273,13 @@ export default async function SettingsPage({
                     <input
                       name="value"
                       type="password"
-                      autoComplete="off"
+                      autoComplete="new-password"
                       className="input"
                       placeholder={setting("ANTHROPIC_API_KEY") ? "•••••••• saved — leave blank to keep" : "sk-ant-…"}
                     />
                   </div>
                   <button className="btn-primary">Save</button>
+                  {setting("ANTHROPIC_API_KEY") ? <ClearSecret settingKey="ANTHROPIC_API_KEY" label="Anthropic API key" /> : null}
                 </form>
                 <form action={saveSetting} className="flex items-center gap-2">
                   <input type="hidden" name="key" value="AI_AUTO_RESEARCH" />
@@ -1299,9 +1311,7 @@ export default async function SettingsPage({
                 <div>
                   <label className="label">API key</label>
                   <div className="flex gap-2">
-                    <code className="flex-1 text-sm bg-muted rounded-lg px-3 py-2 break-all">
-                      {setting("INTAKE_API_KEY") || "—"}
-                    </code>
+                    <SecretReveal settingKey="INTAKE_API_KEY" isSet={Boolean(setting("INTAKE_API_KEY"))} />
                     <form action={regenerateSetting.bind(null, "INTAKE_API_KEY")}>
                       <button className="btn-secondary">Regenerate</button>
                     </form>
