@@ -740,6 +740,11 @@ model Communication {
   conversationId String?
   conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
   messageId      String? // provider Message-ID (email) / platform message id
+  // Idempotency key for inbound-email filing: the Message-ID, or a content hash
+  // when the mail has none. Unique so a retried/overlapping IMAP run can't file
+  // the same email onto the timeline twice. (messageId keeps only a plain index
+  // and may legitimately repeat across historical rows, so it can't be the key.)
+  dedupeKey      String? @unique
   inReplyTo      String? // email In-Reply-To header
   references     String? // email References chain (space-separated Message-IDs)
   readAt         DateTime? // when staff first opened the conversation carrying this inbound message

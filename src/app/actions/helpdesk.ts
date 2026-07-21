@@ -255,6 +255,15 @@ export async function saveMailbox(formData: FormData): Promise<void> {
   const autoReplyEnabled = formData.get("autoReplyEnabled") === "on";
   const autoReplyBody = str(formData, "autoReplyBody") || null;
   const active = formData.get("active") !== "off";
+  // The inbound address routes mail to exactly one mailbox — reject a duplicate
+  // (case-insensitive) up front so the DB unique index surfaces as a clear error.
+  if (email) {
+    const clash = await basePrisma.supportMailbox.findFirst({
+      where: { email: { equals: email, mode: "insensitive" }, ...(id ? { id: { not: id } } : {}) },
+      select: { name: true },
+    });
+    if (clash) throw new Error(`That inbox address is already used by the "${clash.name}" mailbox.`);
+  }
   const data = { name, color, signature, email, autoReplyEnabled, autoReplyBody, active };
   if (id) {
     await basePrisma.supportMailbox.update({ where: { id }, data });
