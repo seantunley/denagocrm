@@ -170,11 +170,21 @@ async function main() {
         )`;
     assert.equal(Number(orphanSessions[0].count), 0, "every session's tenant must belong to that session's user");
 
+    // Fail-closed provisioning: every user must belong to at least one tenant.
+    // The migration backfills existing users, seed covers the owner, and
+    // createUser grants membership in the same transaction as the user — so a
+    // tenantless user (which would resolve to null and be denied tenant access)
+    // must never exist.
+    const usersWithoutTenant = await basePrisma.$queryRaw<{ count: bigint }[]>`
+      SELECT COUNT(*)::bigint AS count FROM "User" u
+      WHERE NOT EXISTS (SELECT 1 FROM "TenantMember" m WHERE m."userId" = u."id")`;
+    assert.equal(Number(usersWithoutTenant[0].count), 0, "every user must belong to at least one tenant (fail-closed provisioning)");
+
     // Upgrade path — the PRODUCTION scenario the fresh-DB CI run does NOT cover:
     // a user + session that predate the tenant columns must be backfilled. Create a
     // membership-less user + a null-tenant session, replay the migration's
     // idempotent backfill statements exactly (mirrors migration
-    // 20260721130000_tenant_foundation), and assert both are filled.
+    // 20260721130000_tenant_foundation), assert both are filled, then clean up.
     const legacyUser = id("legacyUser");
     const legacySession = id("legacySession");
     await basePrisma.user.create({ data: { id: legacyUser, name: "Legacy", email: `${legacyUser}@example.invalid`, passwordHash: "x" } });

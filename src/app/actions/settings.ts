@@ -10,6 +10,7 @@ import { setNextStepScheduling } from "@/lib/nextStepConfig";
 import { PUSH_KINDS } from "@/lib/push";
 import { logAuditStrict } from "@/lib/audit";
 import { bumpUserSessionVersion } from "@/lib/userSecurity";
+import { getActiveTenantId } from "@/lib/tenantContext";
 
 // ---- Pipeline stages ----
 
@@ -87,8 +88,19 @@ export async function createUser(
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) return { error: "A user with that email already exists." };
 
-  const created = await prisma.user.create({
-    data: { name, email, passwordHash: await bcrypt.hash(password, 12) },
+  // Tenant provisioning (fail-closed): a new user MUST land in a tenant — the
+  // creating owner's active tenant. Refuse rather than create a tenantless user
+  // (so nobody is later stranded when session enforcement lands). User + membership
+  // are created in one transaction, so a user never exists without a membership.
+  const tenantId = await getActiveTenantId(owner.id);
+  if (!tenantId) {
+    return { error: "Your account isn't linked to a tenant yet — contact support before adding users." };
+  }
+  const passwordHash = await bcrypt.hash(password, 12);
+  const created = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.create({ data: { name, email, passwordHash } });
+    await tx.tenantMember.create({ data: { tenantId, userId: user.id } });
+    return user;
   });
   try {
     await basePrisma.$executeRaw`
