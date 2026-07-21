@@ -149,20 +149,28 @@ export async function createSessionCookie(
   } catch {
     // never let tenant resolution block sign-in
   }
-  await prisma.userSession.create({
-    data: {
-      jti,
-      userId: user.id,
-      platform: pwa ? "pwa" : "web",
-      ip: (h.get("x-forwarded-for") ?? "").split(",")[0].trim() || null,
-      userAgent: (h.get("user-agent") ?? "").slice(0, 250) || null,
-      tenantId,
-    },
-  });
+  // Stamp the resolved tenant, but never let it block sign-in: if the tenant is
+  // deleted between the resolve above and this insert (concurrent tenant admin),
+  // the FK would reject the create — so on ANY failure retry once WITHOUT the
+  // tenant. sessionTenantId tracks what actually landed so the JWT stays in sync.
+  const sessionBase = {
+    jti,
+    userId: user.id,
+    platform: pwa ? "pwa" : "web",
+    ip: (h.get("x-forwarded-for") ?? "").split(",")[0].trim() || null,
+    userAgent: (h.get("user-agent") ?? "").slice(0, 250) || null,
+  };
+  let sessionTenantId = tenantId;
+  try {
+    await prisma.userSession.create({ data: { ...sessionBase, tenantId: sessionTenantId } });
+  } catch {
+    sessionTenantId = null;
+    await prisma.userSession.create({ data: sessionBase });
+  }
   const token = await signFreshSession(
     { ...user, sessionVersion: security.sessionVersion },
     idle,
-    { jti, pwa, ...(tenantId ? { tid: tenantId } : {}) }
+    { jti, pwa, ...(sessionTenantId ? { tid: sessionTenantId } : {}) }
   );
   const store = await cookies();
   store.set(SESSION_COOKIE, token, sessionCookieOptions(pwa));
