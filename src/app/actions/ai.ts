@@ -2,6 +2,7 @@
 
 import { prisma } from "@/lib/db";
 import { requireOperational, requireOwner } from "@/lib/auth";
+import { requireLeadAccess, requireContactAccess, canAccessContact } from "@/lib/permissions";
 import { aiCheckDraft, aiResearch } from "@/lib/ai";
 import { basePrisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
@@ -98,6 +99,15 @@ export async function researchRecord(
   await requireOperational();
   const leadId = String(formData.get("leadId") ?? "").trim() || null;
   const contactId = String(formData.get("contactId") ?? "").trim() || null;
+  if (!leadId && !contactId) return { error: "Nothing to research." };
+
+  // Authorize the record being enriched. The old code took the id straight from
+  // the form and, after only a module gate, overwrote the research field of ANY
+  // lead/contact by id and fired an outbound AI call on its name/email. Gate on
+  // the record's own edit boundary (redirects a scoped user who can't touch it).
+  const user = leadId
+    ? await requireLeadAccess(leadId, "leads.edit")
+    : await requireContactAccess(contactId!, "contacts.edit");
 
   let name = "";
   let email: string | null = null;
@@ -109,14 +119,19 @@ export async function researchRecord(
     email = l.email;
     // Link the research to the lead's contact too, so it shows on both.
     resolvedContactId = contactId ?? l.contactId;
-  } else if (contactId) {
-    const c = await prisma.contact.findUnique({ where: { id: contactId } });
+  } else {
+    const c = await prisma.contact.findUnique({ where: { id: contactId! } });
     if (!c) return { error: "Contact not found." };
     name = contactName(c);
     email = c.email;
-  } else {
-    return { error: "Nothing to research." };
   }
+
+  // Only enrich the linked contact if this user may also access it — a lead-scoped
+  // user must not write research onto a contact they can't otherwise see. (An
+  // explicit contactId was already authorized above, so this is always true then.)
+  const canWriteContact = resolvedContactId
+    ? await canAccessContact(user, resolvedContactId)
+    : false;
 
   const result = await aiResearch({ name, email });
   if ("error" in result) return { error: result.error };
@@ -124,7 +139,7 @@ export async function researchRecord(
   // Appended to the record's research history + latest snapshot column.
   const researchedAt = new Date();
   await prisma.researchNote.create({
-    data: { body: result.summary, leadId, contactId: resolvedContactId },
+    data: { body: result.summary, leadId, contactId: canWriteContact ? resolvedContactId : null },
   });
   if (leadId) {
     await prisma.lead.update({
@@ -132,7 +147,7 @@ export async function researchRecord(
       data: { research: result.summary, researchedAt },
     });
   }
-  if (resolvedContactId) {
+  if (resolvedContactId && canWriteContact) {
     await prisma.contact.update({
       where: { id: resolvedContactId },
       data: { research: result.summary, researchedAt },
@@ -140,6 +155,6 @@ export async function researchRecord(
   }
   const { revalidatePath } = await import("next/cache");
   if (leadId) revalidatePath(`/leads/${leadId}`);
-  if (resolvedContactId) revalidatePath(`/contacts/${resolvedContactId}`);
+  if (resolvedContactId && canWriteContact) revalidatePath(`/contacts/${resolvedContactId}`);
   return { summary: result.summary };
 }
