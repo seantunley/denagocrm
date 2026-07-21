@@ -366,16 +366,41 @@ export async function syncInboundEmail(): Promise<number> {
     const lock = await client.getMailboxLock("INBOX");
     try {
       const lastUidRaw = await getSetting("IMAP_LAST_UID");
+      const storedIdentity = await getSetting("IMAP_CURSOR_IDENTITY");
       const mailbox = client.mailbox;
       const uidNext = typeof mailbox === "object" ? mailbox.uidNext : undefined;
       const uidValidity = typeof mailbox === "object" ? mailbox.uidValidity : undefined;
-      if (!lastUidRaw) {
-        // First run: start from now — don't import the whole mailbox history
-        if (uidNext) await putSetting("IMAP_LAST_UID", String(uidNext - 1));
-        return 0;
-      }
-      const lastUid = parseInt(lastUidRaw, 10);
       const ourAddress = user.toLowerCase();
+      // A UID is only meaningful within ONE UIDVALIDITY generation of ONE
+      // mailbox. Bind the cursor to host/account/mailbox/UIDVALIDITY so that a
+      // rebuild, restore or provider migration (new UIDVALIDITY → UIDs can
+      // restart below the saved cursor) doesn't make us skip freshly-renumbered
+      // mail against a stale UID.
+      const mailboxIdentity = `${host.toLowerCase()}|${ourAddress}|INBOX|${uidValidity ?? "0"}`;
+
+      // Explicit policy for "no usable cursor for this generation": start from
+      // the current top of the mailbox — don't trust a stale UID, don't import
+      // history. Runs on first-ever sync and whenever the identity changes.
+      const startFromNow = async () => {
+        if (uidNext) {
+          await putSetting("IMAP_LAST_UID", String(uidNext - 1));
+          await putSetting("IMAP_CURSOR_IDENTITY", mailboxIdentity);
+        }
+        return 0;
+      };
+
+      if (!lastUidRaw) return await startFromNow(); // first run ever
+      if (storedIdentity && storedIdentity !== mailboxIdentity) {
+        await logError("imap-sync", `Mailbox identity changed (${storedIdentity} → ${mailboxIdentity}); resetting cursor to now.`);
+        return await startFromNow();
+      }
+      if (!storedIdentity) {
+        // Cursor saved before identity tracking existed — adopt it for the
+        // current mailbox so the deploy that adds this doesn't reset/seam.
+        await putSetting("IMAP_CURSOR_IDENTITY", mailboxIdentity);
+      }
+
+      const lastUid = parseInt(lastUidRaw, 10);
       // Stable per-message identity for mail that lacks a Message-ID.
       const account = `imap:${ourAddress}:INBOX:${uidValidity ?? "0"}`;
       let maxSeen = lastUid;
