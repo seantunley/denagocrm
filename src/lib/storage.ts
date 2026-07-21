@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import crypto from "crypto";
-import { put, del, get } from "@vercel/blob";
+import { put, del, get, list } from "@vercel/blob";
 
 /**
  * Document storage that works in both deployment modes:
@@ -121,4 +121,54 @@ export async function deleteFile(ref: string): Promise<void> {
     return;
   }
   await fs.unlink(path.join(UPLOAD_DIR, ref)).catch(() => {});
+}
+
+/**
+ * Put a MANAGED blob (backups) at a caller-controlled pathname — content-addressed
+ * or timestamped, so never a random suffix and never an overwrite. Writes to the
+ * private store when BLOB_PRIVATE is on (fails closed without its token), else the
+ * public store. Mirrors {@link saveFile}'s private/public split for the backup
+ * pipeline, which manages its own paths. Reads go back through {@link readFile}.
+ */
+export async function putManagedBlob(
+  pathname: string,
+  data: Buffer | string,
+  contentType: string,
+): Promise<{ url: string; pathname: string }> {
+  if (privateMode()) {
+    const token = privateToken();
+    if (!token) throw new Error("BLOB_PRIVATE=true requires BLOB_PRIVATE_READ_WRITE_TOKEN");
+    const blob = await put(pathname, data, { access: "private", contentType, addRandomSuffix: false, allowOverwrite: false, token });
+    return { url: blob.url, pathname: blob.pathname };
+  }
+  if (!publicToken()) throw new Error("Blob storage is not configured");
+  const blob = await put(pathname, data, { access: "public", contentType, addRandomSuffix: false, allowOverwrite: false });
+  return { url: blob.url, pathname: blob.pathname };
+}
+
+/**
+ * List managed blobs under a prefix across BOTH stores (public + private),
+ * deduped by pathname. During the staged BLOB_PRIVATE rollout current backups
+ * live in the private store while legacy ones remain public, so pruning and
+ * restore must see both. With neither private token set this is exactly a public
+ * `list` (unchanged behaviour).
+ */
+export async function listManagedBlobs(prefix: string): Promise<Array<{ pathname: string; url: string }>> {
+  const out: Array<{ pathname: string; url: string }> = [];
+  const seen = new Set<string>();
+  const collect = async (token?: string) => {
+    let cursor: string | undefined;
+    do {
+      const page = await list({ prefix, cursor, limit: 1000, ...(token ? { token } : {}) });
+      for (const b of page.blobs) {
+        if (seen.has(b.pathname)) continue;
+        seen.add(b.pathname);
+        out.push({ pathname: b.pathname, url: b.url });
+      }
+      cursor = page.hasMore ? page.cursor : undefined;
+    } while (cursor);
+  };
+  if (publicToken()) await collect(); // public store (default token)
+  if (privateToken()) await collect(privateToken()); // private store
+  return out;
 }

@@ -1,6 +1,5 @@
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { del, list, put } from "@vercel/blob";
 import {
   exportAllData,
   stringifyBackup,
@@ -10,7 +9,7 @@ import {
 } from "@/lib/backup";
 import { basePrisma } from "@/lib/db";
 import { purgeTrash } from "@/lib/trash";
-import { readFile } from "@/lib/storage";
+import { readFile, putManagedBlob, listManagedBlobs, deleteFile } from "@/lib/storage";
 import {
   decryptBytes,
   decryptValue,
@@ -38,14 +37,8 @@ function isSupportedAssetRef(ref: string): boolean {
 }
 
 async function existingAssetPaths(): Promise<Set<string>> {
-  const paths = new Set<string>();
-  let cursor: string | undefined;
-  do {
-    const page = await list({ prefix: ASSET_PREFIX, cursor, limit: 1000 });
-    for (const blob of page.blobs) paths.add(blob.pathname);
-    cursor = page.hasMore ? page.cursor : undefined;
-  } while (cursor);
-  return paths;
+  const blobs = await listManagedBlobs(ASSET_PREFIX);
+  return new Set(blobs.map((blob) => blob.pathname));
 }
 
 type AssetSnapshot = {
@@ -80,19 +73,10 @@ async function snapshotAssets(refs: AssetReference[]): Promise<AssetSnapshot[]> 
       }
 
       const encrypted = encryptBytes(plain);
-      const blob = await put(backupPath, encrypted, {
-        access: "public",
-        contentType: "application/octet-stream",
-        addRandomSuffix: false,
-        allowOverwrite: false,
-      });
+      const blob = await putManagedBlob(backupPath, encrypted, "application/octet-stream");
 
-      const verificationResponse = await fetch(blob.url, { cache: "no-store" });
-      if (!verificationResponse.ok) {
-        throw new Error(`Asset verification download failed: ${verificationResponse.status}`);
-      }
-      const downloaded = Buffer.from(await verificationResponse.arrayBuffer());
-      const verified = decryptBytes(downloaded);
+      // Verify by reading it straight back (private-store-aware).
+      const verified = decryptBytes(await readFile(blob.url));
       if (sha256(verified) !== digest) throw new Error("Asset verification checksum mismatch");
 
       existing.add(backupPath);
@@ -159,26 +143,25 @@ export async function GET(req: NextRequest) {
     const encrypted = encryptValue(packagePayload);
     const stamp = startedAt.toISOString().replace(/[:.]/g, "-");
 
-    const blob = await put(`${DATABASE_PREFIX}denagocrm-${stamp}.json.enc`, encrypted, {
-      access: "public",
-      contentType: "text/plain; charset=utf-8",
-      addRandomSuffix: false,
-      allowOverwrite: false,
-    });
+    const blob = await putManagedBlob(
+      `${DATABASE_PREFIX}denagocrm-${stamp}.json.enc`,
+      encrypted,
+      "text/plain; charset=utf-8",
+    );
 
-    const response = await fetch(blob.url, { cache: "no-store" });
-    if (!response.ok) throw new Error(`Backup verification download failed: ${response.status}`);
-    const uploadedPackage = JSON.parse(decryptValue(await response.text())) as {
+    // Verify by reading it straight back (private-store-aware).
+    const uploadedText = (await readFile(blob.url)).toString("utf8");
+    const uploadedPackage = JSON.parse(decryptValue(uploadedText)) as {
       portable: PortableBackup;
       assets: AssetSnapshot[];
     };
     const afterUpload = verifyPortableBackup(uploadedPackage.portable);
     if (!afterUpload.ok) throw new Error(afterUpload.errors.join("; "));
 
-    const databaseBlobs = await list({ prefix: DATABASE_PREFIX, limit: 1000 });
-    const sorted = databaseBlobs.blobs.sort((a, b) => b.pathname.localeCompare(a.pathname));
+    const databaseBlobs = await listManagedBlobs(DATABASE_PREFIX);
+    const sorted = databaseBlobs.sort((a, b) => b.pathname.localeCompare(a.pathname));
     const stale = sorted.slice(DATABASE_KEEP);
-    for (const old of stale) await del(old.url).catch(() => {});
+    for (const old of stale) await deleteFile(old.url).catch(() => {});
 
     // Never permanently delete Trash records unless both the logical export and
     // every referenced asset were backed up successfully.
