@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
+import { hasAnyPermission } from "@/lib/permissions";
 import { readFile } from "@/lib/storage";
 
 /** Downloads a specific library document version. */
@@ -10,6 +11,12 @@ export async function GET(
 ) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Match the library page/actions: viewing the library requires library.view (or
+  // library.manage). The old check was "any logged-in user", so a staffer without
+  // library access could still pull any library file straight from the API.
+  if (!(await hasAnyPermission(user, "library.view", "library.manage"))) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const { id } = await params;
   const version = await prisma.libraryVersion.findUnique({ where: { id } });
