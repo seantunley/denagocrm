@@ -33,6 +33,17 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
   // complete) between dispatch's claim and this external email/WhatsApp send.
   if (isRequestClosed(r.request.status)) return;
   if (r.status === "signed" || r.status === "declined") return;
+
+  // AT-MOST-ONCE first send: atomically claim pending→sent BEFORE sending, so two
+  // concurrent callers (e.g. two workflow advances) can't both read "pending" and
+  // both send the same signing link. count !== 1 → someone else already claimed
+  // it, so do nothing. A reminder deliberately re-sends an already-"sent"
+  // recipient, so it skips the claim.
+  if (!opts?.reminder) {
+    const claimed = await prisma.signatureRecipient.updateMany({ where: { id: r.id, status: "pending" }, data: { status: "sent" } });
+    if (claimed.count !== 1) return;
+  }
+
   const url = signUrl(r.token);
   const verb = opts?.reminder ? "Reminder — please sign" : "Please sign your document";
   const evType = opts?.reminder ? "reminded" : "sent";
@@ -52,12 +63,16 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
     await logSignEvent(r.requestId, { type: evType, recipientId: r.id, actor: "system", channel: "whatsapp", metadata: { ok: res.ok, error: res.error } });
   }
 
-  await prisma.signatureRecipient.updateMany({ where: { id: r.id, status: "pending" }, data: { status: "sent" } });
   if (opts?.reminder) await prisma.signatureRecipient.update({ where: { id: r.id }, data: { remindedAt: new Date() } });
 }
 
-/** Send the request: mark sent, and notify the right recipients for the ordering. */
-export async function dispatchRequest(requestId: string): Promise<{ notified: number }> {
+/**
+ * Send the request: mark sent, and notify the right recipients for the ordering.
+ * Pass `reminder: true` for a RE-send (resendRecordSigning) — recipients are
+ * already "sent", so notifyRecipient's at-most-once pending→sent claim would
+ * otherwise skip them; a reminder deliberately re-notifies them.
+ */
+export async function dispatchRequest(requestId: string, opts?: { reminder?: boolean }): Promise<{ notified: number }> {
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: { orderBy: { order: "asc" } } } });
   if (!req) return { notified: 0 };
   // CONDITIONALLY claim the (re)send: only move a still-open request to "sent".
@@ -73,7 +88,7 @@ export async function dispatchRequest(requestId: string): Promise<{ notified: nu
 
   const signers = req.recipients.filter((r) => r.role !== "viewer" && r.status !== "signed");
   const targets = req.ordering === "sequential" ? signers.slice(0, 1) : signers;
-  for (const r of targets) await notifyRecipient(r.id);
+  for (const r of targets) await notifyRecipient(r.id, { reminder: opts?.reminder });
   // NOTE: viewers are intentionally NOT notified here. notifyRecipient() returns
   // early for viewers (they never sign), so the previous per-viewer loop was dead
   // code. If viewer "for your records" copies are wanted, add a dedicated path.
@@ -85,6 +100,9 @@ export async function notifyNextInSequence(requestId: string): Promise<void> {
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: { orderBy: { order: "asc" } } } });
   if (!req || req.ordering !== "sequential") return;
   const next = req.recipients.find((r) => r.role !== "viewer" && r.status !== "signed");
+  // First reach of a pending signer → normal (at-most-once) send. Otherwise it's a
+  // re-nudge of an already-"sent"-but-unopened signer → reminder, so the
+  // at-most-once claim doesn't skip it.
   if (next && next.status !== "sent" && next.status !== "viewed") await notifyRecipient(next.id);
-  else if (next && !next.viewedAt) await notifyRecipient(next.id);
+  else if (next && !next.viewedAt) await notifyRecipient(next.id, { reminder: true });
 }

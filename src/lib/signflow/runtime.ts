@@ -8,6 +8,7 @@ import { notifyApprover } from "@/lib/signing/approvals";
 import { logSignEvent } from "@/lib/signing/events";
 import { completeSignatureRequest } from "@/lib/signing/complete";
 import { notifyCreatorRejected } from "@/lib/signing/notify";
+import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "@/lib/signing/status";
 
 /**
  * Runtime interpreter for workflow-driven signature requests. Unlike the static
@@ -100,7 +101,7 @@ async function materialise(requestId: string, node: SignNode): Promise<void> {
 export async function advanceWorkflow(requestId: string): Promise<void> {
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId } });
   if (!req || !req.workflowGraphJson) return;
-  if (req.status === "completed" || req.status === "voided" || req.status === "rejected" || req.status === "declined") return;
+  if (isRequestClosed(req.status)) return;
   const frozen = parseFrozen(req.workflowGraphJson);
   if (!frozen) return;
   const { graph, vars } = frozen;
@@ -136,7 +137,11 @@ export async function advanceWorkflow(requestId: string): Promise<void> {
 
   const next = walkToActionable(graph, fromEdge, vars);
   if (next.kind === "end") {
-    await prisma.signatureRequest.update({ where: { id: requestId }, data: { currentNodeId: null } });
+    // completeSignatureRequest atomically claims completion (status NOT IN closed,
+    // count === 1), so two concurrent advances reaching the end can't both
+    // complete. currentNodeId is deliberately left as-is: nulling it would read as
+    // "start" and let a third advance re-enter from the beginning before
+    // completion flips the status.
     await completeSignatureRequest(requestId);
     return;
   }
@@ -145,12 +150,30 @@ export async function advanceWorkflow(requestId: string): Promise<void> {
     await rejectRequest(requestId);
     return;
   }
-  await prisma.signatureRequest.update({ where: { id: requestId }, data: { currentNodeId: next.node.id, status: "in_progress" } });
+  // ATOMICALLY claim the transition FROM the node we observed to the next node.
+  // advanceWorkflow isn't otherwise serialized (concurrent signing-start repairs
+  // can both call it), so only the caller that wins this conditional move (from
+  // this exact currentNodeId, request still open) materialises + notifies — the
+  // others no-op. This prevents duplicate signing-link notifications, and the
+  // status guard drops the advance if a concurrent void/decline closed the
+  // request between our read and the claim.
+  const claimed = await prisma.signatureRequest.updateMany({
+    where: { id: requestId, currentNodeId: req.currentNodeId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
+    data: { currentNodeId: next.node.id, status: "in_progress" },
+  });
+  if (claimed.count !== 1) return;
   await materialise(requestId, next.node);
 }
 
 async function rejectRequest(requestId: string): Promise<void> {
-  await prisma.signatureRequest.update({ where: { id: requestId }, data: { status: "rejected", currentNodeId: null } });
+  // Conditional: only reject a still-open request, so a concurrent void (which
+  // committed "voided" between advanceWorkflow's read and here) isn't overwritten
+  // back to "rejected".
+  const claimed = await prisma.signatureRequest.updateMany({
+    where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
+    data: { status: "rejected", currentNodeId: null },
+  });
+  if (claimed.count !== 1) return;
   await logSignEvent(requestId, { type: "rejected", actor: "system" });
   await notifyCreatorRejected(requestId).catch(() => {});
 }

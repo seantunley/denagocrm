@@ -348,7 +348,9 @@ export async function resendRecordSigning(
   if (!state || isRequestClosed(state.status)) {
     return { ok: false, error: "No active request to resend." };
   }
-  const { notified } = await dispatchRequest(state.requestId);
+  // A resend deliberately re-notifies already-"sent" recipients — pass reminder so
+  // notifyRecipient's at-most-once first-send claim doesn't skip them.
+  const { notified } = await dispatchRequest(state.requestId, { reminder: true });
   await logAudit({
     action: "signing.remind",
     summary: `Resent “${state.title}” for signing`,
