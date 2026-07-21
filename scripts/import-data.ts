@@ -1,10 +1,16 @@
 /**
  * Imports data-export.json (produced by export-data.ts) into the database
  * pointed at by DATABASE_URL. Used for the SQLite -> Postgres migration.
- * Safe to re-run: skips import if users already exist.
+ *
+ * NOT globally resumable: the run is skipped entirely once ANY user exists, so a
+ * failure PART-WAY through leaves a partial import that the next run treats as
+ * complete. Each imported user + its founding membership are atomic (transaction
+ * below), but full-restore idempotency / explicit completion tracking is still
+ * needed before relying on this for disaster recovery.
  */
 import { PrismaClient } from "@prisma/client";
 import * as fs from "fs";
+import { ensureFoundingMembership } from "../src/lib/provisioning";
 
 const prisma = new PrismaClient();
 
@@ -21,7 +27,16 @@ async function main() {
     return obj;
   };
 
-  for (const u of raw.users) await prisma.user.create({ data: dates(u, ["createdAt"]) });
+  for (const u of raw.users) {
+    // Each user + its founding membership in ONE transaction, so a failure can't
+    // leave a tenantless user (which the "skip if any users exist" guard would then
+    // never repair on rerun). Every imported user is a Denago user (single-tenant
+    // SQLite→Postgres restore); shared provisioning service, same as seed/createUser.
+    await prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({ data: dates(u, ["createdAt"]) });
+      await ensureFoundingMembership(tx, created.id);
+    });
+  }
   for (const s of raw.appSettings) await prisma.appSetting.create({ data: s });
   for (const t of raw.tags) await prisma.tag.create({ data: t });
   for (const p of raw.products) {

@@ -10,6 +10,7 @@ import { setNextStepScheduling } from "@/lib/nextStepConfig";
 import { PUSH_KINDS } from "@/lib/push";
 import { logAuditStrict } from "@/lib/audit";
 import { bumpUserSessionVersion } from "@/lib/userSecurity";
+import { createUserInOwnerTenant } from "@/lib/tenantContext";
 
 // ---- Pipeline stages ----
 
@@ -87,9 +88,28 @@ export async function createUser(
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) return { error: "A user with that email already exists." };
 
-  const created = await prisma.user.create({
-    data: { name, email, passwordHash: await bcrypt.hash(password, 12) },
-  });
+  // Tenant provisioning (fail-closed): the new user MUST land in a validated tenant
+  // — the owner's CURRENT tenant. createUserInOwnerTenant resolves + LOCKS that
+  // tenant inside the write (FOR UPDATE), so suspension/removal of THAT tenant or
+  // membership can't race it, and creates the user + membership together (never
+  // tenantless). Zero or multiple active tenants is refused, not guessed.
+  const passwordHash = await bcrypt.hash(password, 12);
+  const result = await createUserInOwnerTenant(owner.id, { name, email, passwordHash });
+  if ("error" in result) {
+    return {
+      error:
+        result.error === "ambiguous_tenant"
+          ? "You belong to more than one tenant, and tenant selection isn't available yet — new users can't be added until it is."
+          : result.error === "context_changed"
+            ? "Your tenant changed while adding the user — please try again."
+            : result.error === "duplicate_email"
+              ? "A user with that email already exists."
+              : "Your account isn't linked to an active tenant — contact support before adding users.",
+    };
+  }
+  const created = result.user;
+  // Initial RBAC role — best-effort, OUTSIDE the tenant tx (see PR notes): a missing
+  // role must not block user+membership creation during a rolling deploy.
   try {
     await basePrisma.$executeRaw`
       INSERT INTO "UserRole" ("userId", "roleId")
@@ -105,7 +125,8 @@ export async function createUser(
     entityType: "User",
     entityId: created.id,
     user: owner,
-    after: { name, email, role: "member", initialRbacRole: "role_sales_rep" },
+    // Audit the tenant ACTUALLY used (returned from the locked transaction).
+    after: { name, email, role: "member", initialRbacRole: "role_sales_rep", tenantId: result.tenantId },
   });
   revalidatePath("/settings");
   revalidatePath("/settings/access");
