@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requirePermission } from "@/lib/permissions";
+import { requirePermission, requireContactAccess } from "@/lib/permissions";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
 import { isSmsConfigured } from "@/lib/sms";
 import { saveFile } from "@/lib/storage";
@@ -162,7 +162,10 @@ export async function deleteSegment(id: string) {
 }
 
 export async function setMarketingOptOut(contactId: string, optOut: boolean) {
-  await requirePermission("campaigns.manage");
+  // requireContactAccess enforces campaigns.manage AND access to THIS contact, so
+  // a scoped manager can't flip marketing consent on a contact outside their
+  // scope — a POPIA consent-integrity concern. (Was: permission only, any id.)
+  await requireContactAccess(contactId, "campaigns.manage");
   await prisma.contact.update({ where: { id: contactId }, data: { marketingOptOut: optOut } });
   revalidatePath("/campaigns");
 }

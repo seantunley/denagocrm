@@ -23,8 +23,10 @@ export async function savePushSubscription(sub: {
 }
 
 export async function removePushSubscription(endpoint: string) {
-  await requireUser();
-  await prisma.pushSubscription.deleteMany({ where: { endpoint } });
+  const user = await requireUser();
+  // Scope the delete to THIS user's own device. deleteMany by endpoint alone let
+  // a user who learned another device's endpoint unsubscribe that device.
+  await prisma.pushSubscription.deleteMany({ where: { endpoint, userId: user.id } });
 }
 
 export async function sendTestPush(): Promise<{ ok?: string; error?: string }> {
