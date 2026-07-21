@@ -5,7 +5,8 @@ import { getSetting } from "@/lib/settings";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { logAudit } from "@/lib/audit";
 import { sendPushToAll } from "@/lib/push";
-import { reserveSlot } from "@/lib/bookingSlots";
+import { getSlotConfig, slotInstantOrThrow, claimSlotCapacity } from "@/lib/bookingSlots";
+import { nextJobCardNumber } from "@/lib/numbering";
 import { contactName, formatDate } from "@/lib/format";
 
 const corsHeaders = {
@@ -59,6 +60,19 @@ export async function POST(req: NextRequest) {
   }
   const b = parsed.data;
 
+  // Validate the slot up front (cheap, no writes) so a bad date/time fails before
+  // anything is touched.
+  const config = await getSlotConfig();
+  let dt: Date;
+  try {
+    dt = slotInstantOrThrow(b.date, b.time, config);
+  } catch {
+    return NextResponse.json(
+      { error: "slot_invalid", message: "That date/time isn't available for booking." },
+      { status: 422, headers: corsHeaders }
+    );
+  }
+
   const digits = b.phone.replace(/\D/g, "").slice(-9);
   const contact = await prisma.contact.findFirst({
     where: {
@@ -71,35 +85,12 @@ export async function POST(req: NextRequest) {
     include: { vehicles: true },
   });
 
-  // A service booking is workshop work — it must never open a sales lead.
-  let contactId: string | null = contact?.id ?? null;
-  if (!contact) {
-    const [firstName, ...rest] = b.name.trim().split(/\s+/);
-    const created = await prisma.contact.create({
-      data: {
-        firstName: firstName || b.name,
-        lastName: rest.join(" ") || null,
-        email: b.email,
-        phone: b.phone,
-        source: "website",
-        notes: `Created from an online service booking for ${b.date} at ${b.time}.`,
-      },
-    });
-    contactId = created.id;
-    await logAudit({
-      action: "contact.created",
-      summary: `Contact created from an online service booking`,
-      contactId,
-      userName: "Website",
-    });
-  }
-
   const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
   if (!firstUser) {
     return NextResponse.json({ error: "No users configured" }, { status: 500, headers: corsHeaders });
   }
 
-  // Open a job card when we can tell which vehicle is coming in
+  // Which vehicle (if any) this booking is for — computed from existing data.
   const vehicles = contact?.vehicles.filter((v) => !v.deletedAt) ?? [];
   const vehicle =
     vehicles.length === 1
@@ -107,49 +98,74 @@ export async function POST(req: NextRequest) {
       : (b.model
           ? vehicles.find((v) => v.model.toLowerCase().includes(b.model!.toLowerCase()))
           : null) ?? null;
-  let jobCardNumber: number | null = null;
-  if (vehicle && contactId) {
-    const maxJc = await basePrisma.jobCard.aggregate({ _max: { number: true } });
-    const jc = await prisma.jobCard.create({
-      data: {
-        number: (maxJc._max.number ?? 1000) + 1,
-        description: `Online service booking for ${b.date} at ${b.time} — call the customer to confirm.${
-          b.message ? `\n\nCustomer note: ${b.message}` : ""
-        }`,
-        vehicleId: vehicle.id,
-        contactId,
-      },
-    });
-    jobCardNumber = jc.number;
-    await logAudit({
-      action: "jobcard.created",
-      summary: `Job card #${jc.number} opened from an online service booking (${vehicle.model})`,
-      contactId,
-      userName: "Website",
-    });
-  }
-
   const vehicleHint =
     vehicle?.model ?? b.model ?? (vehicles.length === 1 ? vehicles[0].model : null);
   const summary = `Service ${b.time} — ${b.name}${vehicleHint ? ` (${vehicleHint})` : ""}`;
 
-  let activity;
+  // Everything that WRITES runs in ONE transaction, and the slot capacity is
+  // claimed FIRST. Previously the contact and job card were created before the
+  // slot was reserved, so a full/invalid slot left an orphan contact + job card
+  // behind on every retry. Now a SLOT_TAKEN rolls the whole thing back.
+  let outcome: { activityId: string; contactId: string | null; jobCardNumber: number | null; createdContact: boolean };
   try {
-    activity = await reserveSlot({
-      date: b.date,
-      time: b.time,
-      summary,
-      note: [
-        b.message,
-        `Booked online · ${b.email} · ${b.phone} · call to confirm${
-          jobCardNumber ? ` · job card #${jobCardNumber}` : ""
-        }`,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      contactId,
-      leadId: null,
-      userId: firstUser.id,
+    outcome = await basePrisma.$transaction(async (tx) => {
+      await claimSlotCapacity(tx, dt, config.capacity);
+
+      // A service booking is workshop work — it must never open a sales lead.
+      let contactId: string | null = contact?.id ?? null;
+      let createdContact = false;
+      if (!contact) {
+        const [firstName, ...rest] = b.name.trim().split(/\s+/);
+        const created = await tx.contact.create({
+          data: {
+            firstName: firstName || b.name,
+            lastName: rest.join(" ") || null,
+            email: b.email,
+            phone: b.phone,
+            source: "website",
+            notes: `Created from an online service booking for ${b.date} at ${b.time}.`,
+          },
+        });
+        contactId = created.id;
+        createdContact = true;
+      }
+
+      let jobCardNumber: number | null = null;
+      if (vehicle && contactId) {
+        const number = await nextJobCardNumber(tx);
+        const jc = await tx.jobCard.create({
+          data: {
+            number,
+            description: `Online service booking for ${b.date} at ${b.time} — call the customer to confirm.${
+              b.message ? `\n\nCustomer note: ${b.message}` : ""
+            }`,
+            vehicleId: vehicle.id,
+            contactId,
+          },
+        });
+        jobCardNumber = jc.number;
+      }
+
+      const activity = await tx.activity.create({
+        data: {
+          type: "meeting",
+          category: "workshop",
+          summary,
+          note: [
+            b.message,
+            `Booked online · ${b.email} · ${b.phone} · call to confirm${
+              jobCardNumber ? ` · job card #${jobCardNumber}` : ""
+            }`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          dueDate: dt,
+          contactId,
+          assignedToId: firstUser.id,
+          createdById: firstUser.id,
+        },
+      });
+      return { activityId: activity.id, contactId, jobCardNumber, createdContact };
     });
   } catch (err) {
     const code = err instanceof Error ? err.message : "";
@@ -159,28 +175,45 @@ export async function POST(req: NextRequest) {
         { status: 409, headers: corsHeaders }
       );
     }
+    if (code === "SLOT_INVALID") {
+      return NextResponse.json(
+        { error: "slot_invalid", message: "That date/time isn't available for booking." },
+        { status: 422, headers: corsHeaders }
+      );
+    }
+    // Only the known slot outcomes are client errors. An unexpected DB /
+    // transaction failure must surface as a 500, not masquerade as a bad slot
+    // (which would tell the website to blame the customer's date/time).
+    console.error("Booking transaction failed", err);
     return NextResponse.json(
-      { error: "slot_invalid", message: "That date/time isn't available for booking." },
-      { status: 422, headers: corsHeaders }
+      { error: "server_error", message: "Something went wrong creating your booking. Please try again." },
+      { status: 500, headers: corsHeaders }
     );
   }
 
+  // Audit + notify AFTER commit (best-effort; never rolls the booking back).
+  if (outcome.createdContact) {
+    await logAudit({ action: "contact.created", summary: "Contact created from an online service booking", contactId: outcome.contactId, userName: "Website" });
+  }
+  if (outcome.jobCardNumber && vehicle) {
+    await logAudit({ action: "jobcard.created", summary: `Job card #${outcome.jobCardNumber} opened from an online service booking (${vehicle.model})`, contactId: outcome.contactId, userName: "Website" });
+  }
   await logAudit({
     action: "booking.received",
-    summary: `Online service booking: ${summary} on ${formatDate(activity.dueDate)}${
-      jobCardNumber ? ` — job card #${jobCardNumber} opened` : ""
+    summary: `Online service booking: ${summary} on ${formatDate(dt)}${
+      outcome.jobCardNumber ? ` — job card #${outcome.jobCardNumber} opened` : ""
     }`,
-    contactId,
+    contactId: outcome.contactId,
     userName: "Website",
   });
   await sendPushToAll({
     title: "New service booking 📅",
-    body: `${contact ? contactName(contact) : b.name} — ${formatDate(activity.dueDate)} at ${b.time} · call to confirm`,
+    body: `${contact ? contactName(contact) : b.name} — ${formatDate(dt)} at ${b.time} · call to confirm`,
     url: "/workshop-calendar",
   }, "booking").catch(() => {});
 
   return NextResponse.json(
-    { ok: true, activityId: activity.id },
+    { ok: true, activityId: outcome.activityId },
     { status: 201, headers: corsHeaders }
   );
 }
