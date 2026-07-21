@@ -127,8 +127,12 @@ export async function createSessionCookie(
   const security = await getUserSecurityStateFresh(user.id);
   if (!security || security.disabledAt) throw new Error("User is disabled or no longer exists");
   const pwa = Boolean(opts?.pwa);
-  // Installed PWA: the phone lock is the security boundary — a flat 7-day
-  // session keeps push notifications alive. Desktop keeps the configured idle.
+  // POLICY (see PWA_SESSION_HOURS in session.ts): the `pwa` opt-in makes BOTH the
+  // idle timeout (here) and the absolute cap a week. `pwa` is client-supplied and
+  // not proof of a trusted device, so this is an opt-in "keep me signed in for a
+  // week" for any authenticated user; server-side revocation (sv + jti) is the
+  // boundary. To keep a shorter inactivity window in this mode, use
+  // getIdleMinutes() here and let only the absolute cap extend.
   const idle = pwa ? 7 * 24 * 60 : await getIdleMinutes();
   const jti = crypto.randomUUID();
   const h = await headers();
@@ -147,7 +151,7 @@ export async function createSessionCookie(
     { jti, pwa }
   );
   const store = await cookies();
-  store.set(SESSION_COOKIE, token, sessionCookieOptions);
+  store.set(SESSION_COOKIE, token, sessionCookieOptions(pwa));
 }
 
 export async function destroySessionCookie() {

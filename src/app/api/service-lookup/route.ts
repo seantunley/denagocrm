@@ -120,15 +120,27 @@ export async function POST(req: NextRequest) {
   }
   if (!channel) return notFound;
 
-  await basePrisma.otpChallenge.create({
-    data: {
-      purpose: "service-booking",
-      key: vin,
-      codeHash,
-      channel,
-      target,
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-    },
+  // Invalidate prior unverified codes for this VIN before issuing the new one, in
+  // one transaction serialized by a per-key advisory lock — verification uses the
+  // newest unverified challenge, so an older still-unexpired code must not remain
+  // usable after a newer one is sent, and two concurrent reissues must not each
+  // leave a valid code.
+  await basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`otp:service-booking:${vin}`})::bigint)`;
+    await tx.otpChallenge.updateMany({
+      where: { purpose: "service-booking", key: vin, verifiedAt: null },
+      data: { expiresAt: new Date() },
+    });
+    await tx.otpChallenge.create({
+      data: {
+        purpose: "service-booking",
+        key: vin,
+        codeHash,
+        channel,
+        target,
+        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      },
+    });
   });
 
   return NextResponse.json(
