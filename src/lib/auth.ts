@@ -8,6 +8,8 @@ import { getSetting } from "./settings";
 import { hasModule, type ModuleId } from "./access";
 import { getUserSecurityState, getUserSecurityStateFresh } from "./userSecurity";
 import { resolveActingTenant } from "./tenantContext";
+import { tenantObserving } from "./tenantEnforcement";
+import { logError } from "./errorLog";
 import {
   verifySession,
   signFreshSession,
@@ -146,8 +148,14 @@ export async function createSessionCookie(
   try {
     const ctx = await resolveActingTenant(user.id);
     if ("tenantId" in ctx) tenantId = ctx.tenantId;
-  } catch {
+    else if (tenantObserving()) {
+      // MONITOR: surface logins that couldn't resolve a single active tenant —
+      // exactly the ones that would be affected once enforcement is turned on.
+      await logError("tenant-monitor", `login: no single active tenant for user ${user.id} (${ctx.error})`).catch(() => {});
+    }
+  } catch (e) {
     // never let tenant resolution block sign-in
+    if (tenantObserving()) await logError("tenant-monitor", e).catch(() => {});
   }
   await prisma.userSession.create({
     data: {
