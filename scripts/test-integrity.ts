@@ -143,6 +143,54 @@ async function main() {
     const identityMoved = await basePrisma.contact.findUnique({ where: { id: mergeWinner }, select: { messengerPsid: true } });
     assert.equal(identityMoved?.messengerPsid, psid, "the identity moves to the winner once the loser releases it");
 
+    // Tenant foundation (multi-tenancy PR1) — fail-closed invariants:
+    // (a) the founding tenant is provisioned and the seeded owner is a member
+    //     (provisioning MUST create a membership, not lean on a default);
+    // (b) no session may reference a tenant its user does not belong to. (b) is
+    //     vacuously true until PR1b sets UserSession.tenantId, but encoding it now
+    //     means any future regression that grants a session a tenant the user
+    //     isn't a member of fails this suite.
+    const foundingTenant = await basePrisma.tenant.findUnique({ where: { id: "tenant_denago_cpt" } });
+    assert.ok(foundingTenant, "founding Denago tenant must be provisioned");
+
+    const seededOwner = await basePrisma.user.findFirst({ where: { role: "owner" }, select: { id: true } });
+    if (seededOwner) {
+      const ownerMembership = await basePrisma.tenantMember.findUnique({
+        where: { tenantId_userId: { tenantId: "tenant_denago_cpt", userId: seededOwner.id } },
+      });
+      assert.ok(ownerMembership, "the seeded owner must have a founding-tenant membership");
+    }
+
+    const orphanSessions = await basePrisma.$queryRaw<{ count: bigint }[]>`
+      SELECT COUNT(*)::bigint AS count FROM "UserSession" s
+      WHERE s."tenantId" IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM "TenantMember" m
+          WHERE m."userId" = s."userId" AND m."tenantId" = s."tenantId"
+        )`;
+    assert.equal(Number(orphanSessions[0].count), 0, "every session's tenant must belong to that session's user");
+
+    // Upgrade path — the PRODUCTION scenario the fresh-DB CI run does NOT cover:
+    // a user + session that predate the tenant columns must be backfilled. Create a
+    // membership-less user + a null-tenant session, replay the migration's
+    // idempotent backfill statements exactly (mirrors migration
+    // 20260721130000_tenant_foundation), and assert both are filled.
+    const legacyUser = id("legacyUser");
+    const legacySession = id("legacySession");
+    await basePrisma.user.create({ data: { id: legacyUser, name: "Legacy", email: `${legacyUser}@example.invalid`, passwordHash: "x" } });
+    await basePrisma.userSession.create({ data: { id: legacySession, jti: legacySession, userId: legacyUser } });
+    await basePrisma.$executeRawUnsafe(
+      `INSERT INTO "TenantMember" ("id","tenantId","userId") SELECT 'tm_' || "id", 'tenant_denago_cpt', "id" FROM "User" ON CONFLICT ("tenantId","userId") DO NOTHING`,
+    );
+    await basePrisma.$executeRawUnsafe(`UPDATE "UserSession" SET "tenantId" = 'tenant_denago_cpt' WHERE "tenantId" IS NULL`);
+    const backfilledMember = await basePrisma.tenantMember.findUnique({ where: { tenantId_userId: { tenantId: "tenant_denago_cpt", userId: legacyUser } } });
+    assert.ok(backfilledMember, "migration backfill must add a founding membership for a pre-existing user");
+    const backfilledSession = await basePrisma.userSession.findUnique({ where: { id: legacySession }, select: { tenantId: true } });
+    assert.equal(backfilledSession?.tenantId, "tenant_denago_cpt", "migration backfill must stamp a pre-existing session");
+    await basePrisma.userSession.deleteMany({ where: { id: legacySession } });
+    await basePrisma.tenantMember.deleteMany({ where: { userId: legacyUser } });
+    await basePrisma.user.deleteMany({ where: { id: legacyUser } });
+
     console.log("Integrity / IDOR / soft-delete integration tests passed.");
   } finally {
     await basePrisma.contact.deleteMany({ where: { id: { in: [mergeWinner, mergeLoser] } } });

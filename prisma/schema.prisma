@@ -46,6 +46,7 @@ model User {
   stockReservations  StockReservation[]
   goodsReceipts      GoodsReceipt[]
   timelinePins       TimelinePin[]
+  memberships        TenantMember[]
 }
 
 // User-pinned timeline entries (communications / activities) that float to the
@@ -1289,7 +1290,14 @@ model UserSession {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  // Tenant foundation (behaviour-preserving): the active tenant for this session.
+  // Nullable for now — backfilled to the founding Denago tenant and not yet read
+  // by the app; session/JWT wiring + enforcement come in later PRs.
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
   @@index([userId, revokedAt])
+  @@index([tenantId])
 }
 
 // Named, editable document templates — many per type, one default per type.
@@ -1931,4 +1939,37 @@ model CustomFieldValue {
 
   @@unique([defId, recordId])
   @@index([recordId])
+}
+
+// ── Tenant foundation ─────────────────────────────────────────────────────────
+// Multi-tenancy substrate (isolation-first). PR1 is additive + behaviour-
+// preserving: one Tenant is seeded for the existing Denago business and every
+// current user + session is backfilled into it, so the app runs exactly as
+// before. tenantId on data models, tenant-scoped DB access, and role-per-member
+// all come in later PRs (see MULTITENANCY-SCOPING.md).
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  members  TenantMember[]
+  sessions UserSession[]
+
+  @@index([active])
+}
+
+model TenantMember {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId])
 }

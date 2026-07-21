@@ -89,6 +89,13 @@ jobs:
         # data-seeding INSERTs (RBAC in 52/53) the governance checks depend on.
         run: node scripts/apply-migrations.mjs
 
+      - name: Migration replay-safety — re-apply the tenant migration (must be reentrant)
+        # The runner executes a migration's SQL and records it with `migrate resolve`
+        # as SEPARATE steps; if a deploy dies between them the next run re-executes
+        # the SQL. Re-running the file here (it was already applied above) proves it
+        # is idempotent DDL + data, so an interrupted deploy can't wedge the DB.
+        run: npx prisma db execute --schema ./prisma --file prisma/migrations/20260721130000_tenant_foundation/migration.sql
+
       - name: Seed baseline data
         # governance + security checks also assert on a default pipeline + admin
         # user, which the seed provides on top of the migration-seeded RBAC rows.
