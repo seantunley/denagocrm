@@ -118,22 +118,27 @@ export async function advanceWorkflow(requestId: string): Promise<void> {
   } else {
     const cur = graph.nodes[req.currentNodeId];
     if (!cur) return;
+    // When the current node is NOT yet resolved we re-materialise it (idempotently)
+    // rather than bailing, so a crash between the transition commit and the first
+    // materialise() self-heals: a decision node with no ApprovalStep gets one, a
+    // signer that was never notified gets notified. materialise() is a no-op once
+    // the node is already materialised.
     if (cur.type === "signer") {
       const r = await prisma.signatureRecipient.findFirst({ where: { requestId, nodeId: cur.id } });
       if (r?.status === "declined") { await rejectRequest(requestId); return; } // a declined signer rejects the request
-      if (r?.status !== "signed") return; // not resolved yet
+      if (r?.status !== "signed") { await materialise(requestId, cur); return; } // not resolved yet — heal
       fromEdge = cur.next;
     } else if (cur.type === "approval") {
       if (cur.mode === "signature") {
         const r = await prisma.signatureRecipient.findFirst({ where: { requestId, nodeId: cur.id } });
         if (r?.status === "declined") { fromEdge = cur.whenRejected; }
         else if (r?.status === "signed") { fromEdge = cur.whenApproved; }
-        else return; // pending
+        else { await materialise(requestId, cur); return; } // pending — heal
       } else {
         const s = await prisma.approvalStep.findFirst({ where: { requestId, nodeId: cur.id }, orderBy: { createdAt: "desc" } });
         if (s?.status === "rejected") fromEdge = cur.whenRejected;
         else if (s?.status === "approved") fromEdge = cur.whenApproved;
-        else return; // pending
+        else { await materialise(requestId, cur); return; } // pending or never materialised — heal
       }
     } else {
       return;
@@ -171,28 +176,20 @@ export async function advanceWorkflow(requestId: string): Promise<void> {
 }
 
 /**
- * Idempotently heal a workflow request. Called when a signing-start reuses an
- * existing open request, so a crash at ANY point self-heals on the next start:
- *   - currentNodeId still null  → advance from the start;
- *   - currentNodeId set         → RE-materialise the current node.
- * The second case covers a crash between advanceWorkflow's transition commit and
- * materialise() — a decision node with no ApprovalStep, or a signer node that was
- * never notified. materialise() is idempotent (createMany skipDuplicates for
- * approvals; notifyRecipient's at-most-once claim for signers), so re-running it
- * is a no-op once the node is materialised.
+ * Idempotently heal a workflow request on the next signing-start. advanceWorkflow
+ * is now fully self-healing, so this just re-runs the interpreter, which covers
+ * EVERY crash point:
+ *   - currentNodeId null                → advance from the start;
+ *   - current node RESOLVED, not advanced (crash before advanceWorkflow ran) →
+ *     advance past it;
+ *   - current node PENDING, not materialised (crash before materialise ran) →
+ *     re-materialise it.
+ * All idempotent (createMany skipDuplicates for approvals; notifyRecipient's
+ * at-most-once claim for signers; conditional currentNodeId claim for advances).
+ * A no-op on a non-workflow or closed request.
  */
 export async function repairWorkflow(requestId: string): Promise<void> {
-  const req = await prisma.signatureRequest.findUnique({ where: { id: requestId } });
-  if (!req || !req.workflowGraphJson || isRequestClosed(req.status)) return;
-  if (!req.currentNodeId) {
-    await advanceWorkflow(requestId);
-    return;
-  }
-  const frozen = parseFrozen(req.workflowGraphJson);
-  const node = frozen?.graph.nodes[req.currentNodeId];
-  if (node && (node.type === "signer" || node.type === "approval")) {
-    await materialise(requestId, node);
-  }
+  await advanceWorkflow(requestId);
 }
 
 async function rejectRequest(requestId: string): Promise<void> {
