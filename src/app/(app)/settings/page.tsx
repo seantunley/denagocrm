@@ -1296,9 +1296,11 @@ export default async function SettingsPage({
               <div className="space-y-3">
                 <form action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="ELEVENLABS_API_KEY" />
+                  <input type="hidden" name="keepIfBlank" value="1" />
                   <div className="flex-1">
                     <label className="label">ElevenLabs API key</label>
-                    <input name="value" type="password" className="input" defaultValue={setting("ELEVENLABS_API_KEY")} placeholder="Your ElevenLabs API key" />
+                    {/* Never echo the stored secret into the DOM — blank field, keep-if-blank on save. */}
+                    <input name="value" type="password" autoComplete="off" className="input" placeholder={setting("ELEVENLABS_API_KEY") ? "•••••••• saved — leave blank to keep" : "Your ElevenLabs API key"} />
                   </div>
                   <button className="btn-primary">Save</button>
                 </form>
