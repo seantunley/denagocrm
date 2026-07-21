@@ -27,6 +27,11 @@ export async function saveBotSettings(formData: FormData) {
   // Whisper key for voice-note transcription — only overwrite if provided
   const whisper = String(formData.get("whisperKey") ?? "").trim();
   if (whisper && !whisper.startsWith("•")) await putSetting("OPENAI_API_KEY", whisper);
+  // ElevenLabs — our standard voice provider (STT in + voice-note replies out).
+  const elevenKey = String(formData.get("elevenKey") ?? "").trim();
+  if (elevenKey && !elevenKey.startsWith("•")) await putSetting("ELEVENLABS_API_KEY", elevenKey);
+  await putSetting("ELEVENLABS_VOICE_ID", String(formData.get("elevenVoiceId") ?? "").trim());
+  await putSetting("WHATSAPP_VOICE_REPLIES", formData.get("voiceReplies") === "on" ? "true" : "false");
   await logAudit({
     action: "bot.settings",
     summary: `WhatsApp bot ${enabled ? "enabled" : "disabled"}${aiEnabled ? " (AI assistant on)" : ""}`,

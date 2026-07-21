@@ -92,6 +92,22 @@ export async function sendWhatsAppImage(toDigits: string, url: string, caption?:
   return { ok: true };
 }
 
+/** Sends an audio message (e.g. a synthesised voice-note reply) by public link. */
+export async function sendWhatsAppAudio(toDigits: string, url: string): Promise<{ ok: boolean; error?: string }> {
+  const [phoneNumberId, token] = await Promise.all([getSetting("WA_PHONE_NUMBER_ID"), getSetting("WA_ACCESS_TOKEN")]);
+  if (!phoneNumberId || !token) return { ok: false, error: "WhatsApp is not configured." };
+  const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ messaging_product: "whatsapp", to: toDigits, type: "audio", audio: { link: url } }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    return { ok: false, error: err?.error?.message ?? `WhatsApp API error ${res.status}` };
+  }
+  return { ok: true };
+}
+
 async function sendInteractive(toDigits: string, interactive: unknown): Promise<{ ok: boolean; error?: string }> {
   const [phoneNumberId, token] = await Promise.all([
     getSetting("WA_PHONE_NUMBER_ID"),
