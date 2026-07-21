@@ -1,0 +1,11 @@
+{
+  "//": "tsx-only tsconfig for the standalone integration scripts (scripts/*.ts). Extends the base config but stubs Next's server-only / client-only marker packages, which don't resolve in a plain Node/tsx process. The base tsconfig.json is left alone so the Next build keeps the real guard. `paths` fully replaces the parent's, so @/* is repeated here.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"],
+      "server-only": ["./scripts/stubs/empty-module.ts"],
+      "client-only": ["./scripts/stubs/empty-module.ts"]
+    }
+  }
+}
