@@ -1,19 +1,31 @@
 import "server-only";
+import type { Prisma } from "@prisma/client";
 import { basePrisma } from "@/lib/db";
-import { pickActiveTenant } from "@/lib/tenant";
+import { soleActiveTenant, type SoleTenantResult } from "@/lib/tenant";
+
+type Client = typeof basePrisma | Prisma.TransactionClient;
 
 /**
- * Resolve a user's active tenant id from their `TenantMember` rows. Fail-closed:
- * returns `null` for a user with no membership — callers must treat that as "no
- * tenant access", never a default. DB-backed wrapper over the pure
- * {@link pickActiveTenant}. Session/JWT wiring that reads this at login is a later
- * PR; for now it's used by provisioning to place a new user in their creator's
- * tenant.
+ * Resolve the tenant a user may ACT in when there is no explicit session
+ * selection yet (the session-selected tenant lands in a later PR). This is NOT
+ * "the user's tenant" inferred from an old membership — it validates that each
+ * candidate membership's tenant EXISTS and is ACTIVE, then applies the
+ * {@link soleActiveTenant} rule:
+ *   - `{ tenantId }`            — exactly one active-tenant membership
+ *   - `{ error: "no_tenant" }` — none (a suspended-only user counts as none)
+ *   - `{ error: "ambiguous_tenant" }` — more than one → explicit selection needed
+ *
+ * Fail-closed. Pass a transaction client to re-validate INSIDE a write, so a
+ * concurrent tenant suspension or membership removal between a pre-check and the
+ * write can't provision into a now-invalid tenant.
  */
-export async function getActiveTenantId(userId: string): Promise<string | null> {
-  const memberships = await basePrisma.tenantMember.findMany({
-    where: { userId },
-    select: { tenantId: true, createdAt: true },
+export async function resolveActingTenant(
+  userId: string,
+  client: Client = basePrisma,
+): Promise<SoleTenantResult> {
+  const memberships = await client.tenantMember.findMany({
+    where: { userId, tenant: { active: true } },
+    select: { tenantId: true },
   });
-  return pickActiveTenant(memberships);
+  return soleActiveTenant(memberships.map((m) => m.tenantId));
 }

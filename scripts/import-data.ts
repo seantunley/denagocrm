@@ -5,6 +5,7 @@
  */
 import { PrismaClient } from "@prisma/client";
 import * as fs from "fs";
+import { ensureFoundingMembership } from "../src/lib/provisioning";
 
 const prisma = new PrismaClient();
 
@@ -21,7 +22,14 @@ async function main() {
     return obj;
   };
 
-  for (const u of raw.users) await prisma.user.create({ data: dates(u, ["createdAt"]) });
+  for (const u of raw.users) {
+    const created = await prisma.user.create({ data: dates(u, ["createdAt"]) });
+    // Every imported user is a Denago user (single-tenant SQLite→Postgres restore),
+    // so provision the founding-tenant membership — otherwise they'd be tenantless
+    // and locked out once session enforcement lands. Shared service, same as seed
+    // and admin createUser.
+    await ensureFoundingMembership(prisma, created.id);
+  }
   for (const s of raw.appSettings) await prisma.appSetting.create({ data: s });
   for (const t of raw.tags) await prisma.tag.create({ data: t });
   for (const p of raw.products) {

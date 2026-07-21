@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { prisma, basePrisma } from "../src/lib/db";
+import { resolveActingTenant } from "../src/lib/tenantContext";
+import { ensureFoundingMembership } from "../src/lib/provisioning";
 
 // DB-backed verification of the security/integrity fixes (audit Groups 1-3).
 // Runs in CI against the ephemeral seeded database — NOT locally (a local run
@@ -200,6 +202,40 @@ async function main() {
     await basePrisma.userSession.deleteMany({ where: { id: legacySession } });
     await basePrisma.tenantMember.deleteMany({ where: { userId: legacyUser } });
     await basePrisma.user.deleteMany({ where: { id: legacyUser } });
+
+    // Tenant CONTEXT resolution (used by provisioning): validates active tenant +
+    // membership and applies the sole/zero/many rule — never an earliest guess and
+    // never a suspended tenant.
+    const ctxUser = id("ctxUser");
+    const tActive1 = id("tActive1");
+    const tActive2 = id("tActive2");
+    const tInactive = id("tInactive");
+    const importUser = id("importUser");
+    await basePrisma.user.create({ data: { id: ctxUser, name: "Ctx", email: `${ctxUser}@example.invalid`, passwordHash: "x" } });
+    await basePrisma.tenant.createMany({
+      data: [
+        { id: tActive1, name: "A1", slug: tActive1, active: true },
+        { id: tActive2, name: "A2", slug: tActive2, active: true },
+        { id: tInactive, name: "IN", slug: tInactive, active: false },
+      ],
+    });
+    assert.deepEqual(await resolveActingTenant(ctxUser), { error: "no_tenant" }, "no membership → no_tenant");
+    await basePrisma.tenantMember.create({ data: { tenantId: tInactive, userId: ctxUser } });
+    assert.deepEqual(await resolveActingTenant(ctxUser), { error: "no_tenant" }, "only a SUSPENDED-tenant membership still → no_tenant");
+    await basePrisma.tenantMember.create({ data: { tenantId: tActive1, userId: ctxUser } });
+    assert.deepEqual(await resolveActingTenant(ctxUser), { tenantId: tActive1 }, "exactly one active membership → that tenant");
+    await basePrisma.tenantMember.create({ data: { tenantId: tActive2, userId: ctxUser } });
+    assert.deepEqual(await resolveActingTenant(ctxUser), { error: "ambiguous_tenant" }, "two active memberships → ambiguous (never silently pick one)");
+
+    // Shared provisioning service (seed + data import path) creates a founding membership.
+    await basePrisma.user.create({ data: { id: importUser, name: "Imp", email: `${importUser}@example.invalid`, passwordHash: "x" } });
+    await ensureFoundingMembership(basePrisma, importUser);
+    const importMember = await basePrisma.tenantMember.findUnique({ where: { tenantId_userId: { tenantId: "tenant_denago_cpt", userId: importUser } } });
+    assert.ok(importMember, "ensureFoundingMembership must create a founding-tenant membership");
+
+    await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [ctxUser, importUser] } } });
+    await basePrisma.tenant.deleteMany({ where: { id: { in: [tActive1, tActive2, tInactive] } } });
+    await basePrisma.user.deleteMany({ where: { id: { in: [ctxUser, importUser] } } });
 
     console.log("Integrity / IDOR / soft-delete integration tests passed.");
   } finally {
