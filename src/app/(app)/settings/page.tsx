@@ -623,7 +623,8 @@ export default async function SettingsPage({
                 </div>
                 <div>
                   <label className="label">Password</label>
-                  <input name="pass" type="password" className="input" defaultValue={setting("SMTP_PASS")} />
+                  {/* Never echo the stored secret — blank means "keep it" (see saveSmtpSettings). */}
+                  <input name="pass" type="password" autoComplete="off" className="input" placeholder={setting("SMTP_PASS") ? "•••••••• saved — leave blank to keep" : ""} />
                 </div>
                 <div className="md:col-span-2">
                   <label className="label">From address</label>
@@ -683,7 +684,8 @@ export default async function SettingsPage({
                 </div>
                 <div>
                   <label className="label">Password</label>
-                  <input name="pass" type="password" className="input" defaultValue={setting("IMAP_PASS")} />
+                  {/* Never echo the stored secret — blank means "keep it" (see saveImapSettings). */}
+                  <input name="pass" type="password" autoComplete="off" className="input" placeholder={setting("IMAP_PASS") ? "•••••••• saved — leave blank to keep" : ""} />
                 </div>
                 <div className="md:col-span-2">
                   <button className="btn-primary">Save incoming email</button>
@@ -1059,28 +1061,30 @@ export default async function SettingsPage({
                 </div>
                 <form action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="META_PAGE_ACCESS_TOKEN" />
+                  <input type="hidden" name="keepIfBlank" value="1" />
                   <div className="flex-1">
                     <label className="label">Page access token (System User)</label>
                     <input
                       name="value"
                       type="password"
+                      autoComplete="off"
                       className="input"
-                      defaultValue={setting("META_PAGE_ACCESS_TOKEN")}
-                      placeholder="EAAG…"
+                      placeholder={setting("META_PAGE_ACCESS_TOKEN") ? "•••••••• saved — leave blank to keep" : "EAAG…"}
                     />
                   </div>
                   <button className="btn-primary">Save</button>
                 </form>
                 <form action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="META_APP_SECRET" />
+                  <input type="hidden" name="keepIfBlank" value="1" />
                   <div className="flex-1">
                     <label className="label">App secret (verifies webhook signatures)</label>
                     <input
                       name="value"
                       type="password"
+                      autoComplete="off"
                       className="input"
-                      defaultValue={setting("META_APP_SECRET")}
-                      placeholder="From Meta app → Settings → Basic"
+                      placeholder={setting("META_APP_SECRET") ? "•••••••• saved — leave blank to keep" : "From Meta app → Settings → Basic"}
                     />
                   </div>
                   <button className="btn-primary">Save</button>
@@ -1125,14 +1129,15 @@ export default async function SettingsPage({
                 </form>
                 <form action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="WA_ACCESS_TOKEN" />
+                  <input type="hidden" name="keepIfBlank" value="1" />
                   <div className="flex-1">
                     <label className="label">Access token (permanent, System User)</label>
                     <input
                       name="value"
                       type="password"
+                      autoComplete="off"
                       className="input"
-                      defaultValue={setting("WA_ACCESS_TOKEN")}
-                      placeholder="EAAG…"
+                      placeholder={setting("WA_ACCESS_TOKEN") ? "•••••••• saved — leave blank to keep" : "EAAG…"}
                     />
                   </div>
                   <button className="btn-primary">Save</button>
@@ -1157,14 +1162,15 @@ export default async function SettingsPage({
               <div className="space-y-3">
                 <form action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="GOOGLE_PLACES_API_KEY" />
+                  <input type="hidden" name="keepIfBlank" value="1" />
                   <div className="flex-1">
                     <label className="label">Places API key</label>
                     <input
                       name="value"
                       type="password"
+                      autoComplete="off"
                       className="input"
-                      defaultValue={setting("GOOGLE_PLACES_API_KEY")}
-                      placeholder="AIza…"
+                      placeholder={setting("GOOGLE_PLACES_API_KEY") ? "•••••••• saved — leave blank to keep" : "AIza…"}
                     />
                   </div>
                   <button className="btn-primary">Save</button>
@@ -1216,14 +1222,15 @@ export default async function SettingsPage({
                 </form>
                 <form action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="BULKSMS_TOKEN_SECRET" />
+                  <input type="hidden" name="keepIfBlank" value="1" />
                   <div className="flex-1">
                     <label className="label">Token secret</label>
                     <input
                       name="value"
                       type="password"
+                      autoComplete="off"
                       className="input"
-                      defaultValue={setting("BULKSMS_TOKEN_SECRET")}
-                      placeholder="Shown once when the token is created"
+                      placeholder={setting("BULKSMS_TOKEN_SECRET") ? "•••••••• saved — leave blank to keep" : "Shown once when the token is created"}
                     />
                   </div>
                   <button className="btn-primary">Save</button>
@@ -1249,14 +1256,15 @@ export default async function SettingsPage({
               <div className="space-y-3">
                 <form action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="ANTHROPIC_API_KEY" />
+                  <input type="hidden" name="keepIfBlank" value="1" />
                   <div className="flex-1">
                     <label className="label">Anthropic API key</label>
                     <input
                       name="value"
                       type="password"
+                      autoComplete="off"
                       className="input"
-                      defaultValue={setting("ANTHROPIC_API_KEY")}
-                      placeholder="sk-ant-…"
+                      placeholder={setting("ANTHROPIC_API_KEY") ? "•••••••• saved — leave blank to keep" : "sk-ant-…"}
                     />
                   </div>
                   <button className="btn-primary">Save</button>
