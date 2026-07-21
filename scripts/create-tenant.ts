@@ -7,7 +7,12 @@
  * Usage:
  *   tsx scripts/create-tenant.ts --name "Acme Carts" --slug acme-carts \
  *     --owner-email owner@acme.test --owner-name "Acme Owner" \
- *     [--owner-password "<pw>"] [--role owner] --yes
+ *     [--owner-password "<pw>"] --yes
+ *
+ * The tenant is created SUSPENDED (active:false) and the owner is a non-privileged
+ * "member": there is no tenant data isolation yet, so a live cross-tenant login
+ * must not be minted here. Once enforcement lands, an operator activates the
+ * tenant deliberately. See MULTITENANCY-SCOPING.md §6.
  *
  * SAFETY: writes to DATABASE_URL. A local .env points at PRODUCTION, so this prints
  * the target host and refuses to write without --yes.
@@ -28,12 +33,17 @@ async function main() {
   const slug = arg("slug");
   const ownerEmail = arg("owner-email")?.trim().toLowerCase();
   const ownerName = arg("owner-name");
-  const role = arg("role"); // optional; defaults to "member" in createTenant
   let password = arg("owner-password");
 
+  if (has("role")) {
+    console.error(
+      "--role is not supported: User.role is global, so an owner/admin role here would be a cross-tenant superuser. The tenant owner is created as a non-privileged member.",
+    );
+    process.exit(1);
+  }
   if (!name || !slug || !ownerEmail || !ownerName) {
     console.error(
-      "Usage: tsx scripts/create-tenant.ts --name <name> --slug <slug> --owner-email <email> --owner-name <name> [--owner-password <pw>] [--role owner] --yes",
+      "Usage: tsx scripts/create-tenant.ts --name <name> --slug <slug> --owner-email <email> --owner-name <name> [--owner-password <pw>] --yes",
     );
     process.exit(1);
   }
@@ -60,9 +70,10 @@ async function main() {
     const { tenantId, ownerId } = await createTenant(prisma, {
       name,
       slug,
-      owner: { name: ownerName, email: ownerEmail, passwordHash, ...(role ? { role } : {}) },
+      owner: { name: ownerName, email: ownerEmail, passwordHash },
     });
-    console.log(`Created tenant ${tenantId} ("${name}") with owner ${ownerId} <${ownerEmail}>.`);
+    console.log(`Created tenant ${tenantId} ("${name}") — SUSPENDED — with member owner ${ownerId} <${ownerEmail}>.`);
+    console.log("The owner cannot access tenant data until isolation ships and an operator activates the tenant.");
     if (generated) console.log(`Generated password for ${ownerEmail}: ${password}`);
   } finally {
     await prisma.$disconnect();

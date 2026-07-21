@@ -308,10 +308,15 @@ async function main() {
       owner: { name: "CT Owner", email: ctOwnerEmail, passwordHash: "x" },
     });
     const ctTenant = await basePrisma.tenant.findUnique({ where: { id: ct.tenantId } });
-    assert.ok(ctTenant?.active, "createTenant creates an active tenant");
+    assert.equal(ctTenant?.active, false, "createTenant creates a SUSPENDED tenant (no live cross-tenant login before isolation)");
+    const ctOwner = await basePrisma.user.findUnique({ where: { id: ct.ownerId }, select: { role: true } });
+    assert.equal(ctOwner?.role, "member", "createTenant never mints a global owner/superuser — owner is a plain member");
     const ctMember = await basePrisma.tenantMember.findUnique({ where: { tenantId_userId: { tenantId: ct.tenantId, userId: ct.ownerId } } });
     assert.ok(ctMember, "createTenant makes the owner a member of the new tenant");
-    assert.deepEqual(await resolveActingTenant(ct.ownerId), { tenantId: ct.tenantId }, "the new owner resolves to exactly the created tenant");
+    assert.deepEqual(await resolveActingTenant(ct.ownerId), { error: "no_tenant" }, "a suspended tenant is fail-closed — its owner resolves to no tenant");
+    // Only once an operator activates it (post-isolation) does the owner resolve.
+    await basePrisma.tenant.update({ where: { id: ct.tenantId }, data: { active: true } });
+    assert.deepEqual(await resolveActingTenant(ct.ownerId), { tenantId: ct.tenantId }, "after activation the owner resolves to exactly the created tenant");
     await basePrisma.tenantMember.deleteMany({ where: { userId: ct.ownerId } });
     await basePrisma.user.deleteMany({ where: { id: ct.ownerId } });
     await basePrisma.tenant.deleteMany({ where: { id: ct.tenantId } });

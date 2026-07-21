@@ -43,19 +43,21 @@ export async function ensureFoundingMembership(client: Client, userId: string): 
 export type CreateTenantInput = {
   name: string;
   slug: string;
+  /**
+   * Whether the tenant is live on creation. Defaults to FALSE (suspended):
+   * fail-closed tenant resolution filters `active: true`, so a suspended
+   * tenant's owner resolves to NO tenant and cannot reach tenant-scoped data.
+   * Nothing is scoped by tenant yet (isolation is not built), so this must stay
+   * false until enforcement lands and an operator deliberately activates the
+   * tenant. The future platform-admin UI passes true only post-isolation.
+   */
+  active?: boolean;
   owner: {
     name: string;
     email: string;
     /** Pre-hashed (bcrypt). Callers hash — this module stays crypto-free so tsx
      *  scripts and server code can both use it. */
     passwordHash: string;
-    /**
-     * User.role is still GLOBAL today, so this defaults to "member" to avoid
-     * minting a cross-tenant superuser. A per-tenant owner role lands with the
-     * roles→membership PR; until then, real dealer onboarding also waits on
-     * enforcement (nothing scopes data by tenant yet). See MULTITENANCY-SCOPING.md.
-     */
-    role?: string;
   };
 };
 
@@ -64,6 +66,12 @@ export type CreateTenantInput = {
  * The single source of truth for tenant creation — the `create-tenant` CLI, the
  * future platform-admin UI, and the isolation tests all go through here. Requires
  * a full client (opens its own transaction). Returns the new ids.
+ *
+ * The owner is created with the non-privileged "member" role. User.role is still
+ * GLOBAL, so an "owner" here would be a cross-tenant superuser — this path must
+ * never mint one. Real per-tenant owner roles arrive with the roles→membership
+ * PR; combined with the suspended-by-default tenant, this keeps provisioning safe
+ * to run before isolation exists. See MULTITENANCY-SCOPING.md.
  */
 export async function createTenant(
   prisma: PrismaClient,
@@ -71,14 +79,14 @@ export async function createTenant(
 ): Promise<{ tenantId: string; ownerId: string }> {
   return prisma.$transaction(async (tx) => {
     const tenant = await tx.tenant.create({
-      data: { name: input.name, slug: input.slug, active: true },
+      data: { name: input.name, slug: input.slug, active: input.active ?? false },
     });
     const owner = await tx.user.create({
       data: {
         name: input.owner.name,
         email: input.owner.email,
         passwordHash: input.owner.passwordHash,
-        role: input.owner.role ?? "member",
+        role: "member",
       },
     });
     await addTenantMembership(tx, tenant.id, owner.id);
