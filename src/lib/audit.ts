@@ -68,6 +68,20 @@ function actorType(entry: AuditEntry, actorName: string) {
 }
 
 /**
+ * The acting tenant from the current session, best-effort. Dynamically imported
+ * to avoid any import cycle with auth, and fully guarded — outside a request
+ * (crons/scripts) there is no session, so this returns null and never throws.
+ */
+async function actingTenantId(): Promise<string | null> {
+  try {
+    const { getActiveTenantId } = await import("./auth");
+    return await getActiveTenantId();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Writes both the legacy customer-history record and the professional append-only
  * AuditEvent stream. Use logAuditStrict for permission, role, pipeline, forecast,
  * deletion, export, and other governance-sensitive changes.
@@ -83,6 +97,7 @@ async function writeAudit(entry: AuditEntry) {
     : sanitizeAuditValue(entry.metadata) as Record<string, unknown>;
   const fields = entry.changedFields ?? changedFields(safeBefore, safeAfter);
   const actorName = entry.userName ?? entry.user?.name ?? "System";
+  const tenantId = await actingTenantId();
 
   await basePrisma.$transaction(async (transaction) => {
     await transaction.$executeRaw`
@@ -109,6 +124,7 @@ async function writeAudit(entry: AuditEntry) {
         leadId: entry.leadId ?? null,
         userId: entry.user?.id ?? null,
         userName: actorName,
+        tenantId,
       },
     });
   });
@@ -128,6 +144,7 @@ export async function logAudit(entry: AuditEntry): Promise<void> {
           leadId: entry.leadId ?? null,
           userId: entry.user?.id ?? null,
           userName: entry.userName ?? entry.user?.name ?? "System",
+          tenantId: await actingTenantId(),
         },
       });
     } catch {}

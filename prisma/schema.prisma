@@ -709,10 +709,14 @@ model AuditLog {
   leadId    String?
   userId    String?
   userName  String // denormalized so history survives user changes
+  // Acting tenant captured from the session (multi-tenancy). Nullable/best-effort
+  // — null for system/cron/portal writes and sessions minted before tid existed.
+  tenantId  String?
   createdAt DateTime @default(now())
 
   @@index([contactId, createdAt])
   @@index([leadId, createdAt])
+  @@index([tenantId, createdAt])
 }
 
 model AutomationLog {
