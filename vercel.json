@@ -6,7 +6,7 @@
   "crons": [
     {
       "path": "/api/cron/journeys",
-      "schedule": "*/5 * * * *"
+      "schedule": "*/15 * * * *"
     },
     {
       "path": "/api/cron/automations",

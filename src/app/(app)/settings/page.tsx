@@ -1299,6 +1299,52 @@ export default async function SettingsPage({
             </Row>
 
             <Row
+              title="ElevenLabs (Voice)"
+              status={
+                setting("ELEVENLABS_API_KEY") ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                ) : (
+                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
+                )
+              }
+            >
+              <p className="text-xs text-muted-foreground mb-4">
+                Voice for the WhatsApp assistant: transcribes inbound voice notes, and (with the
+                toggle on) replies to a customer&apos;s voice note with a synthesised voice note —
+                mirroring the customer. Get a key and copy a Voice ID at elevenlabs.io.
+              </p>
+              <div className="space-y-3">
+                <form action={saveSetting} className="flex gap-2 items-end">
+                  <input type="hidden" name="key" value="ELEVENLABS_API_KEY" />
+                  <input type="hidden" name="keepIfBlank" value="1" />
+                  <div className="flex-1">
+                    <label className="label">ElevenLabs API key</label>
+                    {/* Never echo the stored secret into the DOM — blank field, keep-if-blank on save. */}
+                    <input name="value" type="password" autoComplete="new-password" className="input" placeholder={setting("ELEVENLABS_API_KEY") ? "•••••••• saved — leave blank to keep" : "Your ElevenLabs API key"} />
+                  </div>
+                  <button className="btn-primary">Save</button>
+                  {setting("ELEVENLABS_API_KEY") ? <ClearSecret settingKey="ELEVENLABS_API_KEY" label="ElevenLabs API key" /> : null}
+                </form>
+                <form action={saveSetting} className="flex gap-2 items-end">
+                  <input type="hidden" name="key" value="ELEVENLABS_VOICE_ID" />
+                  <div className="flex-1">
+                    <label className="label">Voice ID</label>
+                    <input name="value" className="input" defaultValue={setting("ELEVENLABS_VOICE_ID")} placeholder="e.g. 21m00Tcm4TlvDq8ikWAM" />
+                  </div>
+                  <button className="btn-primary">Save</button>
+                </form>
+                <form action={saveSetting} className="flex items-center gap-2">
+                  <input type="hidden" name="key" value="WHATSAPP_VOICE_REPLIES" />
+                  <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
+                    <input type="checkbox" name="value" value="true" defaultChecked={setting("WHATSAPP_VOICE_REPLIES") === "true"} className="h-4 w-4" />
+                    Reply to voice notes with a voice note (mirror the customer)
+                  </label>
+                  <button className="btn-secondary btn-sm">Save</button>
+                </form>
+              </div>
+            </Row>
+
+            <Row
               title="Website lead intake API"
               status={<span className="badge bg-emerald-500/15 text-emerald-300">Active</span>}
               action="View"

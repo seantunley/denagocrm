@@ -31,6 +31,8 @@ test("isManagedSecret: allowlists the integration secrets, rejects arbitrary key
     "ANTHROPIC_API_KEY",
     "INTAKE_API_KEY",
     "ELEVENLABS_API_KEY",
+    "OPENAI_API_KEY",
+    "TELEGRAM_BOT_TOKEN",
   ]) {
     assert.equal(isManagedSecret(key), true, `${key} should be managed`);
   }

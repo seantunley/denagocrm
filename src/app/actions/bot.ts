@@ -24,7 +24,8 @@ export async function saveBotSettings(formData: FormData) {
   );
   await putSetting("BOT_DAYS", formData.getAll("days").map(String).join(",") || "1,2,3,4,5");
   await putSetting("BOT_AFTERHOURS_MSG", String(formData.get("afterhours") ?? "").trim());
-  // Whisper key for voice-note transcription — only overwrite if provided
+  // Whisper key for voice-note transcription — only overwrite if provided.
+  // (ElevenLabs key/voice + the voice-reply toggle live in Settings → Integrations.)
   const whisper = String(formData.get("whisperKey") ?? "").trim();
   if (whisper && !whisper.startsWith("•")) await putSetting("OPENAI_API_KEY", whisper);
   await logAudit({
@@ -80,6 +81,9 @@ export async function disconnectTelegram() {
   const { deleteTelegramWebhook } = await import("@/lib/telegram");
   await deleteTelegramWebhook();
   await putSetting("BOT_TG_ENABLED", "false");
+  // Don't leave the bot token / webhook secret behind after disconnecting.
+  await putSetting("TELEGRAM_BOT_TOKEN", "");
+  await putSetting("TELEGRAM_WEBHOOK_SECRET", "");
   revalidatePath("/settings");
 }
 

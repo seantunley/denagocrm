@@ -2,10 +2,16 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
+    // Explicit, stable app identity distinct from the Messages sub-app
+    // (id "/messages"). Without an explicit id Chrome derives one from start_url,
+    // which can make the two apps' identities ambiguous and cause the nested
+    // /messages PWA to be treated as "already installed" by the root app.
+    id: "/",
     name: "Denago CRM",
     short_name: "DenagoCRM",
     description: "Sales & EV service management for Denago Cape Town",
     start_url: "/",
+    scope: "/",
     display: "standalone",
     orientation: "portrait",
     background_color: "#020617",

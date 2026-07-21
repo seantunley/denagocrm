@@ -92,6 +92,51 @@ export async function sendWhatsAppImage(toDigits: string, url: string, caption?:
   return { ok: true };
 }
 
+/**
+ * Uploads a media blob to WhatsApp and returns its media ID. Meta hosts the
+ * bytes (valid ~30 days) so we never publish a permanent public URL of our own —
+ * the caller sends by id. Returns the id or an error.
+ */
+export async function uploadWhatsAppMedia(
+  buffer: Buffer,
+  contentType: string,
+  filename: string,
+): Promise<{ id: string } | { error: string }> {
+  const [phoneNumberId, token] = await Promise.all([getSetting("WA_PHONE_NUMBER_ID"), getSetting("WA_ACCESS_TOKEN")]);
+  if (!phoneNumberId || !token) return { error: "WhatsApp is not configured." };
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("type", contentType);
+  form.append("file", new Blob([new Uint8Array(buffer)], { type: contentType }), filename);
+  const res = await fetch(`${GRAPH}/${phoneNumberId}/media`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` }, // fetch sets the multipart boundary
+    body: form,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    return { error: err?.error?.message ?? `WhatsApp media upload error ${res.status}` };
+  }
+  const json = await res.json().catch(() => null);
+  return json?.id ? { id: String(json.id) } : { error: "WhatsApp media upload returned no id" };
+}
+
+/** Sends an audio message (e.g. a synthesised voice-note reply) by uploaded media ID. */
+export async function sendWhatsAppAudioId(toDigits: string, mediaId: string): Promise<{ ok: boolean; error?: string }> {
+  const [phoneNumberId, token] = await Promise.all([getSetting("WA_PHONE_NUMBER_ID"), getSetting("WA_ACCESS_TOKEN")]);
+  if (!phoneNumberId || !token) return { ok: false, error: "WhatsApp is not configured." };
+  const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ messaging_product: "whatsapp", to: toDigits, type: "audio", audio: { id: mediaId } }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    return { ok: false, error: err?.error?.message ?? `WhatsApp API error ${res.status}` };
+  }
+  return { ok: true };
+}
+
 async function sendInteractive(toDigits: string, interactive: unknown): Promise<{ ok: boolean; error?: string }> {
   const [phoneNumberId, token] = await Promise.all([
     getSetting("WA_PHONE_NUMBER_ID"),

@@ -3,7 +3,6 @@ import { accessibleInboxWhere, requireAnyPermission } from "@/lib/permissions";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
-import PushToggle from "@/components/PushToggle";
 import InstallAppButton from "@/components/InstallAppButton";
 import { buildInboxThreads } from "@/lib/inboxThreads";
 
@@ -36,18 +35,6 @@ export default async function MessagesChatsPage() {
       </div>
 
       <InstallAppButton />
-
-      <details className="card">
-        <summary className="cursor-pointer list-none text-sm font-medium">
-          🔔 Notifications
-          <span className="ml-2 text-xs font-normal text-muted-foreground">
-            get pinged on new messages — tap to set up
-          </span>
-        </summary>
-        <div className="mt-3">
-          <PushToggle />
-        </div>
-      </details>
 
       <Tabs
         tabs={[

@@ -19,6 +19,8 @@ export const MANAGED_SECRET_KEYS: ReadonlySet<string> = new Set([
   "ANTHROPIC_API_KEY",
   "INTAKE_API_KEY",
   "ELEVENLABS_API_KEY",
+  "OPENAI_API_KEY",
+  "TELEGRAM_BOT_TOKEN",
 ]);
 
 /** Secrets WE generate (so regenerating them is safe). Externally-issued

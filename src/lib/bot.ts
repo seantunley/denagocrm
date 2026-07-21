@@ -1,8 +1,9 @@
 import { prisma } from "./db";
 import { getSetting } from "./settings";
-import { sendWhatsAppText, matchByPhone } from "./whatsapp";
+import { sendWhatsAppText, uploadWhatsAppMedia, sendWhatsAppAudioId, matchByPhone } from "./whatsapp";
 import { sendPushToAll } from "./push";
 import { isBotAiEnabled, generateBotReply, type BotMsg } from "./botAi";
+import { elevenLabsTTS, canSynthesizeVoice } from "./elevenlabs";
 
 export type BotRule = { id: string; keywords: string; reply: string };
 
@@ -39,6 +40,36 @@ async function withinOfficeHours(): Promise<boolean> {
 
 const AUTO_MARKER = "🤖 Auto-reply";
 const AI_MARKER = "🤖 Assistant";
+
+/**
+ * Voice replies are on only when explicitly enabled AND we can actually
+ * synthesise (key + voice). Gating on the full capability — not just the key —
+ * stops us marking a text fallback as a voice reply when no voice is set.
+ */
+async function voiceRepliesEnabled(): Promise<boolean> {
+  return (await getSetting("WHATSAPP_VOICE_REPLIES")) === "true" && (await canSynthesizeVoice());
+}
+
+/**
+ * Synthesise `text` as a voice note (ElevenLabs) and send it. The audio is
+ * uploaded straight to WhatsApp (media ID) — no public blob of our own is ever
+ * created. Falls back to a text message on any failure, so the customer always
+ * gets a reply. `viaVoice` reports what was ACTUALLY sent so the caller logs the
+ * real channel (a text fallback must not be recorded as a voice reply).
+ */
+async function sendVoiceReply(fromDigits: string, text: string): Promise<{ ok: boolean; viaVoice: boolean }> {
+  const audio = await elevenLabsTTS(text);
+  if (audio) {
+    // .ogg so WhatsApp treats it as a voice note (PTT waveform), not an audio file.
+    const uploaded = await uploadWhatsAppMedia(audio.buffer, audio.contentType, "voice-reply.ogg").catch(() => null);
+    if (uploaded && "id" in uploaded) {
+      const res = await sendWhatsAppAudioId(fromDigits, uploaded.id);
+      if (res.ok) return { ok: true, viaVoice: true };
+    }
+  }
+  const t = await sendWhatsAppText(fromDigits, text);
+  return { ok: t.ok, viaVoice: false };
+}
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function whereOr(contactId: string | null, leadId: string | null, digits: string): any[] {
@@ -130,10 +161,24 @@ export async function maybeAutoReply(
 
     const ai = await generateBotReply({ history, customerName: name, isCustomer, voiceNote: opts.voiceNote });
     if (ai) {
-      const handoff = ai.handoff || Boolean(opts.voiceNote);
-      const sent = await sendWhatsAppText(fromDigits, ai.reply);
+      // Mirror the customer: a voice note in → a voice note back, when voice
+      // replies are enabled. When we CAN voice-reply, treat it as a normal turn
+      // (don't force a human handoff just because the message was voice).
+      const voiceReply = Boolean(opts.voiceNote) && (await voiceRepliesEnabled());
+      const handoff = ai.handoff || (Boolean(opts.voiceNote) && !voiceReply);
+      // `sentVoice` is what actually went out — a voice send that failed and fell
+      // back to text must be logged as text, not as a 🎤 voice reply.
+      let sentVoice = false;
+      let sent: { ok: boolean };
+      if (voiceReply) {
+        const r = await sendVoiceReply(fromDigits, ai.reply);
+        sent = r;
+        sentVoice = r.viaVoice;
+      } else {
+        sent = await sendWhatsAppText(fromDigits, ai.reply);
+      }
       if (!sent.ok) return;
-      await logOutbound(ai.reply, handoff ? `${AI_MARKER} → handoff` : AI_MARKER, contactId, leadId, fromDigits);
+      await logOutbound(sentVoice ? `🎤 ${ai.reply}` : ai.reply, handoff ? `${AI_MARKER} → handoff` : AI_MARKER, contactId, leadId, fromDigits);
       if (handoff) {
         await sendPushToAll(
           {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { prisma, basePrisma } from "../src/lib/db";
 import { resolveActingTenant, createUserInOwnerTenant } from "../src/lib/tenantContext";
-import { ensureFoundingMembership } from "../src/lib/provisioning";
+import { ensureFoundingMembership, createTenant } from "../src/lib/provisioning";
 
 // DB-backed verification of the security/integrity fixes (audit Groups 1-3).
 // Runs in CI against the ephemeral seeded database — NOT locally (a local run
@@ -296,6 +296,37 @@ async function main() {
     await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [provOwner, provOwner0, newUser!.id] } } });
     await basePrisma.user.deleteMany({ where: { id: { in: [provOwner, provOwner0, newUser!.id] } } });
     await basePrisma.tenant.deleteMany({ where: { id: { in: [provTenant, provTenant2] } } });
+
+    // createTenant — provisions a brand-new tenant + its first owner + membership
+    // atomically (the single source of truth for tenant setup: CLI, future admin
+    // UI, isolation tests).
+    const ctSlug = id("ctSlug");
+    const ctOwnerEmail = `${id("ctOwner")}@example.invalid`;
+    const ct = await createTenant(basePrisma, {
+      name: "Created Tenant",
+      slug: ctSlug,
+      owner: { name: "CT Owner", email: ctOwnerEmail, passwordHash: "x" },
+    });
+    const ctTenant = await basePrisma.tenant.findUnique({ where: { id: ct.tenantId } });
+    assert.equal(ctTenant?.active, false, "createTenant creates a SUSPENDED tenant (no live cross-tenant login before isolation)");
+    const ctOwner = await basePrisma.user.findUnique({ where: { id: ct.ownerId }, select: { role: true, modules: true } });
+    assert.equal(ctOwner?.role, "member", "createTenant never mints a global owner/superuser — owner is a plain member");
+    assert.equal(ctOwner?.modules, "", "createTenant grants the owner NO modules");
+    // disabledAt is a raw security column (outside the Prisma model): the owner
+    // must be created disabled so the credentials can't sign into the unscoped CRM.
+    const [{ disabledAt }] = await basePrisma.$queryRaw<Array<{ disabledAt: Date | null }>>`
+      SELECT "disabledAt" FROM "User" WHERE "id" = ${ct.ownerId} LIMIT 1`;
+    assert.ok(disabledAt, "createTenant creates the owner DISABLED (login refused)");
+    const ctMember = await basePrisma.tenantMember.findUnique({ where: { tenantId_userId: { tenantId: ct.tenantId, userId: ct.ownerId } } });
+    assert.ok(ctMember, "createTenant makes the owner a member of the new tenant");
+    assert.deepEqual(await resolveActingTenant(ct.ownerId), { error: "no_tenant" }, "a suspended tenant is fail-closed — its owner resolves to no tenant");
+    // Sanity: resolution only opens up once the tenant is activated (a deliberate
+    // post-isolation step; the owner would also need enabling to actually sign in).
+    await basePrisma.tenant.update({ where: { id: ct.tenantId }, data: { active: true } });
+    assert.deepEqual(await resolveActingTenant(ct.ownerId), { tenantId: ct.tenantId }, "after activation the owner resolves to exactly the created tenant");
+    await basePrisma.tenantMember.deleteMany({ where: { userId: ct.ownerId } });
+    await basePrisma.user.deleteMany({ where: { id: ct.ownerId } });
+    await basePrisma.tenant.deleteMany({ where: { id: ct.tenantId } });
 
     console.log("Integrity / IDOR / soft-delete integration tests passed.");
   } finally {
