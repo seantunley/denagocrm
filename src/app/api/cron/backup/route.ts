@@ -9,7 +9,7 @@ import {
 } from "@/lib/backup";
 import { basePrisma } from "@/lib/db";
 import { purgeTrash } from "@/lib/trash";
-import { readFile, putManagedBlob, listManagedBlobs, deleteFile } from "@/lib/storage";
+import { readFile, putManagedBlob, listActiveBackupBlobs, deleteFile, activeBlobWriteTokenPresent } from "@/lib/storage";
 import {
   decryptBytes,
   decryptValue,
@@ -37,7 +37,10 @@ function isSupportedAssetRef(ref: string): boolean {
 }
 
 async function existingAssetPaths(): Promise<Set<string>> {
-  const blobs = await listManagedBlobs(ASSET_PREFIX);
+  // Dedupe only against the ACTIVE store — after cutover a content-addressed
+  // asset that exists only in the legacy public store must still be written into
+  // the private store, or private backups keep depending on public assets.
+  const blobs = await listActiveBackupBlobs(ASSET_PREFIX);
   return new Set(blobs.map((blob) => blob.pathname));
 }
 
@@ -123,8 +126,10 @@ export async function GET(req: NextRequest) {
   if (!viaCronSecret) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    return NextResponse.json({ error: "Blob storage not configured" }, { status: 500 });
+  if (!activeBlobWriteTokenPresent()) {
+    // Validate the token for the store we actually write to (private in private
+    // mode, public otherwise), so the public token can be retired post-cutover.
+    return NextResponse.json({ error: "Blob storage not configured for the active mode" }, { status: 500 });
   }
   if (!process.env.SETTINGS_ENCRYPTION_KEY) {
     return NextResponse.json({ error: "Backup encryption key not configured" }, { status: 500 });
@@ -158,7 +163,9 @@ export async function GET(req: NextRequest) {
     const afterUpload = verifyPortableBackup(uploadedPackage.portable);
     if (!afterUpload.ok) throw new Error(afterUpload.errors.join("; "));
 
-    const databaseBlobs = await listManagedBlobs(DATABASE_PREFIX);
+    // Retention prunes the ACTIVE store only — never reach across and delete a
+    // backup in the other store (e.g. private/preview blobs while still public).
+    const databaseBlobs = await listActiveBackupBlobs(DATABASE_PREFIX);
     const sorted = databaseBlobs.sort((a, b) => b.pathname.localeCompare(a.pathname));
     const stale = sorted.slice(DATABASE_KEEP);
     for (const old of stale) await deleteFile(old.url).catch(() => {});

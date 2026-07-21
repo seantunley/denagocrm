@@ -2,6 +2,11 @@ import { promises as fs } from "fs";
 import path from "path";
 import crypto from "crypto";
 import { put, del, get, list } from "@vercel/blob";
+import {
+  activeStoreToken,
+  activeWriteTokenPresent,
+  dedupeByPathname,
+} from "./backupBlobs";
 
 /**
  * Document storage that works in both deployment modes:
@@ -123,11 +128,18 @@ export async function deleteFile(ref: string): Promise<void> {
   await fs.unlink(path.join(UPLOAD_DIR, ref)).catch(() => {});
 }
 
+const storeTokens = () => ({ publicToken: publicToken(), privateToken: privateToken() });
+
+/** Whether the store we currently WRITE to has a usable token (see backupBlobs). */
+export function activeBlobWriteTokenPresent(): boolean {
+  return activeWriteTokenPresent(privateMode(), storeTokens());
+}
+
 /**
  * Put a MANAGED blob (backups) at a caller-controlled pathname — content-addressed
  * or timestamped, so never a random suffix and never an overwrite. Writes to the
- * private store when BLOB_PRIVATE is on (fails closed without its token), else the
- * public store. Mirrors {@link saveFile}'s private/public split for the backup
+ * ACTIVE store: private when BLOB_PRIVATE is on (fails closed without its token),
+ * else public. Mirrors {@link saveFile}'s private/public split for the backup
  * pipeline, which manages its own paths. Reads go back through {@link readFile}.
  */
 export async function putManagedBlob(
@@ -146,29 +158,36 @@ export async function putManagedBlob(
   return { url: blob.url, pathname: blob.pathname };
 }
 
-/**
- * List managed blobs under a prefix across BOTH stores (public + private),
- * deduped by pathname. During the staged BLOB_PRIVATE rollout current backups
- * live in the private store while legacy ones remain public, so pruning and
- * restore must see both. With neither private token set this is exactly a public
- * `list` (unchanged behaviour).
- */
-export async function listManagedBlobs(prefix: string): Promise<Array<{ pathname: string; url: string }>> {
+async function collectBlobs(prefix: string, token: string): Promise<Array<{ pathname: string; url: string }>> {
   const out: Array<{ pathname: string; url: string }> = [];
-  const seen = new Set<string>();
-  const collect = async (token?: string) => {
-    let cursor: string | undefined;
-    do {
-      const page = await list({ prefix, cursor, limit: 1000, ...(token ? { token } : {}) });
-      for (const b of page.blobs) {
-        if (seen.has(b.pathname)) continue;
-        seen.add(b.pathname);
-        out.push({ pathname: b.pathname, url: b.url });
-      }
-      cursor = page.hasMore ? page.cursor : undefined;
-    } while (cursor);
-  };
-  if (publicToken()) await collect(); // public store (default token)
-  if (privateToken()) await collect(privateToken()); // private store
+  let cursor: string | undefined;
+  do {
+    const page = await list({ prefix, cursor, limit: 1000, token });
+    for (const b of page.blobs) out.push({ pathname: b.pathname, url: b.url });
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
   return out;
+}
+
+/**
+ * List blobs in the ACTIVE store ONLY (private when BLOB_PRIVATE, else public).
+ * Use this for existence checks before a new write and for live retention/pruning
+ * — those must never cross into the other store, or installing the private token
+ * before flipping the flag would already change public-mode behaviour.
+ */
+export async function listActiveBackupBlobs(prefix: string): Promise<Array<{ pathname: string; url: string }>> {
+  const token = activeStoreToken(privateMode(), storeTokens());
+  if (!token) return [];
+  return collectBlobs(prefix, token);
+}
+
+/**
+ * List blobs across BOTH stores (deduped by pathname). Use this ONLY for
+ * restore/verify selection, where a legacy public backup must remain findable
+ * after the cutover to the private store.
+ */
+export async function listAllBackupBlobs(prefix: string): Promise<Array<{ pathname: string; url: string }>> {
+  const pub = publicToken() ? await collectBlobs(prefix, publicToken()!) : [];
+  const priv = privateToken() ? await collectBlobs(prefix, privateToken()!) : [];
+  return dedupeByPathname(pub, priv);
 }

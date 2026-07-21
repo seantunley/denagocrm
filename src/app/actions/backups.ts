@@ -6,7 +6,7 @@ import { GET as executeBackup } from "@/app/api/cron/backup/route";
 import { requireOwner } from "@/lib/auth";
 import { type PortableBackup, verifyPortableBackup } from "@/lib/backup";
 import { decryptValue, putSetting } from "@/lib/settings";
-import { listManagedBlobs, readFile } from "@/lib/storage";
+import { listAllBackupBlobs, readFile } from "@/lib/storage";
 
 export type BackupActionState = {
   ok?: string;
@@ -68,7 +68,7 @@ export async function verifyBackup(
   }
 
   try {
-    const blobs = await listManagedBlobs(pathname);
+    const blobs = await listAllBackupBlobs(pathname);
     const blob = blobs.find((candidate) => candidate.pathname === pathname);
     if (!blob) return { error: "Backup file not found." };
 
