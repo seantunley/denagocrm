@@ -1,30 +1,30 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_ORG_ID, pickActiveOrg } from "../src/lib/tenant";
+import { DEFAULT_TENANT_ID, pickActiveTenant } from "../src/lib/tenant";
 
-test("DEFAULT_ORG_ID matches the id seeded by the tenant-foundation migration", () => {
-  assert.equal(DEFAULT_ORG_ID, "org_denago_cpt");
+test("DEFAULT_TENANT_ID matches the id seeded by the tenant-foundation migration", () => {
+  assert.equal(DEFAULT_TENANT_ID, "tenant_denago_cpt");
 });
 
-test("pickActiveOrg falls back to the founding org when there are no memberships", () => {
-  assert.equal(pickActiveOrg([]), DEFAULT_ORG_ID);
+test("pickActiveTenant fails CLOSED — no memberships means no tenant (null), never a default", () => {
+  assert.equal(pickActiveTenant([]), null);
 });
 
-test("pickActiveOrg returns the earliest-joined membership", () => {
+test("pickActiveTenant returns the earliest-joined membership", () => {
   const memberships = [
-    { organizationId: "org_b", createdAt: new Date("2026-02-01") },
-    { organizationId: "org_a", createdAt: new Date("2026-01-01") },
-    { organizationId: "org_c", createdAt: new Date("2026-03-01") },
+    { tenantId: "tenant_b", createdAt: new Date("2026-02-01") },
+    { tenantId: "tenant_a", createdAt: new Date("2026-01-01") },
+    { tenantId: "tenant_c", createdAt: new Date("2026-03-01") },
   ];
-  assert.equal(pickActiveOrg(memberships), "org_a");
+  assert.equal(pickActiveTenant(memberships), "tenant_a");
 });
 
-test("pickActiveOrg does not mutate its input", () => {
+test("pickActiveTenant does not mutate its input", () => {
   const memberships = [
-    { organizationId: "org_b", createdAt: new Date("2026-02-01") },
-    { organizationId: "org_a", createdAt: new Date("2026-01-01") },
+    { tenantId: "tenant_b", createdAt: new Date("2026-02-01") },
+    { tenantId: "tenant_a", createdAt: new Date("2026-01-01") },
   ];
-  const before = memberships.map((m) => m.organizationId);
-  pickActiveOrg(memberships);
-  assert.deepEqual(memberships.map((m) => m.organizationId), before);
+  const before = memberships.map((m) => m.tenantId);
+  pickActiveTenant(memberships);
+  assert.deepEqual(memberships.map((m) => m.tenantId), before);
 });

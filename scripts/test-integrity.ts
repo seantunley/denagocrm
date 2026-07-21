@@ -143,6 +143,33 @@ async function main() {
     const identityMoved = await basePrisma.contact.findUnique({ where: { id: mergeWinner }, select: { messengerPsid: true } });
     assert.equal(identityMoved?.messengerPsid, psid, "the identity moves to the winner once the loser releases it");
 
+    // Tenant foundation (multi-tenancy PR1) — fail-closed invariants:
+    // (a) the founding tenant is provisioned and the seeded owner is a member
+    //     (provisioning MUST create a membership, not lean on a default);
+    // (b) no session may reference a tenant its user does not belong to. (b) is
+    //     vacuously true until PR1b sets UserSession.tenantId, but encoding it now
+    //     means any future regression that grants a session a tenant the user
+    //     isn't a member of fails this suite.
+    const foundingTenant = await basePrisma.tenant.findUnique({ where: { id: "tenant_denago_cpt" } });
+    assert.ok(foundingTenant, "founding Denago tenant must be provisioned");
+
+    const seededOwner = await basePrisma.user.findFirst({ where: { role: "owner" }, select: { id: true } });
+    if (seededOwner) {
+      const ownerMembership = await basePrisma.tenantMember.findUnique({
+        where: { tenantId_userId: { tenantId: "tenant_denago_cpt", userId: seededOwner.id } },
+      });
+      assert.ok(ownerMembership, "the seeded owner must have a founding-tenant membership");
+    }
+
+    const orphanSessions = await basePrisma.$queryRaw<{ count: bigint }[]>`
+      SELECT COUNT(*)::bigint AS count FROM "UserSession" s
+      WHERE s."tenantId" IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM "TenantMember" m
+          WHERE m."userId" = s."userId" AND m."tenantId" = s."tenantId"
+        )`;
+    assert.equal(Number(orphanSessions[0].count), 0, "every session's tenant must belong to that session's user");
+
     console.log("Integrity / IDOR / soft-delete integration tests passed.");
   } finally {
     await basePrisma.contact.deleteMany({ where: { id: { in: [mergeWinner, mergeLoser] } } });

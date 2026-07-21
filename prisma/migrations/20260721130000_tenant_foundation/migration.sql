@@ -1,49 +1,49 @@
 -- Tenant foundation (multi-tenancy PR1). ADDITIVE + BEHAVIOUR-PRESERVING:
--- creates the Organization / OrganizationMembership tables and a nullable
--- UserSession.organizationId, then seeds ONE org for the existing Denago business
--- and backfills every current user + session into it. Nothing reads organizationId
--- yet, so the app runs exactly as before. tenantId on data models + enforcement
--- arrive in later PRs (see MULTITENANCY-SCOPING.md).
+-- creates the Tenant / TenantMember tables and a nullable UserSession.tenantId,
+-- then seeds ONE tenant for the existing Denago business and backfills every
+-- current user + session into it. Nothing reads tenantId yet, so the app runs
+-- exactly as before. tenantId on data models + enforcement arrive in later PRs
+-- (see MULTITENANCY-SCOPING.md).
 
--- Organization
-CREATE TABLE "Organization" (
+-- Tenant
+CREATE TABLE "Tenant" (
   "id" TEXT NOT NULL,
   "name" TEXT NOT NULL,
   "slug" TEXT NOT NULL,
   "active" BOOLEAN NOT NULL DEFAULT true,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT "Organization_pkey" PRIMARY KEY ("id")
+  CONSTRAINT "Tenant_pkey" PRIMARY KEY ("id")
 );
-CREATE UNIQUE INDEX "Organization_slug_key" ON "Organization"("slug");
-CREATE INDEX "Organization_active_idx" ON "Organization"("active");
+CREATE UNIQUE INDEX "Tenant_slug_key" ON "Tenant"("slug");
+CREATE INDEX "Tenant_active_idx" ON "Tenant"("active");
 
--- OrganizationMembership (pure user↔org link for now; roles move here later)
-CREATE TABLE "OrganizationMembership" (
+-- TenantMember (pure user↔tenant link for now; roles move here later)
+CREATE TABLE "TenantMember" (
   "id" TEXT NOT NULL,
-  "organizationId" TEXT NOT NULL,
+  "tenantId" TEXT NOT NULL,
   "userId" TEXT NOT NULL,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT "OrganizationMembership_pkey" PRIMARY KEY ("id")
+  CONSTRAINT "TenantMember_pkey" PRIMARY KEY ("id")
 );
-CREATE UNIQUE INDEX "OrganizationMembership_organizationId_userId_key" ON "OrganizationMembership"("organizationId", "userId");
-CREATE INDEX "OrganizationMembership_userId_idx" ON "OrganizationMembership"("userId");
-ALTER TABLE "OrganizationMembership" ADD CONSTRAINT "OrganizationMembership_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "OrganizationMembership" ADD CONSTRAINT "OrganizationMembership_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+CREATE UNIQUE INDEX "TenantMember_tenantId_userId_key" ON "TenantMember"("tenantId", "userId");
+CREATE INDEX "TenantMember_userId_idx" ON "TenantMember"("userId");
+ALTER TABLE "TenantMember" ADD CONSTRAINT "TenantMember_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "TenantMember" ADD CONSTRAINT "TenantMember_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
--- UserSession.organizationId (nullable, SET NULL on org delete)
-ALTER TABLE "UserSession" ADD COLUMN "organizationId" TEXT;
-CREATE INDEX "UserSession_organizationId_idx" ON "UserSession"("organizationId");
-ALTER TABLE "UserSession" ADD CONSTRAINT "UserSession_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+-- UserSession.tenantId (nullable, SET NULL on tenant delete)
+ALTER TABLE "UserSession" ADD COLUMN "tenantId" TEXT;
+CREATE INDEX "UserSession_tenantId_idx" ON "UserSession"("tenantId");
+ALTER TABLE "UserSession" ADD CONSTRAINT "UserSession_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
--- Seed the founding organization for the existing Denago business, then backfill
--- every current user as a member and stamp existing sessions. Guarded with ON
--- CONFLICT / IS NULL so the migration is safe to re-run and a no-op on an empty DB.
-INSERT INTO "Organization" ("id", "name", "slug", "active")
-VALUES ('org_denago_cpt', 'Denago Cape Town', 'denago-cape-town', true)
+-- Seed the founding tenant for the existing Denago business, then backfill every
+-- current user as a member and stamp existing sessions. Guarded with ON CONFLICT /
+-- IS NULL so the migration is safe to re-run and a no-op on an empty DB.
+INSERT INTO "Tenant" ("id", "name", "slug", "active")
+VALUES ('tenant_denago_cpt', 'Denago Cape Town', 'denago-cape-town', true)
 ON CONFLICT ("id") DO NOTHING;
 
-INSERT INTO "OrganizationMembership" ("id", "organizationId", "userId")
-SELECT 'mem_' || "id", 'org_denago_cpt', "id" FROM "User"
-ON CONFLICT ("organizationId", "userId") DO NOTHING;
+INSERT INTO "TenantMember" ("id", "tenantId", "userId")
+SELECT 'tm_' || "id", 'tenant_denago_cpt', "id" FROM "User"
+ON CONFLICT ("tenantId", "userId") DO NOTHING;
 
-UPDATE "UserSession" SET "organizationId" = 'org_denago_cpt' WHERE "organizationId" IS NULL;
+UPDATE "UserSession" SET "tenantId" = 'tenant_denago_cpt' WHERE "tenantId" IS NULL;

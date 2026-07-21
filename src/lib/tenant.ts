@@ -6,21 +6,25 @@
  */
 
 /**
- * The founding organization seeded for the existing Denago business by migration
- * 20260721130000_tenant_foundation. Until sessions carry an org claim this is the
- * fallback active tenant, so single-tenant behaviour is unchanged.
+ * The founding tenant seeded for the existing Denago business by migration
+ * 20260721130000_tenant_foundation. Use this ONLY to EXPLICITLY provision the
+ * Denago tenant (migration + seed) — never as a fallback to infer tenant access
+ * for a user who has no membership. Tenant access is fail-closed: it comes from a
+ * real TenantMember row, not from this constant.
  */
-export const DEFAULT_ORG_ID = "org_denago_cpt";
+export const DEFAULT_TENANT_ID = "tenant_denago_cpt";
 
 /**
- * Choose a user's active organization from their memberships: the earliest-joined
- * one, or the founding Denago org when they have none. Does not mutate the input.
+ * Resolve a user's active tenant from their memberships: the earliest-joined one,
+ * or `null` when they belong to none. Fail-closed by design — a membership-less
+ * user gets NO tenant context (callers must reject / route to provisioning), never
+ * a silent default. Does not mutate the input.
  */
-export function pickActiveOrg(
-  memberships: { organizationId: string; createdAt: Date }[],
-): string {
-  if (memberships.length === 0) return DEFAULT_ORG_ID;
+export function pickActiveTenant(
+  memberships: { tenantId: string; createdAt: Date }[],
+): string | null {
+  if (memberships.length === 0) return null;
   return [...memberships].sort(
     (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
-  )[0].organizationId;
+  )[0].tenantId;
 }
