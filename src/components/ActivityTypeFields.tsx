@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import LocationAutocomplete from "@/components/LocationAutocomplete";
 
 /**
  * Type selector + conditional location: test drives and meetings happen
@@ -58,7 +59,7 @@ export default function ActivityTypeFields({
           <label className="label">
             📍 Location {type === "test_drive" ? "*" : "(optional)"}
           </label>
-          <input
+          <LocationAutocomplete
             name="location"
             className="input"
             required={type === "test_drive"}

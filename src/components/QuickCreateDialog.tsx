@@ -18,6 +18,7 @@ import { createLead } from "@/app/actions/leads";
 import { createContact } from "@/app/actions/contacts";
 import { createVehicle } from "@/app/actions/vehicles";
 import { scheduleActivity } from "@/app/actions/activities";
+import LocationAutocomplete from "@/components/LocationAutocomplete";
 
 export type QuickCreateKind = "lead" | "contact" | "calendar" | "quote" | "jobcard" | "vehicle";
 
@@ -238,7 +239,7 @@ export default function QuickCreateDialog() {
                 </div>
                 <div>
                   <label className="label">Location</label>
-                  <input name="location" className={input} placeholder="Showroom, workshop or customer address" />
+                  <LocationAutocomplete className={input} placeholder="Showroom, workshop or customer address" />
                 </div>
                 <div>
                   <label className="label">
