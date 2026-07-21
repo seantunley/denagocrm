@@ -1,15 +1,20 @@
 import { getSetting } from "./settings";
 import { logError } from "./errorLog";
+import { elevenLabsSTT } from "./elevenlabs";
 
 /**
- * Transcribes an audio clip (e.g. a WhatsApp voice note) to text using an
- * OpenAI-compatible Whisper endpoint. Optional — needs OPENAI_API_KEY set.
- * Returns null if not configured or on failure (caller degrades gracefully).
+ * Transcribes an audio clip (e.g. a WhatsApp voice note) to text. ElevenLabs is
+ * our standard voice provider, so it's tried first; OpenAI Whisper is a fallback
+ * for existing setups. Returns null if neither is configured or on failure
+ * (caller degrades gracefully).
  */
 export async function transcribeVoice(
   buffer: Buffer,
   contentType = "audio/ogg"
 ): Promise<string | null> {
+  const viaEleven = await elevenLabsSTT(buffer, contentType);
+  if (viaEleven) return viaEleven;
+
   const apiKey = await getSetting("OPENAI_API_KEY");
   if (!apiKey) return null;
   try {

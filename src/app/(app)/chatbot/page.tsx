@@ -86,8 +86,9 @@ export default async function ChatbotSettingsPage() {
               <textarea name="brief" className="input" rows={4} defaultValue={setting("BOT_AI_BRIEF") || ""} placeholder="Delivery areas & fees, warranty, finance, service turnaround, location, tone. The bot only states facts you give it here (plus live prices)." />
             </div>
             <div>
-              <label className="label">Voice-note transcription key (OpenAI Whisper) — optional</label>
-              <input name="whisperKey" className="input" type="password" placeholder={hasWhisper ? "•••••••• (saved — leave blank to keep)" : "sk-… — lets the bot understand WhatsApp voice notes"} />
+              <label className="label">Voice-note transcription key (OpenAI Whisper) — optional fallback</label>
+              <input name="whisperKey" className="input" type="password" placeholder={hasWhisper ? "•••••••• (saved — leave blank to keep)" : "sk-… — fallback if ElevenLabs isn't set"} />
+              <p className="text-xs text-muted-foreground mt-1">Voice replies &amp; the ElevenLabs key/voice live in <b>Settings → Integrations → ElevenLabs</b>.</p>
             </div>
           </div>
 

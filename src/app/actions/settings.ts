@@ -216,6 +216,10 @@ export async function saveSetting(formData: FormData) {
   const key = String(formData.get("key") ?? "");
   const value = String(formData.get("value") ?? "").trim();
   if (!key) return;
+  // Secret fields render blank (never echo the stored value into the DOM) and
+  // pass keepIfBlank — a blank submit then means "leave the saved value alone"
+  // rather than wiping it.
+  if (!value && formData.get("keepIfBlank")) return;
   await putSetting(key, value);
   revalidatePath("/settings");
 }
