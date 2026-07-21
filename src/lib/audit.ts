@@ -68,11 +68,15 @@ function actorType(entry: AuditEntry, actorName: string) {
 }
 
 /**
- * The acting tenant from the current session, best-effort. Dynamically imported
- * to avoid any import cycle with auth, and fully guarded — outside a request
- * (crons/scripts) there is no session, so this returns null and never throws.
+ * The acting tenant for an audit entry, best-effort. Only read for a real
+ * authenticated STAFF actor (`entry.user` present): customer/portal/website and
+ * system/cron entries must stay null, even if the request happens to carry a
+ * same-origin staff `denago_session` cookie — otherwise their attribution would
+ * be corrupted by an unrelated tenant. Dynamically imported to avoid an import
+ * cycle with auth, and fully guarded (no session/request → null, never throws).
  */
-async function actingTenantId(): Promise<string | null> {
+async function actingTenantId(entry: AuditEntry): Promise<string | null> {
+  if (!entry.user) return null; // non-staff / system actor → no session tenant
   try {
     const { getActiveTenantId } = await import("./auth");
     return await getActiveTenantId();
@@ -97,7 +101,7 @@ async function writeAudit(entry: AuditEntry) {
     : sanitizeAuditValue(entry.metadata) as Record<string, unknown>;
   const fields = entry.changedFields ?? changedFields(safeBefore, safeAfter);
   const actorName = entry.userName ?? entry.user?.name ?? "System";
-  const tenantId = await actingTenantId();
+  const tenantId = await actingTenantId(entry);
 
   await basePrisma.$transaction(async (transaction) => {
     await transaction.$executeRaw`
@@ -144,7 +148,7 @@ export async function logAudit(entry: AuditEntry): Promise<void> {
           leadId: entry.leadId ?? null,
           userId: entry.user?.id ?? null,
           userName: entry.userName ?? entry.user?.name ?? "System",
-          tenantId: await actingTenantId(),
+          tenantId: await actingTenantId(entry),
         },
       });
     } catch {}
