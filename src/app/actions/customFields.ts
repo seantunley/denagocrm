@@ -26,7 +26,7 @@ const str = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
 
 /** Create or update a custom-field definition. Owner only. */
 export async function saveCustomFieldDef(formData: FormData) {
-  await requireOwner();
+  const owner = await requireOwner();
   const id = str(formData, "id") || null;
   const entity = str(formData, "entity");
   const label = str(formData, "label");
@@ -76,7 +76,7 @@ export async function saveCustomFieldDef(formData: FormData) {
   await logAudit({
     action: id ? "custom_field.updated" : "custom_field.created",
     summary: `${id ? "Updated" : "Added"} custom ${entity} field “${label}”`,
-    userName: "Owner",
+    user: owner,
   });
   revalidatePath("/settings/custom-fields");
   revalidatePath("/", "layout");
@@ -84,14 +84,14 @@ export async function saveCustomFieldDef(formData: FormData) {
 
 /** Delete a custom-field definition (and its values, via cascade). Owner only. */
 export async function deleteCustomFieldDef(id: string) {
-  await requireOwner();
+  const owner = await requireOwner();
   const def = await prisma.customFieldDef.findUnique({ where: { id } });
   if (!def) return;
   await prisma.customFieldDef.delete({ where: { id } });
   await logAudit({
     action: "custom_field.deleted",
     summary: `Deleted custom ${def.entity} field “${def.label}”`,
-    userName: "Owner",
+    user: owner,
   });
   revalidatePath("/settings/custom-fields");
   revalidatePath("/", "layout");

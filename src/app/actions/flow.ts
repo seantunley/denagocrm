@@ -30,7 +30,7 @@ export async function saveFlow(id: string, json: string): Promise<{ ok?: boolean
   const f = parsed as { start?: string; nodes?: Record<string, unknown> };
   if (!f.start || !f.nodes || !f.nodes[f.start]) return { error: "Flow needs a valid start node." };
   await prisma.botFlow.update({ where: { id }, data: { definition: JSON.stringify(parsed) } });
-  await logAudit({ action: "bot.flow_saved", summary: "Chatbot flow updated", userName: owner.name });
+  await logAudit({ action: "bot.flow_saved", summary: "Chatbot flow updated", user: owner });
   revalidatePath(`/bot-builder/${id}`);
   return { ok: true };
 }
