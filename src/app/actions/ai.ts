@@ -2,7 +2,7 @@
 
 import { prisma } from "@/lib/db";
 import { requireOperational, requireOwner } from "@/lib/auth";
-import { requireLeadAccess, requireContactAccess, canAccessContact } from "@/lib/permissions";
+import { requireLeadAccess, requireContactAccess, canAccessContact, hasPermission } from "@/lib/permissions";
 import { aiCheckDraft, aiResearch } from "@/lib/ai";
 import { basePrisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
@@ -117,8 +117,10 @@ export async function researchRecord(
     if (!l) return { error: "Lead not found." };
     name = l.name;
     email = l.email;
-    // Link the research to the lead's contact too, so it shows on both.
-    resolvedContactId = contactId ?? l.contactId;
+    // Link the research to the LEAD'S OWN contact — never a contactId supplied
+    // alongside the leadId, which would let a caller point the write at an
+    // unrelated contact they happen to have access to.
+    resolvedContactId = l.contactId;
   } else {
     const c = await prisma.contact.findUnique({ where: { id: contactId! } });
     if (!c) return { error: "Contact not found." };
@@ -126,12 +128,16 @@ export async function researchRecord(
     email = c.email;
   }
 
-  // Only enrich the linked contact if this user may also access it — a lead-scoped
-  // user must not write research onto a contact they can't otherwise see. (An
-  // explicit contactId was already authorized above, so this is always true then.)
-  const canWriteContact = resolvedContactId
-    ? await canAccessContact(user, resolvedContactId)
-    : false;
+  // Only enrich the linked contact if this user may also EDIT it — writing
+  // Contact.research is a contact edit, so require contacts.edit AND access to the
+  // record, not merely view scope. A lead-scoped user with only contacts.view thus
+  // updates the lead but never the contact. (The contact-only path already passed
+  // requireContactAccess(…, "contacts.edit"), so both hold there.)
+  const canWriteContact = Boolean(
+    resolvedContactId &&
+      (await hasPermission(user, "contacts.edit")) &&
+      (await canAccessContact(user, resolvedContactId)),
+  );
 
   const result = await aiResearch({ name, email });
   if ("error" in result) return { error: result.error };
