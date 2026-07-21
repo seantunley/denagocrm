@@ -11,11 +11,25 @@ import { logError } from "./errorLog";
 
 const API = "https://api.elevenlabs.io/v1";
 // Sensible defaults; overridable via settings if ever needed.
-const DEFAULT_STT_MODEL = "scribe_v1";
+const DEFAULT_STT_MODEL = "scribe_v2"; // current model (scribe_v1 still works but is the older one)
 const DEFAULT_TTS_MODEL = "eleven_turbo_v2_5"; // fast + cheap, good for chat replies
 
+/** Enough config to transcribe inbound voice notes — needs only the API key. */
 export async function isElevenLabsConfigured(): Promise<boolean> {
   return Boolean(await getSetting("ELEVENLABS_API_KEY"));
+}
+
+/**
+ * Enough config to *send* a voice note back — needs the API key AND a voice.
+ * Without a voice, elevenLabsTTS returns null and we'd silently fall back to
+ * text, so the voice-reply path must gate on this, not on the key alone.
+ */
+export async function canSynthesizeVoice(): Promise<boolean> {
+  const [key, voiceId] = await Promise.all([
+    getSetting("ELEVENLABS_API_KEY"),
+    getSetting("ELEVENLABS_VOICE_ID"),
+  ]);
+  return Boolean(key && voiceId);
 }
 
 /** Transcribe an audio clip to text. Returns null if unconfigured or on failure. */

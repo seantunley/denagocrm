@@ -3,7 +3,7 @@ import { getSetting } from "./settings";
 import { sendWhatsAppText, sendWhatsAppAudio, matchByPhone } from "./whatsapp";
 import { sendPushToAll } from "./push";
 import { isBotAiEnabled, generateBotReply, type BotMsg } from "./botAi";
-import { elevenLabsTTS, isElevenLabsConfigured } from "./elevenlabs";
+import { elevenLabsTTS, canSynthesizeVoice } from "./elevenlabs";
 import { saveFile } from "./storage";
 
 export type BotRule = { id: string; keywords: string; reply: string };
@@ -42,9 +42,13 @@ async function withinOfficeHours(): Promise<boolean> {
 const AUTO_MARKER = "🤖 Auto-reply";
 const AI_MARKER = "🤖 Assistant";
 
-/** Voice replies are on only when explicitly enabled AND ElevenLabs is configured. */
+/**
+ * Voice replies are on only when explicitly enabled AND we can actually
+ * synthesise (key + voice). Gating on the full capability — not just the key —
+ * stops us marking a text fallback as a voice reply when no voice is set.
+ */
 async function voiceRepliesEnabled(): Promise<boolean> {
-  return (await getSetting("WHATSAPP_VOICE_REPLIES")) === "true" && (await isElevenLabsConfigured());
+  return (await getSetting("WHATSAPP_VOICE_REPLIES")) === "true" && (await canSynthesizeVoice());
 }
 
 /**
