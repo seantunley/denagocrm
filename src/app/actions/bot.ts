@@ -31,7 +31,7 @@ export async function saveBotSettings(formData: FormData) {
   await logAudit({
     action: "bot.settings",
     summary: `WhatsApp bot ${enabled ? "enabled" : "disabled"}${aiEnabled ? " (AI assistant on)" : ""}`,
-    userName: owner.name,
+    user: owner,
   });
   revalidatePath("/settings");
 }
