@@ -55,7 +55,8 @@ async function voiceRepliesEnabled(): Promise<boolean> {
 async function sendVoiceReply(fromDigits: string, text: string): Promise<{ ok: boolean; error?: string }> {
   const audio = await elevenLabsTTS(text);
   if (audio) {
-    const url = await saveFile(audio.buffer, "voice-reply.mp3", audio.contentType).catch(() => null);
+    // .ogg so WhatsApp treats it as a voice note (PTT waveform), not an audio file.
+    const url = await saveFile(audio.buffer, "voice-reply.ogg", audio.contentType).catch(() => null);
     if (url && url.startsWith("http")) {
       const res = await sendWhatsAppAudio(fromDigits, url);
       if (res.ok) return { ok: true };

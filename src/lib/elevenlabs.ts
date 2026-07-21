@@ -47,9 +47,11 @@ export async function elevenLabsSTT(buffer: Buffer, contentType = "audio/ogg"): 
 }
 
 /**
- * Synthesise speech from text. Returns MP3 bytes (audio/mpeg) or null. MP3 sends
- * fine as a WhatsApp audio message; a true PTT waveform would need ogg/opus, which
- * needs transcoding we don't have serverless — mp3 is the pragmatic v1.
+ * Synthesise speech from text. Returns OGG/Opus bytes (audio/ogg) or null.
+ * ElevenLabs' opus_48000_64 output is a mono OGG-Opus stream (verified: bytes
+ * start "OggS" + "OpusHead 01 01"), which is exactly WhatsApp's voice-note (PTT)
+ * format — so replies render with the real waveform, no transcoding needed. It's
+ * also ~40% smaller than the mp3 we used before.
  */
 export async function elevenLabsTTS(text: string): Promise<{ buffer: Buffer; contentType: string } | null> {
   const apiKey = await getSetting("ELEVENLABS_API_KEY");
@@ -59,12 +61,12 @@ export async function elevenLabsTTS(text: string): Promise<{ buffer: Buffer; con
   const clean = text.trim();
   if (!clean) return null;
   try {
-    const res = await fetch(`${API}/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
+    const res = await fetch(`${API}/text-to-speech/${encodeURIComponent(voiceId)}?output_format=opus_48000_64`, {
       method: "POST",
       headers: {
         "xi-api-key": apiKey,
         "Content-Type": "application/json",
-        Accept: "audio/mpeg",
+        Accept: "audio/ogg",
       },
       body: JSON.stringify({ text: clean, model_id: model }),
       signal: AbortSignal.timeout(30000),
@@ -74,7 +76,7 @@ export async function elevenLabsTTS(text: string): Promise<{ buffer: Buffer; con
       return null;
     }
     const buffer = Buffer.from(await res.arrayBuffer());
-    return buffer.length ? { buffer, contentType: "audio/mpeg" } : null;
+    return buffer.length ? { buffer, contentType: "audio/ogg" } : null;
   } catch (e) {
     await logError("elevenlabs-tts", e);
     return null;
