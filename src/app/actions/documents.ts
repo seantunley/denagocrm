@@ -14,32 +14,50 @@ import {
   requireVehicleAccess,
   requireJobCardAccess,
   requireQuoteAccess,
+  type PermissionUser,
 } from "@/lib/permissions";
 
 const MAX_SIZE = 25 * 1024 * 1024;
 
-async function requireUploadTargets(formData: FormData) {
+type UploadTarget =
+  | { kind: "contact"; contactId: string }
+  | { kind: "vehicle"; vehicleId: string }
+  | { kind: "jobCard"; jobCardId: string }
+  | { kind: "quote"; quoteId: string }
+  | { kind: "none" };
+
+/**
+ * Authorize a document upload against EXACTLY ONE parent record. The previous
+ * version authorized the first non-empty target but then stored all four ids —
+ * so a caller could pass one accessible contact id to pass the check and an
+ * inaccessible vehicle/quote/job-card id in another field, linking the document
+ * to a record they can't access (document access is the union of linked
+ * records). Reject ambiguous submissions, authorize the single target, and hand
+ * back exactly that target so the caller stores only it.
+ */
+async function authorizeUploadTarget(
+  formData: FormData
+): Promise<{ user: PermissionUser; target: UploadTarget }> {
   const contactId = String(formData.get("contactId") ?? "").trim();
   const vehicleId = String(formData.get("vehicleId") ?? "").trim();
   const jobCardId = String(formData.get("jobCardId") ?? "").trim();
   const quoteId = String(formData.get("quoteId") ?? "").trim();
-  if (contactId) return requireContactAccess(contactId, "documents.upload");
-  if (vehicleId) return requireVehicleAccess(vehicleId, "documents.upload");
-  if (jobCardId) return requireJobCardAccess(jobCardId, "documents.upload");
-  if (quoteId) return requireQuoteAccess(quoteId, "documents.upload");
-  return requirePermission("documents.upload");
+  const providedCount = [contactId, vehicleId, jobCardId, quoteId].filter(Boolean).length;
+  if (providedCount > 1) {
+    throw new Error("A document can be filed against only one record.");
+  }
+  if (contactId) return { user: await requireContactAccess(contactId, "documents.upload"), target: { kind: "contact", contactId } };
+  if (vehicleId) return { user: await requireVehicleAccess(vehicleId, "documents.upload"), target: { kind: "vehicle", vehicleId } };
+  if (jobCardId) return { user: await requireJobCardAccess(jobCardId, "documents.upload"), target: { kind: "jobCard", jobCardId } };
+  if (quoteId) return { user: await requireQuoteAccess(quoteId, "documents.upload"), target: { kind: "quote", quoteId } };
+  return { user: await requirePermission("documents.upload"), target: { kind: "none" } };
 }
 
 export async function uploadDocument(formData: FormData) {
-  const user = await requireUploadTargets(formData);
+  const { user, target } = await authorizeUploadTarget(formData);
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) return;
   if (file.size > MAX_SIZE) throw new Error("File exceeds 25 MB limit");
-
-  const str = (k: string) => {
-    const v = String(formData.get(k) ?? "").trim();
-    return v === "" ? null : v;
-  };
 
   const buffer = Buffer.from(await file.arrayBuffer());
   const mimeType = file.type || "application/octet-stream";
@@ -51,10 +69,11 @@ export async function uploadDocument(formData: FormData) {
       storedName,
       mimeType,
       sizeBytes: file.size,
-      contactId: str("contactId"),
-      vehicleId: str("vehicleId"),
-      jobCardId: str("jobCardId"),
-      quoteId: str("quoteId"),
+      // Only the single authorized target — never trust the other id fields.
+      contactId: target.kind === "contact" ? target.contactId : null,
+      vehicleId: target.kind === "vehicle" ? target.vehicleId : null,
+      jobCardId: target.kind === "jobCard" ? target.jobCardId : null,
+      quoteId: target.kind === "quote" ? target.quoteId : null,
       uploadedById: user.id,
     },
     include: { vehicle: true, jobCard: true },
@@ -200,12 +219,15 @@ export async function moveDocument(id: string, formData: FormData) {
   else if (kind === "vehicle") await requireVehicleAccess(targetId, "documents.manage");
   else if (kind === "quote") await requireQuoteAccess(targetId, "documents.manage");
   else return;
+  // Clear every OTHER link on every move — otherwise moving a contact-filed doc
+  // onto a vehicle/quote would keep the old contactId, leaving it linked to both
+  // (and document access is the union of linked records).
   const data =
     kind === "contact"
-      ? { contactId: targetId, vehicleId: null, quoteId: null, jobCardId: null }
+      ? { contactId: targetId, vehicleId: null, jobCardId: null, quoteId: null }
       : kind === "vehicle"
-        ? { vehicleId: targetId }
-        : { quoteId: targetId };
+        ? { vehicleId: targetId, contactId: null, jobCardId: null, quoteId: null }
+        : { quoteId: targetId, contactId: null, vehicleId: null, jobCardId: null };
   const doc = await prisma.document.update({ where: { id }, data });
   await logAudit({ action: "document.moved", summary: `Re-filed “${doc.fileName}”`, user });
   revalidatePath("/settings/documents");

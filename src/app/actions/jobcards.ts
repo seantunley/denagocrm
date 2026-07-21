@@ -177,6 +177,10 @@ export async function addJobCardItem(jobCardId: string, formData: FormData) {
 export async function deleteJobCardItem(id: string, jobCardId: string, formData: FormData) {
   const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+  // Scope the child to the authorized job card — a caller with access to THIS
+  // job card must not be able to delete another job card's item by id.
+  const owned = await prisma.jobCardItem.findFirst({ where: { id, jobCardId } });
+  if (!owned) return;
   const item = await prisma.jobCardItem.delete({ where: { id } });
   if (item.partId && item.kind === "part") {
     await prisma.part.update({
@@ -278,7 +282,8 @@ export async function stopTimeEntry(jobCardId: string) {
 
 export async function deleteTimeEntry(entryId: string, jobCardId: string) {
   await requireJobCardAccess(jobCardId, "jobcards.manage");
-  await prisma.jobCardTimeEntry.delete({ where: { id: entryId } }).catch(() => {});
+  // Scoped delete: only removes the entry if it belongs to the authorized job card.
+  await prisma.jobCardTimeEntry.deleteMany({ where: { id: entryId, jobCardId } });
   revalidatePath(`/jobcards/${jobCardId}`);
 }
 
@@ -419,18 +424,24 @@ export async function setInspectionItem(itemId: string, jobCardId: string, formD
   await requireJobCardAccess(jobCardId, "jobcards.manage");
   const status = String(formData.get("status") ?? "ok");
   const notes = String(formData.get("notes") ?? "").trim() || null;
-  await prisma.jobCardInspectionItem.update({ where: { id: itemId }, data: { status, notes } });
+  // Scoped update: only touches the item if it belongs to the authorized job card.
+  await prisma.jobCardInspectionItem.updateMany({ where: { id: itemId, jobCardId }, data: { status, notes } });
   revalidatePath(`/jobcards/${jobCardId}`);
 }
 
 export async function deleteInspectionItem(itemId: string, jobCardId: string) {
   await requireJobCardAccess(jobCardId, "jobcards.manage");
-  await prisma.jobCardInspectionItem.delete({ where: { id: itemId } }).catch(() => {});
+  await prisma.jobCardInspectionItem.deleteMany({ where: { id: itemId, jobCardId } });
   revalidatePath(`/jobcards/${jobCardId}`);
 }
 
 export async function uploadInspectionPhoto(itemId: string, jobCardId: string, formData: FormData) {
   await requireJobCardAccess(jobCardId, "jobcards.manage");
+  // Verify the item belongs to the authorized job card BEFORE saving a file, so a
+  // wrong item id can't attach a photo to another job card's inspection (or leave
+  // an orphaned blob).
+  const owned = await prisma.jobCardInspectionItem.findFirst({ where: { id: itemId, jobCardId }, select: { id: true } });
+  if (!owned) return;
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) return;
   if (file.size > 4 * 1024 * 1024 || !file.type.startsWith("image/")) return;
@@ -464,6 +475,9 @@ export async function decideApproval(approvalId: string, jobCardId: string, deci
   const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
   const decidedVia = String(formData.get("decidedVia") ?? "phone");
   const notes = String(formData.get("notes") ?? "").trim() || null;
+  // Scope to the authorized job card so a caller can't decide another job's approval.
+  const owned = await prisma.jobCardApproval.findFirst({ where: { id: approvalId, jobCardId }, select: { id: true } });
+  if (!owned) return;
   const approval = await prisma.jobCardApproval.update({
     where: { id: approvalId },
     data: { status: decision, decidedVia, decidedAt: new Date(), notes },
@@ -475,7 +489,7 @@ export async function decideApproval(approvalId: string, jobCardId: string, deci
 
 export async function deleteApproval(approvalId: string, jobCardId: string) {
   await requireJobCardAccess(jobCardId, "jobcards.manage");
-  await prisma.jobCardApproval.delete({ where: { id: approvalId } }).catch(() => {});
+  await prisma.jobCardApproval.deleteMany({ where: { id: approvalId, jobCardId } });
   revalidatePath(`/jobcards/${jobCardId}`);
 }
 
@@ -510,22 +524,36 @@ export async function reservePart(jobCardId: string, formData: FormData) {
 
 export async function releaseReservation(reservationId: string, jobCardId: string) {
   await requireJobCardAccess(jobCardId, "jobcards.manage");
-  await prisma.partReservation.update({ where: { id: reservationId }, data: { status: "released" } }).catch(() => {});
+  // Require status "active" so a consumed reservation can't be flipped back to
+  // released (which would leave its stock decrement + job-card line in place and
+  // let it be consumed again).
+  await prisma.partReservation.updateMany({
+    where: { id: reservationId, jobCardId, status: "active" },
+    data: { status: "released" },
+  });
   revalidatePath(`/jobcards/${jobCardId}`);
   revalidatePath("/parts");
 }
 
 export async function consumeReservation(reservationId: string, jobCardId: string) {
   await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const reservation = await prisma.partReservation.findUnique({ where: { id: reservationId }, include: { part: true } });
-  if (!reservation || reservation.status !== "active") return;
-  await prisma.$transaction([
-    prisma.jobCardItem.create({
+  // Claim the reservation FIRST with a conditional state transition inside the
+  // transaction: only the request that flips active→consumed (count === 1) may
+  // create the line and decrement stock. Two concurrent consumes can no longer
+  // both read it active and both decrement.
+  await prisma.$transaction(async (tx) => {
+    const claimed = await tx.partReservation.updateMany({
+      where: { id: reservationId, jobCardId, status: "active" },
+      data: { status: "consumed" },
+    });
+    if (claimed.count !== 1) return;
+    const reservation = await tx.partReservation.findUnique({ where: { id: reservationId }, include: { part: true } });
+    if (!reservation) return;
+    await tx.jobCardItem.create({
       data: { jobCardId, kind: "part", description: reservation.part.name, qty: reservation.qty, unitPriceCents: reservation.part.priceCents, partId: reservation.partId },
-    }),
-    prisma.part.update({ where: { id: reservation.partId }, data: { stockQty: { decrement: reservation.qty } } }),
-    prisma.partReservation.update({ where: { id: reservationId }, data: { status: "consumed" } }),
-  ]);
+    });
+    await tx.part.update({ where: { id: reservation.partId }, data: { stockQty: { decrement: reservation.qty } } });
+  });
   revalidatePath(`/jobcards/${jobCardId}`);
   revalidatePath("/parts");
 }

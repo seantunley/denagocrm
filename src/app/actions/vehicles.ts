@@ -133,6 +133,13 @@ export async function updateVehicle(id: string, formData: FormData) {
   await requireVehicleAccess(id, "vehicles.manage");
   const data = vehicleData(formData);
   if (!data.model) throw new Error("Model is required");
+  // #15: reassigning the vehicle to a DIFFERENT contact requires access to that
+  // destination contact too — authorizing only the vehicle would let a user move
+  // it onto a customer they can't otherwise access.
+  const current = await prisma.vehicle.findUnique({ where: { id }, select: { contactId: true } });
+  if (current && data.contactId && data.contactId !== current.contactId) {
+    await requireContactAccess(data.contactId, "vehicles.manage");
+  }
   await prisma.vehicle.update({ where: { id }, data });
   revalidatePath("/vehicles");
   revalidatePath(`/vehicles/${id}`);
@@ -166,6 +173,9 @@ export async function addMileage(vehicleId: string, formData: FormData) {
 export async function deleteMileage(id: string, vehicleId: string, formData: FormData) {
   const user = await requireVehicleAccess(vehicleId, "vehicles.manage");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+  // Scope to the authorized vehicle — don't delete another vehicle's entry by id.
+  const owned = await prisma.mileageLog.findFirst({ where: { id, vehicleId } });
+  if (!owned) return;
   const entry = await prisma.mileageLog.delete({ where: { id } });
   const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
   await logAudit({
@@ -224,6 +234,9 @@ export async function addServiceRecord(vehicleId: string, formData: FormData) {
 export async function deleteServiceRecord(id: string, vehicleId: string, formData: FormData) {
   const user = await requireVehicleAccess(vehicleId, "vehicles.manage");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+  // Scope to the authorized vehicle — don't delete another vehicle's record by id.
+  const owned = await prisma.serviceRecord.findFirst({ where: { id, vehicleId } });
+  if (!owned) return;
   const record = await prisma.serviceRecord.delete({ where: { id } });
   const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
   await logAudit({

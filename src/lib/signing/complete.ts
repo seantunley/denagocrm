@@ -5,12 +5,18 @@ import { parseDocument } from "@/lib/doceditor/model";
 import { renderDocumentHtml, type StampField } from "@/lib/doceditor/serialize";
 import { htmlToPdf } from "@/lib/customDocs";
 import { sealPdf } from "@/lib/pdf/seal";
-import { saveFile, readFile } from "@/lib/storage";
+import { saveFile, readFile, deleteFile } from "@/lib/storage";
 import { sendEmail } from "@/lib/email";
 import { formatDateTime } from "@/lib/format";
 import { bindCtx, logoDataUri } from "./render";
 import { logSignEvent } from "./events";
+import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
 import { runPostCompletion } from "./postComplete";
+
+/** Internal sentinel: the completion claim was lost to a concurrent close. */
+class CompletionLost extends Error {}
+/** Internal sentinel: the source quote/job card couldn't be signed (ineligible). */
+class SourceCompletionLost extends Error {}
 
 function esc(s: unknown): string {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -48,7 +54,11 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     where: { id: requestId },
     include: { recipients: { orderBy: { order: "asc" } } },
   });
-  if (!req || req.status === "completed") return;
+  // A request that is already closed (completed, voided or declined) must never
+  // be completed. Voiding races with the final signer's transaction: the signer
+  // commits the recipient + fields, then calls this outside that lock, so a void
+  // can land in between. Reject here AND re-check with a conditional claim below.
+  if (!req || isRequestClosed(req.status)) return;
   const doc = parseDocument(req.snapshotJson);
   if (!doc) return;
   const ctx = await bindCtx(req.quoteId, req.jobCardId);
@@ -81,32 +91,100 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   const storedName = await saveFile(pdf, `${req.title} (signed).pdf`, "application/pdf");
 
   const uploaderId = req.createdById || (await prisma.user.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } }))?.id;
-  const document = uploaderId
-    ? await prisma.document.create({
-        data: {
-          fileName: `${req.title} (signed).pdf`, storedName, mimeType: "application/pdf", sizeBytes: pdf.length,
-          quoteId: req.quoteId, jobCardId: req.jobCardId, contactId: req.contactId, tag: "signed", uploadedById: uploaderId,
-        },
-      })
-    : null;
+  const firstSigner = req.recipients.find((r) => r.status === "signed" && r.role !== "viewer");
+  const signerName = firstSigner?.signedName || firstSigner?.name || "Customer";
 
-  await prisma.signatureRequest.update({
-    where: { id: requestId },
-    data: { status: "completed", completedAt: new Date(), signedPdfRef: storedName, signedPdfHash: hash, signedDocId: document?.id ?? null },
-  });
+  // Create the signed Document, claim completion, AND sign the SOURCE record
+  // (quote/job card) in ONE transaction. Previously the source was signed
+  // afterwards in a best-effort, error-swallowing step, so a crash could leave
+  // the request "completed" and the PDF distributed while the quote/job card
+  // stayed unsigned — with no retry path (the closed request short-circuits).
+  // Signing the source here (guarded live + unsigned + not-superseded) makes the
+  // core state atomic; only external fan-out (automations, push) is best-effort.
+  // A lost claim rolls the Document row back; the blob is kept only once claimed.
+  let documentId: string | null = null;
+  let sourceSigned = false;
+  let wonLeadId: string | null = null;
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Universal lock order — SOURCE record first, THEN the signature request —
+      // matching quote/job-card deletion and signing start. Completion used to
+      // touch the request before the source while deletion did the reverse, so a
+      // final signature racing a delete could deadlock (each holding what the
+      // other needed). Locking the source row up front makes the order consistent.
+      if (req.quoteId) await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${req.quoteId} FOR UPDATE`;
+      else if (req.jobCardId) await tx.$executeRaw`SELECT id FROM "JobCard" WHERE id = ${req.jobCardId} FOR UPDATE`;
+      const document = uploaderId
+        ? await tx.document.create({
+            data: {
+              fileName: `${req.title} (signed).pdf`, storedName, mimeType: "application/pdf", sizeBytes: pdf.length,
+              quoteId: req.quoteId, jobCardId: req.jobCardId, contactId: req.contactId, tag: "signed", uploadedById: uploaderId,
+            },
+          })
+        : null;
+      const claimed = await tx.signatureRequest.updateMany({
+        where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
+        data: { status: "completed", completedAt: new Date(), signedPdfRef: storedName, signedPdfHash: hash, signedDocId: document?.id ?? null },
+      });
+      if (claimed.count === 0) throw new CompletionLost();
+      documentId = document?.id ?? null;
+
+      if (req.quoteId) {
+        const signedQuote = await tx.quote.updateMany({
+          where: { id: req.quoteId, deletedAt: null, supersededAt: null, signedAt: null },
+          data: { signedAt: new Date(), signedByName: signerName, status: "accepted", declinedAt: null, declineReason: null, signedPdfHash: hash },
+        });
+        if (signedQuote.count === 1) {
+          sourceSigned = true;
+          const q = await tx.quote.findUnique({ where: { id: req.quoteId }, select: { leadId: true } });
+          if (q?.leadId) {
+            // Win the lead in the SAME transaction, locked, so quote-accepted and
+            // lead-won can't diverge under a concurrent decline/accept.
+            await tx.$executeRaw`SELECT id FROM "Lead" WHERE id = ${q.leadId} FOR UPDATE`;
+            const won = await tx.lead.updateMany({ where: { id: q.leadId, deletedAt: null, status: "open" }, data: { status: "won" } });
+            if (won.count === 1) wonLeadId = q.leadId;
+          }
+        } else {
+          // Didn't sign it. Completing anyway is only OK if the quote is ALREADY
+          // signed (e.g. the legacy /sign path beat us); a deleted / superseded /
+          // missing quote is ineligible, so roll the whole completion back rather
+          // than complete + distribute a PDF for a quote that never got signed.
+          const q = await tx.quote.findUnique({ where: { id: req.quoteId }, select: { signedAt: true, deletedAt: true, supersededAt: true } });
+          if (!q || q.deletedAt || q.supersededAt || !q.signedAt) throw new SourceCompletionLost();
+        }
+      } else if (req.jobCardId) {
+        const signedJc = await tx.jobCard.updateMany({
+          where: { id: req.jobCardId, deletedAt: null, signedAt: null },
+          data: { signedAt: new Date(), signedByName: signerName },
+        });
+        if (signedJc.count === 1) {
+          sourceSigned = true;
+        } else {
+          const jc = await tx.jobCard.findUnique({ where: { id: req.jobCardId }, select: { signedAt: true, deletedAt: true } });
+          if (!jc || jc.deletedAt || !jc.signedAt) throw new SourceCompletionLost();
+        }
+      }
+    });
+  } catch (err) {
+    await deleteFile(storedName).catch(() => {});
+    if (err instanceof CompletionLost || err instanceof SourceCompletionLost) return;
+    throw err;
+  }
+
   await logSignEvent(requestId, { type: "completed", actor: "system", metadata: { hash } });
 
-  // Fire CRM side-effects (quote accepted → lead won, job card signed). Parity
-  // with the legacy /sign flow. Best-effort: never unwinds the completed request.
-  const firstSigner = req.recipients.find((r) => r.status === "signed" && r.role !== "viewer");
+  // External fan-out only (referral, automations, push, audit). The core source
+  // state is already committed above; this is best-effort and never unwinds it.
   await runPostCompletion({
     id: req.id,
     title: req.title,
     quoteId: req.quoteId,
     jobCardId: req.jobCardId,
-    signedByName: firstSigner?.signedName || firstSigner?.name || null,
+    signedByName: signerName,
     signedPdfHash: hash,
-    signedDocId: document?.id ?? null,
+    signedDocId: documentId,
+    sourceSigned,
+    wonLeadId,
   });
 
   // Email the sealed PDF to every recipient with an address.

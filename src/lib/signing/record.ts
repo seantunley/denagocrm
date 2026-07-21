@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { isRequestClosed } from "./status";
 
 /**
  * The signing state shown on a quote / job-card page. We surface the most recent
@@ -56,5 +57,7 @@ export async function activeRecordRequest(opts: { quoteId?: string | null; jobCa
 
 /** True when the record has an open request that should lock it against edits. */
 export function isLockedForSigning(state: RecordSigningState): boolean {
-  return !!state && state.status !== "completed" && state.status !== "declined";
+  // Any CLOSED request (completed/declined/voided/expired/rejected) leaves the
+  // record editable again; only a live request locks it.
+  return !!state && !isRequestClosed(state.status);
 }

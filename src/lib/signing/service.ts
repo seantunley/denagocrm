@@ -1,4 +1,5 @@
 import "server-only";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { formatDate } from "@/lib/format";
@@ -23,14 +24,19 @@ export async function createSignatureRequestFromDoc(opts: {
   ordering?: "parallel" | "sequential";
   message?: string;
   createdById?: string | null;
+  // Run all writes on this transaction client when provided, so the caller can
+  // create the request + recipients + fields + event atomically (and under a
+  // lock) — e.g. to guarantee at most one open request per quote/job card.
+  client?: Prisma.TransactionClient;
 }): Promise<{ id: string; recipients: number; fields: number }> {
   const { source } = opts;
+  const db = opts.client ?? prisma;
   const frozenDoc = freezeDocumentGlobals(opts.doc, {
     ...companyTokens(await getCompanyProfile()),
     "date.today": formatDate(new Date()),
   });
 
-  const request = await prisma.signatureRequest.create({
+  const request = await db.signatureRequest.create({
     data: {
       title: opts.title,
       status: "draft",
@@ -50,7 +56,7 @@ export async function createSignatureRequestFromDoc(opts: {
   const idMap = new Map<string, string>();
   for (let index = 0; index < frozenDoc.recipients.length; index += 1) {
     const recipient = frozenDoc.recipients[index];
-    const row = await prisma.signatureRecipient.create({
+    const row = await db.signatureRecipient.create({
       data: {
         requestId: request.id,
         name: recipient.name || `Recipient ${index + 1}`,
@@ -81,10 +87,10 @@ export async function createSignatureRequestFromDoc(opts: {
     })),
   );
   if (fieldsData.length) {
-    await prisma.signatureField.createMany({ data: fieldsData });
+    await db.signatureField.createMany({ data: fieldsData });
   }
 
-  await prisma.signatureEvent.create({
+  await db.signatureEvent.create({
     data: {
       requestId: request.id,
       type: "created",

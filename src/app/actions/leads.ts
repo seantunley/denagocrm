@@ -3,7 +3,6 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireCrm } from "@/lib/auth";
 import { parseRands } from "@/lib/format";
 import { runLeadAutomations } from "@/lib/automations";
 import { recordReferral, markReferralEarned } from "@/lib/referrals";
@@ -245,34 +244,69 @@ export async function moveLeadToTestDrive(
   stageId: string,
   data: { productId: string | null; date: string; time: string; location: string }
 ): Promise<{ ok: boolean; error?: string }> {
-  const user = await requireCrm();
+  // Record-level authorization (not a bare module check): the caller must be able
+  // to access this lead and change its stage, mirroring moveLead().
+  const user = await requireLeadAccess(leadId, "leads.change_stage");
   const when = new Date(`${data.date}T${data.time || "09:00"}:00+02:00`); // SA time
   if (isNaN(when.getTime())) return { ok: false, error: "Pick a valid date and time" };
 
-  const lead = await prisma.lead.update({
-    where: { id: leadId },
-    data: {
-      stageId,
-      position: await nextPosition(stageId),
-      stageEnteredAt: new Date(),
-      // Capture the model they want to drive if it changed / wasn't set
-      ...(data.productId ? { productId: data.productId } : {}),
-    },
-    include: { stage: true, product: true },
-  });
+  // Validate the destination stage exists/open, belongs to the lead's pipeline
+  // (or the user may cross pipelines), and is actually THE test-drive stage —
+  // the browser supplies stageId, so none of that can be trusted.
+  const currentScope = await getLeadPipeline(leadId);
+  const targetStage = await validateOpenStage(stageId);
+  if (
+    currentScope &&
+    currentScope.pipelineId !== targetStage.pipelineId &&
+    !(await hasPermission(user, "leads.change_pipeline"))
+  ) {
+    return { ok: false, error: "You cannot move leads between pipelines." };
+  }
+  const pipelineStages = await listPipelineStages(targetStage.pipelineId);
+  const testDriveStage = pipelineStages.find((s) => /test/i.test(s.name)); // same rule the board uses
+  if (!testDriveStage || testDriveStage.id !== stageId) {
+    return { ok: false, error: "That is not the test-drive stage." };
+  }
 
-  await prisma.activity.create({
-    data: {
-      type: "test_drive",
-      summary: `Test Drive${lead.product ? ` — ${lead.product.name}` : ""}`,
-      note: `Booked from the pipeline board for ${lead.name}.`,
-      location: data.location.trim() || null,
-      dueDate: when,
-      leadId,
-      contactId: lead.contactId,
-      assignedToId: lead.assignedToId ?? user.id,
-      createdById: user.id,
-    },
+  // A supplied product must be a real product, or the booking captures a bogus id.
+  let productId: string | null = null;
+  if (data.productId) {
+    const product = await prisma.product.findUnique({
+      where: { id: data.productId },
+      select: { id: true },
+    });
+    if (!product) return { ok: false, error: "That model is not available." };
+    productId = product.id;
+  }
+
+  const position = await nextPosition(stageId);
+  // Move the lead AND create the appointment in one transaction — a failure
+  // between them must not leave the lead moved without its test drive booked.
+  const lead = await prisma.$transaction(async (tx) => {
+    const updated = await tx.lead.update({
+      where: { id: leadId },
+      data: {
+        stageId,
+        position,
+        stageEnteredAt: new Date(),
+        ...(productId ? { productId } : {}),
+      },
+      include: { stage: true, product: true },
+    });
+    await tx.activity.create({
+      data: {
+        type: "test_drive",
+        summary: `Test Drive${updated.product ? ` — ${updated.product.name}` : ""}`,
+        note: `Booked from the pipeline board for ${updated.name}.`,
+        location: data.location.trim() || null,
+        dueDate: when,
+        leadId,
+        contactId: updated.contactId,
+        assignedToId: updated.assignedToId ?? user.id,
+        createdById: user.id,
+      },
+    });
+    return updated;
   });
 
   await logAudit({

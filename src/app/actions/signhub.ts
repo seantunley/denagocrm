@@ -7,6 +7,7 @@ import { logAudit } from "@/lib/audit";
 import { dispatchRequest, notifyRecipient } from "@/lib/signing/dispatch";
 import { logSignEvent } from "@/lib/signing/events";
 import { approveStep, rejectStep, canActOnStep } from "@/lib/signing/approvals";
+import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "@/lib/signing/status";
 
 /** Approve or reject a pending approval step from inside the app (hub queue). */
 export async function decideApproval(stepId: string, decision: "approve" | "reject", reason?: string): Promise<{ ok: boolean; error?: string }> {
@@ -27,7 +28,7 @@ export async function sendRequest(requestId: string): Promise<{ ok: boolean; not
   const user = await requireOwner();
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } });
   if (!req || req.deletedAt) return { ok: false, error: "Not found" };
-  if (req.status === "completed" || req.status === "voided") return { ok: false, error: "This request is closed." };
+  if (isRequestClosed(req.status)) return { ok: false, error: "This request is closed." };
   const reachable = req.recipients.filter((r) => r.role !== "viewer" && (r.email || r.phone));
   if (reachable.length === 0) return { ok: false, error: "Add an email or phone to at least one signer first." };
 
@@ -52,7 +53,14 @@ export async function voidRequest(requestId: string, reason?: string): Promise<{
   const user = await requireOwner();
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId } });
   if (!req) return { ok: false };
-  await prisma.signatureRequest.update({ where: { id: requestId }, data: { status: "voided" } });
+  // CONDITIONAL void — only an OPEN request. An unconditional update would
+  // overwrite a request a concurrent signer just completed / declined (or a
+  // workflow rejection), silently discarding that terminal state.
+  const voided = await prisma.signatureRequest.updateMany({
+    where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
+    data: { status: "voided" },
+  });
+  if (voided.count === 0) return { ok: false };
   await logSignEvent(requestId, { type: "voided", actor: `Denago: ${user.name}`, metadata: { reason: reason ?? "" } });
   await logAudit({ action: "signing.void", summary: `Voided “${req.title}”`, entityType: "SignatureRequest", entityId: requestId, user });
   revalidatePath("/signatures");
@@ -63,8 +71,10 @@ export async function voidRequest(requestId: string, reason?: string): Promise<{
 /** Update recipient contact details before sending (from the dashboard). */
 export async function updateRecipientContact(recipientId: string, patch: { email?: string; phone?: string }): Promise<{ ok: boolean }> {
   await requireOwner();
-  const r = await prisma.signatureRecipient.findUnique({ where: { id: recipientId } });
+  const r = await prisma.signatureRecipient.findUnique({ where: { id: recipientId }, include: { request: { select: { status: true, deletedAt: true } } } });
   if (!r) return { ok: false };
+  // Don't edit recipients on a closed/trashed request.
+  if (r.request.deletedAt || isRequestClosed(r.request.status)) return { ok: false };
   await prisma.signatureRecipient.update({ where: { id: recipientId }, data: { email: patch.email ?? r.email, phone: patch.phone ?? r.phone } });
   revalidatePath(`/signatures/${r.requestId}`);
   return { ok: true };

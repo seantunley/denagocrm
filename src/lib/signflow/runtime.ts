@@ -8,6 +8,7 @@ import { notifyApprover } from "@/lib/signing/approvals";
 import { logSignEvent } from "@/lib/signing/events";
 import { completeSignatureRequest } from "@/lib/signing/complete";
 import { notifyCreatorRejected } from "@/lib/signing/notify";
+import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "@/lib/signing/status";
 
 /**
  * Runtime interpreter for workflow-driven signature requests. Unlike the static
@@ -65,10 +66,20 @@ async function materialise(requestId: string, node: SignNode): Promise<void> {
     return;
   }
   if (node.type === "approval") {
-    // Decision approval — create the step + notify the approver.
+    // Re-check the parent request is still open — a void/decline could have closed
+    // it between the transition claim and here, and we must not create + notify an
+    // approval step for a dead request.
+    const parent = await prisma.signatureRequest.findUnique({ where: { id: requestId }, select: { status: true } });
+    if (!parent || isRequestClosed(parent.status)) return;
+    // Decision approval — materialise the step IDEMPOTENTLY. advanceWorkflow can
+    // run concurrently (e.g. two signing-start repairs), and advanceWorkflow()
+    // isn't itself serialized, so create the step via createMany + skipDuplicates
+    // against the @@unique([requestId, nodeId]) constraint: exactly one row (one
+    // token) is ever created for a node. Only the call that actually inserted it
+    // logs + notifies, so no duplicate approver emails / tokens either.
     const label = node.label || "Approval";
-    const step = await prisma.approvalStep.create({
-      data: {
+    const created = await prisma.approvalStep.createMany({
+      data: [{
         requestId, nodeId: node.id, label, mode: "decision",
         assigneeType: node.who.mode === "staff" ? "staff" : node.who.mode === "owner" ? "owner" : "role",
         assigneeUserId: node.who.userId ?? null,
@@ -76,8 +87,12 @@ async function materialise(requestId: string, node: SignNode): Promise<void> {
         assigneeName: node.who.name ?? null,
         assigneeEmail: node.who.email ?? null,
         token: newSignToken(),
-      },
+      }],
+      skipDuplicates: true,
     });
+    if (created.count === 0) return; // another advance already materialised + notified this node
+    const step = await prisma.approvalStep.findFirst({ where: { requestId, nodeId: node.id } });
+    if (!step) return;
     await logSignEvent(requestId, { type: "approval_requested", actor: "system", metadata: { label, stepId: step.id } });
     await notifyApprover(step.id);
   }
@@ -91,7 +106,7 @@ async function materialise(requestId: string, node: SignNode): Promise<void> {
 export async function advanceWorkflow(requestId: string): Promise<void> {
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId } });
   if (!req || !req.workflowGraphJson) return;
-  if (req.status === "completed" || req.status === "voided" || req.status === "rejected" || req.status === "declined") return;
+  if (isRequestClosed(req.status)) return;
   const frozen = parseFrozen(req.workflowGraphJson);
   if (!frozen) return;
   const { graph, vars } = frozen;
@@ -103,22 +118,27 @@ export async function advanceWorkflow(requestId: string): Promise<void> {
   } else {
     const cur = graph.nodes[req.currentNodeId];
     if (!cur) return;
+    // When the current node is NOT yet resolved we re-materialise it (idempotently)
+    // rather than bailing, so a crash between the transition commit and the first
+    // materialise() self-heals: a decision node with no ApprovalStep gets one, a
+    // signer that was never notified gets notified. materialise() is a no-op once
+    // the node is already materialised.
     if (cur.type === "signer") {
       const r = await prisma.signatureRecipient.findFirst({ where: { requestId, nodeId: cur.id } });
       if (r?.status === "declined") { await rejectRequest(requestId); return; } // a declined signer rejects the request
-      if (r?.status !== "signed") return; // not resolved yet
+      if (r?.status !== "signed") { await materialise(requestId, cur); return; } // not resolved yet — heal
       fromEdge = cur.next;
     } else if (cur.type === "approval") {
       if (cur.mode === "signature") {
         const r = await prisma.signatureRecipient.findFirst({ where: { requestId, nodeId: cur.id } });
         if (r?.status === "declined") { fromEdge = cur.whenRejected; }
         else if (r?.status === "signed") { fromEdge = cur.whenApproved; }
-        else return; // pending
+        else { await materialise(requestId, cur); return; } // pending — heal
       } else {
         const s = await prisma.approvalStep.findFirst({ where: { requestId, nodeId: cur.id }, orderBy: { createdAt: "desc" } });
         if (s?.status === "rejected") fromEdge = cur.whenRejected;
         else if (s?.status === "approved") fromEdge = cur.whenApproved;
-        else return; // pending
+        else { await materialise(requestId, cur); return; } // pending or never materialised — heal
       }
     } else {
       return;
@@ -127,7 +147,11 @@ export async function advanceWorkflow(requestId: string): Promise<void> {
 
   const next = walkToActionable(graph, fromEdge, vars);
   if (next.kind === "end") {
-    await prisma.signatureRequest.update({ where: { id: requestId }, data: { currentNodeId: null } });
+    // completeSignatureRequest atomically claims completion (status NOT IN closed,
+    // count === 1), so two concurrent advances reaching the end can't both
+    // complete. currentNodeId is deliberately left as-is: nulling it would read as
+    // "start" and let a third advance re-enter from the beginning before
+    // completion flips the status.
     await completeSignatureRequest(requestId);
     return;
   }
@@ -136,12 +160,47 @@ export async function advanceWorkflow(requestId: string): Promise<void> {
     await rejectRequest(requestId);
     return;
   }
-  await prisma.signatureRequest.update({ where: { id: requestId }, data: { currentNodeId: next.node.id, status: "in_progress" } });
+  // ATOMICALLY claim the transition FROM the node we observed to the next node.
+  // advanceWorkflow isn't otherwise serialized (concurrent signing-start repairs
+  // can both call it), so only the caller that wins this conditional move (from
+  // this exact currentNodeId, request still open) materialises + notifies — the
+  // others no-op. This prevents duplicate signing-link notifications, and the
+  // status guard drops the advance if a concurrent void/decline closed the
+  // request between our read and the claim.
+  const claimed = await prisma.signatureRequest.updateMany({
+    where: { id: requestId, currentNodeId: req.currentNodeId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
+    data: { currentNodeId: next.node.id, status: "in_progress" },
+  });
+  if (claimed.count !== 1) return;
   await materialise(requestId, next.node);
 }
 
+/**
+ * Idempotently heal a workflow request on the next signing-start. advanceWorkflow
+ * is now fully self-healing, so this just re-runs the interpreter, which covers
+ * EVERY crash point:
+ *   - currentNodeId null                → advance from the start;
+ *   - current node RESOLVED, not advanced (crash before advanceWorkflow ran) →
+ *     advance past it;
+ *   - current node PENDING, not materialised (crash before materialise ran) →
+ *     re-materialise it.
+ * All idempotent (createMany skipDuplicates for approvals; notifyRecipient's
+ * at-most-once claim for signers; conditional currentNodeId claim for advances).
+ * A no-op on a non-workflow or closed request.
+ */
+export async function repairWorkflow(requestId: string): Promise<void> {
+  await advanceWorkflow(requestId);
+}
+
 async function rejectRequest(requestId: string): Promise<void> {
-  await prisma.signatureRequest.update({ where: { id: requestId }, data: { status: "rejected", currentNodeId: null } });
+  // Conditional: only reject a still-open request, so a concurrent void (which
+  // committed "voided" between advanceWorkflow's read and here) isn't overwritten
+  // back to "rejected".
+  const claimed = await prisma.signatureRequest.updateMany({
+    where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
+    data: { status: "rejected", currentNodeId: null },
+  });
+  if (claimed.count !== 1) return;
   await logSignEvent(requestId, { type: "rejected", actor: "system" });
   await notifyCreatorRejected(requestId).catch(() => {});
 }
