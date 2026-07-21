@@ -4,6 +4,7 @@ import { saveFile, deleteFile } from "@/lib/storage";
 import { isValidSignToken } from "@/lib/signing/tokens";
 import { logSignEvent, reqMeta } from "@/lib/signing/events";
 import { advanceAfterSignature } from "@/lib/signing/workflow";
+import { isRequestClosed } from "@/lib/signing/status";
 import { logAudit } from "@/lib/audit";
 
 export const runtime = "nodejs";
@@ -32,7 +33,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
   const request = recipient.request;
   // The signing PAGE enforced these; the API must repeat every one — a direct
   // POST bypasses the page entirely.
-  if (request.deletedAt || request.status === "voided" || request.status === "completed" || request.status === "declined") {
+  if (request.deletedAt || isRequestClosed(request.status)) {
     return new Response("This document can no longer be signed.", { status: 409 });
   }
   if (request.expiresAt && request.expiresAt < new Date()) {
@@ -101,7 +102,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
       const rows = await tx.$queryRaw<{ status: string; deletedAt: Date | null; expiresAt: Date | null; ordering: string }[]>`
         SELECT "status", "deletedAt", "expiresAt", "ordering" FROM "SignatureRequest" WHERE "id" = ${request.id} FOR UPDATE`;
       const r = rows[0];
-      if (!r || r.deletedAt || r.status === "voided" || r.status === "completed" || r.status === "declined") {
+      if (!r || r.deletedAt || isRequestClosed(r.status)) {
         throw new SignAbort(409, "This document can no longer be signed.");
       }
       if (r.expiresAt && r.expiresAt < new Date()) {

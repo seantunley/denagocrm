@@ -66,6 +66,11 @@ async function materialise(requestId: string, node: SignNode): Promise<void> {
     return;
   }
   if (node.type === "approval") {
+    // Re-check the parent request is still open — a void/decline could have closed
+    // it between the transition claim and here, and we must not create + notify an
+    // approval step for a dead request.
+    const parent = await prisma.signatureRequest.findUnique({ where: { id: requestId }, select: { status: true } });
+    if (!parent || isRequestClosed(parent.status)) return;
     // Decision approval — materialise the step IDEMPOTENTLY. advanceWorkflow can
     // run concurrently (e.g. two signing-start repairs), and advanceWorkflow()
     // isn't itself serialized, so create the step via createMany + skipDuplicates
@@ -163,6 +168,31 @@ export async function advanceWorkflow(requestId: string): Promise<void> {
   });
   if (claimed.count !== 1) return;
   await materialise(requestId, next.node);
+}
+
+/**
+ * Idempotently heal a workflow request. Called when a signing-start reuses an
+ * existing open request, so a crash at ANY point self-heals on the next start:
+ *   - currentNodeId still null  → advance from the start;
+ *   - currentNodeId set         → RE-materialise the current node.
+ * The second case covers a crash between advanceWorkflow's transition commit and
+ * materialise() — a decision node with no ApprovalStep, or a signer node that was
+ * never notified. materialise() is idempotent (createMany skipDuplicates for
+ * approvals; notifyRecipient's at-most-once claim for signers), so re-running it
+ * is a no-op once the node is materialised.
+ */
+export async function repairWorkflow(requestId: string): Promise<void> {
+  const req = await prisma.signatureRequest.findUnique({ where: { id: requestId } });
+  if (!req || !req.workflowGraphJson || isRequestClosed(req.status)) return;
+  if (!req.currentNodeId) {
+    await advanceWorkflow(requestId);
+    return;
+  }
+  const frozen = parseFrozen(req.workflowGraphJson);
+  const node = frozen?.graph.nodes[req.currentNodeId];
+  if (node && (node.type === "signer" || node.type === "approval")) {
+    await materialise(requestId, node);
+  }
 }
 
 async function rejectRequest(requestId: string): Promise<void> {

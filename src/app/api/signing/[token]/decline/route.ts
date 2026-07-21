@@ -2,6 +2,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { isValidSignToken } from "@/lib/signing/tokens";
 import { logSignEvent, reqMeta } from "@/lib/signing/events";
+import { isRequestClosed } from "@/lib/signing/status";
 import { notifyCreatorDeclined } from "@/lib/signing/notify";
 
 export const runtime = "nodejs";
@@ -17,7 +18,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
   if (!recipient) return new Response("Not found", { status: 404 });
   if (recipient.status === "signed") return new Response("Already signed", { status: 409 });
   if (recipient.status === "declined") return new Response("Already declined", { status: 409 });
-  if (recipient.request.deletedAt || recipient.request.status === "completed" || recipient.request.status === "voided") return new Response("Closed", { status: 409 });
+  if (recipient.request.deletedAt || isRequestClosed(recipient.request.status)) return new Response("Closed", { status: 409 });
   if (recipient.request.expiresAt && recipient.request.expiresAt < new Date()) return new Response("This signing link has expired.", { status: 409 });
 
   const parsed = bodySchema.safeParse(await req.json().catch(() => ({})));
@@ -33,7 +34,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
     const rows = await tx.$queryRaw<{ status: string; deletedAt: Date | null; expiresAt: Date | null }[]>`
       SELECT "status", "deletedAt", "expiresAt" FROM "SignatureRequest" WHERE "id" = ${recipient.requestId} FOR UPDATE`;
     const r = rows[0];
-    if (!r || r.deletedAt || r.status === "voided" || r.status === "completed") { aborted = "Closed"; return; }
+    if (!r || r.deletedAt || isRequestClosed(r.status)) { aborted = "Closed"; return; }
     if (r.expiresAt && r.expiresAt < new Date()) { aborted = "This signing link has expired."; return; }
     const claimed = await tx.signatureRecipient.updateMany({
       where: { id: recipient.id, status: { notIn: ["signed", "declined"] } },

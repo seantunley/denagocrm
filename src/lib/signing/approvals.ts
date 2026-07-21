@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { logSignEvent } from "./events";
+import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
 import { advanceWorkflow } from "@/lib/signflow/runtime";
 
 const BASE = process.env.SIGN_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za";
@@ -28,6 +29,9 @@ async function resolveApprover(step: { assigneeType: string; assigneeUserId: str
 export async function notifyApprover(stepId: string): Promise<void> {
   const step = await prisma.approvalStep.findUnique({ where: { id: stepId }, include: { request: true } });
   if (!step) return;
+  // Don't email an approval link for a request that has already closed
+  // (completed/voided/declined/expired/rejected) — the link would be dead.
+  if (isRequestClosed(step.request.status)) return;
   const who = await resolveApprover(step);
   const url = approvalUrl(step.token);
   if (who.email) {
@@ -49,11 +53,14 @@ export function canActOnStep(step: { assigneeType: string; assigneeUserId: strin
 
 /** Approve a step → advance the workflow down the approved branch. */
 export async function approveStep(stepId: string, by: { userId?: string; name: string }): Promise<{ ok: boolean; error?: string }> {
+  // Claim only a pending step whose PARENT request is still open — atomically, via
+  // a relation filter — so a step can't be actioned after the request was
+  // completed/voided/declined/expired/rejected.
   const claimed = await prisma.approvalStep.updateMany({
-    where: { id: stepId, status: "pending" },
+    where: { id: stepId, status: "pending", request: { status: { notIn: [...CLOSED_REQUEST_STATUSES] } } },
     data: { status: "approved", decidedByUserId: by.userId ?? null, decidedByName: by.name, decidedAt: new Date() },
   });
-  if (claimed.count === 0) return { ok: false, error: "This approval has already been actioned." };
+  if (claimed.count === 0) return { ok: false, error: "This approval can no longer be actioned." };
   const step = await prisma.approvalStep.findUnique({ where: { id: stepId } });
   if (step) {
     await logSignEvent(step.requestId, { type: "approved", actor: by.name, metadata: { label: step.label } });
@@ -65,10 +72,10 @@ export async function approveStep(stepId: string, by: { userId?: string; name: s
 /** Reject a step → advance down the rejected branch (or reject the request). */
 export async function rejectStep(stepId: string, by: { userId?: string; name: string }, reason: string): Promise<{ ok: boolean; error?: string }> {
   const claimed = await prisma.approvalStep.updateMany({
-    where: { id: stepId, status: "pending" },
+    where: { id: stepId, status: "pending", request: { status: { notIn: [...CLOSED_REQUEST_STATUSES] } } },
     data: { status: "rejected", decidedByUserId: by.userId ?? null, decidedByName: by.name, decidedAt: new Date(), reason: reason.slice(0, 500) },
   });
-  if (claimed.count === 0) return { ok: false, error: "This approval has already been actioned." };
+  if (claimed.count === 0) return { ok: false, error: "This approval can no longer be actioned." };
   const step = await prisma.approvalStep.findUnique({ where: { id: stepId } });
   if (step) {
     await logSignEvent(step.requestId, { type: "rejected", actor: by.name, metadata: { label: step.label, reason } });

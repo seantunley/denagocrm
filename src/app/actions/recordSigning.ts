@@ -14,7 +14,7 @@ import { createSignatureRequestFromDoc } from "@/lib/signing/service";
 import { dispatchRequest } from "@/lib/signing/dispatch";
 import { logSignEvent } from "@/lib/signing/events";
 import { activeRecordRequest } from "@/lib/signing/record";
-import { advanceWorkflow } from "@/lib/signflow/runtime";
+import { advanceWorkflow, repairWorkflow } from "@/lib/signflow/runtime";
 
 type Kind = "quote" | "jobcard";
 type Result = {
@@ -72,23 +72,6 @@ async function checkRecordActive(
   return { error: null, leadId: null, version: jobCard.updatedAt.getTime() };
 }
 
-/**
- * Finish a workflow request whose graph committed but which crashed before its
- * first advance (workflowGraphJson set, currentNodeId still null). Called when a
- * signing-start reuses an existing open request, so a half-initialised workflow
- * self-heals on the next start instead of staying stuck. advanceWorkflow is
- * idempotent, so this is safe to call on an already-advanced request.
- */
-async function repairWorkflowIfNeeded(requestId: string): Promise<void> {
-  const req = await prisma.signatureRequest.findUnique({
-    where: { id: requestId },
-    select: { status: true, workflowGraphJson: true, currentNodeId: true },
-  });
-  if (req && !isRequestClosed(req.status) && req.workflowGraphJson && !req.currentNodeId) {
-    await advanceWorkflow(requestId);
-  }
-}
-
 export async function startRecordSigning(
   kind: Kind,
   id: string,
@@ -110,7 +93,7 @@ export async function startRecordSigning(
   // self-heal a workflow request left un-advanced by an earlier crash.
   const existing = await activeRecordRequest({ quoteId, jobCardId });
   if (existing && !isRequestClosed(existing.status)) {
-    await repairWorkflowIfNeeded(existing.requestId);
+    await repairWorkflow(existing.requestId);
     return { ok: true, requestId: existing.requestId };
   }
 
@@ -239,7 +222,7 @@ export async function startRecordSigning(
     return { ok: false, error: "This record changed while the signing document was being prepared — please try again." };
   }
   if (outcome.kind === "reused") {
-    await repairWorkflowIfNeeded(outcome.requestId);
+    await repairWorkflow(outcome.requestId);
     return { ok: true, requestId: outcome.requestId };
   }
   const requestId: string = outcome.requestId;
@@ -274,7 +257,7 @@ export async function startRecordSigning(
   if (isWorkflow && envelope.frozen) {
     // The graph + recipient node IDs were committed in the creation transaction;
     // advance the first node now. advanceWorkflow is idempotent, and a retry that
-    // reuses an un-advanced request repairs it the same way (repairWorkflowIfNeeded).
+    // reuses an un-advanced request repairs it the same way (repairWorkflow).
     await advanceWorkflow(requestId);
     const after = await prisma.signatureRequest.findUnique({
       where: { id: requestId },
