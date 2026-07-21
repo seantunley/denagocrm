@@ -1,11 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSetting } from "@/lib/settings";
 import { runTelegramFlow, tgAnswerCallback } from "@/lib/telegram";
+import { logError } from "@/lib/errorLog";
 
 export async function POST(req: NextRequest) {
-  // Telegram echoes back the secret we set on the webhook.
+  // Telegram echoes back the secret we set on the webhook. Fail CLOSED: without
+  // the secret we can't verify the sender, so any anonymous POST could drive the
+  // bot flow — reject instead of processing. This matches the meta/whatsapp
+  // webhooks (503 when their secret is unset); the old `secret && …` guard failed
+  // OPEN, skipping the check entirely whenever TELEGRAM_WEBHOOK_SECRET was unset.
   const secret = await getSetting("TELEGRAM_WEBHOOK_SECRET");
-  if (secret && req.headers.get("x-telegram-bot-api-secret-token") !== secret) {
+  if (!secret) {
+    await logError("telegram-webhook", "POST received but TELEGRAM_WEBHOOK_SECRET is not set — rejecting").catch(() => {});
+    return NextResponse.json({ error: "Webhook not configured" }, { status: 503 });
+  }
+  if (req.headers.get("x-telegram-bot-api-secret-token") !== secret) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   let update: {
