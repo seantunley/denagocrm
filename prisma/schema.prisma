@@ -1680,6 +1680,9 @@ model CustomerCaseMessage {
   type      String    @default("message") // customer | staff | note | event
   body      String
   meta      Json?
+  // Source email Message-ID (inbound help-desk mail) — idempotency key so a
+  // retried/overlapping IMAP run can't file the same email twice.
+  sourceMessageId String? @unique
   createdAt DateTime  @default(now())
   readAt    DateTime?
 
