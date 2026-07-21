@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireLeadAccess, requirePermission, requireQuoteAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
@@ -161,6 +162,12 @@ export async function receivePurchaseOrder(id: string, formData?: FormData) {
   const overallQty = formData ? integer(formData.get("qty"), 0) : 0;
 
   const received = await prisma.$transaction(async (tx) => {
+    // Lock the PO row FOR UPDATE up front so concurrent receipts serialize. Unit
+    // claiming (SKIP LOCKED) stops the same unit being received twice, but two
+    // receipts claiming DIFFERENT units could each read the other's uncommitted
+    // units as still incoming and both settle on "partially_received", leaving a
+    // fully-received order stuck partial. Serializing status calc here fixes that.
+    await tx.$executeRaw`SELECT id FROM "PurchaseOrder" WHERE id = ${id} FOR UPDATE`;
     const po = await tx.purchaseOrder.findFirst({ where: { id, deletedAt: null } });
     if (!po || !["ordered", "partially_received"].includes(po.status)) {
       throw new Error("This purchase order cannot be received");
@@ -191,23 +198,37 @@ export async function receivePurchaseOrder(id: string, formData?: FormData) {
     }
     if (!chosen.length) throw new Error("Choose at least one unit to receive");
 
+    // Claim the chosen units atomically. FOR UPDATE SKIP LOCKED locks only the
+    // ones still `incoming` and NOT already locked by a concurrent receipt, so we
+    // operate solely on rows we truly own — two receipts can no longer both
+    // receive the same unit and double-count receivedQty. (The old code updated
+    // by id with no status guard and no lock.)
+    const chosenIds = chosen.map((u) => u.id);
+    const locked = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+      SELECT "id" FROM "StockUnit"
+      WHERE "id" IN (${Prisma.join(chosenIds)}) AND "status" = 'incoming' AND "deletedAt" IS NULL
+      FOR UPDATE SKIP LOCKED`);
+    const claimedIds = new Set(locked.map((r) => r.id));
+    const claimed = chosen.filter((u) => claimedIds.has(u.id));
+    if (!claimed.length) throw new Error("Those units were just received by someone else — refresh and try again.");
+
     const receipt = await tx.goodsReceipt.create({
       data: { purchaseOrderId: id, reference: receiptReference, receivedById: user.id, notes },
     });
     await tx.stockUnit.updateMany({
-      where: { id: { in: chosen.map((u) => u.id) } },
+      where: { id: { in: claimed.map((u) => u.id) }, status: "incoming" },
       data: { status: "received_pending_check", arrivedAt: new Date() },
     });
     await tx.goodsReceiptLine.createMany({
-      data: chosen.map((u) => ({
+      data: claimed.map((u) => ({
         goodsReceiptId: receipt.id,
         purchaseOrderLineId: u.purchaseOrderLineId,
         stockUnitId: u.id,
         accepted: true,
       })),
     });
-    // Keep per-line receivedQty in step.
-    for (const [lineId, count] of countByLine(chosen)) {
+    // Keep per-line receivedQty in step — only for the units we actually claimed.
+    for (const [lineId, count] of countByLine(claimed)) {
       if (lineId) await tx.purchaseOrderLine.update({ where: { id: lineId }, data: { receivedQty: { increment: count } } });
     }
 
@@ -218,7 +239,7 @@ export async function receivePurchaseOrder(id: string, formData?: FormData) {
       where: { id },
       data: { status: stillOutstanding > 0 ? "partially_received" : "received" },
     });
-    return chosen;
+    return claimed;
   });
 
   for (const unit of received) {
@@ -241,6 +262,10 @@ export async function cancelPurchaseOrder(id: string, formData?: FormData) {
   const user = await requirePermission("stock.manage");
   const reason = formData ? str(formData.get("reason")) || "Cancelled by user" : "Cancelled by user";
   const count = await prisma.$transaction(async (tx) => {
+    // Lock the PO row FOR UPDATE, same as receiving, so a cancel can't read
+    // "ordered", wait behind an active receipt, and then overwrite the receipt's
+    // committed "received"/"partially_received" status with "cancelled".
+    await tx.$executeRaw`SELECT id FROM "PurchaseOrder" WHERE id = ${id} FOR UPDATE`;
     const po = await tx.purchaseOrder.findFirst({ where: { id, deletedAt: null } });
     if (!po || !["ordered", "partially_received"].includes(po.status)) throw new Error("Only open purchase orders can be cancelled");
     const result = await tx.stockUnit.updateMany({

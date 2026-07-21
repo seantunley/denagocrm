@@ -1,5 +1,6 @@
 import { addDays } from "date-fns";
-import { prisma } from "./db";
+import { Prisma } from "@prisma/client";
+import { prisma, basePrisma } from "./db";
 import { getSetting } from "./settings";
 
 export type SlotConfig = {
@@ -89,9 +90,39 @@ export function isoDayAllowed(date: string, config: SlotConfig): boolean {
   return config.days.includes(isoDay(date));
 }
 
+/** Validate a requested slot, returning its instant or throwing "SLOT_INVALID". */
+export function slotInstantOrThrow(date: string, time: string, config: SlotConfig): Date {
+  if (!config.times.includes(time)) throw new Error("SLOT_INVALID");
+  if (!isoDayAllowed(date, config)) throw new Error("SLOT_INVALID");
+  const dt = slotDateTime(date, time);
+  if (isNaN(dt.getTime()) || dt <= new Date()) throw new Error("SLOT_INVALID");
+  return dt;
+}
+
 /**
- * Books a slot atomically: re-checks capacity inside a transaction and throws
- * "SLOT_TAKEN" if it filled up in the meantime.
+ * Claim capacity for a slot inside an existing transaction. Takes a
+ * transaction-scoped advisory lock keyed on the slot instant so two concurrent
+ * bookings can't both pass the count check and overfill the slot (the old
+ * count-then-create had no lock — READ COMMITTED let both readers see the same
+ * count). Throws "SLOT_TAKEN" when full. Does NOT create the activity — the
+ * caller creates it (and any contact/job card) in the same transaction so a full
+ * slot rolls everything back.
+ */
+export async function claimSlotCapacity(
+  tx: Prisma.TransactionClient,
+  dt: Date,
+  capacity: number
+): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${BigInt(Math.floor(dt.getTime() / 1000))})`;
+  const taken = await tx.activity.count({
+    where: { category: "workshop", status: "planned", dueDate: dt },
+  });
+  if (taken >= capacity) throw new Error("SLOT_TAKEN");
+}
+
+/**
+ * Books a slot atomically: re-checks capacity under an advisory lock inside a
+ * transaction and throws "SLOT_TAKEN" if it filled up in the meantime.
  */
 export async function reserveSlot(input: {
   date: string;
@@ -106,20 +137,10 @@ export async function reserveSlot(input: {
   location?: string | null;
 }) {
   const config = await getSlotConfig();
-  if (!config.times.includes(input.time)) throw new Error("SLOT_INVALID");
-  if (!isoDayAllowed(input.date, config)) throw new Error("SLOT_INVALID");
-  const dt = slotDateTime(input.date, input.time);
-  if (isNaN(dt.getTime()) || dt <= new Date()) throw new Error("SLOT_INVALID");
+  const dt = slotInstantOrThrow(input.date, input.time, config);
 
-  return prisma.$transaction(async (tx) => {
-    const taken = await tx.activity.count({
-      where: {
-        category: "workshop",
-        status: "planned",
-        dueDate: dt,
-      },
-    });
-    if (taken >= config.capacity) throw new Error("SLOT_TAKEN");
+  return basePrisma.$transaction(async (tx) => {
+    await claimSlotCapacity(tx, dt, config.capacity);
     return tx.activity.create({
       data: {
         type: input.type ?? "meeting",

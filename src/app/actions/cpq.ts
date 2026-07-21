@@ -1,8 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/db";
 import { requireQuoteAccess } from "@/lib/permissions";
+import { withEditableQuote } from "@/lib/quoteLock";
 import { parseRands } from "@/lib/format";
 
 function revalidateQuote(quoteId: string) {
@@ -18,18 +18,26 @@ export async function addQuoteFee(quoteId: string, formData: FormData) {
   const kind = String(formData.get("kind") ?? "fee") === "delivery" ? "delivery" : "fee";
   const amountCents = parseRands(String(formData.get("amount") ?? ""));
   const taxRatePct = Number.parseFloat(String(formData.get("taxRatePct") ?? "15"));
-  const max = await prisma.quoteFee.aggregate({ where: { quoteId }, _max: { sortOrder: true } });
-  await prisma.quoteFee.create({
-    data: { quoteId, label, kind, amountCents, taxRatePct: Number.isFinite(taxRatePct) ? taxRatePct : 15, sortOrder: (max._max.sortOrder ?? 0) + 1 },
+  // Lock the quote FOR UPDATE and re-check editability inside the transaction so
+  // a concurrent send/sign/revision can't be edited under the customer (TOCTOU).
+  // The sortOrder aggregate runs under the same lock, so two adds can't collide.
+  await withEditableQuote(quoteId, async (tx) => {
+    const max = await tx.quoteFee.aggregate({ where: { quoteId }, _max: { sortOrder: true } });
+    await tx.quoteFee.create({
+      data: { quoteId, label, kind, amountCents, taxRatePct: Number.isFinite(taxRatePct) ? taxRatePct : 15, sortOrder: (max._max.sortOrder ?? 0) + 1 },
+    });
   });
   revalidateQuote(quoteId);
 }
 
 export async function deleteQuoteFee(feeId: string, quoteId: string) {
   await requireQuoteAccess(quoteId, "quotes.edit");
-  // Scope to the authorized quote — deleting by feeId alone let a user with edit
-  // access to their own quote delete a fee off someone else's quote.
-  await prisma.quoteFee.deleteMany({ where: { id: feeId, quoteId } });
+  // Scope to the authorized quote (deleting by feeId alone let a user with edit
+  // access to their own quote delete a fee off someone else's quote) AND hold the
+  // editability lock for the delete.
+  await withEditableQuote(quoteId, async (tx) => {
+    await tx.quoteFee.deleteMany({ where: { id: feeId, quoteId } });
+  });
   revalidateQuote(quoteId);
 }
 
@@ -40,7 +48,9 @@ export async function setQuoteDeposit(quoteId: string, formData: FormData) {
   const depositType = type === "percent" || type === "amount" ? type : null;
   const raw = String(formData.get("depositValue") ?? "").trim();
   const depositValue = depositType === null || raw === "" ? null : Math.max(0, Number.parseFloat(raw) || 0);
-  await prisma.quote.update({ where: { id: quoteId }, data: { depositType, depositValue } });
+  await withEditableQuote(quoteId, async (tx) => {
+    await tx.quote.update({ where: { id: quoteId }, data: { depositType, depositValue } });
+  });
   revalidateQuote(quoteId);
 }
 
@@ -48,6 +58,8 @@ export async function setQuoteDeposit(quoteId: string, formData: FormData) {
 export async function setQuoteTaxMode(quoteId: string, formData: FormData) {
   await requireQuoteAccess(quoteId, "quotes.edit");
   const taxInclusive = String(formData.get("taxInclusive") ?? "true") === "true";
-  await prisma.quote.update({ where: { id: quoteId }, data: { taxInclusive } });
+  await withEditableQuote(quoteId, async (tx) => {
+    await tx.quote.update({ where: { id: quoteId }, data: { taxInclusive } });
+  });
   revalidateQuote(quoteId);
 }

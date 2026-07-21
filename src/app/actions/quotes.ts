@@ -3,12 +3,15 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addDays } from "date-fns";
+import type { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "@/lib/db";
 import { quoteTotalCents } from "@/lib/pricing";
 import { logAudit } from "@/lib/audit";
-import { softDeleteRecord } from "@/lib/trash";
+import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
 import { getSetting } from "@/lib/settings";
 import { markReferralEarned } from "@/lib/referrals";
+import { withEditableQuote, hasOpenSignatureRequest } from "@/lib/quoteLock";
+import { nextQuoteNumber } from "@/lib/numbering";
 import { runLeadAutomations } from "@/lib/automations";
 import { parseRands, formatZAR, contactName } from "@/lib/format";
 import { z } from "zod";
@@ -72,34 +75,38 @@ async function createQuoteFromLeadRecord(leadId: string) {
     where: { id: leadId },
     include: { product: true },
   });
-  const max = await basePrisma.quote.aggregate({ _max: { number: true } });
   const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
   const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
   const terms =
     (await getSetting("QUOTE_TERMS")) ||
     "Prices include VAT. Delivery arranged on acceptance. E&OE.";
-  const quote = await prisma.quote.create({
-    data: {
-      number: (max._max.number ?? 1000) + 1,
-      leadId,
-      contactId: lead.contactId,
-      createdById: user.id,
-      validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
-      terms,
-      items: lead.product
-        ? {
-            create: [
-              {
-                description: lead.product.name,
-                qty: 1,
-                unitPriceCents: lead.valueCents || lead.product.basePriceCents,
-                productId: lead.product.id,
-                colorPreference: lead.color || null,
-              },
-            ],
-          }
-        : undefined,
-    },
+  // Allocate the number and insert in ONE transaction under the advisory lock so
+  // two concurrent creates can't read the same MAX(number) and collide (#11).
+  const quote = await basePrisma.$transaction(async (tx) => {
+    const number = await nextQuoteNumber(tx);
+    return tx.quote.create({
+      data: {
+        number,
+        leadId,
+        contactId: lead.contactId,
+        createdById: user.id,
+        validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
+        terms,
+        items: lead.product
+          ? {
+              create: [
+                {
+                  description: lead.product.name,
+                  qty: 1,
+                  unitPriceCents: lead.valueCents || lead.product.basePriceCents,
+                  productId: lead.product.id,
+                  colorPreference: lead.color || null,
+                },
+              ],
+            }
+          : undefined,
+      },
+    });
   });
   await logAudit({
     action: "quote.created",
@@ -132,33 +139,36 @@ export async function createQuoteForContact(formData: FormData) {
   const product = productId
     ? await prisma.product.findUnique({ where: { id: productId } })
     : null;
-  const max = await basePrisma.quote.aggregate({ _max: { number: true } });
   const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
   const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
   const terms =
     (await getSetting("QUOTE_TERMS")) ||
     "Prices include VAT. Delivery arranged on acceptance. E&OE.";
-  const quote = await prisma.quote.create({
-    data: {
-      number: (max._max.number ?? 1000) + 1,
-      contactId,
-      createdById: user.id,
-      validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
-      terms,
-      items: product
-        ? {
-            create: [
-              {
-                description: product.name,
-                qty: 1,
-                unitPriceCents: product.basePriceCents,
-                productId: product.id,
-              },
-            ],
-          }
-        : undefined,
-    },
-    include: { contact: true },
+  // Advisory-locked allocation + insert in one transaction (#11).
+  const quote = await basePrisma.$transaction(async (tx) => {
+    const number = await nextQuoteNumber(tx);
+    return tx.quote.create({
+      data: {
+        number,
+        contactId,
+        createdById: user.id,
+        validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
+        terms,
+        items: product
+          ? {
+              create: [
+                {
+                  description: product.name,
+                  qty: 1,
+                  unitPriceCents: product.basePriceCents,
+                  productId: product.id,
+                },
+              ],
+            }
+          : undefined,
+      },
+      include: { contact: true },
+    });
   });
   await logAudit({
     action: "quote.created",
@@ -279,6 +289,11 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
 
   const result = await basePrisma.$transaction(async (tx) => {
     if (data.id) {
+      // Lock the quote row FOR UPDATE and re-check editability inside the
+      // transaction (including an open signing request) so a concurrent send /
+      // signing-start / revision can't turn it non-editable between the read and
+      // the header+items+fees rewrite below.
+      await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${data.id} FOR UPDATE`;
       const existing = await tx.quote.findUnique({ where: { id: data.id } });
       if (
         !existing ||
@@ -286,7 +301,8 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
         existing.status !== "draft" ||
         existing.signToken ||
         existing.signedAt ||
-        existing.supersededAt
+        existing.supersededAt ||
+        (await hasOpenSignatureRequest(tx, existing.id))
       ) {
         return null;
       }
@@ -325,7 +341,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       return tx.quote.findUniqueOrThrow({ where: { id: existing.id } });
     }
 
-    const max = await tx.quote.aggregate({ _max: { number: true } });
+    const number = await nextQuoteNumber(tx); // advisory-locked allocation (#11)
     const validDaysRaw = createDefaults?.[0];
     const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
     const defaultTerms =
@@ -334,7 +350,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
 
     return tx.quote.create({
       data: {
-        number: (max._max.number ?? 1000) + 1,
+        number,
         contactId: data.contactId,
         leadId: linkedLeadId,
         createdById: user.id,
@@ -383,81 +399,97 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
   };
 }
 
-/**
- * A quote is frozen once a signing link exists, it has been signed, it was
- * superseded by a revision, or it has left draft (customers must never see a
- * quote change under them — revise instead).
- */
-async function quoteLocked(quoteId: string): Promise<boolean> {
-  const quote = await prisma.quote.findUnique({ where: { id: quoteId } });
-  return (
-    !quote ||
-    Boolean(quote.signToken) ||
-    Boolean(quote.signedAt) ||
-    Boolean(quote.supersededAt) ||
-    quote.status !== "draft"
-  );
-}
-
 export async function createQuoteRevision(quoteId: string) {
   const user = await requireQuoteAccess(quoteId, "quotes.edit");
-  const original = await prisma.quote.findUniqueOrThrow({
-    where: { id: quoteId },
-    include: { items: true },
-  });
-  if (original.supersededAt || original.signedAt) return;
-  const max = await basePrisma.quote.aggregate({ _max: { number: true } });
   const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
   const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
-  // Custom-field values key on the quote id with no FK, so a revision starts
-  // blank unless we copy them across. Read the originals up front, then create
-  // the revision, clone the values onto its id, and supersede the original — all
-  // in one transaction so a revision never exists without its custom fields.
-  const originalCustomValues = await prisma.customFieldValue.findMany({
-    where: { recordId: original.id, def: { entity: "quote" } },
-    select: { defId: true, value: true },
-  });
-  const revision = await prisma.$transaction(async (tx) => {
-    const rev = await tx.quote.create({
+  const validUntil = addDays(new Date(), isNaN(validDays) ? 7 : validDays);
+
+  // One transaction: lock the original FOR UPDATE so two concurrent revision
+  // requests can't both spawn a revision (the loser re-reads supersededAt set and
+  // bails), allocate the number under the advisory lock (#11), copy ALL commercial
+  // data — items with discount/tax/cost/optional/selected/sort, fees, tax mode and
+  // deposit (the old copy dropped everything but description/qty/price/product/
+  // colour, #10) — then supersede the original. All commit together.
+  const revision = await basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${quoteId} FOR UPDATE`;
+    const original = await tx.quote.findUnique({
+      where: { id: quoteId },
+      include: { items: true, fees: true },
+    });
+    if (!original || original.deletedAt || original.supersededAt || original.signedAt) return null;
+    // A live signing request must be voided before revising — otherwise the
+    // superseded quote would keep a live customer signing link.
+    if (await hasOpenSignatureRequest(tx, quoteId)) return { blocked: true as const };
+
+    const number = await nextQuoteNumber(tx);
+    const created = await tx.quote.create({
       data: {
-        number: (max._max.number ?? 1000) + 1,
+        number,
         contactId: original.contactId,
         leadId: original.leadId,
         createdById: user.id,
-        validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
+        validUntil,
         terms: original.terms,
+        taxInclusive: original.taxInclusive,
+        depositType: original.depositType,
+        depositValue: original.depositValue,
         revisionOfId: original.id,
         items: {
           create: original.items.map((i) => ({
             description: i.description,
             qty: i.qty,
             unitPriceCents: i.unitPriceCents,
-            productId: i.productId,
+            discountPct: i.discountPct,
             colorPreference: i.colorPreference,
+            kind: i.kind,
+            taxRatePct: i.taxRatePct,
+            costCents: i.costCents,
+            optional: i.optional,
+            selected: i.selected,
+            sortOrder: i.sortOrder,
+            productId: i.productId,
+          })),
+        },
+        fees: {
+          create: original.fees.map((f) => ({
+            label: f.label,
+            kind: f.kind,
+            amountCents: f.amountCents,
+            taxRatePct: f.taxRatePct,
+            sortOrder: f.sortOrder,
           })),
         },
       },
     });
-    if (originalCustomValues.length > 0) {
+    // Carry over the original's quote custom-field values so the revision isn't
+    // missing data captured on the original (@@unique[defId,recordId] keeps the
+    // new recordId collision-free).
+    const cfValues = await tx.customFieldValue.findMany({
+      where: { recordId: original.id, def: { entity: "quote" } },
+      select: { defId: true, value: true },
+    });
+    if (cfValues.length > 0) {
       await tx.customFieldValue.createMany({
-        data: originalCustomValues.map((v) => ({
-          defId: v.defId,
-          recordId: rev.id,
-          value: v.value,
-        })),
+        data: cfValues.map((v) => ({ defId: v.defId, recordId: created.id, value: v.value })),
       });
     }
     await tx.quote.update({
       where: { id: original.id },
       data: { supersededAt: new Date(), signToken: null, signLinkCreatedAt: null, reminderSentAt: null },
     });
-    return rev;
+    return { id: created.id, number: created.number, originalNumber: original.number, leadId: original.leadId, contactId: original.contactId };
   });
+
+  if (!revision) return;
+  if ("blocked" in revision) {
+    throw new Error("Void the open signing request before creating a revision.");
+  }
   await logAudit({
     action: "quote.revised",
-    summary: `Quote Q-${original.number} superseded by revision Q-${revision.number}`,
-    leadId: original.leadId,
-    contactId: original.contactId,
+    summary: `Quote Q-${revision.originalNumber} superseded by revision Q-${revision.number}`,
+    leadId: revision.leadId,
+    contactId: revision.contactId,
     user,
   });
   revalidatePath("/quotes");
@@ -467,16 +499,14 @@ export async function createQuoteRevision(quoteId: string) {
 
 export async function addQuoteItem(quoteId: string, formData: FormData) {
   await requireQuoteAccess(quoteId, "quotes.edit");
-  if (await quoteLocked(quoteId)) return;
   const description = String(formData.get("description") ?? "").trim();
   if (!description) return;
-  await prisma.quoteItem.create({
-    data: {
-      quoteId,
-      description,
-      qty: parseFloat(String(formData.get("qty") ?? "1")) || 1,
-      unitPriceCents: parseRands(String(formData.get("unitPrice") ?? "")),
-    },
+  const qty = parseFloat(String(formData.get("qty") ?? "1")) || 1;
+  const unitPriceCents = parseRands(String(formData.get("unitPrice") ?? ""));
+  // Lock the quote FOR UPDATE and re-check editability inside the transaction —
+  // a preflight-only check let a concurrent send/sign edit a locked quote.
+  await withEditableQuote(quoteId, async (tx) => {
+    await tx.quoteItem.create({ data: { quoteId, description, qty, unitPriceCents } });
   });
   revalidatePath(`/quotes/${quoteId}`);
 }
@@ -484,44 +514,60 @@ export async function addQuoteItem(quoteId: string, formData: FormData) {
 export async function deleteQuoteItem(id: string, quoteId: string, formData: FormData) {
   await requireQuoteAccess(quoteId, "quotes.edit");
   void formData;
-  if (await quoteLocked(quoteId)) return;
   // Scope to the authorized quote — deleting by item id alone let a user with
-  // edit access to their quote delete a line off another quote.
-  await prisma.quoteItem.deleteMany({ where: { id, quoteId } });
+  // edit access to their quote delete a line off another quote — under the lock.
+  await withEditableQuote(quoteId, async (tx) => {
+    await tx.quoteItem.deleteMany({ where: { id, quoteId } });
+  });
   revalidatePath(`/quotes/${quoteId}`);
 }
 
 export async function updateQuoteMeta(quoteId: string, formData: FormData) {
   await requireQuoteAccess(quoteId, "quotes.edit");
-  if (await quoteLocked(quoteId)) return;
   const validUntilRaw = String(formData.get("validUntil") ?? "").trim();
-  await prisma.quote.update({
-    where: { id: quoteId },
-    data: {
-      validUntil: validUntilRaw ? new Date(validUntilRaw) : null,
-      terms: String(formData.get("terms") ?? "").trim() || null,
-    },
+  const terms = String(formData.get("terms") ?? "").trim() || null;
+  await withEditableQuote(quoteId, async (tx) => {
+    await tx.quote.update({
+      where: { id: quoteId },
+      data: { validUntil: validUntilRaw ? new Date(validUntilRaw) : null, terms },
+    });
   });
   revalidatePath(`/quotes/${quoteId}`);
 }
 
-async function reopenLeadIfNoAcceptedQuote(
+/**
+ * Reopen a won lead when the quote that won it stops being accepted — run INSIDE
+ * the caller's quote transaction so the quote transition (declined / trashed) and
+ * the lead reopen commit atomically; a crash can't leave an accepted-quote-gone
+ * lead stuck "won". Locks the lead row, counts live accepted quotes under the
+ * lock (also serializing with setQuoteStatus's in-tx lead-won), and reopens only
+ * when none remain. Returns the reopened lead (for a post-commit audit) or null.
+ */
+async function reopenLeadInTx(
+  tx: Prisma.TransactionClient,
+  leadId: string,
+): Promise<{ title: string; contactId: string | null } | null> {
+  await tx.$executeRaw`SELECT id FROM "Lead" WHERE id = ${leadId} FOR UPDATE`;
+  const lead = await tx.lead.findFirst({ where: { id: leadId, deletedAt: null } });
+  if (!lead || lead.status !== "won") return null;
+  const stillAccepted = await tx.quote.count({ where: { leadId, status: "accepted", deletedAt: null } });
+  if (stillAccepted > 0) return null;
+  await tx.lead.update({ where: { id: leadId }, data: { status: "open" } });
+  return { title: lead.title, contactId: lead.contactId };
+}
+
+/** Post-commit audit + revalidate for a lead reopened by {@link reopenLeadInTx}. */
+async function auditLeadReopened(
+  reopened: { title: string; contactId: string | null },
   leadId: string,
   quoteNumber: number,
-  user: PermissionUser
+  user: PermissionUser,
 ) {
-  const lead = await prisma.lead.findUnique({ where: { id: leadId } });
-  if (!lead || lead.status !== "won") return;
-  const stillAccepted = await prisma.quote.count({
-    where: { leadId, status: "accepted" },
-  });
-  if (stillAccepted > 0) return;
-  await prisma.lead.update({ where: { id: leadId }, data: { status: "open" } });
   await logAudit({
     action: "lead.reopened",
-    summary: `Lead “${lead.title}” reopened — quote Q-${quoteNumber} is no longer accepted, so it doesn't count as a sale`,
+    summary: `Lead “${reopened.title}” reopened — quote Q-${quoteNumber} is no longer accepted, so it doesn't count as a sale`,
     leadId,
-    contactId: lead.contactId,
+    contactId: reopened.contactId,
     user,
   });
   revalidatePath(`/leads/${leadId}`);
@@ -531,15 +577,47 @@ async function reopenLeadIfNoAcceptedQuote(
 
 export async function setQuoteStatus(quoteId: string, status: string) {
   const user = await requireQuoteAccess(quoteId, "quotes.change_status");
-  const before = await prisma.quote.findUniqueOrThrow({ where: { id: quoteId } });
-  if (before.signedAt || before.supersededAt) return;
   const allowed = new Set(["draft", "sent", "accepted", "declined"]);
   if (!allowed.has(status)) throw new Error("Invalid quote status");
-  const quote = await prisma.quote.update({
-    where: { id: quoteId },
-    data: { status },
-    include: { items: true, lead: true },
+  // Lock the quote FOR UPDATE and re-check signed/superseded inside the
+  // transaction so a concurrent createQuoteRevision can't supersede it between
+  // the check and the write — which would run lead-won/referral side-effects
+  // against an obsolete quote.
+  const result = await basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${quoteId} FOR UPDATE`;
+    const before = await tx.quote.findUnique({ where: { id: quoteId } });
+    if (!before || before.deletedAt || before.signedAt || before.supersededAt) return null;
+    // Don't let staff manually accept/decline a quote that's out for signature —
+    // void the request first. (draft/sent moves are still allowed.)
+    if ((status === "accepted" || status === "declined") && (await hasOpenSignatureRequest(tx, quoteId))) {
+      return { blocked: true as const };
+    }
+    const updated = await tx.quote.update({
+      where: { id: quoteId },
+      data: { status },
+      include: { items: true, lead: true },
+    });
+    // Win the lead in the SAME transaction, locked, so a concurrent accept/decline
+    // can't leave quote and lead status diverged (e.g. quote declined, lead won).
+    let wonLeadId: string | null = null;
+    if (status === "accepted" && updated.leadId) {
+      await tx.$executeRaw`SELECT id FROM "Lead" WHERE id = ${updated.leadId} FOR UPDATE`;
+      const won = await tx.lead.updateMany({ where: { id: updated.leadId, deletedAt: null, status: "open" }, data: { status: "won" } });
+      if (won.count === 1) wonLeadId = updated.leadId;
+    }
+    // Reopen the lead in the SAME transaction when this quote stops being accepted,
+    // so the status change and the reopen are atomic.
+    let reopenedLead: { title: string; contactId: string | null } | null = null;
+    if (before.status === "accepted" && status !== "accepted" && updated.leadId) {
+      reopenedLead = await reopenLeadInTx(tx, updated.leadId);
+    }
+    return { beforeStatus: before.status, quote: updated, wonLeadId, reopenedLead };
   });
+  if (!result) return;
+  if ("blocked" in result) {
+    throw new Error("This quote is out for signature — void the signing request before changing its status.");
+  }
+  const { quote, wonLeadId, reopenedLead } = result;
   const total = quoteTotalCents(quote.items);
   const verb =
     status === "sent"
@@ -556,20 +634,21 @@ export async function setQuoteStatus(quoteId: string, status: string) {
     contactId: quote.contactId,
     user,
   });
-  if (status === "accepted" && quote.leadId && quote.lead?.status === "open") {
-    await prisma.lead.update({ where: { id: quote.leadId }, data: { status: "won" } });
-    await markReferralEarned(quote.leadId).catch(() => {});
-    await runLeadAutomations("lead_won", quote.leadId);
+  // External, best-effort lead-won fan-out — gated on the in-transaction win so it
+  // fires exactly once and never for a quote that didn't actually win the lead.
+  if (wonLeadId) {
+    await markReferralEarned(wonLeadId).catch(() => {});
+    await runLeadAutomations("lead_won", wonLeadId);
     await logAudit({
       action: "lead.won",
-      summary: `Lead “${quote.lead.title}” won via accepted quote Q-${quote.number} 🎉`,
-      leadId: quote.leadId,
+      summary: `Lead “${quote.lead?.title ?? ""}” won via accepted quote Q-${quote.number} 🎉`,
+      leadId: wonLeadId,
       contactId: quote.contactId,
       user,
     });
   }
-  if (before.status === "accepted" && status !== "accepted" && quote.leadId) {
-    await reopenLeadIfNoAcceptedQuote(quote.leadId, quote.number, user);
+  if (reopenedLead && quote.leadId) {
+    await auditLeadReopened(reopenedLead, quote.leadId, quote.number, user);
   }
   revalidatePath("/quotes");
   revalidatePath(`/quotes/${quoteId}`);
@@ -579,7 +658,25 @@ export async function setQuoteStatus(quoteId: string, status: string) {
 export async function deleteQuote(id: string, formData: FormData) {
   const user = await requireQuoteAccess(id, "quotes.delete");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
-  const quote = await softDeleteRecord("quote", id, reason, user.name);
+  // Void any live signing request AND soft-delete the quote in one locked
+  // transaction, so a trashed quote can't still be signed via a live customer
+  // link, and a concurrent signing start (which locks the same row) can't race.
+  const { quote, reopenedLead } = await basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${id} FOR UPDATE`;
+    await tx.signatureRequest.updateMany({
+      where: { quoteId: id, deletedAt: null, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
+      data: { status: "voided" },
+    });
+    const updated = await tx.quote.update({
+      where: { id },
+      data: { deletedAt: new Date(), deleteReason: reason, deletedByName: user.name },
+    });
+    // Reopen the lead in the SAME transaction so trashing an accepted quote and
+    // reopening its lead are atomic (no accepted-quote-gone lead stuck "won").
+    const reopened =
+      updated.status === "accepted" && updated.leadId ? await reopenLeadInTx(tx, updated.leadId) : null;
+    return { quote: updated, reopenedLead: reopened };
+  });
   await logAudit({
     action: "trash.deleted",
     summary: `Moved quote Q-${quote.number} to trash — ${reason}`,
@@ -587,8 +684,8 @@ export async function deleteQuote(id: string, formData: FormData) {
     contactId: quote.contactId,
     user,
   });
-  if (quote.status === "accepted" && quote.leadId) {
-    await reopenLeadIfNoAcceptedQuote(quote.leadId, quote.number, user);
+  if (reopenedLead && quote.leadId) {
+    await auditLeadReopened(reopenedLead, quote.leadId, quote.number, user);
   }
   revalidatePath("/quotes");
   redirect("/quotes");

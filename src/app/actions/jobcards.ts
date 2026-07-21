@@ -4,11 +4,12 @@ import { randomUUID } from "crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addMonths } from "date-fns";
-import { prisma } from "@/lib/db";
+import { prisma, basePrisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
+import { nextJobCardNumber } from "@/lib/numbering";
 import { sendReviewRequest } from "@/lib/reviewRequests";
 import { triggerSurvey } from "@/lib/surveys";
-import { softDeleteRecord } from "@/lib/trash";
+import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
 import { saveFile, deleteFile } from "@/lib/storage";
 import { parseRands } from "@/lib/format";
 import { Prisma } from "@prisma/client";
@@ -122,22 +123,27 @@ export async function createJobCard(formData: FormData) {
   const kmInRaw = String(formData.get("kmIn") ?? "").trim();
   const kmIn = kmInRaw === "" ? null : parseInt(kmInRaw, 10);
 
-  const max = await prisma.jobCard.aggregate({ _max: { number: true } });
-  const jobCard = await prisma.jobCard.create({
-    data: {
-      number: (max._max.number ?? 1000) + 1,
-      vehicleId,
-      contactId: vehicle.contactId,
-      description,
-      kmIn: kmIn != null && !isNaN(kmIn) ? kmIn : null,
-      technicianId: user.id,
-    },
-  });
-  if (jobCard.kmIn != null) {
-    await prisma.mileageLog.create({
-      data: { vehicleId, km: jobCard.kmIn, note: `Job card #${jobCard.number} check-in` },
+  // Allocate the number and insert in ONE transaction under the advisory lock so
+  // two concurrent job-card creates can't collide on the unique number (#11).
+  const jobCard = await basePrisma.$transaction(async (tx) => {
+    const number = await nextJobCardNumber(tx);
+    const jc = await tx.jobCard.create({
+      data: {
+        number,
+        vehicleId,
+        contactId: vehicle.contactId,
+        description,
+        kmIn: kmIn != null && !isNaN(kmIn) ? kmIn : null,
+        technicianId: user.id,
+      },
     });
-  }
+    if (jc.kmIn != null) {
+      await tx.mileageLog.create({
+        data: { vehicleId, km: jc.kmIn, note: `Job card #${jc.number} check-in` },
+      });
+    }
+    return jc;
+  });
   await logAudit({
     action: "jobcard.opened",
     summary: `Opened job card #${jobCard.number} on ${vehicle.model}: ${description}`,
@@ -148,46 +154,84 @@ export async function createJobCard(formData: FormData) {
   redirect(`/jobcards/${jobCard.id}`);
 }
 
+/**
+ * Claim `qty` units of a part under a row lock: locks the Part FOR UPDATE,
+ * computes availability as stockQty minus active reservations, rejects when it
+ * can't cover the request (oversell), then decrements atomically. Run inside the
+ * SAME transaction that creates the job-card line so the line and the decrement
+ * commit together. Two concurrent claims can no longer both read the old stock
+ * and both write a clamped absolute value.
+ */
+async function claimPartStock(
+  tx: Prisma.TransactionClient,
+  partId: string,
+  qty: number,
+): Promise<{ ok: true } | { ok: false; available: number; name: string }> {
+  // Lock (and fetch) only a LIVE part — a trashed part must not be consumed via a
+  // known id. basePrisma transactions aren't soft-delete filtered, so the
+  // deletedAt IS NULL predicate is explicit here.
+  await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${partId} AND "deletedAt" IS NULL FOR UPDATE`;
+  const part = await tx.part.findFirst({ where: { id: partId, deletedAt: null }, select: { name: true, stockQty: true } });
+  if (!part) return { ok: false, available: 0, name: "part" };
+  const agg = await tx.partReservation.aggregate({ where: { partId, status: "active" }, _sum: { qty: true } });
+  const available = part.stockQty - (agg._sum.qty ?? 0);
+  if (qty > available) return { ok: false, available: Math.max(0, available), name: part.name };
+  await tx.part.update({ where: { id: partId }, data: { stockQty: { decrement: qty } } });
+  return { ok: true };
+}
+
 export async function addJobCardItem(jobCardId: string, formData: FormData) {
   await requireJobCardAccess(jobCardId, "jobcards.manage");
   const description = String(formData.get("description") ?? "").trim();
   if (!description) return;
-  const qty = parseFloat(String(formData.get("qty") ?? "1")) || 1;
   const kind = String(formData.get("kind") ?? "part");
   const partId = String(formData.get("partId") ?? "").trim() || null;
-  await prisma.jobCardItem.create({
-    data: {
-      jobCardId,
-      kind,
-      description,
-      qty,
-      unitPriceCents: parseRands(String(formData.get("unitPrice") ?? "")),
-      partId,
-    },
+  const unitPriceCents = parseRands(String(formData.get("unitPrice") ?? ""));
+  const isPart = Boolean(partId) && kind === "part";
+  // Reject invalid quantities instead of silently coercing them to 1 (a negative
+  // used to flow through and INCREASE stock). Parts must be WHOLE positive units;
+  // labour/other lines may be fractional but must still be positive.
+  const qtyRaw = parseFloat(String(formData.get("qty") ?? "1"));
+  const qty = isPart
+    ? (Number.isInteger(qtyRaw) && qtyRaw > 0 ? qtyRaw : null)
+    : (Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : null);
+  if (qty == null) throw new Error("Enter a valid quantity.");
+
+  // Claim stock (locked, oversell-checked) and create the line in one transaction.
+  const outcome = await basePrisma.$transaction(async (tx) => {
+    if (isPart && partId) {
+      const claim = await claimPartStock(tx, partId, qty);
+      if (!claim.ok) return claim;
+    }
+    await tx.jobCardItem.create({ data: { jobCardId, kind, description, qty, unitPriceCents, partId } });
+    return { ok: true as const };
   });
-  if (partId && kind === "part") {
-    await prisma.part.update({
-      where: { id: partId },
-      data: { stockQty: { decrement: Math.round(qty) } },
-    });
-  }
+  if (!outcome.ok) throw new Error(`Only ${outcome.available} × ${outcome.name} in stock.`);
   revalidatePath(`/jobcards/${jobCardId}`);
+  revalidatePath("/parts");
 }
 
 export async function deleteJobCardItem(id: string, jobCardId: string, formData: FormData) {
   const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   // Scope the child to the authorized job card — a caller with access to THIS
-  // job card must not be able to delete another job card's item by id.
-  const owned = await prisma.jobCardItem.findFirst({ where: { id, jobCardId } });
-  if (!owned) return;
-  const item = await prisma.jobCardItem.delete({ where: { id } });
-  if (item.partId && item.kind === "part") {
-    await prisma.part.update({
-      where: { id: item.partId },
-      data: { stockQty: { increment: Math.round(item.qty) } },
-    }).catch(() => {});
-  }
+  // job card must not be able to delete another job card's item by id. Delete the
+  // line AND restore its stock in ONE transaction so the two can't diverge (the
+  // old code did them separately and swallowed the restore's errors). updateMany
+  // won't throw if the part is gone, so a missing part doesn't block the delete.
+  const item = await basePrisma.$transaction(async (tx) => {
+    const owned = await tx.jobCardItem.findFirst({ where: { id, jobCardId } });
+    if (!owned) return null;
+    await tx.jobCardItem.delete({ where: { id: owned.id } });
+    if (owned.partId && owned.kind === "part") {
+      const inc = Math.round(owned.qty);
+      if (inc > 0) {
+        await tx.part.updateMany({ where: { id: owned.partId }, data: { stockQty: { increment: inc } } });
+      }
+    }
+    return owned;
+  });
+  if (!item) return;
   const jobCard = await prisma.jobCard.findUnique({ where: { id: jobCardId } });
   await logAudit({
     action: "jobcard.item_deleted",
@@ -358,7 +402,19 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
 export async function deleteJobCard(id: string, formData: FormData) {
   const user = await requireJobCardAccess(id, "jobcards.manage");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
-  const jobCard = await softDeleteRecord("jobCard", id, reason, user.name);
+  // Void any live signing request AND soft-delete the job card in one locked
+  // transaction, so a trashed job card can't still be signed via a live link.
+  const jobCard = await basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT id FROM "JobCard" WHERE id = ${id} FOR UPDATE`;
+    await tx.signatureRequest.updateMany({
+      where: { jobCardId: id, deletedAt: null, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
+      data: { status: "voided" },
+    });
+    return tx.jobCard.update({
+      where: { id },
+      data: { deletedAt: new Date(), deleteReason: reason, deletedByName: user.name },
+    });
+  });
   await logAudit({
     action: "trash.deleted",
     summary: `Moved job card #${jobCard.number} to trash — ${reason}`,
@@ -512,12 +568,27 @@ export async function reservePart(jobCardId: string, formData: FormData) {
   const partId = String(formData.get("partId") ?? "").trim();
   if (!partId) return;
   const qty = Math.max(1, parseInt(String(formData.get("qty") ?? "1"), 10) || 1);
-  const [part, jobCard] = await Promise.all([
-    prisma.part.findUnique({ where: { id: partId }, select: { name: true } }),
-    prisma.jobCard.findUnique({ where: { id: jobCardId }, select: { number: true, contactId: true } }),
-  ]);
-  await prisma.partReservation.create({ data: { jobCardId, partId, qty } });
-  await logAudit({ action: "jobcard.part_reserved", summary: `Reserved ${qty}× ${part?.name ?? "part"} for job card #${jobCard?.number ?? "?"}`, contactId: jobCard?.contactId, user });
+  // Never reserve more than is actually available. Lock the part row so two
+  // concurrent reservations can't both pass the availability check (oversell).
+  const outcome = await prisma.$transaction(async (tx) => {
+    // Lock + fetch a LIVE part only — a trashed part must not be reservable by id.
+    await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${partId} AND "deletedAt" IS NULL FOR UPDATE`;
+    const part = await tx.part.findFirst({ where: { id: partId, deletedAt: null }, select: { name: true, stockQty: true } });
+    if (!part) return { ok: false as const };
+    const agg = await tx.partReservation.aggregate({ where: { partId, status: "active" }, _sum: { qty: true } });
+    const reserved = agg._sum.qty ?? 0;
+    if (reserved + qty > part.stockQty) {
+      return { ok: false as const, over: true, available: Math.max(0, part.stockQty - reserved), name: part.name };
+    }
+    await tx.partReservation.create({ data: { jobCardId, partId, qty } });
+    return { ok: true as const, name: part.name };
+  });
+  if (!outcome.ok) {
+    if (outcome.over) throw new Error(`Only ${outcome.available} × ${outcome.name} available to reserve.`);
+    return;
+  }
+  const jobCard = await prisma.jobCard.findUnique({ where: { id: jobCardId }, select: { number: true, contactId: true } });
+  await logAudit({ action: "jobcard.part_reserved", summary: `Reserved ${qty}× ${outcome.name} for job card #${jobCard?.number ?? "?"}`, contactId: jobCard?.contactId, user });
   revalidatePath(`/jobcards/${jobCardId}`);
   revalidatePath("/parts");
 }
@@ -537,22 +608,37 @@ export async function releaseReservation(reservationId: string, jobCardId: strin
 
 export async function consumeReservation(reservationId: string, jobCardId: string) {
   await requireJobCardAccess(jobCardId, "jobcards.manage");
-  // Claim the reservation FIRST with a conditional state transition inside the
-  // transaction: only the request that flips active→consumed (count === 1) may
-  // create the line and decrement stock. Two concurrent consumes can no longer
-  // both read it active and both decrement.
+  // Lock the PART row FIRST (same ordering as claimPartStock), THEN claim the
+  // reservation and decrement — all in one transaction. The old code flipped the
+  // reservation active→consumed without ever locking the part, so a concurrent
+  // direct stock claim could lock the part, no longer see this (now-consumed)
+  // reservation in the availability calc, claim the "freed" stock, and both paths
+  // decrement into negative stock. Locking the part serializes the two.
   await prisma.$transaction(async (tx) => {
+    const reservation = await tx.partReservation.findUnique({ where: { id: reservationId } });
+    if (!reservation || reservation.jobCardId !== jobCardId || reservation.status !== "active") return { ok: false as const };
+    await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${reservation.partId} AND "deletedAt" IS NULL FOR UPDATE`;
+    const part = await tx.part.findFirst({ where: { id: reservation.partId, deletedAt: null }, select: { name: true, priceCents: true, stockQty: true } });
+    if (!part) return { ok: false as const };
+    // Claim the reservation FIRST, under the part lock. Only the request that
+    // flips active→consumed proceeds — a second waiter (whose reservation was
+    // already consumed) exits harmlessly instead of throwing a false shortage
+    // against the now-reduced stock. Throwing after the claim rolls it back.
     const claimed = await tx.partReservation.updateMany({
       where: { id: reservationId, jobCardId, status: "active" },
       data: { status: "consumed" },
     });
-    if (claimed.count !== 1) return;
-    const reservation = await tx.partReservation.findUnique({ where: { id: reservationId }, include: { part: true } });
-    if (!reservation) return;
+    if (claimed.count !== 1) return { ok: false as const };
+    if (part.stockQty < reservation.qty) {
+      // Throw (not return) so the reservation claim rolls back — otherwise it
+      // would commit as "consumed" with no job-card line or stock decrement.
+      throw new Error(`Only ${Math.max(0, part.stockQty)} × ${part.name} physically in stock — can't consume ${reservation.qty}.`);
+    }
     await tx.jobCardItem.create({
-      data: { jobCardId, kind: "part", description: reservation.part.name, qty: reservation.qty, unitPriceCents: reservation.part.priceCents, partId: reservation.partId },
+      data: { jobCardId, kind: "part", description: part.name, qty: reservation.qty, unitPriceCents: part.priceCents, partId: reservation.partId },
     });
     await tx.part.update({ where: { id: reservation.partId }, data: { stockQty: { decrement: reservation.qty } } });
+    return { ok: true as const };
   });
   revalidatePath(`/jobcards/${jobCardId}`);
   revalidatePath("/parts");
@@ -581,13 +667,26 @@ export async function applyServicePackage(jobCardId: string, formData: FormData)
   if (!packageId) return;
   const pkg = await prisma.servicePackage.findUnique({ where: { id: packageId }, include: { items: true } });
   if (!pkg) return;
-  for (const item of pkg.items) {
-    await prisma.jobCardItem.create({
-      data: { jobCardId, kind: item.kind, description: item.description, qty: item.qty, unitPriceCents: item.unitPriceCents, partId: item.partId },
-    });
-    if (item.partId && item.kind === "part") {
-      await prisma.part.update({ where: { id: item.partId }, data: { stockQty: { decrement: Math.round(item.qty) } } }).catch(() => {});
+  // Apply every line + its stock claim in ONE transaction. Each part is claimed
+  // under a row lock with an availability check (stock minus active reservations),
+  // so the package can't oversell; insufficient stock on ANY part rolls the whole
+  // package back instead of leaving it half-applied or clamping stock to zero.
+  const outcome = await basePrisma.$transaction(async (tx) => {
+    for (const item of pkg.items) {
+      if (item.partId && item.kind === "part") {
+        const dec = Math.round(item.qty);
+        if (dec > 0) {
+          const claim = await claimPartStock(tx, item.partId, dec);
+          if (!claim.ok) return claim;
+        }
+      }
+      await tx.jobCardItem.create({
+        data: { jobCardId, kind: item.kind, description: item.description, qty: item.qty, unitPriceCents: item.unitPriceCents, partId: item.partId },
+      });
     }
-  }
+    return { ok: true as const };
+  });
+  if (!outcome.ok) throw new Error(`Not enough stock to apply this package — only ${outcome.available} × ${outcome.name} available.`);
   revalidatePath(`/jobcards/${jobCardId}`);
+  revalidatePath("/parts");
 }
