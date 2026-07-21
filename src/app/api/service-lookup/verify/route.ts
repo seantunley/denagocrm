@@ -59,17 +59,26 @@ export async function POST(req: NextRequest) {
     },
     orderBy: { createdAt: "desc" },
   });
-  if (!challenge || challenge.attempts >= 5) {
+  if (!challenge) {
     return NextResponse.json(
       { error: "Code expired or too many attempts — request a new one." },
       { status: 410, headers: corsHeaders }
     );
   }
-
-  await basePrisma.otpChallenge.update({
-    where: { id: challenge.id },
+  // Atomically consume one attempt — only succeeds while the challenge is still
+  // unverified and under the 5-attempt cap. The old read-then-increment let N
+  // concurrent requests all pass the cap check before any increment landed,
+  // giving far more than 5 guesses (brute force).
+  const gate = await basePrisma.otpChallenge.updateMany({
+    where: { id: challenge.id, verifiedAt: null, attempts: { lt: 5 }, expiresAt: { gt: new Date() } },
     data: { attempts: { increment: 1 } },
   });
+  if (gate.count !== 1) {
+    return NextResponse.json(
+      { error: "Code expired or too many attempts — request a new one." },
+      { status: 410, headers: corsHeaders }
+    );
+  }
 
   // Support both the new bcrypt hashes and any legacy SHA-256 rows still
   // within their 10-minute window during the changeover.
@@ -92,10 +101,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Vehicle not found" }, { status: 404, headers: corsHeaders });
   }
 
-  await basePrisma.otpChallenge.update({
-    where: { id: challenge.id },
+  // Atomically CONSUME the challenge: only the request that flips verifiedAt (from
+  // null, still unexpired) may return the owner's details. Two concurrent correct
+  // submissions both pass bcrypt, but only one wins this claim — the loser gets a
+  // 410 instead of also leaking the customer's registered details.
+  const consumed = await basePrisma.otpChallenge.updateMany({
+    where: { id: challenge.id, verifiedAt: null, expiresAt: { gt: new Date() } },
     data: { verifiedAt: new Date() },
   });
+  if (consumed.count !== 1) {
+    return NextResponse.json(
+      { error: "Code expired or already used — request a new one." },
+      { status: 410, headers: corsHeaders }
+    );
+  }
   await logAudit({
     action: "booking.otp_verified",
     summary: `Vehicle owner verified by OTP (${challenge.channel}) for ${vehicle.model} — online service booking`,

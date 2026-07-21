@@ -18,7 +18,8 @@
     "verify:governance": "tsx scripts/verify-governance.ts",
     "test:security": "tsx scripts/test-security.ts",
     "test:rbac": "tsx scripts/test-rbac.ts",
-    "validate:security": "npm run prisma:validate && npm run prisma:generate && npm run typecheck && npm run lint && npm run build && npm run verify:governance && npm run test:security && npm run test:rbac"
+    "test:integrity": "tsx scripts/test-integrity.ts",
+    "validate:security": "npm run prisma:validate && npm run prisma:generate && npm run typecheck && npm run lint && npm run build && npm run verify:governance && npm run test:security && npm run test:rbac && npm run test:integrity"
   },
   "dependencies": {
     "@blocknote/core": "^0.51.4",

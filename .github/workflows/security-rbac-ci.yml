@@ -119,3 +119,8 @@ jobs:
         # cards, documents, cases and activities. Previously defined but never
         # executed by CI.
         run: npm run test:rbac
+
+      - name: Run integrity / IDOR integration tests
+        # Child-record IDOR scoping, reservation + dealer-signature state
+        # transitions, the atomic OTP gate, and soft-delete on findUnique.
+        run: npm run test:integrity

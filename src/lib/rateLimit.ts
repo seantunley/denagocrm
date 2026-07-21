@@ -81,6 +81,12 @@ export async function registerRateLimitAttempt(
 ): Promise<RateLimitResult> {
   const now = new Date();
   return basePrisma.$transaction(async (tx) => {
+    // Serialize per key with an advisory lock. FOR UPDATE only locks EXISTING
+    // rows, so for the very first attempt (no row yet) two concurrent requests
+    // both computed count=1 and the ON CONFLICT overwrite kept it at 1 —
+    // under-counting the opening burst. The advisory lock makes even the first
+    // insert exclusive, so attempts accumulate correctly from the start.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key})::bigint)`;
     const rows = await tx.$queryRaw<RateLimitRow[]>`
       SELECT "count", "windowStartedAt", "blockedUntil"
       FROM "SecurityRateLimit"

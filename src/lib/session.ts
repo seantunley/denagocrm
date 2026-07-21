@@ -12,12 +12,22 @@ const secret = () => {
 };
 
 export const ABSOLUTE_SESSION_HOURS = 72; // hard re-login cap regardless of activity
-export const PWA_SESSION_HOURS = 7 * 24; // installed-app sessions last a week
+// POLICY (must match src/lib/auth.ts): when `pwa` is set, the session lasts a
+// week — BOTH its absolute cap (here) AND its idle timeout (auth.ts sets idle to
+// 7 days too) are extended. `pwa` is a client-supplied choice (the login UI sets
+// it from the browser's installed display-mode, but a caller can submit pwa=1
+// directly), so this is an opt-in "keep me signed in for a week" available to any
+// authenticated user — NOT proof of a trusted device. The real boundary is
+// server-side revocation (session version `sv` + per-session `jti` remote
+// sign-out), never the flag itself. If a shorter inactivity window is wanted for
+// this mode, keep the normal idle timeout in auth.ts and extend only this cap; if
+// true device-trust is wanted, gate `pwa` on a server-recognised device.
+export const PWA_SESSION_HOURS = 7 * 24; // opt-in weeklong ("remember me") session
 export const DEFAULT_IDLE_MINUTES = 60;
 
 export type SessionPayload = {
   jti?: string; // session-registry id (device log / remote sign-out)
-  pwa?: boolean; // installed app — 7-day session, device lock is the boundary
+  pwa?: boolean; // opt-in weeklong session (extends BOTH idle + absolute); see PWA_SESSION_HOURS
   sub: string;
   name: string;
   email: string;
@@ -101,10 +111,18 @@ export async function verifySession(token: string): Promise<SessionPayload | nul
 
 export const SESSION_COOKIE = "denago_session";
 
-export const sessionCookieOptions = {
-  httpOnly: true as const,
-  sameSite: "lax" as const,
-  secure: process.env.NODE_ENV === "production",
-  path: "/",
-  maxAge: ABSOLUTE_SESSION_HOURS * 3600,
-};
+/**
+ * Cookie options for a session. The cookie's maxAge MUST match the token's
+ * absolute lifetime, or an installed PWA (7-day token) gets a cookie that the
+ * browser drops after the desktop 72h cap — logging the app out after ~3 days
+ * despite the token and comments promising a week. Pass `pwa` so the two agree.
+ */
+export function sessionCookieOptions(pwa = false) {
+  return {
+    httpOnly: true as const,
+    sameSite: "lax" as const,
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: (pwa ? PWA_SESSION_HOURS : ABSOLUTE_SESSION_HOURS) * 3600,
+  };
+}

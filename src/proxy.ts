@@ -86,7 +86,9 @@ export async function proxy(req: NextRequest) {
   if (result.needsRefresh) {
     const fresh = await refreshSession(result.payload);
     const res = allow(req);
-    res.cookies.set(SESSION_COOKIE, fresh, sessionCookieOptions);
+    // Match the cookie lifetime to the token — PWA sessions get the 7-day maxAge,
+    // otherwise a refresh would shrink an installed app's cookie back to 72h.
+    res.cookies.set(SESSION_COOKIE, fresh, sessionCookieOptions(Boolean(result.payload.pwa)));
     return res;
   }
 

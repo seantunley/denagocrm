@@ -65,15 +65,29 @@ export async function requestPortalOtp(
   if (!contact) return generic;
 
   const code = crypto.randomInt(100000, 1000000).toString();
-  await prisma.otpChallenge.create({
-    data: {
-      purpose: "portal",
-      key: email,
-      codeHash: await bcrypt.hash(code, 10),
-      channel: "email",
-      target: email,
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-    },
+  const codeHash = await bcrypt.hash(code, 10);
+  // Invalidate every prior unverified code for this email BEFORE issuing the new
+  // one, in one transaction serialized by a per-key advisory lock. Verification
+  // picks the newest unverified challenge, so without this an older still-
+  // unexpired code stayed usable after a newer one was consumed. The advisory
+  // lock stops two concurrent reissues from each expiring the visible codes and
+  // then inserting a new one — which would leave TWO valid codes.
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`otp:portal:${email}`})::bigint)`;
+    await tx.otpChallenge.updateMany({
+      where: { purpose: "portal", key: email, verifiedAt: null },
+      data: { expiresAt: new Date() },
+    });
+    await tx.otpChallenge.create({
+      data: {
+        purpose: "portal",
+        key: email,
+        codeHash,
+        channel: "email",
+        target: email,
+        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      },
+    });
   });
   await sendEmail({
     to: email,
@@ -102,9 +116,16 @@ export async function verifyPortalOtp(
     where: { purpose: "portal", key: email, verifiedAt: null, expiresAt: { gt: new Date() } },
     orderBy: { createdAt: "desc" },
   });
-  if (!challenge || challenge.attempts >= 5) return { error: "That code has expired — request a new one." };
+  if (!challenge) return { error: "That code has expired — request a new one." };
 
-  await prisma.otpChallenge.update({ where: { id: challenge.id }, data: { attempts: { increment: 1 } } });
+  // Atomically consume one attempt: only succeeds while unverified and under the
+  // cap, so concurrent requests can't each pass the read-gate and brute-force
+  // past 5 guesses.
+  const gate = await prisma.otpChallenge.updateMany({
+    where: { id: challenge.id, verifiedAt: null, attempts: { lt: 5 }, expiresAt: { gt: new Date() } },
+    data: { attempts: { increment: 1 } },
+  });
+  if (gate.count !== 1) return { error: "That code has expired — request a new one." };
   if (!(await bcrypt.compare(code, challenge.codeHash))) {
     await registerRateLimitAttempt(verifyKey, OTP_VERIFY_POLICY);
     return { error: "That code isn't right — check and try again." };
@@ -115,8 +136,16 @@ export async function verifyPortalOtp(
   });
   if (!contact) return { error: "We couldn't find your account." };
 
+  // Atomically CONSUME the challenge before creating any session: only the
+  // request that flips verifiedAt (from null, still unexpired) may sign in. Two
+  // concurrent correct submissions both pass bcrypt, but only one wins the claim
+  // — the loser is turned away instead of also minting a portal session.
+  const consumed = await prisma.otpChallenge.updateMany({
+    where: { id: challenge.id, verifiedAt: null, expiresAt: { gt: new Date() } },
+    data: { verifiedAt: new Date() },
+  });
+  if (consumed.count !== 1) return { error: "That code has expired — request a new one." };
   await Promise.all([
-    prisma.otpChallenge.update({ where: { id: challenge.id }, data: { verifiedAt: new Date() } }),
     clearRateLimit(verifyKey),
     clearRateLimit(rateLimitKey("portal-otp-send-account", email)),
   ]);
