@@ -107,6 +107,13 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   let wonLeadId: string | null = null;
   try {
     await prisma.$transaction(async (tx) => {
+      // Universal lock order — SOURCE record first, THEN the signature request —
+      // matching quote/job-card deletion and signing start. Completion used to
+      // touch the request before the source while deletion did the reverse, so a
+      // final signature racing a delete could deadlock (each holding what the
+      // other needed). Locking the source row up front makes the order consistent.
+      if (req.quoteId) await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${req.quoteId} FOR UPDATE`;
+      else if (req.jobCardId) await tx.$executeRaw`SELECT id FROM "JobCard" WHERE id = ${req.jobCardId} FOR UPDATE`;
       const document = uploaderId
         ? await tx.document.create({
             data: {

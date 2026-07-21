@@ -1441,6 +1441,10 @@ model ApprovalStep {
   order     Int      @default(0)
   createdAt DateTime @default(now())
 
+  // At most one step per workflow node per request — makes decision-approval
+  // materialisation idempotent so concurrent advances can't create two steps
+  // (two valid tokens / duplicate notifications) for the same node.
+  @@unique([requestId, nodeId])
   @@index([requestId])
   @@index([status])
 }

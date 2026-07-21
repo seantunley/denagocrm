@@ -370,13 +370,25 @@ export async function voidRecordSigning(
     jobCardId: kind === "jobcard" ? id : null,
   });
   if (!state) return { ok: false, error: "No active request." };
-  // Conditional void so it can't overwrite a request that a concurrent signer
-  // just completed / declined (or another void).
-  const voided = await prisma.signatureRequest.updateMany({
-    where: { id: state.requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
-    data: { status: "voided" },
+  // Universal lock order — SOURCE record first, THEN the request (matching
+  // completion / deletion / start) so void can't deadlock against a concurrent
+  // completion. Conditional void so it can't overwrite a request a concurrent
+  // signer just completed / declined (or another void); the quote drop-to-draft
+  // rides in the same transaction.
+  const voided = await basePrisma.$transaction(async (tx) => {
+    if (kind === "quote") await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${id} FOR UPDATE`;
+    else await tx.$executeRaw`SELECT id FROM "JobCard" WHERE id = ${id} FOR UPDATE`;
+    const result = await tx.signatureRequest.updateMany({
+      where: { id: state.requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
+      data: { status: "voided" },
+    });
+    if (result.count === 0) return 0;
+    if (kind === "quote") {
+      await tx.quote.updateMany({ where: { id, status: "sent", signedAt: null }, data: { status: "draft" } });
+    }
+    return result.count;
   });
-  if (voided.count === 0) {
+  if (voided === 0) {
     return { ok: false, error: "This request can no longer be voided." };
   }
   await logSignEvent(state.requestId, {
@@ -391,12 +403,6 @@ export async function voidRecordSigning(
     entityId: state.requestId,
     user,
   });
-  if (kind === "quote") {
-    await prisma.quote.updateMany({
-      where: { id, status: "sent", signedAt: null },
-      data: { status: "draft" },
-    });
-  }
   revalidatePath(recordPath(kind, id));
   return { ok: true, requestId: state.requestId };
 }

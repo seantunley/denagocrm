@@ -65,10 +65,15 @@ async function materialise(requestId: string, node: SignNode): Promise<void> {
     return;
   }
   if (node.type === "approval") {
-    // Decision approval — create the step + notify the approver.
+    // Decision approval — materialise the step IDEMPOTENTLY. advanceWorkflow can
+    // run concurrently (e.g. two signing-start repairs), and advanceWorkflow()
+    // isn't itself serialized, so create the step via createMany + skipDuplicates
+    // against the @@unique([requestId, nodeId]) constraint: exactly one row (one
+    // token) is ever created for a node. Only the call that actually inserted it
+    // logs + notifies, so no duplicate approver emails / tokens either.
     const label = node.label || "Approval";
-    const step = await prisma.approvalStep.create({
-      data: {
+    const created = await prisma.approvalStep.createMany({
+      data: [{
         requestId, nodeId: node.id, label, mode: "decision",
         assigneeType: node.who.mode === "staff" ? "staff" : node.who.mode === "owner" ? "owner" : "role",
         assigneeUserId: node.who.userId ?? null,
@@ -76,8 +81,12 @@ async function materialise(requestId: string, node: SignNode): Promise<void> {
         assigneeName: node.who.name ?? null,
         assigneeEmail: node.who.email ?? null,
         token: newSignToken(),
-      },
+      }],
+      skipDuplicates: true,
     });
+    if (created.count === 0) return; // another advance already materialised + notified this node
+    const step = await prisma.approvalStep.findFirst({ where: { requestId, nodeId: node.id } });
+    if (!step) return;
     await logSignEvent(requestId, { type: "approval_requested", actor: "system", metadata: { label, stepId: step.id } });
     await notifyApprover(step.id);
   }
