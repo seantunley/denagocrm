@@ -9,10 +9,11 @@
  *     --owner-email owner@acme.test --owner-name "Acme Owner" \
  *     [--owner-password "<pw>"] --yes
  *
- * The tenant is created SUSPENDED (active:false) and the owner is a non-privileged
- * "member": there is no tenant data isolation yet, so a live cross-tenant login
- * must not be minted here. Once enforcement lands, an operator activates the
- * tenant deliberately. See MULTITENANCY-SCOPING.md §6.
+ * The tenant is created SUSPENDED and the owner is created DISABLED, with no
+ * modules and the non-privileged "member" role: there is no tenant data isolation
+ * yet, so the credentials must not be able to sign in to the unscoped CRM. Once
+ * enforcement lands, a deliberate activation flow enables the tenant AND the user.
+ * See MULTITENANCY-SCOPING.md §6.
  *
  * SAFETY: writes to DATABASE_URL. A local .env points at PRODUCTION, so this prints
  * the target host and refuses to write without --yes.
@@ -72,9 +73,9 @@ async function main() {
       slug,
       owner: { name: ownerName, email: ownerEmail, passwordHash },
     });
-    console.log(`Created tenant ${tenantId} ("${name}") — SUSPENDED — with member owner ${ownerId} <${ownerEmail}>.`);
-    console.log("The owner cannot access tenant data until isolation ships and an operator activates the tenant.");
-    if (generated) console.log(`Generated password for ${ownerEmail}: ${password}`);
+    console.log(`Created tenant ${tenantId} ("${name}") — SUSPENDED — with DISABLED member owner ${ownerId} <${ownerEmail}>.`);
+    console.log("The owner cannot sign in until isolation ships and a deliberate activation flow enables the tenant and the user.");
+    if (generated) console.log(`Generated password for ${ownerEmail} (stored, but login is disabled): ${password}`);
   } finally {
     await prisma.$disconnect();
   }

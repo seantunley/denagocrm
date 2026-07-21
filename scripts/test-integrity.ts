@@ -309,12 +309,19 @@ async function main() {
     });
     const ctTenant = await basePrisma.tenant.findUnique({ where: { id: ct.tenantId } });
     assert.equal(ctTenant?.active, false, "createTenant creates a SUSPENDED tenant (no live cross-tenant login before isolation)");
-    const ctOwner = await basePrisma.user.findUnique({ where: { id: ct.ownerId }, select: { role: true } });
+    const ctOwner = await basePrisma.user.findUnique({ where: { id: ct.ownerId }, select: { role: true, modules: true } });
     assert.equal(ctOwner?.role, "member", "createTenant never mints a global owner/superuser — owner is a plain member");
+    assert.equal(ctOwner?.modules, "", "createTenant grants the owner NO modules");
+    // disabledAt is a raw security column (outside the Prisma model): the owner
+    // must be created disabled so the credentials can't sign into the unscoped CRM.
+    const [{ disabledAt }] = await basePrisma.$queryRaw<Array<{ disabledAt: Date | null }>>`
+      SELECT "disabledAt" FROM "User" WHERE "id" = ${ct.ownerId} LIMIT 1`;
+    assert.ok(disabledAt, "createTenant creates the owner DISABLED (login refused)");
     const ctMember = await basePrisma.tenantMember.findUnique({ where: { tenantId_userId: { tenantId: ct.tenantId, userId: ct.ownerId } } });
     assert.ok(ctMember, "createTenant makes the owner a member of the new tenant");
     assert.deepEqual(await resolveActingTenant(ct.ownerId), { error: "no_tenant" }, "a suspended tenant is fail-closed — its owner resolves to no tenant");
-    // Only once an operator activates it (post-isolation) does the owner resolve.
+    // Sanity: resolution only opens up once the tenant is activated (a deliberate
+    // post-isolation step; the owner would also need enabling to actually sign in).
     await basePrisma.tenant.update({ where: { id: ct.tenantId }, data: { active: true } });
     assert.deepEqual(await resolveActingTenant(ct.ownerId), { tenantId: ct.tenantId }, "after activation the owner resolves to exactly the created tenant");
     await basePrisma.tenantMember.deleteMany({ where: { userId: ct.ownerId } });
