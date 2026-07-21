@@ -251,11 +251,15 @@ export async function saveMailbox(formData: FormData): Promise<void> {
   if (name.length < 2) throw new Error("Give the mailbox a name.");
   const color = str(formData, "color") || "#ea580c";
   const signature = str(formData, "signature") || null;
+  const email = str(formData, "email").toLowerCase() || null; // routing key: mail to this address becomes a ticket in this mailbox
+  const autoReplyEnabled = formData.get("autoReplyEnabled") === "on";
+  const autoReplyBody = str(formData, "autoReplyBody") || null;
   const active = formData.get("active") !== "off";
+  const data = { name, color, signature, email, autoReplyEnabled, autoReplyBody, active };
   if (id) {
-    await basePrisma.supportMailbox.update({ where: { id }, data: { name, color, signature, active } });
+    await basePrisma.supportMailbox.update({ where: { id }, data });
   } else {
-    await basePrisma.supportMailbox.create({ data: { name, slug: slugify(name), color, signature, active } });
+    await basePrisma.supportMailbox.create({ data: { ...data, slug: slugify(name) } });
   }
   await logAudit({ action: "helpdesk.mailbox_saved", summary: `Saved mailbox ${name}`, user });
   revalidatePath("/settings/helpdesk");

@@ -1,9 +1,126 @@
 import { ImapFlow } from "imapflow";
-import { simpleParser } from "mailparser";
+import { simpleParser, type ParsedMail } from "mailparser";
 import { prisma } from "./db";
 import { getSetting, putSetting } from "./settings";
 import { sendPushToAll } from "./push";
+import { sendEmail } from "./email";
 import { contactName } from "./format";
+
+/** Strip repeated Re:/Fwd: prefixes and lower-case, for subject-based threading. */
+function normalizeSubject(s: string): string {
+  let t = s.trim();
+  let prev: string;
+  do {
+    prev = t;
+    t = t.replace(/^\s*(re|fwd?|fw|aw)\s*:\s*/i, "");
+  } while (t !== prev);
+  return t.trim().toLowerCase();
+}
+
+/** Auto-generated / no-reply mail we must never auto-reply to (loop guard). */
+function looksAutomated(parsed: ParsedMail, fromEmail: string): boolean {
+  const auto = parsed.headers?.get("auto-submitted");
+  const autoStr = typeof auto === "string" ? auto : "";
+  if (autoStr && autoStr.toLowerCase() !== "no") return true;
+  return /(no-?reply|mailer-daemon|postmaster|do-?not-?reply)/i.test(fromEmail);
+}
+
+/** The active support mailbox this mail was addressed to (To/Cc), if any. */
+async function matchSupportMailbox(parsed: ParsedMail) {
+  const addrs = [parsed.to, parsed.cc].flatMap((a) =>
+    a ? (Array.isArray(a) ? a : [a]).flatMap((x) => x.value ?? []) : [],
+  );
+  const recipients = new Set(addrs.map((a) => a.address?.toLowerCase()).filter(Boolean) as string[]);
+  if (recipients.size === 0) return null;
+  const boxes = await prisma.supportMailbox.findMany({ where: { active: true, email: { not: null } } });
+  return boxes.find((b) => b.email && recipients.has(b.email.toLowerCase())) ?? null;
+}
+
+type Mailbox = NonNullable<Awaited<ReturnType<typeof matchSupportMailbox>>>;
+
+/**
+ * Turn a support-mailbox email into a ticket: resolve/create the sender contact,
+ * thread onto an open ticket with the same subject or open a new one, append the
+ * message, and (only on a NEW ticket, never to automated mail) send the mailbox's
+ * auto-reply. Returns true when filed.
+ */
+async function fileSupportEmail(mailbox: Mailbox, parsed: ParsedMail, fromEmail: string): Promise<boolean> {
+  const fromName = parsed.from?.value?.[0]?.name?.trim() || fromEmail.split("@")[0];
+  let contact = await prisma.contact.findFirst({ where: { email: { equals: fromEmail, mode: "insensitive" } } });
+  if (!contact) {
+    const [first, ...rest] = fromName.split(/\s+/);
+    contact = await prisma.contact.create({
+      data: { firstName: first || fromEmail, lastName: rest.join(" ") || null, email: fromEmail, source: "email" },
+    });
+  }
+
+  const rawSubject = (parsed.subject ?? "").trim() || "(no subject)";
+  const norm = normalizeSubject(rawSubject);
+  const body = (parsed.text ?? "").trim().slice(0, 10000) || (parsed.html ? "[HTML email — open the ticket to view]" : "");
+  const when = parsed.date ?? new Date();
+
+  // Thread onto the most recent non-closed ticket for this contact + mailbox with
+  // the same normalized subject; otherwise open a new one.
+  const openCase = await prisma.customerCase.findFirst({
+    where: { contactId: contact.id, mailboxId: mailbox.id, status: { not: "closed" } },
+    orderBy: { updatedAt: "desc" },
+  });
+  const existing = openCase && normalizeSubject(openCase.subject) === norm ? openCase : null;
+
+  let caseId: string;
+  let caseNumber: bigint;
+  const isNew = !existing;
+  if (existing) {
+    await prisma.customerCase.update({
+      where: { id: existing.id },
+      data: {
+        status: existing.status === "resolved" ? "open" : existing.status,
+        lastReplyAt: when,
+        lastReplyBy: "customer",
+        messages: { create: { contactId: contact.id, direction: "customer", type: "message", body } },
+      },
+    });
+    caseId = existing.id;
+    caseNumber = existing.number;
+  } else {
+    const created = await prisma.customerCase.create({
+      data: {
+        subject: rawSubject.slice(0, 200),
+        description: body,
+        type: "support",
+        status: "new",
+        source: "email",
+        contactId: contact.id,
+        mailboxId: mailbox.id,
+        lastReplyAt: when,
+        lastReplyBy: "customer",
+        messages: { create: { contactId: contact.id, direction: "customer", type: "message", body } },
+      },
+      select: { id: true, number: true },
+    });
+    caseId = created.id;
+    caseNumber = created.number;
+  }
+
+  if (isNew && mailbox.autoReplyEnabled && mailbox.autoReplyBody && !looksAutomated(parsed, fromEmail)) {
+    const sig = mailbox.signature ? `\n\n${mailbox.signature}` : "";
+    await sendEmail({
+      to: fromEmail,
+      subject: `Re: ${rawSubject} [C-${caseNumber}]`,
+      text: `${mailbox.autoReplyBody}${sig}`,
+    }).catch(() => {});
+  }
+
+  await sendPushToAll(
+    {
+      title: isNew ? `🎫 New ticket · ${mailbox.name}` : `💬 Ticket reply · ${mailbox.name}`,
+      body: `${contactName(contact)}: ${rawSubject}`.slice(0, 100),
+      url: `/cases/${caseId}`,
+    },
+    "email_in",
+  ).catch(() => {});
+  return true;
+}
 
 /**
  * Pulls new inbox mail via IMAP and files replies onto the matching
@@ -59,6 +176,15 @@ export async function syncInboundEmail(): Promise<number> {
           if (!fromEmail) continue;
           const ourAddress = user.toLowerCase();
           if (fromEmail === ourAddress) continue; // our own sent mail
+
+          // Help desk: mail addressed to a support mailbox becomes a ticket
+          // (create or thread), incl. mail from brand-new senders. Everything else
+          // keeps the timeline-filing behaviour below.
+          const mailbox = await matchSupportMailbox(parsed);
+          if (mailbox) {
+            if (await fileSupportEmail(mailbox, parsed, fromEmail)) filed++;
+            continue;
+          }
 
           const contact = await prisma.contact.findFirst({
             where: { email: { equals: fromEmail, mode: "insensitive" } },
