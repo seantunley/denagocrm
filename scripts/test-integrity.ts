@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { prisma, basePrisma } from "../src/lib/db";
-import { resolveActingTenant } from "../src/lib/tenantContext";
+import { resolveActingTenant, createUserInOwnerTenant } from "../src/lib/tenantContext";
 import { ensureFoundingMembership } from "../src/lib/provisioning";
 
 // DB-backed verification of the security/integrity fixes (audit Groups 1-3).
@@ -236,6 +236,69 @@ async function main() {
     await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [ctxUser, importUser] } } });
     await basePrisma.tenant.deleteMany({ where: { id: { in: [tActive1, tActive2, tInactive] } } });
     await basePrisma.user.deleteMany({ where: { id: { in: [ctxUser, importUser] } } });
+
+    // createUserInOwnerTenant — the createUser provisioning core: atomic
+    // user+membership into the owner's LOCKED+validated tenant, plus refuse/rollback.
+    const provOwner = id("provOwner");
+    const provTenant = id("provTenant");
+    const provTenant2 = id("provTenant2");
+    const provOwner0 = id("provOwner0");
+    await basePrisma.tenant.create({ data: { id: provTenant, name: "ProvT", slug: provTenant, active: true } });
+    await basePrisma.user.create({ data: { id: provOwner, name: "ProvOwner", email: `${provOwner}@example.invalid`, passwordHash: "x" } });
+    await basePrisma.tenantMember.create({ data: { tenantId: provTenant, userId: provOwner } });
+
+    // success — user + membership committed in the SAME validated tenant
+    const newEmail = `${id("provNew")}@example.invalid`;
+    const okRes = await createUserInOwnerTenant(provOwner, { name: "New", email: newEmail, passwordHash: "x" });
+    assert.ok("tenantId" in okRes && okRes.tenantId === provTenant, "provisions into the owner's tenant");
+    const newUser = await basePrisma.user.findUnique({ where: { email: newEmail }, select: { id: true } });
+    assert.ok(newUser, "user was created");
+    const newMember = await basePrisma.tenantMember.findUnique({ where: { tenantId_userId: { tenantId: provTenant, userId: newUser!.id } } });
+    assert.ok(newMember, "membership created atomically in the same validated tenant");
+
+    // rollback — a failure inside the tx (duplicate email) persists NOTHING extra
+    let rolledBack = false;
+    try {
+      await createUserInOwnerTenant(provOwner, { name: "Dup", email: newEmail, passwordHash: "x" });
+    } catch {
+      rolledBack = true;
+    }
+    assert.ok(rolledBack, "duplicate email aborts the provisioning transaction");
+    assert.equal(await basePrisma.user.count({ where: { email: newEmail } }), 1, "rollback left exactly the original user (no partial second)");
+
+    // refuse — owner with no active tenant → no_tenant, no user created
+    await basePrisma.user.create({ data: { id: provOwner0, name: "NoTenant", email: `${provOwner0}@example.invalid`, passwordHash: "x" } });
+    const noneEmail = `${id("provNone")}@example.invalid`;
+    assert.deepEqual(await createUserInOwnerTenant(provOwner0, { name: "X", email: noneEmail, passwordHash: "x" }), { error: "no_tenant" }, "owner with no active tenant is refused");
+    assert.equal(await basePrisma.user.count({ where: { email: noneEmail } }), 0, "no user created when refused");
+
+    // refuse — ambiguous (owner in two active tenants) → ambiguous_tenant, no user
+    await basePrisma.tenant.create({ data: { id: provTenant2, name: "ProvT2", slug: provTenant2, active: true } });
+    await basePrisma.tenantMember.create({ data: { tenantId: provTenant2, userId: provOwner } });
+    const ambigEmail = `${id("provAmbig")}@example.invalid`;
+    const ambigRes = await createUserInOwnerTenant(provOwner, { name: "A", email: ambigEmail, passwordHash: "x" });
+    assert.ok("error" in ambigRes && ambigRes.error === "ambiguous_tenant", "ambiguous owner is refused");
+    assert.equal(await basePrisma.user.count({ where: { email: ambigEmail } }), 0, "no user created when ambiguous");
+
+    // import atomicity — user + founding membership roll back together on failure,
+    // so an import failure can't leave a tenantless user.
+    let importRolledBack = false;
+    const importFailUser = id("importFail");
+    try {
+      await basePrisma.$transaction(async (tx) => {
+        await tx.user.create({ data: { id: importFailUser, name: "IF", email: `${importFailUser}@example.invalid`, passwordHash: "x" } });
+        await ensureFoundingMembership(tx, importFailUser);
+        throw new Error("simulated import failure after provisioning");
+      });
+    } catch {
+      importRolledBack = true;
+    }
+    assert.ok(importRolledBack, "the simulated failure propagates");
+    assert.equal(await basePrisma.user.count({ where: { id: importFailUser } }), 0, "import user rolled back — no tenantless user left");
+
+    await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [provOwner, provOwner0, newUser!.id] } } });
+    await basePrisma.user.deleteMany({ where: { id: { in: [provOwner, provOwner0, newUser!.id] } } });
+    await basePrisma.tenant.deleteMany({ where: { id: { in: [provTenant, provTenant2] } } });
 
     console.log("Integrity / IDOR / soft-delete integration tests passed.");
   } finally {

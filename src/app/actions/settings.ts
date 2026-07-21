@@ -10,8 +10,7 @@ import { setNextStepScheduling } from "@/lib/nextStepConfig";
 import { PUSH_KINDS } from "@/lib/push";
 import { logAuditStrict } from "@/lib/audit";
 import { bumpUserSessionVersion } from "@/lib/userSecurity";
-import { resolveActingTenant } from "@/lib/tenantContext";
-import { addTenantMembership } from "@/lib/provisioning";
+import { createUserInOwnerTenant } from "@/lib/tenantContext";
 
 // ---- Pipeline stages ----
 
@@ -90,58 +89,46 @@ export async function createUser(
   if (existing) return { error: "A user with that email already exists." };
 
   // Tenant provisioning (fail-closed): the new user MUST land in a validated tenant
-  // — the owner's CURRENT tenant, not one inferred from an old membership. Until
-  // session tenant selection lands, that's the owner's sole ACTIVE-tenant
-  // membership; zero or many is refused rather than guessed (so we never provision
-  // into a suspended or wrong tenant). Pre-check for a friendly message…
-  const pre = await resolveActingTenant(owner.id);
-  if ("error" in pre) {
+  // — the owner's CURRENT tenant. createUserInOwnerTenant resolves + LOCKS that
+  // tenant inside the write (FOR UPDATE) and creates the user + membership together,
+  // so a suspension / membership change can't race it and a user never exists
+  // tenantless. Zero or multiple active tenants is refused, not guessed.
+  const passwordHash = await bcrypt.hash(password, 12);
+  const result = await createUserInOwnerTenant(owner.id, { name, email, passwordHash });
+  if ("error" in result) {
     return {
-      error: pre.error === "ambiguous_tenant"
-        ? "You belong to more than one tenant, and tenant selection isn't available yet — new users can't be added until it is."
-        : "Your account isn't linked to an active tenant — contact support before adding users.",
+      error:
+        result.error === "ambiguous_tenant"
+          ? "You belong to more than one tenant, and tenant selection isn't available yet — new users can't be added until it is."
+          : result.error === "context_changed"
+            ? "Your tenant changed while adding the user — please try again."
+            : "Your account isn't linked to an active tenant — contact support before adding users.",
     };
   }
-  const passwordHash = await bcrypt.hash(password, 12);
+  const created = result.user;
+  // Initial RBAC role — best-effort, OUTSIDE the tenant tx (see PR notes): a missing
+  // role must not block user+membership creation during a rolling deploy.
   try {
-    const created = await basePrisma.$transaction(async (tx) => {
-      // …then RE-VALIDATE under the write, so a tenant suspension / membership
-      // removal between the pre-check and here can't slip a user into a now-invalid
-      // tenant. User + membership commit together — a user never exists tenantless.
-      const ctx = await resolveActingTenant(owner.id, tx);
-      if ("error" in ctx) throw new Error("TENANT_CONTEXT_CHANGED");
-      const user = await tx.user.create({ data: { name, email, passwordHash } });
-      await addTenantMembership(tx, ctx.tenantId, user.id);
-      return user;
-    });
-    // Initial RBAC role — best-effort, outside the tenant tx (see PR notes): a
-    // missing role must not block user+membership creation during a rolling deploy.
-    try {
-      await basePrisma.$executeRaw`
-        INSERT INTO "UserRole" ("userId", "roleId")
-        VALUES (${created.id}, 'role_sales_rep')
-        ON CONFLICT DO NOTHING
-      `;
-    } catch {
-      // Safe during a rolling deployment before the RBAC migration is applied.
-    }
-    await logAuditStrict({
-      action: "security.user_created",
-      summary: `Created user ${name}`,
-      entityType: "User",
-      entityId: created.id,
-      user: owner,
-      after: { name, email, role: "member", initialRbacRole: "role_sales_rep", tenantId: pre.tenantId },
-    });
-    revalidatePath("/settings");
-    revalidatePath("/settings/access");
-    return { ok: `${name} added to the team.` };
-  } catch (e) {
-    if (e instanceof Error && e.message === "TENANT_CONTEXT_CHANGED") {
-      return { error: "Your tenant changed while adding the user — please try again." };
-    }
-    throw e;
+    await basePrisma.$executeRaw`
+      INSERT INTO "UserRole" ("userId", "roleId")
+      VALUES (${created.id}, 'role_sales_rep')
+      ON CONFLICT DO NOTHING
+    `;
+  } catch {
+    // Safe during a rolling deployment before the RBAC migration is applied.
   }
+  await logAuditStrict({
+    action: "security.user_created",
+    summary: `Created user ${name}`,
+    entityType: "User",
+    entityId: created.id,
+    user: owner,
+    // Audit the tenant ACTUALLY used (returned from the locked transaction).
+    after: { name, email, role: "member", initialRbacRole: "role_sales_rep", tenantId: result.tenantId },
+  });
+  revalidatePath("/settings");
+  revalidatePath("/settings/access");
+  return { ok: `${name} added to the team.` };
 }
 
 export async function changeOwnPassword(

@@ -23,12 +23,14 @@ async function main() {
   };
 
   for (const u of raw.users) {
-    const created = await prisma.user.create({ data: dates(u, ["createdAt"]) });
-    // Every imported user is a Denago user (single-tenant SQLite→Postgres restore),
-    // so provision the founding-tenant membership — otherwise they'd be tenantless
-    // and locked out once session enforcement lands. Shared service, same as seed
-    // and admin createUser.
-    await ensureFoundingMembership(prisma, created.id);
+    // Each user + its founding membership in ONE transaction, so a failure can't
+    // leave a tenantless user (which the "skip if any users exist" guard would then
+    // never repair on rerun). Every imported user is a Denago user (single-tenant
+    // SQLite→Postgres restore); shared provisioning service, same as seed/createUser.
+    await prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({ data: dates(u, ["createdAt"]) });
+      await ensureFoundingMembership(tx, created.id);
+    });
   }
   for (const s of raw.appSettings) await prisma.appSetting.create({ data: s });
   for (const t of raw.tags) await prisma.tag.create({ data: t });

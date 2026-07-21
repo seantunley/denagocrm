@@ -1,23 +1,17 @@
 import "server-only";
 import type { Prisma } from "@prisma/client";
 import { basePrisma } from "@/lib/db";
+import { addTenantMembership } from "@/lib/provisioning";
 import { soleActiveTenant, type SoleTenantResult } from "@/lib/tenant";
 
 type Client = typeof basePrisma | Prisma.TransactionClient;
 
 /**
  * Resolve the tenant a user may ACT in when there is no explicit session
- * selection yet (the session-selected tenant lands in a later PR). This is NOT
- * "the user's tenant" inferred from an old membership — it validates that each
- * candidate membership's tenant EXISTS and is ACTIVE, then applies the
- * {@link soleActiveTenant} rule:
- *   - `{ tenantId }`            — exactly one active-tenant membership
- *   - `{ error: "no_tenant" }` — none (a suspended-only user counts as none)
- *   - `{ error: "ambiguous_tenant" }` — more than one → explicit selection needed
- *
- * Fail-closed. Pass a transaction client to re-validate INSIDE a write, so a
- * concurrent tenant suspension or membership removal between a pre-check and the
- * write can't provision into a now-invalid tenant.
+ * selection yet. Validates that each candidate membership's tenant EXISTS and is
+ * ACTIVE, then applies {@link soleActiveTenant} (one → that tenant, zero →
+ * `no_tenant`, 2+ → `ambiguous_tenant`). Read-only (no locks) — use it for a
+ * pre-check / friendly error; the WRITE path uses the locking variant below.
  */
 export async function resolveActingTenant(
   userId: string,
@@ -28,4 +22,62 @@ export async function resolveActingTenant(
     select: { tenantId: true },
   });
   return soleActiveTenant(memberships.map((m) => m.tenantId));
+}
+
+/**
+ * Same resolution, but LOCKS the candidate `Tenant` + `TenantMember` rows
+ * `FOR UPDATE`. A concurrent tenant suspension (`UPDATE Tenant SET active=…`) or
+ * membership removal (`DELETE TenantMember`) then serialises against provisioning
+ * instead of racing it — it either committed before our SELECT (excluded by the
+ * `active = true` filter) or blocks until our transaction commits. Must run inside
+ * a transaction.
+ */
+async function lockActingTenant(
+  tx: Prisma.TransactionClient,
+  userId: string,
+): Promise<SoleTenantResult> {
+  const rows = await tx.$queryRaw<{ tenantId: string }[]>`
+    SELECT m."tenantId" AS "tenantId"
+    FROM "TenantMember" m
+    JOIN "Tenant" t ON t."id" = m."tenantId"
+    WHERE m."userId" = ${userId} AND t."active" = true
+    FOR UPDATE OF t, m`;
+  return soleActiveTenant(rows.map((r) => r.tenantId));
+}
+
+export type ProvisionResult =
+  | { user: { id: string }; tenantId: string }
+  | { error: "no_tenant" | "ambiguous_tenant" | "context_changed" };
+
+/**
+ * Create a user and place them in the OWNER's current tenant, ATOMICALLY. The
+ * owner's tenant is resolved and LOCKED inside the write, and compared against the
+ * pre-check — so a tenant suspension or membership change between pre-check and
+ * write aborts (rolls back) rather than provisioning into a stale/invalid tenant.
+ * Returns the tenant ACTUALLY used, for the caller to audit.
+ */
+export async function createUserInOwnerTenant(
+  ownerId: string,
+  data: { name: string; email: string; passwordHash: string },
+): Promise<ProvisionResult> {
+  const pre = await resolveActingTenant(ownerId);
+  if ("error" in pre) return pre;
+  try {
+    return await basePrisma.$transaction(async (tx) => {
+      const ctx = await lockActingTenant(tx, ownerId);
+      // Abort if the locked tenant is no longer resolvable, or differs from what we
+      // pre-checked (membership/suspension changed in between).
+      if ("error" in ctx || ctx.tenantId !== pre.tenantId) {
+        throw new Error("TENANT_CONTEXT_CHANGED");
+      }
+      const user = await tx.user.create({ data });
+      await addTenantMembership(tx, ctx.tenantId, user.id);
+      return { user: { id: user.id }, tenantId: ctx.tenantId };
+    });
+  } catch (e) {
+    if (e instanceof Error && e.message === "TENANT_CONTEXT_CHANGED") {
+      return { error: "context_changed" };
+    }
+    throw e;
+  }
 }
