@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { prisma, basePrisma } from "../src/lib/db";
 import { resolveActingTenant, createUserInOwnerTenant } from "../src/lib/tenantContext";
-import { ensureFoundingMembership } from "../src/lib/provisioning";
+import { ensureFoundingMembership, createTenant } from "../src/lib/provisioning";
 
 // DB-backed verification of the security/integrity fixes (audit Groups 1-3).
 // Runs in CI against the ephemeral seeded database — NOT locally (a local run
@@ -296,6 +296,25 @@ async function main() {
     await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [provOwner, provOwner0, newUser!.id] } } });
     await basePrisma.user.deleteMany({ where: { id: { in: [provOwner, provOwner0, newUser!.id] } } });
     await basePrisma.tenant.deleteMany({ where: { id: { in: [provTenant, provTenant2] } } });
+
+    // createTenant — provisions a brand-new tenant + its first owner + membership
+    // atomically (the single source of truth for tenant setup: CLI, future admin
+    // UI, isolation tests).
+    const ctSlug = id("ctSlug");
+    const ctOwnerEmail = `${id("ctOwner")}@example.invalid`;
+    const ct = await createTenant(basePrisma, {
+      name: "Created Tenant",
+      slug: ctSlug,
+      owner: { name: "CT Owner", email: ctOwnerEmail, passwordHash: "x" },
+    });
+    const ctTenant = await basePrisma.tenant.findUnique({ where: { id: ct.tenantId } });
+    assert.ok(ctTenant?.active, "createTenant creates an active tenant");
+    const ctMember = await basePrisma.tenantMember.findUnique({ where: { tenantId_userId: { tenantId: ct.tenantId, userId: ct.ownerId } } });
+    assert.ok(ctMember, "createTenant makes the owner a member of the new tenant");
+    assert.deepEqual(await resolveActingTenant(ct.ownerId), { tenantId: ct.tenantId }, "the new owner resolves to exactly the created tenant");
+    await basePrisma.tenantMember.deleteMany({ where: { userId: ct.ownerId } });
+    await basePrisma.user.deleteMany({ where: { id: ct.ownerId } });
+    await basePrisma.tenant.deleteMany({ where: { id: ct.tenantId } });
 
     console.log("Integrity / IDOR / soft-delete integration tests passed.");
   } finally {
