@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma, basePrisma } from "@/lib/db";
+import { prisma } from "@/lib/db";
 import { quoteTotalCents } from "@/lib/pricing";
 import { logAudit } from "@/lib/audit";
 import { sendPushToAll } from "@/lib/push";
@@ -8,14 +8,17 @@ import { markReferralEarned } from "@/lib/referrals";
 import { runLeadAutomations } from "@/lib/automations";
 
 /**
- * Fire the CRM side-effects of a signed document once the hub has completed a
- * request. This is what gives the unified signing hub parity with the legacy
- * `/sign/[kind]/[token]` flow: a signed quote is *accepted* and wins its lead;
- * a signed job card is marked signed. Called from completeSignatureRequest after
- * the sealed PDF has been filed.
+ * Fire the EXTERNAL side-effects of a signed document once the hub has completed
+ * a request. The CORE state — request completed, sealed PDF filed, and the source
+ * quote/job card marked signed — is now committed atomically inside
+ * completeSignatureRequest's transaction. This function only fans out the
+ * non-transactional effects (referral, automations, push, audit) and is
+ * best-effort: a failure here must never unwind an already-completed request.
  *
- * Every step is idempotent (guarded on the record not already being signed) and
- * best-effort — a failure here must never unwind an already-completed request.
+ * It runs only when the completion transaction actually signed the source
+ * (`sourceSigned`), so a source already signed elsewhere / trashed / superseded
+ * doesn't re-fire won-effects. `wonLeadId` is set only when that same
+ * transaction won the lead, keeping lead effects in step with the quote.
  */
 
 type CompletedReq = {
@@ -26,49 +29,34 @@ type CompletedReq = {
   signedByName: string | null;
   signedPdfHash: string | null;
   signedDocId: string | null;
+  sourceSigned: boolean;
+  wonLeadId: string | null;
 };
 
 export async function runPostCompletion(req: CompletedReq): Promise<void> {
+  if (!req.sourceSigned) return; // source wasn't newly signed — nothing to fan out
   try {
-    if (req.quoteId) await acceptQuote(req);
-    else if (req.jobCardId) await signJobCard(req);
+    if (req.quoteId) await afterQuoteSigned(req);
+    else if (req.jobCardId) await afterJobCardSigned(req);
   } catch (err) {
     // Never fail completion because a downstream effect threw.
     console.error("[signing] post-completion side-effects failed", err);
   }
 }
 
-/** Accept the quote, win its lead, fire referral + automations + push. */
-async function acceptQuote(req: CompletedReq): Promise<void> {
+async function afterQuoteSigned(req: CompletedReq): Promise<void> {
   const quote = await prisma.quote.findUnique({
     where: { id: req.quoteId! },
-    include: { items: true, lead: true },
+    include: { items: true },
   });
-  if (!quote || quote.signedAt) return; // already accepted (legacy or a prior run)
-
-  const signedAt = new Date();
+  if (!quote) return;
   const name = req.signedByName || "Customer";
-  // Atomic claim mirrors the legacy flow: only one path can accept the quote.
-  const claimed = await basePrisma.quote.updateMany({
-    where: { id: quote.id, signedAt: null },
-    data: {
-      signedAt,
-      signedByName: name,
-      status: "accepted",
-      declinedAt: null,
-      declineReason: null,
-      signedPdfHash: req.signedPdfHash ?? undefined,
-    },
-  });
-  if (claimed.count === 0) return;
-
-  if (quote.leadId && quote.lead?.status === "open") {
-    await prisma.lead.update({ where: { id: quote.leadId }, data: { status: "won" } });
-    await markReferralEarned(quote.leadId).catch(() => {});
-    await runLeadAutomations("lead_won", quote.leadId).catch(() => {});
-  }
-
   const total = quoteTotalCents(quote.items);
+
+  if (req.wonLeadId) {
+    await markReferralEarned(req.wonLeadId).catch(() => {});
+    await runLeadAutomations("lead_won", req.wonLeadId).catch(() => {});
+  }
   await logAudit({
     action: "quote.signed",
     summary: `Quote Q-${quote.number} (${formatZAR(Math.round(total))}) signed online by ${name} via signing hub — sealed PDF filed${req.signedPdfHash ? ` (SHA-256 ${req.signedPdfHash.slice(0, 16)}…)` : ""}`,
@@ -76,7 +64,6 @@ async function acceptQuote(req: CompletedReq): Promise<void> {
     leadId: quote.leadId,
     userName: name,
   });
-
   if (quote.leadId) await runLeadAutomations("quote_signed", quote.leadId).catch(() => {});
   await sendPushToAll(
     { title: "Quote signed 🎉", body: `Q-${quote.number} — ${name} · ${formatZAR(Math.round(total))}`, url: `/quotes/${quote.id}` },
@@ -84,19 +71,10 @@ async function acceptQuote(req: CompletedReq): Promise<void> {
   ).catch(() => {});
 }
 
-/** Mark the job card signed + notify. */
-async function signJobCard(req: CompletedReq): Promise<void> {
+async function afterJobCardSigned(req: CompletedReq): Promise<void> {
   const jobCard = await prisma.jobCard.findUnique({ where: { id: req.jobCardId! } });
-  if (!jobCard || jobCard.signedAt) return;
-
-  const signedAt = new Date();
+  if (!jobCard) return;
   const name = req.signedByName || "Customer";
-  const claimed = await basePrisma.jobCard.updateMany({
-    where: { id: jobCard.id, signedAt: null },
-    data: { signedAt, signedByName: name },
-  });
-  if (claimed.count === 0) return;
-
   await logAudit({
     action: "jobcard.signed",
     summary: `Job card #${jobCard.number} signed online by ${name} via signing hub — sealed PDF filed`,

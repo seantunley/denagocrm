@@ -53,23 +53,23 @@ function requireRecordSigningAccess(kind: Kind, id: string): Promise<PermissionU
 async function checkRecordActive(
   kind: Kind,
   id: string,
-): Promise<{ error: string | null; leadId: string | null }> {
+): Promise<{ error: string | null; leadId: string | null; version: number | null }> {
   if (kind === "quote") {
     const quote = await prisma.quote.findUnique({ where: { id } });
-    if (!quote || quote.deletedAt) return { error: "Quote not found.", leadId: null };
+    if (!quote || quote.deletedAt) return { error: "Quote not found.", leadId: null, version: null };
     if (quote.supersededAt) {
-      return { error: "This quote was superseded by a revision — sign the current version.", leadId: null };
+      return { error: "This quote was superseded by a revision — sign the current version.", leadId: null, version: null };
     }
-    if (quote.signedAt) return { error: "This quote has already been signed.", leadId: null };
+    if (quote.signedAt) return { error: "This quote has already been signed.", leadId: null, version: null };
     if (quoteExpired(quote.validUntil)) {
-      return { error: "This quote has expired — issue an updated quote first.", leadId: null };
+      return { error: "This quote has expired — issue an updated quote first.", leadId: null, version: null };
     }
-    return { error: null, leadId: quote.leadId };
+    return { error: null, leadId: quote.leadId, version: quote.updatedAt.getTime() };
   }
   const jobCard = await prisma.jobCard.findUnique({ where: { id } });
-  if (!jobCard || jobCard.deletedAt) return { error: "Job card not found.", leadId: null };
-  if (jobCard.signedAt) return { error: "This job card has already been signed.", leadId: null };
-  return { error: null, leadId: null };
+  if (!jobCard || jobCard.deletedAt) return { error: "Job card not found.", leadId: null, version: null };
+  if (jobCard.signedAt) return { error: "This job card has already been signed.", leadId: null, version: null };
+  return { error: null, leadId: null, version: jobCard.updatedAt.getTime() };
 }
 
 export async function startRecordSigning(
@@ -87,6 +87,7 @@ export async function startRecordSigning(
   const active = await checkRecordActive(kind, id);
   if (active.error) return { ok: false, error: active.error };
   const sendLeadId = active.leadId;
+  const sourceVersion = active.version;
 
   // Cheap unlocked pre-check to short-circuit the common "already open" case.
   const existing = await activeRecordRequest({ quoteId, jobCardId });
@@ -116,64 +117,94 @@ export async function startRecordSigning(
     "application/pdf",
   );
 
-  // Serialize the check-and-create with a transaction-scoped advisory lock keyed
-  // on the record: two concurrent starts can't both see "no open request" and
-  // both create a signing link. The document + request + recipients + fields are
-  // created together in the transaction, so a failure can't leave a partial
-  // draft. The loser discards its freshly rendered (now unused) PDF.
-  const lockName = `sign:${kind}:${id}`;
+  // The check-and-create runs in one transaction that locks the SOURCE record row
+  // FOR UPDATE — the SAME mutex used by quote/job-card edits, revisions, status
+  // changes and deletion — so signing start serializes with the whole lifecycle,
+  // not just other signing starts. Under the lock we re-validate the record AND
+  // verify it hasn't changed since the envelope was rendered (version check), so
+  // we can't snapshot a stale version. The document + request + recipients +
+  // fields are created together, so a failure can't leave a partial draft.
   let createdRequestId: string | null = null;
   let reusedRequestId: string | null = null;
-  await basePrisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockName})::bigint)`;
-    const open = await tx.signatureRequest.findFirst({
-      where: {
-        ...(quoteId ? { quoteId } : { jobCardId }),
-        deletedAt: null,
-        status: { notIn: [...CLOSED_REQUEST_STATUSES] },
-      },
-      orderBy: { createdAt: "desc" },
-      select: { id: true },
+  let staleSource = false;
+  try {
+    await basePrisma.$transaction(async (tx) => {
+      if (quoteId) {
+        await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${quoteId} FOR UPDATE`;
+        const q = await tx.quote.findUnique({
+          where: { id: quoteId },
+          select: { deletedAt: true, signedAt: true, supersededAt: true, validUntil: true, updatedAt: true },
+        });
+        if (!q || q.deletedAt || q.signedAt || q.supersededAt || quoteExpired(q.validUntil) || q.updatedAt.getTime() !== sourceVersion) {
+          staleSource = true;
+          return;
+        }
+      } else {
+        await tx.$executeRaw`SELECT id FROM "JobCard" WHERE id = ${jobCardId} FOR UPDATE`;
+        const jc = await tx.jobCard.findUnique({
+          where: { id: jobCardId! },
+          select: { deletedAt: true, signedAt: true, updatedAt: true },
+        });
+        if (!jc || jc.deletedAt || jc.signedAt || jc.updatedAt.getTime() !== sourceVersion) {
+          staleSource = true;
+          return;
+        }
+      }
+      const open = await tx.signatureRequest.findFirst({
+        where: {
+          ...(quoteId ? { quoteId } : { jobCardId }),
+          deletedAt: null,
+          status: { notIn: [...CLOSED_REQUEST_STATUSES] },
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true },
+      });
+      if (open) {
+        reusedRequestId = open.id;
+        return;
+      }
+      const document = await tx.document.create({
+        data: {
+          fileName: `${envelope.title}.pdf`,
+          storedName,
+          mimeType: "application/pdf",
+          sizeBytes: pdf.length,
+          quoteId,
+          jobCardId,
+          contactId: envelope.contactId,
+          tag: "for-signing",
+          uploadedById: user.id,
+        },
+      });
+      const created = await createSignatureRequestFromDoc({
+        doc: envelope.doc,
+        title: envelope.title,
+        unsignedPdfRef: storedName,
+        source: {
+          documentId: document.id,
+          quoteId,
+          jobCardId,
+          contactId: envelope.contactId,
+        },
+        ordering: envelope.ordering,
+        createdById: user.id,
+        client: tx,
+      });
+      createdRequestId = created.id;
     });
-    if (open) {
-      reusedRequestId = open.id;
-      return;
-    }
-    const document = await tx.document.create({
-      data: {
-        fileName: `${envelope.title}.pdf`,
-        storedName,
-        mimeType: "application/pdf",
-        sizeBytes: pdf.length,
-        quoteId,
-        jobCardId,
-        contactId: envelope.contactId,
-        tag: "for-signing",
-        uploadedById: user.id,
-      },
-    });
-    const created = await createSignatureRequestFromDoc({
-      doc: envelope.doc,
-      title: envelope.title,
-      unsignedPdfRef: storedName,
-      source: {
-        documentId: document.id,
-        quoteId,
-        jobCardId,
-        contactId: envelope.contactId,
-      },
-      ordering: envelope.ordering,
-      createdById: user.id,
-      client: tx,
-    });
-    createdRequestId = created.id;
-  });
+  } finally {
+    // Retain the rendered (unsigned) PDF only when a request actually references
+    // it. Every other exit — stale source, reused request, OR a thrown
+    // transaction — deletes the blob so customer/commercial data can't leak.
+    if (!createdRequestId) await deleteFile(storedName).catch(() => {});
+  }
+  if (staleSource) {
+    return { ok: false, error: "This record changed while the signing document was being prepared — please try again." };
+  }
   if (reusedRequestId) {
-    await deleteFile(storedName).catch(() => {});
     return { ok: true, requestId: reusedRequestId };
   }
   if (!createdRequestId) {
-    await deleteFile(storedName).catch(() => {});
     return { ok: false, error: "Could not create the signing request." };
   }
   const requestId: string = createdRequestId;

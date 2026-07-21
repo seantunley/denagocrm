@@ -89,15 +89,20 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   const storedName = await saveFile(pdf, `${req.title} (signed).pdf`, "application/pdf");
 
   const uploaderId = req.createdById || (await prisma.user.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } }))?.id;
+  const firstSigner = req.recipients.find((r) => r.status === "signed" && r.role !== "viewer");
+  const signerName = firstSigner?.signedName || firstSigner?.name || "Customer";
 
-  // Create the signed Document row AND claim completion in ONE transaction, so a
-  // lost claim (a concurrent void/decline closed the request after our initial
-  // read) rolls the Document row back automatically — no row is ever left
-  // pointing at the blob we then delete. The sealed PDF is kept only once the
-  // completion is claimed; every non-committed path (lost claim OR a real DB
-  // error) deletes it. Only the claimer runs post-completion / distribution, so
-  // a caller can't receive a "voided" result while the document still completes.
+  // Create the signed Document, claim completion, AND sign the SOURCE record
+  // (quote/job card) in ONE transaction. Previously the source was signed
+  // afterwards in a best-effort, error-swallowing step, so a crash could leave
+  // the request "completed" and the PDF distributed while the quote/job card
+  // stayed unsigned — with no retry path (the closed request short-circuits).
+  // Signing the source here (guarded live + unsigned + not-superseded) makes the
+  // core state atomic; only external fan-out (automations, push) is best-effort.
+  // A lost claim rolls the Document row back; the blob is kept only once claimed.
   let documentId: string | null = null;
+  let sourceSigned = false;
+  let wonLeadId: string | null = null;
   try {
     await prisma.$transaction(async (tx) => {
       const document = uploaderId
@@ -114,6 +119,30 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       });
       if (claimed.count === 0) throw new CompletionLost();
       documentId = document?.id ?? null;
+
+      if (req.quoteId) {
+        const signedQuote = await tx.quote.updateMany({
+          where: { id: req.quoteId, deletedAt: null, supersededAt: null, signedAt: null },
+          data: { signedAt: new Date(), signedByName: signerName, status: "accepted", declinedAt: null, declineReason: null, signedPdfHash: hash },
+        });
+        if (signedQuote.count === 1) {
+          sourceSigned = true;
+          const q = await tx.quote.findUnique({ where: { id: req.quoteId }, select: { leadId: true } });
+          if (q?.leadId) {
+            // Win the lead in the SAME transaction, locked, so quote-accepted and
+            // lead-won can't diverge under a concurrent decline/accept.
+            await tx.$executeRaw`SELECT id FROM "Lead" WHERE id = ${q.leadId} FOR UPDATE`;
+            const won = await tx.lead.updateMany({ where: { id: q.leadId, deletedAt: null, status: "open" }, data: { status: "won" } });
+            if (won.count === 1) wonLeadId = q.leadId;
+          }
+        }
+      } else if (req.jobCardId) {
+        const signedJc = await tx.jobCard.updateMany({
+          where: { id: req.jobCardId, deletedAt: null, signedAt: null },
+          data: { signedAt: new Date(), signedByName: signerName },
+        });
+        sourceSigned = signedJc.count === 1;
+      }
     });
   } catch (err) {
     await deleteFile(storedName).catch(() => {});
@@ -123,17 +152,18 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
 
   await logSignEvent(requestId, { type: "completed", actor: "system", metadata: { hash } });
 
-  // Fire CRM side-effects (quote accepted → lead won, job card signed). Parity
-  // with the legacy /sign flow. Best-effort: never unwinds the completed request.
-  const firstSigner = req.recipients.find((r) => r.status === "signed" && r.role !== "viewer");
+  // External fan-out only (referral, automations, push, audit). The core source
+  // state is already committed above; this is best-effort and never unwinds it.
   await runPostCompletion({
     id: req.id,
     title: req.title,
     quoteId: req.quoteId,
     jobCardId: req.jobCardId,
-    signedByName: firstSigner?.signedName || firstSigner?.name || null,
+    signedByName: signerName,
     signedPdfHash: hash,
     signedDocId: documentId,
+    sourceSigned,
+    wonLeadId,
   });
 
   // Email the sealed PDF to every recipient with an address.
