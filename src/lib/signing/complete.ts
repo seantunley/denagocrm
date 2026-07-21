@@ -15,6 +15,8 @@ import { runPostCompletion } from "./postComplete";
 
 /** Internal sentinel: the completion claim was lost to a concurrent close. */
 class CompletionLost extends Error {}
+/** Internal sentinel: the source quote/job card couldn't be signed (ineligible). */
+class SourceCompletionLost extends Error {}
 
 function esc(s: unknown): string {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -135,18 +137,30 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
             const won = await tx.lead.updateMany({ where: { id: q.leadId, deletedAt: null, status: "open" }, data: { status: "won" } });
             if (won.count === 1) wonLeadId = q.leadId;
           }
+        } else {
+          // Didn't sign it. Completing anyway is only OK if the quote is ALREADY
+          // signed (e.g. the legacy /sign path beat us); a deleted / superseded /
+          // missing quote is ineligible, so roll the whole completion back rather
+          // than complete + distribute a PDF for a quote that never got signed.
+          const q = await tx.quote.findUnique({ where: { id: req.quoteId }, select: { signedAt: true, deletedAt: true, supersededAt: true } });
+          if (!q || q.deletedAt || q.supersededAt || !q.signedAt) throw new SourceCompletionLost();
         }
       } else if (req.jobCardId) {
         const signedJc = await tx.jobCard.updateMany({
           where: { id: req.jobCardId, deletedAt: null, signedAt: null },
           data: { signedAt: new Date(), signedByName: signerName },
         });
-        sourceSigned = signedJc.count === 1;
+        if (signedJc.count === 1) {
+          sourceSigned = true;
+        } else {
+          const jc = await tx.jobCard.findUnique({ where: { id: req.jobCardId }, select: { signedAt: true, deletedAt: true } });
+          if (!jc || jc.deletedAt || !jc.signedAt) throw new SourceCompletionLost();
+        }
       }
     });
   } catch (err) {
     await deleteFile(storedName).catch(() => {});
-    if (err instanceof CompletionLost) return;
+    if (err instanceof CompletionLost || err instanceof SourceCompletionLost) return;
     throw err;
   }
 

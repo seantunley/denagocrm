@@ -72,6 +72,23 @@ async function checkRecordActive(
   return { error: null, leadId: null, version: jobCard.updatedAt.getTime() };
 }
 
+/**
+ * Finish a workflow request whose graph committed but which crashed before its
+ * first advance (workflowGraphJson set, currentNodeId still null). Called when a
+ * signing-start reuses an existing open request, so a half-initialised workflow
+ * self-heals on the next start instead of staying stuck. advanceWorkflow is
+ * idempotent, so this is safe to call on an already-advanced request.
+ */
+async function repairWorkflowIfNeeded(requestId: string): Promise<void> {
+  const req = await prisma.signatureRequest.findUnique({
+    where: { id: requestId },
+    select: { status: true, workflowGraphJson: true, currentNodeId: true },
+  });
+  if (req && !isRequestClosed(req.status) && req.workflowGraphJson && !req.currentNodeId) {
+    await advanceWorkflow(requestId);
+  }
+}
+
 export async function startRecordSigning(
   kind: Kind,
   id: string,
@@ -89,9 +106,11 @@ export async function startRecordSigning(
   const sendLeadId = active.leadId;
   const sourceVersion = active.version;
 
-  // Cheap unlocked pre-check to short-circuit the common "already open" case.
+  // Cheap unlocked pre-check to short-circuit the common "already open" case, and
+  // self-heal a workflow request left un-advanced by an earlier crash.
   const existing = await activeRecordRequest({ quoteId, jobCardId });
   if (existing && !isRequestClosed(existing.status)) {
+    await repairWorkflowIfNeeded(existing.requestId);
     return { ok: true, requestId: existing.requestId };
   }
 
@@ -122,13 +141,18 @@ export async function startRecordSigning(
   // changes and deletion — so signing start serializes with the whole lifecycle,
   // not just other signing starts. Under the lock we re-validate the record AND
   // verify it hasn't changed since the envelope was rendered (version check), so
-  // we can't snapshot a stale version. The document + request + recipients +
-  // fields are created together, so a failure can't leave a partial draft.
-  let createdRequestId: string | null = null;
-  let reusedRequestId: string | null = null;
-  let staleSource = false;
+  // we can't snapshot a stale version. The document, request, recipients, fields
+  // — AND, for a workflow envelope, the frozen graph + recipient node IDs — are
+  // all created together, so a crash can't leave a partial or unrecognisable
+  // draft; the worst residual state (graph set, not yet advanced) self-heals.
+  const isWorkflow = Boolean(envelope.frozen && envelope.signers);
+  let committedRequestId: string | null = null;
+  let outcome:
+    | { kind: "stale" }
+    | { kind: "reused"; requestId: string }
+    | { kind: "created"; requestId: string } = { kind: "stale" };
   try {
-    await basePrisma.$transaction(async (tx) => {
+    outcome = await basePrisma.$transaction(async (tx) => {
       if (quoteId) {
         await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${quoteId} FOR UPDATE`;
         const q = await tx.quote.findUnique({
@@ -136,8 +160,7 @@ export async function startRecordSigning(
           select: { deletedAt: true, signedAt: true, supersededAt: true, validUntil: true, updatedAt: true },
         });
         if (!q || q.deletedAt || q.signedAt || q.supersededAt || quoteExpired(q.validUntil) || q.updatedAt.getTime() !== sourceVersion) {
-          staleSource = true;
-          return;
+          return { kind: "stale" as const };
         }
       } else {
         await tx.$executeRaw`SELECT id FROM "JobCard" WHERE id = ${jobCardId} FOR UPDATE`;
@@ -146,8 +169,7 @@ export async function startRecordSigning(
           select: { deletedAt: true, signedAt: true, updatedAt: true },
         });
         if (!jc || jc.deletedAt || jc.signedAt || jc.updatedAt.getTime() !== sourceVersion) {
-          staleSource = true;
-          return;
+          return { kind: "stale" as const };
         }
       }
       const open = await tx.signatureRequest.findFirst({
@@ -159,10 +181,7 @@ export async function startRecordSigning(
         orderBy: { createdAt: "desc" },
         select: { id: true },
       });
-      if (open) {
-        reusedRequestId = open.id;
-        return;
-      }
+      if (open) return { kind: "reused" as const, requestId: open.id };
       const document = await tx.document.create({
         data: {
           fileName: `${envelope.title}.pdf`,
@@ -190,24 +209,40 @@ export async function startRecordSigning(
         createdById: user.id,
         client: tx,
       });
-      createdRequestId = created.id;
+      if (isWorkflow && envelope.frozen && envelope.signers) {
+        const recipients = await tx.signatureRecipient.findMany({
+          where: { requestId: created.id },
+          orderBy: { order: "asc" },
+        });
+        for (let index = 0; index < envelope.signers.length && index < recipients.length; index += 1) {
+          await tx.signatureRecipient.update({
+            where: { id: recipients[index].id },
+            data: { nodeId: envelope.signers[index].nodeId },
+          });
+        }
+        await tx.signatureRequest.update({
+          where: { id: created.id },
+          data: { workflowGraphJson: envelope.frozen as object, currentNodeId: null },
+        });
+      }
+      return { kind: "created" as const, requestId: created.id };
     });
+    if (outcome.kind === "created") committedRequestId = outcome.requestId;
   } finally {
-    // Retain the rendered (unsigned) PDF only when a request actually references
-    // it. Every other exit — stale source, reused request, OR a thrown
-    // transaction — deletes the blob so customer/commercial data can't leak.
-    if (!createdRequestId) await deleteFile(storedName).catch(() => {});
+    // Retain the rendered (unsigned) PDF only when a request COMMITTED referencing
+    // it. committedRequestId is assigned only AFTER the transaction promise
+    // resolves, so a commit failure (callback returns, commit then throws) also
+    // cleans the blob — no orphaned customer/commercial data.
+    if (!committedRequestId) await deleteFile(storedName).catch(() => {});
   }
-  if (staleSource) {
+  if (outcome.kind === "stale") {
     return { ok: false, error: "This record changed while the signing document was being prepared — please try again." };
   }
-  if (reusedRequestId) {
-    return { ok: true, requestId: reusedRequestId };
+  if (outcome.kind === "reused") {
+    await repairWorkflowIfNeeded(outcome.requestId);
+    return { ok: true, requestId: outcome.requestId };
   }
-  if (!createdRequestId) {
-    return { ok: false, error: "Could not create the signing request." };
-  }
-  const requestId: string = createdRequestId;
+  const requestId: string = outcome.requestId;
 
   if (envelope.customerPhone && envelope.customerEmail) {
     const customer = await prisma.signatureRecipient.findFirst({
@@ -236,28 +271,10 @@ export async function startRecordSigning(
   });
   revalidatePath(recordPath(kind, id));
 
-  if (envelope.frozen && envelope.signers) {
-    const recipients = await prisma.signatureRecipient.findMany({
-      where: { requestId: requestId },
-      orderBy: { order: "asc" },
-    });
-    for (
-      let index = 0;
-      index < envelope.signers.length && index < recipients.length;
-      index += 1
-    ) {
-      await prisma.signatureRecipient.update({
-        where: { id: recipients[index].id },
-        data: { nodeId: envelope.signers[index].nodeId },
-      });
-    }
-    await prisma.signatureRequest.update({
-      where: { id: requestId },
-      data: {
-        workflowGraphJson: envelope.frozen as object,
-        currentNodeId: null,
-      },
-    });
+  if (isWorkflow && envelope.frozen) {
+    // The graph + recipient node IDs were committed in the creation transaction;
+    // advance the first node now. advanceWorkflow is idempotent, and a retry that
+    // reuses an un-advanced request repairs it the same way (repairWorkflowIfNeeded).
     await advanceWorkflow(requestId);
     const after = await prisma.signatureRequest.findUnique({
       where: { id: requestId },
