@@ -7,6 +7,7 @@ import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { hasModule, type ModuleId } from "./access";
 import { getUserSecurityState, getUserSecurityStateFresh } from "./userSecurity";
+import { resolveActingTenant } from "./tenantContext";
 import {
   verifySession,
   signFreshSession,
@@ -136,6 +137,18 @@ export async function createSessionCookie(
   const idle = pwa ? 7 * 24 * 60 : await getIdleMinutes();
   const jti = crypto.randomUUID();
   const h = await headers();
+  // Multi-tenancy PLUMBING (behaviour-preserving): resolve the user's single
+  // active tenant and record it on the session + JWT. Best-effort and fully
+  // fail-open — if resolution errors, is ambiguous, or finds nothing, tenantId
+  // stays null and login proceeds exactly as before. NOTHING reads/enforces this
+  // yet; enforcement lands in a later, flag-gated PR.
+  let tenantId: string | null = null;
+  try {
+    const ctx = await resolveActingTenant(user.id);
+    if ("tenantId" in ctx) tenantId = ctx.tenantId;
+  } catch {
+    // never let tenant resolution block sign-in
+  }
   await prisma.userSession.create({
     data: {
       jti,
@@ -143,12 +156,13 @@ export async function createSessionCookie(
       platform: pwa ? "pwa" : "web",
       ip: (h.get("x-forwarded-for") ?? "").split(",")[0].trim() || null,
       userAgent: (h.get("user-agent") ?? "").slice(0, 250) || null,
+      tenantId,
     },
   });
   const token = await signFreshSession(
     { ...user, sessionVersion: security.sessionVersion },
     idle,
-    { jti, pwa }
+    { jti, pwa, ...(tenantId ? { tid: tenantId } : {}) }
   );
   const store = await cookies();
   store.set(SESSION_COOKIE, token, sessionCookieOptions(pwa));
@@ -157,4 +171,19 @@ export async function createSessionCookie(
 export async function destroySessionCookie() {
   const store = await cookies();
   store.delete(SESSION_COOKIE);
+}
+
+/**
+ * The active tenant carried by the current session's JWT (the `tid` claim), or
+ * null. READ-ONLY plumbing for multi-tenancy: it exposes the claim so later,
+ * flag-gated enforcement can consume it. It intentionally enforces nothing and
+ * returns null for older sessions minted before the claim existed — callers must
+ * not gate access on it yet.
+ */
+export async function getActiveTenantId(): Promise<string | null> {
+  const store = await cookies();
+  const token = store.get(SESSION_COOKIE)?.value;
+  if (!token) return null;
+  const session = await verifySession(token);
+  return session?.tid ?? null;
 }

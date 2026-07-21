@@ -28,6 +28,7 @@ export const DEFAULT_IDLE_MINUTES = 60;
 export type SessionPayload = {
   jti?: string; // session-registry id (device log / remote sign-out)
   pwa?: boolean; // opt-in weeklong session (extends BOTH idle + absolute); see PWA_SESSION_HOURS
+  tid?: string; // active tenant id (multi-tenancy plumbing) — carried, NOT yet enforced
   sub: string;
   name: string;
   email: string;
@@ -49,13 +50,14 @@ export async function signFreshSession(
     sessionVersion: number;
   },
   idleMinutes: number,
-  opts?: { jti?: string; pwa?: boolean }
+  opts?: { jti?: string; pwa?: boolean; tid?: string }
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const abs = now + (opts?.pwa ? PWA_SESSION_HOURS : ABSOLUTE_SESSION_HOURS) * 3600;
   return signWith({
     ...(opts?.jti ? { jti: opts.jti } : {}),
     ...(opts?.pwa ? { pwa: true } : {}),
+    ...(opts?.tid ? { tid: opts.tid } : {}),
     sub: user.id,
     name: user.name,
     email: user.email,
