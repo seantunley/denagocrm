@@ -90,9 +90,9 @@ export async function createUser(
 
   // Tenant provisioning (fail-closed): the new user MUST land in a validated tenant
   // — the owner's CURRENT tenant. createUserInOwnerTenant resolves + LOCKS that
-  // tenant inside the write (FOR UPDATE) and creates the user + membership together,
-  // so a suspension / membership change can't race it and a user never exists
-  // tenantless. Zero or multiple active tenants is refused, not guessed.
+  // tenant inside the write (FOR UPDATE), so suspension/removal of THAT tenant or
+  // membership can't race it, and creates the user + membership together (never
+  // tenantless). Zero or multiple active tenants is refused, not guessed.
   const passwordHash = await bcrypt.hash(password, 12);
   const result = await createUserInOwnerTenant(owner.id, { name, email, passwordHash });
   if ("error" in result) {
@@ -102,7 +102,9 @@ export async function createUser(
           ? "You belong to more than one tenant, and tenant selection isn't available yet — new users can't be added until it is."
           : result.error === "context_changed"
             ? "Your tenant changed while adding the user — please try again."
-            : "Your account isn't linked to an active tenant — contact support before adding users.",
+            : result.error === "duplicate_email"
+              ? "A user with that email already exists."
+              : "Your account isn't linked to an active tenant — contact support before adding users.",
     };
   }
   const created = result.user;

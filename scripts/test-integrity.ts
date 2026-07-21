@@ -256,14 +256,11 @@ async function main() {
     const newMember = await basePrisma.tenantMember.findUnique({ where: { tenantId_userId: { tenantId: provTenant, userId: newUser!.id } } });
     assert.ok(newMember, "membership created atomically in the same validated tenant");
 
-    // rollback — a failure inside the tx (duplicate email) persists NOTHING extra
-    let rolledBack = false;
-    try {
-      await createUserInOwnerTenant(provOwner, { name: "Dup", email: newEmail, passwordHash: "x" });
-    } catch {
-      rolledBack = true;
-    }
-    assert.ok(rolledBack, "duplicate email aborts the provisioning transaction");
+    // rollback + duplicate handling — a duplicate email aborts the tx (persists
+    // nothing extra) and is reported as a friendly duplicate_email, not a raw
+    // Prisma exception (the concurrent-create UX race).
+    const dupRes = await createUserInOwnerTenant(provOwner, { name: "Dup", email: newEmail, passwordHash: "x" });
+    assert.ok("error" in dupRes && dupRes.error === "duplicate_email", "duplicate email reported as duplicate_email, not thrown");
     assert.equal(await basePrisma.user.count({ where: { email: newEmail } }), 1, "rollback left exactly the original user (no partial second)");
 
     // refuse — owner with no active tenant → no_tenant, no user created

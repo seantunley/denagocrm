@@ -1,7 +1,12 @@
 /**
  * Imports data-export.json (produced by export-data.ts) into the database
  * pointed at by DATABASE_URL. Used for the SQLite -> Postgres migration.
- * Safe to re-run: skips import if users already exist.
+ *
+ * NOT globally resumable: the run is skipped entirely once ANY user exists, so a
+ * failure PART-WAY through leaves a partial import that the next run treats as
+ * complete. Each imported user + its founding membership are atomic (transaction
+ * below), but full-restore idempotency / explicit completion tracking is still
+ * needed before relying on this for disaster recovery.
  */
 import { PrismaClient } from "@prisma/client";
 import * as fs from "fs";

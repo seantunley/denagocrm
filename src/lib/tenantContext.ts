@@ -1,5 +1,5 @@
 import "server-only";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { basePrisma } from "@/lib/db";
 import { addTenantMembership } from "@/lib/provisioning";
 import { soleActiveTenant, type SoleTenantResult } from "@/lib/tenant";
@@ -26,11 +26,17 @@ export async function resolveActingTenant(
 
 /**
  * Same resolution, but LOCKS the candidate `Tenant` + `TenantMember` rows
- * `FOR UPDATE`. A concurrent tenant suspension (`UPDATE Tenant SET active=…`) or
- * membership removal (`DELETE TenantMember`) then serialises against provisioning
- * instead of racing it — it either committed before our SELECT (excluded by the
- * `active = true` filter) or blocks until our transaction commits. Must run inside
- * a transaction.
+ * `FOR UPDATE`. This serialises the two mutations that would invalidate the tenant
+ * we're about to use — SUSPENSION/deletion of the RETURNED tenant, and DELETION of
+ * the RETURNED membership: each either committed before our SELECT (excluded by the
+ * `active = true` filter) or blocks until our transaction commits. It does NOT lock
+ * absent rows, so a NEW membership being added, or an inactive tenant being
+ * activated, can still commit alongside — that doesn't invalidate the tenant chosen
+ * at this transaction's linearization point, but it's why the guarantee is scoped
+ * to the resolved rows, not "any membership change". A single shared locking
+ * protocol (advisory lock or locking the owner `User` row) across provisioning AND
+ * membership/tenant administration should replace this before those endpoints ship.
+ * Must run inside a transaction.
  */
 async function lockActingTenant(
   tx: Prisma.TransactionClient,
@@ -47,7 +53,7 @@ async function lockActingTenant(
 
 export type ProvisionResult =
   | { user: { id: string }; tenantId: string }
-  | { error: "no_tenant" | "ambiguous_tenant" | "context_changed" };
+  | { error: "no_tenant" | "ambiguous_tenant" | "context_changed" | "duplicate_email" };
 
 /**
  * Create a user and place them in the OWNER's current tenant, ATOMICALLY. The
@@ -77,6 +83,12 @@ export async function createUserInOwnerTenant(
   } catch (e) {
     if (e instanceof Error && e.message === "TENANT_CONTEXT_CHANGED") {
       return { error: "context_changed" };
+    }
+    // Two concurrent creates for the same email both pass the caller's preliminary
+    // lookup; the loser hits the unique constraint. Report it as a normal duplicate
+    // (the transaction has already rolled back), not a raw Prisma exception.
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return { error: "duplicate_email" };
     }
     throw e;
   }
