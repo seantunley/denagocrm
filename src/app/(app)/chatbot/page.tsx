@@ -85,30 +85,10 @@ export default async function ChatbotSettingsPage() {
               <label className="label">About us / policies (the bot&apos;s brief)</label>
               <textarea name="brief" className="input" rows={4} defaultValue={setting("BOT_AI_BRIEF") || ""} placeholder="Delivery areas & fees, warranty, finance, service turnaround, location, tone. The bot only states facts you give it here (plus live prices)." />
             </div>
-            <div className="space-y-3 border-t border-border pt-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Voice (ElevenLabs)</p>
-              <label className="flex items-center justify-between gap-4 cursor-pointer">
-                <span>
-                  <span className="text-sm font-medium">Reply to voice notes with a voice note</span>
-                  <span className="block text-xs text-muted-foreground">Mirrors the customer — if they send a voice note, the assistant replies with a synthesised voice note. Needs the ElevenLabs key + voice below.</span>
-                </span>
-                <input type="checkbox" name="voiceReplies" defaultChecked={setting("WHATSAPP_VOICE_REPLIES") === "true"} className="h-4 w-4 shrink-0" />
-              </label>
-              <div className="grid sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="label">ElevenLabs API key</label>
-                  <input name="elevenKey" className="input" type="password" placeholder={setting("ELEVENLABS_API_KEY") ? "•••••••• (saved — leave blank to keep)" : "Your ElevenLabs API key"} />
-                </div>
-                <div>
-                  <label className="label">Voice ID</label>
-                  <input name="elevenVoiceId" className="input" defaultValue={setting("ELEVENLABS_VOICE_ID")} placeholder="ElevenLabs voice id" />
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground">ElevenLabs also transcribes inbound voice notes. The OpenAI Whisper key below is an optional fallback used only when no ElevenLabs key is set.</p>
-              <div>
-                <label className="label">Whisper key (OpenAI) — optional fallback</label>
-                <input name="whisperKey" className="input" type="password" placeholder={hasWhisper ? "•••••••• (saved — leave blank to keep)" : "sk-… — fallback voice-note transcription"} />
-              </div>
+            <div>
+              <label className="label">Voice-note transcription key (OpenAI Whisper) — optional fallback</label>
+              <input name="whisperKey" className="input" type="password" placeholder={hasWhisper ? "•••••••• (saved — leave blank to keep)" : "sk-… — fallback if ElevenLabs isn't set"} />
+              <p className="text-xs text-muted-foreground mt-1">Voice replies &amp; the ElevenLabs key/voice live in <b>Settings → Integrations → ElevenLabs</b>.</p>
             </div>
           </div>
 
