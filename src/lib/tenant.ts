@@ -8,23 +8,32 @@
 /**
  * The founding tenant seeded for the existing Denago business by migration
  * 20260721130000_tenant_foundation. Use this ONLY to EXPLICITLY provision the
- * Denago tenant (migration + seed) — never as a fallback to infer tenant access
- * for a user who has no membership. Tenant access is fail-closed: it comes from a
- * real TenantMember row, not from this constant.
+ * Denago tenant (migration + seed + single-tenant data import) — never as a
+ * fallback to infer tenant access for a user who has no membership. Tenant access
+ * is fail-closed: it comes from a real TenantMember row, not from this constant.
  */
 export const DEFAULT_TENANT_ID = "tenant_denago_cpt";
 
+export type SoleTenantResult =
+  | { tenantId: string }
+  | { error: "no_tenant" | "ambiguous_tenant" };
+
 /**
- * Resolve a user's active tenant from their memberships: the earliest-joined one,
- * or `null` when they belong to none. Fail-closed by design — a membership-less
- * user gets NO tenant context (callers must reject / route to provisioning), never
- * a silent default. Does not mutate the input.
+ * Resolve the single tenant a user may act in WITHOUT an explicit session
+ * selection, given the ids of the tenants where they hold an ACTIVE membership
+ * (the caller must have already filtered out suspended tenants). This is
+ * deliberately NOT "pick the active/earliest membership" — that conflated a
+ * historical default with the working tenant and was nondeterministic on equal
+ * timestamps. The rule:
+ *   - 0 active tenants  → `no_tenant`        (provisioning required)
+ *   - exactly 1         → that tenant
+ *   - 2+ active tenants → `ambiguous_tenant` (needs an explicit selection; the
+ *                          session-selected tenant lands in a later PR)
+ * Order-independent, so equal `createdAt` timestamps can't change the outcome.
  */
-export function pickActiveTenant(
-  memberships: { tenantId: string; createdAt: Date }[],
-): string | null {
-  if (memberships.length === 0) return null;
-  return [...memberships].sort(
-    (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
-  )[0].tenantId;
+export function soleActiveTenant(activeTenantIds: readonly string[]): SoleTenantResult {
+  const unique = [...new Set(activeTenantIds)];
+  if (unique.length === 0) return { error: "no_tenant" };
+  if (unique.length > 1) return { error: "ambiguous_tenant" };
+  return { tenantId: unique[0] };
 }

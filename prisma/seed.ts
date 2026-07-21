@@ -1,7 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
-import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
+import { ensureFoundingMembership } from "../src/lib/provisioning";
 
 const prisma = new PrismaClient();
 
@@ -20,27 +20,15 @@ async function main() {
   // Tenant foundation: every provisioned user MUST have a tenant membership —
   // tenant access is fail-closed, so a membership-less user gets NO tenant context
   // (never a silent default). The migration backfills EXISTING users; users seeded
-  // AFTER it (this owner, CI) get their membership here. Idempotent.
-  const ensureFoundingMembership = async (userId: string) => {
-    await prisma.tenant.upsert({
-      where: { id: DEFAULT_TENANT_ID },
-      update: {},
-      create: { id: DEFAULT_TENANT_ID, name: "Denago Cape Town", slug: "denago-cape-town", active: true },
-    });
-    await prisma.tenantMember.upsert({
-      where: { tenantId_userId: { tenantId: DEFAULT_TENANT_ID, userId } },
-      update: {},
-      create: { tenantId: DEFAULT_TENANT_ID, userId },
-    });
-  };
-
+  // AFTER it (this owner, CI) get their membership via the shared provisioning
+  // service, the same one the data import uses.
   const upsertOwner = async (email: string, name: string, passwordHash: string) => {
     const user = await prisma.user.upsert({
       where: { email },
       update: { role: "owner" }, // never overwrite an existing user's password
       create: { name, email, passwordHash, role: "owner" },
     });
-    await ensureFoundingMembership(user.id);
+    await ensureFoundingMembership(prisma, user.id);
   };
 
   if (vercelEnv === "preview") {

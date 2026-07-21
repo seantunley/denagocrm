@@ -170,6 +170,27 @@ async function main() {
         )`;
     assert.equal(Number(orphanSessions[0].count), 0, "every session's tenant must belong to that session's user");
 
+    // Upgrade path — the PRODUCTION scenario the fresh-DB CI run does NOT cover:
+    // a user + session that predate the tenant columns must be backfilled. Create a
+    // membership-less user + a null-tenant session, replay the migration's
+    // idempotent backfill statements exactly (mirrors migration
+    // 20260721130000_tenant_foundation), and assert both are filled.
+    const legacyUser = id("legacyUser");
+    const legacySession = id("legacySession");
+    await basePrisma.user.create({ data: { id: legacyUser, name: "Legacy", email: `${legacyUser}@example.invalid`, passwordHash: "x" } });
+    await basePrisma.userSession.create({ data: { id: legacySession, jti: legacySession, userId: legacyUser } });
+    await basePrisma.$executeRawUnsafe(
+      `INSERT INTO "TenantMember" ("id","tenantId","userId") SELECT 'tm_' || "id", 'tenant_denago_cpt', "id" FROM "User" ON CONFLICT ("tenantId","userId") DO NOTHING`,
+    );
+    await basePrisma.$executeRawUnsafe(`UPDATE "UserSession" SET "tenantId" = 'tenant_denago_cpt' WHERE "tenantId" IS NULL`);
+    const backfilledMember = await basePrisma.tenantMember.findUnique({ where: { tenantId_userId: { tenantId: "tenant_denago_cpt", userId: legacyUser } } });
+    assert.ok(backfilledMember, "migration backfill must add a founding membership for a pre-existing user");
+    const backfilledSession = await basePrisma.userSession.findUnique({ where: { id: legacySession }, select: { tenantId: true } });
+    assert.equal(backfilledSession?.tenantId, "tenant_denago_cpt", "migration backfill must stamp a pre-existing session");
+    await basePrisma.userSession.deleteMany({ where: { id: legacySession } });
+    await basePrisma.tenantMember.deleteMany({ where: { userId: legacyUser } });
+    await basePrisma.user.deleteMany({ where: { id: legacyUser } });
+
     console.log("Integrity / IDOR / soft-delete integration tests passed.");
   } finally {
     await basePrisma.contact.deleteMany({ where: { id: { in: [mergeWinner, mergeLoser] } } });
