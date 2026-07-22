@@ -3,11 +3,12 @@ import { cookies, headers } from "next/headers";
 import crypto from "crypto";
 import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { hasModule, type ModuleId } from "./access";
 import { getUserSecurityState, getUserSecurityStateFresh } from "./userSecurity";
-import { resolveActingTenant } from "./tenantContext";
+import { resolveActingTenant, isActiveTenantMember } from "./tenantContext";
 import {
   verifySession,
   signFreshSession,
@@ -118,6 +119,19 @@ export async function getIdleMinutes(): Promise<number> {
   return isNaN(n) || n < 5 ? DEFAULT_IDLE_MINUTES : n;
 }
 
+/**
+ * True only when a UserSession insert failed specifically because its `tenantId`
+ * foreign key no longer resolves (the tenant was deleted concurrently). A null
+ * tenant can't cause an FK error, so those cases are never "recoverable by
+ * dropping the tenant" and return false so the caller rethrows.
+ */
+function isTenantForeignKeyViolation(e: unknown, tenantId: string | null): boolean {
+  if (tenantId == null) return false;
+  if (!(e instanceof Prisma.PrismaClientKnownRequestError) || e.code !== "P2003") return false;
+  // P2003 identifies the offending FK by field/constraint name in meta.
+  return JSON.stringify(e.meta ?? {}).toLowerCase().includes("tenant");
+}
+
 export async function createSessionCookie(
   user: { id: string; name: string; email: string; role: string; modules: string },
   opts?: { pwa?: boolean }
@@ -163,7 +177,12 @@ export async function createSessionCookie(
   let sessionTenantId = tenantId;
   try {
     await prisma.userSession.create({ data: { ...sessionBase, tenantId: sessionTenantId } });
-  } catch {
+  } catch (e) {
+    // ONLY a broken tenant FK — the resolved tenant was deleted between the
+    // resolve above and this insert — is recoverable by dropping the tenant and
+    // retrying. Any other error is a real failure (e.g. a DB outage or a jti
+    // collision) and must propagate, not be swallowed into a tenant-less session.
+    if (!isTenantForeignKeyViolation(e, sessionTenantId)) throw e;
     sessionTenantId = null;
     await prisma.userSession.create({ data: sessionBase });
   }
@@ -187,11 +206,22 @@ export async function destroySessionCookie() {
  * flag-gated enforcement can consume it. It intentionally enforces nothing and
  * returns null for older sessions minted before the claim existed — callers must
  * not gate access on it yet.
+ *
+ * The claim is honoured ONLY when it is safe to trust:
+ *  - the session is fully valid — getCurrentUser applies the same device
+ *    revocation, disabled-account and session-version checks, so a signature that
+ *    verifies but belongs to a revoked/disabled/superseded session yields null;
+ *  - the claim still matches a LIVE active membership — a `tid` that went stale
+ *    after a membership change or a tenant suspension is dropped, not trusted.
  */
 export async function getActiveTenantId(): Promise<string | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
   const session = await verifySession(token);
-  return session?.tid ?? null;
+  const tid = session?.tid ?? null;
+  if (!tid) return null;
+  return (await isActiveTenantMember(user.id, tid)) ? tid : null;
 }

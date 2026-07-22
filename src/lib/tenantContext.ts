@@ -25,6 +25,24 @@ export async function resolveActingTenant(
 }
 
 /**
+ * Is `tenantId` STILL an active membership of `userId` right now? Validates a
+ * session's carried tenant claim (`tid`) against live membership + tenant state,
+ * so a claim that went stale after a membership change or a tenant suspension is
+ * not honoured. Read-only.
+ */
+export async function isActiveTenantMember(
+  userId: string,
+  tenantId: string,
+  client: Client = basePrisma,
+): Promise<boolean> {
+  const membership = await client.tenantMember.findFirst({
+    where: { userId, tenantId, tenant: { active: true } },
+    select: { id: true },
+  });
+  return membership !== null;
+}
+
+/**
  * Same resolution, but LOCKS the candidate `Tenant` + `TenantMember` rows
  * `FOR UPDATE`. This serialises the two mutations that would invalidate the tenant
  * we're about to use — SUSPENSION/deletion of the RETURNED tenant, and DELETION of
