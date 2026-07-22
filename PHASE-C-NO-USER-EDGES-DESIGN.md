@@ -91,25 +91,31 @@ Lower priority than WhatsApp/Meta (Telegram is the least-used channel); can be i
 
 ---
 
-## 3. The chokepoint pattern
+## 3. The chokepoint pattern — `withTokenTenantScope`
 
-Every no-user route follows one shape. `establishTenantScopeFromId` (already built, `tenantScopeEntry.ts`) is a **no-op when off**, so this is inert until enforcement:
+> **Review lesson (C1):** the tenant MUST be derived through a trusted pre-scope
+> lookup BEFORE any guarded query. A first draft called the scope-setter *after*
+> the guarded `findUnique` that resolves the row — under enforcement that first
+> read has no scope and throws `TenantScopeError`, dead-locking the whole route
+> (a "scope-before-bootstrap" deadlock). The scope-setter must never follow a
+> guarded bootstrap read, and `enterWith` must not be relied on after one.
+
+The portal pattern generalised into one helper (`withTokenTenantScope`, in
+`tenantScopeEntry.ts`), used by **both** the page and its mutation route so the
+read and write surfaces share one derivation and can't drift:
 
 ```ts
-// 1. resolve the tenant from the request's own discriminator
-const tenantId = await resolveChannelTenant("whatsapp", phoneNumberId);
-// 2. fail closed ONLY under enforcement; back-compat path when off
-if (tenantEnforcing() && !tenantId) {
-  return NextResponse.json({ error: "Unrecognised channel" }, { status: 404 });
-}
-// 3. establish scope (no-op when off) and do the work inside it
-establishTenantScopeFromId(tenantId);       // dormant no-op today
-// … existing handler body, unchanged …
+return withTokenTenantScope(
+  () => resolveSignRecipientTenant(token),   // trusted basePrisma lookup: tenantId only
+  () => handleSign(token, req),              // guarded re-read + full op, run INSIDE the scope
+  () => new Response("Not found", { status: 404 }),  // fail closed (enforcing + unknown/untenanted)
+);
 ```
 
-For sweeps (bucket B) the body is wrapped in `withSystemScope(...)`. For per-tenant cron work (bucket C) it's a `withTenant(t, …)` loop — see §4.
+- **Off (dormant):** skips the trusted lookup and runs the handler directly — byte-for-byte the pre-tenancy path, zero ALS overhead, no extra query.
+- **Enforcing:** runs the narrow `basePrisma` resolver (tenantId only, the single trusted boundary crossed before a scope exists); if it can't resolve a tenant it returns `onFailClosed()` **without** running the handler; otherwise it runs the handler inside `runInTenantScope({ tenantId, system:false }, …)` so the guarded re-read succeeds. The scope reverts when the handler returns.
 
-**Back-compat guarantee:** when `tenantEnforcing()` is false, `resolveChannelTenant` still runs but its result is only *used* to (a) attribute the row and (b) never block — the `if (tenantEnforcing() && …)` gate means an unmapped channel is fully processed exactly as today. Zero behaviour change until the flip.
+Meaningful-response routes fail closed with a clean status; **best-effort tracking** records nothing and still delivers the pixel/redirect; **unsubscribe** (a compliance action) shows its success message *only* when the opt-out actually committed. For sweeps (bucket B) the body is wrapped in `withSystemScope(...)`; per-tenant cron work (bucket C) is a `withTenant(t, …)` loop — see §4. Channel/API-key slices (C2/C3) reuse `withTokenTenantScope` with their own resolvers (`resolveChannelTenant`, `resolveApiKeyTenant`).
 
 ---
 
@@ -136,7 +142,7 @@ Per-tenant channel **configuration** — each dealer connecting *their own* Meta
 
 | # | Slice | Schema? | Migration? | Risk |
 |---|---|---|---|---|
-| **C1** | **Token-derivable chokepoints** — `establishTenantScopeFromId(row.tenantId)` in signing/approvals/track/unsubscribe/portal/passkey | none | none | **Lowest** — pure dormant no-ops, no DB change. Proves the pattern. |
+| **C1** ✅ | **Token-derivable surfaces** — `withTokenTenantScope` + a shared per-type resolver across the signing/approval **pages + routes**, tracking, unsubscribe. Portal (via `getPortalContact` #167) and passkey (self-scopes via `createSessionCookie`; `Passkey` is global) already covered. | none | none | **Lowest** — dormant no-ops, no DB change. Derive-before-guarded-read; integration-tested. |
 | **C2** | **`TenantApiKey`** + `resolveApiKeyTenant` + chokepoints in intake/bookings/service-lookup; backfill the current `INTAKE_API_KEY` as tenant_denago_cpt's key | +1 table | additive | Low — new table, back-compat key. |
 | **C3** | **`ChannelIdentity`** + `resolveChannelTenant` + chokepoints in whatsapp/meta webhooks; backfill current phone-number-id + page id → tenant_denago_cpt | +1 table | additive | Low-med — new table, backfill must be exact or (enforcing only) inbound 404s. |
 | **C4** | **Cron scoping** — `withSystemScope` for backup/security; per-tenant-loop scaffold + `resolveTenantOwner` for journeys/automations/competitor-watch | none | none | Med — touches the engines (dormant branch only). |

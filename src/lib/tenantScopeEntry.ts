@@ -64,3 +64,34 @@ export function establishTenantScopeFromId(tenantId: string | null): void {
   if (!tenantEnforcing()) return;
   enterTenantScope({ tenantId, system: false });
 }
+
+type TrustedTenantResolver = () => Promise<{ tenantId: string | null } | null>;
+
+/**
+ * Establish the tenant scope for a NO-USER token surface (public signing/approval
+ * pages + their mutation routes, campaign tracking/unsubscribe) BEFORE any guarded
+ * read, then run the work inside it. This is the portal pattern generalised: derive
+ * the tenant from a narrow trusted lookup keyed by the public token, then execute
+ * the guarded re-read + full operation inside `runInTenantScope`.
+ *
+ * DORMANT when off: skips the trusted lookup entirely and runs `fn()` directly —
+ * byte-for-byte the pre-tenancy path, no ALS overhead, no extra query.
+ *
+ * ENFORCING: runs the narrow trusted `resolve()` (basePrisma, tenantId only). If it
+ * can't resolve an owning tenant (unknown token / null tenant) it returns
+ * `onFailClosed()` WITHOUT running `fn` — the guarded work never executes unscoped
+ * or against the wrong tenant. Otherwise it runs `fn` INSIDE the resolved tenant
+ * scope (RELIABLE `runInTenantScope`, never `enterWith` after a guarded bootstrap),
+ * so the guarded re-read succeeds instead of dead-locking on a missing scope. The
+ * scope reverts when `fn` returns, so nothing leaks to a later request.
+ */
+export async function withTokenTenantScope<T>(
+  resolve: TrustedTenantResolver,
+  fn: () => Promise<T>,
+  onFailClosed: () => T | Promise<T>,
+): Promise<T> {
+  if (!tenantEnforcing()) return fn();
+  const owner = await resolve();
+  if (!owner || !owner.tenantId) return onFailClosed();
+  return runInTenantScope({ tenantId: owner.tenantId, system: false }, fn);
+}

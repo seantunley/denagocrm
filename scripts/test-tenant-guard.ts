@@ -14,10 +14,15 @@ import { randomUUID } from "node:crypto";
 import { prisma, basePrisma } from "../src/lib/db";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 import { runInTenantScope } from "../src/lib/tenantScope";
-import { establishTenantScopeFromId, establishStaffTenantScope } from "../src/lib/tenantScopeEntry";
+import { establishTenantScopeFromId, establishStaffTenantScope, withTokenTenantScope } from "../src/lib/tenantScopeEntry";
 import { TenantScopeError } from "../src/lib/tenantGuard";
 import { resolvePortalTenant } from "../src/lib/portal";
 import { resolveActingTenant } from "../src/lib/tenantContext";
+import {
+  resolveSignRecipientTenant,
+  resolveApprovalStepTenant,
+  resolveCampaignRecipientTenant,
+} from "../src/lib/tokenTenant";
 
 const dbName = (process.env.DATABASE_URL ?? "").split("/").pop()?.split("?")[0] ?? "";
 if (process.env.NODE_ENV !== "test" || !dbName.endsWith("_test")) {
@@ -36,6 +41,18 @@ const uStaff = `u_staff_${SFX}`;
 const t1 = `tn1_${SFX}`;
 const t2 = `tn2_${SFX}`;
 const sessJti = `sess_${SFX}`;
+// No-user token-surface fixtures (Phase C 2b-C1).
+const srId = `sr_${SFX}`;
+const srIdB = `srB_${SFX}`;
+const recId = `rec_${SFX}`;
+const recIdB = `recB_${SFX}`;
+const apId = `ap_${SFX}`;
+const campId = `camp_${SFX}`;
+const crId = `cr_${SFX}`;
+const signTokenA = `signtok_${SFX}`;
+const signTokenB = `signtokB_${SFX}`;
+const apTokenA = `aptok_${SFX}`;
+const crTokenA = `crtok_${SFX}`;
 
 let passed = 0;
 let failed = 0;
@@ -67,6 +84,17 @@ async function main() {
   await basePrisma.tenant.create({ data: { id: t1, name: "T1", slug: `t1_${SFX}`, active: true } });
   await basePrisma.tenant.create({ data: { id: t2, name: "T2", slug: `t2_${SFX}`, active: true } });
   await basePrisma.tenantMember.create({ data: { tenantId: t1, userId: uStaff } });
+
+  // No-user token surfaces: a signing request/recipient + approval step + campaign
+  // recipient owned by tenant A (and a signing recipient owned by tenant B, to prove
+  // cross-tenant isolation). Tenant is DERIVED from these rows by public token.
+  await basePrisma.signatureRequest.create({ data: { id: srId, title: "Doc A", tenantId: TENANT_A } });
+  await basePrisma.signatureRecipient.create({ data: { id: recId, requestId: srId, name: "Signer A", token: signTokenA, tenantId: TENANT_A } });
+  await basePrisma.signatureRequest.create({ data: { id: srIdB, title: "Doc B", tenantId: TENANT_B } });
+  await basePrisma.signatureRecipient.create({ data: { id: recIdB, requestId: srIdB, name: "Signer B", token: signTokenB, tenantId: TENANT_B } });
+  await basePrisma.approvalStep.create({ data: { id: apId, requestId: srId, nodeId: "n1", label: "Approve", assigneeType: "owner", token: apTokenA, tenantId: TENANT_A } });
+  await basePrisma.campaign.create({ data: { id: campId, name: "Camp A", channel: "email", body: "hi", audience: "all", tenantId: TENANT_A } });
+  await basePrisma.campaignRecipient.create({ data: { id: crId, campaignId: campId, contactId: idA, token: crTokenA, tenantId: TENANT_A } });
 
   __setTenantEnforcingForTests(true);
   try {
@@ -218,8 +246,78 @@ async function main() {
     await basePrisma.tenantMember.create({ data: { tenantId: t1, userId: uStaff } });
     await basePrisma.tenantMember.create({ data: { tenantId: t2, userId: uStaff } });
     check("staff: ambiguous (2 active memberships) → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, t1)).ok === false);
+
+    // ── no-user token surfaces (Phase C 2b-C1): tenant is DERIVED from the token's
+    //    row via a narrow trusted lookup, then the guarded re-read runs INSIDE that
+    //    derived scope — the query that dead-locked before the fix. ────────────────
+    check("token: resolveSignRecipientTenant derives A from the signing token", (await resolveSignRecipientTenant(signTokenA))?.tenantId === TENANT_A);
+    check("token: resolveApprovalStepTenant derives A from the approval token", (await resolveApprovalStepTenant(apTokenA))?.tenantId === TENANT_A);
+    check("token: resolveCampaignRecipientTenant derives A from the campaign token", (await resolveCampaignRecipientTenant(crTokenA))?.tenantId === TENANT_A);
+    check("token: resolver → null for an unknown token (fail closed)", (await resolveSignRecipientTenant(`nope_${SFX}`)) === null);
+
+    // The guarded re-read the signing PAGE/route runs succeeds inside the derived
+    // scope (this exact query threw TenantScopeError before the fix).
+    let signRan = false;
+    const sr = await withTokenTenantScope(
+      () => resolveSignRecipientTenant(signTokenA),
+      async () => {
+        signRan = true;
+        return prisma.signatureRecipient.findUnique({ where: { token: signTokenA }, include: { request: true } });
+      },
+      () => null,
+    );
+    check("token: guarded re-read succeeds inside the derived scope (no deadlock)", signRan && sr?.id === recId && sr?.request.tenantId === TENANT_A);
+
+    // Unknown token → onFailClosed, and the guarded work NEVER runs.
+    let missRan = false;
+    const miss = await withTokenTenantScope(
+      () => resolveSignRecipientTenant(`nope_${SFX}`),
+      async () => { missRan = true; return "ran"; },
+      () => "failed-closed",
+    );
+    check("token: unknown token fails closed WITHOUT running the guarded work", miss === "failed-closed" && missRan === false);
+
+    // Cross-tenant: inside A's derived scope, B's recipient is invisible.
+    const leak = await withTokenTenantScope(
+      () => resolveSignRecipientTenant(signTokenA),
+      async () => prisma.signatureRecipient.findUnique({ where: { id: recIdB } }),
+      () => null,
+    );
+    check("token: A's derived scope cannot read B's recipient (no cross-tenant leak)", leak === null);
+
+    // Unsubscribe is a compliance action: the opt-out write commits inside the scope.
+    const optOutDone = await withTokenTenantScope(
+      () => resolveCampaignRecipientTenant(crTokenA),
+      async () => {
+        const r = await prisma.campaignRecipient.findUnique({ where: { token: crTokenA } });
+        if (!r) return false;
+        await prisma.contact.update({ where: { id: r.contactId }, data: { marketingOptOut: true } });
+        return true;
+      },
+      () => false,
+    );
+    const optedOut = await basePrisma.contact.findUnique({ where: { id: idA }, select: { marketingOptOut: true } });
+    check("token: unsubscribe actually sets marketingOptOut inside the derived scope", optOutDone === true && optedOut?.marketingOptOut === true);
+
+    // Tracking records the open inside the derived scope.
+    await withTokenTenantScope(
+      () => resolveCampaignRecipientTenant(crTokenA),
+      async () => {
+        const r = await prisma.campaignRecipient.findUnique({ where: { token: crTokenA } });
+        if (r) await prisma.campaignRecipient.update({ where: { id: r.id }, data: { openCount: { increment: 1 }, openedAt: new Date() } });
+      },
+      () => undefined,
+    );
+    const tracked = await basePrisma.campaignRecipient.findUnique({ where: { id: crId }, select: { openCount: true } });
+    check("token: tracking records the open inside the derived scope", (tracked?.openCount ?? 0) >= 1);
   } finally {
     __setTenantEnforcingForTests(null);
+    // No-user token fixtures first (children before parents; contact FK below).
+    await basePrisma.campaignRecipient.deleteMany({ where: { id: crId } });
+    await basePrisma.campaign.deleteMany({ where: { id: campId } });
+    await basePrisma.approvalStep.deleteMany({ where: { id: apId } });
+    await basePrisma.signatureRecipient.deleteMany({ where: { id: { in: [recId, recIdB] } } });
+    await basePrisma.signatureRequest.deleteMany({ where: { id: { in: [srId, srIdB] } } });
     await basePrisma.contact.deleteMany({
       where: { id: { in: [idA, idB, cmId, `c_forge_${SFX}`] } },
     });

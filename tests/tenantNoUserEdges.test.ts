@@ -4,53 +4,53 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-// Phase C step 2b — "wiring" guard for the no-user token routes. These handlers
-// carry NO staff session, so under enforcement they must establish the request's
-// tenant scope from the row they resolve by token; without it the db guard would
-// fail closed (or, worse, run unscoped). This test asserts the chokepoint is
-// present in each route's SOURCE, so a route added/removed later can't silently
-// drop it. It's deliberately structural (reads the files) — the runtime behaviour
-// of establishTenantScopeFromId is covered by the guard unit + integration suites.
+// Phase C step 2b — structural guard for the no-user token surfaces (public
+// signing + approval PAGES and their mutation ROUTES, campaign tracking, and
+// unsubscribe). These carry no staff session, so under enforcement they must
+// derive their tenant from a narrow trusted lookup BEFORE any guarded query and
+// run the guarded work inside that scope. The original bug shipped the scope
+// establishment AFTER the first guarded read — a scope-before-bootstrap deadlock.
+//
+// This test encodes the anti-deadlock invariant directly: in every file the
+// `withTokenTenantScope(` call must appear BEFORE the guarded token read, both the
+// shared scope helper and the shared resolver must be imported, and page + route
+// for a given token type must use the SAME resolver so they can't drift. Runtime
+// behaviour (derivation, fail-closed, cross-tenant isolation, opt-out commit) is
+// proven by scripts/test-tenant-guard.ts against the real extended Prisma client.
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const routeSrc = (rel: string) => readFileSync(path.join(root, rel), "utf8");
+const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 
-// Every no-user token route must derive + establish its tenant from the row.
-const TOKEN_ROUTES = [
-  "src/app/api/signing/[token]/route.ts",
-  "src/app/api/signing/[token]/decline/route.ts",
-  "src/app/api/approvals/[token]/route.ts",
-  "src/app/api/track/o/[token]/route.ts",
-  "src/app/api/track/c/[token]/route.ts",
-  "src/app/api/unsubscribe/[token]/route.ts",
-];
+// file → { guarded token read, shared resolver } for the whole read+write surface.
+const SURFACE = [
+  { file: "src/app/signing/[token]/page.tsx", read: "prisma.signatureRecipient.findUnique", resolver: "resolveSignRecipientTenant" },
+  { file: "src/app/api/signing/[token]/route.ts", read: "prisma.signatureRecipient.findUnique", resolver: "resolveSignRecipientTenant" },
+  { file: "src/app/api/signing/[token]/decline/route.ts", read: "prisma.signatureRecipient.findUnique", resolver: "resolveSignRecipientTenant" },
+  { file: "src/app/approvals/[token]/page.tsx", read: "prisma.approvalStep.findUnique", resolver: "resolveApprovalStepTenant" },
+  { file: "src/app/api/approvals/[token]/route.ts", read: "prisma.approvalStep.findUnique", resolver: "resolveApprovalStepTenant" },
+  { file: "src/app/api/track/o/[token]/route.ts", read: "prisma.campaignRecipient.findUnique", resolver: "resolveCampaignRecipientTenant" },
+  { file: "src/app/api/track/c/[token]/route.ts", read: "prisma.campaignRecipient.findUnique", resolver: "resolveCampaignRecipientTenant" },
+  { file: "src/app/api/unsubscribe/[token]/route.ts", read: "prisma.campaignRecipient.findUnique", resolver: "resolveCampaignRecipientTenant" },
+] as const;
 
-for (const rel of TOKEN_ROUTES) {
-  test(`${rel}: establishes a tenant scope (no-user chokepoint present)`, () => {
-    const src = routeSrc(rel);
-    assert.match(src, /from "@\/lib\/tenantScopeEntry"/, `${rel} must import from tenantScopeEntry`);
-    assert.match(src, /establishTenantScopeFromId\s*\(/, `${rel} must call establishTenantScopeFromId`);
+for (const { file, read, resolver } of SURFACE) {
+  test(`${file}: derives tenant via the shared helper + resolver`, () => {
+    const code = src(file);
+    assert.match(code, /from "@\/lib\/tenantScopeEntry"/, `${file} must import from tenantScopeEntry`);
+    assert.match(code, /withTokenTenantScope\s*\(/, `${file} must call withTokenTenantScope`);
+    assert.match(code, /from "@\/lib\/tokenTenant"/, `${file} must import the shared resolver`);
+    assert.ok(code.includes(resolver), `${file} must use ${resolver} (shared page/route derivation)`);
   });
-}
 
-// Routes that return a MEANINGFUL response (not a best-effort pixel/redirect) must
-// also fail closed under enforcement when the resolved row has no tenant, rather
-// than let the guard throw an opaque 500. The tracking routes intentionally do NOT
-// gate — they swallow errors and always deliver the pixel/redirect.
-const FAIL_CLOSED_ROUTES = [
-  "src/app/api/signing/[token]/route.ts",
-  "src/app/api/signing/[token]/decline/route.ts",
-  "src/app/api/approvals/[token]/route.ts",
-];
-
-for (const rel of FAIL_CLOSED_ROUTES) {
-  test(`${rel}: fails closed under enforcement when the row carries no tenant`, () => {
-    const src = routeSrc(rel);
-    assert.match(src, /from "@\/lib\/tenantEnforcement"/, `${rel} must import tenantEnforcing`);
-    assert.match(
-      src,
-      /tenantEnforcing\(\)\s*&&\s*!\w+(?:\.\w+)*\.tenantId/,
-      `${rel} must gate on tenantEnforcing() && !<row>.tenantId`,
+  test(`${file}: establishes scope BEFORE the guarded token read (no deadlock)`, () => {
+    const code = src(file);
+    const scopeAt = code.indexOf("withTokenTenantScope(");
+    const readAt = code.indexOf(read);
+    assert.ok(scopeAt >= 0, `${file} must call withTokenTenantScope`);
+    assert.ok(readAt >= 0, `${file} must perform the guarded token read (${read})`);
+    assert.ok(
+      scopeAt < readAt,
+      `${file}: withTokenTenantScope must appear before the guarded read (else the read dead-locks with no scope)`,
     );
   });
 }

@@ -6,8 +6,8 @@ import { logSignEvent, reqMeta } from "@/lib/signing/events";
 import { advanceAfterSignature } from "@/lib/signing/workflow";
 import { isRequestClosed } from "@/lib/signing/status";
 import { logAudit } from "@/lib/audit";
-import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
-import { tenantEnforcing } from "@/lib/tenantEnforcement";
+import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
+import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,18 +29,22 @@ const bodySchema = z.object({
 export async function POST(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
   if (!isValidSignToken(token)) return new Response("Invalid link", { status: 400 });
+  // Phase C no-user edge: this public token route carries no staff session. Derive
+  // the document's tenant from a narrow trusted lookup FIRST, then run the whole
+  // guarded operation inside that scope — a guarded read before the scope exists
+  // would dead-lock under enforcement. Dormant no-op when off; fails closed (404)
+  // under enforcement for an unknown / untenanted token.
+  return withTokenTenantScope(
+    () => resolveSignRecipientTenant(token),
+    () => handleSign(token, req),
+    () => new Response("Not found", { status: 404 }),
+  );
+}
 
+async function handleSign(token: string, req: Request): Promise<Response> {
   const recipient = await prisma.signatureRecipient.findUnique({ where: { token }, include: { request: true } });
   if (!recipient) return new Response("Not found", { status: 404 });
   const request = recipient.request;
-  // Phase C no-user edge: this public token route carries no staff session, so
-  // establish the document's tenant scope from the resolved row before any
-  // further tenant-owned read/write. Dormant no-op until enforcement; fails
-  // closed under enforcement if the row somehow has no tenant.
-  if (tenantEnforcing() && !request.tenantId) {
-    return new Response("This document can no longer be signed.", { status: 409 });
-  }
-  establishTenantScopeFromId(request.tenantId);
   // The signing PAGE enforced these; the API must repeat every one — a direct
   // POST bypasses the page entirely.
   if (request.deletedAt || isRequestClosed(request.status)) {
