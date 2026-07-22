@@ -1,11 +1,11 @@
 import Link from "next/link";
-import { Radar, Plus } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, Eye, Globe2, Plus, Radar, ShieldCheck } from "lucide-react";
 import { requirePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
-import { PageHeader } from "@/components/page-header";
 import ModalTrigger from "@/components/Modal";
 import { buttonVariants } from "@/components/ui/button";
-import { EmptyState, StatusPill } from "@/components/visual-system";
+import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
+import { WorkspaceHero } from "@/components/workspace-hero";
 import { createCompetitor } from "@/app/actions/competitors";
 import { pendingChangeCount } from "@/lib/competitors";
 
@@ -29,14 +29,21 @@ export default async function CompetitorsPage() {
     }),
     pendingChangeCount(),
   ]);
+  const critical = competitors.reduce((sum, competitor) => sum + competitor.changes.filter((change) => change.materiality === "critical").length, 0);
+  const sources = competitors.reduce((sum, competitor) => sum + competitor._count.sources, 0);
 
   return (
     <div className="space-y-6">
-      <PageHeader
+      <WorkspaceHero icon={Radar} eyebrow="Market intelligence"
         title="Competitor intelligence"
-        description={`Monitoring ${competitors.length} competitor${competitors.length === 1 ? "" : "s"} · ${pending} change${pending === 1 ? "" : "s"} awaiting review`}
-      >
-        <ModalTrigger
+        description="Monitor the market signals that matter, review material changes and keep your positioning current."
+        stats={[
+          { label: "Monitored", value: competitors.length, icon: Eye },
+          { label: "Sources", value: sources, icon: Globe2 },
+          { label: "To review", value: pending, icon: AlertTriangle, tone: pending ? "warning" : "default" },
+          { label: "Critical", value: critical, icon: ShieldCheck, tone: critical ? "danger" : "success" },
+        ]}
+        actions={<ModalTrigger
           label={
             <>
               <Plus className="size-4" />
@@ -47,31 +54,34 @@ export default async function CompetitorsPage() {
           buttonClass={buttonVariants({ size: "sm" })}
         >
           <NewCompetitorForm />
-        </ModalTrigger>
-      </PageHeader>
+        </ModalTrigger>}
+      />
 
       {competitors.length === 0 ? (
         <EmptyState
           icon={Radar}
           title="No competitors yet"
-          description="Add a competitor and a few of their public pages (pricing, product, changelog) to start watching for material changes."
+          description="Add a competitor and a few public pages—pricing, products or changelogs—to start watching for material changes."
+          action={<ModalTrigger label={<><Plus className="size-4" />Add competitor</>} title="Add competitor"><NewCompetitorForm /></ModalTrigger>}
         />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {competitors.map((c) => {
             const critical = c.changes.filter((x) => x.materiality === "critical").length;
             return (
-              <Link key={c.id} href={`/competitors/${c.id}`} className="card group block transition hover:border-orange-500/35">
+              <Surface key={c.id} className="group relative overflow-hidden p-5 transition hover:border-primary/35">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate font-semibold text-foreground group-hover:text-orange-300">{c.name}</p>
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-primary/15 bg-primary/10 font-semibold text-primary">{c.name.slice(0, 1).toUpperCase()}</span>
+                    <div className="min-w-0"><p className="truncate font-semibold text-foreground">{c.name}</p>
                     {c.website && (
                       <p className="mt-0.5 truncate text-xs text-muted-foreground">{c.website.replace(/^https?:\/\//, "")}</p>
                     )}
+                    </div>
                   </div>
                   <StatusPill tone={c.tier === 1 ? "danger" : c.tier === 2 ? "info" : "neutral"}>{TIER_LABEL[c.tier]}</StatusPill>
                 </div>
-                <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
+                <div className="mt-5 grid grid-cols-2 gap-2 rounded-xl border border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground">
                   <span>
                     {c._count.sources} source{c._count.sources === 1 ? "" : "s"}
                   </span>
@@ -83,7 +93,8 @@ export default async function CompetitorsPage() {
                     <span className="text-emerald-300/80">Up to date</span>
                   )}
                 </div>
-              </Link>
+                <Link href={`/competitors/${c.id}`} className="mt-4 flex items-center justify-between text-sm font-medium text-primary after:absolute after:inset-0">Open intelligence profile <ArrowUpRight className="size-4" /></Link>
+              </Surface>
             );
           })}
         </div>

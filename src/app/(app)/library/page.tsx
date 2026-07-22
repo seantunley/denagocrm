@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Download, FileStack, FileText, Plus, Upload } from "lucide-react";
+import { Download, FileStack, FileText, FolderOpen, Layers3, Plus, Upload } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import ModalTrigger from "@/components/Modal";
@@ -7,8 +7,8 @@ import ConfirmDelete from "@/components/ConfirmDelete";
 import { deleteLibraryDocument } from "@/app/actions/library";
 import { AddDocumentsForm, NewVersionForm } from "@/components/LibraryUploader";
 import { formatDateTime } from "@/lib/format";
-import { PageHeader } from "@/components/page-header";
-import { EmptyState, StatusPill } from "@/components/visual-system";
+import { EmptyState, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
+import { WorkspaceHero } from "@/components/workspace-hero";
 
 function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -30,7 +30,7 @@ function getDocuments() {
 function DocumentCard({ doc }: { doc: DocWithVersions }) {
   const latest = doc.versions[0];
   return (
-    <div className="card">
+    <Surface className="group p-4 transition hover:border-primary/30">
       <div className="flex items-center gap-4 flex-wrap">
         <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-border bg-muted/40 text-muted-foreground">
           <FileText className="size-5" />
@@ -99,7 +99,7 @@ function DocumentCard({ doc }: { doc: DocWithVersions }) {
           </ul>
         </details>
       )}
-    </div>
+    </Surface>
   );
 }
 
@@ -123,20 +123,32 @@ export default async function LibraryPage({
         category: c,
         docs: documents.filter((d) => (d.category ?? "Other") === c),
       }));
+  const totalVersions = documents.reduce((sum, doc) => sum + doc.versions.length, 0);
+  const totalBytes = documents.reduce(
+    (sum, doc) => sum + (doc.versions[0]?.sizeBytes ?? 0),
+    0
+  );
 
   return (
     <div className="space-y-5">
-      <PageHeader
+      <WorkspaceHero
+        icon={FolderOpen}
+        eyebrow="Documents & data"
         title="Document library"
         description="Brochures, price lists and spec sheets — versioned so the team always shares the latest approved file."
-      >
-        <ModalTrigger label={<><Plus className="size-4" />Add documents</>} title="Add documents to library">
+        stats={[
+          { label: "Documents", value: documents.length, icon: FileText },
+          { label: "Categories", value: categories.length, icon: FolderOpen },
+          { label: "Versions", value: totalVersions, icon: Layers3 },
+          { label: "Latest files", value: humanSize(totalBytes), icon: FileStack },
+        ]}
+        actions={<ModalTrigger label={<><Plus className="size-4" />Add documents</>} title="Add documents to library">
           <AddDocumentsForm />
-        </ModalTrigger>
-      </PageHeader>
+        </ModalTrigger>}
+      />
 
       {documents.length > 0 && (
-        <div className="flex gap-2 flex-wrap">
+        <Surface className="flex gap-2 overflow-x-auto p-2">
           <Link href="/library" className={!active ? "btn-primary btn-sm" : "btn-secondary btn-sm"}>
             All ({documents.length})
           </Link>
@@ -149,7 +161,7 @@ export default async function LibraryPage({
               {c} ({documents.filter((d) => (d.category ?? "Other") === c).length})
             </Link>
           ))}
-        </div>
+        </Surface>
       )}
 
       {documents.length === 0 ? (
@@ -163,14 +175,12 @@ export default async function LibraryPage({
         groups.map(
           (g) =>
             g.docs.length > 0 && (
-              <div key={g.category} className="space-y-3">
-                <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground pt-2">
-                  {g.category} <span className="font-normal">({g.docs.length})</span>
-                </h2>
+              <section key={g.category} className="space-y-3">
+                <SectionHeading title={g.category} description={`${g.docs.length} approved ${g.docs.length === 1 ? "document" : "documents"}`} />
                 {g.docs.map((doc) => (
                   <DocumentCard key={doc.id} doc={doc} />
                 ))}
-              </div>
+              </section>
             )
         )
       )}

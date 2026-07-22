@@ -1,13 +1,12 @@
 import Link from "next/link";
-import { BadgeDollarSign, Calculator, CircleDollarSign, Crosshair, HandCoins, Layers3 } from "lucide-react";
+import { Calculator, Crosshair, HandCoins, Layers3, SlidersHorizontal, TrendingUp, History } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { formatDate, formatDateTime, formatZAR, formatZARCompact } from "@/lib/format";
 import { getAccessibleLeadScope, hasPermission, requirePermission } from "@/lib/permissions";
 import { listActiveSalesPipelines, listForecastLeads, summarizeForecast } from "@/lib/pipelines";
 import { saveLeadForecast, snapshotForecast } from "@/app/actions/pipelines";
-import { PageHeader } from "@/components/page-header";
-import { KpiGrid } from "@/components/responsive-patterns";
-import { MetricCard } from "@/components/visual-system";
+import { EmptyState, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
+import { WorkspaceHero } from "@/components/workspace-hero";
 
 export const dynamic = "force-dynamic";
 
@@ -129,7 +128,18 @@ export default async function ForecastPage({
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Sales forecast" description={`Weighted, commit and best-case pipeline for ${range.period}.`}>
+      <WorkspaceHero
+        icon={TrendingUp}
+        eyebrow="Revenue planning"
+        title="Sales forecast"
+        description={`Pipeline confidence and expected revenue for ${range.from.toLocaleDateString("en-ZA", { month: "long", year: "numeric", timeZone: "UTC" })}.`}
+        stats={[
+          { label: "Open pipeline", value: formatZARCompact(summary.openValueCents), detail: `${summary.count} opportunities` },
+          { label: "Weighted forecast", value: formatZARCompact(summary.weightedValueCents), detail: summary.openValueCents ? `${Math.round(summary.weightedValueCents / summary.openValueCents * 100)}% of open value` : "No open value", tone: "primary" },
+          { label: "Committed", value: formatZARCompact(summary.commitValueCents), detail: "Highest-confidence revenue", tone: "success" },
+          { label: "Best case", value: formatZARCompact(summary.bestCaseValueCents), detail: "Upside potential", tone: "warning" },
+        ]}
+        actions={<>
           {canManagePipelines && <Link href="/settings/pipelines" className="btn-secondary">Pipelines</Link>}
           {canViewTeams && <Link href="/settings/access" className="btn-secondary">Teams &amp; roles</Link>}
           {canViewAudit && <Link href="/audit" className="btn-secondary">Audit</Link>}
@@ -142,9 +152,15 @@ export default async function ForecastPage({
               <button className="btn-secondary">Capture snapshot</button>
             </form>
           )}
-      </PageHeader>
+        </>}
+      />
 
-      <form className="card grid md:grid-cols-5 gap-3 items-end">
+      <Surface className="p-4 sm:p-5">
+        <div className="mb-4 flex items-start gap-3">
+          <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-border bg-muted/40 text-muted-foreground"><SlidersHorizontal className="size-4" /></span>
+          <div><h2 className="font-semibold tracking-tight">Forecast scope</h2><p className="mt-0.5 text-xs text-muted-foreground">Focus the model by period, pipeline, team or owner.</p></div>
+        </div>
+        <form className="grid gap-3 md:grid-cols-5 md:items-end">
         <label className="space-y-1">
           <span className="text-xs text-slate-400">Period</span>
           <input type="month" name="period" className="input" defaultValue={range.period} />
@@ -170,24 +186,43 @@ export default async function ForecastPage({
             {users.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </label>
-        <button className="btn-primary">Apply</button>
-      </form>
+          <button className="btn-primary">Apply filters</button>
+        </form>
+      </Surface>
 
-      <KpiGrid className="md:grid-cols-3 xl:grid-cols-6">
-        {[
-          { label: "Open", value: formatZARCompact(summary.openValueCents), icon: CircleDollarSign },
-          { label: "Weighted", value: formatZARCompact(summary.weightedValueCents), icon: Calculator },
-          { label: "Commit", value: formatZARCompact(summary.commitValueCents), icon: Crosshair },
-          { label: "Best case", value: formatZARCompact(summary.bestCaseValueCents), icon: HandCoins },
-          { label: "Pipeline", value: formatZARCompact(summary.pipelineValueCents), icon: Layers3 },
-          { label: "Deals", value: String(summary.count), icon: BadgeDollarSign },
-        ].map(({ label, value, icon }) => (
-          <MetricCard key={label} icon={icon} label={label} value={value} />
-        ))}
-      </KpiGrid>
+      <Surface className="p-5">
+        <SectionHeading title="Forecast composition" description="How open opportunity value is classified by the sales team." />
+        <div className="mt-5 flex h-3 overflow-hidden rounded-full bg-muted/70" aria-label="Forecast category distribution">
+          {(() => {
+            const total = summary.commitValueCents + summary.bestCaseValueCents + summary.pipelineValueCents;
+            if (!total) return <div className="h-full w-full bg-muted" />;
+            return <>
+              <div className="h-full bg-emerald-400" style={{ width: `${summary.commitValueCents / total * 100}%` }} />
+              <div className="h-full bg-amber-400" style={{ width: `${summary.bestCaseValueCents / total * 100}%` }} />
+              <div className="h-full bg-sky-400" style={{ width: `${summary.pipelineValueCents / total * 100}%` }} />
+            </>;
+          })()}
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {[
+            { label: "Commit", value: summary.commitValueCents, icon: Crosshair, color: "bg-emerald-400", detail: "Expected to close" },
+            { label: "Best case", value: summary.bestCaseValueCents, icon: HandCoins, color: "bg-amber-400", detail: "Credible upside" },
+            { label: "Pipeline", value: summary.pipelineValueCents, icon: Layers3, color: "bg-sky-400", detail: "Still developing" },
+            { label: "Weighted", value: summary.weightedValueCents, icon: Calculator, color: "bg-primary", detail: `${summary.count} open deal${summary.count === 1 ? "" : "s"}` },
+          ].map(({ label, value, icon: Icon, color, detail }) => (
+            <div key={label} className="rounded-xl border border-border/70 bg-muted/[0.18] p-3.5">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground"><span className={`size-2 rounded-full ${color}`} /><Icon className="size-3.5" />{label}</div>
+              <p className="mt-2 text-lg font-semibold tracking-[-0.03em] tabular-nums">{formatZARCompact(value)}</p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">{detail}</p>
+            </div>
+          ))}
+        </div>
+      </Surface>
 
-      <div className="card p-0 overflow-x-auto">
-        <table className="table-base">
+      <Surface>
+        <div className="border-b border-border/70 px-5 py-4"><SectionHeading title="Opportunity forecast" description="Review value, confidence and close timing for every deal in scope." /></div>
+        <div className="overflow-x-auto">
+          <table className="table-base">
           <thead>
             <tr>
               <th>Lead</th><th>Pipeline / stage</th><th>Owner</th><th>Close</th>
@@ -208,8 +243,8 @@ export default async function ForecastPage({
                 <td>{lead.pipelineName}<p className="text-xs text-slate-500">{lead.stageName}</p></td>
                 <td>{lead.assignedToName ?? "Unassigned"}<p className="text-xs text-slate-500">{lead.teamName ?? "No team"}</p></td>
                 <td>{formatDate(lead.expectedCloseDate)}</td>
-                <td>{lead.forecastCategory.replace("_", " ")}</td>
-                <td>{lead.probability}%</td>
+                <td><StatusPill tone={lead.forecastCategory === "commit" ? "success" : lead.forecastCategory === "best_case" ? "warning" : lead.forecastCategory === "omitted" ? "neutral" : "info"}>{lead.forecastCategory.replace("_", " ")}</StatusPill></td>
+                <td><div className="min-w-20"><span className="text-xs tabular-nums">{lead.probability}%</span><div className="mt-1 h-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${lead.probability}%` }} /></div></div></td>
                 <td className="text-right">{formatZAR(lead.valueCents)}</td>
                 <td className="text-right">{formatZAR(Math.round(lead.valueCents * lead.probability / 100))}</td>
                 <td>
@@ -242,22 +277,23 @@ export default async function ForecastPage({
               </tr>
             ))}
           </tbody>
-        </table>
-      </div>
+          </table>
+        </div>
+      </Surface>
 
-      <div className="card">
-        <h2 className="font-semibold mb-4">Recent accessible snapshots</h2>
+      <Surface className="p-5">
+        <SectionHeading title="Forecast history" description="Point-in-time snapshots show how confidence changes through the month." />
         {snapshots.length === 0 ? (
-          <p className="text-sm text-slate-400">No snapshots yet.</p>
+          <EmptyState icon={History} title="No snapshots yet" description="Capture the current forecast to create a baseline for later comparison." className="mt-4 py-8" />
         ) : (
-          <ul className="divide-y divide-slate-800">
+          <ul className="mt-4 grid gap-2 md:grid-cols-2">
             {snapshots.map((snapshot) => (
-              <li key={snapshot.id} className="py-2 text-sm flex gap-3">
+              <li key={snapshot.id} className="rounded-xl border border-border/70 bg-muted/[0.16] p-3 text-sm">
                 <div className="flex-1">
                   <p>
                     {snapshot.period} · {snapshot.pipelineName ?? "All pipelines"} · {snapshot.teamName ?? "All teams"} · {snapshot.userName ?? "All owners"}
                   </p>
-                  <p className="text-xs text-slate-500">
+                    <p className="mt-1 text-xs text-muted-foreground">
                     Open {formatZAR(Number(snapshot.openValueCents))} · Weighted {formatZAR(Number(snapshot.weightedValueCents))} · {snapshot.opportunityCount} deals · {formatDateTime(snapshot.capturedAt)}
                   </p>
                 </div>
@@ -265,7 +301,7 @@ export default async function ForecastPage({
             ))}
           </ul>
         )}
-      </div>
+      </Surface>
     </div>
   );
 }
