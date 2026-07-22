@@ -221,6 +221,25 @@ async function main() {
       (e) => e instanceof TenantScopeError,
     );
 
+    // Actor helpers must ALSO fail closed under enforcement with no scope — never
+    // silently fall back to global users (a missed chokepoint / lost propagation
+    // must not leak a cross-tenant approver). Runs at top level = no ambient scope.
+    check("failclosed(no scope): resolveTenantActor → null", (await resolveTenantActor()) === null);
+    check("failclosed(no scope): resolveTenantActor ownerOnly → null", (await resolveTenantActor({ ownerOnly: true })) === null);
+    check("failclosed(no scope): resolveTenantMemberUser → null", (await resolveTenantMemberUser(userAId)) === null);
+    check("failclosed(no scope): listTenantStaff → empty", (await listTenantStaff()).length === 0);
+    check("failclosed(no scope): resolveApprover staff → no email", (await resolveApprover({ assigneeType: "staff", assigneeUserId: userAId, assigneeRole: null, assigneeName: "A", assigneeEmail: `x_${SFX}@x.test` })).email === null);
+    check("failclosed(no scope): resolveApprover owner → no email", (await resolveApprover({ assigneeType: "owner", assigneeUserId: null, assigneeRole: null, assigneeName: "O", assigneeEmail: `x_${SFX}@x.test` })).email === null);
+
+    // A null NON-system scope ({ tenantId: null, system: false }) is NOT a global
+    // bypass — it must fail closed too (only an explicit system scope bypasses).
+    await runInTenantScope({ tenantId: null, system: false }, async () => {
+      check("failclosed(null non-system): resolveTenantActor → null", (await resolveTenantActor()) === null);
+      check("failclosed(null non-system): resolveTenantMemberUser → null", (await resolveTenantMemberUser(userAId)) === null);
+      check("failclosed(null non-system): listTenantStaff → empty", (await listTenantStaff()).length === 0);
+      check("failclosed(null non-system): resolveApprover staff → no email", (await resolveApprover({ assigneeType: "staff", assigneeUserId: userAId, assigneeRole: null, assigneeName: "A", assigneeEmail: `x_${SFX}@x.test` })).email === null);
+    });
+
     // ── system scope is the only bypass ─────────────────────────────────────
     await runInTenantScope({ tenantId: null, system: true }, async () => {
       const both = await prisma.contact.findMany({ where: { id: { in: [idA, idB] } } });

@@ -99,6 +99,8 @@ The automation/push fan-out that C1 signing-completion triggers (`advanceAfterSi
 
 **Disabled accounts.** `disabledAt`/`role` are real `User` columns but are deliberately NOT in the Prisma model — they're the authoritative security state read via raw SQL (`userSecurity.ts`). So all of `tenantActor` uses **raw-SQL `TenantMember` joins** filtering `u."disabledAt" IS NULL` (and `role` for owners), in **every** mode — a token approval needs no login, so a disabled account must never be picked, listed, or emailed a live token.
 
+**Scope modes (fail closed).** `tenantActor` classifies the scope explicitly via `actorScope()` — it does NOT collapse "run globally" with "no scope" into one nullable check (which would let a missed chokepoint leak global users under enforcement, unlike the guarded Prisma client that throws). The four cases: **global** (dormant, or an explicit trusted `system` scope) → global pick; **tenant** (enforcing + concrete tenant) → member query; **closed** (enforcing + no scope, or a `{ tenantId: null, system: false }` scope) → resolve nothing (`null` / `[]`), so `resolveApprover` returns no email.
+
 ### 2.5 Telegram — the one genuine config gap
 
 Telegram has a single global bot + `TELEGRAM_WEBHOOK_SECRET`; the update payload carries no "which bot" discriminator. Per-tenant Telegram means a **bot per tenant**, each with its own webhook path + secret:
