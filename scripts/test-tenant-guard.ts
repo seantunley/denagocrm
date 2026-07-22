@@ -14,11 +14,10 @@ import { randomUUID } from "node:crypto";
 import { prisma, basePrisma } from "../src/lib/db";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 import { runInTenantScope } from "../src/lib/tenantScope";
-import { establishTenantScopeFromId } from "../src/lib/tenantScopeEntry";
+import { establishTenantScopeFromId, establishStaffTenantScope } from "../src/lib/tenantScopeEntry";
 import { TenantScopeError } from "../src/lib/tenantGuard";
 import { resolvePortalTenant } from "../src/lib/portal";
 import { resolveActingTenant } from "../src/lib/tenantContext";
-import { honoredTenantClaim } from "../src/lib/tenant";
 
 const dbName = (process.env.DATABASE_URL ?? "").split("/").pop()?.split("?")[0] ?? "";
 if (process.env.NODE_ENV !== "test" || !dbName.endsWith("_test")) {
@@ -186,17 +185,17 @@ async function main() {
     const pMissing = await resolvePortalTenant(`nonexistent_${SFX}`);
     check("resolvePortalTenant → null for an unknown subject (fail closed)", pMissing === null);
 
-    // ── staff bootstrap DECISION: resolution + claim-honouring — the actual logic
-    //    getCurrentUser/createSessionCookie use. Tested directly against the DB so
-    //    it does NOT depend on enterWith() propagation (which is unreliable across
-    //    awaits; request-wide persistence is finalised by the RLS transaction
-    //    bootstrap, design §2/§8). Proves tenant-less/ambiguous/mismatched sessions
-    //    fail closed. ────────────────────────────────────────────────────────────
+    // ── staff chokepoint FAIL-CLOSED: establishStaffTenantScope returns { ok:false }
+    //    (→ getCurrentUser returns null → the session is unusable, not merely a null
+    //    scope) whenever no valid acting tenant resolves. Tested against the real DB
+    //    via the actual chokepoint helper (its .ok is deterministic — no reliance on
+    //    enterWith propagation). ─────────────────────────────────────────────────
     const soleRes = await resolveActingTenant(uStaff);
     check("staff: sole active membership resolves to that tenant", "tenantId" in soleRes && soleRes.tenantId === t1);
-    check("staff: matching tid is honoured", honoredTenantClaim(t1, soleRes) === t1);
-    check("staff: mismatched tid → null (fail closed)", honoredTenantClaim("other", soleRes) === null);
-    check("staff: tid-less session → null (fail closed)", honoredTenantClaim(null, soleRes) === null);
+
+    check("staff: sole tenant + matching tid → ok", (await establishStaffTenantScope(uStaff, t1)).ok === true);
+    check("staff: mismatched tid → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, "other")).ok === false);
+    check("staff: tid-less session → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, null)).ok === false);
 
     // New-session write under enforcement lands in the resolved tenant scope and is
     // stamped with that tenant — the login-bootstrap DB path (createSessionCookie).
@@ -204,13 +203,21 @@ async function main() {
       await prisma.userSession.create({ data: { jti: sessJti, userId: uStaff, tenantId: "forged", platform: "web" } });
     });
     const sess = await basePrisma.userSession.findUnique({ where: { jti: sessJti } });
-    check("new session under enforcement is stamped with the scope tenant", sess?.tenantId === t1);
+    check("staff: new session under enforcement is stamped with the scope tenant", sess?.tenantId === t1);
 
-    // Grant a second active membership → the sole tenant is now ambiguous.
+    // Tenant SUSPENDED → session becomes unusable immediately.
+    await basePrisma.tenant.update({ where: { id: t1 }, data: { active: false } });
+    check("staff: suspended tenant → NOT ok (unusable immediately)", (await establishStaffTenantScope(uStaff, t1)).ok === false);
+    await basePrisma.tenant.update({ where: { id: t1 }, data: { active: true } });
+
+    // Membership REMOVED → session becomes unusable immediately.
+    await basePrisma.tenantMember.deleteMany({ where: { userId: uStaff, tenantId: t1 } });
+    check("staff: membership removed → NOT ok (unusable immediately)", (await establishStaffTenantScope(uStaff, t1)).ok === false);
+
+    // Newly AMBIGUOUS (re-add t1 + add a second active membership) → unusable.
+    await basePrisma.tenantMember.create({ data: { tenantId: t1, userId: uStaff } });
     await basePrisma.tenantMember.create({ data: { tenantId: t2, userId: uStaff } });
-    const ambRes = await resolveActingTenant(uStaff);
-    check("staff: two active memberships → ambiguous", "error" in ambRes && ambRes.error === "ambiguous_tenant");
-    check("staff: ambiguous → tid not honoured (fail closed)", honoredTenantClaim(t1, ambRes) === null);
+    check("staff: ambiguous (2 active memberships) → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, t1)).ok === false);
   } finally {
     __setTenantEnforcingForTests(null);
     await basePrisma.contact.deleteMany({
