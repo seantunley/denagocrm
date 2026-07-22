@@ -354,6 +354,7 @@ model Contact {
 // so we can prove lawful basis for holding and marketing to a person.
 model ConsentRecord {
   id          String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   type        String // marketing | service | data_processing
   granted     Boolean
   source      String? // form | phone | email | import | admin
@@ -365,17 +366,21 @@ model ConsentRecord {
   contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
   @@index([contactId, createdAt])
+  @@index([tenantId])
 }
 
 model Tag {
   id       String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name     String    @unique
   color    String    @default("#64748b")
   contacts Contact[]
+  @@index([tenantId])
 }
 
 model Campaign {
   id             String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name           String
   channel        String // email | sms
   subject        String?
@@ -395,10 +400,12 @@ model Campaign {
   recipients     CampaignRecipient[]
 
   @@index([status])
+  @@index([tenantId])
 }
 
 model CampaignRecipient {
   id         String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   campaignId String
   campaign   Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   contactId  String
@@ -414,13 +421,16 @@ model CampaignRecipient {
 
   @@index([campaignId])
   @@index([status])
+  @@index([tenantId])
 }
 
 model Segment {
   id        String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name      String
   criteria  String // JSON: { source?, tagId?, hasVehicle?, serviceDue?, province?, wonOnly? }
   createdAt DateTime @default(now())
+  @@index([tenantId])
 }
 
 /** A saved chatbot conversation flow (one can be marked active/live). */
@@ -547,10 +557,12 @@ model Activity {
 
 model EmailTemplate {
   id        String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name      String
   subject   String
   body      String
   createdAt DateTime @default(now())
+  @@index([tenantId])
 }
 
 model AutomationRule {
@@ -1176,6 +1188,7 @@ model OtpChallenge {
 // Google reviews pulled from the Places API (read-only; reply via Google Maps).
 model GoogleReview {
   id          String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   externalKey String   @unique // hash of author + time (Places API has no stable id)
   author      String
   rating      Int
@@ -1183,12 +1196,14 @@ model GoogleReview {
   publishedAt DateTime
   raw         String?
   createdAt   DateTime @default(now())
+  @@index([tenantId])
 }
 
 // A customer referred someone. Fee is earned when the referred lead is won,
 // and redeemed manually (note records what was given at the time).
 model Referral {
   id           String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   status       String    @default("pending") // pending | earned | redeemed
   earnedAt     DateTime?
   redeemedAt   DateTime?
@@ -1203,6 +1218,7 @@ model Referral {
   contact    Contact? @relation("ReferredIn", fields: [contactId], references: [id], onDelete: SetNull)
 
   @@index([referrerId, createdAt])
+  @@index([tenantId])
 }
 
 // Saved list filters ("Facebook leads over R200k this month")
@@ -1242,6 +1258,7 @@ model ErrorLog {
 // Questions are stored as JSON so new question types need no migration.
 model Survey {
   id          String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   title       String
   type        String    @default("adhoc") // csat | sales | nps | adhoc
   intro       String? // shown at the top of the form / in the invite
@@ -1258,12 +1275,14 @@ model Survey {
   responses SurveyResponse[]
 
   @@index([type, active])
+  @@index([tenantId])
 }
 
 // One invite/answer per recipient. contactId/leadId/jobCardId are loose
 // pointers (no FK) so this never complicates the core records.
 model SurveyResponse {
   id          String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   token       String    @unique @default(cuid()) // public, unguessable link
   surveyId    String
   survey      Survey    @relation(fields: [surveyId], references: [id], onDelete: Cascade)
@@ -1283,6 +1302,7 @@ model SurveyResponse {
   @@index([surveyId, status])
   @@index([contactId])
   @@index([status, scheduledFor])
+  @@index([tenantId])
 }
 
 // One row per signed-in device — powers the device log and remote sign-out.
