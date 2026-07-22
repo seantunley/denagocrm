@@ -45,22 +45,28 @@ async function getPlacesLibrary(): Promise<PlacesLibrary | null> {
       const mapsWindow = window as GoogleMapsWindow;
       if (!mapsWindow.google?.maps?.importLibrary) {
         await new Promise<void>((resolve, reject) => {
-          const existing = document.querySelector<HTMLScriptElement>(
-            'script[data-denago-google-maps="true"]',
-          );
-          if (existing) {
-            existing.addEventListener("load", () => resolve(), { once: true });
-            existing.addEventListener("error", () => reject(new Error("Google Maps failed to load")), {
-              once: true,
-            });
-            return;
-          }
+          // If we're here, importLibrary isn't ready, so any existing marked
+          // script is a DEAD one from a prior failed attempt (a successful load
+          // would have set importLibrary and skipped this block). Never re-attach
+          // to it — its load/error already fired and would never fire again,
+          // hanging forever. Remove it and always load a fresh, deterministic one.
+          document
+            .querySelectorAll('script[data-denago-google-maps="true"]')
+            .forEach((stale) => stale.remove());
 
-          mapsWindow.__denagoGoogleMapsReady = resolve;
           const script = document.createElement("script");
+          const cleanup = () => {
+            script.remove();
+            delete mapsWindow.__denagoGoogleMapsReady;
+          };
+          mapsWindow.__denagoGoogleMapsReady = () => resolve();
           script.dataset.denagoGoogleMaps = "true";
           script.async = true;
-          script.onerror = () => reject(new Error("Google Maps failed to load"));
+          script.onerror = () => {
+            // Leave no failed script behind for the next mount to wait on.
+            cleanup();
+            reject(new Error("Google Maps failed to load"));
+          };
           script.src =
             "https://maps.googleapis.com/maps/api/js?" +
             new URLSearchParams({
