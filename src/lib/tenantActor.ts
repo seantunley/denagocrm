@@ -1,31 +1,15 @@
 import "server-only";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
-import { currentTenantScope } from "./tenantScope";
-import { tenantEnforcing } from "./tenantEnforcement";
+import { currentScopeClass } from "./tenantWrite";
 
 export type TenantActor = { id: string; name: string; email: string };
 
-/**
- * How actor selection should behave for the CURRENT scope. Deliberately does NOT
- * collapse "run globally" and "fail closed" into one null: under enforcement a
- * missing scope or a null non-system scope must fail closed (like the guarded Prisma
- * client throwing), NOT silently fall back to global users.
- *  - `global`  — dormant (enforcement off) OR an explicit trusted `system` scope.
- *  - `tenant`  — enforcement on with a concrete tenant scope.
- *  - `closed`  — enforcement on with NO scope, or a `{ tenantId: null, system:false }`
- *                scope: a missed chokepoint / lost propagation → resolve nothing.
- */
-type ActorScope = { mode: "global" } | { mode: "tenant"; tenantId: string } | { mode: "closed" };
-
-function actorScope(): ActorScope {
-  if (!tenantEnforcing()) return { mode: "global" }; // dormant — unchanged behaviour
-  const scope = currentTenantScope();
-  if (!scope) return { mode: "closed" }; // enforcing but no scope established → fail closed
-  if (scope.system) return { mode: "global" }; // deliberate trusted system bypass
-  if (!scope.tenantId) return { mode: "closed" }; // enforcing + null non-system scope → fail closed
-  return { mode: "tenant", tenantId: scope.tenantId };
-}
+// Actor selection classifies the current scope exactly like every other unguarded
+// tenant-owned path — via the shared {@link currentScopeClass}. `global` → the
+// unchanged pick (dormant OR trusted system), `tenant` → a member of that tenant,
+// `closed` → resolve NOTHING (fail closed), never a global user.
+const actorScope = currentScopeClass;
 
 /**
  * Actor selection for system-generated, tenant-owned records (survey note,

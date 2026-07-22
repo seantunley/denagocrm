@@ -1,5 +1,41 @@
 import webpush from "web-push";
-import { prisma } from "./db";
+import { prisma, basePrisma } from "./db";
+import { currentScopeClass } from "./tenantWrite";
+
+type PushRecipient = { id: string; endpoint: string; p256dh: string; auth: string };
+
+/**
+ * The device subscriptions a push may be delivered to for the CURRENT tenant scope.
+ * `PushSubscription` is a GLOBAL model (in the guard's allow-list), so tenant scope
+ * does NOT filter it — a naive `findMany()` would send one tenant's customer data
+ * (a new lead / booking name) to every other tenant's subscribed devices.
+ *
+ *   - `global`  (dormant OR trusted system scope) → EVERY subscription, unchanged.
+ *   - `tenant`  → only devices of ACTIVE, non-disabled members of that tenant
+ *                 (join through TenantMember → active Tenant, excluding disabled
+ *                 users — a disabled account must not receive tenant data either).
+ *   - `closed`  (enforcement on, no resolvable tenant) → NONE. A scopeless tenant
+ *                 push must fail closed to nobody, never broadcast to everybody.
+ *
+ * Exported so scripts/test-tenant-guard.ts can prove the selection directly without
+ * a live web-push transport.
+ */
+export async function pushRecipientsForCurrentScope(): Promise<PushRecipient[]> {
+  const s = currentScopeClass();
+  if (s.mode === "closed") return [];
+  if (s.mode === "global") {
+    return prisma.pushSubscription.findMany({
+      select: { id: true, endpoint: true, p256dh: true, auth: true },
+    });
+  }
+  return basePrisma.$queryRaw<PushRecipient[]>`
+    SELECT ps."id", ps."endpoint", ps."p256dh", ps."auth"
+    FROM "PushSubscription" ps
+    JOIN "TenantMember" m ON m."userId" = ps."userId"
+    JOIN "Tenant" t ON t."id" = m."tenantId"
+    JOIN "User" u ON u."id" = ps."userId"
+    WHERE m."tenantId" = ${s.tenantId} AND t."active" = true AND u."disabledAt" IS NULL`;
+}
 
 let configured = false;
 function ensureConfigured(): boolean {
@@ -57,7 +93,8 @@ export async function sendPushToAll(
 ): Promise<number> {
   if (!ensureConfigured()) return 0;
   if (await isKindDisabled(kind)) return 0;
-  const subs = await prisma.pushSubscription.findMany();
+  // Deliver only to the CURRENT tenant's devices (all devices when global/system).
+  const subs = await pushRecipientsForCurrentScope();
   let sent = 0;
   await Promise.all(
     subs.map(async (sub) => {

@@ -133,3 +133,52 @@ for (const file of API_KEY_ROUTES) {
     }
   });
 }
+
+// Phase C step 2b (C2, review round 2) — the booking WRITE runs on basePrisma (row
+// lock), which the db.ts guard does NOT scope, so the route must derive the write
+// tenant via writeTenantId() and stamp it onto every row + hand it to the slot claim.
+test("src/app/api/bookings/route.ts: stamps the write tenant + namespaces slot capacity", () => {
+  const code = src("src/app/api/bookings/route.ts");
+  assert.match(code, /from "@\/lib\/tenantWrite"/, "must import writeTenantId");
+  assert.match(code, /const\s+writeTid\s*=\s*writeTenantId\(\)/, "must resolve the write tenant once");
+  // the resolved tenant is threaded into the slot capacity claim (per-tenant slots)
+  assert.match(code, /claimSlotCapacity\([^)]*writeTid/, "must pass the write tenant to claimSlotCapacity");
+  // every tenant-owned create is stamped (contact, job card, activity → 3 sites)
+  const stamps = code.match(/tenantId:\s*writeTid/g) ?? [];
+  assert.ok(stamps.length >= 3, `every created row must be stamped with the tenant (found ${stamps.length}, expected ≥3)`);
+});
+
+// claimSlotCapacity/reserveSlot run on basePrisma → must take an explicit tenant and
+// namespace BOTH the advisory lock and the count by it (else one tenant consumes
+// another's capacity and the count disagrees with the scoped getDayAvailability).
+test("src/lib/bookingSlots.ts: slot capacity is namespaced by an explicit tenant", () => {
+  const code = src("src/lib/bookingSlots.ts");
+  assert.match(code, /from "@\/lib\/tenantWrite"|from "\.\/tenantWrite"/, "must import writeTenantId");
+  assert.match(code, /claimSlotCapacity\([\s\S]*?tenantId:\s*string\s*\|\s*null/, "claimSlotCapacity must take an explicit tenantId");
+  assert.match(code, /slot:\$\{tenantId\}/, "the advisory lock must be namespaced by tenant");
+  assert.match(code, /reserveSlot[\s\S]*?writeTenantId\(\)/, "reserveSlot must resolve + stamp the write tenant");
+});
+
+// OtpChallenge is a GLOBAL model keyed by VIN — under enforcement the service-lookup
+// routes must namespace the challenge key by tenant (serviceOtpKey), never a bare VIN.
+const OTP_ROUTES = [
+  "src/app/api/service-lookup/route.ts",
+  "src/app/api/service-lookup/verify/route.ts",
+] as const;
+for (const file of OTP_ROUTES) {
+  test(`${file}: OTP challenge key is tenant-namespaced via serviceOtpKey`, () => {
+    const code = src(file);
+    assert.match(code, /serviceOtpKey\s*\(/, `${file} must derive the challenge key via serviceOtpKey`);
+    assert.doesNotMatch(code, /key:\s*vin\b/, `${file} must not key the challenge on a bare VIN`);
+  });
+}
+
+// sendPushToAll must select recipients by the current tenant scope, not an unfiltered
+// findMany over the global PushSubscription table (which would leak a tenant's lead /
+// booking names to every other tenant's devices).
+test("src/lib/push.ts: sendPushToAll delivers only to the current tenant's devices", () => {
+  const code = src("src/lib/push.ts");
+  assert.match(code, /pushRecipientsForCurrentScope\s*\(/, "must select recipients via pushRecipientsForCurrentScope");
+  assert.match(code, /const\s+subs\s*=\s*await\s+pushRecipientsForCurrentScope\(\)/, "sendPushToAll must use the scoped recipient list");
+  assert.doesNotMatch(code, /prisma\.pushSubscription\.findMany\(\s*\)/, "must not do an unfiltered findMany() in the send path");
+});

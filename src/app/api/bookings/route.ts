@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma, basePrisma } from "@/lib/db";
 import { authenticateIntakeKey } from "@/lib/apiKeys";
 import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
+import { writeTenantId } from "@/lib/tenantWrite";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { logAudit } from "@/lib/audit";
@@ -108,6 +109,12 @@ export async function POST(req: NextRequest) {
     vehicle?.model ?? b.model ?? (vehicles.length === 1 ? vehicles[0].model : null);
   const summary = `Service ${b.time} — ${b.name}${vehicleHint ? ` (${vehicleHint})` : ""}`;
 
+  // The tenant to STAMP every row with (and namespace the slot capacity by). The
+  // writes below run on `basePrisma` for the row lock, so the db.ts guard does NOT
+  // scope or stamp them — we do it explicitly. null under dormant/system → unstamped,
+  // single-namespace, exactly the pre-tenancy behaviour.
+  const writeTid = writeTenantId();
+
   // Everything that WRITES runs in ONE transaction, and the slot capacity is
   // claimed FIRST. Previously the contact and job card were created before the
   // slot was reserved, so a full/invalid slot left an orphan contact + job card
@@ -115,7 +122,7 @@ export async function POST(req: NextRequest) {
   let outcome: { activityId: string; contactId: string | null; jobCardNumber: number | null; createdContact: boolean };
   try {
     outcome = await basePrisma.$transaction(async (tx) => {
-      await claimSlotCapacity(tx, dt, config.capacity);
+      await claimSlotCapacity(tx, dt, config.capacity, writeTid);
 
       // A service booking is workshop work — it must never open a sales lead.
       let contactId: string | null = contact?.id ?? null;
@@ -130,6 +137,7 @@ export async function POST(req: NextRequest) {
             phone: b.phone,
             source: "website",
             notes: `Created from an online service booking for ${b.date} at ${b.time}.`,
+            ...(writeTid ? { tenantId: writeTid } : {}),
           },
         });
         contactId = created.id;
@@ -147,6 +155,7 @@ export async function POST(req: NextRequest) {
             }`,
             vehicleId: vehicle.id,
             contactId,
+            ...(writeTid ? { tenantId: writeTid } : {}),
           },
         });
         jobCardNumber = jc.number;
@@ -169,6 +178,7 @@ export async function POST(req: NextRequest) {
           contactId,
           assignedToId: firstUser.id,
           createdById: firstUser.id,
+          ...(writeTid ? { tenantId: writeTid } : {}),
         },
       });
       return { activityId: activity.id, contactId, jobCardNumber, createdContact };

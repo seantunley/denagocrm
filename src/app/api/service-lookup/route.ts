@@ -5,6 +5,7 @@ import { z } from "zod";
 import { prisma, basePrisma } from "@/lib/db";
 import { authenticateIntakeKey } from "@/lib/apiKeys";
 import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
+import { serviceOtpKey } from "@/lib/serviceOtp";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { sendSms, isSmsConfigured, maskPhone } from "@/lib/sms";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
@@ -61,6 +62,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid VIN" }, { status: 422, headers: corsHeaders });
   }
   const vin = normalizeVin(parsed.data.vin);
+  // Tenant-namespaced challenge key: the whole OTP lifecycle for this VIN is
+  // confined to the authenticated tenant (OtpChallenge is a global model).
+  const otpKey = serviceOtpKey(vin);
   const notFound = NextResponse.json(
     {
       ok: true,
@@ -71,11 +75,11 @@ export async function POST(req: NextRequest) {
     { headers: corsHeaders }
   );
 
-  // Flood guard: max 3 codes per VIN per hour
+  // Flood guard: max 3 codes per VIN per hour (per tenant — see otpKey)
   const recent = await basePrisma.otpChallenge.count({
     where: {
       purpose: "service-booking",
-      key: vin,
+      key: otpKey,
       createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) },
     },
   });
@@ -130,15 +134,15 @@ export async function POST(req: NextRequest) {
   // usable after a newer one is sent, and two concurrent reissues must not each
   // leave a valid code.
   await basePrisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`otp:service-booking:${vin}`})::bigint)`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`otp:service-booking:${otpKey}`})::bigint)`;
     await tx.otpChallenge.updateMany({
-      where: { purpose: "service-booking", key: vin, verifiedAt: null },
+      where: { purpose: "service-booking", key: otpKey, verifiedAt: null },
       data: { expiresAt: new Date() },
     });
     await tx.otpChallenge.create({
       data: {
         purpose: "service-booking",
-        key: vin,
+        key: otpKey,
         codeHash,
         channel,
         target,
