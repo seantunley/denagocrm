@@ -8,6 +8,7 @@ import { getSetting } from "./settings";
 import { hasModule, type ModuleId } from "./access";
 import { getUserSecurityState, getUserSecurityStateFresh } from "./userSecurity";
 import { resolveActingTenant } from "./tenantContext";
+import { tenantObserving } from "./tenantEnforcement";
 import { honoredTenantClaim, isTenantForeignKeyViolation } from "./tenant";
 import {
   verifySession,
@@ -147,8 +148,18 @@ export async function createSessionCookie(
   try {
     const ctx = await resolveActingTenant(user.id);
     if ("tenantId" in ctx) tenantId = ctx.tenantId;
-  } catch {
+    else if (tenantObserving()) {
+      // MONITOR: surface logins that couldn't resolve a single active tenant —
+      // exactly the ones that would be affected once enforcement is turned on.
+      // These are EXPECTED observations, not system errors, so they go to the
+      // server log (Vercel) — NOT logError, which files a System-Log row and
+      // fires/throttles system_error push alerts (would page admins and mute a
+      // real alert for 30 min during a monitor rollout).
+      console.warn(`[tenant-monitor] login: no single active tenant for user ${user.id} (${ctx.error})`);
+    }
+  } catch (e) {
     // never let tenant resolution block sign-in
+    if (tenantObserving()) console.warn(`[tenant-monitor] login tenant resolve failed for user ${user.id}:`, e);
   }
   // Stamp the resolved tenant, but never let it block sign-in: if the tenant is
   // deleted between the resolve above and this insert (concurrent tenant admin),
