@@ -10,7 +10,7 @@ import { getUserSecurityState, getUserSecurityStateFresh } from "./userSecurity"
 import { resolveActingTenant } from "./tenantContext";
 import { tenantObserving } from "./tenantEnforcement";
 import { honoredTenantClaim, isTenantForeignKeyViolation } from "./tenant";
-import { establishStaffTenantScope } from "./tenantScopeEntry";
+import { establishStaffTenantScope, validateInSystemScope } from "./tenantScopeEntry";
 import {
   verifySession,
   signFreshSession,
@@ -27,39 +27,50 @@ import {
  * effect on the very next request.
  */
 export const getCurrentUser = cache(async () => {
-  const store = await cookies();
-  const token = store.get(SESSION_COOKIE)?.value;
-  if (!token) return null;
-  const session = await verifySession(token);
-  if (!session) return null;
-  // Session registry: revoked devices are locked out on their next request.
-  if (session.jti) {
-    const row = await prisma.userSession.findUnique({
-      where: { jti: session.jti },
-      select: { revokedAt: true, lastActiveAt: true },
-    });
-    if (!row || row.revokedAt) return null;
-    if (Date.now() - row.lastActiveAt.getTime() > 10 * 60 * 1000) {
-      void prisma.userSession
-        .update({ where: { jti: session.jti }, data: { lastActiveAt: new Date() } })
-        .catch(() => {});
+  // Phase C: session/account validation reads tenant-scoped infrastructure
+  // (UserSession, security state) BEFORE the user's tenant is known. Run it in a
+  // trusted `system` scope CONFINED to this callback, so (a) the guard doesn't
+  // reject those reads (chicken-and-egg) and (b) an UNauthenticated request can't
+  // leak a lingering system bypass — the scope reverts on every null path, and
+  // only the user's OWN tenant scope (set after, below) persists on success.
+  // DORMANT: bare fn() when off (no ALS overhead), system-scoped only when enforcing.
+  const validated = await validateInSystemScope(async () => {
+    const store = await cookies();
+    const token = store.get(SESSION_COOKIE)?.value;
+    if (!token) return null;
+    const session = await verifySession(token);
+    if (!session) return null;
+    // Session registry: revoked devices are locked out on their next request.
+    if (session.jti) {
+      const row = await prisma.userSession.findUnique({
+        where: { jti: session.jti },
+        select: { revokedAt: true, lastActiveAt: true },
+      });
+      if (!row || row.revokedAt) return null;
+      if (Date.now() - row.lastActiveAt.getTime() > 10 * 60 * 1000) {
+        void prisma.userSession
+          .update({ where: { jti: session.jti }, data: { lastActiveAt: new Date() } })
+          .catch(() => {});
+      }
     }
-  }
 
-  // Governance: disabled accounts and stale session versions are rejected on
-  // every request, so permission/role/password changes take effect immediately.
-  const [user, security] = await Promise.all([
-    prisma.user.findUnique({ where: { id: session.sub } }),
-    getUserSecurityState(session.sub),
-  ]);
-  if (!user || !security || security.disabledAt) return null;
-  if (security.sessionVersion !== session.sv) return null;
-  // Phase C (step 2): seed the request's tenant scope for downstream DB access.
-  // DORMANT — a no-op that touches nothing until `tenantEnforcing()` flips on;
-  // see establishStaffTenantScope. Runs once per request (getCurrentUser is
-  // cache()d) and resolves the tenant inline to avoid re-entering this function.
-  await establishStaffTenantScope(user.id, session.tid ?? null);
-  return user;
+    // Governance: disabled accounts and stale session versions are rejected on
+    // every request, so permission/role/password changes take effect immediately.
+    const [user, security] = await Promise.all([
+      prisma.user.findUnique({ where: { id: session.sub } }),
+      getUserSecurityState(session.sub),
+    ]);
+    if (!user || !security || security.disabledAt) return null;
+    if (security.sessionVersion !== session.sv) return null;
+    return { user, tid: session.tid ?? null };
+  });
+  if (!validated) return null;
+  // Switch from the (now-reverted) system validation scope to the user's OWN
+  // tenant for the rest of the request. DORMANT — a no-op until enforcing; resolves
+  // inline (no getCurrentUser re-entry); persists downstream via enterWith. Runs
+  // once per request (getCurrentUser is cache()d).
+  await establishStaffTenantScope(validated.user.id, validated.tid);
+  return validated.user;
 });
 
 export async function requireUser() {

@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { prisma, basePrisma } from "../src/lib/db";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 import { runInTenantScope } from "../src/lib/tenantScope";
+import { establishTenantScopeFromId } from "../src/lib/tenantScopeEntry";
 import { TenantScopeError } from "../src/lib/tenantGuard";
 
 const dbName = (process.env.DATABASE_URL ?? "").split("/").pop()?.split("?")[0] ?? "";
@@ -149,6 +150,20 @@ async function main() {
     await runInTenantScope({ tenantId: null, system: true }, async () => {
       const both = await prisma.contact.findMany({ where: { id: { in: [idA, idB] } } });
       check("system scope sees BOTH tenants' rows", both.length === 2);
+    });
+
+    // ── chokepoint pattern (getCurrentUser / getPortalContact): validate under a
+    //    system scope, then switch to the resolved tenant — no deadlock. ────────
+    await runInTenantScope({ tenantId: null, system: true }, async () => {
+      // Infra reads (analogue of the UserSession / AppSetting validation reads)
+      // succeed under the system scope instead of failing closed.
+      const infra = await prisma.contact.findMany({ where: { id: { in: [idA, idB] } } });
+      check("chokepoint: infra read under system scope does not deadlock", infra.length === 2);
+      // Then switch to the principal's tenant (what the chokepoints do after
+      // resolving the user/contact) and confirm subsequent reads are scoped.
+      establishTenantScopeFromId(TENANT_A);
+      const scoped = await prisma.contact.findMany({ where: { id: { in: [idA, idB] } } });
+      check("chokepoint: after switch to tenant A, reads are scoped to A", scoped.length === 1 && scoped[0].id === idA);
     });
   } finally {
     __setTenantEnforcingForTests(null);
