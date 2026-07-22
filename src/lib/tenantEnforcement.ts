@@ -62,13 +62,15 @@ export function __setTenantEnforcingForTests(value: boolean | null): void {
  * True when tenant context should actually be ENFORCED — requests without a valid
  * tenant blocked and DB access confined to the caller's tenant.
  *
- * Deliberately ALWAYS false in every real environment today. Enforcement is
- * DEFENCE-IN-DEPTH at the app layer only; the AUTHORITATIVE, fail-closed isolation
- * boundary is Postgres RLS, which is a HARD PREREQUISITE — this must not flip to
- * true (in any environment, preview included) until RLS is live, because the app
- * guard alone does not cover nested writes/connects or raw/`basePrisma` paths (see
- * PHASE-C-TENANT-GUARD-DESIGN.md §1.5/§2/§6). This is the SINGLE hook the future
- * enforcement PR flips; callers that must eventually block gate on it now.
+ * Deliberately ALWAYS false in every real environment today. The app guard is
+ * DEFENCE-IN-DEPTH: it scopes top-level ops and REFUSES nested relation writes
+ * (fail closed), but it cannot validate a direct child's scalar parent FK. The
+ * AUTHORITATIVE boundaries are Postgres RLS (row-level) and tenant-aware COMPOSITE
+ * FKs (cross-row parent/child), and BOTH are HARD PREREQUISITES — this must not
+ * flip to true in any environment (preview included) until RLS *and* composite FKs
+ * are live (see PHASE-C-TENANT-GUARD-DESIGN.md §1.3/§1.5/§2/§5/§6). This is the
+ * SINGLE hook the future enforcement PR flips; callers that must eventually block
+ * gate on it now.
  */
 export function tenantEnforcing(): boolean {
   if (enforceOverrideForTests !== null) return enforceOverrideForTests;
