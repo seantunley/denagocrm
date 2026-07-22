@@ -16,6 +16,7 @@ import {
   currentTenantScope,
   withTenant,
   withSystemScope,
+  enterTenantScope,
 } from "../src/lib/tenantScope";
 
 const T = "tenant_A";
@@ -198,5 +199,15 @@ test("withTenant / withSystemScope: shape the scope correctly", async () => {
   });
   await withSystemScope(async () => {
     assert.deepEqual(currentTenantScope(), { tenantId: null, system: true });
+  });
+});
+
+test("enterTenantScope: overrides the current scope for downstream access", async () => {
+  // Wrapped in a run() so the enterWith override is confined to this async
+  // subtree and cannot leak into other tests.
+  await runInTenantScope({ tenantId: "A", system: false }, async () => {
+    enterTenantScope({ tenantId: "B", system: true });
+    await Promise.resolve();
+    assert.deepEqual(currentTenantScope(), { tenantId: "B", system: true });
   });
 });

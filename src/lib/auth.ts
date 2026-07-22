@@ -10,6 +10,7 @@ import { getUserSecurityState, getUserSecurityStateFresh } from "./userSecurity"
 import { resolveActingTenant } from "./tenantContext";
 import { tenantObserving } from "./tenantEnforcement";
 import { honoredTenantClaim, isTenantForeignKeyViolation } from "./tenant";
+import { establishStaffTenantScope } from "./tenantScopeEntry";
 import {
   verifySession,
   signFreshSession,
@@ -53,6 +54,11 @@ export const getCurrentUser = cache(async () => {
   ]);
   if (!user || !security || security.disabledAt) return null;
   if (security.sessionVersion !== session.sv) return null;
+  // Phase C (step 2): seed the request's tenant scope for downstream DB access.
+  // DORMANT — a no-op that touches nothing until `tenantEnforcing()` flips on;
+  // see establishStaffTenantScope. Runs once per request (getCurrentUser is
+  // cache()d) and resolves the tenant inline to avoid re-entering this function.
+  await establishStaffTenantScope(user.id, session.tid ?? null);
   return user;
 });
 
