@@ -55,6 +55,7 @@ model User {
 // when the underlying item is deleted. Read/written via raw SQL in lib/timelinePins.
 model TimelinePin {
   id         String   @id
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   kind       String // communication | activity
   itemId     String
   pinnedAt   DateTime @default(now())
@@ -63,6 +64,7 @@ model TimelinePin {
 
   @@unique([kind, itemId])
   @@index([pinnedAt])
+  @@index([tenantId])
 }
 
 model AppSetting {
@@ -509,6 +511,7 @@ model Lead {
 
 model ResearchNote {
   id        String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   body      String
   createdAt DateTime @default(now())
 
@@ -519,6 +522,7 @@ model ResearchNote {
 
   @@index([leadId])
   @@index([contactId])
+  @@index([tenantId])
 }
 
 model Activity {
@@ -644,6 +648,7 @@ model Quote {
 
 model QuoteItem {
   id             String @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   description    String
   qty            Float  @default(1)
   unitPriceCents Int    @default(0)
@@ -665,10 +670,12 @@ model QuoteItem {
   quote   Quote  @relation(fields: [quoteId], references: [id], onDelete: Cascade)
 
   @@index([productId])
+  @@index([tenantId])
 }
 
 model QuoteFee {
   id         String @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   label      String
   kind       String @default("fee") // fee | delivery
   amountCents Int   @default(0)
@@ -679,6 +686,7 @@ model QuoteFee {
   quote   Quote  @relation(fields: [quoteId], references: [id], onDelete: Cascade)
 
   @@index([quoteId])
+  @@index([tenantId])
 }
 
 model ServiceReminderLog {
@@ -1208,15 +1216,18 @@ model Referral {
 // Saved list filters ("Facebook leads over R200k this month")
 model SavedView {
   id        String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name      String
   page      String // e.g. leads
   query     String // URL search params
   createdAt DateTime @default(now())
+  @@index([tenantId])
 }
 
 // Monthly business goals — actuals vs target on the KPI dashboard.
 model Target {
   id        String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   metric    String // leads | sales_value | deliveries | services
   period    String // YYYY-MM
   value     Int // target (a count, or cents for sales_value)
@@ -1224,6 +1235,7 @@ model Target {
   updatedAt DateTime @updatedAt
 
   @@unique([metric, period])
+  @@index([tenantId])
 }
 
 // System errors that would otherwise vanish into serverless logs
@@ -1923,6 +1935,7 @@ model CompetitorBrief {
 // (single tenant); Phase 4 adds tenant scoping.
 model CustomFieldDef {
   id        String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   entity    String // contact | lead | quote | case
   key       String // machine key, unique within an entity
   label     String
@@ -1938,10 +1951,12 @@ model CustomFieldDef {
 
   @@unique([entity, key])
   @@index([entity, active, order])
+  @@index([tenantId])
 }
 
 model CustomFieldValue {
   id        String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   defId     String
   recordId  String // id of the target contact / lead / quote / case
   value     String? // stored as text; coerced by the field's type on read
@@ -1951,6 +1966,7 @@ model CustomFieldValue {
 
   @@unique([defId, recordId])
   @@index([recordId])
+  @@index([tenantId])
 }
 
 // ── Tenant foundation ─────────────────────────────────────────────────────────
