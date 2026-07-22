@@ -770,6 +770,7 @@ model Communication {
 /// on a single channel. Foundation for assignment, unread and SLA reporting.
 model Conversation {
   id              String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   channel         String // email | whatsapp | messenger | instagram | call | note | other
   subject         String?
   status          String    @default("open") // open | snoozed | closed
@@ -791,6 +792,7 @@ model Conversation {
   @@index([unread, lastMessageAt])
   @@index([contactId])
   @@index([leadId])
+  @@index([tenantId])
 }
 
 model Document {
@@ -1792,6 +1794,7 @@ model CustomerCaseTag {
 
 model CannedReply {
   id          String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   mailboxId   String?
   title       String
   body        String
@@ -1802,6 +1805,7 @@ model CannedReply {
   mailbox SupportMailbox? @relation(fields: [mailboxId], references: [id], onDelete: SetNull)
 
   @@index([mailboxId])
+  @@index([tenantId])
 }
 
 // ── Competitor intelligence ──────────────────────────────────────────────────
