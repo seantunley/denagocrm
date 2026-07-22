@@ -329,6 +329,11 @@ model Contact {
   deletedByName String?
   deleteReason  String?
 
+  // Multi-tenancy (Phase B — additive/inert): owning tenant. Nullable + backfilled
+  // now; a later PR flips NOT NULL + adds the FK once the backfill is confirmed on
+  // prod. Nothing reads it yet — behaviour is unchanged.
+  tenantId String?
+
   ownerId     String?
   owner       User?   @relation("ContactOwner", fields: [ownerId], references: [id])
   createdById String?
@@ -348,6 +353,8 @@ model Contact {
   researchNotes     ResearchNote[]
   campaignRecipients CampaignRecipient[]
   consentRecords    ConsentRecord[]
+
+  @@index([tenantId])
 }
 
 // POPIA consent ledger — an append-only history of consent given/withdrawn,
@@ -474,6 +481,9 @@ model Lead {
   externalId String? @unique // e.g. Facebook leadgen_id
   raw        String? // raw intake payload (JSON string)
 
+  // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
+  tenantId   String?
+
   research     String? // latest AI research briefing (shown in the Research tab)
   researchedAt DateTime?
   viewedAt     DateTime? // first time a staff member opened the lead
@@ -505,6 +515,8 @@ model Lead {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   referral  Referral?
+
+  @@index([tenantId])
 }
 
 model ResearchNote {
@@ -533,6 +545,9 @@ model Activity {
   status         String    @default("planned") // planned | done | canceled
   doneAt         DateTime?
 
+  // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
+  tenantId       String?
+
   leadId       String?
   lead         Lead?    @relation(fields: [leadId], references: [id], onDelete: Cascade)
   contactId    String?
@@ -543,6 +558,8 @@ model Activity {
   createdBy    User     @relation("ActivityCreator", fields: [createdById], references: [id])
 
   createdAt DateTime @default(now())
+
+  @@index([tenantId])
 }
 
 model EmailTemplate {
@@ -754,6 +771,9 @@ model Communication {
   readAt         DateTime? // when staff first opened the conversation carrying this inbound message
   archivedAt     DateTime? // when the thread carrying this message was archived out of the inbox (NULL = active)
 
+  // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
+  tenantId  String?
+
   contactId String?
   contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
   leadId    String?
@@ -764,6 +784,7 @@ model Communication {
   @@index([conversationId])
   @@index([messageId])
   @@index([archivedAt])
+  @@index([tenantId])
 }
 
 /// A shared-inbox conversation: groups related messages with a contact (or lead)
