@@ -6,7 +6,7 @@ import { createIntakeLead } from "@/lib/leadIntake";
 import { parseLeadFields, metaSource } from "@/lib/metaLead";
 import { recordInboundDm, recordDmEcho, type DmPlatform } from "@/lib/messenger";
 import { runDmFlow } from "@/lib/flowDm";
-import { withChannelTenantScope } from "@/lib/tenantScopeEntry";
+import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 
 /** Meta webhook verification handshake. */
 export async function GET(req: NextRequest) {
@@ -15,7 +15,9 @@ export async function GET(req: NextRequest) {
   const token = params.get("hub.verify_token");
   const challenge = params.get("hub.challenge");
 
-  const verifyToken = await getSetting("META_VERIFY_TOKEN");
+  // Install-global verification token, read before any tenant is known → system scope
+  // (else the guard throws on this tenant-scoped AppSetting read under enforcement).
+  const verifyToken = await validateInSystemScope(() => getSetting("META_VERIFY_TOKEN"));
   if (mode === "subscribe" && token && token === verifyToken && challenge) {
     return new NextResponse(challenge, { status: 200 });
   }
@@ -40,7 +42,8 @@ export async function POST(req: NextRequest) {
   // Verify Meta's payload signature. Fail CLOSED: if no app secret is
   // configured we cannot authenticate the sender, so we reject rather than
   // trust an anonymous POST (which could forge leads/DMs or drive the bot).
-  const appSecret = await getSetting("META_APP_SECRET");
+  // Install-global + read before the per-event chokepoint → trusted system scope.
+  const appSecret = await validateInSystemScope(() => getSetting("META_APP_SECRET"));
   if (!appSecret) {
     return NextResponse.json({ error: "Webhook not configured" }, { status: 503 });
   }

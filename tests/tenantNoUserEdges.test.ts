@@ -220,6 +220,17 @@ test("src/app/api/webhooks/meta/route.ts: leadgen createIntakeLead runs inside t
   );
 });
 
+// C3 review blocker 1 — the receive-side signature config (install-global) is read
+// BEFORE the per-event chokepoint, so under enforcement it must go through a trusted
+// system scope, not a bare (tenant-scoped) AppSetting read the guard would throw on.
+for (const file of ["src/app/api/webhooks/whatsapp/route.ts", "src/app/api/webhooks/meta/route.ts"] as const) {
+  test(`${file}: receive-side signature config is read via validateInSystemScope`, () => {
+    const code = src(file);
+    assert.match(code, /validateInSystemScope\(\s*\(\)\s*=>\s*getSetting\("META_APP_SECRET"\)\s*\)/, `${file} must read META_APP_SECRET in a system scope`);
+    assert.match(code, /validateInSystemScope\(\s*\(\)\s*=>\s*getSetting\("META_VERIFY_TOKEN"\)\s*\)/, `${file} must read META_VERIFY_TOKEN in a system scope`);
+  });
+}
+
 // C3 actor-pick sites must attribute inbound records via the tenant-aware resolver
 // (channel scope), not the global oldest-user pick — else a tenant-A inbound message
 // is stamped with another tenant's user. (§2.4)

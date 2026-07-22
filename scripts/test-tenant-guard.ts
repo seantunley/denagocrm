@@ -14,7 +14,8 @@ import { randomUUID } from "node:crypto";
 import { prisma, basePrisma } from "../src/lib/db";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 import { runInTenantScope } from "../src/lib/tenantScope";
-import { establishTenantScopeFromId, establishStaffTenantScope, withTokenTenantScope, withChannelTenantScope } from "../src/lib/tenantScopeEntry";
+import { establishTenantScopeFromId, establishStaffTenantScope, withTokenTenantScope, withChannelTenantScope, validateInSystemScope } from "../src/lib/tenantScopeEntry";
+import { getSetting } from "../src/lib/settings";
 import { TenantScopeError } from "../src/lib/tenantGuard";
 import { resolvePortalTenant } from "../src/lib/portal";
 import { resolveActingTenant } from "../src/lib/tenantContext";
@@ -31,6 +32,7 @@ import { claimSlotCapacity } from "../src/lib/bookingSlots";
 import { serviceOtpKey } from "../src/lib/serviceOtp";
 import { pushRecipientsForCurrentScope } from "../src/lib/push";
 import { resolveChannelTenant } from "../src/lib/channelTenant";
+import { upsertChannel } from "./backfill-channel-identities";
 
 const dbName = (process.env.DATABASE_URL ?? "").split("/").pop()?.split("?")[0] ?? "";
 if (process.env.NODE_ENV !== "test" || !dbName.endsWith("_test")) {
@@ -107,6 +109,7 @@ const chIdB = `chB_${SFX}`;
 const chIdDis = `chDis_${SFX}`;
 const chIdSus = `chSus_${SFX}`;
 const chIdGhost = `chGhost_${SFX}`;
+const cfgKey = `TESTCFG_${SFX}`; // a tenant-scoped AppSetting (review blocker 1 fixture)
 
 let passed = 0;
 let failed = 0;
@@ -202,6 +205,9 @@ async function main() {
   await basePrisma.$executeRaw`INSERT INTO "ChannelIdentity" ("id","tenantId","channel","externalId","createdAt","disabledAt") VALUES (${chIdDis}, ${TENANT_A}, 'whatsapp', ${waDisabled}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
   await basePrisma.$executeRaw`INSERT INTO "ChannelIdentity" ("id","tenantId","channel","externalId","createdAt") VALUES (${chIdSus}, ${chTenantSus}, 'whatsapp', ${waSus}, CURRENT_TIMESTAMP)`;
   await basePrisma.$executeRaw`INSERT INTO "ChannelIdentity" ("id","tenantId","channel","externalId","createdAt") VALUES (${chIdGhost}, ${chGhostTenant}, 'whatsapp', ${waGhost}, CURRENT_TIMESTAMP)`;
+  // A tenant-scoped AppSetting (blocker 1): a bare read fails closed under enforcement,
+  // but the webhook's validateInSystemScope wrapper reads it via the system bypass.
+  await basePrisma.appSetting.create({ data: { key: cfgKey, value: "sig-secret" } });
 
   __setTenantEnforcingForTests(true);
   try {
@@ -658,6 +664,27 @@ async function main() {
     const chSus = await withChannelTenantScope("whatsapp", waSus, async () => "ran", () => "skipped");
     check("channel: suspended-tenant endpoint → event skipped (fail closed)", chSus === "skipped");
 
+    // ── review blocker 1: the webhook's PRE-scope receive-side config reads must go
+    //    through validateInSystemScope — a bare tenant-scoped AppSetting read fails
+    //    closed under enforcement (so signature verification would never complete). ──
+    await runInTenantScope({ tenantId: null, system: false }, async () => {
+      await expectThrows(
+        "channel: bare tenant-scoped AppSetting read fails closed (would break sig verify)",
+        () => getSetting(cfgKey),
+        (e) => e instanceof TenantScopeError,
+      );
+    });
+    check("channel: validateInSystemScope reads receive-side config pre-scope (system bypass)", (await validateInSystemScope(() => getSetting(cfgKey))) === "sig-secret");
+
+    // ── review blocker 2: ChannelIdentity is an authz boundary — the backfill must
+    //    NEVER silently reassign an endpoint owned by another tenant. ────────────────
+    await expectThrows(
+      "backfill: refuses to reassign B's endpoint to A (cross-tenant hijack)",
+      () => upsertChannel("messenger", pageEndpointB, "hijack", TENANT_A),
+    );
+    check("backfill: B's endpoint STILL owned by B after the refused reassignment", (await resolveChannelTenant("messenger", pageEndpointB)) === TENANT_B);
+    check("backfill: same-tenant upsert is a no-op (no ownership change)", (await upsertChannel("messenger", pageEndpointB, "same", TENANT_B)) === "unchanged");
+
     // ── DORMANT back-compat (enforcement OFF): C2 keys/OTP/push + C3 channel all run
     //    byte-for-byte the pre-tenancy path. ─────────────────────────────────────────
     __setTenantEnforcingForTests(false);
@@ -689,6 +716,7 @@ async function main() {
     await basePrisma.$executeRaw`DELETE FROM "TenantApiKey" WHERE "tenantId" IN (${TENANT_A}, ${TENANT_SUS}, ${ghostTenant})`;
     await basePrisma.$executeRaw`DELETE FROM "AppSetting" WHERE "key" = 'INTAKE_API_KEY'`;
     await basePrisma.$executeRaw`DELETE FROM "ChannelIdentity" WHERE "id" IN (${chIdA}, ${chIdB}, ${chIdDis}, ${chIdSus}, ${chIdGhost})`;
+    await basePrisma.appSetting.deleteMany({ where: { key: cfgKey } });
     await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [userAId, userBId, userCId] } } });
     await basePrisma.user.deleteMany({ where: { id: { in: [userAId, userBId, userCId] } } });
     await basePrisma.tenant.deleteMany({ where: { id: { in: [TENANT_A, TENANT_B, TENANT_SUS, chTenantSus] } } });
