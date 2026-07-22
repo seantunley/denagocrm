@@ -128,9 +128,12 @@ export async function saveSmtpSettings(formData: FormData) {
     SMTP_PORT: String(formData.get("port") ?? "587").trim(),
     SMTP_SECURE: formData.get("secure") === "on" ? "true" : "false",
     SMTP_USER: String(formData.get("user") ?? "").trim(),
-    SMTP_PASS: String(formData.get("pass") ?? "").trim(),
     SMTP_FROM: String(formData.get("from") ?? "").trim(),
   };
+  // The password field renders blank (never echoes the stored secret), so a
+  // blank submit means "keep the saved password" — only overwrite when provided.
+  const pass = String(formData.get("pass") ?? "").trim();
+  if (pass) entries.SMTP_PASS = pass;
   for (const [key, value] of Object.entries(entries)) {
     await putSetting(key, value);
   }
@@ -199,8 +202,10 @@ export async function saveImapSettings(formData: FormData) {
     IMAP_PORT: String(formData.get("port") ?? "993").trim(),
     IMAP_SECURE: formData.get("secure") === "on" ? "true" : "false",
     IMAP_USER: String(formData.get("user") ?? "").trim(),
-    IMAP_PASS: String(formData.get("pass") ?? "").trim(),
   };
+  // Blank password submit = keep the saved one (the field never echoes it back).
+  const pass = String(formData.get("pass") ?? "").trim();
+  if (pass) entries.IMAP_PASS = pass;
   for (const [key, value] of Object.entries(entries)) {
     await putSetting(key, value);
   }
