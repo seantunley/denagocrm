@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Plus } from "lucide-react";
+import { Activity, Clock3, PauseCircle, PlayCircle, Plus, Workflow, XCircle } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import {
@@ -13,8 +13,9 @@ import AutomationRuleForm from "@/components/AutomationRuleForm";
 import ModalTrigger from "@/components/Modal";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { formatDateTime } from "@/lib/format";
-import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
+import { WorkspaceHero } from "@/components/workspace-hero";
+import { EmptyState, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 
 export default async function AutomationsPage() {
   const user = await requireUser();
@@ -32,6 +33,8 @@ export default async function AutomationsPage() {
   const leads = await prisma.lead.findMany({ where: { id: { in: leadIds } } });
   const leadById = new Map(leads.map((l) => [l.id, l]));
   const ruleById = new Map(rules.map((r) => [r.id, r]));
+  const activeRules = rules.filter((rule) => rule.active).length;
+  const failedRuns = logs.filter((log) => (log.note ?? "").startsWith("error") || (log.note ?? "").includes("failed")).length;
 
   const stageName = (id: string | null) => stages.find((s) => s.id === id)?.name ?? "?";
   const userName = (id: string | null) => users.find((u) => u.id === id)?.name ?? "lead owner";
@@ -59,36 +62,41 @@ export default async function AutomationsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Automations" description={`${rules.length} workflow rule${rules.length === 1 ? "" : "s"} · Lead, quote, delivery and referral triggers.`}>
-        <ModalTrigger label={<><Plus className="size-4" />New automation</>} title="New automation" buttonClass={buttonVariants({ size: "sm" })}>
+      <WorkspaceHero icon={Workflow} eyebrow="Operations" title="Automations" description="Turn repeatable sales work into dependable workflows, with clear controls and a visible run history."
+        stats={[
+          { label: "Active rules", value: activeRules, icon: PlayCircle, tone: "success" },
+          { label: "Paused", value: rules.length - activeRules, icon: PauseCircle },
+          { label: "Recent runs", value: logs.length, icon: Activity },
+          { label: "Needs attention", value: failedRuns, icon: XCircle, tone: failedRuns ? "danger" : "default" },
+        ]}
+        actions={<ModalTrigger label={<><Plus className="size-4" />New automation</>} title="New automation" buttonClass={buttonVariants({ size: "sm" })}>
           <AutomationRuleForm
             stages={stages.map((s) => ({ id: s.id, name: s.name }))}
             users={users.map((u) => ({ id: u.id, name: u.name }))}
             templates={templates.map((t) => ({ id: t.id, name: t.name }))}
           />
-        </ModalTrigger>
-      </PageHeader>
+        </ModalTrigger>}
+      />
 
-      <div className="card">
-        <h2 className="font-semibold mb-4">Rules</h2>
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
+      <Surface className="p-5">
+        <SectionHeading title="Workflow rules" description="Every active rule listens for its trigger and completes the next step automatically." />
         {rules.length === 0 ? (
-          <p className="text-sm text-slate-400 mb-4">No rules yet — click “+ New automation” to create your first.</p>
+          <EmptyState icon={Workflow} title="Build your first automation" description="Choose a trigger and action to remove a repetitive step from your team's day." />
         ) : (
-          <ul className="space-y-2 mb-5">
+          <ul className="mt-4 space-y-3">
             {rules.map((r) => (
               <li
                 key={r.id}
-                className={`rounded-lg border border-slate-800 ${r.active ? "" : "opacity-60"}`}
+                className={`rounded-xl border border-border bg-muted/20 ${r.active ? "" : "opacity-65"}`}
               >
                 <div className="flex items-center gap-3 px-4 pt-2.5">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium">
                       {r.name}
-                      {!r.active && (
-                        <span className="badge bg-slate-800 text-slate-400 ml-2">Paused</span>
-                      )}
+                      <StatusPill className="ml-2" tone={r.active ? "success" : "neutral"}>{r.active ? "Running" : "Paused"}</StatusPill>
                     </p>
-                    <p className="text-xs text-slate-400">{describeRule(r)}</p>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{describeRule(r)}</p>
                   </div>
                   <form action={toggleAutomationRule.bind(null, r.id)}>
                     <button className="btn-secondary btn-sm">
@@ -122,17 +130,18 @@ export default async function AutomationsPage() {
             ))}
           </ul>
         )}
-      </div>
+      </Surface>
 
       {isOwner && (
-        <div className="card">
+        <Surface className="p-5 xl:sticky xl:top-5">
+          <Clock3 className="mb-3 size-5 text-primary" />
           <h2 className="font-semibold mb-1">Next-step scheduling</h2>
-          <p className="text-sm text-slate-400 mb-4">
+          <p className="text-sm text-muted-foreground mb-4">
             Controls when auto-created follow-up tasks are due.
           </p>
           <form
             action={saveNextStepScheduling}
-            className="grid gap-4 sm:grid-cols-2 sm:items-end"
+            className="grid gap-4"
           >
             <div>
               <label className="label" htmlFor="nss-hour">
@@ -160,28 +169,29 @@ export default async function AutomationsPage() {
               />
               Skip weekends (roll to Monday)
             </label>
-            <div className="sm:col-span-2">
+            <div>
               <button className="btn-primary">Save scheduling</button>
             </div>
           </form>
-        </div>
+        </Surface>
       )}
+      </div>
 
-      <div className="card">
-        <h2 className="font-semibold mb-4">Recent runs</h2>
+      <Surface className="p-5">
+        <SectionHeading title="Recent runs" description="A live audit trail of completed and failed automation activity." />
         {logs.length === 0 ? (
           <p className="text-sm text-slate-400">
             Nothing yet — runs appear here as soon as a rule fires.
           </p>
         ) : (
-          <ul className="divide-y divide-slate-800">
+          <ul className="mt-3 divide-y divide-border">
             {logs.map((log) => {
               const lead = leadById.get(log.leadId);
               const rule = ruleById.get(log.ruleId);
               const failed = (log.note ?? "").startsWith("error") || (log.note ?? "").includes("failed");
               return (
                 <li key={log.id} className="py-2 flex items-center gap-3 text-sm">
-                  <span className={failed ? "text-red-400" : "text-emerald-400"}>
+                  <span className={`grid size-7 shrink-0 place-items-center rounded-full ${failed ? "bg-red-500/10 text-red-400" : "bg-emerald-500/10 text-emerald-400"}`}>
                     {failed ? "✕" : "✓"}
                   </span>
                   <div className="flex-1 min-w-0">
@@ -205,7 +215,7 @@ export default async function AutomationsPage() {
             })}
           </ul>
         )}
-      </div>
+      </Surface>
     </div>
   );
 }

@@ -12,8 +12,10 @@ import {
   disconnectTelegram,
   telegramStatus,
 } from "@/app/actions/bot";
-import { PageHeader } from "@/components/page-header";
 import ClearSecret from "@/components/ClearSecret";
+import { Bot, BrainCircuit, GitBranch, MessagesSquare, Radio } from "lucide-react";
+import { WorkspaceHero } from "@/components/workspace-hero";
+import { StatusPill, Surface } from "@/components/visual-system";
 
 export default async function ChatbotSettingsPage() {
   await requireOwner();
@@ -31,27 +33,38 @@ export default async function ChatbotSettingsPage() {
       return raw;
     }
   };
+  const botEnabled = setting("BOT_ENABLED") === "true";
+  const flowEnabled = setting("BOT_FLOW_ENABLED") === "true";
+  const aiEnabled = setting("BOT_AI_ENABLED") === "true";
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Chatbot" description="Automated customer conversations across WhatsApp, Messenger, Instagram and Telegram." />
+      <WorkspaceHero icon={Bot} eyebrow="Customer conversations" title="Chatbot" description="Control how automated conversations greet, guide and hand customers over across every connected channel."
+        stats={[
+          { label: "Assistant", value: botEnabled ? "Live" : "Off", icon: Radio, tone: botEnabled ? "success" : "default" },
+          { label: "Guided flow", value: flowEnabled ? "Enabled" : "Off", icon: GitBranch },
+          { label: "AI answers", value: aiEnabled ? "Enabled" : "Off", icon: BrainCircuit },
+          { label: "FAQ paths", value: botFaqs.length, icon: MessagesSquare },
+        ]}
+        actions={<Link href="/bot-builder" className="btn-primary btn-sm"><GitBranch className="size-4" />Open flow builder</Link>}
+      />
 
-      <div className="max-w-3xl space-y-4">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_24rem] xl:items-start">
         <form action={saveBotSettings} className="space-y-4">
           {/* Master switch */}
-          <div className="card flex items-center justify-between gap-4">
+          <Surface className="flex items-center justify-between gap-4 p-5">
             <div>
-              <p className="font-medium">Chatbot</p>
+              <p className="font-medium">Chatbot <StatusPill className="ml-2" tone={botEnabled ? "success" : "neutral"}>{botEnabled ? "Live" : "Off"}</StatusPill></p>
               <p className="text-xs text-muted-foreground">Master switch — when off, no automatic replies go out on any channel.</p>
             </div>
             <label className="flex items-center gap-2 text-sm cursor-pointer shrink-0">
               <input type="checkbox" name="enabled" defaultChecked={setting("BOT_ENABLED") === "true"} className="h-4 w-4" />
               On
             </label>
-          </div>
+          </Surface>
 
           {/* Where it runs */}
-          <div className="card space-y-3">
+          <Surface className="space-y-3 p-5">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Where it runs &amp; how</p>
               <Link href="/bot-builder" className="btn-secondary btn-sm">Flow builder</Link>
@@ -70,10 +83,10 @@ export default async function ChatbotSettingsPage() {
               </span>
               <input type="checkbox" name="dmEnabled" defaultChecked={setting("BOT_DM_ENABLED") === "true"} className="h-4 w-4 shrink-0" />
             </label>
-          </div>
+          </Surface>
 
           {/* Intelligence */}
-          <div className="card space-y-3">
+          <Surface className="space-y-3 p-5">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI assistant</p>
             <label className="flex items-center justify-between gap-4 cursor-pointer">
               <span>
@@ -94,10 +107,10 @@ export default async function ChatbotSettingsPage() {
               </div>
               <p className="text-xs text-muted-foreground mt-1">Voice replies &amp; the ElevenLabs key/voice live in <b>Settings → Integrations → ElevenLabs</b>.</p>
             </div>
-          </div>
+          </Surface>
 
           {/* Fallback, collapsed */}
-          <details className="card">
+          <details className="card p-5">
             <summary className="text-sm font-medium cursor-pointer select-none">Office hours &amp; away message</summary>
             <p className="text-xs text-muted-foreground mt-1 mb-3">Used for the after-hours away message when the AI assistant is off. An away message goes out at most once per customer per 4 hours.</p>
             <div className="flex items-end gap-3 flex-wrap">
@@ -130,8 +143,8 @@ export default async function ChatbotSettingsPage() {
           <button className="btn-primary">Save bot settings</button>
         </form>
 
-        {/* FAQ pathways */}
-        <div className="card">
+        <aside className="space-y-4 xl:sticky xl:top-5">
+        <Surface className="p-5">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">FAQ pathways</p>
           <p className="text-xs text-muted-foreground mb-3">
             Canonical answers for common questions — the assistant matches each message to the right
@@ -167,10 +180,10 @@ export default async function ChatbotSettingsPage() {
               <button className="btn-primary btn-sm">Add pathway</button>
             </form>
           </details>
-        </div>
+        </Surface>
 
         {/* Telegram */}
-        <div className="card">
+        <Surface className="p-5">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">
             Telegram {tg.connected && <span className="text-emerald-400 normal-case">· connected{tg.enabled ? " & live" : ""}</span>}
           </p>
@@ -187,7 +200,8 @@ export default async function ChatbotSettingsPage() {
               <button className="btn-secondary btn-sm">Disconnect</button>
             </form>
           )}
-        </div>
+        </Surface>
+        </aside>
       </div>
     </div>
   );
