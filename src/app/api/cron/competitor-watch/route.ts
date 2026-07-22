@@ -9,7 +9,8 @@ import {
   researchCompetitor,
 } from "@/lib/competitors";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
-import { runCronPerTenant } from "@/lib/tenantCron";
+import { logError } from "@/lib/errorLog";
+import { runCronPerTenant, type CronSliceContext } from "@/lib/tenantCron";
 
 export const maxDuration = 300;
 
@@ -26,58 +27,87 @@ function isAuthorizedCron(req: NextRequest): boolean {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function runTenantWatch(budget: CronSliceContext) {
+  if (!(await getEnabledModuleIds()).has("automation")) {
+    return { checked: 0, changed: 0, errors: 0, discovered: 0, researched: 0, budgetExhausted: false };
+  }
+
+  const ids = await dueSourceIds(25);
+  let checked = 0;
+  let changed = 0;
+  let errors = 0;
+  let budgetExhausted = false;
+
+  // A source fetch has a 20-second hard timeout. Do not start another one unless
+  // enough route budget remains for it plus the politeness delay.
+  for (const id of ids) {
+    if (budget.shouldStop(25_000)) {
+      budgetExhausted = true;
+      break;
+    }
+    const res = await collectSource(id).catch(() => ({ ok: false, changed: false }));
+    checked += 1;
+    if (res.changed) changed += 1;
+    if (!res.ok) errors += 1;
+    await sleep(1500);
+  }
+
+  // Discovery and deep research can each be materially more expensive than a
+  // page-diff. Check the shared deadline before every item instead of multiplying
+  // the full legacy workload by tenant count.
+  let discovered = 0;
+  if (!budget.shouldStop(90_000)) {
+    for (const id of await competitorsNeedingDiscovery(2)) {
+      if (budget.shouldStop(90_000)) {
+        budgetExhausted = true;
+        break;
+      }
+      const res = await discoverSources(id).catch(() => ({ ok: false }));
+      if (res.ok) discovered += 1;
+    }
+  } else {
+    budgetExhausted = true;
+  }
+
+  let researched = 0;
+  if (!budget.shouldStop(90_000)) {
+    for (const id of await competitorsDueForResearch(2)) {
+      if (budget.shouldStop(90_000)) {
+        budgetExhausted = true;
+        break;
+      }
+      const res = await researchCompetitor(id).catch(() => ({ ok: false }));
+      if (res.ok) researched += 1;
+    }
+  } else {
+    budgetExhausted = true;
+  }
+
+  return { checked, changed, errors, discovered, researched, budgetExhausted };
+}
+
 /**
- * Daily competitor watch. Three layers on a cost ladder:
- *  1. cheap daily page-diff of due public pages (Haiku classifies material changes)
- *  2. auto-discovery (strong model + web search) for competitors with no sources
- *  3. weekly deep-research brief (strong model + web search), a couple per run
- * Layers 2–3 are capped per run to bound token spend and stay within maxDuration.
+ * Daily competitor watch. Work is fairly rotated across tenants and admitted
+ * through a bounded worker pool with an explicit route budget.
  */
 export async function GET(req: NextRequest) {
   if (!isAuthorizedCron(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Competitor watch is a per-tenant business queue. DORMANT → one global run
-  // (unchanged). ENFORCING → one run per active tenant, each in its own scope, so
-  // the module gate + the due-source/competitor queries see only that tenant's
-  // rows. The automation gate stays inside the slice so it's per-tenant.
-  const runs = await runCronPerTenant(async () => {
-    if (!(await getEnabledModuleIds()).has("automation")) {
-      return { checked: 0, changed: 0, errors: 0, discovered: 0, researched: 0 };
-    }
-
-    // 1. Cheap page-diff watch.
-    const ids = await dueSourceIds(25);
-    let changed = 0;
-    let errors = 0;
-    // Sequential + a small delay keeps us polite to each host and within limits.
-    for (const id of ids) {
-      const res = await collectSource(id).catch(() => ({ ok: false, changed: false }));
-      if (res.changed) changed += 1;
-      if (!res.ok) errors += 1;
-      await new Promise((r) => setTimeout(r, 1500));
-    }
-
-    // 2. Auto-discover a couple of competitors that have no sources yet.
-    let discovered = 0;
-    for (const id of await competitorsNeedingDiscovery(2)) {
-      const res = await discoverSources(id).catch(() => ({ ok: false }));
-      if (res.ok) discovered += 1;
-    }
-
-    // 3. Weekly deep-research brief for a couple of due competitors.
-    let researched = 0;
-    for (const id of await competitorsDueForResearch(2)) {
-      const res = await researchCompetitor(id).catch(() => ({ ok: false }));
-      if (res.ok) researched += 1;
-    }
-
-    return { checked: ids.length, changed, errors, discovered, researched };
+  const runs = await runCronPerTenant(async (_tenantId, budget) => runTenantWatch(budget), {
+    maxRuntimeMs: 270_000,
+    minStartBudgetMs: 45_000,
+    concurrency: 2,
+    rotationWindowMs: 24 * 60 * 60 * 1000,
+    onError: (tenantId, error) => logError(`competitor-watch:${tenantId}`, error),
   });
 
-  if (runs.length === 1 && runs[0].tenantId === null) {
-    return NextResponse.json({ ok: true, ...runs[0].result });
+  const dormant = runs.length === 1 && runs[0].tenantId === null ? runs[0] : null;
+  if (dormant?.status === "ok") {
+    return NextResponse.json({ ok: true, ...dormant.result });
   }
   return NextResponse.json({ ok: true, tenants: runs });
 }
