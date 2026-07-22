@@ -74,11 +74,20 @@ function actorType(entry: AuditEntry, actorName: string) {
  * same-origin staff `denago_session` cookie — otherwise their attribution would
  * be corrupted by an unrelated tenant. Dynamically imported to avoid an import
  * cycle with auth, and fully guarded (no session/request → null, never throws).
+ *
+ * The session tenant is trusted ONLY when the current authenticated cookie user
+ * IS the entry's actor. Otherwise — an owner logging an action attributed to
+ * another user, or an actor set programmatically while a different staff cookie
+ * rides along — the cookie user's tenant would be mis-stamped onto someone else's
+ * event. When the actor and the session differ, we leave the tenant null rather
+ * than attribute it to the wrong tenant.
  */
 async function actingTenantId(entry: AuditEntry): Promise<string | null> {
   if (!entry.user) return null; // non-staff / system actor → no session tenant
   try {
-    const { getActiveTenantId } = await import("./auth");
+    const { getCurrentUser, getActiveTenantId } = await import("./auth");
+    const current = await getCurrentUser();
+    if (!current || current.id !== entry.user.id) return null;
     return await getActiveTenantId();
   } catch {
     return null;
