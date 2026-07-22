@@ -123,6 +123,19 @@ type ScopeKind = "where" | "create" | "mutation" | "upsert";
  * environment, no code change): tenant-scoped models REQUIRE a tenant scope in
  * async context and fail closed without one; a `system` scope bypasses; and args
  * are rewritten to confine the read/write to the caller's tenant.
+ *
+ * SCOPE / LIMITS — this is DEFENCE-IN-DEPTH, not the authoritative boundary:
+ *   - Prisma query extensions only intercept TOP-LEVEL operations, so a `tenantId`
+ *     is stamped onto the top-level `data` only. NESTED writes (`create`/`connect`
+ *     /`update`/`upsert` inside another model's `data`) and nested relation reads
+ *     are NOT scoped here, and raw / `basePrisma` paths bypass the extension
+ *     entirely.
+ *   - Therefore Postgres RLS is the AUTHORITATIVE, fail-closed isolation layer and
+ *     a HARD PREREQUISITE: `tenantEnforcing()` must not return true in any
+ *     environment until RLS is live (see tenantEnforcement.ts and
+ *     PHASE-C-TENANT-GUARD-DESIGN.md §1.5/§2/§6). This guard gives correct
+ *     scoping/anti-forgery for the common top-level case and a good default; RLS
+ *     closes the nested/raw gaps.
  */
 function scopeArgs(model: string, kind: ScopeKind, args: any): any {
   if (!tenantEnforcing()) return args;
@@ -157,6 +170,9 @@ function buildClient(base: PrismaClient) {
         async findFirst({ model, args, query }: any) {
           return query(addAliveFilter(model, scopeArgs(model, "where", args)));
         },
+        async findFirstOrThrow({ model, args, query }: any) {
+          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
+        },
         async findUnique({ model, args, query }: any) {
           return filteredUnique(model, args, query, false);
         },
@@ -171,6 +187,9 @@ function buildClient(base: PrismaClient) {
         async createMany({ model, args, query }: any) {
           return query(scopeArgs(model, "create", args));
         },
+        async createManyAndReturn({ model, args, query }: any) {
+          return query(scopeArgs(model, "create", args));
+        },
         // Mutations are guarded too, not just reads: a trashed row must not be
         // updatable/deletable through the filtered client (Trash/restore/purge
         // use basePrisma). update/delete throw on a trashed row; the *Many forms
@@ -182,6 +201,9 @@ function buildClient(base: PrismaClient) {
         async updateMany({ model, args, query }: any) {
           return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
         },
+        async updateManyAndReturn({ model, args, query }: any) {
+          return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
+        },
         async delete({ model, args, query }: any) {
           return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
         },
@@ -190,8 +212,9 @@ function buildClient(base: PrismaClient) {
         },
         // upsert is NOT soft-delete-guarded (injecting `deletedAt` into its unique
         // where would force a spurious create on a trashed row). The tenant guard
-        // stamps create + guards update but leaves the where — cross-tenant reach
-        // via a globally-unique upsert key is backstopped by RLS. See scopeUpsert.
+        // DOES scope its where (Prisma 6 extendedWhereUnique) + stamp create +
+        // guard update, so a cross-tenant upsert misses and takes the (stamped)
+        // create branch instead of updating another tenant's row. See scopeUpsert.
         async upsert({ model, args, query }: any) {
           return query(scopeArgs(model, "upsert", args));
         },

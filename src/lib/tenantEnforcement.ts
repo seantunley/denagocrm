@@ -39,14 +39,38 @@ export function tenantObserving(): boolean {
   return tenantMode() !== "off";
 }
 
+// Test-only override for tenantEnforcing(). Lets the tenant-guard integration
+// tests exercise the REAL Prisma extension with enforcement enabled, instead of
+// the guard being permanently untestable behind a literal `false`. Never settable
+// in production (the setter throws), and defaults to null so every real
+// environment still gets `false`.
+let enforceOverrideForTests: boolean | null = null;
+
+/**
+ * TEST ONLY. Enable/disable the enforcement branch for the current test process,
+ * or pass null to clear. Throws in production so a stray call can never flip
+ * enforcement on in the live app.
+ */
+export function __setTenantEnforcingForTests(value: boolean | null): void {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("__setTenantEnforcingForTests is not available in production");
+  }
+  enforceOverrideForTests = value;
+}
+
 /**
  * True when tenant context should actually be ENFORCED — requests without a valid
- * tenant blocked. Deliberately ALWAYS false today: enforcement depends on
- * per-table tenantId + Postgres RLS, which is not built yet, so even "enforce"
- * mode only observes. This is the SINGLE hook a future enforcement PR flips;
- * callers that must eventually block should gate on this now so nothing changes
- * behaviour until enforcement is real.
+ * tenant blocked and DB access confined to the caller's tenant.
+ *
+ * Deliberately ALWAYS false in every real environment today. Enforcement is
+ * DEFENCE-IN-DEPTH at the app layer only; the AUTHORITATIVE, fail-closed isolation
+ * boundary is Postgres RLS, which is a HARD PREREQUISITE — this must not flip to
+ * true (in any environment, preview included) until RLS is live, because the app
+ * guard alone does not cover nested writes/connects or raw/`basePrisma` paths (see
+ * PHASE-C-TENANT-GUARD-DESIGN.md §1.5/§2/§6). This is the SINGLE hook the future
+ * enforcement PR flips; callers that must eventually block gate on it now.
  */
 export function tenantEnforcing(): boolean {
+  if (enforceOverrideForTests !== null) return enforceOverrideForTests;
   return false;
 }

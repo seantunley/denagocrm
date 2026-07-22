@@ -183,17 +183,20 @@ Backup first. This is the point of no easy return, so it's the last structural s
 
 Each PR is independently safe, verified as a constrained user, no CI-red merges (CI now restored):
 
-1. **`tenantContext` + guard, dormant** — AsyncLocalStorage, `db.ts` guard, `GLOBAL_MODELS`, all behind `tenantEnforcing()===false`. Ships inert. Unit-test the injection helpers pure. **← building now.**
-2. **Establish context at the edges** — `withTenantContext` in auth/route layer; explicit `system`/token contexts for cron, webhooks, public signing, portal, intake. Still inert (guard reads context but doesn't enforce).
-3. **Audit every `basePrisma` call site** — add `tenantId` predicates to business uses; mark backups/trash/admin `system`. (Correctness even before enforcement.)
-4. **`AppSetting.tenantId` additive slice** (decision 3) — nullable + index + backfill, mirror of Phase B; move settings-resolution to read request tenant (still inert).
-5. **Per-tenant invoice counter** (decision 1) — `TenantCounter` model + locked-increment in invoice create; backfill Denago's counter to `MAX(number)`. Prereq for the uniqueness swap.
-6. **Uniqueness re-scoping** (§3) — composite `@@unique` swaps + backfills, incl. `Invoice.number` now that the counter exists.
-5. **Turn the guard on in preview** — `TENANT_ENFORCEMENT=enforce` + flip `tenantEnforcing()` to honour it, **preview env only**. Run the isolation suite (§7). Watch monitor logs.
-6. **RLS** — enable + policies + the `set_config` transaction wrapper + BYPASSRLS system role. Preview first; the pooling behaviour (§2.2) is the risk to prove out here.
-7. **NOT NULL + FK flip** (§5) — per-cluster, backup-first, after everything above is clean in prod-monitor.
-8. **Enforce in prod** — flip the env in production, watch, keep the one-line rollback (`TENANT_ENFORCEMENT=off` / `tenantEnforcing()` guard) ready.
-9. **Tenant activation flow** — only now: `createTenant` currently makes SUSPENDED tenants w/ DISABLED owners; a controlled activation enables a real second tenant once isolation is *proven*.
+**⚠️ RLS is a HARD PREREQUISITE for enforcement.** The app-layer guard is defence-in-depth: Prisma extensions intercept only TOP-LEVEL operations, so nested writes/connects and raw/`basePrisma` paths are NOT covered by it. `tenantEnforcing()` must not return true in ANY environment (preview included) until RLS is live — RLS is the authoritative, fail-closed boundary that closes those gaps. Hence RLS precedes every enforcement step below.
+
+1. **✅ `tenantScope`/`tenantGuard` + `db.ts` guard, dormant** (#165) — AsyncLocalStorage scope, full-operation guard incl. `findFirstOrThrow`/`createManyAndReturn`/`updateManyAndReturn`, upsert `where` scoping (extendedWhereUnique), `GLOBAL_MODELS`, testable enforcement override, pure-helper unit tests + a disposable-Postgres integration test + a schema-contract test. All behind `tenantEnforcing()===false`.
+2. **Establish scope at the chokepoints** (#166) — `getCurrentUser` (staff) + `getPortalContact` (portal), with auth/session validation running in a trusted `system` scope FIRST (it reads tenant-scoped `UserSession`/`AppSetting` before the tenant is known), then switching to the principal's tenant. Still inert.
+3. **No-user edges** (step 2b) — cron + backup (`system`), webhooks (derived tenant; WhatsApp `phone_number_id` as the routing key), public token routes (tenant derived from the token's entity). Bypass both chokepoints; must be wired before enforcement.
+4. **Audit every `basePrisma` call site** — add `tenantId` predicates to business uses; mark backups/trash/admin `system`. (Correctness even before enforcement.)
+5. **`AppSetting.tenantId` additive slice** (decision 3) — nullable + index + backfill, mirror of Phase B; move settings-resolution to read request tenant (still inert). Clears the last `PENDING` model in the schema-contract test.
+6. **Per-tenant invoice counter** (decision 1) — `TenantCounter` model + locked-increment in invoice create; backfill Denago's counter to `MAX(number)`. Prereq for the uniqueness swap.
+7. **Uniqueness re-scoping** (§3) — composite `@@unique` swaps + backfills, incl. `Invoice.number` now that the counter exists.
+8. **RLS** — enable + `FORCE ROW LEVEL SECURITY` + policies + the `set_config(...,true)` transaction wrapper + `BYPASSRLS` system role. **Preview first**; the pooling behaviour (§2.2) is the risk to prove out here. This is the prerequisite for anything below.
+9. **Turn the guard on in preview** — `TENANT_ENFORCEMENT=enforce` + flip `tenantEnforcing()` to honour it, **preview env only, AFTER RLS is live**. Run the isolation suite (§7). Watch monitor logs.
+10. **NOT NULL + FK flip** (§5) — per-cluster, backup-first, after everything above is clean.
+11. **Enforce in prod** — RLS live in prod, then flip the env, watch, keep the one-line rollback (`TENANT_ENFORCEMENT=off` / `tenantEnforcing()` guard) ready.
+12. **Tenant activation flow** — only now: `createTenant` currently makes SUSPENDED tenants w/ DISABLED owners; a controlled activation enables a real second tenant once isolation is *proven*.
 
 ---
 

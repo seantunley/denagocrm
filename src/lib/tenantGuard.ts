@@ -80,14 +80,21 @@ export function scopeMutation(args: any, tenantId: string): any {
 }
 
 /**
- * upsert: stamp the create branch and guard the update branch. The `where` is
- * left untouched — upsert's where must be a unique selector and cannot carry an
- * extra `tenantId` filter, so cross-tenant reach via a globally-unique key on an
- * upsert is backstopped by RLS (WITH CHECK), not the app layer. Documented
- * limitation, revisited when enforcement lands.
+ * upsert: scope the `where`, stamp the create branch, and guard the update branch.
+ *
+ * Prisma 6 `WhereUniqueInput` accepts additional non-unique fields alongside the
+ * unique selector (extendedWhereUnique, GA), so we DO inject `tenantId` into the
+ * where. Effect for a cross-tenant upsert: the unique lookup is scoped to the
+ * caller's tenant → it misses another tenant's row → Prisma takes the CREATE
+ * branch (stamped with the caller's tenant) instead of silently updating the
+ * other tenant's row. Before business uniqueness is tenant-scoped (step 6) that
+ * create may then hit the still-global unique constraint and error — a safe,
+ * fail-closed outcome, never a cross-tenant write. RLS remains the authoritative
+ * backstop.
  */
 export function scopeUpsert(args: any, tenantId: string): any {
   const next = { ...(args ?? {}) };
+  next.where = { ...(next.where ?? {}), tenantId };
   next.create = { ...(next.create ?? {}), tenantId };
   const update = next.update;
   if (update && typeof update === "object" && "tenantId" in update) {

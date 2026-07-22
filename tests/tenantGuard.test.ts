@@ -128,9 +128,16 @@ test("scopeUpsert: forces update.tenantId back to context when present", () => {
   assert.equal(out.update.tenantId, T);
 });
 
-test("scopeUpsert: leaves the unique where untouched (RLS backstops it)", () => {
+test("scopeUpsert: scopes the where so a cross-tenant upsert misses and creates instead of updating", () => {
+  // Prisma 6 extendedWhereUnique: tenantId is added alongside the unique key, so
+  // the lookup is confined to the caller's tenant.
   const out = scopeUpsert({ where: { key: "k" }, create: {}, update: {} }, T);
-  assert.deepEqual(out.where, { key: "k" });
+  assert.deepEqual(out.where, { key: "k", tenantId: T });
+});
+
+test("scopeUpsert: forces a caller-supplied where.tenantId back to context", () => {
+  const out = scopeUpsert({ where: { key: "k", tenantId: "tenant_B" }, create: {}, update: {} }, T);
+  assert.equal(out.where.tenantId, T);
 });
 
 // ── tenantScope: async-context propagation ──────────────────────────────────
