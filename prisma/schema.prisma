@@ -73,6 +73,7 @@ model AppSetting {
 // Company document library (brochures, price lists) with version control
 model LibraryDocument {
   id        String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name      String
   category  String? // Brochure | Price list | Spec sheet | Other
   createdAt DateTime @default(now())
@@ -83,10 +84,12 @@ model LibraryDocument {
   deleteReason  String?
 
   versions LibraryVersion[]
+  @@index([tenantId])
 }
 
 model LibraryVersion {
   id         String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   version    Int
   fileName   String
   storedName String
@@ -101,6 +104,7 @@ model LibraryVersion {
   uploadedBy   User            @relation(fields: [uploadedById], references: [id])
 
   @@unique([documentId, version])
+  @@index([tenantId])
 }
 
 model Product {
@@ -1312,6 +1316,7 @@ model UserSession {
 // Named, editable document templates — many per type, one default per type.
 model DocTemplateRecord {
   id        String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   docType   String // quote | jobcard | delivery
   name      String
   isDefault Boolean   @default(false)
@@ -1321,6 +1326,7 @@ model DocTemplateRecord {
   deletedAt DateTime?
 
   @@index([docType, isDefault])
+  @@index([tenantId])
 }
 
 // Block-based document builder: a Puck document tree (blocks + root props) that
@@ -1328,6 +1334,7 @@ model DocTemplateRecord {
 // own documents" editor — additive; the live print/signing pipeline is untouched.
 model DocBuilderTemplate {
   id              String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name            String
   key             String // doc type: quote | invoice | agreement | … | custom
   data            Json // Puck document data ({ content, root, zones }) — the working draft
@@ -1346,12 +1353,14 @@ model DocBuilderTemplate {
   versions DocBuilderVersion[]
 
   @@index([key, isDefault])
+  @@index([tenantId])
 }
 
 /// A visual signing workflow: an ordered/branching graph of signer + condition
 /// nodes that compiles (against a quote/job card) into the hub's recipient chain.
 model SignWorkflow {
   id          String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name        String
   description String?
   graphJson   Json // { start, nodes: {id: node}, positions: {id: {x,y}} }
@@ -1362,12 +1371,14 @@ model SignWorkflow {
   deletedAt   DateTime?
 
   templates DocBuilderTemplate[] @relation("TemplateDefaultWorkflow")
+  @@index([tenantId])
 }
 
 // Immutable snapshot of a builder template's JSON at publish time. Restore copies
 // a version's data back onto the working draft; publish snapshots the draft.
 model DocBuilderVersion {
   id          String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   version     Int
   data        Json // immutable Puck document snapshot
   label       String?
@@ -1379,6 +1390,7 @@ model DocBuilderVersion {
 
   @@unique([templateId, version])
   @@index([templateId, version])
+  @@index([tenantId])
 }
 
 // ── E-signing: unified signature-request hub (all document types) ────
@@ -1386,6 +1398,7 @@ model DocBuilderVersion {
 // logged to SignatureEvent (ECTA-grade audit). Sequential or parallel ordering.
 model SignatureRequest {
   id      String @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   title   String
   status  String @default("draft") // draft|sent|viewed|in_progress|completed|declined|expired|voided|rejected
   ordering String @default("parallel") // parallel|sequential
@@ -1427,6 +1440,7 @@ model SignatureRequest {
   @@index([quoteId])
   @@index([jobCardId])
   @@index([contactId])
+  @@index([tenantId])
 }
 
 /// An internal approval gate materialised from a workflow's approval node. A CRM
@@ -1434,6 +1448,7 @@ model SignatureRequest {
 /// as approver SignatureRecipients instead. Reject routes down the node's rejected branch.
 model ApprovalStep {
   id        String           @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   requestId String
   request   SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
@@ -1464,10 +1479,12 @@ model ApprovalStep {
   @@unique([requestId, nodeId])
   @@index([requestId])
   @@index([status])
+  @@index([tenantId])
 }
 
 model SignatureRecipient {
   id        String           @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   requestId String
   request   SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
@@ -1495,10 +1512,12 @@ model SignatureRecipient {
   fields SignatureField[]
 
   @@index([requestId, order])
+  @@index([tenantId])
 }
 
 model SignatureField {
   id        String           @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   requestId String
   request   SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
@@ -1518,11 +1537,13 @@ model SignatureField {
   filledAt DateTime?
 
   @@index([requestId])
+  @@index([tenantId])
 }
 
 // Append-only audit trail — never updated or deleted.
 model SignatureEvent {
   id        String           @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   requestId String
   request   SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
@@ -1536,12 +1557,14 @@ model SignatureEvent {
   createdAt   DateTime @default(now())
 
   @@index([requestId, createdAt])
+  @@index([tenantId])
 }
 
 // ── Document Studio: free-form BlockNote documents ──────────────────
 // Templates hold draft JSON; publishing snapshots an immutable version.
 model CustomDocTemplate {
   id          String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name        String
   description String?
   draftJson   Json // current editable BlockNote content
@@ -1551,10 +1574,12 @@ model CustomDocTemplate {
 
   versions  CustomDocVersion[]
   instances DocInstance[]
+  @@index([tenantId])
 }
 
 model CustomDocVersion {
   id          String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   version     Int
   contentJson Json // immutable snapshot
   publishedAt DateTime @default(now())
@@ -1564,11 +1589,13 @@ model CustomDocVersion {
   template   CustomDocTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
 
   @@unique([templateId, version])
+  @@index([tenantId])
 }
 
 // A generated document: owns an editable copy + the resolved-data snapshot.
 model DocInstance {
   id           String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   title        String
   status       String    @default("draft") // draft | final
   contentJson  Json // editable copy (tokens resolved at creation)
@@ -1588,17 +1615,20 @@ model DocInstance {
   template          CustomDocTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
 
   @@index([status, updatedAt])
+  @@index([tenantId])
 }
 
 // Reusable clauses — inserted BY VALUE into documents (no dependency graph).
 model ReusableBlock {
   id          String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name        String
   category    String?
   contentJson Json
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
+  @@index([tenantId])
 }
 
 // WebAuthn passkeys — biometric / device sign-in (Phase 2 auth).
