@@ -105,6 +105,7 @@ model LibraryVersion {
 
 model Product {
   id             String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name           String
   sku            String?
   category       String?
@@ -123,10 +124,12 @@ model Product {
   stockUnits         StockUnit[]
   quoteItems         QuoteItem[]
   purchaseOrderLines PurchaseOrderLine[]
+  @@index([tenantId])
 }
 
 model PurchaseOrder {
   id         String      @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   reference  String? // supplier's PO / order number
   supplier   String      @default("Denago")
   status     String      @default("ordered") // ordered | received | cancelled
@@ -140,10 +143,12 @@ model PurchaseOrder {
   lines         PurchaseOrderLine[]
   goodsReceipts GoodsReceipt[]
   stockEvents   StockEvent[]
+  @@index([tenantId])
 }
 
 model StockUnit {
   id        String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   productId String
   product   Product   @relation(fields: [productId], references: [id])
   color     String?
@@ -195,10 +200,12 @@ model StockUnit {
   @@index([location, status], map: "StockUnit_location_status_idx")
   @@index([arrivedAt], map: "StockUnit_arrivedAt_idx")
   @@index([purchaseOrderLineId], map: "StockUnit_po_line_idx")
+  @@index([tenantId])
 }
 
 model StockReservation {
   id                   String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   stockUnitId          String
   stockUnit            StockUnit @relation(fields: [stockUnitId], references: [id], onDelete: Cascade)
   leadId               String
@@ -219,10 +226,12 @@ model StockReservation {
   // (StockReservation_active_unit_key WHERE status='active') in the migration.
   @@index([status, expiresAt], map: "StockReservation_expiry_idx")
   @@index([leadId, status], map: "StockReservation_lead_idx")
+  @@index([tenantId])
 }
 
 model StockEvent {
   id              String         @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   stockUnitId     String?
   stockUnit       StockUnit?     @relation(fields: [stockUnitId], references: [id], onDelete: SetNull)
   purchaseOrderId String?
@@ -242,10 +251,12 @@ model StockEvent {
 
   @@index([stockUnitId, occurredAt(sort: Desc)], map: "StockEvent_unit_time_idx")
   @@index([purchaseOrderId, occurredAt(sort: Desc)], map: "StockEvent_po_time_idx")
+  @@index([tenantId])
 }
 
 model PurchaseOrderLine {
   id              String        @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   purchaseOrderId String
   purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
   productId       String
@@ -262,10 +273,12 @@ model PurchaseOrderLine {
   units             StockUnit[]
 
   @@index([purchaseOrderId], map: "PurchaseOrderLine_po_idx")
+  @@index([tenantId])
 }
 
 model GoodsReceipt {
   id              String        @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   purchaseOrderId String
   purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
   reference       String?
@@ -277,10 +290,12 @@ model GoodsReceipt {
   lines GoodsReceiptLine[]
 
   @@index([purchaseOrderId, receivedAt(sort: Desc)], map: "GoodsReceipt_po_idx")
+  @@index([tenantId])
 }
 
 model GoodsReceiptLine {
   id                  String             @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   goodsReceiptId      String
   goodsReceipt        GoodsReceipt       @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
   purchaseOrderLineId String?
@@ -291,13 +306,16 @@ model GoodsReceiptLine {
   conditionNote       String?
 
   @@index([goodsReceiptId], map: "GoodsReceiptLine_receipt_idx")
+  @@index([tenantId])
 }
 
 model ProductColor {
   id        String  @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name      String
   productId String
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  @@index([tenantId])
 }
 
 model Contact {
@@ -1067,6 +1085,7 @@ model JobCard {
 
 model PartReservation {
   id        String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   qty       Int      @default(1)
   status    String   @default("active") // active | released | consumed
   createdAt DateTime @default(now())
@@ -1078,6 +1097,7 @@ model PartReservation {
 
   @@index([partId, status])
   @@index([jobCardId, status])
+  @@index([tenantId])
 }
 
 model ServicePackage {
@@ -1179,6 +1199,7 @@ model JobCardItem {
 
 model Part {
   id         String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name       String
   sku        String?
   priceCents Int      @default(0) // sell price
@@ -1193,6 +1214,7 @@ model Part {
 
   jobCardItems JobCardItem[]
   reservations PartReservation[]
+  @@index([tenantId])
 }
 
 // One-time codes for verifying vehicle owners on the public booking form.
