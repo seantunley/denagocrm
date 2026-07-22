@@ -30,6 +30,7 @@ export default async function AppLayout({
         role: user.role,
         modules: user.modules,
         permissions,
+        avatarVersion: user.avatarRef ? user.avatarUpdatedAt?.toISOString() ?? "current" : null,
       }}
       inboxWaiting={inboxWaiting}
       casesWaiting={casesWaiting}

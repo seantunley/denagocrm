@@ -24,19 +24,25 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "Workspace",
     items: [
       { key: "overview", label: "Settings overview", keywords: ["home", "all settings", "configuration"] },
+    ],
+  },
+  {
+    label: "Personal",
+    items: [
+      { key: "account", label: "My Account", everyone: true, keywords: ["profile", "name", "email", "phone", "photo", "job title", "password", "signature"] },
+      { key: "notifications", label: "Notifications", keywords: ["alerts", "push", "email preferences"] },
+    ],
+  },
+  {
+    label: "Organisation",
+    items: [
+      { key: "company", label: "Company profile", href: "/settings/company", keywords: ["business", "address", "phone", "branding", "footer", "logo", "details"] },
       { key: "modules", label: "Modules", href: "/settings/modules", keywords: ["features", "packs", "enable", "disable", "automotive", "workshop", "inbox", "add-ons"] },
       { key: "custom-fields", label: "Custom fields", href: "/settings/custom-fields", keywords: ["custom", "fields", "eav", "extra", "attributes", "metadata", "contact fields", "lead fields", "properties"] },
     ],
   },
   {
-    label: "You",
-    items: [
-      { key: "account", label: "My Account", everyone: true, keywords: ["profile", "password", "signature"] },
-      { key: "notifications", label: "Notifications", keywords: ["alerts", "push", "email preferences"] },
-    ],
-  },
-  {
-    label: "CRM",
+    label: "Sales & CRM",
     items: [
       { key: "pipeline", label: "Pipeline", href: "/settings/pipelines", permission: "pipelines.manage", keywords: ["lead stages", "sales stages"] },
       { key: "quotes", label: "Quotes", keywords: ["quote defaults", "terms"] },
@@ -44,39 +50,43 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     ],
   },
   {
-    label: "Workshop",
+    label: "Operations",
     items: [
       { key: "workshop", label: "Bookings & slots", module: "automotive", keywords: ["schedule", "calendar", "hours"] },
       { key: "workshop-settings", label: "Workshop settings", href: "/settings/workshop", permission: "workshop.manage", module: "automotive", keywords: ["bays", "labour rate", "packages", "workshop"] },
-    ],
-  },
-  {
-    label: "Catalog",
-    items: [
       { key: "products", label: "Products", module: "commerce", keywords: ["catalog", "pricing"] },
       { key: "stock", label: "Stock labels", module: "commerce", keywords: ["stock", "inventory", "labels", "demo", "consignment", "showroom"] },
     ],
   },
   {
-    label: "Comms & Marketing",
+    label: "Communications",
     items: [
       { key: "email", label: "Email", keywords: ["smtp", "imap", "templates"] },
       { key: "automations", label: "Automations", module: "marketing", keywords: ["rules", "workflows", "triggers"] },
       { key: "helpdesk", label: "Help desk", href: "/settings/helpdesk", permission: "cases.manage", module: "support", keywords: ["mailboxes", "saved replies", "tags", "support", "tickets", "cases"] },
+      { key: "integrations", label: "Integrations", keywords: ["api", "webhooks", "whatsapp", "meta"] },
     ],
   },
   {
-    label: "Organisation",
+    label: "Documents & Data",
     items: [
-      { key: "company", label: "Company profile", href: "/settings/company", keywords: ["business", "address", "phone", "branding", "footer", "logo", "details"] },
-      { key: "team", label: "Team & access", href: "/settings/access", permission: ["teams.view", "roles.view", "teams.manage", "roles.manage"], keywords: ["users", "staff", "members", "roles", "permissions"] },
-      { key: "portal-access", label: "Portal access", href: "/settings/portal-access", permission: "portal_access.manage", keywords: ["customer portal", "delegation", "profile requests"] },
       { key: "documents", label: "Documents", href: "/settings/documents", keywords: ["templates", "document studio"] },
       { key: "signing-workflows", label: "Signing workflows", href: "/settings/signing-workflows", keywords: ["approval", "signing", "workflow", "e-sign"] },
-      { key: "security", label: "Security", href: "/settings/security", keywords: ["security checks", "surface exposure"] },
       { key: "backups", label: "Backup & recovery", href: "/settings/backup-recovery", keywords: ["backup", "restore", "disaster recovery"] },
+    ],
+  },
+  {
+    label: "Security & Access",
+    items: [
+      { key: "team", label: "Team & access", href: "/settings/access", permission: ["teams.view", "roles.view", "teams.manage", "roles.manage"], keywords: ["users", "staff", "members", "roles", "permissions"] },
+      { key: "portal-access", label: "Portal access", href: "/settings/portal-access", permission: "portal_access.manage", keywords: ["customer portal", "delegation", "profile requests"] },
+      { key: "security", label: "Security", href: "/settings/security", keywords: ["security checks", "surface exposure"] },
       { key: "sessions", label: "Sessions & devices", href: "/settings/sessions", keywords: ["devices", "logins", "sign out"] },
-      { key: "integrations", label: "Integrations", keywords: ["api", "webhooks", "whatsapp", "meta"] },
+    ],
+  },
+  {
+    label: "System",
+    items: [
       { key: "system", label: "System Log", keywords: ["errors", "logs", "diagnostics"] },
     ],
   },

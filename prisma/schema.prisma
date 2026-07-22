@@ -25,6 +25,10 @@ model User {
   loginOtpExpires   DateTime?
   passwordChangedAt DateTime?
   mobile            String?
+  jobTitle          String?
+  avatarRef         String?
+  avatarMimeType    String?
+  avatarUpdatedAt   DateTime?
   signatureHtml     String? // custom override; blank = branded template
   drawnSignatureRef String? // saved handwritten signature for countersigning documents
   createdAt         DateTime  @default(now())
