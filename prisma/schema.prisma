@@ -426,17 +426,20 @@ model Segment {
 /** A saved chatbot conversation flow (one can be marked active/live). */
 model BotFlow {
   id         String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name       String
   channel    String   @default("whatsapp")
   active     Boolean  @default(false)
   definition String // JSON { start, nodes, positions }
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt @default(now())
+  @@index([tenantId])
 }
 
 /** Live state of a customer's position in a chatbot flow. */
 model BotSession {
   id        String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   channel   String   @default("whatsapp")
   key       String // phone digits (or web visitor id)
   nodeId    String? // current waiting node
@@ -446,6 +449,7 @@ model BotSession {
   expiresAt DateTime
 
   @@unique([channel, key])
+  @@index([tenantId])
 }
 
 model PipelineStage {
@@ -555,6 +559,7 @@ model EmailTemplate {
 
 model AutomationRule {
   id     String  @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name   String
   active Boolean @default(true)
 
@@ -576,6 +581,7 @@ model AutomationRule {
   pushMessage     String? // for send_push
 
   createdAt DateTime @default(now())
+  @@index([tenantId])
 }
 
 model Quote {
@@ -721,12 +727,14 @@ model AuditLog {
 
 model AutomationLog {
   id        String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   ruleId    String
   leadId    String
   note      String?
   createdAt DateTime @default(now())
 
   @@index([ruleId, leadId])
+  @@index([tenantId])
 }
 
 model Communication {
