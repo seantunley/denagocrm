@@ -14,11 +14,11 @@ import {
 /**
  * Owner-only "Clear" for a stored secret — the deliberate way to disconnect an
  * integration or remove a compromised key (a blank save only "keeps" now). Uses
- * the app Dialog to confirm (the repo's visual guardrail rejects native
- * window.confirm). The trigger is a non-submit button so it never submits the
- * surrounding settings form, and the confirm form is portaled out of that form by
- * the dialog — so there's no nested <form>. The server action re-checks owner +
- * an allowlisted key.
+ * the app Dialog for confirmation (the repo's visual guardrail rejects native
+ * browser dialogs). The trigger is a non-submit button so it never submits the
+ * surrounding settings form, and the confirmation form is portaled out of that
+ * form by the dialog — so there's no nested <form>. The server action re-checks
+ * owner + an allowlisted key.
  */
 export default function ClearSecret({ settingKey, label }: { settingKey: string; label: string }) {
   return (
