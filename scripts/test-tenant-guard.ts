@@ -14,10 +14,18 @@ import { randomUUID } from "node:crypto";
 import { prisma, basePrisma } from "../src/lib/db";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 import { runInTenantScope } from "../src/lib/tenantScope";
-import { establishTenantScopeFromId, establishStaffTenantScope } from "../src/lib/tenantScopeEntry";
+import { establishTenantScopeFromId, establishStaffTenantScope, withTokenTenantScope } from "../src/lib/tenantScopeEntry";
 import { TenantScopeError } from "../src/lib/tenantGuard";
 import { resolvePortalTenant } from "../src/lib/portal";
 import { resolveActingTenant } from "../src/lib/tenantContext";
+import {
+  resolveSignRecipientTenant,
+  resolveApprovalStepTenant,
+  resolveCampaignRecipientTenant,
+  resolveSurveyResponseTenant,
+} from "../src/lib/tokenTenant";
+import { resolveTenantActor, resolveTenantMemberUser, listTenantStaff } from "../src/lib/tenantActor";
+import { resolveApprover } from "../src/lib/signing/approvals";
 
 const dbName = (process.env.DATABASE_URL ?? "").split("/").pop()?.split("?")[0] ?? "";
 if (process.env.NODE_ENV !== "test" || !dbName.endsWith("_test")) {
@@ -36,6 +44,30 @@ const uStaff = `u_staff_${SFX}`;
 const t1 = `tn1_${SFX}`;
 const t2 = `tn2_${SFX}`;
 const sessJti = `sess_${SFX}`;
+// No-user token-surface fixtures (Phase C 2b-C1).
+const srId = `sr_${SFX}`;
+const srIdB = `srB_${SFX}`;
+const recId = `rec_${SFX}`;
+const recIdB = `recB_${SFX}`;
+const apId = `ap_${SFX}`;
+const campId = `camp_${SFX}`;
+const crId = `cr_${SFX}`;
+const signTokenA = `signtok_${SFX}`;
+const signTokenB = `signtokB_${SFX}`;
+const apTokenA = `aptok_${SFX}`;
+const crTokenA = `crtok_${SFX}`;
+const survId = `surv_${SFX}`;
+const survIdB = `survB_${SFX}`;
+const srespId = `sresp_${SFX}`;
+const srespIdB = `srespB_${SFX}`;
+const surveyTokenA = `survtok_${SFX}`;
+const surveyTokenB = `survtokB_${SFX}`;
+// Tenant-aware actor fixtures: userB is OLDER than userA, so the legacy global
+// "oldest user" pick would wrongly choose B. TENANT_A/TENANT_B get real Tenant rows
+// here (TenantMember needs the FK).
+const userAId = `uA_${SFX}`;
+const userBId = `uB_${SFX}`;
+const userCId = `uC_${SFX}`; // DISABLED member of TENANT_A, oldest of all — must never be picked
 
 let passed = 0;
 let failed = 0;
@@ -67,6 +99,37 @@ async function main() {
   await basePrisma.tenant.create({ data: { id: t1, name: "T1", slug: `t1_${SFX}`, active: true } });
   await basePrisma.tenant.create({ data: { id: t2, name: "T2", slug: `t2_${SFX}`, active: true } });
   await basePrisma.tenantMember.create({ data: { tenantId: t1, userId: uStaff } });
+
+  // No-user token surfaces: a signing request/recipient + approval step + campaign
+  // recipient owned by tenant A (and a signing recipient owned by tenant B, to prove
+  // cross-tenant isolation). Tenant is DERIVED from these rows by public token.
+  await basePrisma.signatureRequest.create({ data: { id: srId, title: "Doc A", tenantId: TENANT_A } });
+  await basePrisma.signatureRecipient.create({ data: { id: recId, requestId: srId, name: "Signer A", token: signTokenA, tenantId: TENANT_A } });
+  await basePrisma.signatureRequest.create({ data: { id: srIdB, title: "Doc B", tenantId: TENANT_B } });
+  await basePrisma.signatureRecipient.create({ data: { id: recIdB, requestId: srIdB, name: "Signer B", token: signTokenB, tenantId: TENANT_B } });
+  await basePrisma.approvalStep.create({ data: { id: apId, requestId: srId, nodeId: "n1", label: "Approve", assigneeType: "owner", token: apTokenA, tenantId: TENANT_A } });
+  await basePrisma.campaign.create({ data: { id: campId, name: "Camp A", channel: "email", body: "hi", audience: "all", tenantId: TENANT_A } });
+  await basePrisma.campaignRecipient.create({ data: { id: crId, campaignId: campId, contactId: idA, token: crTokenA, tenantId: TENANT_A } });
+  // Public survey surface: a survey + response owned by A (and one owned by B).
+  await basePrisma.survey.create({ data: { id: survId, title: "Survey A", questions: [], tenantId: TENANT_A } });
+  await basePrisma.surveyResponse.create({ data: { id: srespId, surveyId: survId, token: surveyTokenA, contactId: idA, status: "sent", tenantId: TENANT_A } });
+  await basePrisma.survey.create({ data: { id: survIdB, title: "Survey B", questions: [], tenantId: TENANT_B } });
+  await basePrisma.surveyResponse.create({ data: { id: srespIdB, surveyId: survIdB, token: surveyTokenB, status: "sent", tenantId: TENANT_B } });
+
+  // Real Tenant rows for A/B + one owner member each. userB is created OLDER than
+  // userA on purpose: the legacy global oldest-user pick would choose B.
+  await basePrisma.tenant.create({ data: { id: TENANT_A, name: "Tenant A", slug: `ta_${SFX}`, active: true } });
+  await basePrisma.tenant.create({ data: { id: TENANT_B, name: "Tenant B", slug: `tb_${SFX}`, active: true } });
+  await basePrisma.user.create({ data: { id: userBId, name: "Owner B", email: `ob_${SFX}@t.test`, passwordHash: "x", role: "owner", createdAt: new Date("2020-01-01T00:00:00Z") } });
+  await basePrisma.user.create({ data: { id: userAId, name: "Owner A", email: `oa_${SFX}@t.test`, passwordHash: "x", role: "owner", createdAt: new Date("2021-01-01T00:00:00Z") } });
+  await basePrisma.tenantMember.create({ data: { tenantId: TENANT_B, userId: userBId } });
+  await basePrisma.tenantMember.create({ data: { tenantId: TENANT_A, userId: userAId } });
+  // A DISABLED owner member of TENANT_A, OLDER than everyone — so an actor pick that
+  // ignored disablement would wrongly choose them. disabledAt is a raw User column
+  // (not in the Prisma model), so seed it via SQL.
+  await basePrisma.user.create({ data: { id: userCId, name: "Disabled A", email: `oc_${SFX}@t.test`, passwordHash: "x", role: "owner", createdAt: new Date("2019-01-01T00:00:00Z") } });
+  await basePrisma.tenantMember.create({ data: { tenantId: TENANT_A, userId: userCId } });
+  await basePrisma.$executeRaw`UPDATE "User" SET "disabledAt" = ${new Date("2019-06-01T00:00:00Z")} WHERE "id" = ${userCId}`;
 
   __setTenantEnforcingForTests(true);
   try {
@@ -158,6 +221,25 @@ async function main() {
       (e) => e instanceof TenantScopeError,
     );
 
+    // Actor helpers must ALSO fail closed under enforcement with no scope — never
+    // silently fall back to global users (a missed chokepoint / lost propagation
+    // must not leak a cross-tenant approver). Runs at top level = no ambient scope.
+    check("failclosed(no scope): resolveTenantActor → null", (await resolveTenantActor()) === null);
+    check("failclosed(no scope): resolveTenantActor ownerOnly → null", (await resolveTenantActor({ ownerOnly: true })) === null);
+    check("failclosed(no scope): resolveTenantMemberUser → null", (await resolveTenantMemberUser(userAId)) === null);
+    check("failclosed(no scope): listTenantStaff → empty", (await listTenantStaff()).length === 0);
+    check("failclosed(no scope): resolveApprover staff → no email", (await resolveApprover({ assigneeType: "staff", assigneeUserId: userAId, assigneeRole: null, assigneeName: "A", assigneeEmail: `x_${SFX}@x.test` })).email === null);
+    check("failclosed(no scope): resolveApprover owner → no email", (await resolveApprover({ assigneeType: "owner", assigneeUserId: null, assigneeRole: null, assigneeName: "O", assigneeEmail: `x_${SFX}@x.test` })).email === null);
+
+    // A null NON-system scope ({ tenantId: null, system: false }) is NOT a global
+    // bypass — it must fail closed too (only an explicit system scope bypasses).
+    await runInTenantScope({ tenantId: null, system: false }, async () => {
+      check("failclosed(null non-system): resolveTenantActor → null", (await resolveTenantActor()) === null);
+      check("failclosed(null non-system): resolveTenantMemberUser → null", (await resolveTenantMemberUser(userAId)) === null);
+      check("failclosed(null non-system): listTenantStaff → empty", (await listTenantStaff()).length === 0);
+      check("failclosed(null non-system): resolveApprover staff → no email", (await resolveApprover({ assigneeType: "staff", assigneeUserId: userAId, assigneeRole: null, assigneeName: "A", assigneeEmail: `x_${SFX}@x.test` })).email === null);
+    });
+
     // ── system scope is the only bypass ─────────────────────────────────────
     await runInTenantScope({ tenantId: null, system: true }, async () => {
       const both = await prisma.contact.findMany({ where: { id: { in: [idA, idB] } } });
@@ -218,8 +300,185 @@ async function main() {
     await basePrisma.tenantMember.create({ data: { tenantId: t1, userId: uStaff } });
     await basePrisma.tenantMember.create({ data: { tenantId: t2, userId: uStaff } });
     check("staff: ambiguous (2 active memberships) → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, t1)).ok === false);
+
+    // ── no-user token surfaces (Phase C 2b-C1): tenant is DERIVED from the token's
+    //    row via a narrow trusted lookup, then the guarded re-read runs INSIDE that
+    //    derived scope — the query that dead-locked before the fix. ────────────────
+    check("token: resolveSignRecipientTenant derives A from the signing token", (await resolveSignRecipientTenant(signTokenA))?.tenantId === TENANT_A);
+    check("token: resolveApprovalStepTenant derives A from the approval token", (await resolveApprovalStepTenant(apTokenA))?.tenantId === TENANT_A);
+    check("token: resolveCampaignRecipientTenant derives A from the campaign token", (await resolveCampaignRecipientTenant(crTokenA))?.tenantId === TENANT_A);
+    check("token: resolver → null for an unknown token (fail closed)", (await resolveSignRecipientTenant(`nope_${SFX}`)) === null);
+
+    // The guarded re-read the signing PAGE/route runs succeeds inside the derived
+    // scope (this exact query threw TenantScopeError before the fix).
+    let signRan = false;
+    const sr = await withTokenTenantScope(
+      () => resolveSignRecipientTenant(signTokenA),
+      async () => {
+        signRan = true;
+        return prisma.signatureRecipient.findUnique({ where: { token: signTokenA }, include: { request: true } });
+      },
+      () => null,
+    );
+    check("token: guarded re-read succeeds inside the derived scope (no deadlock)", signRan && sr?.id === recId && sr?.request.tenantId === TENANT_A);
+
+    // Unknown token → onFailClosed, and the guarded work NEVER runs.
+    let missRan = false;
+    const miss = await withTokenTenantScope(
+      () => resolveSignRecipientTenant(`nope_${SFX}`),
+      async () => { missRan = true; return "ran"; },
+      () => "failed-closed",
+    );
+    check("token: unknown token fails closed WITHOUT running the guarded work", miss === "failed-closed" && missRan === false);
+
+    // Cross-tenant: inside A's derived scope, B's recipient is invisible.
+    const leak = await withTokenTenantScope(
+      () => resolveSignRecipientTenant(signTokenA),
+      async () => prisma.signatureRecipient.findUnique({ where: { id: recIdB } }),
+      () => null,
+    );
+    check("token: A's derived scope cannot read B's recipient (no cross-tenant leak)", leak === null);
+
+    // Unsubscribe is a compliance action: the opt-out write commits inside the scope.
+    const optOutDone = await withTokenTenantScope(
+      () => resolveCampaignRecipientTenant(crTokenA),
+      async () => {
+        const r = await prisma.campaignRecipient.findUnique({ where: { token: crTokenA } });
+        if (!r) return false;
+        await prisma.contact.update({ where: { id: r.contactId }, data: { marketingOptOut: true } });
+        return true;
+      },
+      () => false,
+    );
+    const optedOut = await basePrisma.contact.findUnique({ where: { id: idA }, select: { marketingOptOut: true } });
+    check("token: unsubscribe actually sets marketingOptOut inside the derived scope", optOutDone === true && optedOut?.marketingOptOut === true);
+
+    // Tracking records the open inside the derived scope.
+    await withTokenTenantScope(
+      () => resolveCampaignRecipientTenant(crTokenA),
+      async () => {
+        const r = await prisma.campaignRecipient.findUnique({ where: { token: crTokenA } });
+        if (r) await prisma.campaignRecipient.update({ where: { id: r.id }, data: { openCount: { increment: 1 }, openedAt: new Date() } });
+      },
+      () => undefined,
+    );
+    const tracked = await basePrisma.campaignRecipient.findUnique({ where: { id: crId }, select: { openCount: true } });
+    check("token: tracking records the open inside the derived scope", (tracked?.openCount ?? 0) >= 1);
+
+    // Public SURVEY surface (page /s/[token] + the submitSurveyResponse action).
+    check("survey: resolveSurveyResponseTenant derives A from the survey token", (await resolveSurveyResponseTenant(surveyTokenA))?.tenantId === TENANT_A);
+    check("survey: resolver → null for an unknown token (fail closed)", (await resolveSurveyResponseTenant(`nope_${SFX}`)) === null);
+
+    // The guarded re-read the PAGE does succeeds inside the derived scope.
+    const survResp = await withTokenTenantScope(
+      () => resolveSurveyResponseTenant(surveyTokenA),
+      async () => prisma.surveyResponse.findUnique({ where: { token: surveyTokenA }, include: { survey: true } }),
+      () => null,
+    );
+    check("survey: page's guarded re-read succeeds inside the derived scope", survResp?.id === srespId && survResp?.survey.tenantId === TENANT_A);
+
+    // The SUBMISSION write (surveyResponse.update to completed) commits inside scope.
+    const survDone = await withTokenTenantScope(
+      () => resolveSurveyResponseTenant(surveyTokenA),
+      async () => {
+        const r = await prisma.surveyResponse.findUnique({ where: { token: surveyTokenA } });
+        if (!r) return false;
+        await prisma.surveyResponse.update({ where: { id: r.id }, data: { status: "completed", completedAt: new Date() } });
+        return true;
+      },
+      () => false,
+    );
+    const survAfter = await basePrisma.surveyResponse.findUnique({ where: { id: srespId }, select: { status: true, tenantId: true } });
+    check("survey: submission write completes inside the derived scope (stays tenant A)", survDone === true && survAfter?.status === "completed" && survAfter?.tenantId === TENANT_A);
+
+    // Cross-tenant: inside A's derived scope, B's survey response is invisible.
+    const survLeak = await withTokenTenantScope(
+      () => resolveSurveyResponseTenant(surveyTokenA),
+      async () => prisma.surveyResponse.findUnique({ where: { id: srespIdB } }),
+      () => null,
+    );
+    check("survey: A's derived scope cannot read B's response (no cross-tenant leak)", survLeak === null);
+
+    // ── tenant-aware actor resolution (Phase C 2b-C1): system-generated records
+    //    must reference a member of the CURRENT tenant, never the global oldest
+    //    user (here userB, created earlier than userA). ────────────────────────────
+    await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => {
+      check("actor: A's scope resolves A's member, not B's older global user", (await resolveTenantActor())?.id === userAId);
+      check("actor: A's scope ownerOnly resolves A's owner, not B's", (await resolveTenantActor({ ownerOnly: true }))?.id === userAId);
+
+      // The exact survey side effect: the timeline note is attributed to A's user
+      // AND stamped tenant A — never userB (the older, cross-tenant global pick).
+      const actor = await resolveTenantActor();
+      const comm = await prisma.communication.create({
+        data: { type: "note", direction: "inbound", subject: "Survey response: A", body: "b", contactId: idA, userId: actor!.id },
+      });
+      const storedComm = await basePrisma.communication.findUnique({ where: { id: comm.id }, select: { userId: true, tenantId: true } });
+      check("actor: survey note attributed to A's user + stamped tenant A (never B)", storedComm?.userId === userAId && storedComm?.tenantId === TENANT_A);
+      await basePrisma.communication.deleteMany({ where: { id: comm.id } });
+    });
+    await runInTenantScope({ tenantId: TENANT_B, system: false }, async () => {
+      check("actor: B's scope resolves B's member", (await resolveTenantActor())?.id === userBId);
+    });
+    // System scope (analogue of dormant / no user-tenant): global oldest NON-DISABLED
+    // user — userC is older (2019) but disabled, so it skips to userB (2020).
+    await runInTenantScope({ tenantId: null, system: true }, async () => {
+      check("actor: system scope → global oldest non-disabled user (skips disabled userC) = B", (await resolveTenantActor())?.id === userBId);
+    });
+
+    // ── explicit STAFF approval assignees: the real notification-resolution path
+    //    (resolveApprover) must reject a cross-tenant/stale assigneeUserId and only
+    //    resolve an email for a current-tenant member. ─────────────────────────────
+    await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => {
+      // A member of A → their email is returned (they WOULD be notified).
+      const okStaff = await resolveApprover({ assigneeType: "staff", assigneeUserId: userAId, assigneeRole: null, assigneeName: "A", assigneeEmail: null });
+      check("approver: current-tenant staff assignee → their email", okStaff.email === `oa_${SFX}@t.test`);
+      // A user of tenant B (cross-tenant / stale) — even with a stored email — is
+      // rejected: fail closed, no notification.
+      const crossStaff = await resolveApprover({ assigneeType: "staff", assigneeUserId: userBId, assigneeRole: null, assigneeName: "B", assigneeEmail: `ob_${SFX}@t.test` });
+      check("approver: cross-tenant staff assignee → fail closed (no email)", crossStaff.email === null);
+      // Owner assignee → A's owner, never B's.
+      const ownerApprover = await resolveApprover({ assigneeType: "owner", assigneeUserId: null, assigneeRole: null, assigneeName: null, assigneeEmail: null });
+      check("approver: owner assignee → A's owner email, never B's", ownerApprover.email === `oa_${SFX}@t.test`);
+
+      // resolveTenantMemberUser directly: A member resolves, B's user is rejected.
+      check("member: resolveTenantMemberUser(A's user) → resolves", (await resolveTenantMemberUser(userAId))?.id === userAId);
+      check("member: resolveTenantMemberUser(B's user) under A → null (fail closed)", (await resolveTenantMemberUser(userBId)) === null);
+
+      // Staff picker: the assignee list excludes B's user under A's scope.
+      const staffList = await listTenantStaff();
+      const staffIds = staffList.map((u) => u.id);
+      check("picker: staff list scoped to A's members (includes A, excludes B)", staffIds.includes(userAId) && !staffIds.includes(userBId));
+
+      // ── disabled accounts are excluded from EVERY actor path (userC is the oldest
+      //    member of A but disabled — a token action needs no login, so a disabled
+      //    account must never be picked/listed/emailed). ──────────────────────────
+      check("disabled: resolveTenantActor skips the disabled (older) member → userA", (await resolveTenantActor())?.id === userAId);
+      check("disabled: ownerOnly skips the disabled owner → userA", (await resolveTenantActor({ ownerOnly: true }))?.id === userAId);
+      check("disabled: resolveTenantMemberUser(disabled member) → null", (await resolveTenantMemberUser(userCId)) === null);
+      check("disabled: resolveApprover staff=disabled member → fail closed (no email)", (await resolveApprover({ assigneeType: "staff", assigneeUserId: userCId, assigneeRole: null, assigneeName: "C", assigneeEmail: `oc_${SFX}@t.test` })).email === null);
+      check("disabled: listTenantStaff excludes the disabled member", staffIds.includes(userAId) && !staffIds.includes(userCId));
+
+      // ── legacy/malformed steps fail closed under enforcement (blocker 2) ────────
+      check("approver: staff step with NO assigneeUserId → fail closed (no stored-email fallback)", (await resolveApprover({ assigneeType: "staff", assigneeUserId: null, assigneeRole: null, assigneeName: "X", assigneeEmail: `stored_${SFX}@x.test` })).email === null);
+    });
+    // Owner assignee whose scope has no active, non-disabled owner → fail closed.
+    await runInTenantScope({ tenantId: `empty_${SFX}`, system: false }, async () => {
+      check("approver: owner assignee with no resolvable owner → fail closed (no email)", (await resolveApprover({ assigneeType: "owner", assigneeUserId: null, assigneeRole: null, assigneeName: "O", assigneeEmail: `stored_${SFX}@x.test` })).email === null);
+    });
   } finally {
     __setTenantEnforcingForTests(null);
+    // No-user token fixtures first (children before parents; contact FK below).
+    await basePrisma.campaignRecipient.deleteMany({ where: { id: crId } });
+    await basePrisma.campaign.deleteMany({ where: { id: campId } });
+    await basePrisma.approvalStep.deleteMany({ where: { id: apId } });
+    await basePrisma.signatureRecipient.deleteMany({ where: { id: { in: [recId, recIdB] } } });
+    await basePrisma.signatureRequest.deleteMany({ where: { id: { in: [srId, srIdB] } } });
+    await basePrisma.surveyResponse.deleteMany({ where: { id: { in: [srespId, srespIdB] } } });
+    await basePrisma.survey.deleteMany({ where: { id: { in: [survId, survIdB] } } });
+    await basePrisma.communication.deleteMany({ where: { contactId: { in: [idA, idB] } } });
+    await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [userAId, userBId, userCId] } } });
+    await basePrisma.user.deleteMany({ where: { id: { in: [userAId, userBId, userCId] } } });
+    await basePrisma.tenant.deleteMany({ where: { id: { in: [TENANT_A, TENANT_B] } } });
     await basePrisma.contact.deleteMany({
       where: { id: { in: [idA, idB, cmId, `c_forge_${SFX}`] } },
     });

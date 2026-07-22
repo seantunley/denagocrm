@@ -3,6 +3,8 @@ import { prisma } from "@/lib/db";
 import { isValidSignToken } from "@/lib/signing/tokens";
 import { approveStep, rejectStep } from "@/lib/signing/approvals";
 import { reqMeta } from "@/lib/signing/events";
+import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
+import { resolveApprovalStepTenant } from "@/lib/tokenTenant";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,7 +19,16 @@ const bodySchema = z.object({
 export async function POST(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
   if (!isValidSignToken(token)) return new Response("Invalid link", { status: 400 });
+  // Phase C no-user edge: derive the approval's tenant first, then run the guarded
+  // decision inside that scope (dormant no-op when off; fails closed under enforcement).
+  return withTokenTenantScope(
+    () => resolveApprovalStepTenant(token),
+    () => handleApproval(token, req),
+    () => new Response("Not found", { status: 404 }),
+  );
+}
 
+async function handleApproval(token: string, req: Request): Promise<Response> {
   const step = await prisma.approvalStep.findUnique({ where: { token } });
   if (!step) return new Response("Not found", { status: 404 });
   if (step.status !== "pending") return new Response("This approval has already been actioned.", { status: 409 });

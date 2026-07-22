@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
+import { resolveCampaignRecipientTenant } from "@/lib/tokenTenant";
 
 function page(message: string) {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Denago Cape Town</title></head>
@@ -15,12 +17,25 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
   const { token } = await params;
   let message = "This unsubscribe link is no longer valid.";
   try {
-    const r = await prisma.campaignRecipient.findUnique({ where: { token } });
-    if (r) {
-      await prisma.contact.update({
-        where: { id: r.contactId },
-        data: { marketingOptOut: true },
-      });
+    // Phase C no-user edge: opt the contact out inside the recipient's tenant scope
+    // (dormant no-op when off). Unsubscribe is a COMPLIANCE action, NOT best-effort:
+    // the success message is shown ONLY when the opt-out actually committed. An
+    // unresolvable tenant under enforcement returns false and keeps the neutral
+    // "no longer valid" message — never a false "you've been unsubscribed".
+    const done = await withTokenTenantScope(
+      () => resolveCampaignRecipientTenant(token),
+      async () => {
+        const r = await prisma.campaignRecipient.findUnique({ where: { token } });
+        if (!r) return false;
+        await prisma.contact.update({
+          where: { id: r.contactId },
+          data: { marketingOptOut: true },
+        });
+        return true;
+      },
+      () => false,
+    );
+    if (done) {
       message = "You've been unsubscribed from Denago Cape Town marketing emails. You'll still receive service reminders and messages about your own orders.";
     }
   } catch {

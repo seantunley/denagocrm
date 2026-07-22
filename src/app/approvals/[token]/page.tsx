@@ -2,6 +2,8 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { isValidSignToken } from "@/lib/signing/tokens";
 import { renderRequestDocHtml } from "@/lib/signing/render";
+import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
+import { resolveApprovalStepTenant } from "@/lib/tokenTenant";
 import { ApprovalSurface } from "./ApprovalSurface";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +28,17 @@ function Msg({ title, body }: { title: string; body: string }) {
 export default async function ApprovalPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   if (!isValidSignToken(token)) notFound();
+  // Phase C no-user edge: derive the approval's tenant first, then load + render
+  // inside that scope (shared resolver with the POST route). Dormant no-op when
+  // off; 404 under enforcement for an unknown/untenanted token.
+  return withTokenTenantScope(
+    () => resolveApprovalStepTenant(token),
+    () => renderApprovalPage(token),
+    () => notFound(),
+  );
+}
+
+async function renderApprovalPage(token: string) {
   const step = await prisma.approvalStep.findUnique({ where: { token }, include: { request: true } });
   if (!step) notFound();
   if (step.status === "approved") return <Msg title="Approved ✓" body="You have already approved this document. Thank you." />;

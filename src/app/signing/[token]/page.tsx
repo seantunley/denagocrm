@@ -3,6 +3,8 @@ import { prisma } from "@/lib/db";
 import { isValidSignToken } from "@/lib/signing/tokens";
 import { renderRequestSigningSheets, signedFieldStamps } from "@/lib/signing/render";
 import { recordView } from "@/lib/signing/events";
+import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
+import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
 import { SignSurface } from "./SignSurface";
 
 export const dynamic = "force-dynamic";
@@ -29,7 +31,19 @@ function Msg({ title, body }: { title: string; body: string }) {
 export default async function SigningPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   if (!isValidSignToken(token)) notFound();
+  // Phase C no-user edge: derive the document's tenant from a narrow trusted lookup
+  // FIRST, then load + render inside that scope — the same guarded reads the POST
+  // route runs, so the read and write surfaces share one tenant derivation and
+  // can't drift. Dormant no-op when off; 404 under enforcement for an unknown /
+  // untenanted token.
+  return withTokenTenantScope(
+    () => resolveSignRecipientTenant(token),
+    () => renderSigningPage(token),
+    () => notFound(),
+  );
+}
 
+async function renderSigningPage(token: string) {
   const recipient = await prisma.signatureRecipient.findUnique({
     where: { token },
     include: { request: { include: { recipients: { orderBy: { order: "asc" } }, fields: true } } },

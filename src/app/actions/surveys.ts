@@ -6,6 +6,8 @@ import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { sendSurvey, submitResponse } from "@/lib/surveys";
+import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
+import { resolveSurveyResponseTenant } from "@/lib/tokenTenant";
 import {
   defaultQuestions,
   type SurveyQuestion,
@@ -142,5 +144,14 @@ export async function sendToAudience(_prev: SendResult, formData: FormData): Pro
 }
 
 export async function submitSurveyResponse(token: string, answers: Record<string, unknown>) {
-  return submitResponse(token, answers);
+  // Phase C no-user edge: this public, unauthenticated action derives the survey's
+  // tenant from a narrow trusted lookup FIRST, then runs the guarded read + write
+  // (surveyResponse update, contact-timeline note, audit) inside that scope — a
+  // guarded read before the scope exists would dead-lock under enforcement. Dormant
+  // no-op when off; an unknown/untenanted token fails closed as not_found.
+  return withTokenTenantScope(
+    () => resolveSurveyResponseTenant(token),
+    () => submitResponse(token, answers),
+    () => ({ ok: false as const, error: "not_found" as const }),
+  );
 }
