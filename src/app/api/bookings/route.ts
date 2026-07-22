@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma, basePrisma } from "@/lib/db";
-import { getSetting } from "@/lib/settings";
+import { authenticateIntakeKey } from "@/lib/apiKeys";
+import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
+import { resolveTenantActor } from "@/lib/tenantActor";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { logAudit } from "@/lib/audit";
 import { sendPushToAll } from "@/lib/push";
@@ -36,13 +38,16 @@ export async function OPTIONS() {
  * reserved atomically — if it's taken, the request fails with 409.
  */
 export async function POST(req: NextRequest) {
+  // Authenticate + establish the caller's tenant scope BEFORE any guarded read
+  // (incl. the module check, which reads tenant-owned settings).
+  const auth = await authenticateIntakeKey(req.headers.get("x-api-key"), "bookings");
+  if (!auth) {
+    return NextResponse.json({ error: "Invalid API key" }, { status: 401, headers: corsHeaders });
+  }
+  establishTenantScopeFromId(auth.tenantId);
   // Workshop bookings belong to the automotive pack — gone when it's off.
   if (!(await isModuleEnabled("automotive"))) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-  const apiKey = await getSetting("INTAKE_API_KEY");
-  if (!apiKey || req.headers.get("x-api-key") !== apiKey) {
-    return NextResponse.json({ error: "Invalid API key" }, { status: 401, headers: corsHeaders });
   }
 
   let json: unknown;
@@ -85,7 +90,8 @@ export async function POST(req: NextRequest) {
     include: { vehicles: true },
   });
 
-  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  // The booking's system actor — a member of THIS tenant, never a global user.
+  const firstUser = await resolveTenantActor();
   if (!firstUser) {
     return NextResponse.json({ error: "No users configured" }, { status: 500, headers: corsHeaders });
   }

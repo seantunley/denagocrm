@@ -108,3 +108,28 @@ for (const file of STAFF_PICKERS) {
     assert.match(src(file), /listTenantStaff\s*\(/, `${file} must build its staff list via listTenantStaff`);
   });
 }
+
+// Phase C step 2b (C2) — the public X-Api-Key routes must authenticate via the
+// per-tenant key resolver and establish the caller's tenant scope BEFORE any guarded
+// read (incl. the module check, which reads tenant-owned settings). The legacy
+// global-key compare must be gone.
+const API_KEY_ROUTES = [
+  "src/app/api/intake/route.ts",
+  "src/app/api/bookings/route.ts",
+  "src/app/api/bookings/slots/route.ts",
+  "src/app/api/service-lookup/route.ts",
+  "src/app/api/service-lookup/verify/route.ts",
+] as const;
+for (const file of API_KEY_ROUTES) {
+  test(`${file}: authenticates via authenticateIntakeKey + establishes tenant scope first`, () => {
+    const code = src(file);
+    assert.match(code, /authenticateIntakeKey\s*\(/, `${file} must authenticate via authenticateIntakeKey`);
+    assert.match(code, /establishTenantScopeFromId\s*\(/, `${file} must establish the tenant scope`);
+    assert.doesNotMatch(code, /getSetting\(\s*["']INTAKE_API_KEY["']\s*\)/, `${file} must not do the legacy global-key compare`);
+    const scopeAt = code.indexOf("establishTenantScopeFromId(");
+    const moduleAt = code.indexOf('isModuleEnabled("automotive")');
+    if (moduleAt >= 0) {
+      assert.ok(scopeAt >= 0 && scopeAt < moduleAt, `${file}: scope must be established before the module check`);
+    }
+  });
+}

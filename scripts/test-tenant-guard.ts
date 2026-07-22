@@ -26,6 +26,7 @@ import {
 } from "../src/lib/tokenTenant";
 import { resolveTenantActor, resolveTenantMemberUser, listTenantStaff } from "../src/lib/tenantActor";
 import { resolveApprover } from "../src/lib/signing/approvals";
+import { hashApiKey, resolveApiKeyTenant, authenticateIntakeKey } from "../src/lib/apiKeys";
 
 const dbName = (process.env.DATABASE_URL ?? "").split("/").pop()?.split("?")[0] ?? "";
 if (process.env.NODE_ENV !== "test" || !dbName.endsWith("_test")) {
@@ -68,6 +69,12 @@ const surveyTokenB = `survtokB_${SFX}`;
 const userAId = `uA_${SFX}`;
 const userBId = `uB_${SFX}`;
 const userCId = `uC_${SFX}`; // DISABLED member of TENANT_A, oldest of all — must never be picked
+// Per-tenant API keys (C2).
+const apiKeyRawA = `keyA_${SFX}`;
+const apiKeyRawRevoked = `keyR_${SFX}`;
+const apiKeyRawGlobal = `legacyglobal_${SFX}`;
+const apiKeyIdA = `tak_${SFX}`;
+const apiKeyIdR = `takR_${SFX}`;
 
 let passed = 0;
 let failed = 0;
@@ -130,6 +137,14 @@ async function main() {
   await basePrisma.user.create({ data: { id: userCId, name: "Disabled A", email: `oc_${SFX}@t.test`, passwordHash: "x", role: "owner", createdAt: new Date("2019-01-01T00:00:00Z") } });
   await basePrisma.tenantMember.create({ data: { tenantId: TENANT_A, userId: userCId } });
   await basePrisma.$executeRaw`UPDATE "User" SET "disabledAt" = ${new Date("2019-06-01T00:00:00Z")} WHERE "id" = ${userCId}`;
+
+  // Per-tenant API keys (raw SQL — the client delegate may be un-regenerated locally,
+  // and this is exactly how apiKeys.ts queries the table). keyA is scoped to
+  // intake+bookings only (NOT service-lookup); keyR is revoked. A legacy global key
+  // is seeded into AppSetting for the dormant back-compat test.
+  await basePrisma.$executeRaw`INSERT INTO "TenantApiKey" ("id","tenantId","label","hashedKey","prefix","scopes","createdAt") VALUES (${apiKeyIdA}, ${TENANT_A}, ${"Key A"}, ${hashApiKey(apiKeyRawA)}, ${apiKeyRawA.slice(0, 8)}, ${"intake,bookings"}, CURRENT_TIMESTAMP)`;
+  await basePrisma.$executeRaw`INSERT INTO "TenantApiKey" ("id","tenantId","label","hashedKey","prefix","scopes","createdAt","revokedAt") VALUES (${apiKeyIdR}, ${TENANT_A}, ${"Key R"}, ${hashApiKey(apiKeyRawRevoked)}, ${apiKeyRawRevoked.slice(0, 8)}, ${"intake,bookings,service-lookup"}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
+  await basePrisma.$executeRaw`INSERT INTO "AppSetting" ("key","value") VALUES ('INTAKE_API_KEY', ${apiKeyRawGlobal}) ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value"`;
 
   __setTenantEnforcingForTests(true);
   try {
@@ -465,6 +480,25 @@ async function main() {
     await runInTenantScope({ tenantId: `empty_${SFX}`, system: false }, async () => {
       check("approver: owner assignee with no resolvable owner → fail closed (no email)", (await resolveApprover({ assigneeType: "owner", assigneeUserId: null, assigneeRole: null, assigneeName: "O", assigneeEmail: `stored_${SFX}@x.test` })).email === null);
     });
+
+    // ── per-tenant API keys (Phase C 2b-C2) ─────────────────────────────────────
+    check("apikey: resolveApiKeyTenant(keyA,'intake') → tenant A", (await resolveApiKeyTenant(apiKeyRawA, "intake")) === TENANT_A);
+    check("apikey: resolveApiKeyTenant(keyA,'bookings') → tenant A", (await resolveApiKeyTenant(apiKeyRawA, "bookings")) === TENANT_A);
+    check("apikey: keyA out of scope (service-lookup) → null", (await resolveApiKeyTenant(apiKeyRawA, "service-lookup")) === null);
+    check("apikey: unknown key → null", (await resolveApiKeyTenant(`nope_${SFX}`, "intake")) === null);
+    check("apikey: revoked key → null", (await resolveApiKeyTenant(apiKeyRawRevoked, "intake")) === null);
+    // Enforcement: per-tenant keys only — the legacy global key is rejected.
+    check("apikey: authenticateIntakeKey(keyA) enforcing → tenant A", (await authenticateIntakeKey(apiKeyRawA, "intake"))?.tenantId === TENANT_A);
+    check("apikey: authenticateIntakeKey(legacy global) enforcing → null", (await authenticateIntakeKey(apiKeyRawGlobal, "intake")) === null);
+    check("apikey: authenticateIntakeKey(null) → null", (await authenticateIntakeKey(null, "intake")) === null);
+    // Dormant back-compat: the legacy global key still works (tenantId null); a
+    // per-tenant key still resolves.
+    __setTenantEnforcingForTests(false);
+    const dormLegacy = await authenticateIntakeKey(apiKeyRawGlobal, "intake");
+    check("apikey: DORMANT legacy global accepted (tenantId null)", dormLegacy !== null && dormLegacy.tenantId === null);
+    check("apikey: DORMANT per-tenant keyA still resolves to A", (await authenticateIntakeKey(apiKeyRawA, "intake"))?.tenantId === TENANT_A);
+    check("apikey: DORMANT unknown key → null", (await authenticateIntakeKey(`nope_${SFX}`, "intake")) === null);
+    __setTenantEnforcingForTests(true);
   } finally {
     __setTenantEnforcingForTests(null);
     // No-user token fixtures first (children before parents; contact FK below).
@@ -476,6 +510,8 @@ async function main() {
     await basePrisma.surveyResponse.deleteMany({ where: { id: { in: [srespId, srespIdB] } } });
     await basePrisma.survey.deleteMany({ where: { id: { in: [survId, survIdB] } } });
     await basePrisma.communication.deleteMany({ where: { contactId: { in: [idA, idB] } } });
+    await basePrisma.$executeRaw`DELETE FROM "TenantApiKey" WHERE "tenantId" = ${TENANT_A}`;
+    await basePrisma.$executeRaw`DELETE FROM "AppSetting" WHERE "key" = 'INTAKE_API_KEY'`;
     await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [userAId, userBId, userCId] } } });
     await basePrisma.user.deleteMany({ where: { id: { in: [userAId, userBId, userCId] } } });
     await basePrisma.tenant.deleteMany({ where: { id: { in: [TENANT_A, TENANT_B] } } });

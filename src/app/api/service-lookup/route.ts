@@ -3,7 +3,8 @@ import bcrypt from "bcryptjs";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma, basePrisma } from "@/lib/db";
-import { getSetting } from "@/lib/settings";
+import { authenticateIntakeKey } from "@/lib/apiKeys";
+import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { sendSms, isSmsConfigured, maskPhone } from "@/lib/sms";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
@@ -38,13 +39,16 @@ export async function OPTIONS() {
  * masked. Details are only released after the OTP is verified.
  */
 export async function POST(req: NextRequest) {
+  // Authenticate + establish the caller's tenant scope BEFORE any guarded read
+  // (the vehicle lookup below is then confined to this tenant under enforcement).
+  const auth = await authenticateIntakeKey(req.headers.get("x-api-key"), "service-lookup");
+  if (!auth) {
+    return NextResponse.json({ error: "Invalid API key" }, { status: 401, headers: corsHeaders });
+  }
+  establishTenantScopeFromId(auth.tenantId);
   // Workshop bookings belong to the automotive pack — gone when it's off.
   if (!(await isModuleEnabled("automotive"))) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-  const apiKey = await getSetting("INTAKE_API_KEY");
-  if (!apiKey || req.headers.get("x-api-key") !== apiKey) {
-    return NextResponse.json({ error: "Invalid API key" }, { status: 401, headers: corsHeaders });
   }
   let json: unknown;
   try {

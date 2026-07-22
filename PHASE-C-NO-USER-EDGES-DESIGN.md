@@ -43,9 +43,9 @@ model ChannelIdentity {
 
 `resolveChannelTenant(channel, externalId): Promise<string | null>` — `findUnique` on the composite key, `disabledAt: null`. Returns `tenantId` or null. Uses `basePrisma` (it's an infra lookup that runs *before* any scope exists — same pattern as `resolvePortalTenant`).
 
-### 2.2 `TenantApiKey` — public API key → tenant (hashed)
+### 2.2 `TenantApiKey` — public API key → tenant (hashed) — ✅ built (C2)
 
-Replaces the single global `INTAKE_API_KEY` with per-tenant keys, **hashed at rest** (a security upgrade regardless of tenancy).
+Replaces the single global `INTAKE_API_KEY` with per-tenant keys, **hashed at rest** (a security upgrade regardless of tenancy). Scalar `tenantId` (no FK), matching the Phase B additive convention — resolution is app-layer and a dangling key just fails to resolve.
 
 ```prisma
 model TenantApiKey {
@@ -53,17 +53,16 @@ model TenantApiKey {
   tenantId   String
   label      String
   hashedKey  String    @unique   // sha256(key); the raw key is shown ONCE at creation
-  prefix     String              // first 8 chars, for display ("dk_live_…")
-  scopes     String              // csv: "intake,bookings,service-lookup"
+  prefix     String              // first chars, for display
+  scopes     String    @default("intake,bookings,service-lookup") // csv
   createdAt  DateTime  @default(now())
   lastUsedAt DateTime?
   revokedAt  DateTime?
-  tenant     Tenant    @relation(fields: [tenantId], references: [id])
   @@index([tenantId])
 }
 ```
 
-`resolveApiKeyTenant(rawKey, scope): Promise<string | null>` — sha256 the header, `findUnique({ hashedKey })`, check `revokedAt == null` and `scope ∈ scopes`, best-effort stamp `lastUsedAt`, return `tenantId`. Constant-time via the unique-hash lookup (no plaintext compare).
+`resolveApiKeyTenant(rawKey, scope)` (`src/lib/apiKeys.ts`) — sha256 the header, look up by `hashedKey` (**raw SQL** via basePrisma — trusted infra resolved *before* a scope exists, same boundary as the token resolvers), reject revoked / out-of-scope, best-effort `lastUsedAt`, return `tenantId`. `authenticateIntakeKey(rawKey, scope)` wraps it: per-tenant key → its tenant; under enforcement only per-tenant keys; **dormant back-compat** accepts the legacy global `INTAKE_API_KEY` (tenantId null) so intake keeps working before the backfill. Each route authenticates then `establishTenantScopeFromId(auth.tenantId)` **before** the module check (which reads tenant-owned settings). Migration `78_tenant_api_keys` (additive table only); backfill of the current global key = `scripts/backfill-tenant-api-keys.ts` (enforcement-prep, not on deploy).
 
 ### 2.3 Per-channel discriminator (exact payload fields — verified against current routes)
 
@@ -164,7 +163,7 @@ Per-tenant channel **configuration** — each dealer connecting *their own* Meta
 | # | Slice | Schema? | Migration? | Risk |
 |---|---|---|---|---|
 | **C1** ✅ | **Token-derivable surfaces** — `withTokenTenantScope` + a shared per-type resolver across the signing/approval **pages + routes**, the **survey `/s/[token]` page + `submitSurveyResponse` action**, tracking, unsubscribe. Portal (via `getPortalContact` #167) and passkey (self-scopes via `createSessionCookie`; `Passkey` is global) already covered. Verified: the only other non-`(app)` pages are `messages/*` (staff `requireUser`), `doc-editor` (`requireOwner`), `login` (no tenant reads). | none | none | **Lowest** — dormant no-ops, no DB change. Derive-before-guarded-read; integration-tested. |
-| **C2** | **`TenantApiKey`** + `resolveApiKeyTenant` + chokepoints in intake/bookings/service-lookup; backfill the current `INTAKE_API_KEY` as tenant_denago_cpt's key | +1 table | additive | Low — new table, back-compat key. |
+| **C2** ✅ | **`TenantApiKey`** + `resolveApiKeyTenant`/`authenticateIntakeKey` + chokepoints in intake/bookings/bookings-slots/service-lookup/service-lookup-verify (auth→scope before the module check; bookings actor via `resolveTenantActor`); migration `78`; backfill script (enforcement-prep) | +1 table | additive (`78`) | Low — new table, dormant back-compat key. Migration HELD for Sean's backup-first merge. |
 | **C3** | **`ChannelIdentity`** + `resolveChannelTenant` + chokepoints in whatsapp/meta webhooks; backfill current phone-number-id + page id → tenant_denago_cpt | +1 table | additive | Low-med — new table, backfill must be exact or (enforcing only) inbound 404s. |
 | **C4** | **Cron scoping** — `withSystemScope` for backup/security; per-tenant-loop scaffold + `resolveTenantOwner` for journeys/automations/competitor-watch | none | none | Med — touches the engines (dormant branch only). |
 | **C5** | **Telegram per-tenant** (§2.5) — per-tenant path + secret | reuses ChannelIdentity | route add | Low (least-used) — can defer. |
