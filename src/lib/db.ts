@@ -1,5 +1,15 @@
 import { PrismaClient } from "@prisma/client";
 import { SOFT_DELETE_MODELS } from "./softDeleteModels";
+import { currentTenantScope } from "./tenantScope";
+import { tenantEnforcing } from "./tenantEnforcement";
+import {
+  isTenantScopedModel,
+  scopeWhere,
+  stampCreate,
+  scopeMutation,
+  scopeUpsert,
+  TenantScopeError,
+} from "./tenantGuard";
 
 const globalForPrisma = globalThis as unknown as {
   basePrisma?: PrismaClient;
@@ -56,38 +66,96 @@ async function filteredUnique(
   query: (a: any) => Promise<any>,
   orThrow: boolean,
 ) {
-  if (!SOFT_DELETE_MODELS.has(model)) return query(args);
+  const soft = SOFT_DELETE_MODELS.has(model);
+  // Tenant scoping for findUnique* can't inject a non-unique `tenantId` into the
+  // unique `where`, so — exactly like the soft-delete filter — we check it on the
+  // RESULT. DORMANT: `tenantEnforcing()` is false today, so `tenantActive` stays
+  // false and this behaves byte-for-byte as the soft-delete-only version.
+  const tenantOn = tenantEnforcing() && isTenantScopedModel(model);
+  const scope = tenantOn ? currentTenantScope() : undefined;
+  if (tenantOn) {
+    if (!scope) throw new TenantScopeError(`No tenant scope established for ${model}`);
+    if (!scope.system && !scope.tenantId) {
+      throw new TenantScopeError(`No tenant in scope for ${model}`);
+    }
+  }
+  const tenantActive = Boolean(tenantOn && scope && !scope.system);
+  if (!soft && !tenantActive) return query(args);
+
   const hasSelect = args?.select && typeof args.select === "object";
-  // Inject deletedAt whenever the caller's select doesn't already ASK for it
-  // (=== true). Testing only for the key's presence let `deletedAt: false` slip
-  // through: the key exists, so nothing was injected, and the result then had no
-  // deletedAt to test — a trashed row would resolve as if alive.
-  const injectDeletedAt = hasSelect && args.select.deletedAt !== true;
-  const runArgs = injectDeletedAt
-    ? { ...args, select: { ...args.select, deletedAt: true } }
+  // Inject a field into `select` only when the caller uses a select that doesn't
+  // already ASK for it (=== true). Testing only for key presence would let
+  // `deletedAt: false` slip through: the key exists, nothing is injected, and the
+  // result then has no field to test — a trashed / cross-tenant row would resolve
+  // as if visible.
+  const ensure: Record<string, true> = {};
+  if (soft && hasSelect && args.select.deletedAt !== true) ensure.deletedAt = true;
+  if (tenantActive && hasSelect && args.select.tenantId !== true) ensure.tenantId = true;
+  const injectedKeys = Object.keys(ensure);
+  const runArgs = injectedKeys.length
+    ? { ...args, select: { ...args.select, ...ensure } }
     : args;
   const result = await query(runArgs);
-  if (result && result.deletedAt) {
-    if (orThrow) throw new Error(`No ${model} found`);
-    return null;
-  }
-  if (result && injectDeletedAt) {
-    const { deletedAt: _dropped, ...rest } = result;
-    void _dropped;
-    return rest;
+  if (result) {
+    if (soft && result.deletedAt) {
+      if (orThrow) throw new Error(`No ${model} found`);
+      return null;
+    }
+    if (tenantActive && result.tenantId !== scope!.tenantId) {
+      if (orThrow) throw new Error(`No ${model} found`);
+      return null;
+    }
+    if (injectedKeys.length) {
+      const clone = { ...result };
+      for (const k of injectedKeys) delete clone[k];
+      return clone;
+    }
   }
   return result;
+}
+
+type ScopeKind = "where" | "create" | "mutation" | "upsert";
+
+/**
+ * DORMANT request-scoped tenant guard (Phase C). When `tenantEnforcing()` is
+ * false — always, today — this returns `args` untouched, so the extension
+ * behaves exactly as it did pre-tenancy. When enforcement is flipped on (per
+ * environment, no code change): tenant-scoped models REQUIRE a tenant scope in
+ * async context and fail closed without one; a `system` scope bypasses; and args
+ * are rewritten to confine the read/write to the caller's tenant.
+ */
+function scopeArgs(model: string, kind: ScopeKind, args: any): any {
+  if (!tenantEnforcing()) return args;
+  if (!isTenantScopedModel(model)) return args;
+  const scope = currentTenantScope();
+  if (!scope) throw new TenantScopeError(`No tenant scope established for ${model}`);
+  if (scope.system) return args;
+  if (!scope.tenantId) throw new TenantScopeError(`No tenant in scope for ${model}`);
+  switch (kind) {
+    case "where":
+      return scopeWhere(args, scope.tenantId);
+    case "create":
+      return stampCreate(args, scope.tenantId);
+    case "mutation":
+      return scopeMutation(args, scope.tenantId);
+    case "upsert":
+      return scopeUpsert(args, scope.tenantId);
+  }
 }
 
 function buildClient(base: PrismaClient) {
   return base.$extends({
     query: {
+      // Each hook composes two independent concerns on `args`: the tenant guard
+      // (`scopeArgs`, DORMANT until `tenantEnforcing()`) and the soft-delete
+      // filter (`addAlive*`). With enforcement off, `scopeArgs` is the identity,
+      // so this block behaves exactly as the soft-delete-only version did.
       $allModels: {
         async findMany({ model, args, query }: any) {
-          return query(addAliveFilter(model, args));
+          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
         },
         async findFirst({ model, args, query }: any) {
-          return query(addAliveFilter(model, args));
+          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
         },
         async findUnique({ model, args, query }: any) {
           return filteredUnique(model, args, query, false);
@@ -95,31 +163,46 @@ function buildClient(base: PrismaClient) {
         async findUniqueOrThrow({ model, args, query }: any) {
           return filteredUnique(model, args, query, true);
         },
+        // Writes are stamped with the owning tenant from trusted context,
+        // overwriting any client-supplied `tenantId` (the anti-forgery rule).
+        async create({ model, args, query }: any) {
+          return query(scopeArgs(model, "create", args));
+        },
+        async createMany({ model, args, query }: any) {
+          return query(scopeArgs(model, "create", args));
+        },
         // Mutations are guarded too, not just reads: a trashed row must not be
         // updatable/deletable through the filtered client (Trash/restore/purge
         // use basePrisma). update/delete throw on a trashed row; the *Many forms
-        // skip it. upsert is intentionally NOT guarded (injecting the filter into
-        // its unique where would force a spurious create on a trashed row).
+        // skip it. The tenant guard additionally scopes the `where` to the caller's
+        // tenant so you can only touch your own rows.
         async update({ model, args, query }: any) {
-          return query(addAliveMutationFilter(model, args));
+          return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
         },
         async updateMany({ model, args, query }: any) {
-          return query(addAliveMutationFilter(model, args));
+          return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
         },
         async delete({ model, args, query }: any) {
-          return query(addAliveMutationFilter(model, args));
+          return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
         },
         async deleteMany({ model, args, query }: any) {
-          return query(addAliveMutationFilter(model, args));
+          return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
+        },
+        // upsert is NOT soft-delete-guarded (injecting `deletedAt` into its unique
+        // where would force a spurious create on a trashed row). The tenant guard
+        // stamps create + guards update but leaves the where — cross-tenant reach
+        // via a globally-unique upsert key is backstopped by RLS. See scopeUpsert.
+        async upsert({ model, args, query }: any) {
+          return query(scopeArgs(model, "upsert", args));
         },
         async count({ model, args, query }: any) {
-          return query(addAliveFilter(model, args));
+          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
         },
         async aggregate({ model, args, query }: any) {
-          return query(addAliveFilter(model, args));
+          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
         },
         async groupBy({ model, args, query }: any) {
-          return query(addAliveFilter(model, args));
+          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
         },
       },
       // Shared inbox: attach every new message to a conversation and roll its
