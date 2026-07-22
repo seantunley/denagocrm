@@ -54,6 +54,7 @@ import {
   SettingsOverview,
   SettingsWorkspace,
 } from "@/components/settings-workspace";
+import ProfileSettingsForms from "@/components/ProfileSettingsForms";
 
 export default async function SettingsPage({
   searchParams,
@@ -201,29 +202,16 @@ export default async function SettingsPage({
 
       {tab === "account" && (
         <div className="max-w-3xl space-y-6">
-          <div className="flex items-center gap-3">
-            <div className="h-11 w-11 shrink-0 rounded-full bg-primary flex items-center justify-center font-bold text-white">
-              {currentUser.name
-                .split(/\s+/)
-                .map((p) => p[0])
-                .slice(0, 2)
-                .join("")
-                .toUpperCase()}
-            </div>
-            <div className="min-w-0">
-              <p className="font-semibold flex items-center gap-2 flex-wrap">
-                {currentUser.name}
-                <span
-                  className={`badge ${
-                    isOwner ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"
-                  }`}
-                >
-                  {isOwner ? "Owner" : "Member"}
-                </span>
-              </p>
-              <p className="text-xs text-muted-foreground truncate">{currentUser.email}</p>
-            </div>
-          </div>
+          <ProfileSettingsForms
+            name={currentUser.name}
+            email={currentUser.email}
+            mobile={currentUser.mobile}
+            jobTitle={currentUser.jobTitle}
+            role={isOwner ? "Owner" : "Member"}
+            createdAt={currentUser.createdAt.toLocaleDateString("en-ZA", { month: "long", year: "numeric" })}
+            hasAvatar={Boolean(currentUser.avatarRef)}
+            avatarVersion={currentUser.avatarUpdatedAt?.toISOString() ?? null}
+          />
 
           <div className="card p-0 divide-y divide-border/50">
             <details>
@@ -310,15 +298,6 @@ export default async function SettingsPage({
                   dangerouslySetInnerHTML={{ __html: buildSignature(currentUser) }}
                 />
                 <form action={saveMyProfile} className="space-y-3 max-w-md">
-                  <div>
-                    <label className="label">My mobile number</label>
-                    <input
-                      name="mobile"
-                      className="input"
-                      defaultValue={currentUser.mobile ?? ""}
-                      placeholder="e.g. 082 123 4567"
-                    />
-                  </div>
                   <div>
                     <label className="label">Custom signature HTML (optional)</label>
                     <textarea

@@ -26,14 +26,14 @@ import { cn } from "@/lib/utils";
 
 const groupIcons: Record<string, LucideIcon> = {
   Workspace: Settings2,
-  You: UserRound,
-  CRM: SlidersHorizontal,
-  Workshop: Wrench,
-  Catalog: Boxes,
-  "Comms & Marketing": BellRing,
+  Personal: UserRound,
+  "Sales & CRM": SlidersHorizontal,
+  Operations: Wrench,
+  Communications: BellRing,
   Organisation: Building2,
-  Security: ShieldCheck,
-  Data: Database,
+  "Security & Access": ShieldCheck,
+  "Documents & Data": Database,
+  System: Boxes,
 };
 
 /**

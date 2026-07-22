@@ -22,7 +22,7 @@ import CommandMenu, { openCommandMenu } from "@/components/CommandMenu";
 import QuickActions from "@/components/QuickActions";
 import QuickCreateDialog from "@/components/QuickCreateDialog";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -38,7 +38,7 @@ import { APP_VERSION } from "@/lib/version";
 import { cn } from "@/lib/utils";
 import { isPathEnabled } from "@/lib/modules/registry";
 
-type ShellUser = { name: string; role: string; modules: string; permissions: string[] };
+type ShellUser = { name: string; role: string; modules: string; permissions: string[]; avatarVersion?: string | null };
 
 function initials(name: string) {
   return name
@@ -91,6 +91,13 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules
           <DropdownMenuTrigger asChild>
             <button className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent">
               <Avatar className="size-7 rounded-md">
+                {user.avatarVersion ? (
+                  <AvatarImage
+                    src={`/api/profile/avatar?v=${encodeURIComponent(user.avatarVersion)}`}
+                    alt=""
+                    className="rounded-md object-cover"
+                  />
+                ) : null}
                 <AvatarFallback className="rounded-md bg-primary/15 text-[11px] font-semibold text-primary">
                   {initials(user.name)}
                 </AvatarFallback>

@@ -12,6 +12,13 @@ import { PUSH_KINDS } from "@/lib/push";
 import { logAuditStrict } from "@/lib/audit";
 import { bumpUserSessionVersion } from "@/lib/userSecurity";
 import { createUserInOwnerTenant } from "@/lib/tenantContext";
+import { deleteFile, saveFile } from "@/lib/storage";
+import {
+  detectProfileImageMime,
+  isValidPhone,
+  normalisePhone,
+  PROFILE_IMAGE_MAX_BYTES,
+} from "@/lib/profile";
 
 // ---- Pipeline stages ----
 
@@ -202,11 +209,162 @@ export async function saveNextStepScheduling(formData: FormData) {
   revalidatePath("/settings");
 }
 
+export async function updateOwnProfile(
+  _prev: FormState | undefined,
+  formData: FormData,
+): Promise<FormState> {
+  const user = await requireUser();
+  const name = String(formData.get("name") ?? "").trim().replace(/\s+/g, " ");
+  const jobTitle = String(formData.get("jobTitle") ?? "").trim().replace(/\s+/g, " ") || null;
+  const mobile = normalisePhone(String(formData.get("mobile") ?? ""));
+
+  if (name.length < 2 || name.length > 100) {
+    return { error: "Enter a name between 2 and 100 characters." };
+  }
+  if (jobTitle && jobTitle.length > 100) {
+    return { error: "Job title must be 100 characters or fewer." };
+  }
+  if (mobile && !isValidPhone(mobile)) {
+    return { error: "Enter a valid phone number, including its country code where possible." };
+  }
+
+  await prisma.user.update({ where: { id: user.id }, data: { name, jobTitle, mobile } });
+  await logAuditStrict({
+    action: "account.profile_updated",
+    summary: "Updated personal profile",
+    entityType: "User",
+    entityId: user.id,
+    user,
+    before: { name: user.name, jobTitle: user.jobTitle, mobile: user.mobile },
+    after: { name, jobTitle, mobile },
+  });
+  revalidatePath("/settings");
+  revalidatePath("/", "layout");
+  return { ok: "Profile updated." };
+}
+
+export async function updateOwnEmail(
+  _prev: FormState | undefined,
+  formData: FormData,
+): Promise<FormState> {
+  const user = await requireUser();
+  const email = String(formData.get("email") ?? "").trim().toLowerCase();
+  const currentPassword = String(formData.get("currentPassword") ?? "");
+
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { error: "Enter a valid email address." };
+  }
+  if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
+    return { error: "Current password is incorrect." };
+  }
+  if (email === user.email.toLowerCase()) {
+    return { ok: "Your sign-in email is already up to date." };
+  }
+  const existing = await prisma.user.findFirst({
+    where: { email: { equals: email, mode: "insensitive" }, id: { not: user.id } },
+    select: { id: true },
+  });
+  if (existing) return { error: "That email address is already in use." };
+
+  let updated;
+  try {
+    updated = await prisma.user.update({ where: { id: user.id }, data: { email } });
+  } catch (error) {
+    if (typeof error === "object" && error && "code" in error && error.code === "P2002") {
+      return { error: "That email address is already in use." };
+    }
+    throw error;
+  }
+  await logAuditStrict({
+    action: "security.email_changed",
+    summary: "Changed account sign-in email",
+    entityType: "User",
+    entityId: user.id,
+    user,
+    before: { email: user.email },
+    after: { email },
+  });
+  await bumpUserSessionVersion(user.id);
+  await createSessionCookie(updated);
+  revalidatePath("/settings");
+  revalidatePath("/", "layout");
+  return { ok: "Email updated. Other signed-in devices have been signed out." };
+}
+
+export async function updateOwnAvatar(
+  _prev: FormState | undefined,
+  formData: FormData,
+): Promise<FormState> {
+  const user = await requireUser();
+  const upload = formData.get("avatar");
+  if (!(upload instanceof File) || upload.size === 0) {
+    return { error: "Choose a JPG, PNG or WebP image." };
+  }
+  if (upload.size > PROFILE_IMAGE_MAX_BYTES) {
+    return { error: "Profile photos must be 3 MB or smaller." };
+  }
+
+  const buffer = Buffer.from(await upload.arrayBuffer());
+  const mimeType = detectProfileImageMime(buffer);
+  if (!mimeType) {
+    return { error: "That file is not a supported JPG, PNG or WebP image." };
+  }
+  const extension = mimeType === "image/jpeg" ? ".jpg" : mimeType === "image/png" ? ".png" : ".webp";
+  const nextRef = await saveFile(buffer, `profile${extension}`, mimeType);
+  try {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { avatarRef: nextRef, avatarMimeType: mimeType, avatarUpdatedAt: new Date() },
+    });
+  } catch (error) {
+    await deleteFile(nextRef).catch(() => {});
+    throw error;
+  }
+  await logAuditStrict({
+    action: "account.photo_updated",
+    summary: "Updated profile photo",
+    entityType: "User",
+    entityId: user.id,
+    user,
+  });
+  if (user.avatarRef) {
+    await deleteFile(user.avatarRef).catch((error) => console.warn("Unable to remove previous profile photo", error));
+  }
+  revalidatePath("/settings");
+  revalidatePath("/", "layout");
+  return { ok: "Profile photo updated." };
+}
+
+export async function removeOwnAvatar(
+  _prev: FormState | undefined,
+  _formData: FormData,
+): Promise<FormState> {
+  void _prev;
+  void _formData;
+  const user = await requireUser();
+  if (!user.avatarRef) return { ok: "No profile photo to remove." };
+  const previousRef = user.avatarRef;
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { avatarRef: null, avatarMimeType: null, avatarUpdatedAt: new Date() },
+  });
+  await logAuditStrict({
+    action: "account.photo_removed",
+    summary: "Removed profile photo",
+    entityType: "User",
+    entityId: user.id,
+    user,
+  });
+  await deleteFile(previousRef).catch((error) => console.warn("Unable to delete profile photo", error));
+  revalidatePath("/settings");
+  revalidatePath("/", "layout");
+  return { ok: "Profile photo removed." };
+}
+
 export async function saveMyProfile(formData: FormData) {
   const user = await requireUser();
-  const mobile = String(formData.get("mobile") ?? "").trim() || null;
   const signatureHtml = String(formData.get("signatureHtml") ?? "").trim() || null;
-  await prisma.user.update({ where: { id: user.id }, data: { mobile, signatureHtml } });
+  await prisma.user.update({ where: { id: user.id }, data: { signatureHtml } });
   revalidatePath("/settings");
 }
 

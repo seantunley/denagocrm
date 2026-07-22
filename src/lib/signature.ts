@@ -2,21 +2,35 @@
 
 const SITE = "https://crm.denagocpt.co.za";
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export function buildSignature(user: {
   name: string;
   email: string;
   mobile?: string | null;
+  jobTitle?: string | null;
   signatureHtml?: string | null;
 }): string {
   if (user.signatureHtml?.trim()) return user.signatureHtml;
 
   const waDigits = (user.mobile ?? "").replace(/\D/g, "").replace(/^0/, "27");
+  const safeMobile = user.mobile ? escapeHtml(user.mobile) : null;
+  const safeEmail = escapeHtml(user.email);
+  const safeName = escapeHtml(user.name);
+  const safeJobTitle = user.jobTitle ? escapeHtml(user.jobTitle) : null;
   const contactBits = [
-    user.mobile
-      ? `<a href="tel:${user.mobile.replace(/\s/g, "")}" style="color:#475569;text-decoration:none;">${user.mobile}</a>`
+    safeMobile
+      ? `<a href="tel:${waDigits}" style="color:#475569;text-decoration:none;">${safeMobile}</a>`
       : null,
     `<a href="tel:+27737893438" style="color:#475569;text-decoration:none;">073 789 3438</a>`,
-    `<a href="mailto:${user.email}" style="color:#ea580c;text-decoration:none;">${user.email}</a>`,
+    `<a href="mailto:${encodeURIComponent(user.email)}" style="color:#ea580c;text-decoration:none;">${safeEmail}</a>`,
   ]
     .filter(Boolean)
     .join(`<span style="color:#cbd5e1;">&nbsp;&nbsp;|&nbsp;&nbsp;</span>`);
@@ -37,8 +51,8 @@ export function buildSignature(user: {
   </tr>
   <tr>
     <td style="padding:10px 2px 2px;">
-      <span style="font-size:15px;font-weight:bold;color:#0f172a;">${user.name}</span>
-      <span style="font-size:12px;color:#94a3b8;">&nbsp;·&nbsp;Denago Cape Town</span>
+      <span style="font-size:15px;font-weight:bold;color:#0f172a;">${safeName}</span>
+      <span style="font-size:12px;color:#94a3b8;">&nbsp;·&nbsp;${safeJobTitle ? `${safeJobTitle}&nbsp;·&nbsp;` : ""}Denago Cape Town</span>
     </td>
   </tr>
   <tr>
