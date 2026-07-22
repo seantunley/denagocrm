@@ -43,9 +43,9 @@ model ChannelIdentity {
 
 `resolveChannelTenant(channel, externalId): Promise<string | null>` — `findUnique` on the composite key, `disabledAt: null`. Returns `tenantId` or null. Uses `basePrisma` (it's an infra lookup that runs *before* any scope exists — same pattern as `resolvePortalTenant`).
 
-### 2.2 `TenantApiKey` — public API key → tenant (hashed)
+### 2.2 `TenantApiKey` — public API key → tenant (hashed) — ✅ built (C2)
 
-Replaces the single global `INTAKE_API_KEY` with per-tenant keys, **hashed at rest** (a security upgrade regardless of tenancy).
+Replaces the single global `INTAKE_API_KEY` with per-tenant keys, **hashed at rest** (a security upgrade regardless of tenancy). Scalar `tenantId` (no FK), matching the Phase B additive convention — resolution is app-layer and a dangling key just fails to resolve.
 
 ```prisma
 model TenantApiKey {
@@ -53,17 +53,26 @@ model TenantApiKey {
   tenantId   String
   label      String
   hashedKey  String    @unique   // sha256(key); the raw key is shown ONCE at creation
-  prefix     String              // first 8 chars, for display ("dk_live_…")
-  scopes     String              // csv: "intake,bookings,service-lookup"
+  prefix     String              // first chars, for display
+  scopes     String    @default("intake,bookings,service-lookup") // csv
   createdAt  DateTime  @default(now())
   lastUsedAt DateTime?
   revokedAt  DateTime?
-  tenant     Tenant    @relation(fields: [tenantId], references: [id])
   @@index([tenantId])
 }
 ```
 
-`resolveApiKeyTenant(rawKey, scope): Promise<string | null>` — sha256 the header, `findUnique({ hashedKey })`, check `revokedAt == null` and `scope ∈ scopes`, best-effort stamp `lastUsedAt`, return `tenantId`. Constant-time via the unique-hash lookup (no plaintext compare).
+`resolveApiKeyTenant(rawKey, scope)` (`src/lib/apiKeys.ts`) — sha256 the header, look up by `hashedKey` (**raw SQL** via basePrisma — trusted infra resolved *before* a scope exists, same boundary as the token resolvers), **JOIN `Tenant` and require `active = true`** (a key for a suspended tenant, or a dangling key after tenant deletion, must not authenticate), reject revoked / out-of-scope, best-effort `lastUsedAt`, return `tenantId`. `authenticateIntakeKey(rawKey, scope)` wraps it: per-tenant key → its tenant; under enforcement only per-tenant keys; **dormant back-compat** accepts the legacy global `INTAKE_API_KEY` (tenantId null) so intake keeps working before the backfill. Each route authenticates then `establishTenantScopeFromId(auth.tenantId)` **before** the module check (which reads tenant-owned settings). Migration `78_tenant_api_keys` (additive table only); backfill of the current global key = `scripts/backfill-tenant-api-keys.ts` (enforcement-prep, not on deploy).
+
+**Establishing scope is not enough — the routes' UNGUARDED paths had to be closed too (review round 2).** Authenticating and calling `establishTenantScopeFromId` only scopes the *guarded* `prisma` client. Three code paths in these routes bypass it and were leaking cross-tenant under enforcement; all three now derive the tenant from the shared classifier and stamp/filter/namespace explicitly:
+
+- **Booking write transaction** (`bookings/route.ts`, `bookingSlots.ts`): the whole booking runs in `basePrisma.$transaction` for the slot row-lock, which the guard does **not** touch. `claimSlotCapacity(tx, dt, capacity, tenantId)` now namespaces **both** the advisory lock and the `activity.count` by tenant (one tenant no longer consumes/locks another's slot, and the count agrees with the scoped `getDayAvailability`), and the `Contact` / `JobCard` / `Activity` creates are each stamped with the write tenant. `reserveSlot` (staff/bot path) does the same. The tenant comes from `writeTenantId()` — a concrete id under enforcement, `null` (unstamped, single-namespace, byte-for-byte legacy) when dormant/system, and a **throw** when closed.
+- **Service OTP** (`service-lookup` + `verify`): `OtpChallenge` is a **global** model keyed by VIN. `serviceOtpKey(vin)` folds the authenticated tenant into the `key` (`t:<tenantId>:<vin>`), so issue / flood-count / invalidate / verify / consume are all per-tenant — a code for tenant A's VIN can't rate-limit, invalidate, or be verified by tenant B (dormant → bare VIN, legacy-compatible).
+- **Push delivery** (`push.ts`): `PushSubscription` is a **global** model. `sendPushToAll` now selects recipients via `pushRecipientsForCurrentScope()` — under enforcement only devices of **active, non-disabled members of the current tenant** (join through `TenantMember` → active `Tenant`); dormant/system → all devices; closed → **nobody**. This fixes every one of the ~17 `sendPushToAll` callers at once, so a tenant-A lead/booking never notifies tenant B.
+
+Shared plumbing: `src/lib/tenantWrite.ts` — `currentScopeClass()` (the single global/tenant/closed classifier, now also used by `tenantActor.ts`) and `writeTenantId()` (stamp value, or throw when closed). Behavioural coverage for all three lands in `scripts/test-tenant-guard.ts` (per-tenant slot capacity, cross-tenant OTP invisibility + flood isolation, per-tenant/disabled/system/closed push selection); structural wiring in `tests/tenantNoUserEdges.test.ts`.
+
+**Deferred — per-tenant document numbering.** The "all document numbers are per-tenant" decision (invoices/quotes/job-cards/POs/etc.) is **not** delivered here. It requires swapping the global `@unique` on each `number` column for `@@unique([tenantId, number])` (a constraint change that must preserve uniqueness for today's `tenantId = null` prod rows — Postgres treats NULLs as distinct, so a naive composite unique would *weaken* the current global guarantee). That belongs with the tenant-scoped-**uniqueness** step (a hard co-requisite of the enforcement flip), bundled with the allocator changes and its own migration — **not** split half-done into this PR. Job cards created by the booking route are stamped with `tenantId` and keep their globally-unique sequential number for now (safe under enforcement; only leaks cross-tenant volume, which the numbering slice closes).
 
 ### 2.3 Per-channel discriminator (exact payload fields — verified against current routes)
 
@@ -164,7 +173,7 @@ Per-tenant channel **configuration** — each dealer connecting *their own* Meta
 | # | Slice | Schema? | Migration? | Risk |
 |---|---|---|---|---|
 | **C1** ✅ | **Token-derivable surfaces** — `withTokenTenantScope` + a shared per-type resolver across the signing/approval **pages + routes**, the **survey `/s/[token]` page + `submitSurveyResponse` action**, tracking, unsubscribe. Portal (via `getPortalContact` #167) and passkey (self-scopes via `createSessionCookie`; `Passkey` is global) already covered. Verified: the only other non-`(app)` pages are `messages/*` (staff `requireUser`), `doc-editor` (`requireOwner`), `login` (no tenant reads). | none | none | **Lowest** — dormant no-ops, no DB change. Derive-before-guarded-read; integration-tested. |
-| **C2** | **`TenantApiKey`** + `resolveApiKeyTenant` + chokepoints in intake/bookings/service-lookup; backfill the current `INTAKE_API_KEY` as tenant_denago_cpt's key | +1 table | additive | Low — new table, back-compat key. |
+| **C2** ✅ | **`TenantApiKey`** + `resolveApiKeyTenant`/`authenticateIntakeKey` + chokepoints in intake/bookings/bookings-slots/service-lookup/service-lookup-verify (auth→scope before the module check; bookings actor via `resolveTenantActor`); migration `78`; backfill script (enforcement-prep). **Round 2:** closed the routes' unguarded paths — per-tenant slot capacity + stamped booking rows, tenant-namespaced service OTP (`serviceOtpKey`), tenant-scoped push delivery (`pushRecipientsForCurrentScope`); shared `tenantWrite.ts` classifier; behavioural + structural tests. | +1 table | additive (`78`) | Low — new table, dormant back-compat key. Migration HELD for Sean's backup-first merge. |
 | **C3** | **`ChannelIdentity`** + `resolveChannelTenant` + chokepoints in whatsapp/meta webhooks; backfill current phone-number-id + page id → tenant_denago_cpt | +1 table | additive | Low-med — new table, backfill must be exact or (enforcing only) inbound 404s. |
 | **C4** | **Cron scoping** — `withSystemScope` for backup/security; per-tenant-loop scaffold + `resolveTenantOwner` for journeys/automations/competitor-watch | none | none | Med — touches the engines (dormant branch only). |
 | **C5** | **Telegram per-tenant** (§2.5) — per-tenant path + secret | reuses ChannelIdentity | route add | Low (least-used) — can defer. |
@@ -188,3 +197,5 @@ Standing rules: additive only, **backup first**, PR + Sean-merge (never self-dep
 1. **Approve the two table shapes** (`ChannelIdentity`, `TenantApiKey`) before I write the migrations.
 2. **Telegram (C5):** build per-tenant now, or defer until a second dealer needs it? (Recommend defer.)
 3. **Lead order:** I recommend shipping **C1** first (zero schema, zero migration, pure dormant no-op) to lock the pattern, then C2/C3. Confirm.
+4. **Per-tenant document numbering + tenant-scoped uniqueness** (the "all document numbers per tenant" decision): its own slice, a **hard co-requisite of the enforcement flip**, needing a `@@unique([tenantId, number])` migration per numbered model that *preserves* today's global uniqueness for `tenantId = null` rows (NULLs are distinct in a Postgres unique index) + the allocator changes. Your hands-on migration — flag when to schedule it. Until then C2 stamps job cards with their tenant but keeps globally-unique sequential numbers.
+5. **HTTP-level booking test** (non-blocking C2 follow-up): assert the *persisted* tenant IDs on `Contact`/`JobCard`/`Activity` by invoking the real `bookings` POST end-to-end, replacing the current structural + `claimSlotCapacity`-level coverage. **Blocked on the `AppSetting.tenantId` slice**: under enforcement the route's `getSlotConfig()` → `getSetting()` reads `AppSetting` through the guarded client, and `AppSetting` has no `tenantId` column, so `scopeWhere` injects a `where.tenantId` against a non-existent column and the route 500s before the transaction. Land `AppSetting.tenantId` first, then this test (and the routes themselves) can run enforcement-on.

@@ -2,6 +2,7 @@ import { addDays } from "date-fns";
 import { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "./db";
 import { getSetting } from "./settings";
+import { writeTenantId } from "./tenantWrite";
 
 export type SlotConfig = {
   times: string[]; // "08:00" …
@@ -107,15 +108,35 @@ export function slotInstantOrThrow(date: string, time: string, config: SlotConfi
  * count). Throws "SLOT_TAKEN" when full. Does NOT create the activity — the
  * caller creates it (and any contact/job card) in the same transaction so a full
  * slot rolls everything back.
+ *
+ * TENANT SCOPING: this runs on `basePrisma` (the guard does NOT scope it), so both
+ * the lock and the count are namespaced by `tenantId` EXPLICITLY. Under enforcement
+ * one tenant's bookings must neither consume another tenant's slot capacity nor
+ * contend on its lock; `getDayAvailability()` reads through the scoped client, so an
+ * unscoped count here would also DISAGREE with what the customer was shown. When
+ * `tenantId` is null (dormant / trusted system) the lock and count are byte-for-byte
+ * the pre-tenancy single-namespace behaviour.
  */
 export async function claimSlotCapacity(
   tx: Prisma.TransactionClient,
   dt: Date,
-  capacity: number
+  capacity: number,
+  tenantId: string | null
 ): Promise<void> {
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${BigInt(Math.floor(dt.getTime() / 1000))})`;
+  const instant = Math.floor(dt.getTime() / 1000);
+  if (tenantId) {
+    // Per-tenant lock namespace: same instant in two tenants is two distinct slots.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`slot:${tenantId}:${instant}`})::bigint)`;
+  } else {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${BigInt(instant)})`;
+  }
   const taken = await tx.activity.count({
-    where: { category: "workshop", status: "planned", dueDate: dt },
+    where: {
+      category: "workshop",
+      status: "planned",
+      dueDate: dt,
+      ...(tenantId ? { tenantId } : {}),
+    },
   });
   if (taken >= capacity) throw new Error("SLOT_TAKEN");
 }
@@ -138,9 +159,13 @@ export async function reserveSlot(input: {
 }) {
   const config = await getSlotConfig();
   const dt = slotInstantOrThrow(input.date, input.time, config);
+  // Namespace the slot capacity by the caller's tenant, and STAMP the workshop
+  // activity — reserveSlot runs on basePrisma, so the guard won't do either. null
+  // (dormant / system) → unchanged, unstamped, single-namespace behaviour.
+  const tenantId = writeTenantId();
 
   return basePrisma.$transaction(async (tx) => {
-    await claimSlotCapacity(tx, dt, config.capacity);
+    await claimSlotCapacity(tx, dt, config.capacity, tenantId);
     return tx.activity.create({
       data: {
         type: input.type ?? "meeting",
@@ -153,6 +178,7 @@ export async function reserveSlot(input: {
         leadId: input.leadId,
         assignedToId: input.assignedToId ?? input.userId,
         createdById: input.userId,
+        ...(tenantId ? { tenantId } : {}),
       },
     });
   });

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getSetting } from "@/lib/settings";
+import { authenticateIntakeKey } from "@/lib/apiKeys";
+import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
 import { createIntakeLead } from "@/lib/leadIntake";
 import { recordReferral } from "@/lib/referrals";
 
@@ -27,14 +28,14 @@ export async function OPTIONS() {
 
 /** Website / landing-page lead intake. Authenticate with the X-Api-Key header. */
 export async function POST(req: NextRequest) {
-  const apiKey = await getSetting("INTAKE_API_KEY");
-  const provided = req.headers.get("x-api-key");
-  if (!apiKey || provided !== apiKey) {
+  const auth = await authenticateIntakeKey(req.headers.get("x-api-key"), "intake");
+  if (!auth) {
     return NextResponse.json(
       { error: "Invalid API key" },
       { status: 401, headers: corsHeaders }
     );
   }
+  establishTenantScopeFromId(auth.tenantId);
 
   let json: unknown;
   try {

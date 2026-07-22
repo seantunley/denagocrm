@@ -2189,3 +2189,23 @@ model TenantMember {
   @@unique([tenantId, userId])
   @@index([userId])
 }
+
+// Phase C step 2b (C2) — per-tenant PUBLIC API keys, replacing the single global
+// INTAKE_API_KEY for intake / bookings / service-lookup. Keys are HASHED at rest
+// (sha256 of the raw key; the raw key is shown once at creation). Scalar tenantId
+// (no FK), matching the Phase B additive convention — resolution is app-layer, and
+// a dangling key simply fails to resolve (fail closed). Inert until the routes
+// consume it; the legacy global key keeps working (dormant back-compat).
+model TenantApiKey {
+  id         String    @id @default(cuid())
+  tenantId   String
+  label      String
+  hashedKey  String    @unique // sha256(rawKey) hex
+  prefix     String // first chars of the raw key, for display only
+  scopes     String    @default("intake,bookings,service-lookup") // csv of allowed scopes
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+
+  @@index([tenantId])
+}

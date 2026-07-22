@@ -2,7 +2,9 @@ import bcrypt from "bcryptjs";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma, basePrisma } from "@/lib/db";
-import { getSetting } from "@/lib/settings";
+import { authenticateIntakeKey } from "@/lib/apiKeys";
+import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
+import { serviceOtpKey } from "@/lib/serviceOtp";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { logAudit } from "@/lib/audit";
 import { contactName } from "@/lib/format";
@@ -27,13 +29,15 @@ export async function OPTIONS() {
  * to prefill the booking form. Max 5 attempts per code, 10-minute expiry.
  */
 export async function POST(req: NextRequest) {
+  // Authenticate + establish the caller's tenant scope BEFORE any guarded read.
+  const auth = await authenticateIntakeKey(req.headers.get("x-api-key"), "service-lookup");
+  if (!auth) {
+    return NextResponse.json({ error: "Invalid API key" }, { status: 401, headers: corsHeaders });
+  }
+  establishTenantScopeFromId(auth.tenantId);
   // Workshop bookings belong to the automotive pack — gone when it's off.
   if (!(await isModuleEnabled("automotive"))) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-  const apiKey = await getSetting("INTAKE_API_KEY");
-  if (!apiKey || req.headers.get("x-api-key") !== apiKey) {
-    return NextResponse.json({ error: "Invalid API key" }, { status: 401, headers: corsHeaders });
   }
   let json: unknown;
   try {
@@ -49,11 +53,14 @@ export async function POST(req: NextRequest) {
     );
   }
   const vin = parsed.data.vin.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+  // Same tenant-namespaced key as issuance — a code issued for another tenant's
+  // request (or a bare-VIN legacy row from a different tenant) is invisible here.
+  const otpKey = serviceOtpKey(vin);
 
   const challenge = await basePrisma.otpChallenge.findFirst({
     where: {
       purpose: "service-booking",
-      key: vin,
+      key: otpKey,
       verifiedAt: null,
       expiresAt: { gt: new Date() },
     },

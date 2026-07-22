@@ -26,6 +26,10 @@ import {
 } from "../src/lib/tokenTenant";
 import { resolveTenantActor, resolveTenantMemberUser, listTenantStaff } from "../src/lib/tenantActor";
 import { resolveApprover } from "../src/lib/signing/approvals";
+import { hashApiKey, resolveApiKeyTenant, authenticateIntakeKey } from "../src/lib/apiKeys";
+import { claimSlotCapacity } from "../src/lib/bookingSlots";
+import { serviceOtpKey } from "../src/lib/serviceOtp";
+import { pushRecipientsForCurrentScope } from "../src/lib/push";
 
 const dbName = (process.env.DATABASE_URL ?? "").split("/").pop()?.split("?")[0] ?? "";
 if (process.env.NODE_ENV !== "test" || !dbName.endsWith("_test")) {
@@ -68,6 +72,27 @@ const surveyTokenB = `survtokB_${SFX}`;
 const userAId = `uA_${SFX}`;
 const userBId = `uB_${SFX}`;
 const userCId = `uC_${SFX}`; // DISABLED member of TENANT_A, oldest of all — must never be picked
+// Per-tenant API keys (C2).
+const apiKeyRawA = `keyA_${SFX}`;
+const apiKeyRawRevoked = `keyR_${SFX}`;
+const apiKeyRawGlobal = `legacyglobal_${SFX}`;
+const apiKeyIdA = `tak_${SFX}`;
+const apiKeyIdR = `takR_${SFX}`;
+const TENANT_SUS = `tenant_sus_${SFX}`; // suspended tenant (active=false)
+const ghostTenant = `ghost_${SFX}`; // a tenantId with NO Tenant row (dangling key)
+const apiKeyRawSuspended = `keyS_${SFX}`;
+const apiKeyRawDangling = `keyD_${SFX}`;
+const apiKeyIdS = `takS_${SFX}`;
+const apiKeyIdD = `takD_${SFX}`;
+// Route-level tenant boundaries (C2 review round 2): booking slot capacity, service
+// OTP challenge, and push delivery.
+const actAId = `act_A_${SFX}`;
+const otpChalId = `otp_A_${SFX}`;
+const subAId = `sub_A_${SFX}`;
+const subBId = `sub_B_${SFX}`;
+const subCId = `sub_C_${SFX}`;
+const otpVin = `VINSHARE${SFX}`.toUpperCase();
+const slotDt = new Date("2030-06-03T06:00:00.000Z"); // fixed future slot instant
 
 let passed = 0;
 let failed = 0;
@@ -130,6 +155,29 @@ async function main() {
   await basePrisma.user.create({ data: { id: userCId, name: "Disabled A", email: `oc_${SFX}@t.test`, passwordHash: "x", role: "owner", createdAt: new Date("2019-01-01T00:00:00Z") } });
   await basePrisma.tenantMember.create({ data: { tenantId: TENANT_A, userId: userCId } });
   await basePrisma.$executeRaw`UPDATE "User" SET "disabledAt" = ${new Date("2019-06-01T00:00:00Z")} WHERE "id" = ${userCId}`;
+
+  // Per-tenant API keys (raw SQL — the client delegate may be un-regenerated locally,
+  // and this is exactly how apiKeys.ts queries the table). keyA is scoped to
+  // intake+bookings only (NOT service-lookup); keyR is revoked. A legacy global key
+  // is seeded into AppSetting for the dormant back-compat test.
+  await basePrisma.$executeRaw`INSERT INTO "TenantApiKey" ("id","tenantId","label","hashedKey","prefix","scopes","createdAt") VALUES (${apiKeyIdA}, ${TENANT_A}, ${"Key A"}, ${hashApiKey(apiKeyRawA)}, ${apiKeyRawA.slice(0, 8)}, ${"intake,bookings"}, CURRENT_TIMESTAMP)`;
+  await basePrisma.$executeRaw`INSERT INTO "TenantApiKey" ("id","tenantId","label","hashedKey","prefix","scopes","createdAt","revokedAt") VALUES (${apiKeyIdR}, ${TENANT_A}, ${"Key R"}, ${hashApiKey(apiKeyRawRevoked)}, ${apiKeyRawRevoked.slice(0, 8)}, ${"intake,bookings,service-lookup"}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
+  await basePrisma.$executeRaw`INSERT INTO "AppSetting" ("key","value") VALUES ('INTAKE_API_KEY', ${apiKeyRawGlobal}) ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value"`;
+  // A key for a SUSPENDED tenant (active=false) and a DANGLING key (tenantId with no
+  // Tenant row) — both must fail to authenticate.
+  await basePrisma.tenant.create({ data: { id: TENANT_SUS, name: "Suspended", slug: `sus_${SFX}`, active: false } });
+  await basePrisma.$executeRaw`INSERT INTO "TenantApiKey" ("id","tenantId","label","hashedKey","prefix","scopes","createdAt") VALUES (${apiKeyIdS}, ${TENANT_SUS}, ${"Key S"}, ${hashApiKey(apiKeyRawSuspended)}, ${apiKeyRawSuspended.slice(0, 8)}, ${"intake,bookings,service-lookup"}, CURRENT_TIMESTAMP)`;
+  await basePrisma.$executeRaw`INSERT INTO "TenantApiKey" ("id","tenantId","label","hashedKey","prefix","scopes","createdAt") VALUES (${apiKeyIdD}, ${ghostTenant}, ${"Key D"}, ${hashApiKey(apiKeyRawDangling)}, ${apiKeyRawDangling.slice(0, 8)}, ${"intake,bookings,service-lookup"}, CURRENT_TIMESTAMP)`;
+
+  // One WORKSHOP activity for tenant A at a fixed instant (slot capacity fixture).
+  await basePrisma.activity.create({
+    data: { id: actAId, type: "meeting", category: "workshop", status: "planned", summary: "A booked slot", dueDate: slotDt, contactId: idA, assignedToId: userAId, createdById: userAId, tenantId: TENANT_A },
+  });
+  // Push device subscriptions (PushSubscription is a GLOBAL model): one for a member
+  // of A, one for a member of B, and one for A's DISABLED member (userC).
+  await basePrisma.pushSubscription.create({ data: { id: subAId, endpoint: `epA_${SFX}`, p256dh: "x", auth: "x", userId: userAId, userName: "A" } });
+  await basePrisma.pushSubscription.create({ data: { id: subBId, endpoint: `epB_${SFX}`, p256dh: "x", auth: "x", userId: userBId, userName: "B" } });
+  await basePrisma.pushSubscription.create({ data: { id: subCId, endpoint: `epC_${SFX}`, p256dh: "x", auth: "x", userId: userCId, userName: "C-disabled" } });
 
   __setTenantEnforcingForTests(true);
   try {
@@ -465,6 +513,105 @@ async function main() {
     await runInTenantScope({ tenantId: `empty_${SFX}`, system: false }, async () => {
       check("approver: owner assignee with no resolvable owner → fail closed (no email)", (await resolveApprover({ assigneeType: "owner", assigneeUserId: null, assigneeRole: null, assigneeName: "O", assigneeEmail: `stored_${SFX}@x.test` })).email === null);
     });
+
+    // ── per-tenant API keys (Phase C 2b-C2) ─────────────────────────────────────
+    check("apikey: resolveApiKeyTenant(keyA,'intake') → tenant A", (await resolveApiKeyTenant(apiKeyRawA, "intake")) === TENANT_A);
+    check("apikey: resolveApiKeyTenant(keyA,'bookings') → tenant A", (await resolveApiKeyTenant(apiKeyRawA, "bookings")) === TENANT_A);
+    check("apikey: keyA out of scope (service-lookup) → null", (await resolveApiKeyTenant(apiKeyRawA, "service-lookup")) === null);
+    check("apikey: unknown key → null", (await resolveApiKeyTenant(`nope_${SFX}`, "intake")) === null);
+    check("apikey: revoked key → null", (await resolveApiKeyTenant(apiKeyRawRevoked, "intake")) === null);
+    check("apikey: key for a SUSPENDED tenant → null (Tenant.active=false)", (await resolveApiKeyTenant(apiKeyRawSuspended, "intake")) === null);
+    check("apikey: authenticateIntakeKey(suspended-tenant key) → null", (await authenticateIntakeKey(apiKeyRawSuspended, "intake")) === null);
+    check("apikey: DANGLING key (deleted tenant, no Tenant row) → null", (await resolveApiKeyTenant(apiKeyRawDangling, "intake")) === null);
+    // Enforcement: per-tenant keys only — the legacy global key is rejected.
+    check("apikey: authenticateIntakeKey(keyA) enforcing → tenant A", (await authenticateIntakeKey(apiKeyRawA, "intake"))?.tenantId === TENANT_A);
+    check("apikey: authenticateIntakeKey(legacy global) enforcing → null", (await authenticateIntakeKey(apiKeyRawGlobal, "intake")) === null);
+    check("apikey: authenticateIntakeKey(null) → null", (await authenticateIntakeKey(null, "intake")) === null);
+
+    // ── booking SLOT CAPACITY is per-tenant (C2 review round 2). claimSlotCapacity
+    //    runs on basePrisma with an EXPLICIT tenant, so one tenant's booking must
+    //    neither consume nor lock-contend on another's slot. tenantId is passed
+    //    directly (not via scope), so this holds regardless of ambient scope. ───────
+    let bClaimOk = false;
+    await basePrisma.$transaction(async (tx) => {
+      await claimSlotCapacity(tx, slotDt, 1, TENANT_B);
+      bClaimOk = true;
+    });
+    check("slot: tenant B can claim the instant A already booked (per-tenant capacity)", bClaimOk);
+    await expectThrows(
+      "slot: the same instant is FULL for tenant A (its own booking counts)",
+      () => basePrisma.$transaction((tx) => claimSlotCapacity(tx, slotDt, 1, TENANT_A)),
+      (e) => e instanceof Error && e.message === "SLOT_TAKEN",
+    );
+    await expectThrows(
+      "slot: global (null tenant) capacity still counts A's row (dormant back-compat)",
+      () => basePrisma.$transaction((tx) => claimSlotCapacity(tx, slotDt, 1, null)),
+      (e) => e instanceof Error && e.message === "SLOT_TAKEN",
+    );
+
+    // ── service OTP challenge is tenant-namespaced (OtpChallenge is global). A code
+    //    issued for tenant A's VIN must be invisible to — and not rate-limit — tenant
+    //    B's request for the SAME VIN. ──────────────────────────────────────────────
+    let otpKeyA = "";
+    let otpKeyB = "";
+    await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => {
+      otpKeyA = serviceOtpKey(otpVin);
+      await basePrisma.otpChallenge.create({
+        data: { id: otpChalId, purpose: "service-booking", key: otpKeyA, codeHash: "x", channel: "sms", target: "x", expiresAt: new Date(Date.now() + 10 * 60 * 1000) },
+      });
+    });
+    await runInTenantScope({ tenantId: TENANT_B, system: false }, async () => {
+      otpKeyB = serviceOtpKey(otpVin);
+    });
+    check("otp: same VIN → DIFFERENT challenge key per tenant", otpKeyA !== otpKeyB && otpKeyA.includes(TENANT_A) && otpKeyB.includes(TENANT_B));
+    const bSeesChallenge = await basePrisma.otpChallenge.findFirst({ where: { purpose: "service-booking", key: otpKeyB, verifiedAt: null, expiresAt: { gt: new Date() } } });
+    check("otp: tenant B cannot see/verify A's challenge for the same VIN", bSeesChallenge === null);
+    const bFloodCount = await basePrisma.otpChallenge.count({ where: { purpose: "service-booking", key: otpKeyB } });
+    check("otp: A's issuance does not rate-limit B (per-tenant flood count)", bFloodCount === 0);
+    const aSeesChallenge = await basePrisma.otpChallenge.findFirst({ where: { purpose: "service-booking", key: otpKeyA, verifiedAt: null } });
+    check("otp: tenant A still finds its own challenge", aSeesChallenge?.id === otpChalId);
+    // Fail-closed: a null non-system scope must never mint/match a globally-keyed
+    // challenge (deterministic "closed" case — no reliance on ambient emptiness).
+    await runInTenantScope({ tenantId: null, system: false }, async () => {
+      await expectThrows(
+        "otp: serviceOtpKey fails closed under a null non-system scope",
+        async () => { serviceOtpKey(otpVin); },
+        (e) => e instanceof TenantScopeError,
+      );
+    });
+
+    // ── PUSH delivery is per-tenant (PushSubscription is global). A tenant-A push must
+    //    reach only A's active-member devices, never B's, and never a disabled member. ─
+    await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => {
+      const ids = (await pushRecipientsForCurrentScope()).map((r) => r.id);
+      check("push: tenant A push reaches A's member device", ids.includes(subAId));
+      check("push: tenant A push does NOT reach B's device (no cross-tenant leak)", !ids.includes(subBId));
+      check("push: tenant A push excludes the DISABLED member's device", !ids.includes(subCId));
+    });
+    await runInTenantScope({ tenantId: TENANT_B, system: false }, async () => {
+      const ids = (await pushRecipientsForCurrentScope()).map((r) => r.id);
+      check("push: tenant B push reaches only B's device (never A's)", ids.includes(subBId) && !ids.includes(subAId));
+    });
+    await runInTenantScope({ tenantId: null, system: true }, async () => {
+      const ids = (await pushRecipientsForCurrentScope()).map((r) => r.id);
+      check("push: system scope broadcasts to ALL devices (A + B)", ids.includes(subAId) && ids.includes(subBId));
+    });
+    await runInTenantScope({ tenantId: null, system: false }, async () => {
+      check("push: null non-system scope → delivers to NOBODY (fail closed)", (await pushRecipientsForCurrentScope()).length === 0);
+    });
+
+    // Dormant back-compat: the legacy global key still works (tenantId null); a
+    // per-tenant key still resolves.
+    __setTenantEnforcingForTests(false);
+    const dormLegacy = await authenticateIntakeKey(apiKeyRawGlobal, "intake");
+    check("apikey: DORMANT legacy global accepted (tenantId null)", dormLegacy !== null && dormLegacy.tenantId === null);
+    check("apikey: DORMANT per-tenant keyA still resolves to A", (await authenticateIntakeKey(apiKeyRawA, "intake"))?.tenantId === TENANT_A);
+    check("apikey: DORMANT unknown key → null", (await authenticateIntakeKey(`nope_${SFX}`, "intake")) === null);
+    // Dormant: OTP key is the bare VIN (legacy) and push broadcasts to every device.
+    check("otp: DORMANT serviceOtpKey → bare VIN (legacy key, byte-for-byte)", serviceOtpKey(otpVin) === otpVin);
+    const dormPushIds = (await pushRecipientsForCurrentScope()).map((r) => r.id);
+    check("push: DORMANT delivers to ALL devices (global, unchanged)", dormPushIds.includes(subAId) && dormPushIds.includes(subBId) && dormPushIds.includes(subCId));
+    __setTenantEnforcingForTests(true);
   } finally {
     __setTenantEnforcingForTests(null);
     // No-user token fixtures first (children before parents; contact FK below).
@@ -476,9 +623,15 @@ async function main() {
     await basePrisma.surveyResponse.deleteMany({ where: { id: { in: [srespId, srespIdB] } } });
     await basePrisma.survey.deleteMany({ where: { id: { in: [survId, survIdB] } } });
     await basePrisma.communication.deleteMany({ where: { contactId: { in: [idA, idB] } } });
+    // Route-level boundary fixtures (activity FKs contact; push subs FK user).
+    await basePrisma.activity.deleteMany({ where: { id: actAId } });
+    await basePrisma.otpChallenge.deleteMany({ where: { id: otpChalId } });
+    await basePrisma.pushSubscription.deleteMany({ where: { id: { in: [subAId, subBId, subCId] } } });
+    await basePrisma.$executeRaw`DELETE FROM "TenantApiKey" WHERE "tenantId" IN (${TENANT_A}, ${TENANT_SUS}, ${ghostTenant})`;
+    await basePrisma.$executeRaw`DELETE FROM "AppSetting" WHERE "key" = 'INTAKE_API_KEY'`;
     await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [userAId, userBId, userCId] } } });
     await basePrisma.user.deleteMany({ where: { id: { in: [userAId, userBId, userCId] } } });
-    await basePrisma.tenant.deleteMany({ where: { id: { in: [TENANT_A, TENANT_B] } } });
+    await basePrisma.tenant.deleteMany({ where: { id: { in: [TENANT_A, TENANT_B, TENANT_SUS] } } });
     await basePrisma.contact.deleteMany({
       where: { id: { in: [idA, idB, cmId, `c_forge_${SFX}`] } },
     });

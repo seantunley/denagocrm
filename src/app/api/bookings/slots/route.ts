@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSetting } from "@/lib/settings";
+import { authenticateIntakeKey } from "@/lib/apiKeys";
+import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { getDayAvailability, getSlotConfig } from "@/lib/bookingSlots";
 
@@ -15,13 +16,15 @@ export async function OPTIONS() {
 
 /** Slot availability for a given day: GET /api/bookings/slots?date=YYYY-MM-DD */
 export async function GET(req: NextRequest) {
+  // Authenticate + establish the caller's tenant scope BEFORE any guarded read.
+  const auth = await authenticateIntakeKey(req.headers.get("x-api-key"), "bookings");
+  if (!auth) {
+    return NextResponse.json({ error: "Invalid API key" }, { status: 401, headers: corsHeaders });
+  }
+  establishTenantScopeFromId(auth.tenantId);
   // Workshop bookings belong to the automotive pack — gone when it's off.
   if (!(await isModuleEnabled("automotive"))) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-  const apiKey = await getSetting("INTAKE_API_KEY");
-  if (!apiKey || req.headers.get("x-api-key") !== apiKey) {
-    return NextResponse.json({ error: "Invalid API key" }, { status: 401, headers: corsHeaders });
   }
   const date = req.nextUrl.searchParams.get("date") ?? "";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
