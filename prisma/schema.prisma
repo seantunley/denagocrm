@@ -730,12 +730,14 @@ model QuoteFee {
 
 model ServiceReminderLog {
   id        String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   vehicleId String
   dueKey    String // identifies the due-cycle so each service due is reminded once
   sentTo    String
   createdAt DateTime @default(now())
 
   @@unique([vehicleId, dueKey])
+  @@index([tenantId])
 }
 
 model PushSubscription {
@@ -1017,6 +1019,7 @@ model ServiceRecord {
 
 model JobCard {
   id          String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   number      Int       @unique
   // Workshop stages: booking | checkin | diagnosis | approval | repair | qc | ready | collected | cancelled
   status      String    @default("booking")
@@ -1081,6 +1084,7 @@ model JobCard {
 
   @@index([bayId])
   @@index([comebackOfId])
+  @@index([tenantId])
 }
 
 model PartReservation {
@@ -1102,16 +1106,19 @@ model PartReservation {
 
 model ServicePackage {
   id          String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name        String
   description String?
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
 
   items ServicePackageItem[]
+  @@index([tenantId])
 }
 
 model ServicePackageItem {
   id             String @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   kind           String @default("part") // part | labour
   description    String
   qty            Float  @default(1)
@@ -1122,10 +1129,12 @@ model ServicePackageItem {
   package   ServicePackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
 
   @@index([packageId])
+  @@index([tenantId])
 }
 
 model JobCardInspectionItem {
   id             String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   label          String
   status         String   @default("ok") // ok | attention | fail | na
   notes          String?
@@ -1137,10 +1146,12 @@ model JobCardInspectionItem {
   jobCard   JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
 
   @@index([jobCardId])
+  @@index([tenantId])
 }
 
 model JobCardApproval {
   id          String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   description String
   amountCents Int       @default(0)
   status      String    @default("pending") // pending | approved | declined
@@ -1154,10 +1165,12 @@ model JobCardApproval {
   jobCard   JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
 
   @@index([jobCardId, status])
+  @@index([tenantId])
 }
 
 model WorkshopBay {
   id        String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name      String
   color     String   @default("#0ea5e9")
   active    Boolean  @default(true)
@@ -1166,10 +1179,12 @@ model WorkshopBay {
   createdAt DateTime @default(now())
 
   jobCards JobCard[]
+  @@index([tenantId])
 }
 
 model JobCardTimeEntry {
   id        String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   startedAt DateTime  @default(now())
   endedAt   DateTime? // null while the clock is running
   note      String?
@@ -1182,10 +1197,12 @@ model JobCardTimeEntry {
 
   @@index([jobCardId])
   @@index([technicianId, endedAt])
+  @@index([tenantId])
 }
 
 model JobCardItem {
   id             String @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   kind           String @default("part") // part | labour
   description    String
   qty            Float  @default(1)
@@ -1195,6 +1212,7 @@ model JobCardItem {
   jobCard   JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
   partId    String? // set when the line came from the parts catalogue (stock deducted)
   part      Part?   @relation(fields: [partId], references: [id], onDelete: SetNull)
+  @@index([tenantId])
 }
 
 model Part {
