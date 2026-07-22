@@ -37,3 +37,36 @@ export function soleActiveTenant(activeTenantIds: readonly string[]): SoleTenant
   if (unique.length > 1) return { error: "ambiguous_tenant" };
   return { tenantId: unique[0] };
 }
+
+/**
+ * Decide whether a session's carried tenant claim (`tid`) may still be honoured,
+ * given the user's freshly-resolved sole active tenant. The claim is honoured
+ * ONLY when the user has exactly ONE active membership AND it equals the claim:
+ *   - no tid                  → null (older / tenant-less session)
+ *   - resolve error (0 or 2+) → null (`no_tenant`, or newly `ambiguous_tenant`
+ *                                because a second active membership appeared
+ *                                AFTER login — the claim is no longer unambiguous)
+ *   - single active ≠ tid     → null (membership removed / tenant suspended)
+ *   - single active === tid   → tid
+ */
+export function honoredTenantClaim(tid: string | null, sole: SoleTenantResult): string | null {
+  if (!tid) return null;
+  if ("error" in sole) return null;
+  return sole.tenantId === tid ? tid : null;
+}
+
+/**
+ * True only when a Prisma write failed specifically because a `tenantId` foreign
+ * key no longer resolves (the tenant was deleted concurrently) — the one case
+ * recoverable by dropping the tenant and retrying. Duck-typed on the error's
+ * `code`/`meta` so this module stays dependency-free and unit-testable. A null
+ * tenant can't cause an FK error, so those cases return false and the caller must
+ * rethrow the original error rather than mask an unrelated failure.
+ */
+export function isTenantForeignKeyViolation(error: unknown, tenantId: string | null): boolean {
+  if (tenantId == null) return false;
+  if (typeof error !== "object" || error === null) return false;
+  if ((error as { code?: unknown }).code !== "P2003") return false;
+  const meta = (error as { meta?: unknown }).meta;
+  return JSON.stringify(meta ?? {}).toLowerCase().includes("tenant");
+}

@@ -3,12 +3,12 @@ import { cookies, headers } from "next/headers";
 import crypto from "crypto";
 import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
-import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { hasModule, type ModuleId } from "./access";
 import { getUserSecurityState, getUserSecurityStateFresh } from "./userSecurity";
-import { resolveActingTenant, isActiveTenantMember } from "./tenantContext";
+import { resolveActingTenant } from "./tenantContext";
+import { honoredTenantClaim, isTenantForeignKeyViolation } from "./tenant";
 import {
   verifySession,
   signFreshSession,
@@ -119,19 +119,6 @@ export async function getIdleMinutes(): Promise<number> {
   return isNaN(n) || n < 5 ? DEFAULT_IDLE_MINUTES : n;
 }
 
-/**
- * True only when a UserSession insert failed specifically because its `tenantId`
- * foreign key no longer resolves (the tenant was deleted concurrently). A null
- * tenant can't cause an FK error, so those cases are never "recoverable by
- * dropping the tenant" and return false so the caller rethrows.
- */
-function isTenantForeignKeyViolation(e: unknown, tenantId: string | null): boolean {
-  if (tenantId == null) return false;
-  if (!(e instanceof Prisma.PrismaClientKnownRequestError) || e.code !== "P2003") return false;
-  // P2003 identifies the offending FK by field/constraint name in meta.
-  return JSON.stringify(e.meta ?? {}).toLowerCase().includes("tenant");
-}
-
 export async function createSessionCookie(
   user: { id: string; name: string; email: string; role: string; modules: string },
   opts?: { pwa?: boolean }
@@ -211,8 +198,10 @@ export async function destroySessionCookie() {
  *  - the session is fully valid — getCurrentUser applies the same device
  *    revocation, disabled-account and session-version checks, so a signature that
  *    verifies but belongs to a revoked/disabled/superseded session yields null;
- *  - the claim still matches a LIVE active membership — a `tid` that went stale
- *    after a membership change or a tenant suspension is dropped, not trusted.
+ *  - it still resolves to the user's SOLE active tenant (see honoredTenantClaim):
+ *    a `tid` that went stale after a membership removal or tenant suspension is
+ *    dropped, and so is one that became AMBIGUOUS because a second active
+ *    membership was added after login.
  */
 export async function getActiveTenantId(): Promise<string | null> {
   const user = await getCurrentUser();
@@ -221,7 +210,6 @@ export async function getActiveTenantId(): Promise<string | null> {
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
   const session = await verifySession(token);
-  const tid = session?.tid ?? null;
-  if (!tid) return null;
-  return (await isActiveTenantMember(user.id, tid)) ? tid : null;
+  const sole = await resolveActingTenant(user.id);
+  return honoredTenantClaim(session?.tid ?? null, sole);
 }
