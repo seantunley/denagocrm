@@ -14,7 +14,7 @@ Three tenant-derivability buckets:
 
 | Bucket | Routes | How the tenant is found |
 |---|---|---|
-| **A — token-derivable** | signing/`[token]`, signing decline, approvals/`[token]`, track open/click, unsubscribe, portal uploads/documents, passkey login | The resolved row (`SignatureRecipient`, `CampaignRecipient`, portal `Contact`, `Passkey`→`User`) **already carries `tenantId`** (Phase B). Mechanical. |
+| **A — token-derivable** | signing/`[token]` (page + POST), signing decline, approvals/`[token]` (page + POST), **survey `/s/[token]` (page + `submitSurveyResponse` action)**, track open/click, unsubscribe, portal uploads/documents, passkey login | The resolved row (`SignatureRecipient`, `ApprovalStep`, `CampaignRecipient`, `SurveyResponse`, portal `Contact`, `Passkey`→`User`) **already carries `tenantId`** (Phase B). Mechanical. **Includes public PAGES and public server ACTIONS, not just `/api` routes** — the first pass missed the survey page + action (caught in review); the full surface is: every non-`(app)`/non-`portal` page and any server action reachable from one. |
 | **B — cross-tenant sweeps** | cron: backup, security, trash-purge, errorLog cleanup | Genuinely platform-global → run in **`system`** scope (guard bypass by design). |
 | **C — no discriminator in the request** | inbound WhatsApp / Messenger / IG / Telegram; `INTAKE_API_KEY` intake/bookings/service-lookup; per-tenant cron business work; the 3 global `user.findFirst({role:"owner"})` actor picks | **The real work.** Needs an explicit identity→tenant map + per-tenant keys + tenant-scoped actor resolution. |
 
@@ -142,7 +142,7 @@ Per-tenant channel **configuration** — each dealer connecting *their own* Meta
 
 | # | Slice | Schema? | Migration? | Risk |
 |---|---|---|---|---|
-| **C1** ✅ | **Token-derivable surfaces** — `withTokenTenantScope` + a shared per-type resolver across the signing/approval **pages + routes**, tracking, unsubscribe. Portal (via `getPortalContact` #167) and passkey (self-scopes via `createSessionCookie`; `Passkey` is global) already covered. | none | none | **Lowest** — dormant no-ops, no DB change. Derive-before-guarded-read; integration-tested. |
+| **C1** ✅ | **Token-derivable surfaces** — `withTokenTenantScope` + a shared per-type resolver across the signing/approval **pages + routes**, the **survey `/s/[token]` page + `submitSurveyResponse` action**, tracking, unsubscribe. Portal (via `getPortalContact` #167) and passkey (self-scopes via `createSessionCookie`; `Passkey` is global) already covered. Verified: the only other non-`(app)` pages are `messages/*` (staff `requireUser`), `doc-editor` (`requireOwner`), `login` (no tenant reads). | none | none | **Lowest** — dormant no-ops, no DB change. Derive-before-guarded-read; integration-tested. |
 | **C2** | **`TenantApiKey`** + `resolveApiKeyTenant` + chokepoints in intake/bookings/service-lookup; backfill the current `INTAKE_API_KEY` as tenant_denago_cpt's key | +1 table | additive | Low — new table, back-compat key. |
 | **C3** | **`ChannelIdentity`** + `resolveChannelTenant` + chokepoints in whatsapp/meta webhooks; backfill current phone-number-id + page id → tenant_denago_cpt | +1 table | additive | Low-med — new table, backfill must be exact or (enforcing only) inbound 404s. |
 | **C4** | **Cron scoping** — `withSystemScope` for backup/security; per-tenant-loop scaffold + `resolveTenantOwner` for journeys/automations/competitor-watch | none | none | Med — touches the engines (dormant branch only). |

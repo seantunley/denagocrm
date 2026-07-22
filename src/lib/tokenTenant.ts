@@ -50,3 +50,14 @@ export async function resolveCampaignRecipientTenant(
   });
   return row ? { tenantId: row.tenantId } : null;
 }
+
+/** Owning tenant of a public survey-response token (page load + submission). */
+export async function resolveSurveyResponseTenant(
+  token: string,
+): Promise<{ tenantId: string | null } | null> {
+  const row = await basePrisma.surveyResponse.findUnique({
+    where: { token },
+    select: { tenantId: true },
+  });
+  return row ? { tenantId: row.tenantId } : null;
+}

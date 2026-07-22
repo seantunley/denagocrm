@@ -31,6 +31,7 @@ const SURFACE = [
   { file: "src/app/api/track/o/[token]/route.ts", read: "prisma.campaignRecipient.findUnique", resolver: "resolveCampaignRecipientTenant" },
   { file: "src/app/api/track/c/[token]/route.ts", read: "prisma.campaignRecipient.findUnique", resolver: "resolveCampaignRecipientTenant" },
   { file: "src/app/api/unsubscribe/[token]/route.ts", read: "prisma.campaignRecipient.findUnique", resolver: "resolveCampaignRecipientTenant" },
+  { file: "src/app/s/[token]/page.tsx", read: "prisma.surveyResponse.findUnique", resolver: "resolveSurveyResponseTenant" },
 ] as const;
 
 for (const { file, read, resolver } of SURFACE) {
@@ -54,3 +55,20 @@ for (const { file, read, resolver } of SURFACE) {
     );
   });
 }
+
+// The public survey SUBMISSION is a server action (not a route): the guarded read
+// lives in submitResponse (lib/surveys.ts), so the action must establish the tenant
+// scope before delegating to it.
+test("src/app/actions/surveys.ts: public survey submission wraps submitResponse in a tenant scope", () => {
+  const code = src("src/app/actions/surveys.ts");
+  assert.match(code, /from "@\/lib\/tenantScopeEntry"/, "must import withTokenTenantScope");
+  assert.match(code, /from "@\/lib\/tokenTenant"/, "must import resolveSurveyResponseTenant");
+  const scopeAt = code.indexOf("withTokenTenantScope(");
+  const workAt = code.indexOf("submitResponse(token");
+  assert.ok(scopeAt >= 0, "submitSurveyResponse must call withTokenTenantScope");
+  assert.ok(workAt >= 0, "submitSurveyResponse must delegate to submitResponse(token, …)");
+  assert.ok(
+    scopeAt < workAt,
+    "submitSurveyResponse must establish the tenant scope before calling submitResponse (else the guarded read inside dead-locks)",
+  );
+});

@@ -22,6 +22,7 @@ import {
   resolveSignRecipientTenant,
   resolveApprovalStepTenant,
   resolveCampaignRecipientTenant,
+  resolveSurveyResponseTenant,
 } from "../src/lib/tokenTenant";
 
 const dbName = (process.env.DATABASE_URL ?? "").split("/").pop()?.split("?")[0] ?? "";
@@ -53,6 +54,12 @@ const signTokenA = `signtok_${SFX}`;
 const signTokenB = `signtokB_${SFX}`;
 const apTokenA = `aptok_${SFX}`;
 const crTokenA = `crtok_${SFX}`;
+const survId = `surv_${SFX}`;
+const survIdB = `survB_${SFX}`;
+const srespId = `sresp_${SFX}`;
+const srespIdB = `srespB_${SFX}`;
+const surveyTokenA = `survtok_${SFX}`;
+const surveyTokenB = `survtokB_${SFX}`;
 
 let passed = 0;
 let failed = 0;
@@ -95,6 +102,11 @@ async function main() {
   await basePrisma.approvalStep.create({ data: { id: apId, requestId: srId, nodeId: "n1", label: "Approve", assigneeType: "owner", token: apTokenA, tenantId: TENANT_A } });
   await basePrisma.campaign.create({ data: { id: campId, name: "Camp A", channel: "email", body: "hi", audience: "all", tenantId: TENANT_A } });
   await basePrisma.campaignRecipient.create({ data: { id: crId, campaignId: campId, contactId: idA, token: crTokenA, tenantId: TENANT_A } });
+  // Public survey surface: a survey + response owned by A (and one owned by B).
+  await basePrisma.survey.create({ data: { id: survId, title: "Survey A", questions: [], tenantId: TENANT_A } });
+  await basePrisma.surveyResponse.create({ data: { id: srespId, surveyId: survId, token: surveyTokenA, contactId: idA, status: "sent", tenantId: TENANT_A } });
+  await basePrisma.survey.create({ data: { id: survIdB, title: "Survey B", questions: [], tenantId: TENANT_B } });
+  await basePrisma.surveyResponse.create({ data: { id: srespIdB, surveyId: survIdB, token: surveyTokenB, status: "sent", tenantId: TENANT_B } });
 
   __setTenantEnforcingForTests(true);
   try {
@@ -310,6 +322,40 @@ async function main() {
     );
     const tracked = await basePrisma.campaignRecipient.findUnique({ where: { id: crId }, select: { openCount: true } });
     check("token: tracking records the open inside the derived scope", (tracked?.openCount ?? 0) >= 1);
+
+    // Public SURVEY surface (page /s/[token] + the submitSurveyResponse action).
+    check("survey: resolveSurveyResponseTenant derives A from the survey token", (await resolveSurveyResponseTenant(surveyTokenA))?.tenantId === TENANT_A);
+    check("survey: resolver → null for an unknown token (fail closed)", (await resolveSurveyResponseTenant(`nope_${SFX}`)) === null);
+
+    // The guarded re-read the PAGE does succeeds inside the derived scope.
+    const survResp = await withTokenTenantScope(
+      () => resolveSurveyResponseTenant(surveyTokenA),
+      async () => prisma.surveyResponse.findUnique({ where: { token: surveyTokenA }, include: { survey: true } }),
+      () => null,
+    );
+    check("survey: page's guarded re-read succeeds inside the derived scope", survResp?.id === srespId && survResp?.survey.tenantId === TENANT_A);
+
+    // The SUBMISSION write (surveyResponse.update to completed) commits inside scope.
+    const survDone = await withTokenTenantScope(
+      () => resolveSurveyResponseTenant(surveyTokenA),
+      async () => {
+        const r = await prisma.surveyResponse.findUnique({ where: { token: surveyTokenA } });
+        if (!r) return false;
+        await prisma.surveyResponse.update({ where: { id: r.id }, data: { status: "completed", completedAt: new Date() } });
+        return true;
+      },
+      () => false,
+    );
+    const survAfter = await basePrisma.surveyResponse.findUnique({ where: { id: srespId }, select: { status: true, tenantId: true } });
+    check("survey: submission write completes inside the derived scope (stays tenant A)", survDone === true && survAfter?.status === "completed" && survAfter?.tenantId === TENANT_A);
+
+    // Cross-tenant: inside A's derived scope, B's survey response is invisible.
+    const survLeak = await withTokenTenantScope(
+      () => resolveSurveyResponseTenant(surveyTokenA),
+      async () => prisma.surveyResponse.findUnique({ where: { id: srespIdB } }),
+      () => null,
+    );
+    check("survey: A's derived scope cannot read B's response (no cross-tenant leak)", survLeak === null);
   } finally {
     __setTenantEnforcingForTests(null);
     // No-user token fixtures first (children before parents; contact FK below).
@@ -318,6 +364,8 @@ async function main() {
     await basePrisma.approvalStep.deleteMany({ where: { id: apId } });
     await basePrisma.signatureRecipient.deleteMany({ where: { id: { in: [recId, recIdB] } } });
     await basePrisma.signatureRequest.deleteMany({ where: { id: { in: [srId, srIdB] } } });
+    await basePrisma.surveyResponse.deleteMany({ where: { id: { in: [srespId, srespIdB] } } });
+    await basePrisma.survey.deleteMany({ where: { id: { in: [survId, survIdB] } } });
     await basePrisma.contact.deleteMany({
       where: { id: { in: [idA, idB, cmId, `c_forge_${SFX}`] } },
     });
