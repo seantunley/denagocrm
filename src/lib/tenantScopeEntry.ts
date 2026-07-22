@@ -14,6 +14,11 @@ import { resolveChannelTenant, type ChannelKind } from "./channelTenant";
  * DORMANT: when enforcement is off this is a bare `fn()` with zero AsyncLocalStorage
  * overhead — byte-for-byte the pre-tenancy path. The scope is confined to `fn` and
  * reverts when it returns, so no system bypass lingers onto a later request.
+ *
+ * CONTRACT: `fn` must AWAIT its DB work internally. The scope covers only what is
+ * awaited inside `fn`; returning a lazy Prisma thenable unawaited (`() => prisma.x
+ * .findMany()`) lets the query execute AFTER the scope has reverted — so it fails
+ * closed. Always `async () => { … await … }`.
  */
 export function withSystemScope<T>(fn: () => Promise<T>): Promise<T> {
   if (!tenantEnforcing()) return fn();

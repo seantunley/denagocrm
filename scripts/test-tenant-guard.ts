@@ -698,9 +698,11 @@ async function main() {
       );
     });
     // withSystemScope: the same sweep sees EVERY tenant's rows (guard bypass), no deadlock.
-    const sysSweep = await withSystemScope(() =>
-      prisma.contact.findMany({ where: { id: { in: [idA, idB] } }, select: { id: true } }),
-    );
+    // NB: the guarded read must be AWAITED inside the callback — the ALS scope covers
+    // only work awaited within `fn`, not a lazy Prisma thenable returned unawaited.
+    const sysSweep = await withSystemScope(async () => {
+      return await prisma.contact.findMany({ where: { id: { in: [idA, idB] } }, select: { id: true } });
+    });
     check("cron: withSystemScope sees BOTH tenants' rows (platform sweep, no deadlock)", sysSweep.length === 2);
 
     // runCronPerTenant: one run per ACTIVE tenant, each confined — A's slice sees only

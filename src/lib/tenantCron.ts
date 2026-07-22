@@ -42,6 +42,10 @@ export type CronRun<T> = { tenantId: string | null; result: T };
  *
  * Callers preserve the pre-tenancy response shape by unwrapping the single dormant
  * run (`runs[0].result`) and only emitting the per-tenant array under enforcement.
+ *
+ * CONTRACT: `slice` must be async and AWAIT its DB work internally — the tenant
+ * scope covers only work awaited inside it, not a lazy Prisma thenable returned
+ * unawaited (which would run after the scope reverts and fail closed).
  */
 export async function runCronPerTenant<T>(
   slice: (tenantId: string | null) => Promise<T>,
