@@ -1186,6 +1186,39 @@ export default async function SettingsPage({
             </Row>
 
             <Row
+              title="Google Maps location autocomplete"
+              status={
+                setting("GOOGLE_MAPS_BROWSER_API_KEY") ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                ) : (
+                  <span className="badge bg-amber-500/15 text-amber-300">Text input fallback</span>
+                )
+              }
+            >
+              <p className="text-xs text-muted-foreground mb-4">
+                Suggests verified South African addresses and places while booking test drives or
+                scheduling meetings. Use a dedicated browser key with <b>Maps JavaScript API</b> and
+                <b> Places API (New)</b> enabled, restricted to this CRM&apos;s website referrers. If
+                unset or unavailable, location fields remain normal text inputs.
+              </p>
+              <form action={saveSetting} className="flex gap-2 items-end">
+                <input type="hidden" name="key" value="GOOGLE_MAPS_BROWSER_API_KEY" />
+                <div className="flex-1">
+                  <label className="label">Maps JavaScript browser API key</label>
+                  <input
+                    name="value"
+                    type="password"
+                    className="input"
+                    defaultValue={setting("GOOGLE_MAPS_BROWSER_API_KEY")}
+                    placeholder="AIza..."
+                    autoComplete="off"
+                  />
+                </div>
+                <button className="btn-primary">Save</button>
+              </form>
+            </Row>
+
+            <Row
               title="SMS one-time codes (BulkSMS)"
               status={
                 setting("BULKSMS_TOKEN_ID") ? (
