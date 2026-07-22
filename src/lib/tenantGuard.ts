@@ -30,6 +30,53 @@ export function isTenantScopedModel(model: string): boolean {
   return !GLOBAL_MODELS.has(model);
 }
 
+/** Prisma nested-write operation keywords (relation fields inside `data`). */
+const RELATION_WRITE_KEYS = new Set([
+  "create",
+  "createMany",
+  "connect",
+  "connectOrCreate",
+  "update",
+  "updateMany",
+  "upsert",
+  "set",
+  "disconnect",
+  "delete",
+  "deleteMany",
+]);
+
+/**
+ * True if `data` (a create/update payload, or an array of them) contains a NESTED
+ * RELATION WRITE — a relation field whose value nests create/connect/update/etc.
+ *
+ * Prisma query extensions only intercept TOP-LEVEL operations, so nested writes
+ * are neither tenant-stamped nor validated by this guard; under enforcement they
+ * are REFUSED until tenant-aware composite FKs make parent/child consistency
+ * safe (see PHASE-C-TENANT-GUARD-DESIGN.md §1.3/§5).
+ *
+ * Heuristic that avoids false positives on scalars / JSON blobs: a plain-object
+ * field value is a relation write only if EVERY key is a relation-op keyword (a
+ * JSON column like `{ create: 1, other: 2 }` has a non-keyword key, so it's not
+ * flagged; a scalar, Date, or array is never flagged).
+ */
+export function hasNestedRelationWrite(data: unknown): boolean {
+  if (!data || typeof data !== "object") return false;
+  const rows = Array.isArray(data) ? data : [data];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    for (const value of Object.values(row as Record<string, unknown>)) {
+      if (!value || typeof value !== "object" || Array.isArray(value) || value instanceof Date) {
+        continue;
+      }
+      const keys = Object.keys(value as Record<string, unknown>);
+      if (keys.length > 0 && keys.every((k) => RELATION_WRITE_KEYS.has(k))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 /** Thrown when enforcement is on but no usable tenant scope is present. */
 export class TenantScopeError extends Error {
   constructor(message: string) {

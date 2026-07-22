@@ -8,6 +8,7 @@ import {
   stampCreate,
   scopeMutation,
   scopeUpsert,
+  hasNestedRelationWrite,
   TenantScopeError,
 } from "./tenantGuard";
 
@@ -59,6 +60,11 @@ function addAliveMutationFilter(model: string, args: any) {
  * that omits deletedAt we transparently add it (so we can test it) and strip it
  * back off, preserving the caller's expected shape. Code that genuinely needs
  * trashed rows uses basePrisma (Trash / restore / purge), which is unfiltered.
+ *
+ * Tenant scoping for unique reads is handled SEPARATELY and at the DB layer: the
+ * findUnique* hooks pass args through `scopeArgs(..., "where")` first, which adds
+ * `tenantId` to the `where` (Prisma 6 extendedWhereUnique) so a cross-tenant row
+ * is never fetched in the first place — no result-filtering needed here.
  */
 async function filteredUnique(
   model: string,
@@ -66,50 +72,25 @@ async function filteredUnique(
   query: (a: any) => Promise<any>,
   orThrow: boolean,
 ) {
-  const soft = SOFT_DELETE_MODELS.has(model);
-  // Tenant scoping for findUnique* can't inject a non-unique `tenantId` into the
-  // unique `where`, so — exactly like the soft-delete filter — we check it on the
-  // RESULT. DORMANT: `tenantEnforcing()` is false today, so `tenantActive` stays
-  // false and this behaves byte-for-byte as the soft-delete-only version.
-  const tenantOn = tenantEnforcing() && isTenantScopedModel(model);
-  const scope = tenantOn ? currentTenantScope() : undefined;
-  if (tenantOn) {
-    if (!scope) throw new TenantScopeError(`No tenant scope established for ${model}`);
-    if (!scope.system && !scope.tenantId) {
-      throw new TenantScopeError(`No tenant in scope for ${model}`);
-    }
-  }
-  const tenantActive = Boolean(tenantOn && scope && !scope.system);
-  if (!soft && !tenantActive) return query(args);
-
+  if (!SOFT_DELETE_MODELS.has(model)) return query(args);
   const hasSelect = args?.select && typeof args.select === "object";
-  // Inject a field into `select` only when the caller uses a select that doesn't
-  // already ASK for it (=== true). Testing only for key presence would let
-  // `deletedAt: false` slip through: the key exists, nothing is injected, and the
-  // result then has no field to test — a trashed / cross-tenant row would resolve
-  // as if visible.
-  const ensure: Record<string, true> = {};
-  if (soft && hasSelect && args.select.deletedAt !== true) ensure.deletedAt = true;
-  if (tenantActive && hasSelect && args.select.tenantId !== true) ensure.tenantId = true;
-  const injectedKeys = Object.keys(ensure);
-  const runArgs = injectedKeys.length
-    ? { ...args, select: { ...args.select, ...ensure } }
+  // Inject deletedAt whenever the caller's select doesn't already ASK for it
+  // (=== true). Testing only for the key's presence let `deletedAt: false` slip
+  // through: the key exists, so nothing was injected, and the result then had no
+  // deletedAt to test — a trashed row would resolve as if alive.
+  const injectDeletedAt = hasSelect && args.select.deletedAt !== true;
+  const runArgs = injectDeletedAt
+    ? { ...args, select: { ...args.select, deletedAt: true } }
     : args;
   const result = await query(runArgs);
-  if (result) {
-    if (soft && result.deletedAt) {
-      if (orThrow) throw new Error(`No ${model} found`);
-      return null;
-    }
-    if (tenantActive && result.tenantId !== scope!.tenantId) {
-      if (orThrow) throw new Error(`No ${model} found`);
-      return null;
-    }
-    if (injectedKeys.length) {
-      const clone = { ...result };
-      for (const k of injectedKeys) delete clone[k];
-      return clone;
-    }
+  if (result && result.deletedAt) {
+    if (orThrow) throw new Error(`No ${model} found`);
+    return null;
+  }
+  if (result && injectDeletedAt) {
+    const { deletedAt: _dropped, ...rest } = result;
+    void _dropped;
+    return rest;
   }
   return result;
 }
@@ -125,17 +106,21 @@ type ScopeKind = "where" | "create" | "mutation" | "upsert";
  * are rewritten to confine the read/write to the caller's tenant.
  *
  * SCOPE / LIMITS — this is DEFENCE-IN-DEPTH, not the authoritative boundary:
- *   - Prisma query extensions only intercept TOP-LEVEL operations, so a `tenantId`
- *     is stamped onto the top-level `data` only. NESTED writes (`create`/`connect`
- *     /`update`/`upsert` inside another model's `data`) and nested relation reads
- *     are NOT scoped here, and raw / `basePrisma` paths bypass the extension
- *     entirely.
- *   - Therefore Postgres RLS is the AUTHORITATIVE, fail-closed isolation layer and
- *     a HARD PREREQUISITE: `tenantEnforcing()` must not return true in any
- *     environment until RLS is live (see tenantEnforcement.ts and
- *     PHASE-C-TENANT-GUARD-DESIGN.md §1.5/§2/§6). This guard gives correct
- *     scoping/anti-forgery for the common top-level case and a good default; RLS
- *     closes the nested/raw gaps.
+ *   - Prisma query extensions only intercept TOP-LEVEL operations, so `tenantId`
+ *     is stamped/scoped on the top-level payload only. NESTED relation writes
+ *     (`create`/`connect`/`update`/`upsert` inside another model's `data`) can't
+ *     be safely stamped here, so under enforcement they are REFUSED (fail closed)
+ *     until tenant-aware composite FKs land — they are NOT silently accepted.
+ *   - A DIRECT child create that passes a scalar parent FK owned by another tenant
+ *     is NOT caught by this guard, and RLS does NOT close it either (a single-column
+ *     FK only checks the parent id exists; a row policy only checks the child's own
+ *     tenantId). That parent/child consistency requires tenant-aware COMPOSITE FKs
+ *     — `(tenantId, parentId) → Parent(tenantId, id)` — added in the FK step. RLS
+ *     is the authoritative ROW-level boundary; composite FKs are the authoritative
+ *     CROSS-ROW boundary. Both, plus this guard, are needed.
+ *   - Therefore enforcement is a HARD-gated staged rollout: `tenantEnforcing()`
+ *     must not return true in any environment until RLS + composite FKs are live
+ *     (see tenantEnforcement.ts and PHASE-C-TENANT-GUARD-DESIGN.md §1.3/§1.5/§5/§6).
  */
 function scopeArgs(model: string, kind: ScopeKind, args: any): any {
   if (!tenantEnforcing()) return args;
@@ -148,11 +133,29 @@ function scopeArgs(model: string, kind: ScopeKind, args: any): any {
     case "where":
       return scopeWhere(args, scope.tenantId);
     case "create":
+      refuseNestedRelationWrite(model, args?.data);
       return stampCreate(args, scope.tenantId);
     case "mutation":
+      refuseNestedRelationWrite(model, args?.data);
       return scopeMutation(args, scope.tenantId);
     case "upsert":
+      refuseNestedRelationWrite(model, args?.create);
+      refuseNestedRelationWrite(model, args?.update);
       return scopeUpsert(args, scope.tenantId);
+  }
+}
+
+/**
+ * Nested relation writes can't be tenant-stamped/validated by a query extension
+ * (it only sees top-level args), so under enforcement they fail closed rather than
+ * silently linking/creating cross-tenant rows. Lifted once composite FKs make
+ * parent/child consistency DB-enforced.
+ */
+function refuseNestedRelationWrite(model: string, data: unknown): void {
+  if (hasNestedRelationWrite(data)) {
+    throw new TenantScopeError(
+      `Nested relation write on ${model} is refused under tenant enforcement (top-level guard cannot stamp nested rows; use flat writes until composite FKs land)`,
+    );
   }
 }
 
@@ -173,11 +176,14 @@ function buildClient(base: PrismaClient) {
         async findFirstOrThrow({ model, args, query }: any) {
           return query(addAliveFilter(model, scopeArgs(model, "where", args)));
         },
+        // Tenant scoping is injected into the `where` (DB-level, extendedWhereUnique)
+        // so a cross-tenant row is never fetched; filteredUnique then applies only
+        // the soft-delete result check.
         async findUnique({ model, args, query }: any) {
-          return filteredUnique(model, args, query, false);
+          return filteredUnique(model, scopeArgs(model, "where", args), query, false);
         },
         async findUniqueOrThrow({ model, args, query }: any) {
-          return filteredUnique(model, args, query, true);
+          return filteredUnique(model, scopeArgs(model, "where", args), query, true);
         },
         // Writes are stamped with the owning tenant from trusted context,
         // overwriting any client-supplied `tenantId` (the anti-forgery rule).

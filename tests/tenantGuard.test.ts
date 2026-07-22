@@ -9,6 +9,7 @@ import {
   stampCreate,
   scopeMutation,
   scopeUpsert,
+  hasNestedRelationWrite,
 } from "../src/lib/tenantGuard";
 import {
   runInTenantScope,
@@ -138,6 +139,44 @@ test("scopeUpsert: scopes the where so a cross-tenant upsert misses and creates 
 test("scopeUpsert: forces a caller-supplied where.tenantId back to context", () => {
   const out = scopeUpsert({ where: { key: "k", tenantId: "tenant_B" }, create: {}, update: {} }, T);
   assert.equal(out.where.tenantId, T);
+});
+
+// ── hasNestedRelationWrite: the fail-closed detector ────────────────────────
+
+test("hasNestedRelationWrite: flat scalar data → false", () => {
+  assert.equal(hasNestedRelationWrite({ firstName: "x", parentId: "p", n: 1, ok: true }), false);
+});
+
+test("hasNestedRelationWrite: a nested create → true", () => {
+  assert.equal(hasNestedRelationWrite({ name: "x", items: { create: [{ n: 1 }] } }), true);
+});
+
+test("hasNestedRelationWrite: a nested connect → true", () => {
+  assert.equal(hasNestedRelationWrite({ parent: { connect: { id: "p" } } }), true);
+});
+
+test("hasNestedRelationWrite: connectOrCreate → true", () => {
+  assert.equal(
+    hasNestedRelationWrite({ tag: { connectOrCreate: { where: { id: "t" }, create: { name: "t" } } } }),
+    true,
+  );
+});
+
+test("hasNestedRelationWrite: a JSON column with a non-relation key → false (no false positive)", () => {
+  assert.equal(hasNestedRelationWrite({ meta: { create: 1, extra: 2 } }), false);
+});
+
+test("hasNestedRelationWrite: Date / array / null values → false", () => {
+  assert.equal(hasNestedRelationWrite({ when: new Date(0), tags: ["a", "b"], x: null }), false);
+});
+
+test("hasNestedRelationWrite: an array payload with a nested write in one row → true", () => {
+  assert.equal(hasNestedRelationWrite([{ n: 1 }, { rel: { connect: { id: "y" } } }]), true);
+});
+
+test("hasNestedRelationWrite: non-object input → false", () => {
+  assert.equal(hasNestedRelationWrite(undefined), false);
+  assert.equal(hasNestedRelationWrite("x"), false);
 });
 
 // ── tenantScope: async-context propagation ──────────────────────────────────

@@ -72,11 +72,32 @@ return query(args);   // when tenantEnforcing() === false → today's behaviour,
 
 Because the whole block is behind `tenantEnforcing()`, merging this PR changes **nothing** in prod until the env flag flips. That's the safety valve.
 
-### 1.3 Deriving child tenant from parent (principle #4)
+### 1.3 Parent/child tenant consistency (principle #4) — LOCKED strategy
 
-For nested creates and child tables, the tenant must come from the parent row, not the payload. Two mechanisms:
-- **Nested writes** (`quote: { create: { items: { create: [...] } } }`): the top-level `create` stamps the parent's tenant; nested rows copy the parent's `tenantId` in the same extension pass.
-- **Direct child creates** (`quoteItem.create({ data: { quoteId } })`): resolve `tenantId` from the referenced parent inside the guard (a cheap `basePrisma` lookup of `Quote.tenantId WHERE id = quoteId`), and refuse if the parent is a different tenant than context. This is the anti-forgery check.
+A Prisma query extension only sees TOP-LEVEL args, so the app guard cannot safely
+stamp or validate nested rows. Parent/child consistency is therefore enforced by a
+combination, NOT by the app guard alone, and NOT by RLS alone:
+
+- **Nested relation writes** (`quote: { create: { items: { create: [...] } } }`,
+  `connect`, `connectOrCreate`, nested `update`/`upsert`): the guard **refuses**
+  them under enforcement (`hasNestedRelationWrite` → `TenantScopeError`, fail
+  closed) — it cannot stamp what it cannot see. Callers use flat writes, or the
+  refusal is lifted per-relation once composite FKs (below) make the link safe.
+- **Direct child creates with a scalar parent FK** (`quoteItem.create({ data: {
+  quoteId } })`): the guard stamps the child's own `tenantId` but does **NOT**
+  prove `quoteId` belongs to that tenant, and **RLS does not close this** — a
+  single-column FK only checks the parent id exists; a row policy only checks the
+  child's own `tenantId`. Closed instead by **tenant-aware composite foreign
+  keys**: parent gets `UNIQUE(tenantId, id)`, child FK becomes
+  `(tenantId, quoteId) → Quote(tenantId, id)`, so the DB rejects a child pointing
+  at another tenant's parent. Added in the FK step (§5). A cheaper app-level
+  complement — resolve the parent's `tenantId` via `basePrisma` and compare —
+  MAY be added, but the composite FK is the authoritative guarantee.
+
+So the three layers are complementary: **this guard** = top-level scoping +
+anti-forgery stamping + nested-write refusal; **RLS** = authoritative ROW-level
+tenant match; **composite FKs** = authoritative CROSS-ROW (parent/child) match.
+Enforcement stays gated until RLS + composite FKs are live (§6).
 
 ### 1.4 Global (non-scoped) models — the allow-list
 
@@ -175,6 +196,13 @@ Only after §1–§4 are in place and monitored clean. Per table, **in this orde
 3. `ADD CONSTRAINT "T_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id")` — `ON DELETE RESTRICT` (never cascade-delete a tenant's data implicitly).
 4. Schema: `tenantId String` (drop the `?`) + the relation.
 
+**Tenant-aware COMPOSITE FKs (parent/child consistency — §1.3).** For every
+parent→child relation between tenant-owned tables, additionally:
+- parent gets `UNIQUE(tenantId, id)` (or a composite PK);
+- the child's relation FK becomes `FOREIGN KEY (tenantId, <parentId>) REFERENCES Parent(tenantId, id)`, so the DB rejects a child row pointing at another tenant's parent — the gap RLS + single-column FKs leave open.
+
+Only once these land can the guard's **nested-relation-write refusal** be relaxed per-relation (a relation with a composite FK is safe to nest). Until then, callers use flat writes under enforcement.
+
 Backup first. This is the point of no easy return, so it's the last structural step and it's staged (preview → prod), NOT NULL flips gated behind confirmed-clean monitor logs.
 
 ---
@@ -183,9 +211,9 @@ Backup first. This is the point of no easy return, so it's the last structural s
 
 Each PR is independently safe, verified as a constrained user, no CI-red merges (CI now restored):
 
-**⚠️ RLS is a HARD PREREQUISITE for enforcement.** The app-layer guard is defence-in-depth: Prisma extensions intercept only TOP-LEVEL operations, so nested writes/connects and raw/`basePrisma` paths are NOT covered by it. `tenantEnforcing()` must not return true in ANY environment (preview included) until RLS is live — RLS is the authoritative, fail-closed boundary that closes those gaps. Hence RLS precedes every enforcement step below.
+**⚠️ RLS + composite FKs are HARD PREREQUISITES for enforcement.** The app-layer guard is defence-in-depth: Prisma extensions intercept only TOP-LEVEL operations. It refuses nested relation writes under enforcement (fail closed), but a direct child create with a cross-tenant scalar parent FK is caught by neither the guard nor RLS nor a single-column FK — only by tenant-aware **composite FKs** (§1.3/§5). So: **RLS** (authoritative row-level boundary) must be live before *any* enforcement (preview included); **composite FKs** (authoritative cross-row boundary) must be live before **prod** enforcement. `tenantEnforcing()` stays false until then.
 
-1. **✅ `tenantScope`/`tenantGuard` + `db.ts` guard, dormant** (#165) — AsyncLocalStorage scope, full-operation guard incl. `findFirstOrThrow`/`createManyAndReturn`/`updateManyAndReturn`, upsert `where` scoping (extendedWhereUnique), `GLOBAL_MODELS`, testable enforcement override, pure-helper unit tests + a disposable-Postgres integration test + a schema-contract test. All behind `tenantEnforcing()===false`.
+1. **✅ `tenantScope`/`tenantGuard` + `db.ts` guard, dormant** (#165) — AsyncLocalStorage scope, full-operation guard incl. `findFirstOrThrow`/`createManyAndReturn`/`updateManyAndReturn`, DB-level `where` scoping for unique reads + upsert (extendedWhereUnique), nested-relation-write refusal (fail closed), `GLOBAL_MODELS`, testable enforcement override, pure-helper unit tests + a disposable-Postgres integration test (real extension, incl. upsert/`*ManyAndReturn`/nested-refusal) + a schema-contract test. All behind `tenantEnforcing()===false`.
 2. **Establish scope at the chokepoints** (#166) — `getCurrentUser` (staff) + `getPortalContact` (portal), with auth/session validation running in a trusted `system` scope FIRST (it reads tenant-scoped `UserSession`/`AppSetting` before the tenant is known), then switching to the principal's tenant. Still inert.
 3. **No-user edges** (step 2b) — cron + backup (`system`), webhooks (derived tenant; WhatsApp `phone_number_id` as the routing key), public token routes (tenant derived from the token's entity). Bypass both chokepoints; must be wired before enforcement.
 4. **Audit every `basePrisma` call site** — add `tenantId` predicates to business uses; mark backups/trash/admin `system`. (Correctness even before enforcement.)
@@ -193,9 +221,9 @@ Each PR is independently safe, verified as a constrained user, no CI-red merges 
 6. **Per-tenant invoice counter** (decision 1) — `TenantCounter` model + locked-increment in invoice create; backfill Denago's counter to `MAX(number)`. Prereq for the uniqueness swap.
 7. **Uniqueness re-scoping** (§3) — composite `@@unique` swaps + backfills, incl. `Invoice.number` now that the counter exists.
 8. **RLS** — enable + `FORCE ROW LEVEL SECURITY` + policies + the `set_config(...,true)` transaction wrapper + `BYPASSRLS` system role. **Preview first**; the pooling behaviour (§2.2) is the risk to prove out here. This is the prerequisite for anything below.
-9. **Turn the guard on in preview** — `TENANT_ENFORCEMENT=enforce` + flip `tenantEnforcing()` to honour it, **preview env only, AFTER RLS is live**. Run the isolation suite (§7). Watch monitor logs.
-10. **NOT NULL + FK flip** (§5) — per-cluster, backup-first, after everything above is clean.
-11. **Enforce in prod** — RLS live in prod, then flip the env, watch, keep the one-line rollback (`TENANT_ENFORCEMENT=off` / `tenantEnforcing()` guard) ready.
+9. **Turn the guard on in preview** — `TENANT_ENFORCEMENT=enforce` + flip `tenantEnforcing()` to honour it, **preview env only, AFTER RLS is live**. Run the isolation suite (§7). Watch monitor logs. Nested writes are refused here (expected) until step 10.
+10. **NOT NULL + FK flip + tenant-aware composite FKs** (§5) — per-cluster, backup-first, after everything above is clean. Then relax the guard's nested-write refusal per-relation as each composite FK lands.
+11. **Enforce in prod** — RLS **and composite FKs** live in prod, then flip the env, watch, keep the one-line rollback (`TENANT_ENFORCEMENT=off` / `tenantEnforcing()` guard) ready.
 12. **Tenant activation flow** — only now: `createTenant` currently makes SUSPENDED tenants w/ DISABLED owners; a controlled activation enables a real second tenant once isolation is *proven*.
 
 ---

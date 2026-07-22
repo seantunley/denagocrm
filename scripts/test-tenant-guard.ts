@@ -28,6 +28,7 @@ const TENANT_A = `tguard_A_${SFX}`;
 const TENANT_B = `tguard_B_${SFX}`;
 const idA = `c_A_${SFX}`;
 const idB = `c_B_${SFX}`;
+const cmId = `c_cm_${SFX}`;
 
 let passed = 0;
 let failed = 0;
@@ -90,6 +91,48 @@ async function main() {
       const forged = await basePrisma.contact.findUnique({ where: { id: forgedId } });
       check("create stamps acting tenant, ignoring forged tenantId", forged?.tenantId === TENANT_A);
 
+      // findFirstOrThrow of B's row → throws (scoped where finds nothing).
+      await expectThrows(
+        "findFirstOrThrow of B's row → throws",
+        () => prisma.contact.findFirstOrThrow({ where: { id: idB } }),
+      );
+
+      // Cross-tenant upsert: the where is tenant-scoped, so it MISSES B's row and
+      // takes the create branch (id collision → throws) instead of updating B.
+      await expectThrows(
+        "cross-tenant upsert does not update B (misses → create → PK collision)",
+        () =>
+          prisma.contact.upsert({
+            where: { id: idB },
+            create: { id: idB, firstName: "hacked", tenantId: TENANT_B },
+            update: { firstName: "hacked" },
+          }),
+      );
+
+      // createManyAndReturn stamps the acting tenant.
+      await prisma.contact.createManyAndReturn({
+        data: [{ id: cmId, firstName: "cm", tenantId: TENANT_B }],
+      });
+      const cm = await basePrisma.contact.findUnique({ where: { id: cmId } });
+      check("createManyAndReturn stamps acting tenant", cm?.tenantId === TENANT_A);
+
+      // updateManyAndReturn is scoped to A: only A's row is returned/updated.
+      const updated = await prisma.contact.updateManyAndReturn({
+        where: { id: { in: [idA, idB] } },
+        data: { firstName: "bulk" },
+      });
+      check("updateManyAndReturn touches only A's row", updated.length === 1 && updated[0].id === idA);
+
+      // Nested relation writes are refused under enforcement (fail closed).
+      await expectThrows(
+        "nested relation write is refused under enforcement",
+        () =>
+          prisma.contact.create({
+            data: { firstName: "n", rel: { create: { x: 1 } } },
+          } as unknown as Parameters<typeof prisma.contact.create>[0]),
+        (e) => e instanceof TenantScopeError,
+      );
+
       // B's row is untouched by all of the above.
       const bStill = await basePrisma.contact.findUnique({ where: { id: idB } });
       check("B's row untouched (still tenant B, name intact)", bStill?.tenantId === TENANT_B && bStill?.firstName === "B");
@@ -110,7 +153,7 @@ async function main() {
   } finally {
     __setTenantEnforcingForTests(null);
     await basePrisma.contact.deleteMany({
-      where: { id: { in: [idA, idB, `c_forge_${SFX}`] } },
+      where: { id: { in: [idA, idB, cmId, `c_forge_${SFX}`] } },
     });
     await basePrisma.$disconnect();
   }
