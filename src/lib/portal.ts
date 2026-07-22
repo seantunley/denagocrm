@@ -2,7 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { prisma } from "./db";
 import { isModuleEnabled } from "./modules/enabled";
-import { establishTenantScopeFromId } from "./tenantScopeEntry";
+import { establishTenantScopeFromId, validateInSystemScope } from "./tenantScopeEntry";
 
 const secret = () => {
   const s = process.env.SESSION_SECRET;
@@ -46,25 +46,34 @@ export async function clearPortalCookie() {
 
 /** The logged-in customer for the portal, or null. */
 export async function getPortalContact() {
-  // Portal is an optional pack. When it is off, no session resolves — this is
-  // the single choke point every portal page and action funnels through
-  // (directly, or via getPortalScope/requirePortalScope/portalUser), so gating
-  // here makes the whole portal self-reject server-side, not just hide its UI.
-  if (!(await isModuleEnabled("portal"))) return null;
-  const store = await cookies();
-  const token = store.get(PORTAL_COOKIE)?.value;
-  if (!token) return null;
-  try {
-    const { payload } = await jwtVerify(token, secret());
-    if (payload.kind !== "portal" || typeof payload.sub !== "string") return null;
-    const contact = await prisma.contact.findFirst({
-      where: { id: payload.sub, deletedAt: null },
-    });
-    // Phase C (step 2): seed the portal request's tenant scope from the resolved
-    // customer's owning tenant. DORMANT until `tenantEnforcing()` flips on.
-    if (contact) establishTenantScopeFromId(contact.tenantId ?? null);
-    return contact;
-  } catch {
-    return null;
-  }
+  // Phase C: the module check (tenant-scoped AppSetting) and the Contact lookup
+  // run BEFORE the customer's tenant is known. Do them in a trusted `system` scope
+  // CONFINED to this callback, so the guard doesn't reject them AND a rejected
+  // portal request (module off / no session) can't leak a lingering system bypass
+  // — the scope reverts on the null paths; only the contact's own tenant (set
+  // after, below) persists. DORMANT: the db guard ignores the scope until
+  // `tenantEnforcing()`, and the check order is unchanged when off.
+  const contact = await validateInSystemScope(async () => {
+    // Portal is an optional pack. When it is off, no session resolves — this is
+    // the single choke point every portal page and action funnels through
+    // (directly, or via getPortalScope/requirePortalScope/portalUser), so gating
+    // here makes the whole portal self-reject server-side, not just hide its UI.
+    if (!(await isModuleEnabled("portal"))) return null;
+    const store = await cookies();
+    const token = store.get(PORTAL_COOKIE)?.value;
+    if (!token) return null;
+    try {
+      const { payload } = await jwtVerify(token, secret());
+      if (payload.kind !== "portal" || typeof payload.sub !== "string") return null;
+      return await prisma.contact.findFirst({
+        where: { id: payload.sub, deletedAt: null },
+      });
+    } catch {
+      return null;
+    }
+  });
+  // Switch to the customer's own tenant for the rest of the request (persists via
+  // enterWith). DORMANT until `tenantEnforcing()`.
+  if (contact) establishTenantScopeFromId(contact.tenantId ?? null);
+  return contact;
 }

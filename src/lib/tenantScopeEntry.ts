@@ -2,7 +2,20 @@ import "server-only";
 import { resolveActingTenant } from "./tenantContext";
 import { honoredTenantClaim } from "./tenant";
 import { tenantEnforcing } from "./tenantEnforcement";
-import { enterTenantScope } from "./tenantScope";
+import { enterTenantScope, runInTenantScope } from "./tenantScope";
+
+/**
+ * Run auth/session validation (which reads tenant-scoped infrastructure BEFORE
+ * the principal's tenant is known) in a trusted `system` scope — but ONLY when
+ * enforcement is on. When off this is a bare `fn()` call with zero AsyncLocalStorage
+ * overhead, so the auth hot path is unchanged from pre-tenancy. The scope is
+ * confined to `fn`, so it reverts when `fn` returns (no lingering system bypass on
+ * the unauthenticated path); the principal's own scope is established separately.
+ */
+export function validateInSystemScope<T>(fn: () => Promise<T>): Promise<T> {
+  if (!tenantEnforcing()) return fn();
+  return runInTenantScope({ tenantId: null, system: true }, fn);
+}
 
 /**
  * Establish the request's tenant SCOPE at an authenticated chokepoint (Phase C,
