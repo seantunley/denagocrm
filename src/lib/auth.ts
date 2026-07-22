@@ -8,8 +8,8 @@ import { getSetting } from "./settings";
 import { hasModule, type ModuleId } from "./access";
 import { getUserSecurityState, getUserSecurityStateFresh } from "./userSecurity";
 import { resolveActingTenant } from "./tenantContext";
-import { tenantObserving, tenantEnforcing } from "./tenantEnforcement";
-import { honoredTenantClaim, isTenantForeignKeyViolation } from "./tenant";
+import { tenantObserving, tenantEnforcing, mayRetryTenantlessSession } from "./tenantEnforcement";
+import { honoredTenantClaim } from "./tenant";
 import { establishStaffTenantScope, validateInSystemScope } from "./tenantScopeEntry";
 import { withTenant, withSystemScope } from "./tenantScope";
 import {
@@ -66,11 +66,14 @@ export const getCurrentUser = cache(async () => {
     return { user, tid: session.tid ?? null };
   });
   if (!validated) return null;
-  // Switch from the (now-reverted) system validation scope to the user's OWN
-  // tenant for the rest of the request. DORMANT — a no-op until enforcing; resolves
-  // inline (no getCurrentUser re-entry); persists downstream via enterWith. Runs
-  // once per request (getCurrentUser is cache()d).
-  await establishStaffTenantScope(validated.user.id, validated.tid);
+  // Establish the user's OWN tenant for the rest of the request. DORMANT — a no-op
+  // that always succeeds until enforcing. Under enforcement it FAILS CLOSED here
+  // (returns null → session unusable) when no valid acting tenant resolves — a
+  // stale/tenant-less/ambiguous session must not pass requireUser/role/owner checks
+  // or reach global models. Resolves inline (no getCurrentUser re-entry); runs once
+  // per request (getCurrentUser is cache()d).
+  const established = await establishStaffTenantScope(validated.user.id, validated.tid);
+  if (!established.ok) return null;
   return validated.user;
 });
 
@@ -198,15 +201,16 @@ export async function createSessionCookie(
       ip: (h.get("x-forwarded-for") ?? "").split(",")[0].trim() || null,
       userAgent: (h.get("user-agent") ?? "").slice(0, 250) || null,
     };
-    // Stamp the resolved tenant, but never let a concurrently-deleted tenant block
-    // sign-in: on a broken tenant FK, retry once WITHOUT the tenant (in a system
-    // scope so the guard doesn't re-stamp the now-invalid tenant). sessionTenantId
-    // tracks what actually landed so the JWT stays in sync.
+    // Stamp the resolved tenant. If the tenant is deleted between resolve and
+    // insert (concurrent tenant admin) the FK breaks. When NOT enforcing, fall back
+    // to a tenant-less session for backward compatibility (in a system scope so the
+    // guard doesn't re-stamp the invalid tenant). When ENFORCING, do NOT issue a
+    // tenant-less session — propagate the error and abort login (mayRetryTenantlessSession).
     let sessionTenantId = tenantId;
     try {
       await prisma.userSession.create({ data: { ...sessionBase, tenantId: sessionTenantId } });
     } catch (e) {
-      if (!isTenantForeignKeyViolation(e, sessionTenantId)) throw e;
+      if (!mayRetryTenantlessSession(e, sessionTenantId)) throw e;
       sessionTenantId = null;
       await withSystemScope(() => prisma.userSession.create({ data: sessionBase }));
     }

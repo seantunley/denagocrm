@@ -30,18 +30,28 @@ export function validateInSystemScope<T>(fn: () => Promise<T>): Promise<T> {
  */
 
 /**
- * Staff/app surface. Called from `getCurrentUser()` with the already-resolved
- * user id and the session's `tid` claim — resolves the user's sole active tenant
- * and honours the claim exactly as `getActiveTenantId()` does, but WITHOUT
- * re-entering `getCurrentUser` (which would recurse). No-op when enforcement off.
+ * Staff/app surface. Called from `getCurrentUser()` with the already-resolved user
+ * id and the session's `tid` claim — resolves the user's sole active tenant and
+ * honours the claim exactly as `getActiveTenantId()` does, but WITHOUT re-entering
+ * `getCurrentUser` (which would recurse).
+ *
+ * Returns `{ ok }`. Under enforcement, `ok` is FALSE whenever no valid acting
+ * tenant resolves (tid absent/mismatched, membership removed, tenant suspended, or
+ * a second active membership made it ambiguous) — the caller MUST then fail the
+ * whole authentication, not just leave a null scope, so a stale/ambiguous session
+ * can't still pass `requireUser`/role/owner checks or trigger global side effects.
+ * When enforcement is off it always returns `{ ok: true }` (dormant, no rejection).
  */
 export async function establishStaffTenantScope(
   userId: string,
   tid: string | null,
-): Promise<void> {
-  if (!tenantEnforcing()) return;
+): Promise<{ ok: boolean }> {
+  if (!tenantEnforcing()) return { ok: true };
   const sole = await resolveActingTenant(userId);
-  enterTenantScope({ tenantId: honoredTenantClaim(tid, sole), system: false });
+  const tenantId = honoredTenantClaim(tid, sole);
+  if (!tenantId) return { ok: false }; // fail closed at the chokepoint
+  enterTenantScope({ tenantId, system: false });
+  return { ok: true };
 }
 
 /**

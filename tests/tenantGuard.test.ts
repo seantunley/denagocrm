@@ -18,6 +18,10 @@ import {
   withSystemScope,
   enterTenantScope,
 } from "../src/lib/tenantScope";
+import {
+  mayRetryTenantlessSession,
+  __setTenantEnforcingForTests,
+} from "../src/lib/tenantEnforcement";
 
 const T = "tenant_A";
 
@@ -260,4 +264,36 @@ test("a confined scope returning null leaves NO scope behind (portal reject path
   });
   assert.equal(result, null);
   assert.equal(currentTenantScope(), undefined); // scope reverted — nothing leaked
+});
+
+// ── mayRetryTenantlessSession: the login FK-race fallback decision ───────────
+
+const fkError = { code: "P2003", meta: { constraint: "UserSession_tenantId_fkey" } };
+
+test("mayRetryTenantlessSession: FK violation + NOT enforcing → true (backward-compat retry)", () => {
+  __setTenantEnforcingForTests(false);
+  try {
+    assert.equal(mayRetryTenantlessSession(fkError, "tenant_x"), true);
+  } finally {
+    __setTenantEnforcingForTests(null);
+  }
+});
+
+test("mayRetryTenantlessSession: FK violation + ENFORCING → false (never issue a tenant-less session)", () => {
+  __setTenantEnforcingForTests(true);
+  try {
+    assert.equal(mayRetryTenantlessSession(fkError, "tenant_x"), false);
+  } finally {
+    __setTenantEnforcingForTests(null);
+  }
+});
+
+test("mayRetryTenantlessSession: a non-tenant-FK error → false regardless of mode", () => {
+  __setTenantEnforcingForTests(false);
+  try {
+    assert.equal(mayRetryTenantlessSession({ code: "P2002" }, "tenant_x"), false);
+    assert.equal(mayRetryTenantlessSession(fkError, null), false); // null tenant can't FK-fault
+  } finally {
+    __setTenantEnforcingForTests(null);
+  }
 });
