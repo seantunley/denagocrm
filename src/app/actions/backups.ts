@@ -1,12 +1,12 @@
 "use server";
 
-import { list } from "@vercel/blob";
 import { NextRequest } from "next/server";
 import { revalidatePath } from "next/cache";
 import { GET as executeBackup } from "@/app/api/cron/backup/route";
 import { requireOwner } from "@/lib/auth";
 import { type PortableBackup, verifyPortableBackup } from "@/lib/backup";
 import { decryptValue, putSetting } from "@/lib/settings";
+import { listAllBackupBlobs, readFile } from "@/lib/storage";
 
 export type BackupActionState = {
   ok?: string;
@@ -68,13 +68,12 @@ export async function verifyBackup(
   }
 
   try {
-    const page = await list({ prefix: pathname, limit: 10 });
-    const blob = page.blobs.find((candidate) => candidate.pathname === pathname);
+    const blobs = await listAllBackupBlobs(pathname);
+    const blob = blobs.find((candidate) => candidate.pathname === pathname);
     if (!blob) return { error: "Backup file not found." };
 
-    const response = await fetch(blob.url, { cache: "no-store" });
-    if (!response.ok) return { error: `Could not download the backup (${response.status}).` };
-    const payload = JSON.parse(decryptValue(await response.text())) as {
+    const uploadedText = (await readFile(blob.url)).toString("utf8");
+    const payload = JSON.parse(decryptValue(uploadedText)) as {
       portable: PortableBackup;
       assets?: Array<{ status?: string }>;
     };
