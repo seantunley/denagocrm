@@ -11,18 +11,24 @@ export async function GET(req: NextRequest) {
   if (!isAuthorizedCron(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    // Journeys are a per-tenant business queue. DORMANT → one global run
-    // (unchanged). ENFORCING → one run per active tenant, each in its own scope,
-    // so the module gate + engine read only that tenant's data. The marketing
-    // gate stays inside the slice so it's evaluated per tenant under enforcement.
+    // Journeys are a per-tenant business queue. The helper rotates the starting
+    // tenant, bounds concurrency, stops admitting work at the route deadline, and
+    // records one tenant's failure without starving every tenant behind it.
     const runs = await runCronPerTenant(async () => {
       if (!(await getEnabledModuleIds()).has("marketing")) {
         return { skipped: "marketing-disabled" as const };
       }
       return runJourneyEngine();
+    }, {
+      maxRuntimeMs: 50_000,
+      minStartBudgetMs: 8_000,
+      concurrency: 2,
+      rotationWindowMs: 15 * 60 * 1000,
+      onError: (tenantId, error) => logError(`journey-engine:${tenantId}`, error),
     });
-    if (runs.length === 1 && runs[0].tenantId === null) {
-      return NextResponse.json({ ok: true, ...runs[0].result });
+    const dormant = runs.length === 1 && runs[0].tenantId === null ? runs[0] : null;
+    if (dormant?.status === "ok") {
+      return NextResponse.json({ ok: true, ...dormant.result });
     }
     return NextResponse.json({ ok: true, tenants: runs });
   } catch (error) {
