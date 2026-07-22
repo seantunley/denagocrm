@@ -7,6 +7,8 @@ import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { hasModule, type ModuleId } from "./access";
 import { getUserSecurityState, getUserSecurityStateFresh } from "./userSecurity";
+import { resolveActingTenant } from "./tenantContext";
+import { honoredTenantClaim, isTenantForeignKeyViolation } from "./tenant";
 import {
   verifySession,
   signFreshSession,
@@ -136,19 +138,45 @@ export async function createSessionCookie(
   const idle = pwa ? 7 * 24 * 60 : await getIdleMinutes();
   const jti = crypto.randomUUID();
   const h = await headers();
-  await prisma.userSession.create({
-    data: {
-      jti,
-      userId: user.id,
-      platform: pwa ? "pwa" : "web",
-      ip: (h.get("x-forwarded-for") ?? "").split(",")[0].trim() || null,
-      userAgent: (h.get("user-agent") ?? "").slice(0, 250) || null,
-    },
-  });
+  // Multi-tenancy PLUMBING (behaviour-preserving): resolve the user's single
+  // active tenant and record it on the session + JWT. Best-effort and fully
+  // fail-open — if resolution errors, is ambiguous, or finds nothing, tenantId
+  // stays null and login proceeds exactly as before. NOTHING reads/enforces this
+  // yet; enforcement lands in a later, flag-gated PR.
+  let tenantId: string | null = null;
+  try {
+    const ctx = await resolveActingTenant(user.id);
+    if ("tenantId" in ctx) tenantId = ctx.tenantId;
+  } catch {
+    // never let tenant resolution block sign-in
+  }
+  // Stamp the resolved tenant, but never let it block sign-in: if the tenant is
+  // deleted between the resolve above and this insert (concurrent tenant admin),
+  // the FK would reject the create — so on ANY failure retry once WITHOUT the
+  // tenant. sessionTenantId tracks what actually landed so the JWT stays in sync.
+  const sessionBase = {
+    jti,
+    userId: user.id,
+    platform: pwa ? "pwa" : "web",
+    ip: (h.get("x-forwarded-for") ?? "").split(",")[0].trim() || null,
+    userAgent: (h.get("user-agent") ?? "").slice(0, 250) || null,
+  };
+  let sessionTenantId = tenantId;
+  try {
+    await prisma.userSession.create({ data: { ...sessionBase, tenantId: sessionTenantId } });
+  } catch (e) {
+    // ONLY a broken tenant FK — the resolved tenant was deleted between the
+    // resolve above and this insert — is recoverable by dropping the tenant and
+    // retrying. Any other error is a real failure (e.g. a DB outage or a jti
+    // collision) and must propagate, not be swallowed into a tenant-less session.
+    if (!isTenantForeignKeyViolation(e, sessionTenantId)) throw e;
+    sessionTenantId = null;
+    await prisma.userSession.create({ data: sessionBase });
+  }
   const token = await signFreshSession(
     { ...user, sessionVersion: security.sessionVersion },
     idle,
-    { jti, pwa }
+    { jti, pwa, ...(sessionTenantId ? { tid: sessionTenantId } : {}) }
   );
   const store = await cookies();
   store.set(SESSION_COOKIE, token, sessionCookieOptions(pwa));
@@ -157,4 +185,31 @@ export async function createSessionCookie(
 export async function destroySessionCookie() {
   const store = await cookies();
   store.delete(SESSION_COOKIE);
+}
+
+/**
+ * The active tenant carried by the current session's JWT (the `tid` claim), or
+ * null. READ-ONLY plumbing for multi-tenancy: it exposes the claim so later,
+ * flag-gated enforcement can consume it. It intentionally enforces nothing and
+ * returns null for older sessions minted before the claim existed — callers must
+ * not gate access on it yet.
+ *
+ * The claim is honoured ONLY when it is safe to trust:
+ *  - the session is fully valid — getCurrentUser applies the same device
+ *    revocation, disabled-account and session-version checks, so a signature that
+ *    verifies but belongs to a revoked/disabled/superseded session yields null;
+ *  - it still resolves to the user's SOLE active tenant (see honoredTenantClaim):
+ *    a `tid` that went stale after a membership removal or tenant suspension is
+ *    dropped, and so is one that became AMBIGUOUS because a second active
+ *    membership was added after login.
+ */
+export async function getActiveTenantId(): Promise<string | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const store = await cookies();
+  const token = store.get(SESSION_COOKIE)?.value;
+  if (!token) return null;
+  const session = await verifySession(token);
+  const sole = await resolveActingTenant(user.id);
+  return honoredTenantClaim(session?.tid ?? null, sole);
 }
