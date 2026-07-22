@@ -99,23 +99,59 @@ export function classifyDiffScript(script) {
 }
 
 /**
+ * Pin every child `prisma` invocation to the SAME direct database this runner
+ * checks and locks, so apply + record + verify can never drift onto different
+ * databases (the root cause of the recorded-but-not-applied outage). Pure +
+ * exported so the pinning contract is covered by tests. Returns a NEW env object.
+ */
+export function buildChildEnv(env) {
+  const directUrl = env.DATABASE_URL_UNPOOLED || env.DATABASE_URL;
+  return directUrl
+    ? { ...env, DATABASE_URL: directUrl, DATABASE_URL_UNPOOLED: directUrl }
+    : { ...env };
+}
+
+/** Default schema-diff probe: `prisma migrate diff` (DB → deployed schema). */
+function defaultRunDiff(childEnv) {
+  return capture(
+    NPX,
+    ["prisma", "migrate", "diff", "--from-url", childEnv.DATABASE_URL, "--to-schema-datamodel", schemaFile, "--script"],
+    childEnv,
+  );
+}
+
+/**
+ * Apply ONE migration: execute its SQL, THEN record it (execute-before-resolve).
+ * If execute throws, resolve never runs, so the migration stays pending and
+ * re-runs next time (every migration.sql is idempotent). `runner(cmd, args, env)`
+ * is injectable so the ordering is covered by tests. Exported.
+ */
+export function applyOne(name, childEnv, runner = run) {
+  runner(NPX, ["prisma", "db", "execute", "--schema", schemaPath, "--file", join(migrationsDir, name, "migration.sql")], childEnv);
+  runner(NPX, ["prisma", "migrate", "resolve", "--schema", schemaPath, "--applied", name], childEnv);
+}
+
+/**
  * Assert the live database contains every table and column the deployed schema
  * requires. Uses {@link classifyDiffScript}; FAILS the deploy on any missing
- * table/column rather than ship code that will 500 on it.
+ * table/column rather than ship code that will 500 on it. `runDiff` is injectable
+ * for tests. Exported.
+ *
+ * FAIL-CLOSED: a safety gate that cannot verify the schema must BLOCK the deploy,
+ * never wave it through. If the diff probe itself fails (missing config, auth /
+ * network failure, CLI problem), we throw — an unverifiable schema is treated as
+ * unsafe, not assumed fine.
  */
-function assertSchemaObjectsPresent(childEnv) {
+export function assertSchemaObjectsPresent(childEnv, runDiff = defaultRunDiff) {
   let script;
   try {
-    script = capture(
-      NPX,
-      ["prisma", "migrate", "diff", "--from-url", childEnv.DATABASE_URL, "--to-schema-datamodel", schemaFile, "--script"],
-      childEnv,
-    );
+    script = runDiff(childEnv);
   } catch (e) {
-    // Never let an inability to compute the diff mask a real deploy — but do not
-    // hard-fail the deploy on the check itself being unavailable.
-    console.warn(`integrity check: could not compute schema diff — ${e.message}`);
-    return;
+    throw new Error(
+      `✗ MIGRATION INTEGRITY CHECK COULD NOT VERIFY THE SCHEMA (failing closed): ${e.message}\n` +
+        "The deploy is blocked because the database schema could not be checked — fix the probe " +
+        "(database URL / connectivity / prisma CLI) and redeploy.",
+    );
   }
 
   const { missing, otherDrift } = classifyDiffScript(script);
@@ -145,12 +181,7 @@ async function main() {
   // it is not reliable through a transaction pooler. Fall back to DATABASE_URL
   // where no unpooled URL is configured (e.g. CI's direct Postgres).
   const directUrl = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
-  // Pin every child `prisma` invocation to the SAME direct database this runner
-  // checks and locks, so apply + record + verify can never drift onto different
-  // databases (the root cause of the recorded-but-not-applied outage).
-  const childEnv = directUrl
-    ? { ...process.env, DATABASE_URL: directUrl, DATABASE_URL_UNPOOLED: directUrl }
-    : { ...process.env };
+  const childEnv = buildChildEnv(process.env);
   const prisma = new PrismaClient(directUrl ? { datasources: { db: { url: directUrl } } } : undefined);
   let locked = false;
 
@@ -184,11 +215,7 @@ async function main() {
         continue;
       }
       console.log(`applying     ${name}`);
-      // Execute the SQL FIRST, then record it — both on the pinned childEnv DB. If
-      // execute throws, we never record, so the migration stays pending and
-      // re-runs next time (every migration.sql is written idempotent).
-      run(NPX, ["prisma", "db", "execute", "--schema", schemaPath, "--file", join(migrationsDir, name, "migration.sql")], childEnv);
-      run(NPX, ["prisma", "migrate", "resolve", "--schema", schemaPath, "--applied", name], childEnv);
+      applyOne(name, childEnv);
     }
 
     if (pending.length === 0) console.log("Database is up to date — nothing to apply.");
