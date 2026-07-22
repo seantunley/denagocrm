@@ -15,23 +15,25 @@ export function approvalUrl(token: string): string {
 
 /** Resolve who should be notified for an approval step (name + email). Exported for tests. */
 export async function resolveApprover(step: { assigneeType: string; assigneeUserId: string | null; assigneeRole: string | null; assigneeName: string | null; assigneeEmail: string | null }): Promise<{ name: string; email: string | null }> {
-  if (step.assigneeType === "staff" && step.assigneeUserId) {
-    // Validate the stored assignee is STILL an active member of THIS request's
-    // tenant. `User` is global, so an unscoped lookup would happily return a
-    // cross-tenant/stale user and email them this tenant's document + token.
-    const u = await resolveTenantMemberUser(step.assigneeUserId);
+  if (step.assigneeType === "staff") {
+    // Validate the stored assignee is STILL an active, non-disabled member of THIS
+    // request's tenant. `User` is global, so an unscoped lookup would happily return
+    // a cross-tenant/stale/disabled user and email them this tenant's document +
+    // token. Branch on the TYPE (not `&& assigneeUserId`) so a malformed/legacy
+    // staff step with a null/unresolved id also fails closed under enforcement
+    // rather than leaking to a stored email.
+    const u = step.assigneeUserId ? await resolveTenantMemberUser(step.assigneeUserId) : null;
     if (u) return { name: u.name, email: u.email };
-    // Under enforcement, FAIL CLOSED — never fall back to a stored (possibly stale,
-    // cross-tenant) email. Dormant keeps the legacy fallback below unchanged.
     if (tenantEnforcing()) return { name: step.assigneeName || "Approver", email: null };
   }
   if (step.assigneeType === "owner") {
     // The OWNER of this request's tenant — never the first global owner, which
-    // could belong to another tenant and be emailed this document (resolveTenantActor).
+    // could belong to another tenant and be emailed this document.
     const u = await resolveTenantActor({ ownerOnly: true });
     if (u) return { name: u.name, email: u.email };
+    if (tenantEnforcing()) return { name: step.assigneeName || "Approver", email: null };
   }
-  // role or fallback: use the typed email/name if given
+  // role, or the DORMANT fallback for an unresolved staff/owner: the typed email/name.
   return { name: step.assigneeName || step.assigneeRole || "Approver", email: step.assigneeEmail };
 }
 

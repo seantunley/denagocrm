@@ -104,7 +104,7 @@ const STAFF_PICKERS = [
   "src/lib/signing/autoEnvelope.ts",
 ] as const;
 for (const file of STAFF_PICKERS) {
-  test(`${file}: staff list scoped to the current tenant`, () => {
-    assert.match(src(file), /currentTenantUserWhere\s*\(/, `${file} must scope its user list with currentTenantUserWhere`);
+  test(`${file}: staff list scoped to the current tenant (active, non-disabled members)`, () => {
+    assert.match(src(file), /listTenantStaff\s*\(/, `${file} must build its staff list via listTenantStaff`);
   });
 }

@@ -93,7 +93,11 @@ The automation/push fan-out that C1 signing-completion triggers (`advanceAfterSi
 
 **Explicit staff assignees (approval workflow).** Beyond "pick *an* actor", an approval step can name a SPECIFIC staff user (`ApprovalStep.assigneeUserId`), and `notifyApprover` emails them the document title + approval token. `User` being global, an unscoped `user.findUnique` there would happily return a cross-tenant/stale user — and the workflow editor's staff picker (`signing-workflows/[id]/page.tsx`) + the runtime `staffMap` (`autoEnvelope.ts`) would let tenant A persist tenant B's user id in the first place. Fixed with two more `tenantActor` helpers:
 - `resolveTenantMemberUser(userId)` — returns the user only if they're an active member of the current tenant; **fails closed** (null → no email) under enforcement otherwise. Used by `resolveApprover`.
-- `currentTenantUserWhere()` — a `User` where-fragment restricting a staff picker/list to the current tenant's members (empty when dormant). Applied to both staff pickers.
+- `listTenantStaff()` — the active members eligible as an assignee. Applied to both staff pickers so a cross-tenant id can't be offered or persisted.
+
+`resolveApprover` branches on the assignee **type** first, so a malformed/legacy `staff` step with a null/unresolved id — or an `owner` with no resolvable owner — **fails closed** (no email) under enforcement rather than leaking to a stored address.
+
+**Disabled accounts.** `disabledAt`/`role` are real `User` columns but are deliberately NOT in the Prisma model — they're the authoritative security state read via raw SQL (`userSecurity.ts`). So all of `tenantActor` uses **raw-SQL `TenantMember` joins** filtering `u."disabledAt" IS NULL` (and `role` for owners), in **every** mode — a token approval needs no login, so a disabled account must never be picked, listed, or emailed a live token.
 
 ### 2.5 Telegram — the one genuine config gap
 

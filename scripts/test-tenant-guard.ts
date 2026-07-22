@@ -24,7 +24,7 @@ import {
   resolveCampaignRecipientTenant,
   resolveSurveyResponseTenant,
 } from "../src/lib/tokenTenant";
-import { resolveTenantActor, resolveTenantMemberUser, currentTenantUserWhere } from "../src/lib/tenantActor";
+import { resolveTenantActor, resolveTenantMemberUser, listTenantStaff } from "../src/lib/tenantActor";
 import { resolveApprover } from "../src/lib/signing/approvals";
 
 const dbName = (process.env.DATABASE_URL ?? "").split("/").pop()?.split("?")[0] ?? "";
@@ -67,6 +67,7 @@ const surveyTokenB = `survtokB_${SFX}`;
 // here (TenantMember needs the FK).
 const userAId = `uA_${SFX}`;
 const userBId = `uB_${SFX}`;
+const userCId = `uC_${SFX}`; // DISABLED member of TENANT_A, oldest of all — must never be picked
 
 let passed = 0;
 let failed = 0;
@@ -123,6 +124,12 @@ async function main() {
   await basePrisma.user.create({ data: { id: userAId, name: "Owner A", email: `oa_${SFX}@t.test`, passwordHash: "x", role: "owner", createdAt: new Date("2021-01-01T00:00:00Z") } });
   await basePrisma.tenantMember.create({ data: { tenantId: TENANT_B, userId: userBId } });
   await basePrisma.tenantMember.create({ data: { tenantId: TENANT_A, userId: userAId } });
+  // A DISABLED owner member of TENANT_A, OLDER than everyone — so an actor pick that
+  // ignored disablement would wrongly choose them. disabledAt is a raw User column
+  // (not in the Prisma model), so seed it via SQL.
+  await basePrisma.user.create({ data: { id: userCId, name: "Disabled A", email: `oc_${SFX}@t.test`, passwordHash: "x", role: "owner", createdAt: new Date("2019-01-01T00:00:00Z") } });
+  await basePrisma.tenantMember.create({ data: { tenantId: TENANT_A, userId: userCId } });
+  await basePrisma.$executeRaw`UPDATE "User" SET "disabledAt" = ${new Date("2019-06-01T00:00:00Z")} WHERE "id" = ${userCId}`;
 
   __setTenantEnforcingForTests(true);
   try {
@@ -393,9 +400,10 @@ async function main() {
     await runInTenantScope({ tenantId: TENANT_B, system: false }, async () => {
       check("actor: B's scope resolves B's member", (await resolveTenantActor())?.id === userBId);
     });
-    // System scope (analogue of dormant / no user-tenant): unchanged global oldest pick (B).
+    // System scope (analogue of dormant / no user-tenant): global oldest NON-DISABLED
+    // user — userC is older (2019) but disabled, so it skips to userB (2020).
     await runInTenantScope({ tenantId: null, system: true }, async () => {
-      check("actor: system scope falls back to the global oldest user, unchanged (B)", (await resolveTenantActor())?.id === userBId);
+      check("actor: system scope → global oldest non-disabled user (skips disabled userC) = B", (await resolveTenantActor())?.id === userBId);
     });
 
     // ── explicit STAFF approval assignees: the real notification-resolution path
@@ -418,9 +426,25 @@ async function main() {
       check("member: resolveTenantMemberUser(B's user) under A → null (fail closed)", (await resolveTenantMemberUser(userBId)) === null);
 
       // Staff picker: the assignee list excludes B's user under A's scope.
-      const staffList = await prisma.user.findMany({ where: currentTenantUserWhere(), select: { id: true } });
+      const staffList = await listTenantStaff();
       const staffIds = staffList.map((u) => u.id);
       check("picker: staff list scoped to A's members (includes A, excludes B)", staffIds.includes(userAId) && !staffIds.includes(userBId));
+
+      // ── disabled accounts are excluded from EVERY actor path (userC is the oldest
+      //    member of A but disabled — a token action needs no login, so a disabled
+      //    account must never be picked/listed/emailed). ──────────────────────────
+      check("disabled: resolveTenantActor skips the disabled (older) member → userA", (await resolveTenantActor())?.id === userAId);
+      check("disabled: ownerOnly skips the disabled owner → userA", (await resolveTenantActor({ ownerOnly: true }))?.id === userAId);
+      check("disabled: resolveTenantMemberUser(disabled member) → null", (await resolveTenantMemberUser(userCId)) === null);
+      check("disabled: resolveApprover staff=disabled member → fail closed (no email)", (await resolveApprover({ assigneeType: "staff", assigneeUserId: userCId, assigneeRole: null, assigneeName: "C", assigneeEmail: `oc_${SFX}@t.test` })).email === null);
+      check("disabled: listTenantStaff excludes the disabled member", staffIds.includes(userAId) && !staffIds.includes(userCId));
+
+      // ── legacy/malformed steps fail closed under enforcement (blocker 2) ────────
+      check("approver: staff step with NO assigneeUserId → fail closed (no stored-email fallback)", (await resolveApprover({ assigneeType: "staff", assigneeUserId: null, assigneeRole: null, assigneeName: "X", assigneeEmail: `stored_${SFX}@x.test` })).email === null);
+    });
+    // Owner assignee whose scope has no active, non-disabled owner → fail closed.
+    await runInTenantScope({ tenantId: `empty_${SFX}`, system: false }, async () => {
+      check("approver: owner assignee with no resolvable owner → fail closed (no email)", (await resolveApprover({ assigneeType: "owner", assigneeUserId: null, assigneeRole: null, assigneeName: "O", assigneeEmail: `stored_${SFX}@x.test` })).email === null);
     });
   } finally {
     __setTenantEnforcingForTests(null);
@@ -433,8 +457,8 @@ async function main() {
     await basePrisma.surveyResponse.deleteMany({ where: { id: { in: [srespId, srespIdB] } } });
     await basePrisma.survey.deleteMany({ where: { id: { in: [survId, survIdB] } } });
     await basePrisma.communication.deleteMany({ where: { contactId: { in: [idA, idB] } } });
-    await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [userAId, userBId] } } });
-    await basePrisma.user.deleteMany({ where: { id: { in: [userAId, userBId] } } });
+    await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [userAId, userBId, userCId] } } });
+    await basePrisma.user.deleteMany({ where: { id: { in: [userAId, userBId, userCId] } } });
     await basePrisma.tenant.deleteMany({ where: { id: { in: [TENANT_A, TENANT_B] } } });
     await basePrisma.contact.deleteMany({
       where: { id: { in: [idA, idB, cmId, `c_forge_${SFX}`] } },
