@@ -5,6 +5,7 @@ import { recordInboundWhatsApp, fetchWhatsAppMedia } from "@/lib/whatsapp";
 import { transcribeVoice } from "@/lib/transcribe";
 import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
+import { withChannelTenantScope } from "@/lib/tenantScopeEntry";
 import { logError } from "@/lib/errorLog";
 
 /** Meta webhook verification handshake (same flow as Lead Ads). */
@@ -64,6 +65,12 @@ export async function POST(req: NextRequest) {
       if (change.field !== "messages") continue;
       const value = change.value ?? {};
       const contactsMeta = value.contacts ?? [];
+      // Per-change tenant chokepoint: resolve WHICH tenant owns this WhatsApp
+      // business number, then process the change's messages inside that scope.
+      // Dormant → runs directly, unchanged. Unknown/disabled endpoint under
+      // enforcement → the messages are skipped (fail closed), never run unscoped.
+      const phoneNumberId: string | undefined = value?.metadata?.phone_number_id;
+      await withChannelTenantScope("whatsapp", phoneNumberId, async () => {
       for (const message of value.messages ?? []) {
         const from: string = message.from;
         const profileName: string | null =
@@ -111,6 +118,9 @@ export async function POST(req: NextRequest) {
           }).catch(() => {});
         }
       }
+      }, () => {
+        console.warn(`[tenant-channel] skipped WhatsApp inbound: unmapped phone_number_id ${phoneNumberId ?? "?"}`);
+      });
     }
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */

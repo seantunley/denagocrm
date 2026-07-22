@@ -3,6 +3,7 @@ import { getSetting } from "./settings";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
 import { saveFile } from "./storage";
+import { resolveTenantActor } from "./tenantActor";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
@@ -251,7 +252,7 @@ export async function recordInboundDm(
     }
   }
 
-  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  const firstUser = await resolveTenantActor(); // tenant-aware (channel scope); dormant → oldest active user
   if (firstUser) {
     if (text) {
       await prisma.communication.create({
@@ -311,7 +312,7 @@ export async function recordDmEcho(platform: DmPlatform, recipientId: string, te
   const idField = platform === "instagram" ? "instagramId" : "messengerPsid";
   const contact = await prisma.contact.findFirst({ where: { [idField]: recipientId } });
   if (!contact) return;
-  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  const firstUser = await resolveTenantActor(); // tenant-aware (channel scope); dormant → oldest active user
   if (!firstUser) return;
 
   // An outbound echo must not resurrect a deliberately-archived thread. The

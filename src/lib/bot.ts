@@ -2,6 +2,7 @@ import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { sendWhatsAppText, uploadWhatsAppMedia, sendWhatsAppAudioId, matchByPhone } from "./whatsapp";
 import { sendPushToAll } from "./push";
+import { resolveTenantActor } from "./tenantActor";
 import { isBotAiEnabled, generateBotReply, type BotMsg } from "./botAi";
 import { elevenLabsTTS, canSynthesizeVoice } from "./elevenlabs";
 
@@ -112,7 +113,7 @@ async function buildHistory(contactId: string | null, leadId: string | null, dig
 }
 
 async function logOutbound(reply: string, subject: string, contactId: string | null, leadId: string | null, digits: string) {
-  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  const firstUser = await resolveTenantActor(); // tenant-aware (channel scope); dormant → oldest active user
   if (!firstUser) return;
   await prisma.communication.create({
     data: {

@@ -22,26 +22,29 @@ Three tenant-derivability buckets:
 
 ## 2. Resolution model
 
-### 2.1 `ChannelIdentity` — inbound channel → tenant
+### 2.1 `ChannelIdentity` — inbound channel → tenant — ✅ built (C3)
 
 One row per external channel endpoint we own. The webhook reads the discriminator out of the payload and looks up the tenant.
 
 ```prisma
 model ChannelIdentity {
-  id         String   @id @default(cuid())
-  tenantId   String
-  channel    String   // "whatsapp" | "messenger" | "instagram" | "telegram"
-  externalId String   // see §2.3 — the stable id of OUR endpoint, not the sender
-  label      String?  // human note e.g. "Denago main WABA"
-  createdAt  DateTime @default(now())
+  id         String    @id @default(cuid())
+  tenantId   String    // scalar, NO FK (see below)
+  channel    String    // "whatsapp" | "messenger" | "instagram"
+  externalId String    // see §2.3 — the stable id of OUR endpoint, not the sender
+  label      String?   // human note e.g. "Denago main WABA"
+  createdAt  DateTime  @default(now())
   disabledAt DateTime?
-  tenant     Tenant   @relation(fields: [tenantId], references: [id])
   @@unique([channel, externalId])   // one endpoint belongs to exactly one tenant
   @@index([tenantId])
 }
 ```
 
-`resolveChannelTenant(channel, externalId): Promise<string | null>` — `findUnique` on the composite key, `disabledAt: null`. Returns `tenantId` or null. Uses `basePrisma` (it's an infra lookup that runs *before* any scope exists — same pattern as `resolvePortalTenant`).
+**Scalar `tenantId`, NO hard FK** (deviates from the first-draft shape) — matching the `TenantApiKey` convention. The C2 round-1 review established that a tenant resolver must verify the tenant is still *active*; a plain FK would still allow a channel pointing at a **suspended** tenant through. So the resolver does an active-Tenant JOIN regardless, which subsumes what the FK would give (a missing tenant → no JOIN row → null). Keeping it scalar also avoids a `Tenant` back-relation + cascade-delete decision. `resolveChannelTenant(channel, externalId): Promise<string | null>` (`src/lib/channelTenant.ts`) — **raw SQL** via `basePrisma` (pre-scope infra, like `resolveApiKeyTenant` / the token resolvers), `JOIN "Tenant" … active = true`, `ChannelIdentity.disabledAt IS NULL`; returns `tenantId` or null.
+
+The webhook chokepoint is `withChannelTenantScope(channel, externalId, fn, onUnresolved)` (`tenantScopeEntry.ts`) — same shape as `withTokenTenantScope`, keyed on the channel discriminator. Because the discriminator is **per-event** (one POST can carry events for several of our endpoints — §2.3), it wraps the processing of a *single* event inside the entry/change loop and is called once per event. Dormant → runs `fn()` directly (no lookup, no overhead). Enforcing → resolves the tenant and runs `fn` in that scope; an unmapped/disabled/suspended endpoint runs `onUnresolved` (the event is **skipped** — fail closed — and a `[tenant-channel]` warning is logged) without running `fn`. The five inbound actor picks (§2.4) inside that scope swap to `resolveTenantActor`.
+
+> **Enforcement prerequisite (not C3):** the webhook's *pre-event* infra reads — `getSetting("META_APP_SECRET"/"META_VERIFY_TOKEN")` for signature verification — run BEFORE the per-event chokepoint and read `AppSetting` through the guarded client. Once `AppSetting` becomes tenant-scoped (its slice), those reads need a trusted **system scope** (the receive-side Meta app secret/verify token are install-global, one webhook endpoint), while the *send-side* settings (`WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, `META_PAGE_ACCESS_TOKEN`) become per-tenant. Tracked with the AppSetting/enforcement work — dormant today, so no effect yet.
 
 ### 2.2 `TenantApiKey` — public API key → tenant (hashed) — ✅ built (C2)
 
@@ -173,8 +176,8 @@ Per-tenant channel **configuration** — each dealer connecting *their own* Meta
 | # | Slice | Schema? | Migration? | Risk |
 |---|---|---|---|---|
 | **C1** ✅ | **Token-derivable surfaces** — `withTokenTenantScope` + a shared per-type resolver across the signing/approval **pages + routes**, the **survey `/s/[token]` page + `submitSurveyResponse` action**, tracking, unsubscribe. Portal (via `getPortalContact` #167) and passkey (self-scopes via `createSessionCookie`; `Passkey` is global) already covered. Verified: the only other non-`(app)` pages are `messages/*` (staff `requireUser`), `doc-editor` (`requireOwner`), `login` (no tenant reads). | none | none | **Lowest** — dormant no-ops, no DB change. Derive-before-guarded-read; integration-tested. |
-| **C2** ✅ | **`TenantApiKey`** + `resolveApiKeyTenant`/`authenticateIntakeKey` + chokepoints in intake/bookings/bookings-slots/service-lookup/service-lookup-verify (auth→scope before the module check; bookings actor via `resolveTenantActor`); migration `78`; backfill script (enforcement-prep). **Round 2:** closed the routes' unguarded paths — per-tenant slot capacity + stamped booking rows, tenant-namespaced service OTP (`serviceOtpKey`), tenant-scoped push delivery (`pushRecipientsForCurrentScope`); shared `tenantWrite.ts` classifier; behavioural + structural tests. | +1 table | additive (`78`) | Low — new table, dormant back-compat key. Migration HELD for Sean's backup-first merge. |
-| **C3** | **`ChannelIdentity`** + `resolveChannelTenant` + chokepoints in whatsapp/meta webhooks; backfill current phone-number-id + page id → tenant_denago_cpt | +1 table | additive | Low-med — new table, backfill must be exact or (enforcing only) inbound 404s. |
+| **C2** ✅ | **`TenantApiKey`** + `resolveApiKeyTenant`/`authenticateIntakeKey` + chokepoints in intake/bookings/bookings-slots/service-lookup/service-lookup-verify (auth→scope before the module check; bookings actor via `resolveTenantActor`); migration `78`; backfill script (enforcement-prep). **Round 2:** closed the routes' unguarded paths — per-tenant slot capacity + stamped booking rows, tenant-namespaced service OTP (`serviceOtpKey`), tenant-scoped push delivery (`pushRecipientsForCurrentScope`); shared `tenantWrite.ts` classifier; behavioural + structural tests. **Merged 2026-07-22 (#172).** | +1 table | additive (`78`) | Low — new table, dormant back-compat key. |
+| **C3** ✅ | **`ChannelIdentity`** (scalar tenantId, active-JOIN resolver) + `resolveChannelTenant` + `withChannelTenantScope` chokepoints in the whatsapp + meta (Messenger/IG DM **and** leadgen) webhooks, per-event; 5 inbound actor picks → `resolveTenantActor`; migration `20260722180000`; backfill script. | +1 table | additive (`…180000`) | Low-med — new table, dormant; backfill must be exact or (enforcing only) inbound is skipped. |
 | **C4** | **Cron scoping** — `withSystemScope` for backup/security; per-tenant-loop scaffold + `resolveTenantOwner` for journeys/automations/competitor-watch | none | none | Med — touches the engines (dormant branch only). |
 | **C5** | **Telegram per-tenant** (§2.5) — per-tenant path + secret | reuses ChannelIdentity | route add | Low (least-used) — can defer. |
 
@@ -187,7 +190,7 @@ Recommended order: **C1 → C2 → C3 → C4** (C5 deferred). C1 needs no migrat
 Standing rules: additive only, **backup first**, PR + Sean-merge (never self-deploy).
 
 - **C2 backfill:** insert one `TenantApiKey` for tenant_denago_cpt whose `hashedKey = sha256(current INTAKE_API_KEY)` → the existing embed key keeps working *and* now resolves to a tenant. Verify a real intake POST still 201s.
-- **C3 backfill:** insert `ChannelIdentity` rows for the live WhatsApp `phone_number_id`, the Meta Page id, (and IG id if used) → tenant_denago_cpt. Verify against the actual values in prod settings before writing. Under enforcement an unmapped channel 404s, so this backfill is a **hard prerequisite** to any flip — same gate as RLS/composite FKs.
+- **C3 backfill** = `scripts/backfill-channel-identities.ts` (idempotent, enforcement-prep, NOT on deploy). WhatsApp auto-reads the stored `WA_PHONE_NUMBER_ID`; the Meta **Page id** and **IG account id** are NOT stored anywhere (the app authenticates with a page-scoped token), so pass them explicitly: `MESSENGER_PAGE_ID=… INSTAGRAM_ACCOUNT_ID=… tsx scripts/backfill-channel-identities.ts` (find them in Meta Business settings or via Graph `/me`). Under enforcement an unmapped endpoint is **skipped** (fail closed), so a complete backfill is a **hard prerequisite** to any flip — same gate as RLS/composite FKs.
 - All backfills are idempotent upserts on the `@@unique` keys.
 
 ---

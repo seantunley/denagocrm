@@ -3,6 +3,7 @@ import { resolveActingTenant } from "./tenantContext";
 import { honoredTenantClaim } from "./tenant";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { enterTenantScope, runInTenantScope } from "./tenantScope";
+import { resolveChannelTenant, type ChannelKind } from "./channelTenant";
 
 /**
  * Run auth/session validation (which reads tenant-scoped infrastructure BEFORE
@@ -94,4 +95,39 @@ export async function withTokenTenantScope<T>(
   const owner = await resolve();
   if (!owner || !owner.tenantId) return onFailClosed();
   return runInTenantScope({ tenantId: owner.tenantId, system: false }, fn);
+}
+
+/**
+ * Establish the tenant scope for a NO-USER INBOUND CHANNEL event (WhatsApp / Meta
+ * Messenger / Instagram webhook) BEFORE any guarded read, then run the per-event
+ * work inside it. Same shape as {@link withTokenTenantScope}, keyed on the channel
+ * discriminator (OUR endpoint id — phone-number id / Page id / IG id) instead of a
+ * public token.
+ *
+ * The discriminator is PER-EVENT, not per-request: one webhook POST can carry events
+ * for several of our endpoints, so this wraps the processing of a SINGLE event and
+ * is called once per event inside the entry/change loop — each event runs in its own
+ * resolved tenant scope.
+ *
+ * DORMANT when off: runs `fn()` directly — byte-for-byte the pre-tenancy path, no
+ * channel lookup, no ALS overhead.
+ *
+ * ENFORCING: resolves the owning tenant via `resolveChannelTenant` (basePrisma,
+ * active-tenant JOIN). If the endpoint is unknown / disabled / points at a suspended
+ * or deleted tenant, it runs `onUnresolved()` WITHOUT running `fn` — an unmapped
+ * inbound event is skipped (fail closed), never processed against the wrong tenant or
+ * unscoped. Otherwise `fn` runs INSIDE the resolved tenant scope (reliable
+ * `runInTenantScope`), so every downstream read/write/actor pick is confined to that
+ * tenant; the scope reverts when `fn` returns.
+ */
+export async function withChannelTenantScope<T>(
+  channel: ChannelKind,
+  externalId: string | null | undefined,
+  fn: () => Promise<T>,
+  onUnresolved: () => T | Promise<T>,
+): Promise<T> {
+  if (!tenantEnforcing()) return fn();
+  const tenantId = await resolveChannelTenant(channel, externalId);
+  if (!tenantId) return onUnresolved();
+  return runInTenantScope({ tenantId, system: false }, fn);
 }
