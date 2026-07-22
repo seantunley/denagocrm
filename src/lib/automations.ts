@@ -1,5 +1,6 @@
 import { subDays } from "date-fns";
 import { prisma } from "./db";
+import { resolveTenantActor } from "./tenantActor";
 import { logAudit } from "./audit";
 import { sendEmail, renderTemplate, leadVars } from "./email";
 import { sendPushToAll } from "./push";
@@ -32,7 +33,7 @@ function loadLead(id: string) {
 async function fallbackUserId(lead: LeadForRules, ruleAssignee?: string | null) {
   if (ruleAssignee) return ruleAssignee;
   if (lead.assignedToId) return lead.assignedToId;
-  const first = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  const first = await resolveTenantActor();
   if (!first) throw new Error("No users exist");
   return first.id;
 }

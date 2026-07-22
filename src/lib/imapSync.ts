@@ -2,6 +2,7 @@ import { ImapFlow } from "imapflow";
 import { simpleParser, type ParsedMail } from "mailparser";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
+import { resolveTenantActor } from "./tenantActor";
 import { getSetting, putSetting } from "./settings";
 import { sendPushToAll } from "./push";
 import { sendEmail } from "./email";
@@ -242,7 +243,7 @@ async function fileTimelineEmail(parsed: ParsedMail, fromEmail: string, transpor
     : await prisma.lead.findFirst({ where: { email: { equals: fromEmail, mode: "insensitive" }, status: "open" } });
   if (!contact && !lead) return false; // unknown sender — leave in the mailbox
 
-  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  const firstUser = await resolveTenantActor();
   if (!firstUser) return false;
 
   try {

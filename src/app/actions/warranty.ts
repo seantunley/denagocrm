@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { resolveTenantActor } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
 import { sendSms } from "@/lib/sms";
@@ -86,7 +87,7 @@ export async function notifyRecall(_prev: NotifyResult, formData: FormData): Pro
     where: { model: recall.model },
     include: { contact: true },
   });
-  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  const firstUser = await resolveTenantActor();
 
   const seen = new Set<string>();
   let sent = 0;

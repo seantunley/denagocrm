@@ -9,6 +9,7 @@ import {
   researchCompetitor,
 } from "@/lib/competitors";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
+import { runCronPerTenant } from "@/lib/tenantCron";
 
 export const maxDuration = 300;
 
@@ -37,38 +38,46 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Competitor intelligence (page-diff, discovery, deep research) is the whole
-  // job of this route and is owned by the automation pack — skip it entirely
-  // when that pack is off, keeping the response shape.
-  if (!(await getEnabledModuleIds()).has("automation")) {
-    return NextResponse.json({ ok: true, checked: 0, changed: 0, errors: 0, discovered: 0, researched: 0 });
-  }
+  // Competitor watch is a per-tenant business queue. DORMANT → one global run
+  // (unchanged). ENFORCING → one run per active tenant, each in its own scope, so
+  // the module gate + the due-source/competitor queries see only that tenant's
+  // rows. The automation gate stays inside the slice so it's per-tenant.
+  const runs = await runCronPerTenant(async () => {
+    if (!(await getEnabledModuleIds()).has("automation")) {
+      return { checked: 0, changed: 0, errors: 0, discovered: 0, researched: 0 };
+    }
 
-  // 1. Cheap page-diff watch.
-  const ids = await dueSourceIds(25);
-  let changed = 0;
-  let errors = 0;
-  // Sequential + a small delay keeps us polite to each host and within limits.
-  for (const id of ids) {
-    const res = await collectSource(id).catch(() => ({ ok: false, changed: false }));
-    if (res.changed) changed += 1;
-    if (!res.ok) errors += 1;
-    await new Promise((r) => setTimeout(r, 1500));
-  }
+    // 1. Cheap page-diff watch.
+    const ids = await dueSourceIds(25);
+    let changed = 0;
+    let errors = 0;
+    // Sequential + a small delay keeps us polite to each host and within limits.
+    for (const id of ids) {
+      const res = await collectSource(id).catch(() => ({ ok: false, changed: false }));
+      if (res.changed) changed += 1;
+      if (!res.ok) errors += 1;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
 
-  // 2. Auto-discover a couple of competitors that have no sources yet.
-  let discovered = 0;
-  for (const id of await competitorsNeedingDiscovery(2)) {
-    const res = await discoverSources(id).catch(() => ({ ok: false }));
-    if (res.ok) discovered += 1;
-  }
+    // 2. Auto-discover a couple of competitors that have no sources yet.
+    let discovered = 0;
+    for (const id of await competitorsNeedingDiscovery(2)) {
+      const res = await discoverSources(id).catch(() => ({ ok: false }));
+      if (res.ok) discovered += 1;
+    }
 
-  // 3. Weekly deep-research brief for a couple of due competitors.
-  let researched = 0;
-  for (const id of await competitorsDueForResearch(2)) {
-    const res = await researchCompetitor(id).catch(() => ({ ok: false }));
-    if (res.ok) researched += 1;
-  }
+    // 3. Weekly deep-research brief for a couple of due competitors.
+    let researched = 0;
+    for (const id of await competitorsDueForResearch(2)) {
+      const res = await researchCompetitor(id).catch(() => ({ ok: false }));
+      if (res.ok) researched += 1;
+    }
 
-  return NextResponse.json({ ok: true, checked: ids.length, changed, errors, discovered, researched });
+    return { checked: ids.length, changed, errors, discovered, researched };
+  });
+
+  if (runs.length === 1 && runs[0].tenantId === null) {
+    return NextResponse.json({ ok: true, ...runs[0].result });
+  }
+  return NextResponse.json({ ok: true, tenants: runs });
 }

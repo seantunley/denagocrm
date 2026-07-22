@@ -5,6 +5,7 @@ import crypto from "crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
+import { resolveTenantActor } from "@/lib/tenantActor";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
 import { getPortalContact, setPortalCookie, clearPortalCookie } from "@/lib/portal";
 import { portalCanAccessVehicle, requirePortalScope } from "@/lib/portalAccess";
@@ -30,7 +31,7 @@ const MAX_UPLOAD = 10 * 1024 * 1024;
 const ALLOWED_UPLOADS = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp", "text/plain"]);
 
 async function firstStaffUser() {
-  return prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  return resolveTenantActor();
 }
 
 async function createPortalNotification(contactId: string, title: string, body: string, href?: string, kind = "info") {

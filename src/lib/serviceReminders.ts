@@ -1,4 +1,5 @@
 import { prisma } from "./db";
+import { resolveTenantActor } from "./tenantActor";
 import { getSetting } from "./settings";
 import { sendEmail, renderTemplate } from "./email";
 import { sendSms } from "./sms";
@@ -26,7 +27,7 @@ export async function runServiceReminders(): Promise<number> {
       mileageLogs: { orderBy: { recordedAt: "desc" }, take: 1 },
     },
   });
-  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  const firstUser = await resolveTenantActor();
 
   let sent = 0;
   for (const vehicle of vehicles) {
@@ -106,7 +107,7 @@ export async function remindVehicleService(
   if (!contact.email && !contact.phone) return { ok: false, error: "No email or phone on file" };
 
   const due = computeDue(vehicle);
-  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  const firstUser = await resolveTenantActor();
   const first = contact.firstName;
   const dueWhen = due.nextDueDate ? formatDate(due.nextDueDate) : "soon";
 

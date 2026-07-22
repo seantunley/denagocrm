@@ -1,5 +1,6 @@
 import { addDays, addHours, addMinutes } from "date-fns";
 import { prisma } from "./db";
+import { resolveTenantActor } from "./tenantActor";
 import { sendEmail, renderTemplate } from "./email";
 import { sendSms } from "./sms";
 import { sendPushToAll } from "./push";
@@ -45,7 +46,7 @@ async function fallbackUserId(context: JourneyContext, configured?: string | nul
   const contact = (context.contact ?? {}) as Record<string, unknown>;
   const owner = lead.assignedToId ?? contact.ownerId;
   if (typeof owner === "string" && owner) return owner;
-  const first = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  const first = await resolveTenantActor();
   if (!first) throw new Error("No CRM users exist");
   return first.id;
 }
