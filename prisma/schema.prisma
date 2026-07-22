@@ -1985,6 +1985,7 @@ model CannedReply {
 
 model Competitor {
   id          String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name        String
   website     String?
   description String?
@@ -2004,10 +2005,12 @@ model Competitor {
   briefs    CompetitorBrief[]
 
   @@index([status, name])
+  @@index([tenantId])
 }
 
 model CompetitorSource {
   id            String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   competitorId  String
   label         String
   url           String
@@ -2028,10 +2031,12 @@ model CompetitorSource {
 
   @@index([competitorId])
   @@index([active, lastCheckedAt])
+  @@index([tenantId])
 }
 
 model CompetitorSnapshot {
   id           String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   competitorId String
   sourceId     String
   contentHash  String
@@ -2045,10 +2050,12 @@ model CompetitorSnapshot {
   source     CompetitorSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
 
   @@index([sourceId, fetchedAt])
+  @@index([tenantId])
 }
 
 model CompetitorChange {
   id             String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   competitorId   String
   sourceId       String
   prevSnapshotId String?
@@ -2069,6 +2076,7 @@ model CompetitorChange {
 
   @@index([status, createdAt])
   @@index([competitorId, createdAt])
+  @@index([tenantId])
 }
 
 // AI-authored intelligence brief — the "research" layer that a strong model
@@ -2076,6 +2084,7 @@ model CompetitorChange {
 // CompetitorChange (which is the cheap daily page-diff signal).
 model CompetitorBrief {
   id           String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   competitorId String
   kind         String   @default("research") // research | discovery
   headline     String?
@@ -2088,6 +2097,7 @@ model CompetitorBrief {
   competitor Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
 
   @@index([competitorId, createdAt])
+  @@index([tenantId])
 }
 
 // ─── Custom fields (Path A, Phase 2) ─────────────────────────────────
