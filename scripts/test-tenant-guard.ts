@@ -14,7 +14,10 @@ import { randomUUID } from "node:crypto";
 import { prisma, basePrisma } from "../src/lib/db";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 import { runInTenantScope } from "../src/lib/tenantScope";
+import { establishTenantScopeFromId, establishStaffTenantScope } from "../src/lib/tenantScopeEntry";
 import { TenantScopeError } from "../src/lib/tenantGuard";
+import { resolvePortalTenant } from "../src/lib/portal";
+import { resolveActingTenant } from "../src/lib/tenantContext";
 
 const dbName = (process.env.DATABASE_URL ?? "").split("/").pop()?.split("?")[0] ?? "";
 if (process.env.NODE_ENV !== "test" || !dbName.endsWith("_test")) {
@@ -29,6 +32,10 @@ const TENANT_B = `tguard_B_${SFX}`;
 const idA = `c_A_${SFX}`;
 const idB = `c_B_${SFX}`;
 const cmId = `c_cm_${SFX}`;
+const uStaff = `u_staff_${SFX}`;
+const t1 = `tn1_${SFX}`;
+const t2 = `tn2_${SFX}`;
+const sessJti = `sess_${SFX}`;
 
 let passed = 0;
 let failed = 0;
@@ -54,6 +61,12 @@ async function main() {
   // Fixtures via basePrisma (bypasses the guard) — one contact per tenant.
   await basePrisma.contact.create({ data: { id: idA, firstName: "A", tenantId: TENANT_A } });
   await basePrisma.contact.create({ data: { id: idB, firstName: "B", tenantId: TENANT_B } });
+  // Staff-bootstrap fixtures: a user with ONE active-tenant membership (a second
+  // is granted mid-test to make the resolved tenant ambiguous).
+  await basePrisma.user.create({ data: { id: uStaff, name: "Staff", email: `staff_${SFX}@t.test`, passwordHash: "x" } });
+  await basePrisma.tenant.create({ data: { id: t1, name: "T1", slug: `t1_${SFX}`, active: true } });
+  await basePrisma.tenant.create({ data: { id: t2, name: "T2", slug: `t2_${SFX}`, active: true } });
+  await basePrisma.tenantMember.create({ data: { tenantId: t1, userId: uStaff } });
 
   __setTenantEnforcingForTests(true);
   try {
@@ -150,11 +163,70 @@ async function main() {
       const both = await prisma.contact.findMany({ where: { id: { in: [idA, idB] } } });
       check("system scope sees BOTH tenants' rows", both.length === 2);
     });
+
+    // ── chokepoint pattern (getCurrentUser / getPortalContact): validate under a
+    //    system scope, then switch to the resolved tenant — no deadlock. ────────
+    await runInTenantScope({ tenantId: null, system: true }, async () => {
+      // Infra reads (analogue of the UserSession / AppSetting validation reads)
+      // succeed under the system scope instead of failing closed.
+      const infra = await prisma.contact.findMany({ where: { id: { in: [idA, idB] } } });
+      check("chokepoint: infra read under system scope does not deadlock", infra.length === 2);
+      // Then switch to the principal's tenant (what the chokepoints do after
+      // resolving the user/contact) and confirm subsequent reads are scoped.
+      establishTenantScopeFromId(TENANT_A);
+      const scoped = await prisma.contact.findMany({ where: { id: { in: [idA, idB] } } });
+      check("chokepoint: after switch to tenant A, reads are scoped to A", scoped.length === 1 && scoped[0].id === idA);
+    });
+
+    // ── portal bootstrap: tenant is DERIVED from the verified subject's Contact,
+    //    never seedable from the token itself. ─────────────────────────────────
+    const pOwner = await resolvePortalTenant(idA);
+    check("resolvePortalTenant derives tenant from the contact", pOwner?.tenantId === TENANT_A);
+    const pMissing = await resolvePortalTenant(`nonexistent_${SFX}`);
+    check("resolvePortalTenant → null for an unknown subject (fail closed)", pMissing === null);
+
+    // ── staff chokepoint FAIL-CLOSED: establishStaffTenantScope returns { ok:false }
+    //    (→ getCurrentUser returns null → the session is unusable, not merely a null
+    //    scope) whenever no valid acting tenant resolves. Tested against the real DB
+    //    via the actual chokepoint helper (its .ok is deterministic — no reliance on
+    //    enterWith propagation). ─────────────────────────────────────────────────
+    const soleRes = await resolveActingTenant(uStaff);
+    check("staff: sole active membership resolves to that tenant", "tenantId" in soleRes && soleRes.tenantId === t1);
+
+    check("staff: sole tenant + matching tid → ok", (await establishStaffTenantScope(uStaff, t1)).ok === true);
+    check("staff: mismatched tid → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, "other")).ok === false);
+    check("staff: tid-less session → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, null)).ok === false);
+
+    // New-session write under enforcement lands in the resolved tenant scope and is
+    // stamped with that tenant — the login-bootstrap DB path (createSessionCookie).
+    await runInTenantScope({ tenantId: t1, system: false }, async () => {
+      await prisma.userSession.create({ data: { jti: sessJti, userId: uStaff, tenantId: "forged", platform: "web" } });
+    });
+    const sess = await basePrisma.userSession.findUnique({ where: { jti: sessJti } });
+    check("staff: new session under enforcement is stamped with the scope tenant", sess?.tenantId === t1);
+
+    // Tenant SUSPENDED → session becomes unusable immediately.
+    await basePrisma.tenant.update({ where: { id: t1 }, data: { active: false } });
+    check("staff: suspended tenant → NOT ok (unusable immediately)", (await establishStaffTenantScope(uStaff, t1)).ok === false);
+    await basePrisma.tenant.update({ where: { id: t1 }, data: { active: true } });
+
+    // Membership REMOVED → session becomes unusable immediately.
+    await basePrisma.tenantMember.deleteMany({ where: { userId: uStaff, tenantId: t1 } });
+    check("staff: membership removed → NOT ok (unusable immediately)", (await establishStaffTenantScope(uStaff, t1)).ok === false);
+
+    // Newly AMBIGUOUS (re-add t1 + add a second active membership) → unusable.
+    await basePrisma.tenantMember.create({ data: { tenantId: t1, userId: uStaff } });
+    await basePrisma.tenantMember.create({ data: { tenantId: t2, userId: uStaff } });
+    check("staff: ambiguous (2 active memberships) → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, t1)).ok === false);
   } finally {
     __setTenantEnforcingForTests(null);
     await basePrisma.contact.deleteMany({
       where: { id: { in: [idA, idB, cmId, `c_forge_${SFX}`] } },
     });
+    await basePrisma.userSession.deleteMany({ where: { jti: sessJti } });
+    await basePrisma.tenantMember.deleteMany({ where: { userId: uStaff } });
+    await basePrisma.tenant.deleteMany({ where: { id: { in: [t1, t2] } } });
+    await basePrisma.user.deleteMany({ where: { id: uStaff } });
     await basePrisma.$disconnect();
   }
 

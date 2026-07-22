@@ -8,8 +8,10 @@ import { getSetting } from "./settings";
 import { hasModule, type ModuleId } from "./access";
 import { getUserSecurityState, getUserSecurityStateFresh } from "./userSecurity";
 import { resolveActingTenant } from "./tenantContext";
-import { tenantObserving } from "./tenantEnforcement";
-import { honoredTenantClaim, isTenantForeignKeyViolation } from "./tenant";
+import { tenantObserving, tenantEnforcing, mayRetryTenantlessSession } from "./tenantEnforcement";
+import { honoredTenantClaim } from "./tenant";
+import { establishStaffTenantScope, validateInSystemScope } from "./tenantScopeEntry";
+import { withTenant, withSystemScope } from "./tenantScope";
 import {
   verifySession,
   signFreshSession,
@@ -26,34 +28,53 @@ import {
  * effect on the very next request.
  */
 export const getCurrentUser = cache(async () => {
-  const store = await cookies();
-  const token = store.get(SESSION_COOKIE)?.value;
-  if (!token) return null;
-  const session = await verifySession(token);
-  if (!session) return null;
-  // Session registry: revoked devices are locked out on their next request.
-  if (session.jti) {
-    const row = await prisma.userSession.findUnique({
-      where: { jti: session.jti },
-      select: { revokedAt: true, lastActiveAt: true },
-    });
-    if (!row || row.revokedAt) return null;
-    if (Date.now() - row.lastActiveAt.getTime() > 10 * 60 * 1000) {
-      void prisma.userSession
-        .update({ where: { jti: session.jti }, data: { lastActiveAt: new Date() } })
-        .catch(() => {});
+  // Phase C: session/account validation reads tenant-scoped infrastructure
+  // (UserSession, security state) BEFORE the user's tenant is known. Run it in a
+  // trusted `system` scope CONFINED to this callback, so (a) the guard doesn't
+  // reject those reads (chicken-and-egg) and (b) an UNauthenticated request can't
+  // leak a lingering system bypass — the scope reverts on every null path, and
+  // only the user's OWN tenant scope (set after, below) persists on success.
+  // DORMANT: bare fn() when off (no ALS overhead), system-scoped only when enforcing.
+  const validated = await validateInSystemScope(async () => {
+    const store = await cookies();
+    const token = store.get(SESSION_COOKIE)?.value;
+    if (!token) return null;
+    const session = await verifySession(token);
+    if (!session) return null;
+    // Session registry: revoked devices are locked out on their next request.
+    if (session.jti) {
+      const row = await prisma.userSession.findUnique({
+        where: { jti: session.jti },
+        select: { revokedAt: true, lastActiveAt: true },
+      });
+      if (!row || row.revokedAt) return null;
+      if (Date.now() - row.lastActiveAt.getTime() > 10 * 60 * 1000) {
+        void prisma.userSession
+          .update({ where: { jti: session.jti }, data: { lastActiveAt: new Date() } })
+          .catch(() => {});
+      }
     }
-  }
 
-  // Governance: disabled accounts and stale session versions are rejected on
-  // every request, so permission/role/password changes take effect immediately.
-  const [user, security] = await Promise.all([
-    prisma.user.findUnique({ where: { id: session.sub } }),
-    getUserSecurityState(session.sub),
-  ]);
-  if (!user || !security || security.disabledAt) return null;
-  if (security.sessionVersion !== session.sv) return null;
-  return user;
+    // Governance: disabled accounts and stale session versions are rejected on
+    // every request, so permission/role/password changes take effect immediately.
+    const [user, security] = await Promise.all([
+      prisma.user.findUnique({ where: { id: session.sub } }),
+      getUserSecurityState(session.sub),
+    ]);
+    if (!user || !security || security.disabledAt) return null;
+    if (security.sessionVersion !== session.sv) return null;
+    return { user, tid: session.tid ?? null };
+  });
+  if (!validated) return null;
+  // Establish the user's OWN tenant for the rest of the request. DORMANT — a no-op
+  // that always succeeds until enforcing. Under enforcement it FAILS CLOSED here
+  // (returns null → session unusable) when no valid acting tenant resolves — a
+  // stale/tenant-less/ambiguous session must not pass requireUser/role/owner checks
+  // or reach global models. Resolves inline (no getCurrentUser re-entry); runs once
+  // per request (getCurrentUser is cache()d).
+  const established = await establishStaffTenantScope(validated.user.id, validated.tid);
+  if (!established.ok) return null;
+  return validated.user;
 });
 
 export async function requireUser() {
@@ -130,20 +151,14 @@ export async function createSessionCookie(
   const security = await getUserSecurityStateFresh(user.id);
   if (!security || security.disabledAt) throw new Error("User is disabled or no longer exists");
   const pwa = Boolean(opts?.pwa);
-  // POLICY (see PWA_SESSION_HOURS in session.ts): the `pwa` opt-in makes BOTH the
-  // idle timeout (here) and the absolute cap a week. `pwa` is client-supplied and
-  // not proof of a trusted device, so this is an opt-in "keep me signed in for a
-  // week" for any authenticated user; server-side revocation (sv + jti) is the
-  // boundary. To keep a shorter inactivity window in this mode, use
-  // getIdleMinutes() here and let only the absolute cap extend.
-  const idle = pwa ? 7 * 24 * 60 : await getIdleMinutes();
   const jti = crypto.randomUUID();
   const h = await headers();
-  // Multi-tenancy PLUMBING (behaviour-preserving): resolve the user's single
-  // active tenant and record it on the session + JWT. Best-effort and fully
-  // fail-open — if resolution errors, is ambiguous, or finds nothing, tenantId
-  // stays null and login proceeds exactly as before. NOTHING reads/enforces this
-  // yet; enforcement lands in a later, flag-gated PR.
+
+  // Multi-tenancy: resolve the user's single active tenant FIRST — it's recorded
+  // on the session + JWT, and (under enforcement) it scopes the tenant-owned
+  // setting read + session write below, which run BEFORE any request chokepoint
+  // has established a scope. Best-effort + fail-open when NOT enforcing: on error/
+  // ambiguity/none, tenantId stays null and login proceeds exactly as before.
   let tenantId: string | null = null;
   try {
     const ctx = await resolveActingTenant(user.id);
@@ -161,36 +176,52 @@ export async function createSessionCookie(
     // never let tenant resolution block sign-in
     if (tenantObserving()) console.warn(`[tenant-monitor] login tenant resolve failed for user ${user.id}:`, e);
   }
-  // Stamp the resolved tenant, but never let it block sign-in: if the tenant is
-  // deleted between the resolve above and this insert (concurrent tenant admin),
-  // the FK would reject the create — so on ANY failure retry once WITHOUT the
-  // tenant. sessionTenantId tracks what actually landed so the JWT stays in sync.
-  const sessionBase = {
-    jti,
-    userId: user.id,
-    platform: pwa ? "pwa" : "web",
-    ip: (h.get("x-forwarded-for") ?? "").split(",")[0].trim() || null,
-    userAgent: (h.get("user-agent") ?? "").slice(0, 250) || null,
-  };
-  let sessionTenantId = tenantId;
-  try {
-    await prisma.userSession.create({ data: { ...sessionBase, tenantId: sessionTenantId } });
-  } catch (e) {
-    // ONLY a broken tenant FK — the resolved tenant was deleted between the
-    // resolve above and this insert — is recoverable by dropping the tenant and
-    // retrying. Any other error is a real failure (e.g. a DB outage or a jti
-    // collision) and must propagate, not be swallowed into a tenant-less session.
-    if (!isTenantForeignKeyViolation(e, sessionTenantId)) throw e;
-    sessionTenantId = null;
-    await prisma.userSession.create({ data: sessionBase });
+  // Under enforcement a session with no resolvable single tenant CANNOT be issued:
+  // the tenant-owned setting/session writes below would fail closed, and a
+  // tenant-less session couldn't act anyway. Reject cleanly (fail closed) rather
+  // than deadlock. When NOT enforcing this never triggers (unchanged behaviour).
+  if (tenantEnforcing() && !tenantId) {
+    throw new Error("Cannot issue a session: no single active tenant for this user");
   }
-  const token = await signFreshSession(
-    { ...user, sessionVersion: security.sessionVersion },
-    idle,
-    { jti, pwa, ...(sessionTenantId ? { tid: sessionTenantId } : {}) }
-  );
-  const store = await cookies();
-  store.set(SESSION_COOKIE, token, sessionCookieOptions(pwa));
+
+  // Run the tenant-owned setting read + session write inside the resolved tenant's
+  // scope (RELIABLE via runInTenantScope, not enterWith) so the guard doesn't
+  // reject them once enforcement is on. When off, the scope is inert and this is
+  // exactly the pre-tenancy path.
+  await withTenant(tenantId, async () => {
+    // POLICY (see PWA_SESSION_HOURS in session.ts): the `pwa` opt-in makes BOTH
+    // the idle timeout and the absolute cap a week. `pwa` is client-supplied and
+    // not proof of a trusted device; server-side revocation (sv + jti) is the
+    // boundary.
+    const idle = pwa ? 7 * 24 * 60 : await getIdleMinutes();
+    const sessionBase = {
+      jti,
+      userId: user.id,
+      platform: pwa ? "pwa" : "web",
+      ip: (h.get("x-forwarded-for") ?? "").split(",")[0].trim() || null,
+      userAgent: (h.get("user-agent") ?? "").slice(0, 250) || null,
+    };
+    // Stamp the resolved tenant. If the tenant is deleted between resolve and
+    // insert (concurrent tenant admin) the FK breaks. When NOT enforcing, fall back
+    // to a tenant-less session for backward compatibility (in a system scope so the
+    // guard doesn't re-stamp the invalid tenant). When ENFORCING, do NOT issue a
+    // tenant-less session — propagate the error and abort login (mayRetryTenantlessSession).
+    let sessionTenantId = tenantId;
+    try {
+      await prisma.userSession.create({ data: { ...sessionBase, tenantId: sessionTenantId } });
+    } catch (e) {
+      if (!mayRetryTenantlessSession(e, sessionTenantId)) throw e;
+      sessionTenantId = null;
+      await withSystemScope(() => prisma.userSession.create({ data: sessionBase }));
+    }
+    const token = await signFreshSession(
+      { ...user, sessionVersion: security.sessionVersion },
+      idle,
+      { jti, pwa, ...(sessionTenantId ? { tid: sessionTenantId } : {}) }
+    );
+    const store = await cookies();
+    store.set(SESSION_COOKIE, token, sessionCookieOptions(pwa));
+  });
 }
 
 export async function destroySessionCookie() {

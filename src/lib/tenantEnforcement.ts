@@ -1,3 +1,5 @@
+import { isTenantForeignKeyViolation } from "./tenant";
+
 // Rollout switch for multi-tenancy enforcement. Three phases, controlled by the
 // TENANT_ENFORCEMENT env var so it can be flipped per-environment (preview before
 // prod) with no deploy:
@@ -75,4 +77,15 @@ export function __setTenantEnforcingForTests(value: boolean | null): void {
 export function tenantEnforcing(): boolean {
   if (enforceOverrideForTests !== null) return enforceOverrideForTests;
   return false;
+}
+
+/**
+ * Whether a failed `UserSession` insert may be retried WITHOUT a tenant (the
+ * concurrent-tenant-deletion fallback in createSessionCookie). A broken tenant FK
+ * is recoverable that way ONLY when NOT enforcing; under enforcement a tenant-less
+ * authenticated session must never be issued, so the error propagates and login
+ * aborts instead. Pure + unit-testable.
+ */
+export function mayRetryTenantlessSession(error: unknown, tenantId: string | null): boolean {
+  return !tenantEnforcing() && isTenantForeignKeyViolation(error, tenantId);
 }

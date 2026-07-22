@@ -35,6 +35,17 @@ export function runInTenantScope<T>(
   return storage.run(scope, fn);
 }
 
+/**
+ * Establish the scope for the CURRENT async execution and everything downstream,
+ * WITHOUT a callback wrapper. For chokepoints that resolve-then-return rather than
+ * wrap a callback — e.g. `getCurrentUser()`, which resolves the user and returns
+ * it, leaving the rest of the request to run outside any wrapper. Prefer
+ * `runInTenantScope` wherever you control the enclosing callback.
+ */
+export function enterTenantScope(scope: TenantScope): void {
+  storage.enterWith(scope);
+}
+
 /** The active tenant scope, or undefined if none was established. */
 export function currentTenantScope(): TenantScope | undefined {
   return storage.getStore();

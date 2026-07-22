@@ -16,7 +16,12 @@ import {
   currentTenantScope,
   withTenant,
   withSystemScope,
+  enterTenantScope,
 } from "../src/lib/tenantScope";
+import {
+  mayRetryTenantlessSession,
+  __setTenantEnforcingForTests,
+} from "../src/lib/tenantEnforcement";
 
 const T = "tenant_A";
 
@@ -199,4 +204,96 @@ test("withTenant / withSystemScope: shape the scope correctly", async () => {
   await withSystemScope(async () => {
     assert.deepEqual(currentTenantScope(), { tenantId: null, system: true });
   });
+});
+
+test("enterTenantScope: overrides the current scope for downstream access", async () => {
+  // Wrapped in a run() so the enterWith override is confined to this async
+  // subtree and cannot leak into other tests.
+  await runInTenantScope({ tenantId: "A", system: false }, async () => {
+    enterTenantScope({ tenantId: "B", system: true });
+    await Promise.resolve();
+    assert.deepEqual(currentTenantScope(), { tenantId: "B", system: true });
+  });
+});
+
+test("concurrent scopes stay independent (parallel requests don't cross scopes)", async () => {
+  const seen: (string | null | undefined)[] = [];
+  await Promise.all([
+    runInTenantScope({ tenantId: "A", system: false }, async () => {
+      await new Promise((r) => setTimeout(r, 5)); // yield so B interleaves
+      seen.push(currentTenantScope()?.tenantId ?? null);
+    }),
+    runInTenantScope({ tenantId: "B", system: false }, async () => {
+      await new Promise((r) => setTimeout(r, 1));
+      seen.push(currentTenantScope()?.tenantId ?? null);
+    }),
+  ]);
+  // Each callback observed ITS OWN tenant despite interleaving.
+  assert.deepEqual([...seen].sort(), ["A", "B"]);
+});
+
+test("enterTenantScope stays isolated across concurrent contexts (the chokepoint switch)", async () => {
+  // Exercises the ACTUAL enter-based pattern the chokepoints use: each request has
+  // its own context (a run), then switches its scope via enterTenantScope. Two
+  // interleaved requests must not cross scopes.
+  const seen: (string | null | undefined)[] = [];
+  await Promise.all([
+    runInTenantScope({ tenantId: null, system: true }, async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      enterTenantScope({ tenantId: "A", system: false }); // switch to A
+      await new Promise((r) => setTimeout(r, 5));
+      seen.push(currentTenantScope()?.tenantId ?? null);
+    }),
+    runInTenantScope({ tenantId: null, system: true }, async () => {
+      await new Promise((r) => setTimeout(r, 1));
+      enterTenantScope({ tenantId: "B", system: false }); // switch to B
+      await new Promise((r) => setTimeout(r, 1));
+      seen.push(currentTenantScope()?.tenantId ?? null);
+    }),
+  ]);
+  assert.deepEqual([...seen].sort(), ["A", "B"]);
+});
+
+test("a confined scope returning null leaves NO scope behind (portal reject path)", async () => {
+  // Mirrors getPortalContact: the module check + Contact read run inside a run(),
+  // and enterTenantScope is called ONLY after success. A rejected request (module
+  // off / soft-deleted / missing contact) returns null and the scope must revert.
+  assert.equal(currentTenantScope(), undefined); // no ambient scope
+  const result = await runInTenantScope({ tenantId: "A", system: false }, async () => {
+    return null as string | null; // e.g. module disabled or contact soft-deleted
+  });
+  assert.equal(result, null);
+  assert.equal(currentTenantScope(), undefined); // scope reverted — nothing leaked
+});
+
+// ── mayRetryTenantlessSession: the login FK-race fallback decision ───────────
+
+const fkError = { code: "P2003", meta: { constraint: "UserSession_tenantId_fkey" } };
+
+test("mayRetryTenantlessSession: FK violation + NOT enforcing → true (backward-compat retry)", () => {
+  __setTenantEnforcingForTests(false);
+  try {
+    assert.equal(mayRetryTenantlessSession(fkError, "tenant_x"), true);
+  } finally {
+    __setTenantEnforcingForTests(null);
+  }
+});
+
+test("mayRetryTenantlessSession: FK violation + ENFORCING → false (never issue a tenant-less session)", () => {
+  __setTenantEnforcingForTests(true);
+  try {
+    assert.equal(mayRetryTenantlessSession(fkError, "tenant_x"), false);
+  } finally {
+    __setTenantEnforcingForTests(null);
+  }
+});
+
+test("mayRetryTenantlessSession: a non-tenant-FK error → false regardless of mode", () => {
+  __setTenantEnforcingForTests(false);
+  try {
+    assert.equal(mayRetryTenantlessSession({ code: "P2002" }, "tenant_x"), false);
+    assert.equal(mayRetryTenantlessSession(fkError, null), false); // null tenant can't FK-fault
+  } finally {
+    __setTenantEnforcingForTests(null);
+  }
 });
