@@ -27,12 +27,25 @@ function MailboxForm({ mailbox }: { mailbox?: Mailbox }) {
         <input id="mailbox-name" name="name" className="input" required minLength={2} defaultValue={mailbox?.name} placeholder="Support" />
       </div>
       <div>
+        <label className="label" htmlFor="mailbox-email">Inbox address</label>
+        <input id="mailbox-email" name="email" type="email" className="input" defaultValue={mailbox?.email ?? ""} placeholder="support@denagocpt.co.za" />
+        <p className="text-xs text-muted-foreground mt-1">Email sent to this address becomes a ticket in this mailbox. Point this alias at your connected inbox (Settings → Email → IMAP).</p>
+      </div>
+      <div>
         <label className="label" htmlFor="mailbox-color">Colour</label>
         <input id="mailbox-color" type="color" name="color" className="input h-10 w-full p-1" defaultValue={mailbox?.color ?? "#ea580c"} />
       </div>
       <div>
         <label className="label" htmlFor="mailbox-signature">Signature</label>
         <textarea id="mailbox-signature" name="signature" className="input" rows={4} defaultValue={mailbox?.signature ?? ""} placeholder="Kind regards, the Denago team" />
+      </div>
+      <div className="space-y-2 border-t border-border pt-3">
+        <label className="flex items-center gap-2 text-sm text-slate-300">
+          <input type="checkbox" name="autoReplyEnabled" value="on" className="h-4 w-4" defaultChecked={mailbox?.autoReplyEnabled ?? false} />
+          Send an auto-reply when a new ticket arrives by email
+        </label>
+        <textarea name="autoReplyBody" className="input" rows={3} defaultValue={mailbox?.autoReplyBody ?? ""} placeholder="Thanks for contacting Denago — we've logged your request and will get back to you shortly." />
+        <p className="text-xs text-muted-foreground">Sent once per new email ticket (never to automated / no-reply senders). The signature above is appended.</p>
       </div>
       <label className="flex items-center gap-2 text-sm text-slate-300">
         <input type="checkbox" name="active" value="on" className="h-4 w-4" defaultChecked={mailbox ? mailbox.active : true} />
