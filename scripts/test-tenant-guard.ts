@@ -13,9 +13,11 @@
 import { randomUUID } from "node:crypto";
 import { prisma, basePrisma } from "../src/lib/db";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
-import { runInTenantScope } from "../src/lib/tenantScope";
-import { establishTenantScopeFromId } from "../src/lib/tenantScopeEntry";
+import { runInTenantScope, currentTenantScope } from "../src/lib/tenantScope";
+import { establishTenantScopeFromId, establishStaffTenantScope } from "../src/lib/tenantScopeEntry";
 import { TenantScopeError } from "../src/lib/tenantGuard";
+import { resolvePortalTenant } from "../src/lib/portal";
+import { resolveActingTenant } from "../src/lib/tenantContext";
 
 const dbName = (process.env.DATABASE_URL ?? "").split("/").pop()?.split("?")[0] ?? "";
 if (process.env.NODE_ENV !== "test" || !dbName.endsWith("_test")) {
@@ -30,6 +32,9 @@ const TENANT_B = `tguard_B_${SFX}`;
 const idA = `c_A_${SFX}`;
 const idB = `c_B_${SFX}`;
 const cmId = `c_cm_${SFX}`;
+const uStaff = `u_staff_${SFX}`;
+const t1 = `tn1_${SFX}`;
+const t2 = `tn2_${SFX}`;
 
 let passed = 0;
 let failed = 0;
@@ -55,6 +60,12 @@ async function main() {
   // Fixtures via basePrisma (bypasses the guard) — one contact per tenant.
   await basePrisma.contact.create({ data: { id: idA, firstName: "A", tenantId: TENANT_A } });
   await basePrisma.contact.create({ data: { id: idB, firstName: "B", tenantId: TENANT_B } });
+  // Staff-bootstrap fixtures: a user with ONE active-tenant membership (a second
+  // is granted mid-test to make the resolved tenant ambiguous).
+  await basePrisma.user.create({ data: { id: uStaff, name: "Staff", email: `staff_${SFX}@t.test`, passwordHash: "x" } });
+  await basePrisma.tenant.create({ data: { id: t1, name: "T1", slug: `t1_${SFX}`, active: true } });
+  await basePrisma.tenant.create({ data: { id: t2, name: "T2", slug: `t2_${SFX}`, active: true } });
+  await basePrisma.tenantMember.create({ data: { tenantId: t1, userId: uStaff } });
 
   __setTenantEnforcingForTests(true);
   try {
@@ -165,11 +176,41 @@ async function main() {
       const scoped = await prisma.contact.findMany({ where: { id: { in: [idA, idB] } } });
       check("chokepoint: after switch to tenant A, reads are scoped to A", scoped.length === 1 && scoped[0].id === idA);
     });
+
+    // ── portal bootstrap: tenant is DERIVED from the verified subject's Contact,
+    //    never seedable from the token itself. ─────────────────────────────────
+    const pOwner = await resolvePortalTenant(idA);
+    check("resolvePortalTenant derives tenant from the contact", pOwner?.tenantId === TENANT_A);
+    const pMissing = await resolvePortalTenant(`nonexistent_${SFX}`);
+    check("resolvePortalTenant → null for an unknown subject (fail closed)", pMissing === null);
+
+    // ── staff bootstrap: establishStaffTenantScope resolves the sole active tenant
+    //    and fails closed on tenant-less / ambiguous / mismatched-claim sessions. ─
+    // Direct resolution check (isolates DB resolution from scope propagation).
+    const resolved = await resolveActingTenant(uStaff);
+    check("resolveActingTenant → the sole active tenant", "tenantId" in resolved && resolved.tenantId === t1);
+
+    // getCurrentUser calls establishStaffTenantScope OUTSIDE any run (after
+    // validateInSystemScope returns), so it enterWith()s the request store here
+    // the same way — no enclosing run to shadow it.
+    await establishStaffTenantScope(uStaff, t1); // sole membership + matching tid
+    check("staff scope: sole active tenant + matching tid → that tenant", currentTenantScope()?.tenantId === t1);
+
+    await establishStaffTenantScope(uStaff, "some_other_tenant"); // tid mismatch
+    check("staff scope: tid mismatch → null (fail closed)", currentTenantScope()?.tenantId === null);
+
+    // Grant a second active membership → the sole tenant is now ambiguous.
+    await basePrisma.tenantMember.create({ data: { tenantId: t2, userId: uStaff } });
+    await establishStaffTenantScope(uStaff, t1);
+    check("staff scope: ambiguous (2 active tenants) → null (fail closed)", currentTenantScope()?.tenantId === null);
   } finally {
     __setTenantEnforcingForTests(null);
     await basePrisma.contact.deleteMany({
       where: { id: { in: [idA, idB, cmId, `c_forge_${SFX}`] } },
     });
+    await basePrisma.tenantMember.deleteMany({ where: { userId: uStaff } });
+    await basePrisma.tenant.deleteMany({ where: { id: { in: [t1, t2] } } });
+    await basePrisma.user.deleteMany({ where: { id: uStaff } });
     await basePrisma.$disconnect();
   }
 
