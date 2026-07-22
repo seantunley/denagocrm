@@ -885,6 +885,7 @@ model Document {
 
 model Vehicle {
   id                    String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   model                 String
   vin                   String?   @unique
   regNumber             String?
@@ -915,12 +916,14 @@ model Vehicle {
   warrantyClaims WarrantyClaim[]
 
   @@index([fleetId])
+  @@index([tenantId])
 }
 
 // A fleet / B2B account — an estate, golf course, resort or business that
 // owns many carts. Groups vehicles for a fleet-level service overview.
 model Fleet {
   id          String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name        String
   type        String? // estate | golf-course | resort | business | other
   notes       String?
@@ -930,12 +933,14 @@ model Fleet {
   deletedAt   DateTime?
 
   vehicles Vehicle[]
+  @@index([tenantId])
 }
 
 // A warranty claim against a cart. Lightweight workflow: open → approved/
 // rejected → resolved, with a free-text resolution note.
 model WarrantyClaim {
   id          String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   status      String    @default("open") // open | approved | rejected | resolved
   description String
   resolution  String?
@@ -951,12 +956,14 @@ model WarrantyClaim {
 
   @@index([status, claimedAt])
   @@index([vehicleId])
+  @@index([tenantId])
 }
 
 // A recall or service bulletin for a cart model. Owners of matching carts can
 // be notified in one click.
 model Recall {
   id          String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   title       String
   model       String // affected cart model (matches Vehicle.model)
   description String
@@ -966,6 +973,7 @@ model Recall {
   createdById String?
 
   @@index([active])
+  @@index([tenantId])
 }
 
 // EV battery health snapshots — track state-of-health, voltage and charge
@@ -973,6 +981,7 @@ model Recall {
 // happen proactively (the battery is a cart's most expensive component).
 model BatteryCheck {
   id            String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   checkedAt     DateTime @default(now())
   packSerial    String?
   stateOfHealth Int? // % of original capacity
@@ -987,20 +996,24 @@ model BatteryCheck {
   recordedById String? // user who logged it (loose pointer)
 
   @@index([vehicleId, checkedAt])
+  @@index([tenantId])
 }
 
 model MileageLog {
   id         String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   km         Int
   recordedAt DateTime @default(now())
   note       String?
 
   vehicleId String
   vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  @@index([tenantId])
 }
 
 model ServiceRecord {
   id          String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   serviceDate DateTime  @default(now())
   km          Int?
   summary     String
@@ -1015,6 +1028,7 @@ model ServiceRecord {
   jobCard       JobCard? @relation(fields: [jobCardId], references: [id])
   performedById String?
   performedBy   User?    @relation(fields: [performedById], references: [id])
+  @@index([tenantId])
 }
 
 model JobCard {
