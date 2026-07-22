@@ -461,7 +461,12 @@ model PipelineStage {
   order Int
   color String @default("#64748b")
 
+  // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
+  tenantId String?
+
   leads Lead[]
+
+  @@index([tenantId])
 }
 
 model Lead {
@@ -604,6 +609,11 @@ model Quote {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
+  // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
+  // NOTE: `number` stays globally @unique here; the risky swap to
+  // @@unique([tenantId, number]) is a separate backup-first PR.
+  tenantId   String?
+
   // CPQ (phase 1): tax mode + deposit terms
   taxInclusive Boolean @default(true) // unit prices already include VAT
   depositType  String? // percent | amount
@@ -657,6 +667,8 @@ model Quote {
   fees      QuoteFee[]
   soldStock StockUnit[] @relation("StockSold")
   stockReservations StockReservation[]
+
+  @@index([tenantId])
 }
 
 model QuoteItem {
@@ -822,6 +834,9 @@ model Document {
   sizeBytes  Int
   createdAt  DateTime @default(now())
 
+  // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
+  tenantId   String?
+
   deletedAt     DateTime?
   deletedByName String?
   deleteReason  String?
@@ -844,6 +859,8 @@ model Document {
 
   uploadedById String
   uploadedBy   User     @relation(fields: [uploadedById], references: [id])
+
+  @@index([tenantId])
 }
 
 model Vehicle {
