@@ -3,6 +3,8 @@ import { prisma } from "@/lib/db";
 import { isValidSignToken } from "@/lib/signing/tokens";
 import { approveStep, rejectStep } from "@/lib/signing/approvals";
 import { reqMeta } from "@/lib/signing/events";
+import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
+import { tenantEnforcing } from "@/lib/tenantEnforcement";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,6 +22,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
 
   const step = await prisma.approvalStep.findUnique({ where: { token } });
   if (!step) return new Response("Not found", { status: 404 });
+  // Phase C no-user edge: establish the approval's tenant scope from the resolved
+  // row (dormant no-op until enforcement; fails closed under enforcement).
+  if (tenantEnforcing() && !step.tenantId) return new Response("This approval has already been actioned.", { status: 409 });
+  establishTenantScopeFromId(step.tenantId);
   if (step.status !== "pending") return new Response("This approval has already been actioned.", { status: 409 });
 
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));

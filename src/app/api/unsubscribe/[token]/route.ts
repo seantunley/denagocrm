@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
 
 function page(message: string) {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Denago Cape Town</title></head>
@@ -17,6 +18,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
   try {
     const r = await prisma.campaignRecipient.findUnique({ where: { token } });
     if (r) {
+      // Phase C no-user edge: scope the opt-out write to the recipient's tenant
+      // (dormant no-op until enforcement).
+      establishTenantScopeFromId(r.tenantId);
       await prisma.contact.update({
         where: { id: r.contactId },
         data: { marketingOptOut: true },

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
 import { appBaseUrl } from "@/lib/campaigns";
 
 /** Click-tracking redirect: records a click, then forwards to the real URL. */
@@ -11,6 +12,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
   try {
     const r = await prisma.campaignRecipient.findUnique({ where: { token } });
     if (r) {
+      // Phase C no-user edge: scope tracking writes to the recipient's tenant
+      // (dormant no-op until enforcement). Errors stay swallowed — best-effort.
+      establishTenantScopeFromId(r.tenantId);
       const firstClick = !r.clickedAt;
       await prisma.campaignRecipient.update({
         where: { id: r.id },

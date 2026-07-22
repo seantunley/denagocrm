@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
 
 // 1x1 transparent GIF
 const PIXEL = Buffer.from(
@@ -13,6 +14,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
   try {
     const r = await prisma.campaignRecipient.findUnique({ where: { token } });
     if (r) {
+      // Phase C no-user edge: scope tracking writes to the recipient's tenant
+      // (dormant no-op until enforcement). Errors stay swallowed by the catch —
+      // tracking is best-effort and must never break pixel delivery.
+      establishTenantScopeFromId(r.tenantId);
       const firstOpen = !r.openedAt;
       await prisma.campaignRecipient.update({
         where: { id: r.id },

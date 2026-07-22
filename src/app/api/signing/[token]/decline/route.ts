@@ -4,6 +4,8 @@ import { isValidSignToken } from "@/lib/signing/tokens";
 import { logSignEvent, reqMeta } from "@/lib/signing/events";
 import { isRequestClosed } from "@/lib/signing/status";
 import { notifyCreatorDeclined } from "@/lib/signing/notify";
+import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
+import { tenantEnforcing } from "@/lib/tenantEnforcement";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,6 +18,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
 
   const recipient = await prisma.signatureRecipient.findUnique({ where: { token }, include: { request: true } });
   if (!recipient) return new Response("Not found", { status: 404 });
+  // Phase C no-user edge: establish the document's tenant scope from the resolved
+  // row (dormant no-op until enforcement; fails closed under enforcement).
+  if (tenantEnforcing() && !recipient.request.tenantId) return new Response("Closed", { status: 409 });
+  establishTenantScopeFromId(recipient.request.tenantId);
   if (recipient.status === "signed") return new Response("Already signed", { status: 409 });
   if (recipient.status === "declined") return new Response("Already declined", { status: 409 });
   if (recipient.request.deletedAt || isRequestClosed(recipient.request.status)) return new Response("Closed", { status: 409 });
