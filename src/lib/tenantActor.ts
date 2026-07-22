@@ -76,9 +76,11 @@ export async function resolveTenantActor(
  * Resolve a SPECIFIC user by id, but ONLY if they are a valid actor for the current
  * tenant — an ACTIVE, NON-DISABLED member of the current tenant scope. Used for
  * EXPLICIT staff assignees (approval steps): a stale, cross-tenant, or disabled
- * `assigneeUserId` must never be emailed this tenant's document. Dormant / system /
- * no-scope: the unchanged direct lookup (still excluding disabled). Returns null
- * (FAIL CLOSED) when the id is not a valid current-tenant member.
+ * `assigneeUserId` must never be emailed this tenant's document. Scope handling via
+ * {@link actorScope}: dormant or an explicit `system` scope → direct lookup (still
+ * excluding disabled); a tenant scope → membership-checked lookup; enforcement with
+ * no scope or a null non-system scope → null (fail closed). Returns null whenever
+ * the id is not a valid current-tenant member.
  */
 export async function resolveTenantMemberUser(userId: string): Promise<TenantActor | null> {
   const s = actorScope();
@@ -103,10 +105,11 @@ export async function resolveTenantMemberUser(userId: string): Promise<TenantAct
 
 /**
  * The list of users eligible to be an approval assignee / staff selection: active,
- * non-disabled members of the current tenant scope (dormant / system / no-scope →
- * all active, non-disabled users). Replaces an unscoped `user.findMany` in the
- * workflow editor picker + runtime staffMap, so a workflow can neither offer nor
- * persist a cross-tenant or disabled user id.
+ * non-disabled members of the current tenant scope. Via {@link actorScope}: dormant
+ * or an explicit `system` scope → all active, non-disabled users; enforcement with
+ * no scope or a null non-system scope → empty (fail closed). Replaces an unscoped
+ * `user.findMany` in the workflow editor picker + runtime staffMap, so a workflow
+ * can neither offer nor persist a cross-tenant or disabled user id.
  */
 export async function listTenantStaff(): Promise<TenantActor[]> {
   const s = actorScope();
