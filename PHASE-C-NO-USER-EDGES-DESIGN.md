@@ -91,6 +91,10 @@ Full inventory (`grep user.findFirst`) — **22 sites**, classified by which sli
 
 The automation/push fan-out that C1 signing-completion triggers (`advanceAfterSignature` → automations) reaches the **C4** picks above; those run with the tenant scope C4 establishes and use the same resolver — tracked here so they aren't dropped.
 
+**Explicit staff assignees (approval workflow).** Beyond "pick *an* actor", an approval step can name a SPECIFIC staff user (`ApprovalStep.assigneeUserId`), and `notifyApprover` emails them the document title + approval token. `User` being global, an unscoped `user.findUnique` there would happily return a cross-tenant/stale user — and the workflow editor's staff picker (`signing-workflows/[id]/page.tsx`) + the runtime `staffMap` (`autoEnvelope.ts`) would let tenant A persist tenant B's user id in the first place. Fixed with two more `tenantActor` helpers:
+- `resolveTenantMemberUser(userId)` — returns the user only if they're an active member of the current tenant; **fails closed** (null → no email) under enforcement otherwise. Used by `resolveApprover`.
+- `currentTenantUserWhere()` — a `User` where-fragment restricting a staff picker/list to the current tenant's members (empty when dormant). Applied to both staff pickers.
+
 ### 2.5 Telegram — the one genuine config gap
 
 Telegram has a single global bot + `TELEGRAM_WEBHOOK_SECRET`; the update payload carries no "which bot" discriminator. Per-tenant Telegram means a **bot per tenant**, each with its own webhook path + secret:

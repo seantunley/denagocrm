@@ -24,7 +24,8 @@ import {
   resolveCampaignRecipientTenant,
   resolveSurveyResponseTenant,
 } from "../src/lib/tokenTenant";
-import { resolveTenantActor } from "../src/lib/tenantActor";
+import { resolveTenantActor, resolveTenantMemberUser, currentTenantUserWhere } from "../src/lib/tenantActor";
+import { resolveApprover } from "../src/lib/signing/approvals";
 
 const dbName = (process.env.DATABASE_URL ?? "").split("/").pop()?.split("?")[0] ?? "";
 if (process.env.NODE_ENV !== "test" || !dbName.endsWith("_test")) {
@@ -395,6 +396,31 @@ async function main() {
     // System scope (analogue of dormant / no user-tenant): unchanged global oldest pick (B).
     await runInTenantScope({ tenantId: null, system: true }, async () => {
       check("actor: system scope falls back to the global oldest user, unchanged (B)", (await resolveTenantActor())?.id === userBId);
+    });
+
+    // ── explicit STAFF approval assignees: the real notification-resolution path
+    //    (resolveApprover) must reject a cross-tenant/stale assigneeUserId and only
+    //    resolve an email for a current-tenant member. ─────────────────────────────
+    await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => {
+      // A member of A → their email is returned (they WOULD be notified).
+      const okStaff = await resolveApprover({ assigneeType: "staff", assigneeUserId: userAId, assigneeRole: null, assigneeName: "A", assigneeEmail: null });
+      check("approver: current-tenant staff assignee → their email", okStaff.email === `oa_${SFX}@t.test`);
+      // A user of tenant B (cross-tenant / stale) — even with a stored email — is
+      // rejected: fail closed, no notification.
+      const crossStaff = await resolveApprover({ assigneeType: "staff", assigneeUserId: userBId, assigneeRole: null, assigneeName: "B", assigneeEmail: `ob_${SFX}@t.test` });
+      check("approver: cross-tenant staff assignee → fail closed (no email)", crossStaff.email === null);
+      // Owner assignee → A's owner, never B's.
+      const ownerApprover = await resolveApprover({ assigneeType: "owner", assigneeUserId: null, assigneeRole: null, assigneeName: null, assigneeEmail: null });
+      check("approver: owner assignee → A's owner email, never B's", ownerApprover.email === `oa_${SFX}@t.test`);
+
+      // resolveTenantMemberUser directly: A member resolves, B's user is rejected.
+      check("member: resolveTenantMemberUser(A's user) → resolves", (await resolveTenantMemberUser(userAId))?.id === userAId);
+      check("member: resolveTenantMemberUser(B's user) under A → null (fail closed)", (await resolveTenantMemberUser(userBId)) === null);
+
+      // Staff picker: the assignee list excludes B's user under A's scope.
+      const staffList = await prisma.user.findMany({ where: currentTenantUserWhere(), select: { id: true } });
+      const staffIds = staffList.map((u) => u.id);
+      check("picker: staff list scoped to A's members (includes A, excludes B)", staffIds.includes(userAId) && !staffIds.includes(userBId));
     });
   } finally {
     __setTenantEnforcingForTests(null);

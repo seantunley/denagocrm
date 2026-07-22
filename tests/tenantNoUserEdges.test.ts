@@ -88,3 +88,23 @@ for (const file of ACTOR_SITES) {
     assert.match(src(file), /resolveTenantActor\s*\(/, `${file} must resolve the actor via resolveTenantActor`);
   });
 }
+
+// Explicit STAFF assignees (approval steps) must be validated against current-tenant
+// membership, and the pickers that populate them scoped to the tenant — else a
+// workflow can persist another tenant's user id and notifyApprover emails them.
+test("src/lib/signing/approvals.ts: staff assignee validated via resolveTenantMemberUser + fail closed", () => {
+  const code = src("src/lib/signing/approvals.ts");
+  assert.match(code, /resolveTenantMemberUser\s*\(/, "staff assignee must resolve via resolveTenantMemberUser");
+  assert.match(code, /tenantEnforcing\(\)/, "must fail closed under enforcement when not a member");
+  assert.match(code, /email:\s*null/, "fail-closed branch must return a null email (no notification)");
+});
+
+const STAFF_PICKERS = [
+  "src/app/(app)/signing-workflows/[id]/page.tsx",
+  "src/lib/signing/autoEnvelope.ts",
+] as const;
+for (const file of STAFF_PICKERS) {
+  test(`${file}: staff list scoped to the current tenant`, () => {
+    assert.match(src(file), /currentTenantUserWhere\s*\(/, `${file} must scope its user list with currentTenantUserWhere`);
+  });
+}

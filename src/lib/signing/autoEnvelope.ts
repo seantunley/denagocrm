@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { quoteTotalCents } from "@/lib/pricing";
 import { contactName } from "@/lib/format";
+import { currentTenantUserWhere } from "@/lib/tenantActor";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import {
   parseDocument,
@@ -344,7 +345,10 @@ async function quoteWorkflowContext(
 async function staffMap(): Promise<
   Record<string, { name: string; email: string | null }>
 > {
+  // Scope to THIS tenant's members so a workflow's staff assignee can only resolve
+  // to a name/email within the tenant (never a cross-tenant user).
   const users = await prisma.user.findMany({
+    where: currentTenantUserWhere(),
     select: { id: true, name: true, email: true },
   });
   return Object.fromEntries(

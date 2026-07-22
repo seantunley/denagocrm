@@ -4,7 +4,8 @@ import { sendEmail } from "@/lib/email";
 import { logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
 import { advanceWorkflow } from "@/lib/signflow/runtime";
-import { resolveTenantActor } from "@/lib/tenantActor";
+import { resolveTenantActor, resolveTenantMemberUser } from "@/lib/tenantActor";
+import { tenantEnforcing } from "@/lib/tenantEnforcement";
 
 const BASE = process.env.SIGN_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za";
 
@@ -12,11 +13,17 @@ export function approvalUrl(token: string): string {
   return `${BASE}/approvals/${token}`;
 }
 
-/** Resolve who should be notified for an approval step (name + email). */
-async function resolveApprover(step: { assigneeType: string; assigneeUserId: string | null; assigneeRole: string | null; assigneeName: string | null; assigneeEmail: string | null }): Promise<{ name: string; email: string | null }> {
+/** Resolve who should be notified for an approval step (name + email). Exported for tests. */
+export async function resolveApprover(step: { assigneeType: string; assigneeUserId: string | null; assigneeRole: string | null; assigneeName: string | null; assigneeEmail: string | null }): Promise<{ name: string; email: string | null }> {
   if (step.assigneeType === "staff" && step.assigneeUserId) {
-    const u = await prisma.user.findUnique({ where: { id: step.assigneeUserId }, select: { name: true, email: true } });
+    // Validate the stored assignee is STILL an active member of THIS request's
+    // tenant. `User` is global, so an unscoped lookup would happily return a
+    // cross-tenant/stale user and email them this tenant's document + token.
+    const u = await resolveTenantMemberUser(step.assigneeUserId);
     if (u) return { name: u.name, email: u.email };
+    // Under enforcement, FAIL CLOSED — never fall back to a stored (possibly stale,
+    // cross-tenant) email. Dormant keeps the legacy fallback below unchanged.
+    if (tenantEnforcing()) return { name: step.assigneeName || "Approver", email: null };
   }
   if (step.assigneeType === "owner") {
     // The OWNER of this request's tenant — never the first global owner, which
