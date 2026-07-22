@@ -2,7 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { prisma, basePrisma } from "./db";
 import { isModuleEnabled } from "./modules/enabled";
-import { enterTenantScope } from "./tenantScope";
+import { enterTenantScope, runInTenantScope } from "./tenantScope";
 import { tenantEnforcing } from "./tenantEnforcement";
 
 const secret = () => {
@@ -60,21 +60,34 @@ export async function getPortalContact() {
   } catch {
     return null;
   }
-  // Phase C: derive the tenant from the verified subject via a DELIBERATELY NARROW
-  // trusted lookup (single column, basePrisma) and enter THAT tenant — the public
-  // portal is NEVER given a broad `system` bypass. DORMANT until `tenantEnforcing()`;
-  // when off, no lookup runs and the checks below behave exactly as before.
-  if (tenantEnforcing()) {
-    const owner = await resolvePortalTenant(contactId);
-    if (!owner) return null; // unknown subject → fail closed
-    enterTenantScope({ tenantId: owner.tenantId ?? null, system: false });
+  // Dormant path (enforcement off): unchanged pre-tenancy behaviour, no scope
+  // machinery. Portal is an optional pack — this is the single choke point every
+  // portal page/action funnels through, so gating here self-rejects server-side.
+  if (!tenantEnforcing()) {
+    if (!(await isModuleEnabled("portal"))) return null;
+    return prisma.contact.findFirst({ where: { id: contactId, deletedAt: null } });
   }
-  // Portal is an optional pack. When it is off, no session resolves — this is the
-  // single choke point every portal page and action funnels through (directly, or
-  // via getPortalScope/requirePortalScope/portalUser), so gating here makes the
-  // whole portal self-reject server-side. Now runs in the customer's own tenant.
-  if (!(await isModuleEnabled("portal"))) return null;
-  return prisma.contact.findFirst({ where: { id: contactId, deletedAt: null } });
+
+  // Enforcing: derive the tenant from the verified subject via a DELIBERATELY
+  // NARROW trusted lookup (single column, basePrisma) — the public portal is NEVER
+  // given a broad `system` bypass.
+  const owner = await resolvePortalTenant(contactId);
+  if (!owner) return null; // unknown subject → fail closed
+  const tenantId = owner.tenantId ?? null;
+
+  // Do the module check + LIVE (non-deleted) Contact read inside a CONFINED tenant
+  // scope, so a rejected request (module off / soft-deleted / missing) leaves NO
+  // scope behind — the scope reverts when this callback returns.
+  const contact = await runInTenantScope({ tenantId, system: false }, async () => {
+    if (!(await isModuleEnabled("portal"))) return null;
+    return prisma.contact.findFirst({ where: { id: contactId, deletedAt: null } });
+  });
+  if (!contact) return null;
+
+  // Only after validation SUCCEEDS, persist the tenant scope for the rest of the
+  // request.
+  enterTenantScope({ tenantId, system: false });
+  return contact;
 }
 
 /**

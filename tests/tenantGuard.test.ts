@@ -227,3 +227,37 @@ test("concurrent scopes stay independent (parallel requests don't cross scopes)"
   // Each callback observed ITS OWN tenant despite interleaving.
   assert.deepEqual([...seen].sort(), ["A", "B"]);
 });
+
+test("enterTenantScope stays isolated across concurrent contexts (the chokepoint switch)", async () => {
+  // Exercises the ACTUAL enter-based pattern the chokepoints use: each request has
+  // its own context (a run), then switches its scope via enterTenantScope. Two
+  // interleaved requests must not cross scopes.
+  const seen: (string | null | undefined)[] = [];
+  await Promise.all([
+    runInTenantScope({ tenantId: null, system: true }, async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      enterTenantScope({ tenantId: "A", system: false }); // switch to A
+      await new Promise((r) => setTimeout(r, 5));
+      seen.push(currentTenantScope()?.tenantId ?? null);
+    }),
+    runInTenantScope({ tenantId: null, system: true }, async () => {
+      await new Promise((r) => setTimeout(r, 1));
+      enterTenantScope({ tenantId: "B", system: false }); // switch to B
+      await new Promise((r) => setTimeout(r, 1));
+      seen.push(currentTenantScope()?.tenantId ?? null);
+    }),
+  ]);
+  assert.deepEqual([...seen].sort(), ["A", "B"]);
+});
+
+test("a confined scope returning null leaves NO scope behind (portal reject path)", async () => {
+  // Mirrors getPortalContact: the module check + Contact read run inside a run(),
+  // and enterTenantScope is called ONLY after success. A rejected request (module
+  // off / soft-deleted / missing contact) returns null and the scope must revert.
+  assert.equal(currentTenantScope(), undefined); // no ambient scope
+  const result = await runInTenantScope({ tenantId: "A", system: false }, async () => {
+    return null as string | null; // e.g. module disabled or contact soft-deleted
+  });
+  assert.equal(result, null);
+  assert.equal(currentTenantScope(), undefined); // scope reverted — nothing leaked
+});
