@@ -1,5 +1,16 @@
 import { PrismaClient } from "@prisma/client";
 import { SOFT_DELETE_MODELS } from "./softDeleteModels";
+import { currentTenantScope } from "./tenantScope";
+import { tenantEnforcing } from "./tenantEnforcement";
+import {
+  isTenantScopedModel,
+  scopeWhere,
+  stampCreate,
+  scopeMutation,
+  scopeUpsert,
+  hasNestedRelationWrite,
+  TenantScopeError,
+} from "./tenantGuard";
 
 const globalForPrisma = globalThis as unknown as {
   basePrisma?: PrismaClient;
@@ -49,6 +60,11 @@ function addAliveMutationFilter(model: string, args: any) {
  * that omits deletedAt we transparently add it (so we can test it) and strip it
  * back off, preserving the caller's expected shape. Code that genuinely needs
  * trashed rows uses basePrisma (Trash / restore / purge), which is unfiltered.
+ *
+ * Tenant scoping for unique reads is handled SEPARATELY and at the DB layer: the
+ * findUnique* hooks pass args through `scopeArgs(..., "where")` first, which adds
+ * `tenantId` to the `where` (Prisma 6 extendedWhereUnique) so a cross-tenant row
+ * is never fetched in the first place — no result-filtering needed here.
  */
 async function filteredUnique(
   model: string,
@@ -79,47 +95,143 @@ async function filteredUnique(
   return result;
 }
 
+type ScopeKind = "where" | "create" | "mutation" | "upsert";
+
+/**
+ * DORMANT request-scoped tenant guard (Phase C). When `tenantEnforcing()` is
+ * false — always, today — this returns `args` untouched, so the extension
+ * behaves exactly as it did pre-tenancy. When enforcement is flipped on (per
+ * environment, no code change): tenant-scoped models REQUIRE a tenant scope in
+ * async context and fail closed without one; a `system` scope bypasses; and args
+ * are rewritten to confine the read/write to the caller's tenant.
+ *
+ * SCOPE / LIMITS — this is DEFENCE-IN-DEPTH, not the authoritative boundary:
+ *   - Prisma query extensions only intercept TOP-LEVEL operations, so `tenantId`
+ *     is stamped/scoped on the top-level payload only. NESTED relation writes
+ *     (`create`/`connect`/`update`/`upsert` inside another model's `data`) can't
+ *     be safely stamped here, so under enforcement they are REFUSED (fail closed)
+ *     until tenant-aware composite FKs land — they are NOT silently accepted.
+ *   - A DIRECT child create that passes a scalar parent FK owned by another tenant
+ *     is NOT caught by this guard, and RLS does NOT close it either (a single-column
+ *     FK only checks the parent id exists; a row policy only checks the child's own
+ *     tenantId). That parent/child consistency requires tenant-aware COMPOSITE FKs
+ *     — `(tenantId, parentId) → Parent(tenantId, id)` — added in the FK step. RLS
+ *     is the authoritative ROW-level boundary; composite FKs are the authoritative
+ *     CROSS-ROW boundary. Both, plus this guard, are needed.
+ *   - Therefore enforcement is a HARD-gated staged rollout: `tenantEnforcing()`
+ *     must not return true in any environment until RLS + composite FKs are live
+ *     (see tenantEnforcement.ts and PHASE-C-TENANT-GUARD-DESIGN.md §1.3/§1.5/§5/§6).
+ */
+function scopeArgs(model: string, kind: ScopeKind, args: any): any {
+  if (!tenantEnforcing()) return args;
+  if (!isTenantScopedModel(model)) return args;
+  const scope = currentTenantScope();
+  if (!scope) throw new TenantScopeError(`No tenant scope established for ${model}`);
+  if (scope.system) return args;
+  if (!scope.tenantId) throw new TenantScopeError(`No tenant in scope for ${model}`);
+  switch (kind) {
+    case "where":
+      return scopeWhere(args, scope.tenantId);
+    case "create":
+      refuseNestedRelationWrite(model, args?.data);
+      return stampCreate(args, scope.tenantId);
+    case "mutation":
+      refuseNestedRelationWrite(model, args?.data);
+      return scopeMutation(args, scope.tenantId);
+    case "upsert":
+      refuseNestedRelationWrite(model, args?.create);
+      refuseNestedRelationWrite(model, args?.update);
+      return scopeUpsert(args, scope.tenantId);
+  }
+}
+
+/**
+ * Nested relation writes can't be tenant-stamped/validated by a query extension
+ * (it only sees top-level args), so under enforcement they fail closed rather than
+ * silently linking/creating cross-tenant rows. Lifted once composite FKs make
+ * parent/child consistency DB-enforced.
+ */
+function refuseNestedRelationWrite(model: string, data: unknown): void {
+  if (hasNestedRelationWrite(data)) {
+    throw new TenantScopeError(
+      `Nested relation write on ${model} is refused under tenant enforcement (top-level guard cannot stamp nested rows; use flat writes until composite FKs land)`,
+    );
+  }
+}
+
 function buildClient(base: PrismaClient) {
   return base.$extends({
     query: {
+      // Each hook composes two independent concerns on `args`: the tenant guard
+      // (`scopeArgs`, DORMANT until `tenantEnforcing()`) and the soft-delete
+      // filter (`addAlive*`). With enforcement off, `scopeArgs` is the identity,
+      // so this block behaves exactly as the soft-delete-only version did.
       $allModels: {
         async findMany({ model, args, query }: any) {
-          return query(addAliveFilter(model, args));
+          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
         },
         async findFirst({ model, args, query }: any) {
-          return query(addAliveFilter(model, args));
+          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
         },
+        async findFirstOrThrow({ model, args, query }: any) {
+          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
+        },
+        // Tenant scoping is injected into the `where` (DB-level, extendedWhereUnique)
+        // so a cross-tenant row is never fetched; filteredUnique then applies only
+        // the soft-delete result check.
         async findUnique({ model, args, query }: any) {
-          return filteredUnique(model, args, query, false);
+          return filteredUnique(model, scopeArgs(model, "where", args), query, false);
         },
         async findUniqueOrThrow({ model, args, query }: any) {
-          return filteredUnique(model, args, query, true);
+          return filteredUnique(model, scopeArgs(model, "where", args), query, true);
+        },
+        // Writes are stamped with the owning tenant from trusted context,
+        // overwriting any client-supplied `tenantId` (the anti-forgery rule).
+        async create({ model, args, query }: any) {
+          return query(scopeArgs(model, "create", args));
+        },
+        async createMany({ model, args, query }: any) {
+          return query(scopeArgs(model, "create", args));
+        },
+        async createManyAndReturn({ model, args, query }: any) {
+          return query(scopeArgs(model, "create", args));
         },
         // Mutations are guarded too, not just reads: a trashed row must not be
         // updatable/deletable through the filtered client (Trash/restore/purge
         // use basePrisma). update/delete throw on a trashed row; the *Many forms
-        // skip it. upsert is intentionally NOT guarded (injecting the filter into
-        // its unique where would force a spurious create on a trashed row).
+        // skip it. The tenant guard additionally scopes the `where` to the caller's
+        // tenant so you can only touch your own rows.
         async update({ model, args, query }: any) {
-          return query(addAliveMutationFilter(model, args));
+          return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
         },
         async updateMany({ model, args, query }: any) {
-          return query(addAliveMutationFilter(model, args));
+          return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
+        },
+        async updateManyAndReturn({ model, args, query }: any) {
+          return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
         },
         async delete({ model, args, query }: any) {
-          return query(addAliveMutationFilter(model, args));
+          return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
         },
         async deleteMany({ model, args, query }: any) {
-          return query(addAliveMutationFilter(model, args));
+          return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
+        },
+        // upsert is NOT soft-delete-guarded (injecting `deletedAt` into its unique
+        // where would force a spurious create on a trashed row). The tenant guard
+        // DOES scope its where (Prisma 6 extendedWhereUnique) + stamp create +
+        // guard update, so a cross-tenant upsert misses and takes the (stamped)
+        // create branch instead of updating another tenant's row. See scopeUpsert.
+        async upsert({ model, args, query }: any) {
+          return query(scopeArgs(model, "upsert", args));
         },
         async count({ model, args, query }: any) {
-          return query(addAliveFilter(model, args));
+          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
         },
         async aggregate({ model, args, query }: any) {
-          return query(addAliveFilter(model, args));
+          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
         },
         async groupBy({ model, args, query }: any) {
-          return query(addAliveFilter(model, args));
+          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
         },
       },
       // Shared inbox: attach every new message to a conversation and roll its

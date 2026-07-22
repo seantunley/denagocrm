@@ -131,3 +131,10 @@ jobs:
         # Child-record IDOR scoping, reservation + dealer-signature state
         # transitions, the atomic OTP gate, and soft-delete on findUnique.
         run: npm run test:integrity
+
+      - name: Run tenant-guard integration tests
+        # Phase C: the db.ts tenant guard with enforcement enabled — cross-tenant
+        # read/update/delete refusal, write stamping, fail-closed on no scope,
+        # system-scope bypass. Exercises the real Prisma extension, not just the
+        # pure helpers.
+        run: npm run test:tenant-guard

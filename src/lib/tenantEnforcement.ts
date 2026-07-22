@@ -39,14 +39,40 @@ export function tenantObserving(): boolean {
   return tenantMode() !== "off";
 }
 
+// Test-only override for tenantEnforcing(). Lets the tenant-guard integration
+// tests exercise the REAL Prisma extension with enforcement enabled, instead of
+// the guard being permanently untestable behind a literal `false`. Never settable
+// in production (the setter throws), and defaults to null so every real
+// environment still gets `false`.
+let enforceOverrideForTests: boolean | null = null;
+
+/**
+ * TEST ONLY. Enable/disable the enforcement branch for the current test process,
+ * or pass null to clear. Throws in production so a stray call can never flip
+ * enforcement on in the live app.
+ */
+export function __setTenantEnforcingForTests(value: boolean | null): void {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("__setTenantEnforcingForTests is not available in production");
+  }
+  enforceOverrideForTests = value;
+}
+
 /**
  * True when tenant context should actually be ENFORCED — requests without a valid
- * tenant blocked. Deliberately ALWAYS false today: enforcement depends on
- * per-table tenantId + Postgres RLS, which is not built yet, so even "enforce"
- * mode only observes. This is the SINGLE hook a future enforcement PR flips;
- * callers that must eventually block should gate on this now so nothing changes
- * behaviour until enforcement is real.
+ * tenant blocked and DB access confined to the caller's tenant.
+ *
+ * Deliberately ALWAYS false in every real environment today. The app guard is
+ * DEFENCE-IN-DEPTH: it scopes top-level ops and REFUSES nested relation writes
+ * (fail closed), but it cannot validate a direct child's scalar parent FK. The
+ * AUTHORITATIVE boundaries are Postgres RLS (row-level) and tenant-aware COMPOSITE
+ * FKs (cross-row parent/child), and BOTH are HARD PREREQUISITES — this must not
+ * flip to true in any environment (preview included) until RLS *and* composite FKs
+ * are live (see PHASE-C-TENANT-GUARD-DESIGN.md §1.3/§1.5/§2/§5/§6). This is the
+ * SINGLE hook the future enforcement PR flips; callers that must eventually block
+ * gate on it now.
  */
 export function tenantEnforcing(): boolean {
+  if (enforceOverrideForTests !== null) return enforceOverrideForTests;
   return false;
 }
