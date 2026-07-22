@@ -9,6 +9,7 @@ import { hasModule, type ModuleId } from "./access";
 import { getUserSecurityState, getUserSecurityStateFresh } from "./userSecurity";
 import { resolveActingTenant } from "./tenantContext";
 import { tenantObserving } from "./tenantEnforcement";
+import { honoredTenantClaim, isTenantForeignKeyViolation } from "./tenant";
 import {
   verifySession,
   signFreshSession,
@@ -174,7 +175,12 @@ export async function createSessionCookie(
   let sessionTenantId = tenantId;
   try {
     await prisma.userSession.create({ data: { ...sessionBase, tenantId: sessionTenantId } });
-  } catch {
+  } catch (e) {
+    // ONLY a broken tenant FK — the resolved tenant was deleted between the
+    // resolve above and this insert — is recoverable by dropping the tenant and
+    // retrying. Any other error is a real failure (e.g. a DB outage or a jti
+    // collision) and must propagate, not be swallowed into a tenant-less session.
+    if (!isTenantForeignKeyViolation(e, sessionTenantId)) throw e;
     sessionTenantId = null;
     await prisma.userSession.create({ data: sessionBase });
   }
@@ -198,11 +204,23 @@ export async function destroySessionCookie() {
  * flag-gated enforcement can consume it. It intentionally enforces nothing and
  * returns null for older sessions minted before the claim existed — callers must
  * not gate access on it yet.
+ *
+ * The claim is honoured ONLY when it is safe to trust:
+ *  - the session is fully valid — getCurrentUser applies the same device
+ *    revocation, disabled-account and session-version checks, so a signature that
+ *    verifies but belongs to a revoked/disabled/superseded session yields null;
+ *  - it still resolves to the user's SOLE active tenant (see honoredTenantClaim):
+ *    a `tid` that went stale after a membership removal or tenant suspension is
+ *    dropped, and so is one that became AMBIGUOUS because a second active
+ *    membership was added after login.
  */
 export async function getActiveTenantId(): Promise<string | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
   const session = await verifySession(token);
-  return session?.tid ?? null;
+  const sole = await resolveActingTenant(user.id);
+  return honoredTenantClaim(session?.tid ?? null, sole);
 }

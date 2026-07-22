@@ -13,6 +13,7 @@ import {
   telegramStatus,
 } from "@/app/actions/bot";
 import { PageHeader } from "@/components/page-header";
+import ClearSecret from "@/components/ClearSecret";
 
 export default async function ChatbotSettingsPage() {
   await requireOwner();
@@ -87,7 +88,10 @@ export default async function ChatbotSettingsPage() {
             </div>
             <div>
               <label className="label">Voice-note transcription key (OpenAI Whisper) — optional fallback</label>
-              <input name="whisperKey" className="input" type="password" placeholder={hasWhisper ? "•••••••• (saved — leave blank to keep)" : "sk-… — fallback if ElevenLabs isn't set"} />
+              <div className="flex gap-2">
+                <input name="whisperKey" className="input flex-1" type="password" autoComplete="new-password" placeholder={hasWhisper ? "•••••••• (saved — leave blank to keep)" : "sk-… — fallback if ElevenLabs isn't set"} />
+                {hasWhisper ? <ClearSecret settingKey="OPENAI_API_KEY" label="OpenAI Whisper key" /> : null}
+              </div>
               <p className="text-xs text-muted-foreground mt-1">Voice replies &amp; the ElevenLabs key/voice live in <b>Settings → Integrations → ElevenLabs</b>.</p>
             </div>
           </div>

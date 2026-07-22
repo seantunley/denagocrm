@@ -5,7 +5,8 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { basePrisma, prisma } from "@/lib/db";
 import { createSessionCookie, requireUser, requireOwner } from "@/lib/auth";
-import { putSetting } from "@/lib/settings";
+import { putSetting, getSetting } from "@/lib/settings";
+import { isManagedSecret, isRegeneratable, keepBlankSubmit } from "@/lib/settingsSecrets";
 import { setNextStepScheduling } from "@/lib/nextStepConfig";
 import { PUSH_KINDS } from "@/lib/push";
 import { logAuditStrict } from "@/lib/audit";
@@ -218,14 +219,36 @@ export async function saveSetting(formData: FormData) {
   if (!key) return;
   // Secret fields render blank (never echo the stored value into the DOM) and
   // pass keepIfBlank — a blank submit then means "leave the saved value alone"
-  // rather than wiping it.
-  if (!value && formData.get("keepIfBlank")) return;
+  // rather than wiping it. Clearing is a separate, explicit owner action.
+  if (keepBlankSubmit(value, Boolean(formData.get("keepIfBlank")))) return;
   await putSetting(key, value);
+  revalidatePath("/settings");
+}
+
+/** Reveal a stored secret to the owner on demand — so the value is NEVER in the
+ *  initial server-rendered page, only fetched by an explicit owner action. */
+export async function revealSecret(key: string): Promise<string> {
+  await requireOwner();
+  if (!isManagedSecret(key)) throw new Error("Not a revealable secret.");
+  return (await getSetting(key)) ?? "";
+}
+
+/** Explicitly clear a secret (disconnect an integration / remove a compromised
+ *  key). Owner-only, and the key is allowlisted — a server action's bound arg
+ *  comes from the client, so we must not delete an arbitrary AppSetting. */
+export async function clearSecret(key: string, _formData?: FormData): Promise<void> {
+  await requireOwner();
+  void _formData;
+  if (!isManagedSecret(key)) throw new Error("Not a clearable secret.");
+  await putSetting(key, "");
   revalidatePath("/settings");
 }
 
 export async function regenerateSetting(key: string) {
   await requireOwner();
+  // The key is a client-supplied bound arg — only allow secrets we actually
+  // generate, so this can't overwrite an externally-issued credential.
+  if (!isRegeneratable(key)) throw new Error("Not a regeneratable secret.");
   const value = crypto.randomBytes(24).toString("hex");
   await putSetting(key, value);
   revalidatePath("/settings");

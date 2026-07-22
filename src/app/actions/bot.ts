@@ -81,6 +81,9 @@ export async function disconnectTelegram() {
   const { deleteTelegramWebhook } = await import("@/lib/telegram");
   await deleteTelegramWebhook();
   await putSetting("BOT_TG_ENABLED", "false");
+  // Don't leave the bot token / webhook secret behind after disconnecting.
+  await putSetting("TELEGRAM_BOT_TOKEN", "");
+  await putSetting("TELEGRAM_WEBHOOK_SECRET", "");
   revalidatePath("/settings");
 }
 

@@ -33,6 +33,7 @@ import {
   Search,
 } from "lucide-react";
 import { toast } from "sonner";
+import LocationAutocomplete from "@/components/LocationAutocomplete";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { moveLead, moveLeadToTestDrive } from "@/app/actions/leads";
 import { formatZAR } from "@/lib/format";
@@ -717,10 +718,10 @@ function TestDriveDialog({
               </div>
               <div>
                 <label className="mb-1 block text-xs font-medium text-muted-foreground">Location</label>
-                <input
+                <LocationAutocomplete
                   className={input}
                   value={location}
-                  onChange={(event) => setLocation(event.target.value)}
+                  onValueChange={setLocation}
                   placeholder="Showroom, estate, customer's address…"
                 />
               </div>
