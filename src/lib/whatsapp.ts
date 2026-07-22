@@ -3,6 +3,7 @@ import { getSetting } from "./settings";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
 import { topPosition } from "./leadPos";
+import { resolveTenantActor } from "./tenantActor";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
@@ -260,7 +261,9 @@ export async function recordInboundWhatsApp(
     }
   }
 
-  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  // Tenant-aware actor: under enforcement, a member of THIS channel's tenant scope
+  // (established by the webhook chokepoint); dormant → the oldest active user.
+  const firstUser = await resolveTenantActor();
   if (!firstUser) return;
   await prisma.communication.create({
     data: {

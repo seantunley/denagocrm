@@ -6,6 +6,7 @@ import { createIntakeLead } from "@/lib/leadIntake";
 import { parseLeadFields, metaSource } from "@/lib/metaLead";
 import { recordInboundDm, recordDmEcho, type DmPlatform } from "@/lib/messenger";
 import { runDmFlow } from "@/lib/flowDm";
+import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 
 /** Meta webhook verification handshake. */
 export async function GET(req: NextRequest) {
@@ -14,7 +15,9 @@ export async function GET(req: NextRequest) {
   const token = params.get("hub.verify_token");
   const challenge = params.get("hub.challenge");
 
-  const verifyToken = await getSetting("META_VERIFY_TOKEN");
+  // Install-global verification token, read before any tenant is known → system scope
+  // (else the guard throws on this tenant-scoped AppSetting read under enforcement).
+  const verifyToken = await validateInSystemScope(() => getSetting("META_VERIFY_TOKEN"));
   if (mode === "subscribe" && token && token === verifyToken && challenge) {
     return new NextResponse(challenge, { status: 200 });
   }
@@ -39,7 +42,8 @@ export async function POST(req: NextRequest) {
   // Verify Meta's payload signature. Fail CLOSED: if no app secret is
   // configured we cannot authenticate the sender, so we reject rather than
   // trust an anonymous POST (which could forge leads/DMs or drive the bot).
-  const appSecret = await getSetting("META_APP_SECRET");
+  // Install-global + read before the per-event chokepoint → trusted system scope.
+  const appSecret = await validateInSystemScope(() => getSetting("META_APP_SECRET"));
   if (!appSecret) {
     return NextResponse.json({ error: "Webhook not configured" }, { status: 503 });
   }
@@ -70,6 +74,11 @@ export async function POST(req: NextRequest) {
   if (objectType === "page" || objectType === "instagram") {
     const platform: DmPlatform = objectType === "instagram" ? "instagram" : "messenger";
     for (const entry of (body as any).entry ?? []) {
+      // Per-entry tenant chokepoint: entry.id is OUR endpoint (Page id / IG account
+      // id). Resolve its tenant and process this entry's DM events inside that scope.
+      // Dormant → runs directly. Unmapped endpoint under enforcement → skipped.
+      const endpointId = String(entry.id ?? "");
+      await withChannelTenantScope(platform, endpointId, async () => {
       for (const ev of entry.messaging ?? []) {
         try {
           const text: string = ev.message?.text ?? "";
@@ -93,6 +102,9 @@ export async function POST(req: NextRequest) {
           await logError("meta-dm-webhook", e);
         }
       }
+      }, () => {
+        console.warn(`[tenant-channel] skipped ${platform} DM: unmapped endpoint ${endpointId || "?"}`);
+      });
     }
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -106,10 +118,15 @@ export async function POST(req: NextRequest) {
       if (change.field !== "leadgen") continue;
       const leadgenId = String(change.value?.leadgen_id ?? "");
       if (!leadgenId) continue;
+      // Per-change tenant chokepoint: page_id is OUR endpoint. Resolve its tenant and
+      // create this lead inside that scope. Dormant → runs directly. Unmapped page
+      // under enforcement → the lead is skipped (fail closed), never created unscoped.
+      const pageId = String(change.value?.page_id ?? "");
 
+      await withChannelTenantScope("messenger", pageId, async () => {
       // Dedupe: Meta retries deliveries
       const existing = await prisma.lead.findUnique({ where: { externalId: leadgenId } });
-      if (existing) continue;
+      if (existing) return;
 
       const accessToken = await getSetting("META_PAGE_ACCESS_TOKEN");
       try {
@@ -139,6 +156,9 @@ export async function POST(req: NextRequest) {
           raw: change.value,
         }).catch(() => {});
       }
+      }, () => {
+        console.warn(`[tenant-channel] skipped leadgen: unmapped page_id ${pageId || "?"}`);
+      });
     }
   }
 

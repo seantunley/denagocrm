@@ -182,3 +182,73 @@ test("src/lib/push.ts: sendPushToAll delivers only to the current tenant's devic
   assert.match(code, /const\s+subs\s*=\s*await\s+pushRecipientsForCurrentScope\(\)/, "sendPushToAll must use the scoped recipient list");
   assert.doesNotMatch(code, /prisma\.pushSubscription\.findMany\(\s*\)/, "must not do an unfiltered findMany() in the send path");
 });
+
+// Phase C step 2b (C3) — inbound webhooks carry no session; under enforcement they
+// must resolve the tenant from the channel discriminator (OUR endpoint id) via
+// withChannelTenantScope BEFORE any guarded DB work. The discriminator is per-EVENT,
+// so the scope wraps each event inside the entry/change loop.
+const CHANNEL_WEBHOOKS = [
+  { file: "src/app/api/webhooks/whatsapp/route.ts", firstWork: "recordInboundWhatsApp", discriminator: /phone_number_id/ },
+  { file: "src/app/api/webhooks/meta/route.ts", firstWork: "recordInboundDm", discriminator: /entry\.id/ },
+] as const;
+for (const { file, firstWork, discriminator } of CHANNEL_WEBHOOKS) {
+  test(`${file}: establishes the channel tenant scope BEFORE the guarded work`, () => {
+    const code = src(file);
+    assert.match(code, /withChannelTenantScope\s*\(/, `${file} must call withChannelTenantScope`);
+    assert.match(code, discriminator, `${file} must read its channel discriminator`);
+    const scopeAt = code.indexOf("withChannelTenantScope(");
+    assert.ok(scopeAt >= 0, `${file} must call withChannelTenantScope`);
+    // The guarded work must be CALLED at/after the scope opens (searching from
+    // scopeAt skips the import occurrence, which always precedes it).
+    assert.ok(
+      code.indexOf(firstWork, scopeAt) !== -1,
+      `${file}: the guarded work (${firstWork}) must run inside/after the channel scope`,
+    );
+  });
+}
+
+// The meta route's leadgen path must create the lead INSIDE the (messenger/page_id)
+// channel scope — else a Lead Ads submission lands unscoped under enforcement.
+test("src/app/api/webhooks/meta/route.ts: leadgen createIntakeLead runs inside the messenger channel scope", () => {
+  const code = src("src/app/api/webhooks/meta/route.ts");
+  assert.match(code, /page_id/, "leadgen must read the page_id discriminator");
+  const scopeAt = code.indexOf('withChannelTenantScope("messenger"');
+  assert.ok(scopeAt >= 0, "leadgen must open a messenger channel scope");
+  assert.ok(
+    code.indexOf("createIntakeLead", scopeAt) !== -1,
+    "createIntakeLead must run inside the messenger channel scope",
+  );
+});
+
+// C3 review blocker 1 — the receive-side signature config (install-global) is read
+// BEFORE the per-event chokepoint, so under enforcement it must go through a trusted
+// system scope, not a bare (tenant-scoped) AppSetting read the guard would throw on.
+for (const file of ["src/app/api/webhooks/whatsapp/route.ts", "src/app/api/webhooks/meta/route.ts"] as const) {
+  test(`${file}: receive-side signature config is read via validateInSystemScope`, () => {
+    const code = src(file);
+    assert.match(code, /validateInSystemScope\(\s*\(\)\s*=>\s*getSetting\("META_APP_SECRET"\)\s*\)/, `${file} must read META_APP_SECRET in a system scope`);
+    assert.match(code, /validateInSystemScope\(\s*\(\)\s*=>\s*getSetting\("META_VERIFY_TOKEN"\)\s*\)/, `${file} must read META_VERIFY_TOKEN in a system scope`);
+  });
+}
+
+// C3 actor-pick sites must attribute inbound records via the tenant-aware resolver
+// (channel scope), not the global oldest-user pick — else a tenant-A inbound message
+// is stamped with another tenant's user. (§2.4)
+const C3_ACTOR_SITES = [
+  "src/lib/whatsapp.ts",
+  "src/lib/messenger.ts",
+  "src/lib/bot.ts",
+  "src/lib/flowRun.ts",
+  "src/lib/flowActions.ts",
+] as const;
+for (const file of C3_ACTOR_SITES) {
+  test(`${file}: inbound actor pick uses resolveTenantActor (not the global oldest-user pick)`, () => {
+    const code = src(file);
+    assert.match(code, /resolveTenantActor\s*\(/, `${file} must resolve the actor via resolveTenantActor`);
+    assert.doesNotMatch(
+      code,
+      /user\.findFirst\(\s*\{\s*orderBy:\s*\{\s*createdAt:\s*"asc"\s*\}\s*\}\s*\)/,
+      `${file} must not keep the global oldest-user pick`,
+    );
+  });
+}

@@ -12,6 +12,7 @@ import { generateBotReply, type BotMsg } from "./botAi";
 import { sendPushToAll } from "./push";
 import { maybeAutoReply, botShouldPause } from "./bot";
 import { greetingVars } from "./flowSession";
+import { resolveTenantActor } from "./tenantActor";
 import { crmActions } from "./flowActions";
 import { runFlow, DEFAULT_FLOW, type Flow, type FlowInput, type FlowSession, type FlowCtx } from "./flow";
 
@@ -136,7 +137,7 @@ function buildCtx(digits: string, match: { contactId: string | null; leadId: str
 }
 
 async function logOutbound(text: string, contactId: string | null, leadId: string | null, digits: string) {
-  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  const firstUser = await resolveTenantActor(); // tenant-aware (channel scope); dormant → oldest active user
   if (!firstUser) return;
   await prisma.communication.create({
     data: {

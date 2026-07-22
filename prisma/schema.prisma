@@ -2209,3 +2209,26 @@ model TenantApiKey {
 
   @@index([tenantId])
 }
+
+// Inbound channel endpoint → owning tenant (Phase C 2b-C3). One row per external
+// endpoint WE own — a WhatsApp business phone-number id, a Facebook Page id, an
+// Instagram account id. The webhook reads the discriminator out of the payload and
+// resolves the tenant BEFORE any scope exists (resolveChannelTenant, raw SQL via
+// basePrisma — same pre-scope infra boundary as TenantApiKey / the token resolvers).
+// Scalar tenantId, NO hard FK, matching the TenantApiKey convention: resolution is
+// app-layer and JOINs Tenant + requires active=true, so a mapping to a missing OR
+// SUSPENDED tenant simply fails to resolve (a plain FK would allow a suspended
+// tenant through — the active check is required regardless, and subsumes the FK).
+// DORMANT until enforcement; additive, resolved only on webhook paths.
+model ChannelIdentity {
+  id         String    @id @default(cuid())
+  tenantId   String
+  channel    String // "whatsapp" | "messenger" | "instagram"
+  externalId String // the stable id of OUR endpoint, not the sender (see design §2.3)
+  label      String? // human note e.g. "Denago main WABA"
+  createdAt  DateTime  @default(now())
+  disabledAt DateTime?
+
+  @@unique([channel, externalId]) // one endpoint belongs to exactly one tenant
+  @@index([tenantId])
+}

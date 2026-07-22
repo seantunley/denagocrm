@@ -8,6 +8,7 @@ import { prisma } from "./db";
 import { getDayAvailability, reserveSlot } from "./bookingSlots";
 import { createIntakeLead } from "./leadIntake";
 import { sendPushToAll } from "./push";
+import { resolveTenantActor } from "./tenantActor";
 
 type Match = { contactId: string | null; leadId: string | null };
 
@@ -41,7 +42,9 @@ async function ensureContact(source: string, vars: Record<string, string>, match
 }
 
 async function firstUserId(): Promise<string | null> {
-  return (await prisma.user.findFirst({ orderBy: { createdAt: "asc" } }))?.id ?? null;
+  // Tenant-aware (channel scope established by the webhook chokepoint); dormant →
+  // the oldest active user, unchanged.
+  return (await resolveTenantActor())?.id ?? null;
 }
 
 /** Captured file uploads (stored as URLs in variables) → note lines. */

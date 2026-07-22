@@ -5,6 +5,7 @@ import { recordInboundWhatsApp, fetchWhatsAppMedia } from "@/lib/whatsapp";
 import { transcribeVoice } from "@/lib/transcribe";
 import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
+import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 import { logError } from "@/lib/errorLog";
 
 /** Meta webhook verification handshake (same flow as Lead Ads). */
@@ -12,7 +13,10 @@ export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const token = params.get("hub.verify_token");
   const challenge = params.get("hub.challenge");
-  const verifyToken = await getSetting("META_VERIFY_TOKEN");
+  // Receive-side verification config is install-global and read BEFORE any tenant is
+  // known — under enforcement it must go through a trusted system scope, or the guard
+  // throws on this tenant-scoped AppSetting read and verification never completes.
+  const verifyToken = await validateInSystemScope(() => getSetting("META_VERIFY_TOKEN"));
   if (params.get("hub.mode") === "subscribe" && token === verifyToken && challenge) {
     return new NextResponse(challenge, { status: 200 });
   }
@@ -24,8 +28,10 @@ export async function POST(req: NextRequest) {
   const rawBody = await req.text();
 
   // Fail CLOSED: without the app secret we cannot verify the sender, so an
-  // unauthenticated POST must not be able to drive the auto-reply bot.
-  const appSecret = await getSetting("META_APP_SECRET");
+  // unauthenticated POST must not be able to drive the auto-reply bot. Read in a
+  // trusted system scope — it's install-global and runs before the per-event tenant
+  // chokepoint, so under enforcement a bare (tenant-scoped) read would throw here.
+  const appSecret = await validateInSystemScope(() => getSetting("META_APP_SECRET"));
   if (!appSecret) {
     await logError("whatsapp-webhook", "POST received but META_APP_SECRET is not set — rejecting").catch(() => {});
     return NextResponse.json({ error: "Webhook not configured" }, { status: 503 });
@@ -64,6 +70,12 @@ export async function POST(req: NextRequest) {
       if (change.field !== "messages") continue;
       const value = change.value ?? {};
       const contactsMeta = value.contacts ?? [];
+      // Per-change tenant chokepoint: resolve WHICH tenant owns this WhatsApp
+      // business number, then process the change's messages inside that scope.
+      // Dormant → runs directly, unchanged. Unknown/disabled endpoint under
+      // enforcement → the messages are skipped (fail closed), never run unscoped.
+      const phoneNumberId: string | undefined = value?.metadata?.phone_number_id;
+      await withChannelTenantScope("whatsapp", phoneNumberId, async () => {
       for (const message of value.messages ?? []) {
         const from: string = message.from;
         const profileName: string | null =
@@ -111,6 +123,9 @@ export async function POST(req: NextRequest) {
           }).catch(() => {});
         }
       }
+      }, () => {
+        console.warn(`[tenant-channel] skipped WhatsApp inbound: unmapped phone_number_id ${phoneNumberId ?? "?"}`);
+      });
     }
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */

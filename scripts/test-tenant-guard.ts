@@ -14,7 +14,8 @@ import { randomUUID } from "node:crypto";
 import { prisma, basePrisma } from "../src/lib/db";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 import { runInTenantScope } from "../src/lib/tenantScope";
-import { establishTenantScopeFromId, establishStaffTenantScope, withTokenTenantScope } from "../src/lib/tenantScopeEntry";
+import { establishTenantScopeFromId, establishStaffTenantScope, withTokenTenantScope, withChannelTenantScope, validateInSystemScope } from "../src/lib/tenantScopeEntry";
+import { getSetting } from "../src/lib/settings";
 import { TenantScopeError } from "../src/lib/tenantGuard";
 import { resolvePortalTenant } from "../src/lib/portal";
 import { resolveActingTenant } from "../src/lib/tenantContext";
@@ -30,6 +31,8 @@ import { hashApiKey, resolveApiKeyTenant, authenticateIntakeKey } from "../src/l
 import { claimSlotCapacity } from "../src/lib/bookingSlots";
 import { serviceOtpKey } from "../src/lib/serviceOtp";
 import { pushRecipientsForCurrentScope } from "../src/lib/push";
+import { resolveChannelTenant } from "../src/lib/channelTenant";
+import { upsertChannel } from "./backfill-channel-identities";
 
 const dbName = (process.env.DATABASE_URL ?? "").split("/").pop()?.split("?")[0] ?? "";
 if (process.env.NODE_ENV !== "test" || !dbName.endsWith("_test")) {
@@ -93,6 +96,20 @@ const subBId = `sub_B_${SFX}`;
 const subCId = `sub_C_${SFX}`;
 const otpVin = `VINSHARE${SFX}`.toUpperCase();
 const slotDt = new Date("2030-06-03T06:00:00.000Z"); // fixed future slot instant
+// Inbound channel-identity fixtures (Phase C 2b-C3): OUR endpoints → tenant.
+const waEndpointA = `waA_${SFX}`; // WhatsApp phone-number id owned by TENANT_A
+const pageEndpointB = `pageB_${SFX}`; // FB Page id owned by TENANT_B
+const waDisabled = `waDis_${SFX}`; // an endpoint with disabledAt set
+const waSus = `waSus_${SFX}`; // endpoint of a SUSPENDED tenant
+const waGhost = `waGhost_${SFX}`; // endpoint whose tenant has NO Tenant row (dangling)
+const chTenantSus = `chsus_${SFX}`; // suspended tenant (active=false)
+const chGhostTenant = `chghost_${SFX}`; // tenantId with no Tenant row
+const chIdA = `chA_${SFX}`;
+const chIdB = `chB_${SFX}`;
+const chIdDis = `chDis_${SFX}`;
+const chIdSus = `chSus_${SFX}`;
+const chIdGhost = `chGhost_${SFX}`;
+const cfgKey = `TESTCFG_${SFX}`; // a tenant-scoped AppSetting (review blocker 1 fixture)
 
 let passed = 0;
 let failed = 0;
@@ -178,6 +195,19 @@ async function main() {
   await basePrisma.pushSubscription.create({ data: { id: subAId, endpoint: `epA_${SFX}`, p256dh: "x", auth: "x", userId: userAId, userName: "A" } });
   await basePrisma.pushSubscription.create({ data: { id: subBId, endpoint: `epB_${SFX}`, p256dh: "x", auth: "x", userId: userBId, userName: "B" } });
   await basePrisma.pushSubscription.create({ data: { id: subCId, endpoint: `epC_${SFX}`, p256dh: "x", auth: "x", userId: userCId, userName: "C-disabled" } });
+
+  // Channel identities (C3, raw SQL — the delegate may be un-regenerated locally, and
+  // this is how channelTenant.ts queries the table): A's WhatsApp number, B's Page, a
+  // DISABLED endpoint, a SUSPENDED-tenant endpoint, and a DANGLING endpoint (no Tenant).
+  await basePrisma.tenant.create({ data: { id: chTenantSus, name: "Suspended Ch", slug: `chsus_${SFX}`, active: false } });
+  await basePrisma.$executeRaw`INSERT INTO "ChannelIdentity" ("id","tenantId","channel","externalId","createdAt") VALUES (${chIdA}, ${TENANT_A}, 'whatsapp', ${waEndpointA}, CURRENT_TIMESTAMP)`;
+  await basePrisma.$executeRaw`INSERT INTO "ChannelIdentity" ("id","tenantId","channel","externalId","createdAt") VALUES (${chIdB}, ${TENANT_B}, 'messenger', ${pageEndpointB}, CURRENT_TIMESTAMP)`;
+  await basePrisma.$executeRaw`INSERT INTO "ChannelIdentity" ("id","tenantId","channel","externalId","createdAt","disabledAt") VALUES (${chIdDis}, ${TENANT_A}, 'whatsapp', ${waDisabled}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
+  await basePrisma.$executeRaw`INSERT INTO "ChannelIdentity" ("id","tenantId","channel","externalId","createdAt") VALUES (${chIdSus}, ${chTenantSus}, 'whatsapp', ${waSus}, CURRENT_TIMESTAMP)`;
+  await basePrisma.$executeRaw`INSERT INTO "ChannelIdentity" ("id","tenantId","channel","externalId","createdAt") VALUES (${chIdGhost}, ${chGhostTenant}, 'whatsapp', ${waGhost}, CURRENT_TIMESTAMP)`;
+  // A tenant-scoped AppSetting (blocker 1): a bare read fails closed under enforcement,
+  // but the webhook's validateInSystemScope wrapper reads it via the system bypass.
+  await basePrisma.appSetting.create({ data: { key: cfgKey, value: "sig-secret" } });
 
   __setTenantEnforcingForTests(true);
   try {
@@ -600,17 +630,73 @@ async function main() {
       check("push: null non-system scope → delivers to NOBODY (fail closed)", (await pushRecipientsForCurrentScope()).length === 0);
     });
 
-    // Dormant back-compat: the legacy global key still works (tenantId null); a
-    // per-tenant key still resolves.
+    // ── inbound CHANNEL identity (Phase C 2b-C3): resolve OUR endpoint → tenant with
+    //    an active-Tenant JOIN, then run the event inside that scope (enforcement ON).
+    check("channel: resolveChannelTenant(whatsapp, A's number) → tenant A", (await resolveChannelTenant("whatsapp", waEndpointA)) === TENANT_A);
+    check("channel: resolveChannelTenant(messenger, B's page) → tenant B", (await resolveChannelTenant("messenger", pageEndpointB)) === TENANT_B);
+    check("channel: same id under the WRONG channel → null", (await resolveChannelTenant("whatsapp", pageEndpointB)) === null);
+    check("channel: unknown endpoint → null", (await resolveChannelTenant("whatsapp", `nope_${SFX}`)) === null);
+    check("channel: null externalId → null", (await resolveChannelTenant("whatsapp", null)) === null);
+    check("channel: DISABLED endpoint → null (disabledAt set)", (await resolveChannelTenant("whatsapp", waDisabled)) === null);
+    check("channel: endpoint of a SUSPENDED tenant → null (Tenant.active=false)", (await resolveChannelTenant("whatsapp", waSus)) === null);
+    check("channel: DANGLING endpoint (no Tenant row) → null", (await resolveChannelTenant("whatsapp", waGhost)) === null);
+
+    // withChannelTenantScope confines the event's guarded work to the derived tenant.
+    const chSeen = await withChannelTenantScope(
+      "whatsapp",
+      waEndpointA,
+      async () => (await prisma.contact.findMany({ where: { id: { in: [idA, idB] } } })).map((r) => r.id),
+      () => [] as string[],
+    );
+    check("channel: withChannelTenantScope confines reads to the derived tenant (A only, not B)", chSeen.length === 1 && chSeen[0] === idA);
+
+    // Unmapped endpoint under enforcement → onUnresolved runs, `fn` NEVER runs (the
+    // returned marker distinguishes which branch executed).
+    const chMiss = await withChannelTenantScope(
+      "whatsapp",
+      `nope_${SFX}`,
+      async () => "ran",
+      () => "unresolved",
+    );
+    check("channel: unmapped endpoint → onUnresolved WITHOUT running the event", chMiss === "unresolved");
+
+    // A suspended-tenant endpoint also fails closed through the scope helper.
+    const chSus = await withChannelTenantScope("whatsapp", waSus, async () => "ran", () => "skipped");
+    check("channel: suspended-tenant endpoint → event skipped (fail closed)", chSus === "skipped");
+
+    // ── review blocker 1: the webhook's PRE-scope receive-side config reads must go
+    //    through validateInSystemScope — a bare tenant-scoped AppSetting read fails
+    //    closed under enforcement (so signature verification would never complete). ──
+    await runInTenantScope({ tenantId: null, system: false }, async () => {
+      await expectThrows(
+        "channel: bare tenant-scoped AppSetting read fails closed (would break sig verify)",
+        () => getSetting(cfgKey),
+        (e) => e instanceof TenantScopeError,
+      );
+    });
+    check("channel: validateInSystemScope reads receive-side config pre-scope (system bypass)", (await validateInSystemScope(() => getSetting(cfgKey))) === "sig-secret");
+
+    // ── review blocker 2: ChannelIdentity is an authz boundary — the backfill must
+    //    NEVER silently reassign an endpoint owned by another tenant. ────────────────
+    await expectThrows(
+      "backfill: refuses to reassign B's endpoint to A (cross-tenant hijack)",
+      () => upsertChannel("messenger", pageEndpointB, "hijack", TENANT_A),
+    );
+    check("backfill: B's endpoint STILL owned by B after the refused reassignment", (await resolveChannelTenant("messenger", pageEndpointB)) === TENANT_B);
+    check("backfill: same-tenant upsert is a no-op (no ownership change)", (await upsertChannel("messenger", pageEndpointB, "same", TENANT_B)) === "unchanged");
+
+    // ── DORMANT back-compat (enforcement OFF): C2 keys/OTP/push + C3 channel all run
+    //    byte-for-byte the pre-tenancy path. ─────────────────────────────────────────
     __setTenantEnforcingForTests(false);
     const dormLegacy = await authenticateIntakeKey(apiKeyRawGlobal, "intake");
     check("apikey: DORMANT legacy global accepted (tenantId null)", dormLegacy !== null && dormLegacy.tenantId === null);
     check("apikey: DORMANT per-tenant keyA still resolves to A", (await authenticateIntakeKey(apiKeyRawA, "intake"))?.tenantId === TENANT_A);
     check("apikey: DORMANT unknown key → null", (await authenticateIntakeKey(`nope_${SFX}`, "intake")) === null);
-    // Dormant: OTP key is the bare VIN (legacy) and push broadcasts to every device.
     check("otp: DORMANT serviceOtpKey → bare VIN (legacy key, byte-for-byte)", serviceOtpKey(otpVin) === otpVin);
     const dormPushIds = (await pushRecipientsForCurrentScope()).map((r) => r.id);
     check("push: DORMANT delivers to ALL devices (global, unchanged)", dormPushIds.includes(subAId) && dormPushIds.includes(subBId) && dormPushIds.includes(subCId));
+    const chDorm = await withChannelTenantScope("whatsapp", `nope_${SFX}`, async () => "ran", () => "skipped");
+    check("channel: DORMANT runs the event directly even for an unmapped id (byte-for-byte legacy)", chDorm === "ran");
     __setTenantEnforcingForTests(true);
   } finally {
     __setTenantEnforcingForTests(null);
@@ -629,9 +715,11 @@ async function main() {
     await basePrisma.pushSubscription.deleteMany({ where: { id: { in: [subAId, subBId, subCId] } } });
     await basePrisma.$executeRaw`DELETE FROM "TenantApiKey" WHERE "tenantId" IN (${TENANT_A}, ${TENANT_SUS}, ${ghostTenant})`;
     await basePrisma.$executeRaw`DELETE FROM "AppSetting" WHERE "key" = 'INTAKE_API_KEY'`;
+    await basePrisma.$executeRaw`DELETE FROM "ChannelIdentity" WHERE "id" IN (${chIdA}, ${chIdB}, ${chIdDis}, ${chIdSus}, ${chIdGhost})`;
+    await basePrisma.appSetting.deleteMany({ where: { key: cfgKey } });
     await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [userAId, userBId, userCId] } } });
     await basePrisma.user.deleteMany({ where: { id: { in: [userAId, userBId, userCId] } } });
-    await basePrisma.tenant.deleteMany({ where: { id: { in: [TENANT_A, TENANT_B, TENANT_SUS] } } });
+    await basePrisma.tenant.deleteMany({ where: { id: { in: [TENANT_A, TENANT_B, TENANT_SUS, chTenantSus] } } });
     await basePrisma.contact.deleteMany({
       where: { id: { in: [idA, idB, cmId, `c_forge_${SFX}`] } },
     });
