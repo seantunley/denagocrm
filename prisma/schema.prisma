@@ -1629,6 +1629,7 @@ model Passkey {
 
 model PortalAccessGrant {
   id               String   @id
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   viewerContactId  String
   grantedContactId String?
   fleetId          String?
@@ -1638,6 +1639,7 @@ model PortalAccessGrant {
   createdById      String?
 
   @@index([viewerContactId, active])
+  @@index([tenantId])
 }
 
 // ── Support ticketing (help desk) ───────────────────────────────────────────
@@ -1648,6 +1650,7 @@ model PortalAccessGrant {
 
 model CustomerCase {
   id              String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   number          BigInt    @unique @default(autoincrement())
   subject         String
   description     String
@@ -1678,10 +1681,12 @@ model CustomerCase {
   @@index([vehicleId, createdAt])
   @@index([mailboxId, status, updatedAt])
   @@index([assignedToId, status])
+  @@index([tenantId])
 }
 
 model CustomerCaseMessage {
   id        String    @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   caseId    String
   contactId String?
   userId    String?
@@ -1698,10 +1703,12 @@ model CustomerCaseMessage {
   case CustomerCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId, createdAt])
+  @@index([tenantId])
 }
 
 model PortalNotification {
   id        String    @id
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   contactId String
   title     String
   body      String
@@ -1711,10 +1718,12 @@ model PortalNotification {
   createdAt DateTime  @default(now())
 
   @@index([contactId, readAt, createdAt])
+  @@index([tenantId])
 }
 
 model PortalProfileChangeRequest {
   id           String    @id
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   contactId    String
   changes      Json
   note         String?
@@ -1725,10 +1734,12 @@ model PortalProfileChangeRequest {
   reviewNote   String?
 
   @@index([contactId, status, createdAt])
+  @@index([tenantId])
 }
 
 model PortalPreference {
   contactId           String   @id
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   serviceReminders    Boolean  @default(true)
   portalNotifications Boolean  @default(true)
   marketingEmail      Boolean  @default(true)
@@ -1736,10 +1747,12 @@ model PortalPreference {
   emailServiceUpdates Boolean  @default(true)
   smsServiceUpdates   Boolean  @default(true)
   emailMarketing      Boolean  @default(true)
+  @@index([tenantId])
 }
 
 model PortalUpload {
   id         String   @id
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   contactId  String
   caseId     String?
   vehicleId  String?
@@ -1751,10 +1764,12 @@ model PortalUpload {
   createdAt  DateTime @default(now())
 
   @@index([contactId, createdAt])
+  @@index([tenantId])
 }
 
 model SupportMailbox {
   id               String   @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name             String
   slug             String   @unique
   color            String   @default("#ea580c")
@@ -1769,15 +1784,18 @@ model SupportMailbox {
 
   cases        CustomerCase[]
   cannedReplies CannedReply[]
+  @@index([tenantId])
 }
 
 model SupportTag {
   id        String            @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name      String
   slug      String            @unique
   color     String            @default("#64748b")
   createdAt DateTime          @default(now())
   cases     CustomerCaseTag[]
+  @@index([tenantId])
 }
 
 model CustomerCaseTag {
@@ -1787,7 +1805,9 @@ model CustomerCaseTag {
   tag    SupportTag   @relation(fields: [tagId], references: [id], onDelete: Cascade)
 
   @@id([caseId, tagId])
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   @@index([tagId])
+  @@index([tenantId])
 }
 
 model CannedReply {
