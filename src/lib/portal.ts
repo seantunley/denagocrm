@@ -1,8 +1,9 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
-import { prisma } from "./db";
+import { prisma, basePrisma } from "./db";
 import { isModuleEnabled } from "./modules/enabled";
-import { establishTenantScopeFromId, validateInSystemScope } from "./tenantScopeEntry";
+import { enterTenantScope } from "./tenantScope";
+import { tenantEnforcing } from "./tenantEnforcement";
 
 const secret = () => {
   const s = process.env.SESSION_SECRET;
@@ -46,34 +47,47 @@ export async function clearPortalCookie() {
 
 /** The logged-in customer for the portal, or null. */
 export async function getPortalContact() {
-  // Phase C: the module check (tenant-scoped AppSetting) and the Contact lookup
-  // run BEFORE the customer's tenant is known. Do them in a trusted `system` scope
-  // CONFINED to this callback, so the guard doesn't reject them AND a rejected
-  // portal request (module off / no session) can't leak a lingering system bypass
-  // — the scope reverts on the null paths; only the contact's own tenant (set
-  // after, below) persists. DORMANT: the db guard ignores the scope until
-  // `tenantEnforcing()`, and the check order is unchanged when off.
-  const contact = await validateInSystemScope(async () => {
-    // Portal is an optional pack. When it is off, no session resolves — this is
-    // the single choke point every portal page and action funnels through
-    // (directly, or via getPortalScope/requirePortalScope/portalUser), so gating
-    // here makes the whole portal self-reject server-side, not just hide its UI.
-    if (!(await isModuleEnabled("portal"))) return null;
-    const store = await cookies();
-    const token = store.get(PORTAL_COOKIE)?.value;
-    if (!token) return null;
-    try {
-      const { payload } = await jwtVerify(token, secret());
-      if (payload.kind !== "portal" || typeof payload.sub !== "string") return null;
-      return await prisma.contact.findFirst({
-        where: { id: payload.sub, deletedAt: null },
-      });
-    } catch {
-      return null;
-    }
+  // Verify the portal JWT FIRST, with NO database access, so no tenant-owned data
+  // is touched before we know whose tenant this request belongs to.
+  const store = await cookies();
+  const token = store.get(PORTAL_COOKIE)?.value;
+  if (!token) return null;
+  let contactId: string;
+  try {
+    const { payload } = await jwtVerify(token, secret());
+    if (payload.kind !== "portal" || typeof payload.sub !== "string") return null;
+    contactId = payload.sub;
+  } catch {
+    return null;
+  }
+  // Phase C: derive the tenant from the verified subject via a DELIBERATELY NARROW
+  // trusted lookup (single column, basePrisma) and enter THAT tenant — the public
+  // portal is NEVER given a broad `system` bypass. DORMANT until `tenantEnforcing()`;
+  // when off, no lookup runs and the checks below behave exactly as before.
+  if (tenantEnforcing()) {
+    const owner = await resolvePortalTenant(contactId);
+    if (!owner) return null; // unknown subject → fail closed
+    enterTenantScope({ tenantId: owner.tenantId ?? null, system: false });
+  }
+  // Portal is an optional pack. When it is off, no session resolves — this is the
+  // single choke point every portal page and action funnels through (directly, or
+  // via getPortalScope/requirePortalScope/portalUser), so gating here makes the
+  // whole portal self-reject server-side. Now runs in the customer's own tenant.
+  if (!(await isModuleEnabled("portal"))) return null;
+  return prisma.contact.findFirst({ where: { id: contactId, deletedAt: null } });
+}
+
+/**
+ * Narrow trusted lookup: the owning tenant of a verified portal subject (contact
+ * id). basePrisma + single column — the ONLY thing the public portal reads before
+ * its tenant scope is established, deliberately not a broad system bypass.
+ * Exported for tests.
+ */
+export async function resolvePortalTenant(
+  contactId: string,
+): Promise<{ tenantId: string | null } | null> {
+  return basePrisma.contact.findUnique({
+    where: { id: contactId },
+    select: { tenantId: true },
   });
-  // Switch to the customer's own tenant for the rest of the request (persists via
-  // enterWith). DORMANT until `tenantEnforcing()`.
-  if (contact) establishTenantScopeFromId(contact.tenantId ?? null);
-  return contact;
 }

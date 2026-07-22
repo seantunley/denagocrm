@@ -211,3 +211,19 @@ test("enterTenantScope: overrides the current scope for downstream access", asyn
     assert.deepEqual(currentTenantScope(), { tenantId: "B", system: true });
   });
 });
+
+test("concurrent scopes stay independent (parallel requests don't cross scopes)", async () => {
+  const seen: (string | null | undefined)[] = [];
+  await Promise.all([
+    runInTenantScope({ tenantId: "A", system: false }, async () => {
+      await new Promise((r) => setTimeout(r, 5)); // yield so B interleaves
+      seen.push(currentTenantScope()?.tenantId ?? null);
+    }),
+    runInTenantScope({ tenantId: "B", system: false }, async () => {
+      await new Promise((r) => setTimeout(r, 1));
+      seen.push(currentTenantScope()?.tenantId ?? null);
+    }),
+  ]);
+  // Each callback observed ITS OWN tenant despite interleaving.
+  assert.deepEqual([...seen].sort(), ["A", "B"]);
+});
