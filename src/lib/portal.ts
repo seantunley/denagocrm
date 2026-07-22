@@ -2,6 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { prisma } from "./db";
 import { isModuleEnabled } from "./modules/enabled";
+import { establishTenantScopeFromId } from "./tenantScopeEntry";
 
 const secret = () => {
   const s = process.env.SESSION_SECRET;
@@ -59,6 +60,9 @@ export async function getPortalContact() {
     const contact = await prisma.contact.findFirst({
       where: { id: payload.sub, deletedAt: null },
     });
+    // Phase C (step 2): seed the portal request's tenant scope from the resolved
+    // customer's owning tenant. DORMANT until `tenantEnforcing()` flips on.
+    if (contact) establishTenantScopeFromId(contact.tenantId ?? null);
     return contact;
   } catch {
     return null;
