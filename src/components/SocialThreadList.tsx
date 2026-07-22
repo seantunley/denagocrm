@@ -59,6 +59,14 @@ export default function SocialThreadList({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2"><p className="truncate text-sm font-semibold text-foreground">{thread.name}</p><span className="shrink-0 text-[10px] text-muted-foreground">{meta.label}</span></div>
                   <p className={`mt-0.5 truncate text-xs ${thread.unread ? "font-medium text-foreground/80" : "text-muted-foreground"}`}>{preview || "No message preview"}</p>
+                  <div className="mt-1.5 flex items-center gap-2 sm:hidden">
+                    <StatusPill tone={thread.unread ? "warning" : thread.awaiting ? "info" : "success"}>
+                      {thread.unread ? "Unread" : thread.awaiting ? "Reply due" : "Replied"}
+                    </StatusPill>
+                    <time dateTime={thread.lastAt.toISOString()} className="truncate text-[10px] text-muted-foreground">
+                      {formatDateTime(thread.lastAt)}
+                    </time>
+                  </div>
                 </div>
                 <div className="hidden shrink-0 text-right sm:block">
                   {thread.unread ? <StatusPill tone="warning">Unread</StatusPill> : thread.awaiting ? <StatusPill tone="info">Reply due</StatusPill> : <StatusPill tone="success">Replied</StatusPill>}
