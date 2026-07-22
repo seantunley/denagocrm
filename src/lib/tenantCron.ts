@@ -27,8 +27,8 @@ export type CronSliceContext = {
 
 export type CronRun<T> =
   | { tenantId: string | null; status: "ok"; result: T; durationMs: number }
-  | { tenantId: string; status: "error"; error: string; durationMs: number }
-  | { tenantId: string; status: "skipped"; reason: "deadline"; durationMs: 0 };
+  | { tenantId: string; status: "error"; result: T; error: string; durationMs: number }
+  | { tenantId: string; status: "skipped"; result: T; reason: "deadline"; durationMs: 0 };
 
 export type RunCronPerTenantOptions = {
   /** Wall-clock budget for the whole enforcing-mode fan-out. */
@@ -141,6 +141,9 @@ export async function runCronPerTenant<T>(
         completed.set(tenantId, {
           tenantId,
           status: "error",
+          // Keep the original `result: T` surface type-compatible for existing
+          // success-path callers; JSON omits this undefined value on failures.
+          result: undefined as T,
           error: errorMessage(error),
           durationMs: Math.max(0, now() - runStartedAt),
         });
@@ -161,6 +164,7 @@ export async function runCronPerTenant<T>(
     completed.get(tenantId) ?? {
       tenantId,
       status: "skipped" as const,
+      result: undefined as T,
       reason: "deadline" as const,
       durationMs: 0 as const,
     }
