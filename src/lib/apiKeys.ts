@@ -22,9 +22,13 @@ export function hashApiKey(raw: string): string {
 export async function resolveApiKeyTenant(rawKey: string, scope: string): Promise<string | null> {
   if (!rawKey) return null;
   const hashedKey = hashApiKey(rawKey);
+  // JOIN Tenant + require active=true: a key for a SUSPENDED tenant, or a DANGLING
+  // key whose tenant was deleted, must not authenticate or establish a scope.
   const rows = await basePrisma.$queryRaw<{ id: string; tenantId: string; scopes: string }[]>`
-    SELECT "id", "tenantId", "scopes" FROM "TenantApiKey"
-    WHERE "hashedKey" = ${hashedKey} AND "revokedAt" IS NULL
+    SELECT k."id", k."tenantId", k."scopes"
+    FROM "TenantApiKey" k
+    JOIN "Tenant" t ON t."id" = k."tenantId"
+    WHERE k."hashedKey" = ${hashedKey} AND k."revokedAt" IS NULL AND t."active" = true
     LIMIT 1`;
   const row = rows[0];
   if (!row) return null;

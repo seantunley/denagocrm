@@ -75,6 +75,12 @@ const apiKeyRawRevoked = `keyR_${SFX}`;
 const apiKeyRawGlobal = `legacyglobal_${SFX}`;
 const apiKeyIdA = `tak_${SFX}`;
 const apiKeyIdR = `takR_${SFX}`;
+const TENANT_SUS = `tenant_sus_${SFX}`; // suspended tenant (active=false)
+const ghostTenant = `ghost_${SFX}`; // a tenantId with NO Tenant row (dangling key)
+const apiKeyRawSuspended = `keyS_${SFX}`;
+const apiKeyRawDangling = `keyD_${SFX}`;
+const apiKeyIdS = `takS_${SFX}`;
+const apiKeyIdD = `takD_${SFX}`;
 
 let passed = 0;
 let failed = 0;
@@ -145,6 +151,11 @@ async function main() {
   await basePrisma.$executeRaw`INSERT INTO "TenantApiKey" ("id","tenantId","label","hashedKey","prefix","scopes","createdAt") VALUES (${apiKeyIdA}, ${TENANT_A}, ${"Key A"}, ${hashApiKey(apiKeyRawA)}, ${apiKeyRawA.slice(0, 8)}, ${"intake,bookings"}, CURRENT_TIMESTAMP)`;
   await basePrisma.$executeRaw`INSERT INTO "TenantApiKey" ("id","tenantId","label","hashedKey","prefix","scopes","createdAt","revokedAt") VALUES (${apiKeyIdR}, ${TENANT_A}, ${"Key R"}, ${hashApiKey(apiKeyRawRevoked)}, ${apiKeyRawRevoked.slice(0, 8)}, ${"intake,bookings,service-lookup"}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
   await basePrisma.$executeRaw`INSERT INTO "AppSetting" ("key","value") VALUES ('INTAKE_API_KEY', ${apiKeyRawGlobal}) ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value"`;
+  // A key for a SUSPENDED tenant (active=false) and a DANGLING key (tenantId with no
+  // Tenant row) — both must fail to authenticate.
+  await basePrisma.tenant.create({ data: { id: TENANT_SUS, name: "Suspended", slug: `sus_${SFX}`, active: false } });
+  await basePrisma.$executeRaw`INSERT INTO "TenantApiKey" ("id","tenantId","label","hashedKey","prefix","scopes","createdAt") VALUES (${apiKeyIdS}, ${TENANT_SUS}, ${"Key S"}, ${hashApiKey(apiKeyRawSuspended)}, ${apiKeyRawSuspended.slice(0, 8)}, ${"intake,bookings,service-lookup"}, CURRENT_TIMESTAMP)`;
+  await basePrisma.$executeRaw`INSERT INTO "TenantApiKey" ("id","tenantId","label","hashedKey","prefix","scopes","createdAt") VALUES (${apiKeyIdD}, ${ghostTenant}, ${"Key D"}, ${hashApiKey(apiKeyRawDangling)}, ${apiKeyRawDangling.slice(0, 8)}, ${"intake,bookings,service-lookup"}, CURRENT_TIMESTAMP)`;
 
   __setTenantEnforcingForTests(true);
   try {
@@ -487,6 +498,9 @@ async function main() {
     check("apikey: keyA out of scope (service-lookup) → null", (await resolveApiKeyTenant(apiKeyRawA, "service-lookup")) === null);
     check("apikey: unknown key → null", (await resolveApiKeyTenant(`nope_${SFX}`, "intake")) === null);
     check("apikey: revoked key → null", (await resolveApiKeyTenant(apiKeyRawRevoked, "intake")) === null);
+    check("apikey: key for a SUSPENDED tenant → null (Tenant.active=false)", (await resolveApiKeyTenant(apiKeyRawSuspended, "intake")) === null);
+    check("apikey: authenticateIntakeKey(suspended-tenant key) → null", (await authenticateIntakeKey(apiKeyRawSuspended, "intake")) === null);
+    check("apikey: DANGLING key (deleted tenant, no Tenant row) → null", (await resolveApiKeyTenant(apiKeyRawDangling, "intake")) === null);
     // Enforcement: per-tenant keys only — the legacy global key is rejected.
     check("apikey: authenticateIntakeKey(keyA) enforcing → tenant A", (await authenticateIntakeKey(apiKeyRawA, "intake"))?.tenantId === TENANT_A);
     check("apikey: authenticateIntakeKey(legacy global) enforcing → null", (await authenticateIntakeKey(apiKeyRawGlobal, "intake")) === null);
@@ -510,11 +524,11 @@ async function main() {
     await basePrisma.surveyResponse.deleteMany({ where: { id: { in: [srespId, srespIdB] } } });
     await basePrisma.survey.deleteMany({ where: { id: { in: [survId, survIdB] } } });
     await basePrisma.communication.deleteMany({ where: { contactId: { in: [idA, idB] } } });
-    await basePrisma.$executeRaw`DELETE FROM "TenantApiKey" WHERE "tenantId" = ${TENANT_A}`;
+    await basePrisma.$executeRaw`DELETE FROM "TenantApiKey" WHERE "tenantId" IN (${TENANT_A}, ${TENANT_SUS}, ${ghostTenant})`;
     await basePrisma.$executeRaw`DELETE FROM "AppSetting" WHERE "key" = 'INTAKE_API_KEY'`;
     await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [userAId, userBId, userCId] } } });
     await basePrisma.user.deleteMany({ where: { id: { in: [userAId, userBId, userCId] } } });
-    await basePrisma.tenant.deleteMany({ where: { id: { in: [TENANT_A, TENANT_B] } } });
+    await basePrisma.tenant.deleteMany({ where: { id: { in: [TENANT_A, TENANT_B, TENANT_SUS] } } });
     await basePrisma.contact.deleteMany({
       where: { id: { in: [idA, idB, cmId, `c_forge_${SFX}`] } },
     });
