@@ -20,7 +20,7 @@ import { runAiHealthIfDue, runBackupWatchdog } from "@/lib/systemHealth";
 import { basePrisma } from "@/lib/db";
 import { expireReservations } from "@/lib/stockPlatform";
 import { resolveTenantActor } from "@/lib/tenantActor";
-import { runCronPerTenant } from "@/lib/tenantCron";
+import { runCronPerTenant, type CronRun } from "@/lib/tenantCron";
 import { withSystemScope } from "@/lib/tenantScopeEntry";
 
 /**
@@ -87,6 +87,18 @@ async function runOperationalQueues() {
   };
 }
 
+type OperationalResult = Awaited<ReturnType<typeof runOperationalQueues>>;
+
+async function runGlobalMaintenance() {
+  await withSystemScope(async () => {
+    await runAiHealthIfDue().catch((e) => logError("ai-health", e));
+    await runBackupWatchdog().catch(() => {});
+    await basePrisma.errorLog
+      .deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } } })
+      .catch(() => {});
+  });
+}
+
 /**
  * Runs recurring operational queues. Invoked by Vercel Cron with
  *   Authorization: Bearer <CRON_SECRET>
@@ -96,22 +108,27 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Per-tenant business queues (dormant → one global run, unchanged).
-  const runs = await runCronPerTenant(() => runOperationalQueues());
+  let runs: Array<CronRun<OperationalResult>>;
+  try {
+    // The helper isolates tenant failures, rotates the start tenant, and stops
+    // admitting new slices before the route deadline.
+    runs = await runCronPerTenant(async () => runOperationalQueues(), {
+      maxRuntimeMs: 45_000,
+      minStartBudgetMs: 8_000,
+      concurrency: 2,
+      rotationWindowMs: 15 * 60 * 1000,
+      onError: (tenantId, error) => logError(`automations-tenant:${tenantId}`, error),
+    });
+  } finally {
+    // Platform-global maintenance runs exactly once and is not starved by a failed
+    // tenant slice or tenant-enumeration error. In dormant mode the original error
+    // still propagates after this finally block, preserving the legacy response.
+    await runGlobalMaintenance();
+  }
 
-  // Platform-global maintenance — runs ONCE regardless of tenant count. Health
-  // + backup watchdog + `ErrorLog` retention (ErrorLog is a global model) are
-  // not per-tenant work, so they run in the system scope, never inside the loop.
-  await withSystemScope(async () => {
-    await runAiHealthIfDue().catch((e) => logError("ai-health", e));
-    await runBackupWatchdog().catch(() => {});
-    await basePrisma.errorLog
-      .deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } } })
-      .catch(() => {});
-  });
-
-  if (runs.length === 1 && runs[0].tenantId === null) {
-    return NextResponse.json({ ok: true, ...runs[0].result });
+  const dormant = runs.length === 1 && runs[0].tenantId === null ? runs[0] : null;
+  if (dormant?.status === "ok") {
+    return NextResponse.json({ ok: true, ...dormant.result });
   }
   return NextResponse.json({ ok: true, tenants: runs });
 }
