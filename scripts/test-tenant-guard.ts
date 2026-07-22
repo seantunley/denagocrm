@@ -24,6 +24,7 @@ import {
   resolveCampaignRecipientTenant,
   resolveSurveyResponseTenant,
 } from "../src/lib/tokenTenant";
+import { resolveTenantActor } from "../src/lib/tenantActor";
 
 const dbName = (process.env.DATABASE_URL ?? "").split("/").pop()?.split("?")[0] ?? "";
 if (process.env.NODE_ENV !== "test" || !dbName.endsWith("_test")) {
@@ -60,6 +61,11 @@ const srespId = `sresp_${SFX}`;
 const srespIdB = `srespB_${SFX}`;
 const surveyTokenA = `survtok_${SFX}`;
 const surveyTokenB = `survtokB_${SFX}`;
+// Tenant-aware actor fixtures: userB is OLDER than userA, so the legacy global
+// "oldest user" pick would wrongly choose B. TENANT_A/TENANT_B get real Tenant rows
+// here (TenantMember needs the FK).
+const userAId = `uA_${SFX}`;
+const userBId = `uB_${SFX}`;
 
 let passed = 0;
 let failed = 0;
@@ -107,6 +113,15 @@ async function main() {
   await basePrisma.surveyResponse.create({ data: { id: srespId, surveyId: survId, token: surveyTokenA, contactId: idA, status: "sent", tenantId: TENANT_A } });
   await basePrisma.survey.create({ data: { id: survIdB, title: "Survey B", questions: [], tenantId: TENANT_B } });
   await basePrisma.surveyResponse.create({ data: { id: srespIdB, surveyId: survIdB, token: surveyTokenB, status: "sent", tenantId: TENANT_B } });
+
+  // Real Tenant rows for A/B + one owner member each. userB is created OLDER than
+  // userA on purpose: the legacy global oldest-user pick would choose B.
+  await basePrisma.tenant.create({ data: { id: TENANT_A, name: "Tenant A", slug: `ta_${SFX}`, active: true } });
+  await basePrisma.tenant.create({ data: { id: TENANT_B, name: "Tenant B", slug: `tb_${SFX}`, active: true } });
+  await basePrisma.user.create({ data: { id: userBId, name: "Owner B", email: `ob_${SFX}@t.test`, passwordHash: "x", role: "owner", createdAt: new Date("2020-01-01T00:00:00Z") } });
+  await basePrisma.user.create({ data: { id: userAId, name: "Owner A", email: `oa_${SFX}@t.test`, passwordHash: "x", role: "owner", createdAt: new Date("2021-01-01T00:00:00Z") } });
+  await basePrisma.tenantMember.create({ data: { tenantId: TENANT_B, userId: userBId } });
+  await basePrisma.tenantMember.create({ data: { tenantId: TENANT_A, userId: userAId } });
 
   __setTenantEnforcingForTests(true);
   try {
@@ -356,6 +371,31 @@ async function main() {
       () => null,
     );
     check("survey: A's derived scope cannot read B's response (no cross-tenant leak)", survLeak === null);
+
+    // ── tenant-aware actor resolution (Phase C 2b-C1): system-generated records
+    //    must reference a member of the CURRENT tenant, never the global oldest
+    //    user (here userB, created earlier than userA). ────────────────────────────
+    await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => {
+      check("actor: A's scope resolves A's member, not B's older global user", (await resolveTenantActor())?.id === userAId);
+      check("actor: A's scope ownerOnly resolves A's owner, not B's", (await resolveTenantActor({ ownerOnly: true }))?.id === userAId);
+
+      // The exact survey side effect: the timeline note is attributed to A's user
+      // AND stamped tenant A — never userB (the older, cross-tenant global pick).
+      const actor = await resolveTenantActor();
+      const comm = await prisma.communication.create({
+        data: { type: "note", direction: "inbound", subject: "Survey response: A", body: "b", contactId: idA, userId: actor!.id },
+      });
+      const storedComm = await basePrisma.communication.findUnique({ where: { id: comm.id }, select: { userId: true, tenantId: true } });
+      check("actor: survey note attributed to A's user + stamped tenant A (never B)", storedComm?.userId === userAId && storedComm?.tenantId === TENANT_A);
+      await basePrisma.communication.deleteMany({ where: { id: comm.id } });
+    });
+    await runInTenantScope({ tenantId: TENANT_B, system: false }, async () => {
+      check("actor: B's scope resolves B's member", (await resolveTenantActor())?.id === userBId);
+    });
+    // System scope (analogue of dormant / no user-tenant): unchanged global oldest pick (B).
+    await runInTenantScope({ tenantId: null, system: true }, async () => {
+      check("actor: system scope falls back to the global oldest user, unchanged (B)", (await resolveTenantActor())?.id === userBId);
+    });
   } finally {
     __setTenantEnforcingForTests(null);
     // No-user token fixtures first (children before parents; contact FK below).
@@ -366,6 +406,10 @@ async function main() {
     await basePrisma.signatureRequest.deleteMany({ where: { id: { in: [srId, srIdB] } } });
     await basePrisma.surveyResponse.deleteMany({ where: { id: { in: [srespId, srespIdB] } } });
     await basePrisma.survey.deleteMany({ where: { id: { in: [survId, survIdB] } } });
+    await basePrisma.communication.deleteMany({ where: { contactId: { in: [idA, idB] } } });
+    await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [userAId, userBId] } } });
+    await basePrisma.user.deleteMany({ where: { id: { in: [userAId, userBId] } } });
+    await basePrisma.tenant.deleteMany({ where: { id: { in: [TENANT_A, TENANT_B] } } });
     await basePrisma.contact.deleteMany({
       where: { id: { in: [idA, idB, cmId, `c_forge_${SFX}`] } },
     });

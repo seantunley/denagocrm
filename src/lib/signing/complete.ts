@@ -8,6 +8,7 @@ import { sealPdf } from "@/lib/pdf/seal";
 import { saveFile, readFile, deleteFile } from "@/lib/storage";
 import { sendEmail } from "@/lib/email";
 import { formatDateTime } from "@/lib/format";
+import { resolveTenantActor } from "@/lib/tenantActor";
 import { bindCtx, logoDataUri } from "./render";
 import { logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
@@ -90,7 +91,9 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   const hash = crypto.createHash("sha256").update(pdf).digest("hex");
   const storedName = await saveFile(pdf, `${req.title} (signed).pdf`, "application/pdf");
 
-  const uploaderId = req.createdById || (await prisma.user.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } }))?.id;
+  // No creator recorded → attribute the signed Document to a member of THIS
+  // request's tenant, never the global oldest user (resolveTenantActor).
+  const uploaderId = req.createdById || (await resolveTenantActor())?.id;
   const firstSigner = req.recipients.find((r) => r.status === "signed" && r.role !== "viewer");
   const signerName = firstSigner?.signedName || firstSigner?.name || "Customer";
 

@@ -72,3 +72,19 @@ test("src/app/actions/surveys.ts: public survey submission wraps submitResponse 
     "submitSurveyResponse must establish the tenant scope before calling submitResponse (else the guarded read inside dead-locks)",
   );
 });
+
+// C1-reachable "pick an actor for a system-generated record" sites must use the
+// tenant-aware resolver, not a global `user.findFirst` — else a public tenant-A
+// operation stamps/emails a user from another tenant. (Other actor picks are
+// C4-owned; see PHASE-C-NO-USER-EDGES-DESIGN.md §2.4.)
+const ACTOR_SITES = [
+  "src/lib/surveys.ts",             // submitResponse → Communication.userId
+  "src/lib/signing/complete.ts",    // Document.uploadedById fallback
+  "src/lib/signing/approvals.ts",   // owner approval notification recipient
+] as const;
+
+for (const file of ACTOR_SITES) {
+  test(`${file}: C1-reachable actor pick uses the tenant-aware resolveTenantActor`, () => {
+    assert.match(src(file), /resolveTenantActor\s*\(/, `${file} must resolve the actor via resolveTenantActor`);
+  });
+}

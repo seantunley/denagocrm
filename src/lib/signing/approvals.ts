@@ -4,6 +4,7 @@ import { sendEmail } from "@/lib/email";
 import { logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
 import { advanceWorkflow } from "@/lib/signflow/runtime";
+import { resolveTenantActor } from "@/lib/tenantActor";
 
 const BASE = process.env.SIGN_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za";
 
@@ -18,7 +19,9 @@ async function resolveApprover(step: { assigneeType: string; assigneeUserId: str
     if (u) return { name: u.name, email: u.email };
   }
   if (step.assigneeType === "owner") {
-    const u = await prisma.user.findFirst({ where: { role: "owner" }, orderBy: { createdAt: "asc" }, select: { name: true, email: true } });
+    // The OWNER of this request's tenant — never the first global owner, which
+    // could belong to another tenant and be emailed this document (resolveTenantActor).
+    const u = await resolveTenantActor({ ownerOnly: true });
     if (u) return { name: u.name, email: u.email };
   }
   // role or fallback: use the typed email/name if given

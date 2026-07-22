@@ -74,11 +74,22 @@ model TenantApiKey {
 | Instagram | IG account id | `entry[].id` |
 | Telegram | bot id / path slug | **per-tenant webhook path** — see §2.5 |
 
-### 2.4 Owner-actor resolution
+### 2.4 Actor resolution — `resolveTenantActor` (full inventory)
 
-The three `user.findFirst({ role: "owner" })` "pick an actor" calls (`cron/automations:64`, `bookings/route.ts:88`, `imapSync.ts:245`) grab *an* owner globally. `User` is a **global** model, so the guard will **not** auto-scope it — these need an explicit helper:
+Many "pick a user for a system-generated record" call sites use `prisma.user.findFirst({ orderBy: { createdAt: "asc" } })` (or the first `role:"owner"`). `User` is a **global** model, so the guard does **not** scope these — the pick can belong to *another* tenant and then be **stamped onto this tenant's row or emailed this tenant's document**. Fix: `resolveTenantActor({ ownerOnly? })` (`src/lib/tenantActor.ts`) — under enforcement, an active member of the CURRENT tenant scope via `TenantMember` (`tenant.active`, owner-preferred when asked); dormant/system/no-scope → the unchanged global pick.
 
-`resolveTenantOwner(tenantId): Promise<User | null>` — the active `owner` member of that tenant, via `TenantMember` (tenantId + role=owner + not suspended). Every call site above becomes "the owner **of the resolved tenant**", not "any owner".
+Full inventory (`grep user.findFirst`) — **22 sites**, classified by which slice establishes their tenant scope:
+
+| Slice | Call sites | Record affected |
+|---|---|---|
+| **C1 (fixed here)** | `surveys.ts:275` (submitResponse), `signing/complete.ts:93`, `signing/approvals.ts:21` | `Communication.userId`, `Document.uploadedById`, owner approval **email** |
+| **C3 (channel)** | `whatsapp.ts:263`, `messenger.ts:254/314`, `bot.ts:115`, `flowRun.ts:139`, `flowActions.ts:44`, `bookings/route.ts:88` | inbound message/lead attribution |
+| **C4 (cron/queues)** | `automations.ts:35`, `journeyStepExecutor.ts:48`, `lifecycleJourneys.ts:23`, `serviceReminders.ts:29/109`, `reviewRequests.ts:50`, `signingReminders.ts:28`, `imapSync.ts:245`, `surveys.ts:93` (deliverInvite), `cron/automations/route.ts:64` | queue/reminder attribution |
+| **staff/portal (already scoped)** | `actions/warranty.ts:89`, `actions/portal.ts:33` | swap to `resolveTenantActor` during C4 cleanup |
+
+> Only the **C1** rows are reachable from the public no-user token surfaces and are fixed in this slice; each of the others is closed by swapping to the same `resolveTenantActor` when its slice establishes the tenant scope (a mechanical follow-up, not a redesign). The earlier "three owner picks" note was wrong — this table is the source of truth.
+
+The automation/push fan-out that C1 signing-completion triggers (`advanceAfterSignature` → automations) reaches the **C4** picks above; those run with the tenant scope C4 establishes and use the same resolver — tracked here so they aren't dropped.
 
 ### 2.5 Telegram — the one genuine config gap
 

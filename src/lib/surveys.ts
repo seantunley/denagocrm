@@ -4,6 +4,7 @@ import { sendEmail } from "./email";
 import { sendSms } from "./sms";
 import { logAudit } from "./audit";
 import { logError } from "./errorLog";
+import { resolveTenantActor } from "./tenantActor";
 import { defaultIntro, type SurveyQuestion, type SurveyType } from "./surveyTypes";
 
 const APP_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za").replace(/\/$/, "");
@@ -272,8 +273,10 @@ export async function submitResponse(token: string, answers: Record<string, unkn
   });
 
   if (resp.contactId) {
-    const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
-    if (firstUser) {
+    // Attribute the timeline note to a member of THIS survey's tenant, never the
+    // global oldest user (which could belong to another tenant). See resolveTenantActor.
+    const actor = await resolveTenantActor();
+    if (actor) {
       await prisma.communication.create({
         data: {
           type: "note",
@@ -281,7 +284,7 @@ export async function submitResponse(token: string, answers: Record<string, unkn
           subject: `Survey response: ${resp.survey.title}`,
           body: summarise(questions, answers, score),
           contactId: resp.contactId,
-          userId: firstUser.id,
+          userId: actor.id,
         },
       });
     }
