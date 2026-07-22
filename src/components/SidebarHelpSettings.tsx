@@ -162,9 +162,9 @@ export default function SidebarHelpSettings({
           align="end"
           sideOffset={10}
           collisionPadding={16}
-          className={`max-h-[min(80vh,48rem)] w-[min(38rem,calc(100vw-2rem))] ${PANEL}`}
+          className={`flex max-h-[min(80vh,48rem)] w-[min(38rem,calc(100vw-2rem))] flex-col ${PANEL}`}
         >
-          <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-border/70 bg-popover/95 px-4 py-3.5 backdrop-blur-xl">
+          <div className="flex shrink-0 items-center gap-3 border-b border-border/70 bg-popover/95 px-4 py-3.5 backdrop-blur-xl">
             <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-primary/20 bg-primary/10 text-primary"><Settings className="size-[18px]" /></span>
             <div className="min-w-0 flex-1"><p className="font-semibold tracking-tight text-foreground">Workspace settings</p><p className="mt-0.5 text-xs text-muted-foreground">Manage your profile, organisation and connected tools.</p></div>
             <DropdownMenuItem asChild className="h-8 shrink-0 rounded-lg border border-border bg-muted/30 px-2.5 text-xs font-medium">
@@ -172,7 +172,7 @@ export default function SidebarHelpSettings({
             </DropdownMenuItem>
           </div>
 
-          <div className="grid gap-2 p-2 sm:grid-cols-2">
+          <div className="grid min-h-0 flex-1 gap-2 overflow-y-auto overscroll-contain p-2 [scrollbar-gutter:stable] sm:grid-cols-2">
             {settingsGroups.map((group) => {
               const Icon = GROUP_ICONS[group.label] ?? Settings2;
               return (
