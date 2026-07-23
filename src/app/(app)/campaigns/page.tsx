@@ -14,6 +14,7 @@ import { PageHeader } from "@/components/page-header";
 import { MobileDataCard, MobileDataField, MobileDataFields, MobileDataHeader, MobileDataList, ResponsiveDataView } from "@/components/responsive-patterns";
 import { EmptyState, StatusPill } from "@/components/visual-system";
 import { Megaphone } from "lucide-react";
+import RecordContextMenu from "@/components/RecordContextMenu";
 
 // First send batch runs inside the send action — give it room.
 export const maxDuration = 60;
@@ -98,7 +99,7 @@ export default async function CampaignsPage() {
       mobile={<MobileDataList>{campaigns.map((campaign) => {
         const openRate = campaign.sentCount > 0 ? Math.round((campaign.openCount / campaign.sentCount) * 100) : 0;
         const campaignClickRate = campaign.sentCount > 0 ? Math.round((campaign.clickCount / campaign.sentCount) * 100) : 0;
-        return <MobileDataCard key={campaign.id}>
+        return <RecordContextMenu key={campaign.id} label={campaign.name} href={`/campaigns/${campaign.id}`}><MobileDataCard>
           <MobileDataHeader
             title={<Link href={`/campaigns/${campaign.id}`} className="text-primary">{campaign.name}</Link>}
             detail={`${campaign.channel.toUpperCase()} · ${campaign.audience}`}
@@ -111,7 +112,7 @@ export default async function CampaignsPage() {
             {campaign.channel === "email" && <MobileDataField label="Clicked">{campaignClickRate}%</MobileDataField>}
           </MobileDataFields>
           <Link href={`/campaigns/${campaign.id}`} className="btn-secondary w-full">View campaign</Link>
-        </MobileDataCard>;
+        </MobileDataCard></RecordContextMenu>;
       })}</MobileDataList>}
       desktop={<div className="card p-0 overflow-x-auto">
       <table className="table-base">
@@ -134,7 +135,8 @@ export default async function CampaignsPage() {
             const oRate = c.sentCount > 0 ? Math.round((c.openCount / c.sentCount) * 100) : 0;
             const cRate = c.sentCount > 0 ? Math.round((c.clickCount / c.sentCount) * 100) : 0;
             return (
-              <tr key={c.id}>
+              <RecordContextMenu key={c.id} label={c.name} href={`/campaigns/${c.id}`}>
+              <tr tabIndex={0} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                 <td><StatusPill tone={c.status === "sent" ? "success" : c.status === "sending" ? "warning" : c.status === "queued" ? "info" : "neutral"}>{c.status}</StatusPill></td>
                 <td>
                   <Link href={`/campaigns/${c.id}`} className="font-medium text-primary hover:underline">{c.name}</Link>
@@ -146,6 +148,7 @@ export default async function CampaignsPage() {
                 <td className="text-right">{c.channel === "email" && c.sentCount > 0 ? `${cRate}%` : "—"}</td>
                 <td className="text-muted-foreground text-xs">{formatDateTime(c.createdAt)}</td>
               </tr>
+              </RecordContextMenu>
             );
           })}
         </tbody>

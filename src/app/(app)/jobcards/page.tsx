@@ -33,6 +33,7 @@ import {
   hasPermission,
   requireAnyPermission,
 } from "@/lib/permissions";
+import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
 
 const FILTERS = [
   { value: "all", label: "All" },
@@ -201,7 +202,13 @@ export default async function JobCardsPage({
                   const total = job.items.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
                   const sm = stageMeta(job.status);
                   return (
-                    <MobileDataCard key={job.id}>
+                    <RecordContextMenu
+                      key={job.id}
+                      label={`Job #${job.number}`}
+                      href={`/jobcards/${job.id}`}
+                      actions={jobContextActions(job.id, job.vehicleId)}
+                    >
+                    <MobileDataCard>
                       <MobileDataHeader
                         title={<Link href={`/jobcards/${job.id}`} className="text-primary hover:underline">Job #{job.number}</Link>}
                         detail={`${job.vehicle.model} · ${contactName(job.contact)}`}
@@ -216,6 +223,7 @@ export default async function JobCardsPage({
                       </MobileDataFields>
                       <Link href={`/jobcards/${job.id}`} className="inline-flex items-center gap-1 text-xs font-semibold text-primary">Open workspace <ArrowRight className="size-3.5" /></Link>
                     </MobileDataCard>
+                    </RecordContextMenu>
                   );
                 })}
               </MobileDataList>
@@ -241,7 +249,13 @@ export default async function JobCardsPage({
                       const sm = stageMeta(job.status);
                       const pm = priorityMeta(job.priority);
                       return (
-                        <tr key={job.id} className="group transition-colors hover:bg-muted/20">
+                        <RecordContextMenu
+                          key={job.id}
+                          label={`Job #${job.number}`}
+                          href={`/jobcards/${job.id}`}
+                          actions={jobContextActions(job.id, job.vehicleId)}
+                        >
+                        <tr tabIndex={0} className="group transition-colors hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                           <td className="px-5 py-4">
                             <Link href={`/jobcards/${job.id}`} className="font-semibold text-foreground hover:text-primary">#{job.number}</Link>
                             <p className="mt-1 max-w-xs truncate text-xs text-muted-foreground">{job.description}</p>
@@ -266,6 +280,7 @@ export default async function JobCardsPage({
                           <td className="px-4 py-4 text-muted-foreground"><span className="inline-flex items-center gap-1.5"><Clock3 className="size-3.5" />{formatDate(job.openedAt)}</span></td>
                           <td className="px-5 py-4 text-right"><Link href={`/jobcards/${job.id}`} className={buttonVariants({ variant: "ghost", size: "sm" })}>Open <ArrowRight /></Link></td>
                         </tr>
+                        </RecordContextMenu>
                       );
                     })}
                   </tbody>
@@ -277,4 +292,11 @@ export default async function JobCardsPage({
       </Surface>
     </div>
   );
+}
+
+function jobContextActions(jobId: string, vehicleId: string): RecordContextAction[] {
+  return [
+    { label: "Open vehicle", href: `/vehicles/${vehicleId}`, icon: "car" },
+    { label: "Print job card", href: `/jobcards/${jobId}/print`, icon: "print", newTab: true },
+  ];
 }

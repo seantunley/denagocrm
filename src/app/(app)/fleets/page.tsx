@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/page-header";
 import { MobileDataCard, MobileDataField, MobileDataFields, MobileDataHeader, MobileDataList, ResponsiveDataView } from "@/components/responsive-patterns";
 import { EmptyState, StatusPill } from "@/components/visual-system";
 import { Warehouse } from "lucide-react";
+import RecordContextMenu from "@/components/RecordContextMenu";
 
 export const dynamic = "force-dynamic";
 
@@ -52,7 +53,7 @@ export default async function FleetsPage() {
       </div>
 
       {fleets.length === 0 ? <EmptyState icon={Warehouse} title="No fleets yet" description="Create the first managed estate, golf course, resort or business fleet above." /> : <ResponsiveDataView
-        mobile={<MobileDataList>{fleets.map((fleet) => <MobileDataCard key={fleet.id}>
+        mobile={<MobileDataList>{fleets.map((fleet) => <RecordContextMenu key={fleet.id} label={fleet.name} href={`/fleets/${fleet.id}`}><MobileDataCard>
           <MobileDataHeader
             title={<Link href={`/fleets/${fleet.id}`} className="text-primary">{fleet.name}</Link>}
             detail="Open the fleet workspace to manage vehicles and service status."
@@ -63,7 +64,7 @@ export default async function FleetsPage() {
             <MobileDataField label="Account type"><span className="capitalize">{fleet.type ?? "Not set"}</span></MobileDataField>
           </MobileDataFields>
           <Link href={`/fleets/${fleet.id}`} className="btn-secondary w-full">Open fleet</Link>
-        </MobileDataCard>)}</MobileDataList>}
+        </MobileDataCard></RecordContextMenu>)}</MobileDataList>}
         desktop={<div className="card p-0 overflow-x-auto">
         <table className="table-base">
           <thead>
@@ -82,7 +83,8 @@ export default async function FleetsPage() {
               </tr>
             )}
             {fleets.map((f) => (
-              <tr key={f.id}>
+              <RecordContextMenu key={f.id} label={f.name} href={`/fleets/${f.id}`}>
+              <tr tabIndex={0} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                 <td>
                   <Link href={`/fleets/${f.id}`} className="font-medium text-orange-400 hover:underline">
                     {f.name}
@@ -91,6 +93,7 @@ export default async function FleetsPage() {
                 <td className="text-slate-400 capitalize">{f.type ?? "—"}</td>
                 <td className="text-right">{f._count.vehicles}</td>
               </tr>
+              </RecordContextMenu>
             ))}
           </tbody>
         </table>

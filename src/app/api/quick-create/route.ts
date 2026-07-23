@@ -18,12 +18,6 @@ export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // This endpoint feeds the Quick-Create dialogs. It must not act as an
-  // unguarded metadata directory for any signed-in user: gate the whole payload
-  // behind actually being able to create SOMETHING, then gate each option list
-  // by the specific create/assign permission that consumes it. Combined with the
-  // pack gating (vehicles=automotive, products=commerce) and the accessible-id
-  // scoping (a restricted salesperson never receives the whole org).
   const [
     automotiveOn,
     commerceOn,
@@ -50,13 +44,7 @@ export async function GET() {
     getAccessibleVehicleIds(user),
   ]);
 
-  // Creating a job card picks a vehicle, and getAccessibleVehicleIds returns
-  // nothing without a vehicle-view permission — so jobcards.manage alone yields
-  // an empty picker and a dead-end dialog. Treat "can create a job card" as
-  // jobcards.manage AND vehicle-view, matching what QuickActions shows.
   const canManageJobcards = rawJobcards && canViewVehicles;
-
-  // No create capability at all → nothing to hand out.
   if (
     !canCreateLead && !canCreateContact && !canCreateQuote &&
     !canManageVehicles && !canManageJobcards && !canScheduleActivity
@@ -64,9 +52,6 @@ export async function GET() {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Which lists this caller may see, by the dialog that consumes each one. The
-  // vehicle list is used ONLY by the job-card dialog (register-vehicle needs
-  // just contacts + products), so it's gated on the job-card capability.
   const needsContacts = canCreateLead || canCreateQuote || canManageVehicles || canScheduleActivity;
   const needsProducts = canCreateLead || canCreateQuote || canManageVehicles;
   const needsUsers = canCreateLead || canCreateContact || canScheduleActivity;

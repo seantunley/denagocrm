@@ -15,6 +15,7 @@ import {
   hasPermission,
   requireAnyPermission,
 } from "@/lib/permissions";
+import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
 
 export default async function VehiclesPage({
   searchParams,
@@ -23,10 +24,11 @@ export default async function VehiclesPage({
 }) {
   const user = await requireAnyPermission("vehicles.view_all", "vehicles.view_owned");
   const { filter } = await searchParams;
-  const [vehicleIds, contactIds, canManage] = await Promise.all([
+  const [vehicleIds, contactIds, canManage, canManageJobs] = await Promise.all([
     getAccessibleVehicleIds(user),
     getAccessibleContactIds(user),
     hasPermission(user, "vehicles.manage"),
+    hasPermission(user, "jobcards.manage"),
   ]);
   const [vehicles, contacts, products] = await Promise.all([
     prisma.vehicle.findMany({
@@ -101,7 +103,13 @@ export default async function VehiclesPage({
               </tr>
             )}
             {rows.map(({ vehicle: v, due }) => (
-              <tr key={v.id}>
+              <RecordContextMenu
+                key={v.id}
+                label={v.model}
+                href={`/vehicles/${v.id}`}
+                actions={vehicleContextActions(v.id, canManage, canManageJobs)}
+              >
+              <tr tabIndex={0} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                 <td data-primary data-label="Model">
                   <Link href={`/vehicles/${v.id}`} className="font-medium text-orange-400 hover:underline">
                     {v.model}
@@ -128,10 +136,30 @@ export default async function VehiclesPage({
                 </td>
                 <td data-label="Purchased" className="text-slate-400">{formatDate(v.purchaseDate)}</td>
               </tr>
+              </RecordContextMenu>
             ))}
           </tbody>
         </table>
       </ResponsiveEntityTable>
     </div>
   );
+}
+
+function vehicleContextActions(
+  vehicleId: string,
+  canManage: boolean,
+  canManageJobs: boolean,
+): RecordContextAction[] {
+  return [
+    ...(canManage
+      ? [{ label: "Edit vehicle", href: `/vehicles/${vehicleId}/edit`, icon: "edit" as const }]
+      : []),
+    ...(canManageJobs
+      ? [{
+          label: "Open job card",
+          href: `/jobcards/new?vehicleId=${vehicleId}`,
+          icon: "jobcard" as const,
+        }]
+      : []),
+  ];
 }

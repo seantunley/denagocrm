@@ -29,6 +29,7 @@ import {
 } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 import { isModuleEnabled } from "@/lib/modules/enabled";
+import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
 
 function initials(name: string) {
   return name
@@ -49,10 +50,13 @@ export default async function ContactsPage({
   const automotiveOn = await isModuleEnabled("automotive");
   const { q, view } = await searchParams;
   const cards = view !== "list";
-  const [accessibleIds, canCreate, canMerge] = await Promise.all([
+  const [accessibleIds, canCreate, canMerge, canEdit, canCreateLead, canManageActivities] = await Promise.all([
     getAccessibleContactIds(user),
     hasPermission(user, "contacts.create"),
     hasPermission(user, "contacts.merge"),
+    hasPermission(user, "contacts.edit"),
+    hasPermission(user, "leads.create"),
+    hasPermission(user, "activities.manage"),
   ]);
   const searchWhere = q
     ? {
@@ -175,11 +179,24 @@ export default async function ContactsPage({
       ) : cards ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {contacts.map((contact) => (
-            <ContactCard key={contact.id} contact={contact} automotiveOn={automotiveOn} />
+            <ContactCard
+              key={contact.id}
+              contact={contact}
+              automotiveOn={automotiveOn}
+              canEdit={canEdit}
+              canCreateLead={canCreateLead}
+              canManageActivities={canManageActivities}
+            />
           ))}
         </div>
       ) : (
-        <ContactTable contacts={contacts} automotiveOn={automotiveOn} />
+        <ContactTable
+          contacts={contacts}
+          automotiveOn={automotiveOn}
+          canEdit={canEdit}
+          canCreateLead={canCreateLead}
+          canManageActivities={canManageActivities}
+        />
       )}
     </div>
   );
@@ -212,11 +229,51 @@ type ContactWithRelations = Awaited<ReturnType<typeof prisma.contact.findMany<{
   include: { tags: true; owner: true; _count: { select: { vehicles: true; leads: true } } };
 }>>>[number];
 
-function ContactCard({ contact, automotiveOn }: { contact: ContactWithRelations; automotiveOn: boolean }) {
+function contactActions(
+  contact: ContactWithRelations,
+  permissions: { canEdit: boolean; canCreateLead: boolean; canManageActivities: boolean },
+): RecordContextAction[] {
+  return [
+    ...(permissions.canEdit
+      ? [{ label: "Edit contact", href: `/contacts/${contact.id}/edit`, icon: "edit" as const }]
+      : []),
+    ...(permissions.canCreateLead
+      ? [{ label: "New lead", quickCreate: "lead" as const, icon: "lead" as const }]
+      : []),
+    ...(permissions.canManageActivities
+      ? [{ label: "Schedule activity", quickCreate: "calendar" as const, icon: "calendar" as const }]
+      : []),
+    ...(contact.email
+      ? [{ label: "Email contact", href: `mailto:${contact.email}`, icon: "email" as const, separatorBefore: true }]
+      : []),
+    ...(contact.phone
+      ? [{ label: "Call contact", href: `tel:${contact.phone}`, icon: "phone" as const }]
+      : []),
+  ];
+}
+
+function ContactCard({
+  contact,
+  automotiveOn,
+  canEdit,
+  canCreateLead,
+  canManageActivities,
+}: {
+  contact: ContactWithRelations;
+  automotiveOn: boolean;
+  canEdit: boolean;
+  canCreateLead: boolean;
+  canManageActivities: boolean;
+}) {
   const name = contactName(contact);
   const context = contact.isCompany ? "Company account" : contact.company || contact.city || "Individual customer";
   return (
-    <Link href={`/contacts/${contact.id}`} className="group relative flex min-h-44 flex-col overflow-hidden rounded-2xl border border-border bg-card p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-orange-500/35 hover:shadow-xl hover:shadow-black/15 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-500/15">
+    <RecordContextMenu
+      label={name}
+      href={`/contacts/${contact.id}`}
+      actions={contactActions(contact, { canEdit, canCreateLead, canManageActivities })}
+    >
+      <Link href={`/contacts/${contact.id}`} className="group relative flex min-h-44 flex-col overflow-hidden rounded-2xl border border-border bg-card p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-orange-500/35 hover:shadow-xl hover:shadow-black/15 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-500/15">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
       <div className="flex items-start gap-3">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-orange-400/15 bg-gradient-to-br from-orange-400/15 to-orange-600/5 text-xs font-semibold text-orange-300 shadow-inner">
@@ -248,7 +305,8 @@ function ContactCard({ contact, automotiveOn }: { contact: ContactWithRelations;
         {contact.email ? <span className="flex min-w-0 items-center gap-1.5"><Mail className="size-3 shrink-0" /><span className="truncate">{contact.email}</span></span> : contact.phone ? <span className="flex items-center gap-1.5"><Phone className="size-3" />{contact.phone}</span> : <span className="flex items-center gap-1.5"><UserRound className="size-3" />No contact details</span>}
         {contact.owner && <span className="ml-auto shrink-0">{contact.owner.name.split(" ")[0]}</span>}
       </div>
-    </Link>
+      </Link>
+    </RecordContextMenu>
   );
 }
 
@@ -256,7 +314,19 @@ function MiniMetric({ icon: Icon, value, label, active = false }: { icon: typeof
   return <div className="rounded-lg border border-border/70 bg-background/35 px-2.5 py-1.5"><div className="flex items-center gap-1.5"><Icon className={cn("size-3.5", active ? "text-orange-400" : "text-muted-foreground")} /><span className="text-sm font-semibold tabular-nums">{value}</span></div><p className="mt-0.5 text-[10px] text-muted-foreground">{label}</p></div>;
 }
 
-function ContactTable({ contacts, automotiveOn }: { contacts: ContactWithRelations[]; automotiveOn: boolean }) {
+function ContactTable({
+  contacts,
+  automotiveOn,
+  canEdit,
+  canCreateLead,
+  canManageActivities,
+}: {
+  contacts: ContactWithRelations[];
+  automotiveOn: boolean;
+  canEdit: boolean;
+  canCreateLead: boolean;
+  canManageActivities: boolean;
+}) {
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
       <div className="overflow-x-auto">
@@ -268,7 +338,13 @@ function ContactTable({ contacts, automotiveOn }: { contacts: ContactWithRelatio
             {contacts.map((contact) => {
               const name = contactName(contact);
               return (
-                <tr key={contact.id} className="group transition-colors hover:bg-white/[0.025]">
+                <RecordContextMenu
+                  key={contact.id}
+                  label={name}
+                  href={`/contacts/${contact.id}`}
+                  actions={contactActions(contact, { canEdit, canCreateLead, canManageActivities })}
+                >
+                <tr tabIndex={0} className="group transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                   <td className="px-5 py-3.5"><Link href={`/contacts/${contact.id}`} className="flex items-center gap-3"><span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-orange-500/10 text-[10px] font-semibold text-orange-300">{contact.isCompany ? <Building2 className="size-4" /> : initials(name)}</span><span><span className="block font-medium text-foreground group-hover:text-orange-300">{name}</span><span className="block text-xs text-muted-foreground">{contact.company || contact.city || (contact.isCompany ? "Company" : "Customer")}</span></span></Link></td>
                   <td className="px-4 py-3.5"><p className="max-w-60 truncate text-xs text-foreground/85">{contact.email || contact.phone || "No details"}</p>{contact.email && contact.phone && <p className="mt-0.5 text-[11px] text-muted-foreground">{contact.phone}</p>}</td>
                   <td className="px-4 py-3.5"><div className="flex flex-wrap gap-1">{contact.tags.slice(0, 2).map((tag) => <Badge key={tag.id} variant="outline" className="text-[10px] text-muted-foreground"><span className="size-1.5 rounded-full" style={{ backgroundColor: tag.color }} />{tag.name}</Badge>)}{contact.owner && <span className="text-[11px] text-muted-foreground">{contact.tags.length ? "· " : ""}{contact.owner.name}</span>}</div></td>
@@ -277,6 +353,7 @@ function ContactTable({ contacts, automotiveOn }: { contacts: ContactWithRelatio
                   <td className="whitespace-nowrap px-4 py-3.5 text-xs text-muted-foreground">{formatDate(contact.createdAt)}</td>
                   <td className="pr-4"><Link href={`/contacts/${contact.id}`} aria-label={`Open ${name}`} className="flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition hover:bg-accent hover:text-foreground group-hover:opacity-100 focus:opacity-100"><ArrowRight className="size-3.5" /></Link></td>
                 </tr>
+                </RecordContextMenu>
               );
             })}
           </tbody>

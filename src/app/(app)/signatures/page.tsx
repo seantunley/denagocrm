@@ -5,6 +5,7 @@ import { formatDate, formatDateTime } from "@/lib/format";
 import { ApprovalActions } from "./ApprovalActions";
 import { PageHeader } from "@/components/page-header";
 import { ShieldCheck } from "lucide-react";
+import RecordContextMenu from "@/components/RecordContextMenu";
 
 export const dynamic = "force-dynamic";
 
@@ -132,7 +133,8 @@ export default async function SignaturesPage() {
                   ? signers.find((x) => x.status !== "signed" && x.status !== "declined") ?? null
                   : null;
               return (
-                <li key={r.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:gap-3">
+                <RecordContextMenu key={r.id} label={r.title} href={`/signatures/${r.id}`}>
+                <li className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <Link href={`/signatures/${r.id}`} className="truncate text-[13px] font-medium text-foreground hover:text-primary">{r.title}</Link>
@@ -166,6 +168,7 @@ export default async function SignaturesPage() {
                   </div>
                   <Link href={`/signatures/${r.id}`} className="btn-secondary btn-sm shrink-0 self-start">Open</Link>
                 </li>
+                </RecordContextMenu>
               );
             })}
           </ul>

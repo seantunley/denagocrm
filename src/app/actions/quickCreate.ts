@@ -35,7 +35,7 @@ async function requireTenantRecord(
   if (!record) throw new Error("That selection is not available in this workspace");
 }
 
-/** Tenant-validation gateway for the global/mobile quick-create surface. */
+/** Tenant-validation gateway for contextual/global quick-create actions. */
 export async function createQuickLead(formData: FormData) {
   await Promise.all([
     requireTenantMember(formData, "assignedToId"),

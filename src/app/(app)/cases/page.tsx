@@ -51,6 +51,7 @@ import {
 } from "@/lib/permissions";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { cn } from "@/lib/utils";
+import RecordContextMenu from "@/components/RecordContextMenu";
 
 export const dynamic = "force-dynamic";
 
@@ -385,6 +386,11 @@ function TicketRow({ ticket, automotiveOn }: { ticket: TicketListRow; automotive
   const unread = Number(ticket.unread);
 
   return (
+    <RecordContextMenu
+      label={`C-${ticket.number.toString()} · ${ticket.subject}`}
+      href={`/cases/${ticket.id}`}
+      actions={[{ label: "Open customer", href: `/contacts/${ticket.contactId}`, icon: "contact" }]}
+    >
     <Link
       href={`/cases/${ticket.id}`}
       className="group relative block overflow-hidden px-4 py-4 transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50 sm:px-5"
@@ -484,5 +490,6 @@ function TicketRow({ ticket, automotiveOn }: { ticket: TicketListRow; automotive
         </div>
       </div>
     </Link>
+    </RecordContextMenu>
   );
 }

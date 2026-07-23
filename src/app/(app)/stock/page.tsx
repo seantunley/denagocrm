@@ -32,6 +32,7 @@ import { EmptyState, FeedbackBanner, MetricCard, SectionHeading, StatusPill, Sur
 import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import { listStockUnits, stockDashboard } from "@/lib/stockPlatform";
 import { getStockLabels } from "@/lib/stockLabels";
+import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
 
 const STATUS: Record<string, { label: string; tone: "neutral" | "success" | "warning" | "danger" | "info" }> = {
   incoming: { label: "Incoming", tone: "info" },
@@ -184,7 +185,21 @@ export default async function StockPage({
               <table className="table-base"><thead><tr><th>Unit</th><th>Status</th><th>Customer / quote</th><th>Location</th><th className="whitespace-nowrap">Age</th>{canManage && <th className="whitespace-nowrap text-right">Landed cost</th>}<th></th></tr></thead>
                 <tbody>{units.map((unit) => {
                   const meta = STATUS[unit.status] ?? { label: unit.status.replaceAll("_", " "), tone: "neutral" as const };
-                  return <tr key={unit.id}>
+                  const actions: RecordContextAction[] = [
+                    ...(unit.reservedForLeadId
+                      ? [{ label: "Open reserved lead", href: `/leads/${unit.reservedForLeadId}`, icon: "lead" as const }]
+                      : []),
+                    ...(unit.soldQuoteId
+                      ? [{ label: "Open linked quote", href: `/quotes/${unit.soldQuoteId}`, icon: "quote" as const }]
+                      : []),
+                  ];
+                  return <RecordContextMenu
+                    key={unit.id}
+                    label={unit.stockNumber ?? unit.productName}
+                    href={`/stock/${unit.id}`}
+                    actions={actions}
+                  >
+                  <tr tabIndex={0} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                     <td data-primary data-label="Unit"><Link href={`/stock/${unit.id}`} className="font-medium text-foreground hover:text-primary">{unit.stockNumber ?? unit.productName}</Link><p className="mt-0.5 text-xs text-muted-foreground">{unit.productName}{unit.color ? ` · ${unit.color}` : ""}{unit.serial ? ` · ${unit.serial}` : " · serial pending"}</p></td>
                     <td data-label="Status"><div className="flex flex-wrap items-center gap-1.5"><StatusPill tone={meta.tone}>{meta.label}</StatusPill>{unit.label && labelBySlug.has(unit.label) && <span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium" style={{ backgroundColor: `${labelBySlug.get(unit.label)!.color}22`, color: labelBySlug.get(unit.label)!.color }}>{labelBySlug.get(unit.label)!.label}</span>}</div></td>
                     <td data-label="Customer / quote" className="text-sm text-muted-foreground">{unit.reservedForLeadId ? <Link href={`/leads/${unit.reservedForLeadId}`} className="text-primary hover:underline">{unit.reservedLeadName ?? "Lead"}</Link> : unit.soldQuoteId ? <Link href={`/quotes/${unit.soldQuoteId}`} className="text-primary hover:underline">Q-{unit.quoteNumber}</Link> : "—"}{unit.reservationExpiresAt && <p className="text-[11px]">Expires {unit.reservationExpiresAt.toLocaleDateString("en-ZA")}</p>}</td>
@@ -192,7 +207,8 @@ export default async function StockPage({
                     <td data-label="Age" className={`whitespace-nowrap ${unit.ageDays >= 60 ? "font-semibold text-amber-300" : "text-muted-foreground"}`}>{unit.ageDays}d</td>
                     {canManage && <td data-label="Landed cost" className="whitespace-nowrap text-right tabular-nums">{formatZAR(unit.landedCostCents || unit.costCents)}</td>}
                     <td data-actions className="text-right"><Link href={`/stock/${unit.id}`} className="btn-secondary btn-sm inline-flex items-center gap-1 whitespace-nowrap">Open <ArrowRight className="size-3.5" /></Link></td>
-                  </tr>;
+                  </tr>
+                  </RecordContextMenu>;
                 })}</tbody>
               </table>
             </ResponsiveEntityTable>}

@@ -11,6 +11,7 @@ import {
 } from "@/lib/surveyTypes";
 import { PageHeader } from "@/components/page-header";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
+import RecordContextMenu from "@/components/RecordContextMenu";
 
 export const dynamic = "force-dynamic";
 
@@ -120,7 +121,8 @@ export default async function SurveysPage() {
               const done = live.filter((r) => r.status === "completed").length;
               const rate = live.length ? Math.round((done / live.length) * 100) : 0;
               return (
-                <tr key={s.id}>
+                <RecordContextMenu key={s.id} label={s.title} href={`/surveys/${s.id}`}>
+                <tr tabIndex={0} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                   <td data-primary data-label="Survey">
                     <Link href={`/surveys/${s.id}`} className="font-medium text-orange-400 hover:underline">
                       {s.title}
@@ -146,6 +148,7 @@ export default async function SurveysPage() {
                     </form>
                   </td>
                 </tr>
+                </RecordContextMenu>
               );
             })}
           </tbody>

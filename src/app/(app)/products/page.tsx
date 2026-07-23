@@ -15,6 +15,7 @@ import {
   ResponsiveDataView,
 } from "@/components/responsive-patterns";
 import { EmptyState, StatusPill } from "@/components/visual-system";
+import RecordContextMenu from "@/components/RecordContextMenu";
 
 export default async function ProductsPage() {
   const products = await prisma.product.findMany({
@@ -42,7 +43,8 @@ export default async function ProductsPage() {
           mobile={
             <MobileDataList>
               {products.map((product) => (
-                <MobileDataCard key={product.id}>
+                <RecordContextMenu key={product.id} label={product.name} href={`/products/${product.id}`}>
+                <MobileDataCard>
                   <MobileDataHeader
                     title={<Link href={`/products/${product.id}`} className="text-primary hover:underline">{product.name}</Link>}
                     detail={product.sku || product.category || "Catalogue product"}
@@ -54,6 +56,7 @@ export default async function ProductsPage() {
                     <MobileDataField label="Colours" wide>{product.colors.length ? product.colors.map((color) => color.name).join(", ") : "No choices configured"}</MobileDataField>
                   </MobileDataFields>
                 </MobileDataCard>
+                </RecordContextMenu>
               ))}
             </MobileDataList>
           }
@@ -73,7 +76,8 @@ export default async function ProductsPage() {
           </thead>
           <tbody>
             {products.map((p) => (
-              <tr key={p.id}>
+              <RecordContextMenu key={p.id} label={p.name} href={`/products/${p.id}`}>
+              <tr tabIndex={0} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                 <td>
                   <Link href={`/products/${p.id}`} className="font-medium text-primary hover:underline">
                     {p.name}
@@ -98,6 +102,7 @@ export default async function ProductsPage() {
                   <StatusPill tone={p.active ? "success" : "neutral"}>{p.active ? "Active" : "Archived"}</StatusPill>
                 </td>
               </tr>
+              </RecordContextMenu>
             ))}
           </tbody>
               </table>
