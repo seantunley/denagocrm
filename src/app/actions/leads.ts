@@ -11,6 +11,7 @@ import { softDeleteRecord } from "@/lib/trash";
 import { topPosition } from "@/lib/leadPos";
 import { triggerSurvey } from "@/lib/surveys";
 import { removeTimelinePin } from "@/lib/timelinePins";
+import { resolveTenantMemberUser } from "@/lib/tenantActor";
 import {
   hasPermission,
   requireLeadAccess,
@@ -43,6 +44,12 @@ function leadData(formData: FormData) {
     contactId: str("contactId"),
     assignedToId: str("assignedToId"),
   };
+}
+
+async function requireAssignableUser(userId: string) {
+  const assignee = await resolveTenantMemberUser(userId);
+  if (!assignee) throw new Error("That team member is no longer available.");
+  return assignee;
 }
 
 async function nextPosition(stageId: string) {
@@ -87,6 +94,7 @@ export async function createLead(formData: FormData) {
   if (data.assignedToId !== user.id && !(await hasPermission(user, "leads.assign"))) {
     throw new Error("You do not have permission to assign leads to another user");
   }
+  await requireAssignableUser(data.assignedToId);
 
   const title = String(formData.get("title") ?? "").trim() || (await buildTitle(data));
 
@@ -155,6 +163,7 @@ export async function updateLead(id: string, formData: FormData) {
   if (before.assignedToId !== data.assignedToId && !(await hasPermission(user, "leads.assign"))) {
     throw new Error("You do not have permission to reassign this lead");
   }
+  if (data.assignedToId) await requireAssignableUser(data.assignedToId);
   if (before.stageId !== data.stageId) {
     if (!(await hasPermission(user, "leads.change_stage"))) {
       throw new Error("You do not have permission to change the lead stage");
@@ -261,7 +270,6 @@ export async function moveLeadToTestDrive(
   const changingStage = currentScope.stageId !== stageId;
   const targetStage = await validateOpenStage(stageId);
   if (
-    currentScope &&
     currentScope.pipelineId !== targetStage.pipelineId &&
     !(await hasPermission(user, "leads.change_pipeline"))
   ) {
@@ -295,15 +303,15 @@ export async function moveLeadToTestDrive(
       include: { stage: true, product: true },
     });
     const activityData = {
-        type: "test_drive",
-        summary: `Test Drive${updated.product ? ` — ${updated.product.name}` : ""}`,
-        note: `${changingStage ? "Booked" : "Rescheduled"} from the pipeline board for ${updated.name}.`,
-        location: data.location.trim() || null,
-        dueDate: when,
-        leadId,
-        contactId: updated.contactId,
-        assignedToId: updated.assignedToId ?? user.id,
-        createdById: user.id,
+      type: "test_drive",
+      summary: `Test Drive${updated.product ? ` — ${updated.product.name}` : ""}`,
+      note: `${changingStage ? "Booked" : "Rescheduled"} from the pipeline board for ${updated.name}.`,
+      location: data.location.trim() || null,
+      dueDate: when,
+      leadId,
+      contactId: updated.contactId,
+      assignedToId: updated.assignedToId ?? user.id,
+      createdById: user.id,
     };
     const existing = await tx.activity.findFirst({
       where: { leadId, type: "test_drive", status: "planned" },
@@ -340,10 +348,7 @@ export async function moveLeadToTestDrive(
 /** Reassign a lead from the board without submitting the full edit form. */
 export async function assignLead(leadId: string, assignedToId: string) {
   const user = await requireLeadAccess(leadId, "leads.assign");
-  const assignee = await prisma.user.findUnique({
-    where: { id: assignedToId },
-    select: { id: true, name: true },
-  });
+  const assignee = await requireAssignableUser(assignedToId).catch(() => null);
   if (!assignee) return { ok: false as const, error: "That team member is no longer available." };
 
   const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
