@@ -27,6 +27,7 @@ test("test-drive stage action explains its required workflow", () => {
 });
 
 test("migration backfills one deterministic open test-drive stage per tenant pipeline", () => {
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS "tenantId"/);
   assert.match(migration, /ADD COLUMN IF NOT EXISTS "entryAction"/);
   assert.match(migration, /PARTITION BY candidate\."tenantId", candidate\."pipelineId"/);
   assert.match(migration, /candidate\."name" ILIKE '%test%'/);
@@ -64,7 +65,13 @@ test("pipeline action audit reads do not bypass tenant scope", () => {
     pipelineActionsSource,
     /SELECT \* FROM "PipelineStage" WHERE "id" = \$\{id\}/,
   );
-  assert.match(pipelineActionsSource, /const before = await prisma\.lead\.findUnique\(/);
+  assert.match(pipelineActionsSource, /const tenantId = writeTenantId\(\)/);
+  assert.match(pipelineActionsSource, /AND "tenantId" = \$\{tenantId\}/);
+  assert.match(
+    pipelineActionsSource,
+    /SELECT "probability", "forecastCategory", "expectedCloseDate", "estimatedCostCents", "teamId"[\s\S]+FROM "Lead"/,
+  );
+  assert.doesNotMatch(pipelineActionsSource, /prisma\.lead\.findUnique\(/);
 });
 
 test("lead relation ids are validated even when a custom title is supplied", () => {
