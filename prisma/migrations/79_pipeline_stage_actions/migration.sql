@@ -1,6 +1,14 @@
 -- Explicit, configurable behaviour when a lead enters a pipeline stage.
 -- Existing installations used a stage-name convention. Backfill at most one OPEN
 -- matching stage per tenant/pipeline, deterministically, and enforce the invariant.
+--
+-- This migration is numbered before the dated tenant-isolation migrations in the
+-- repository's numeric migration runner, so it must create the nullable tenantId
+-- column itself on a fresh database. The later tenant migration repeats this with
+-- IF NOT EXISTS and performs the founding-tenant backfill.
+
+ALTER TABLE "PipelineStage"
+  ADD COLUMN IF NOT EXISTS "tenantId" TEXT;
 
 ALTER TABLE "PipelineStage"
   ADD COLUMN IF NOT EXISTS "entryAction" TEXT;
