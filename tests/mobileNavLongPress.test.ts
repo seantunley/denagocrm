@@ -4,6 +4,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const shellSource = readFileSync(join(process.cwd(), "src", "components", "AppShell.tsx"), "utf8");
+const quickCreateRouteSource = readFileSync(
+  join(process.cwd(), "src", "app", "api", "quick-create", "route.ts"),
+  "utf8",
+);
 
 test("mobile navigation exposes permission-aware create shortcuts", () => {
   assert.match(shellSource, /can\("leads\.create"\)[\s\S]+kind: "lead"[\s\S]+label: "New lead"/);
@@ -24,4 +28,9 @@ test("mobile quick actions use the global create dialog", () => {
   assert.match(shellSource, /openQuickCreate\(kind\)/);
   assert.match(shellSource, /Hold any marked icon/);
   assert.match(shellSource, /event\.shiftKey && event\.key === "F10"/);
+});
+
+test("quick-create staff options are limited to the active tenant", () => {
+  assert.match(quickCreateRouteSource, /listTenantStaff\(\)/);
+  assert.doesNotMatch(quickCreateRouteSource, /prisma\.user\.findMany/);
 });
