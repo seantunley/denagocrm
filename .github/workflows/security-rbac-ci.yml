@@ -109,7 +109,18 @@ jobs:
         run: npm run lint
 
       - name: Unit tests
-        run: npm run test:unit
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:unit 2>&1 | tee unit.txt
+
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-report
+          path: unit.txt
+          if-no-files-found: ignore
 
       # Production build is intentionally NOT run here: Vercel builds every PR
       # preview and push, so a duplicate CI build only burns Actions minutes.
