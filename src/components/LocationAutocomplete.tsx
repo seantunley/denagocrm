@@ -127,7 +127,6 @@ async function loadGoogleMapsScript(
         v: "weekly",
         language: "en",
         region: "ZA",
-        auth_referrer_policy: "origin",
       });
     document.head.appendChild(script);
   });
