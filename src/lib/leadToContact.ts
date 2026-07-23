@@ -1,8 +1,7 @@
 import "server-only";
 
-import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
-import { resolveActingTenant } from "./tenantContext";
+import { soleActiveTenant } from "./tenant";
 
 export type LeadToContactErrorCode =
   | "tenant_unavailable"
@@ -36,9 +35,9 @@ export type LeadToContactResult = {
 };
 
 /**
- * Create or reuse a contact for a lead inside one tenant-scoped transaction.
- * The conditional lead update is the concurrency gate: a losing simultaneous
- * request throws, which rolls back any contact it created in the transaction.
+ * Convert an existing lead into a linked contact without crossing tenant or RBAC
+ * boundaries. The active membership and lead row are locked in the same database
+ * transaction so two submissions for the same lead cannot both create contacts.
  */
 export async function addLeadToContactsAtomic({
   leadId,
@@ -52,7 +51,16 @@ export async function addLeadToContactsAtomic({
   const accessible = accessibleContactIds === null ? null : new Set(accessibleContactIds);
 
   return basePrisma.$transaction(async (tx) => {
-    const actingTenant = await resolveActingTenant(userId, tx);
+    // Stabilise the acting tenant for this write. Shared locks allow unrelated
+    // conversions to proceed concurrently while tenant suspension/membership
+    // deletion waits until this transaction finishes.
+    const memberships = await tx.$queryRaw<{ tenantId: string }[]>`
+      SELECT m."tenantId" AS "tenantId"
+      FROM "TenantMember" m
+      JOIN "Tenant" t ON t."id" = m."tenantId"
+      WHERE m."userId" = ${userId} AND t."active" = true
+      FOR SHARE OF t, m`;
+    const actingTenant = soleActiveTenant(memberships.map((row) => row.tenantId));
     if ("error" in actingTenant) {
       throw new LeadToContactError(
         "tenant_unavailable",
@@ -61,7 +69,23 @@ export async function addLeadToContactsAtomic({
     }
     const tenantId = actingTenant.tenantId;
 
-    const lead = await tx.lead.findFirst({
+    // Lock the precise live lead in the active tenant before checking contactId.
+    // A concurrent submission waits here, then observes the first link and exits.
+    const lockedLead = await tx.$queryRaw<{ id: string }[]>`
+      SELECT l."id"
+      FROM "Lead" l
+      WHERE l."id" = ${leadId}
+        AND l."tenantId" = ${tenantId}
+        AND l."deletedAt" IS NULL
+      FOR UPDATE`;
+    if (lockedLead.length !== 1) {
+      throw new LeadToContactError(
+        "lead_unavailable",
+        "That lead is not available in your current workspace.",
+      );
+    }
+
+    const lead = await tx.lead.findFirstOrThrow({
       where: { id: leadId, tenantId, deletedAt: null },
       select: {
         id: true,
@@ -74,12 +98,6 @@ export async function addLeadToContactsAtomic({
         contactId: true,
       },
     });
-    if (!lead) {
-      throw new LeadToContactError(
-        "lead_unavailable",
-        "That lead is not available in your current workspace.",
-      );
-    }
     if (lead.contactId) {
       return {
         lead,
@@ -91,8 +109,8 @@ export async function addLeadToContactsAtomic({
 
     const email = lead.email?.trim() || null;
     const phone = lead.phone?.trim() || null;
-    const matchers: Prisma.ContactWhereInput[] = [
-      ...(email ? [{ email: { equals: email, mode: "insensitive" } }] : []),
+    const matchers = [
+      ...(email ? [{ email: { equals: email, mode: "insensitive" as const } }] : []),
       ...(phone ? [{ phone }] : []),
     ];
     const matches = matchers.length
@@ -113,7 +131,6 @@ export async function addLeadToContactsAtomic({
 
     let contactId: string;
     let created = false;
-
     if (matches.length === 1) {
       contactId = matches[0].id;
       if (accessible !== null && !accessible.has(contactId)) {
@@ -155,6 +172,9 @@ export async function addLeadToContactsAtomic({
       created = true;
     }
 
+    // The row lock makes this conditional claim deterministic; the predicate is
+    // retained as defence in depth and rolls back a newly-created contact if some
+    // future code path changes the lead without taking the same lock.
     const linked = await tx.lead.updateMany({
       where: {
         id: leadId,
@@ -167,7 +187,7 @@ export async function addLeadToContactsAtomic({
     if (linked.count !== 1) {
       throw new LeadToContactError(
         "concurrent_change",
-        "The lead was linked by another request. Refresh and try again.",
+        "The lead changed while it was being linked. Refresh and try again.",
       );
     }
 
