@@ -1,0 +1,27 @@
+name: Temporary unit diagnostic
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  unit-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --silent
+      - name: Capture unit test output
+        run: npm run test:unit > unit.txt 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unit-report
+          path: unit.txt
