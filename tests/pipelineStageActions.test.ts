@@ -64,11 +64,20 @@ test("pipeline action audit reads do not bypass tenant scope", () => {
     pipelineActionsSource,
     /SELECT \* FROM "PipelineStage" WHERE "id" = \$\{id\}/,
   );
-  assert.match(pipelineActionsSource, /const before = await prisma\.lead\.findUnique\(/);
+  assert.match(pipelineActionsSource, /const tenantId = writeTenantId\(\)/);
+  assert.match(pipelineActionsSource, /Prisma\.sql`AND "tenantId" = \$\{tenantId\}`/);
+  assert.match(
+    pipelineActionsSource,
+    /FROM "Lead"[\s\S]+WHERE "id" = \$\{leadId\} AND "deletedAt" IS NULL \$\{tenantScope\}/,
+  );
 });
 
 test("lead relation ids are validated even when a custom title is supplied", () => {
-  assert.match(leadActionsSource, /resolveTenantMemberUser\(data\.assignedToId\)/);
+  assert.match(leadActionsSource, /resolveTenantMemberUser\(userId\)/);
+  assert.match(
+    leadActionsSource,
+    /if \(data\.assignedToId\) await requireAssignableUser\(data\.assignedToId\)/,
+  );
   assert.match(leadActionsSource, /That contact is not available in this workspace/);
   assert.match(leadActionsSource, /That product is not available in this workspace/);
   assert.equal(
