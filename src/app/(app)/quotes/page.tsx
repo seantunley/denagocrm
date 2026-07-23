@@ -23,6 +23,7 @@ import {
   QuoteEditorTrigger,
   type QuoteEditorRecord,
 } from "@/components/quotes/QuoteEditorDialog";
+import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
 
 function inputDate(daysFromNow: number) {
   const date = new Date();
@@ -196,7 +197,13 @@ export default async function QuotesPage({
                 {quotes.map((quote) => {
                   const total = quoteTotalCents(quote.items);
                   return (
-                    <MobileDataCard key={quote.id}>
+                    <RecordContextMenu
+                      key={quote.id}
+                      label={`Quote Q-${quote.number}`}
+                      href={`/quotes/${quote.id}`}
+                      actions={quoteContextActions(quote.id)}
+                    >
+                    <MobileDataCard>
                       <MobileDataHeader
                         title={
                           <QuoteEditorTrigger quoteId={quote.id} className="text-left text-primary hover:underline">
@@ -222,6 +229,7 @@ export default async function QuotesPage({
                         <ConfirmDelete action={deleteQuote.bind(null, quote.id)} title={`Delete quote Q-${quote.number}?`} description="Moves the quote to Trash (restorable for 60 days)." trigger="Delete quote" triggerClass="text-xs text-slate-500 hover:text-red-400" />
                       </div>
                     </MobileDataCard>
+                    </RecordContextMenu>
                   );
                 })}
               </MobileDataList>
@@ -245,7 +253,13 @@ export default async function QuotesPage({
                     {quotes.map((quote) => {
                       const total = quoteTotalCents(quote.items);
                       return (
-                        <tr key={quote.id}>
+                        <RecordContextMenu
+                          key={quote.id}
+                          label={`Quote Q-${quote.number}`}
+                          href={`/quotes/${quote.id}`}
+                          actions={quoteContextActions(quote.id)}
+                        >
+                        <tr tabIndex={0} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                           <td>
                             <QuoteEditorTrigger quoteId={quote.id} className="font-medium text-orange-400 hover:underline">
                               Q-{quote.number}
@@ -269,6 +283,7 @@ export default async function QuotesPage({
                             <ConfirmDelete action={deleteQuote.bind(null, quote.id)} title={`Delete quote Q-${quote.number}?`} description="Moves the quote to Trash (restorable for 60 days)." trigger="Delete" triggerClass="text-xs text-slate-500 hover:text-red-400" />
                           </td>
                         </tr>
+                        </RecordContextMenu>
                       );
                     })}
                   </tbody>
@@ -280,4 +295,11 @@ export default async function QuotesPage({
       </div>
     </QuoteEditorProvider>
   );
+}
+
+function quoteContextActions(quoteId: string): RecordContextAction[] {
+  return [
+    { label: "Open editor", href: `/quotes?edit=${quoteId}`, icon: "edit" },
+    { label: "Print / PDF", href: `/quotes/${quoteId}/print`, icon: "print", newTab: true },
+  ];
 }

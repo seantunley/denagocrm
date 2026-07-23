@@ -4,7 +4,7 @@ import { subDays } from "date-fns";
 import { prisma } from "@/lib/db";
 import { saveView, deleteView } from "@/app/actions/views";
 import { formatDate, formatZAR } from "@/lib/format";
-import { getAccessibleLeadIds, requireAnyPermission } from "@/lib/permissions";
+import { getAccessibleLeadIds, hasPermission, requireAnyPermission } from "@/lib/permissions";
 import { listActiveSalesPipelines, listPipelineStages } from "@/lib/pipelines";
 import MobileFilterDrawer from "@/components/MobileFilterDrawer";
 import { EmptyState, StatusPill } from "@/components/visual-system";
@@ -17,6 +17,7 @@ import {
   ResponsiveDataView,
   StickyActionArea,
 } from "@/components/responsive-patterns";
+import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
 
 export const metadata = { title: "Lead list — DenagoCRM" };
 
@@ -41,10 +42,12 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
   const minValue = parseInt(params.minValue || "", 10);
   const days = parseInt(params.days || "", 10);
 
-  const [pipelines, accessibleIds, views] = await Promise.all([
+  const [pipelines, accessibleIds, views, canEdit, canManageActivities] = await Promise.all([
     listActiveSalesPipelines(),
     getAccessibleLeadIds(user),
     prisma.savedView.findMany({ where: { page: "leads" }, orderBy: { createdAt: "asc" } }),
+    hasPermission(user, "leads.edit"),
+    hasPermission(user, "activities.manage"),
   ]);
   const selectedPipeline = pipelines.find((pipeline) => pipeline.id === pipelineId) ?? null;
   const stages = selectedPipeline
@@ -134,7 +137,13 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
           mobile={
             <MobileDataList>
               {leads.map((lead) => (
-                <MobileDataCard key={lead.id}>
+                <RecordContextMenu
+                  key={lead.id}
+                  label={lead.name}
+                  href={`/leads/${lead.id}`}
+                  actions={leadListActions(lead.id, canEdit, canManageActivities)}
+                >
+                <MobileDataCard>
                   <MobileDataHeader
                     title={<Link href={`/leads/${lead.id}`} className="text-primary hover:underline">{lead.name}</Link>}
                     detail={lead.title}
@@ -147,6 +156,7 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
                     <MobileDataField label="Created">{formatDate(lead.createdAt)}</MobileDataField>
                   </MobileDataFields>
                 </MobileDataCard>
+                </RecordContextMenu>
               ))}
               <div className="border-t border-border bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
                 {leads.length} lead{leads.length !== 1 ? "s" : ""} · <span className="font-semibold text-foreground">{formatZAR(totalValue)}</span> total
@@ -159,7 +169,13 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
                 <thead><tr><th>Lead</th><th>Stage</th><th>Source</th><th className="text-right">Value</th><th>Created</th><th>Assigned</th></tr></thead>
                 <tbody>
                   {leads.map((lead) => (
-                    <tr key={lead.id}>
+                    <RecordContextMenu
+                      key={lead.id}
+                      label={lead.name}
+                      href={`/leads/${lead.id}`}
+                      actions={leadListActions(lead.id, canEdit, canManageActivities)}
+                    >
+                    <tr tabIndex={0} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                       <td><Link href={`/leads/${lead.id}`} className="font-medium text-primary hover:underline">{lead.name}</Link><p className="max-w-52 truncate text-xs text-muted-foreground">{lead.title}</p></td>
                       <td>{lead.status === "open" ? <span className="badge text-white" style={{ backgroundColor: lead.stage.color }}>{lead.stage.name}</span> : <StatusPill tone={lead.status === "won" ? "success" : "danger"}>{lead.status}</StatusPill>}</td>
                       <td className="text-sm capitalize text-foreground/80">{lead.source}</td>
@@ -167,6 +183,7 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
                       <td className="text-sm text-muted-foreground">{formatDate(lead.createdAt)}</td>
                       <td className="text-sm text-muted-foreground">{lead.assignedTo?.name ?? "—"}</td>
                     </tr>
+                    </RecordContextMenu>
                   ))}
                 </tbody>
               </table>
@@ -177,6 +194,25 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
       )}
     </div>
   );
+}
+
+function leadListActions(
+  leadId: string,
+  canEdit: boolean,
+  canManageActivities: boolean,
+): RecordContextAction[] {
+  return [
+    ...(canEdit
+      ? [{ label: "Edit lead", href: `/leads/${leadId}/edit`, icon: "edit" as const }]
+      : []),
+    ...(canManageActivities
+      ? [{
+          label: "Schedule activity",
+          href: `/leads/${leadId}?tab=activities&schedule=1`,
+          icon: "calendar" as const,
+        }]
+      : []),
+  ];
 }
 
 function LeadFilterFields({ params, status, source, pipelineId, stageId, pipelines, stages }: {

@@ -8,6 +8,7 @@ import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { createCompetitor } from "@/app/actions/competitors";
 import { pendingChangeCount } from "@/lib/competitors";
+import RecordContextMenu from "@/components/RecordContextMenu";
 
 export const dynamic = "force-dynamic";
 
@@ -69,7 +70,8 @@ export default async function CompetitorsPage() {
           {competitors.map((c) => {
             const critical = c.changes.filter((x) => x.materiality === "critical").length;
             return (
-              <Surface key={c.id} className="group relative overflow-hidden p-5 transition hover:border-primary/35">
+              <RecordContextMenu key={c.id} label={c.name} href={`/competitors/${c.id}`}>
+              <Surface className="group relative overflow-hidden p-5 transition hover:border-primary/35">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-3">
                     <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-primary/15 bg-primary/10 font-semibold text-primary">{c.name.slice(0, 1).toUpperCase()}</span>
@@ -95,6 +97,7 @@ export default async function CompetitorsPage() {
                 </div>
                 <Link href={`/competitors/${c.id}`} className="mt-4 flex items-center justify-between text-sm font-medium text-primary after:absolute after:inset-0">Open intelligence profile <ArrowUpRight className="size-4" /></Link>
               </Surface>
+              </RecordContextMenu>
             );
           })}
         </div>

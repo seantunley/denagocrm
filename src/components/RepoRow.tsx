@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { renameDocument, moveDocument, replaceDocument } from "@/app/actions/documents";
+import RecordContextMenu from "@/components/RecordContextMenu";
 
 export type RepoDoc = {
   id: string;
@@ -58,6 +59,11 @@ export default function RepoRow({
       : File;
 
   return (
+    <RecordContextMenu
+      label={doc.fileName}
+      href={`/api/files/${doc.id}`}
+      openInNewTab
+    >
     <li className="flex items-center gap-3 py-2">
       <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
         <Icon className="size-4" />
@@ -161,5 +167,6 @@ export default function RepoRow({
         </ResponsiveDialogContent>
       </Dialog>
     </li>
+    </RecordContextMenu>
   );
 }
