@@ -11,6 +11,10 @@ const migration = readFileSync(
   join(process.cwd(), "prisma", "migrations", "79_pipeline_stage_actions", "migration.sql"),
   "utf8",
 );
+const pipelineSource = readFileSync(
+  join(process.cwd(), "src", "lib", "pipelines.ts"),
+  "utf8",
+);
 
 test("pipeline stage actions accept only supported action identifiers", () => {
   assert.equal(parsePipelineStageAction("book_test_drive"), "book_test_drive");
@@ -49,4 +53,13 @@ test("database enforces one required action per tenant pipeline", () => {
   assert.match(migration, /UPDATE "PipelineStage"[\s\S]+COALESCE\("isClosed", false\) = true/);
   assert.match(migration, /DROP CONSTRAINT IF EXISTS "PipelineStage_entryAction_check"/);
   assert.match(migration, /VALIDATE CONSTRAINT "PipelineStage_entryAction_check"/);
+});
+
+test("raw pipeline stage helpers obey the active tenant scope", () => {
+  assert.match(pipelineSource, /currentScopeClass\(\)/);
+  assert.match(pipelineSource, /writeTenantId\(\)/);
+  assert.match(pipelineSource, /INSERT INTO "PipelineStage"[\s\S]+"tenantId"/);
+  assert.match(pipelineSource, /function tenantFilter/);
+  assert.match(pipelineSource, /WHERE "id" = \$\{stageId\} \$\{scope\}/);
+  assert.match(pipelineSource, /FROM "Lead"[\s\S]+"deletedAt" IS NULL \$\{scope\}/);
 });
