@@ -30,7 +30,9 @@ import {
 import { resolveTenantActor, resolveTenantMemberUser, listTenantStaff } from "../src/lib/tenantActor";
 import { resolveApprover } from "../src/lib/signing/approvals";
 import { hashApiKey, resolveApiKeyTenant, authenticateIntakeKey } from "../src/lib/apiKeys";
-import { claimSlotCapacity } from "../src/lib/bookingSlots";
+import { claimSlotCapacity, getSlotConfig, slotInstantOrThrow } from "../src/lib/bookingSlots";
+import { NextRequest } from "next/server";
+import { POST as bookingsPOST } from "../src/app/api/bookings/route";
 import { serviceOtpKey } from "../src/lib/serviceOtp";
 import { pushRecipientsForCurrentScope } from "../src/lib/push";
 import { resolveChannelTenant } from "../src/lib/channelTenant";
@@ -825,6 +827,93 @@ async function main() {
     await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => { await putSetting(cfgSetW, "written"); });
     const wRow = await basePrisma.$queryRaw<{ tenantId: string | null }[]>`SELECT "tenantId" FROM "AppSetting" WHERE "key" = ${cfgSetW}`;
     check("appsetting: putSetting inside scope A stamps tenant A on the created row", wRow[0]?.tenantId === TENANT_A);
+
+    // ── HTTP-level booking test (design §8.5 — unblocked by the AppSetting.tenantId
+    //    slice): invoke the REAL bookings POST end-to-end under enforcement with
+    //    tenant A's per-tenant API key, and assert every PERSISTED raw write from the
+    //    C2 finding — Contact, Activity AND JobCard — carries tenant A. Exercises the
+    //    whole chokepoint chain — key auth → establishTenantScopeFromId → the guarded
+    //    getSetting config read (which would have 500'd on the missing AppSetting
+    //    column before this slice) → the basePrisma booking writes stamped via
+    //    writeTenantId(). Two cases because one booking can't cover both branches:
+    //    case 1 hits the NEW-contact path (no vehicle → no job card); case 2 hits the
+    //    matched-contact-with-vehicle path (the `if (vehicle && contactId)` job-card
+    //    branch). ─────────────────────────────────────────────────────────────────
+    // Pick slots the route will accept using its OWN config + validator (no
+    // dependence on weekday/timezone or seeded booking settings; defaults apply
+    // because tenant A has no BOOKING_* rows). Two distinct dates so the two bookings
+    // never contend for the same capacity-1 slot.
+    const bookingConfig = await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => await getSlotConfig());
+    const bkTime = bookingConfig.times[0] ?? "10:00";
+    const acceptedDates: string[] = [];
+    for (let d = 9; d <= 40 && acceptedDates.length < 2; d++) {
+      const cand = new Date();
+      cand.setDate(cand.getDate() + d);
+      const iso = cand.toISOString().slice(0, 10);
+      try { slotInstantOrThrow(iso, bkTime, bookingConfig); acceptedDates.push(iso); } catch { /* not an allowed slot day — try the next */ }
+    }
+    const bkDate = acceptedDates[0] ?? "";
+    const bkDate2 = acceptedDates[1] ?? "";
+    check("booking-http: found two distinct future slots the route accepts", bkDate !== "" && bkDate2 !== "" && bkDate !== bkDate2);
+    // Phones derived from SFX (unique per run). The route matches an existing contact
+    // by email OR phone OR whatsapp, so a fixed literal like 0821234567 could divert
+    // case 1 onto a real seed row; distinct prefixes keep the two cases apart too.
+    const bkNum = String(parseInt(SFX, 16)).padStart(9, "0").slice(-7);
+    const bkPhone = `082${bkNum}`;
+    const bk2Phone = `083${bkNum}`;
+
+    // Case 1 — NEW contact (no vehicle): asserts Contact + Activity are stamped.
+    const bkEmail = `httpbook_${SFX}@test.invalid`;
+    const bookingReq = new NextRequest("https://denago.test/api/bookings", {
+      method: "POST",
+      headers: { "x-api-key": apiKeyRawA, "content-type": "application/json" },
+      body: JSON.stringify({ name: "HTTP Booking Test", email: bkEmail, phone: bkPhone, date: bkDate, time: bkTime }),
+    });
+    // Confine the route's enterWith(tenant) scope to THIS call so it can't leak into
+    // later assertions; the route still resolves tenant A from the key inside.
+    const bookingRes = await runInTenantScope({ tenantId: null, system: false }, async () => await bookingsPOST(bookingReq));
+    const bookingBody = (await bookingRes.json()) as { ok?: boolean; activityId?: string; error?: string };
+    check("booking-http: real POST (new contact) returns 201 (whole chokepoint chain works enforcing)", bookingRes.status === 201 && bookingBody.ok === true);
+    const httpContact = await basePrisma.contact.findFirst({ where: { email: bkEmail }, select: { id: true, tenantId: true } });
+    check("booking-http: persisted Contact stamped tenant A (end-to-end)", httpContact?.tenantId === TENANT_A);
+    const httpActivity = bookingBody.activityId
+      ? await basePrisma.activity.findUnique({ where: { id: bookingBody.activityId }, select: { tenantId: true } })
+      : null;
+    check("booking-http: persisted Activity stamped tenant A (end-to-end)", httpActivity?.tenantId === TENANT_A);
+    // Inline cleanup: activity + audit rows (FK → contact) before the contact itself.
+    if (bookingBody.activityId) await basePrisma.activity.deleteMany({ where: { id: bookingBody.activityId } });
+    if (httpContact?.id) {
+      await basePrisma.auditLog.deleteMany({ where: { contactId: httpContact.id } });
+      await basePrisma.contact.deleteMany({ where: { id: httpContact.id } });
+    }
+
+    // Case 2 — matched contact WITH one vehicle: the only path that reaches the raw
+    // `tx.jobCard.create(... tenantId: writeTid)`. Seed a tenant-A contact + exactly
+    // one non-deleted vehicle, POST with the SAME email/phone so the route matches it,
+    // then assert the persisted JobCard is stamped tenant A. (The route returns only
+    // activityId, so locate the JobCard via basePrisma by the seeded contact.)
+    const bk2ContactId = `c_hbk_${SFX}`;
+    const bk2VehicleId = `v_hbk_${SFX}`;
+    const bk2Email = `httpbook2_${SFX}@test.invalid`;
+    await basePrisma.contact.create({ data: { id: bk2ContactId, firstName: "HTTP", lastName: "JobCard", email: bk2Email, phone: bk2Phone, tenantId: TENANT_A } });
+    await basePrisma.vehicle.create({ data: { id: bk2VehicleId, model: "Denago Rover EV", contactId: bk2ContactId, tenantId: TENANT_A } });
+    const booking2Req = new NextRequest("https://denago.test/api/bookings", {
+      method: "POST",
+      headers: { "x-api-key": apiKeyRawA, "content-type": "application/json" },
+      body: JSON.stringify({ name: "HTTP JobCard Booking", email: bk2Email, phone: bk2Phone, date: bkDate2, time: bkTime }),
+    });
+    const booking2Res = await runInTenantScope({ tenantId: null, system: false }, async () => await bookingsPOST(booking2Req));
+    const booking2Body = (await booking2Res.json()) as { ok?: boolean; activityId?: string; error?: string };
+    check("booking-http: real POST (seeded contact+vehicle) returns 201", booking2Res.status === 201 && booking2Body.ok === true);
+    const httpJobCard = await basePrisma.jobCard.findFirst({ where: { contactId: bk2ContactId }, select: { id: true, tenantId: true } });
+    check("booking-http: persisted JobCard stamped tenant A (raw jobCard.create end-to-end)", httpJobCard?.tenantId === TENANT_A);
+    // FK-safe cleanup: job card + activity + audit rows (all → contact/vehicle) before
+    // the seeded vehicle, then the seeded contact.
+    await basePrisma.jobCard.deleteMany({ where: { contactId: bk2ContactId } });
+    if (booking2Body.activityId) await basePrisma.activity.deleteMany({ where: { id: booking2Body.activityId } });
+    await basePrisma.auditLog.deleteMany({ where: { contactId: bk2ContactId } });
+    await basePrisma.vehicle.deleteMany({ where: { id: bk2VehicleId } });
+    await basePrisma.contact.deleteMany({ where: { id: bk2ContactId } });
 
     // ── DORMANT back-compat (enforcement OFF): C2 keys/OTP/push + C3 channel all run
     //    byte-for-byte the pre-tenancy path. ─────────────────────────────────────────
