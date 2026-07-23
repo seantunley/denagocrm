@@ -1,5 +1,7 @@
 import crypto from "crypto";
+import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
+import { currentScopeClass, writeTenantId } from "./tenantWrite";
 
 export type SalesPipelineRow = {
   id: string;
@@ -22,6 +24,7 @@ export type PipelineStageRow = {
   staleAfterDays: number | null;
   isClosed: boolean;
   closedStatus: string | null;
+  entryAction: string | null;
 };
 
 export type ForecastLeadRow = {
@@ -44,6 +47,20 @@ export type ForecastLeadRow = {
   teamName: string | null;
   updatedAt: Date;
 };
+
+/**
+ * Tenant predicate for raw SQL paths that bypass the guarded Prisma client.
+ * Dormant/system scope preserves the legacy global behaviour; a concrete tenant
+ * filters the requested column; an enforcing but missing scope returns no rows.
+ */
+function tenantFilter(column: '"tenantId"' | 'l."tenantId"' | 's."tenantId"') {
+  const scope = currentScopeClass();
+  if (scope.mode === "closed") return Prisma.sql`AND FALSE`;
+  if (scope.mode === "tenant") {
+    return Prisma.sql`AND ${Prisma.raw(column)} = ${scope.tenantId}`;
+  }
+  return Prisma.empty;
+}
 
 export async function listSalesPipelines(activeOnly = false): Promise<SalesPipelineRow[]> {
   if (activeOnly) return listActiveSalesPipelines();
@@ -76,27 +93,35 @@ export async function getDefaultPipeline(): Promise<SalesPipelineRow | null> {
 }
 
 export async function listPipelineStages(pipelineId: string): Promise<PipelineStageRow[]> {
+  const scope = tenantFilter('"tenantId"');
   return basePrisma.$queryRaw<PipelineStageRow[]>`
     SELECT "id", "name", "order", "color", "pipelineId", "defaultProbability",
-      "staleAfterDays", "isClosed", "closedStatus"
+      "staleAfterDays", "isClosed", "closedStatus", "entryAction"
     FROM "PipelineStage"
-    WHERE "pipelineId" = ${pipelineId}
+    WHERE "pipelineId" = ${pipelineId} ${scope}
     ORDER BY "order" ASC
   `;
 }
 
 export async function getPipelineStage(stageId: string): Promise<PipelineStageRow | null> {
+  const scope = tenantFilter('"tenantId"');
   const rows = await basePrisma.$queryRaw<PipelineStageRow[]>`
     SELECT "id", "name", "order", "color", "pipelineId", "defaultProbability",
-      "staleAfterDays", "isClosed", "closedStatus"
-    FROM "PipelineStage" WHERE "id" = ${stageId} LIMIT 1
+      "staleAfterDays", "isClosed", "closedStatus", "entryAction"
+    FROM "PipelineStage"
+    WHERE "id" = ${stageId} ${scope}
+    LIMIT 1
   `;
   return rows[0] ?? null;
 }
 
 export async function getLeadPipeline(leadId: string): Promise<{ pipelineId: string; stageId: string; teamId: string | null } | null> {
+  const scope = tenantFilter('"tenantId"');
   const rows = await basePrisma.$queryRaw<Array<{ pipelineId: string; stageId: string; teamId: string | null }>>`
-    SELECT "pipelineId", "stageId", "teamId" FROM "Lead" WHERE "id" = ${leadId} AND "deletedAt" IS NULL LIMIT 1
+    SELECT "pipelineId", "stageId", "teamId"
+    FROM "Lead"
+    WHERE "id" = ${leadId} AND "deletedAt" IS NULL ${scope}
+    LIMIT 1
   `;
   return rows[0] ?? null;
 }
@@ -163,6 +188,26 @@ function normalizeClosedStage(input: { isClosed?: boolean; closedStatus?: string
   return { isClosed: true, closedStatus: input.closedStatus };
 }
 
+async function assertEntryActionAvailable(
+  pipelineId: string,
+  entryAction: string | null | undefined,
+  excludeStageId?: string,
+) {
+  if (!entryAction) return;
+  const scope = tenantFilter('"tenantId"');
+  const existing = await basePrisma.$queryRaw<Array<{ id: string }>>`
+    SELECT "id" FROM "PipelineStage"
+    WHERE "pipelineId" = ${pipelineId}
+      AND "entryAction" = ${entryAction}
+      AND (${excludeStageId ?? null}::text IS NULL OR "id" <> ${excludeStageId ?? null})
+      ${scope}
+    LIMIT 1
+  `;
+  if (existing[0]) {
+    throw new Error("This pipeline already has a stage with that required action");
+  }
+}
+
 export async function addPipelineStage(input: {
   pipelineId: string;
   name: string;
@@ -171,23 +216,32 @@ export async function addPipelineStage(input: {
   staleAfterDays?: number | null;
   isClosed?: boolean;
   closedStatus?: string | null;
+  entryAction?: string | null;
 }) {
+  const tenantId = writeTenantId();
+  const scope = tenantFilter('"tenantId"');
   const pipeline = await basePrisma.$queryRaw<Array<{ active: boolean }>>`
     SELECT "active" FROM "SalesPipeline" WHERE "id" = ${input.pipelineId} AND "deletedAt" IS NULL LIMIT 1
   `;
   if (!pipeline[0]) throw new Error("Pipeline not found");
   const rows = await basePrisma.$queryRaw<Array<{ nextOrder: number }>>`
-    SELECT COALESCE(MAX("order"), -1) + 1 AS "nextOrder" FROM "PipelineStage" WHERE "pipelineId" = ${input.pipelineId}
+    SELECT COALESCE(MAX("order"), -1) + 1 AS "nextOrder"
+    FROM "PipelineStage"
+    WHERE "pipelineId" = ${input.pipelineId} ${scope}
   `;
   const closed = normalizeClosedStage(input);
+  if (closed.isClosed && input.entryAction) {
+    throw new Error("Closed stages cannot require an entry action");
+  }
+  await assertEntryActionAvailable(input.pipelineId, input.entryAction);
   const id = crypto.randomUUID();
   await basePrisma.$executeRaw`
     INSERT INTO "PipelineStage" (
-      "id", "name", "order", "color", "pipelineId", "defaultProbability", "staleAfterDays", "isClosed", "closedStatus"
+      "id", "name", "order", "color", "pipelineId", "defaultProbability", "staleAfterDays", "isClosed", "closedStatus", "entryAction", "tenantId"
     ) VALUES (
       ${id}, ${input.name}, ${rows[0]?.nextOrder ?? 0}, ${input.color}, ${input.pipelineId},
       ${Math.max(0, Math.min(100, input.defaultProbability))}, ${input.staleAfterDays ?? null},
-      ${closed.isClosed}, ${closed.closedStatus}
+      ${closed.isClosed}, ${closed.closedStatus}, ${input.entryAction ?? null}, ${tenantId}
     )
   `;
   return id;
@@ -200,21 +254,36 @@ export async function updatePipelineStage(id: string, input: {
   staleAfterDays?: number | null;
   isClosed: boolean;
   closedStatus?: string | null;
+  entryAction?: string | null;
 }) {
+  writeTenantId();
+  const scope = tenantFilter('"tenantId"');
   const closed = normalizeClosedStage(input);
+  if (closed.isClosed && input.entryAction) {
+    throw new Error("Closed stages cannot require an entry action");
+  }
+  const current = await basePrisma.$queryRaw<Array<{ pipelineId: string }>>`
+    SELECT "pipelineId" FROM "PipelineStage" WHERE "id" = ${id} ${scope} LIMIT 1
+  `;
+  if (!current[0]) throw new Error("Pipeline stage not found");
+  await assertEntryActionAvailable(current[0].pipelineId, input.entryAction, id);
   await basePrisma.$executeRaw`
     UPDATE "PipelineStage"
     SET "name" = ${input.name}, "color" = ${input.color},
       "defaultProbability" = ${Math.max(0, Math.min(100, input.defaultProbability))},
       "staleAfterDays" = ${input.staleAfterDays ?? null}, "isClosed" = ${closed.isClosed},
-      "closedStatus" = ${closed.closedStatus}
-    WHERE "id" = ${id}
+      "closedStatus" = ${closed.closedStatus}, "entryAction" = ${input.entryAction ?? null}
+    WHERE "id" = ${id} ${scope}
   `;
 }
 
 export async function reorderPipelineStages(pipelineId: string, stageIds: string[]) {
+  writeTenantId();
+  const scope = tenantFilter('"tenantId"');
   const actual = await basePrisma.$queryRaw<Array<{ id: string }>>`
-    SELECT "id" FROM "PipelineStage" WHERE "pipelineId" = ${pipelineId} ORDER BY "order"
+    SELECT "id" FROM "PipelineStage"
+    WHERE "pipelineId" = ${pipelineId} ${scope}
+    ORDER BY "order"
   `;
   const actualIds = new Set(actual.map((row) => row.id));
   if (actualIds.size !== stageIds.length || stageIds.some((id) => !actualIds.has(id))) {
@@ -222,12 +291,12 @@ export async function reorderPipelineStages(pipelineId: string, stageIds: string
   }
   await basePrisma.$transaction(
     stageIds.map((stageId, index) =>
-      basePrisma.$executeRaw`UPDATE "PipelineStage" SET "order" = ${1000 + index} WHERE "id" = ${stageId} AND "pipelineId" = ${pipelineId}`
+      basePrisma.$executeRaw`UPDATE "PipelineStage" SET "order" = ${1000 + index} WHERE "id" = ${stageId} AND "pipelineId" = ${pipelineId} ${scope}`
     )
   );
   await basePrisma.$transaction(
     stageIds.map((stageId, index) =>
-      basePrisma.$executeRaw`UPDATE "PipelineStage" SET "order" = ${index} WHERE "id" = ${stageId} AND "pipelineId" = ${pipelineId}`
+      basePrisma.$executeRaw`UPDATE "PipelineStage" SET "order" = ${index} WHERE "id" = ${stageId} AND "pipelineId" = ${pipelineId} ${scope}`
     )
   );
 }
@@ -259,6 +328,7 @@ export async function listForecastLeads(input: {
   const userId = input.userId ?? null;
   const closeFrom = input.closeFrom ?? null;
   const closeTo = input.closeTo ?? null;
+  const scope = tenantFilter('l."tenantId"');
   return basePrisma.$queryRaw<ForecastLeadRow[]>`
     SELECT l."id", l."title", l."name", l."status", l."valueCents", l."estimatedCostCents",
       l."probability", l."forecastCategory", l."expectedCloseDate", l."pipelineId", p."name" AS "pipelineName",
@@ -269,7 +339,7 @@ export async function listForecastLeads(input: {
     JOIN "PipelineStage" s ON s."id" = l."stageId"
     LEFT JOIN "User" u ON u."id" = l."assignedToId"
     LEFT JOIN "Team" t ON t."id" = l."teamId"
-    WHERE l."deletedAt" IS NULL AND l."status" = 'open'
+    WHERE l."deletedAt" IS NULL AND l."status" = 'open' ${scope}
       AND (${pipelineId}::text IS NULL OR l."pipelineId" = ${pipelineId})
       AND (${teamId}::text IS NULL OR l."teamId" = ${teamId})
       AND (${userId}::text IS NULL OR l."assignedToId" = ${userId})
@@ -301,6 +371,8 @@ export async function updateLeadForecast(leadId: string, input: {
   estimatedCostCents?: number | null;
   teamId?: string | null;
 }) {
+  writeTenantId();
+  const leadScope = tenantFilter('"tenantId"');
   const allowed = new Set(["pipeline", "best_case", "commit", "closed", "omitted"]);
   if (!allowed.has(input.forecastCategory)) throw new Error("Invalid forecast category");
   if (input.teamId) {
@@ -315,7 +387,7 @@ export async function updateLeadForecast(leadId: string, input: {
       "forecastCategory" = ${input.forecastCategory}, "expectedCloseDate" = ${input.expectedCloseDate ?? null},
       "estimatedCostCents" = ${input.estimatedCostCents ?? null}, "teamId" = ${input.teamId ?? null},
       "updatedAt" = CURRENT_TIMESTAMP
-    WHERE "id" = ${leadId} AND "deletedAt" IS NULL
+    WHERE "id" = ${leadId} AND "deletedAt" IS NULL ${leadScope}
   `;
 }
 
