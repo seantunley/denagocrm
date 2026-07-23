@@ -61,11 +61,13 @@ const MAPS_SCRIPT_SELECTOR = 'script[data-denago-google-maps="true"]';
 const MAPS_LOAD_TIMEOUT_MS = 15_000;
 const AUTOCOMPLETE_DELAY_MS = 250;
 const MIN_QUERY_LENGTH = 3;
+const CAPE_TOWN_AUTOCOMPLETE_RADIUS_METRES = 50_000;
 
 let placesLibraryPromise: Promise<PlacesLoadResult> | null = null;
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
   return "Google Maps could not be loaded.";
 }
 
@@ -224,7 +226,6 @@ export default function LocationAutocomplete({
   const sessionTokenRef = useRef<unknown>(null);
   const searchTimerRef = useRef<number | null>(null);
   const requestSequenceRef = useRef(0);
-  const latestValueRef = useRef(currentValue);
   const onValueChangeRef = useRef(onValueChange);
 
   useEffect(() => {
@@ -232,9 +233,7 @@ export default function LocationAutocomplete({
   }, [onValueChange]);
 
   useEffect(() => {
-    if (value === undefined) return;
-    latestValueRef.current = value;
-    setCurrentValue(value);
+    if (value !== undefined) setCurrentValue(value);
   }, [value]);
 
   useEffect(() => {
@@ -292,7 +291,6 @@ export default function LocationAutocomplete({
   }, [retryKey]);
 
   const updateValue = (next: string) => {
-    latestValueRef.current = next;
     setCurrentValue(next);
     onValueChangeRef.current?.(next);
   };
@@ -325,7 +323,7 @@ export default function LocationAutocomplete({
         region: "za",
         locationBias: {
           center: { lat: -33.925, lng: 18.48 },
-          radius: 100_000,
+          radius: CAPE_TOWN_AUTOCOMPLETE_RADIUS_METRES,
         },
       })
         .then(({ suggestions }) => {
@@ -339,13 +337,12 @@ export default function LocationAutocomplete({
         })
         .catch((error) => {
           if (requestId !== requestSequenceRef.current) return;
+          const message = errorMessage(error);
           console.error("[Google Maps autocomplete] Suggestions failed", error);
           libraryRef.current = null;
           sessionTokenRef.current = null;
           setPredictions([]);
-          setLoadError(
-            "Google denied the Places request. Check the browser key's referrer and API restrictions in Google Cloud.",
-          );
+          setLoadError(`Google Places request failed: ${message}`);
           setMode("fallback");
         })
         .finally(() => {
