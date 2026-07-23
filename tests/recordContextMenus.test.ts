@@ -8,6 +8,7 @@ const menuSource = read("src", "components", "RecordContextMenu.tsx");
 const quickCreateSource = read("src", "components", "QuickCreateDialog.tsx");
 const quickCreateRouteSource = read("src", "app", "api", "quick-create", "route.ts");
 const quickCreateActionSource = read("src", "app", "actions", "quickCreate.ts");
+const pipelineSource = read("src", "lib", "pipelines.ts");
 
 const coveredSurfaces = [
   ["contacts", "page.tsx"],
@@ -52,6 +53,15 @@ test("record quick-create metadata and writes remain tenant scoped", () => {
   assert.match(quickCreateActionSource, /prisma\.pipelineStage\.findUnique/);
   assert.match(quickCreateActionSource, /prisma\.contact\.findUnique/);
   assert.match(quickCreateActionSource, /prisma\.product\.findUnique/);
+});
+
+test("record action stack retains inherited pipeline tenant isolation", () => {
+  assert.match(pipelineSource, /currentScopeClass\(\)/);
+  assert.match(pipelineSource, /writeTenantId\(\)/);
+  assert.match(pipelineSource, /function tenantFilter/);
+  assert.match(pipelineSource, /WHERE "pipelineId" = \$\{pipelineId\} \$\{scope\}/);
+  assert.match(pipelineSource, /WHERE "id" = \$\{leadId\} AND "deletedAt" IS NULL \$\{scope\}/);
+  assert.match(pipelineSource, /INSERT INTO "PipelineStage"[\s\S]+"tenantId"/);
 });
 
 test("primary record surfaces use the shared context menu", () => {
