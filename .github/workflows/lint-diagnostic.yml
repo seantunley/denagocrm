@@ -15,4 +15,14 @@ jobs:
         with:
           show-progress: false
       - run: npm ci --silent
-      - run: npx eslint src/components/LocationAutocomplete.tsx
+      - name: Capture ESLint report
+        id: lint
+        continue-on-error: true
+        run: npx eslint src/components/LocationAutocomplete.tsx > lint-report.txt 2>&1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: location-autocomplete-lint
+          path: lint-report.txt
+      - name: Fail when lint failed
+        if: steps.lint.outcome == 'failure'
+        run: exit 1
