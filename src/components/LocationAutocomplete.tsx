@@ -220,7 +220,7 @@ export default function LocationAutocomplete({
     let disposed = false;
     let widget: PlaceAutocompleteElement | null = null;
 
-    const useFallback = (message: string) => {
+    const showFallback = (message: string) => {
       if (disposed) return;
       widget?.remove();
       widgetRef.current = null;
@@ -233,7 +233,7 @@ export default function LocationAutocomplete({
         event instanceof CustomEvent && typeof event.detail === "string"
           ? event.detail
           : "Google Maps rejected the autocomplete request.";
-      useFallback(message);
+      showFallback(message);
     };
 
     window.addEventListener(MAPS_ERROR_EVENT, handleGlobalError);
@@ -243,7 +243,7 @@ export default function LocationAutocomplete({
     void getPlacesLibrary().then(({ library, error }) => {
       if (disposed || !hostRef.current) return;
       if (!library) {
-        useFallback(error ?? "Google Maps autocomplete is unavailable.");
+        showFallback(error ?? "Google Maps autocomplete is unavailable.");
         return;
       }
 
@@ -302,7 +302,7 @@ export default function LocationAutocomplete({
           updateValue(selected);
         };
         const handleRequestError = () => {
-          useFallback(
+          showFallback(
             "Google denied the Places request. Check the browser key's referrer and API restrictions in Google Cloud.",
           );
         };
@@ -313,7 +313,7 @@ export default function LocationAutocomplete({
         hostRef.current.replaceChildren(widget);
         setMode("ready");
       } catch (errorDuringWidgetSetup) {
-        useFallback(`Google Places widget setup failed: ${errorMessage(errorDuringWidgetSetup)}`);
+        showFallback(`Google Places widget setup failed: ${errorMessage(errorDuringWidgetSetup)}`);
       }
     });
 
