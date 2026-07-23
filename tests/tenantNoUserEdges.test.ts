@@ -297,15 +297,19 @@ for (const file of PER_TENANT_CRONS) {
 // (health + backup watchdog + ErrorLog retention). That maintenance must run ONCE
 // in the system scope — NOT inside the per-tenant loop (ErrorLog is a global model;
 // looping would repeat the same global delete per tenant).
-test("src/app/api/cron/automations/route.ts: global ErrorLog cleanup runs in withSystemScope, outside the per-tenant loop", () => {
+test("src/app/api/cron/automations/route.ts: global ErrorLog cleanup runs in withSystemScope, invoked after the per-tenant loop and never suppressed by a tenant failure", () => {
   const code = src("src/app/api/cron/automations/route.ts");
-  assert.match(code, /withSystemScope\s*\(/, "must run the global maintenance in withSystemScope");
+  assert.match(code, /withSystemScope\s*\(/, "global maintenance must run in withSystemScope");
+  // The maintenance is invoked AFTER the per-tenant fan-out (its call, not the
+  // helper's definition, is what runs late), and it lives in a `finally` so a
+  // failed tenant loop or tenant-enumeration error cannot skip it.
   const loopAt = code.indexOf("runCronPerTenant(");
+  const maintCallAt = code.indexOf("runGlobalMaintenance()", loopAt);
   const sysAt = code.indexOf("withSystemScope(");
   const purgeAt = code.search(/errorLog\s*\n?\s*\.deleteMany|errorLog\s*\.deleteMany/);
-  assert.ok(loopAt >= 0 && sysAt >= 0 && purgeAt >= 0, "must have the per-tenant loop, the system scope, and the ErrorLog purge");
-  assert.ok(sysAt > loopAt, "the system-scoped maintenance must run after the per-tenant loop, not inside it");
-  assert.ok(purgeAt > sysAt, "the ErrorLog purge must sit inside the withSystemScope block");
+  assert.ok(loopAt >= 0 && maintCallAt > loopAt, "runGlobalMaintenance() must be invoked after the per-tenant loop");
+  assert.match(code, /finally\s*\{[\s\S]*runGlobalMaintenance\(\)/, "maintenance must run in a finally so a failed tenant loop can't skip it");
+  assert.ok(purgeAt >= 0 && sysAt >= 0 && purgeAt > sysAt, "the ErrorLog purge must sit inside the withSystemScope block");
 });
 
 // C4 actor-pick sites (cron/queue + staff/portal cleanup, §2.4) attribute
