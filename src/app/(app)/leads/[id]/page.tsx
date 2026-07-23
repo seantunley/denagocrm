@@ -38,10 +38,13 @@ const RESEARCH_SUBJECT = "🔎 AI research";
 
 export default async function LeadDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ tab?: string; schedule?: string }>;
 }) {
   const { id } = await params;
+  const { tab, schedule } = await searchParams;
   const user = await requireUser();
   const lead = await prisma.lead.findUnique({
     where: { id },
@@ -193,6 +196,7 @@ export default async function LeadDetailPage({
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 min-w-0">
           <Tabs
+            initialKey={tab}
             tabs={[
               {
                 key: "details",
@@ -348,6 +352,7 @@ export default async function LeadDetailPage({
                     currentUserId={user.id}
                     leadId={lead.id}
                     revalidate={path}
+                    startOpen={tab === "activities" && schedule === "1"}
                   />
                 ),
               },

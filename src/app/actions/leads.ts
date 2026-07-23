@@ -46,6 +46,12 @@ function leadData(formData: FormData) {
   };
 }
 
+async function requireAssignableUser(userId: string) {
+  const assignee = await resolveTenantMemberUser(userId);
+  if (!assignee) throw new Error("That team member is no longer available.");
+  return assignee;
+}
+
 async function nextPosition(stageId: string) {
   const max = await prisma.lead.aggregate({
     where: { stageId },
@@ -61,9 +67,7 @@ async function buildTitle(data: {
   contactId?: string | null;
   assignedToId?: string | null;
 }) {
-  if (data.assignedToId && !(await resolveTenantMemberUser(data.assignedToId))) {
-    throw new Error("That team member is not available in this workspace");
-  }
+  if (data.assignedToId) await requireAssignableUser(data.assignedToId);
   if (data.contactId) {
     const contact = await prisma.contact.findUnique({
       where: { id: data.contactId },
@@ -111,7 +115,6 @@ export async function createLead(formData: FormData) {
   const generatedTitle = await buildTitle(data);
   const title = String(formData.get("title") ?? "").trim() || generatedTitle;
 
-  // Ensure every lead has a contact: link an existing one or create it.
   if (!data.contactId) {
     const matchers = [
       ...(data.email ? [{ email: data.email }] : []),
@@ -267,9 +270,10 @@ export async function moveLeadToTestDrive(
   if (isNaN(when.getTime())) return { ok: false, error: "Pick a valid date and time" };
 
   const currentScope = await getLeadPipeline(leadId);
+  if (!currentScope) return { ok: false, error: "Lead not found." };
+  const changingStage = currentScope.stageId !== stageId;
   const targetStage = await validateOpenStage(stageId);
   if (
-    currentScope &&
     currentScope.pipelineId !== targetStage.pipelineId &&
     !(await hasPermission(user, "leads.change_pipeline"))
   ) {
@@ -294,32 +298,38 @@ export async function moveLeadToTestDrive(
     const updated = await tx.lead.update({
       where: { id: leadId },
       data: {
-        stageId,
-        position,
-        stageEnteredAt: new Date(),
+        ...(changingStage ? { stageId, position, stageEnteredAt: new Date() } : {}),
         ...(productId ? { productId } : {}),
       },
       include: { stage: true, product: true },
     });
-    await tx.activity.create({
-      data: {
-        type: "test_drive",
-        summary: `Test Drive${updated.product ? ` — ${updated.product.name}` : ""}`,
-        note: `Booked from the pipeline board for ${updated.name}.`,
-        location: data.location.trim() || null,
-        dueDate: when,
-        leadId,
-        contactId: updated.contactId,
-        assignedToId: updated.assignedToId ?? user.id,
-        createdById: user.id,
-      },
+    const activityData = {
+      type: "test_drive",
+      summary: `Test Drive${updated.product ? ` — ${updated.product.name}` : ""}`,
+      note: `${changingStage ? "Booked" : "Rescheduled"} from the pipeline board for ${updated.name}.`,
+      location: data.location.trim() || null,
+      dueDate: when,
+      leadId,
+      contactId: updated.contactId,
+      assignedToId: updated.assignedToId ?? user.id,
+      createdById: user.id,
+    };
+    const existing = await tx.activity.findFirst({
+      where: { leadId, type: "test_drive", status: "planned" },
+      orderBy: { dueDate: "asc" },
+      select: { id: true },
     });
+    if (existing) {
+      await tx.activity.update({ where: { id: existing.id }, data: activityData });
+    } else {
+      await tx.activity.create({ data: activityData });
+    }
     return updated;
   });
 
   await logAudit({
     action: "lead.test_drive_booked",
-    summary: `Booked a test drive for “${lead.title}” (${when.toLocaleString("en-ZA", {
+    summary: `${changingStage ? "Booked" : "Rescheduled"} a test drive for “${lead.title}” (${when.toLocaleString("en-ZA", {
       timeZone: "Africa/Johannesburg",
       day: "numeric",
       month: "short",
@@ -330,10 +340,35 @@ export async function moveLeadToTestDrive(
     contactId: lead.contactId,
     user,
   });
-  await runLeadAutomations("stage_entered", leadId);
+  if (changingStage) await runLeadAutomations("stage_entered", leadId);
   revalidatePath("/leads");
   revalidatePath("/calendar");
   return { ok: true };
+}
+
+export async function assignLead(leadId: string, assignedToId: string) {
+  const user = await requireLeadAccess(leadId, "leads.assign");
+  const assignee = await requireAssignableUser(assignedToId).catch(() => null);
+  if (!assignee) return { ok: false as const, error: "That team member is no longer available." };
+
+  const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+  const lead = await prisma.lead.update({
+    where: { id: leadId },
+    data: { assignedToId: assignee.id },
+  });
+  await logAuditStrict({
+    action: "lead.assigned",
+    summary: `Assigned lead “${lead.title}” to ${assignee.name}`,
+    leadId,
+    contactId: lead.contactId,
+    user,
+    before,
+    after: lead,
+  });
+  revalidatePath("/leads");
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/forecast");
+  return { ok: true as const, assignee };
 }
 
 export async function markLeadViewed(leadId: string) {
@@ -345,7 +380,7 @@ export async function markLeadViewed(leadId: string) {
   }
 }
 
-export async function markWon(leadId: string) {
+export async function markWon(leadId: string, formData?: FormData) {
   const user = await requireLeadAccess(leadId, "leads.mark_won");
   const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
   let contactId = before.contactId;
@@ -391,6 +426,7 @@ export async function markWon(leadId: string) {
   revalidatePath("/leads");
   revalidatePath("/forecast");
   revalidatePath(`/leads/${leadId}`);
+  if (formData?.get("returnTo") === "/leads") return;
   redirect(`/contacts/${contactId}`);
 }
 

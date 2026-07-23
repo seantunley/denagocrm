@@ -26,7 +26,17 @@ export default async function LeadsPage() {
   // Gate the Ads export link to the same permission the API route enforces
   // (owner or reports.view_all), so staff without it don't see a dead link.
   const currentUser = await getCurrentUser();
-  const canExportAds = currentUser ? await hasPermission(currentUser, "reports.view_all") : false;
+  const [canExportAds, canChangeStage, canAssign, canManageActivities, canMarkWon, canMarkLost] =
+    currentUser
+      ? await Promise.all([
+          hasPermission(currentUser, "reports.view_all"),
+          hasPermission(currentUser, "leads.change_stage"),
+          hasPermission(currentUser, "leads.assign"),
+          hasPermission(currentUser, "activities.manage"),
+          hasPermission(currentUser, "leads.mark_won"),
+          hasPermission(currentUser, "leads.mark_lost"),
+        ])
+      : [false, false, false, false, false, false];
   const [stages, products, contacts, users, stageAutomationRules] = await Promise.all([
     prisma.pipelineStage.findMany({
       orderBy: { order: "asc" },
@@ -148,6 +158,7 @@ export default async function LeadsPage() {
         color: lead.color,
         productId: lead.productId,
         productName: lead.product?.name ?? null,
+        assignedToId: lead.assignedToId,
         assignee: lead.assignedTo?.name ?? null,
         research: lead.research,
         isNew: !lead.viewedAt && lead.createdAt.getTime() > now.getTime() - 3 * 24 * 60 * 60 * 1000,
@@ -258,6 +269,8 @@ export default async function LeadsPage() {
       <KanbanBoard
         stages={boardStages}
         products={products.map((product) => ({ id: product.id, name: product.name }))}
+        users={users.map((user) => ({ id: user.id, name: user.name }))}
+        permissions={{ canChangeStage, canAssign, canManageActivities, canMarkWon, canMarkLost }}
       />
     </div>
   );

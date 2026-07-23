@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   DndContext,
@@ -22,6 +23,7 @@ import {
 import {
   ArrowUpRight,
   CalendarClock,
+  CalendarPlus,
   Car,
   ChevronLeft,
   ChevronRight,
@@ -29,14 +31,19 @@ import {
   FilterX,
   GripVertical,
   Hourglass,
+  Link as LinkIcon,
+  MoreHorizontal,
   PenLine,
   Search,
+  Trophy,
+  UserRound,
+  XCircle,
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import LocationAutocomplete from "@/components/LocationAutocomplete";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { moveLead, moveLeadToTestDrive } from "@/app/actions/leads";
+import { assignLead, markLost, markWon, moveLead, moveLeadToTestDrive } from "@/app/actions/leads";
 import { formatZAR } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -50,6 +57,28 @@ import {
 } from "@/components/ui/dialog";
 import TestDriveWeather from "@/components/TestDriveWeather";
 import ResearchPopup from "@/components/ResearchPopup";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 export type KanbanLead = {
   id: string;
@@ -61,6 +90,7 @@ export type KanbanLead = {
   color: string | null;
   productId?: string | null;
   productName: string | null;
+  assignedToId: string | null;
   assignee: string | null;
   testDrive?: { when: string; weather: string | null; date: string } | null;
   signing?: { label: string } | null;
@@ -123,7 +153,7 @@ function SourceIcon({ source }: { source: string }) {
   return <PenLine className="size-3.5 text-muted-foreground" />;
 }
 
-function LeadCard({ lead, dragging }: { lead: KanbanLead; dragging?: boolean }) {
+function LeadCard({ lead, dragging, actions }: { lead: KanbanLead; dragging?: boolean; actions?: ReactNode }) {
   const opportunity = lead.title !== lead.name && lead.title !== lead.productName ? lead.title : null;
 
   return (
@@ -173,6 +203,7 @@ function LeadCard({ lead, dragging }: { lead: KanbanLead; dragging?: boolean }) 
           <span title={`Source: ${lead.source}`}>
             <SourceIcon source={lead.source} />
           </span>
+          {actions}
         </div>
       </div>
 
@@ -281,23 +312,220 @@ function LeadCard({ lead, dragging }: { lead: KanbanLead; dragging?: boolean }) 
   );
 }
 
-function DraggableCard({ lead }: { lead: KanbanLead }) {
+type LeadActionHandlers = {
+  open: () => void;
+  schedule: () => void;
+  move: (stageId: string) => void;
+  assign: (userId: string) => void;
+  testDrive: () => void;
+  won: () => void;
+  lost: () => void;
+  copyLink: () => void;
+};
+
+type BoardPermissions = {
+  canChangeStage: boolean;
+  canAssign: boolean;
+  canManageActivities: boolean;
+  canMarkWon: boolean;
+  canMarkLost: boolean;
+};
+
+function LeadMenuItems({
+  kind,
+  lead,
+  stages,
+  users,
+  permissions,
+  actions,
+}: {
+  kind: "context" | "dropdown";
+  lead: KanbanLead;
+  stages: KanbanStage[];
+  users: { id: string; name: string }[];
+  permissions: BoardPermissions;
+  actions: LeadActionHandlers;
+}) {
+  const Item = kind === "context" ? ContextMenuItem : DropdownMenuItem;
+  const Label = kind === "context" ? ContextMenuLabel : DropdownMenuLabel;
+  const Separator = kind === "context" ? ContextMenuSeparator : DropdownMenuSeparator;
+  const Sub = kind === "context" ? ContextMenuSub : DropdownMenuSub;
+  const SubTrigger = kind === "context" ? ContextMenuSubTrigger : DropdownMenuSubTrigger;
+  const SubContent = kind === "context" ? ContextMenuSubContent : DropdownMenuSubContent;
+  const currentStage = stages.find((stage) => stage.leads.some((item) => item.id === lead.id));
+  const testDriveStage = stages.find((stage) => stage.entryAction === "book_test_drive");
+
+  return (
+    <>
+      <Label>{lead.name}</Label>
+      <Item onSelect={actions.open}>
+        <ArrowUpRight /> Open lead
+      </Item>
+      <Item disabled={!permissions.canManageActivities} onSelect={actions.schedule}>
+        <CalendarPlus /> Schedule activity
+      </Item>
+      <Separator />
+      <Sub>
+        <SubTrigger disabled={!permissions.canChangeStage}>
+          <GripVertical /> Move to stage
+        </SubTrigger>
+        <SubContent>
+          {stages.map((stage) => (
+            <Item
+              key={stage.id}
+              disabled={stage.id === currentStage?.id}
+              onSelect={() => actions.move(stage.id)}
+            >
+              <span className="size-2 rounded-full" style={{ backgroundColor: stage.color }} />
+              {stage.name}
+            </Item>
+          ))}
+        </SubContent>
+      </Sub>
+      <Sub>
+        <SubTrigger disabled={!permissions.canAssign}>
+          <UserRound /> Assign owner
+        </SubTrigger>
+        <SubContent>
+          {users.map((user) => (
+            <Item
+              key={user.id}
+              disabled={user.id === lead.assignedToId}
+              onSelect={() => actions.assign(user.id)}
+            >
+              <Avatar className="size-5">
+                <AvatarFallback className="text-[7px]">{initials(user.name)}</AvatarFallback>
+              </Avatar>
+              {user.name}
+            </Item>
+          ))}
+        </SubContent>
+      </Sub>
+      <Item disabled={!permissions.canChangeStage || !testDriveStage} onSelect={actions.testDrive}>
+        <Car /> {lead.testDrive ? "Reschedule test drive" : "Book test drive"}
+      </Item>
+      <Separator />
+      <Item disabled={!permissions.canMarkWon} onSelect={actions.won}>
+        <Trophy /> Mark won
+      </Item>
+      <Item disabled={!permissions.canMarkLost} variant="destructive" onSelect={actions.lost}>
+        <XCircle /> Mark lost
+      </Item>
+      <Separator />
+      <Item onSelect={actions.copyLink}>
+        <LinkIcon /> Copy lead link
+      </Item>
+    </>
+  );
+}
+
+function LeadActionsButton({
+  lead,
+  stages,
+  users,
+  permissions,
+  actions,
+}: {
+  lead: KanbanLead;
+  stages: KanbanStage[];
+  users: { id: string; name: string }[];
+  permissions: BoardPermissions;
+  actions: LeadActionHandlers;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="grid size-6 place-items-center rounded-md text-muted-foreground opacity-70 hover:bg-muted hover:text-foreground group-hover:opacity-100"
+          aria-label={`Actions for ${lead.name}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <MoreHorizontal className="size-4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-52">
+        <LeadMenuItems
+          kind="dropdown"
+          lead={lead}
+          stages={stages}
+          users={users}
+          permissions={permissions}
+          actions={actions}
+        />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function DraggableCard({
+  lead,
+  stages,
+  users,
+  permissions,
+  actions,
+}: {
+  lead: KanbanLead;
+  stages: KanbanStage[];
+  users: { id: string; name: string }[];
+  permissions: BoardPermissions;
+  actions: LeadActionHandlers;
+}) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: lead.id });
   // No touch-action:none on the card: the TouchSensor's press-delay decides drag
   // vs scroll, so leaving native touch scrolling on lets the board/columns scroll.
   return (
-    <div
-      ref={setNodeRef}
-      {...listeners}
-      {...attributes}
-      className={cn("select-none", isDragging && "opacity-30")}
-    >
-      <LeadCard lead={lead} />
-    </div>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          ref={setNodeRef}
+          {...listeners}
+          {...attributes}
+          className={cn("select-none outline-none focus-visible:ring-2 focus-visible:ring-primary", isDragging && "opacity-30")}
+          aria-label={`${lead.name}. Right-click or press Shift+F10 for actions.`}
+        >
+          <LeadCard
+            lead={lead}
+            actions={
+              <LeadActionsButton
+                lead={lead}
+                stages={stages}
+                users={users}
+                permissions={permissions}
+                actions={actions}
+              />
+            }
+          />
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <LeadMenuItems
+          kind="context"
+          lead={lead}
+          stages={stages}
+          users={users}
+          permissions={permissions}
+          actions={actions}
+        />
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
-function Column({ stage }: { stage: KanbanStage }) {
+function Column({
+  stage,
+  stages,
+  users,
+  permissions,
+  getActions,
+}: {
+  stage: KanbanStage;
+  stages: KanbanStage[];
+  users: { id: string; name: string }[];
+  permissions: BoardPermissions;
+  getActions: (lead: KanbanLead) => LeadActionHandlers;
+}) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const total = stage.leads.reduce((sum, lead) => sum + lead.valueCents, 0);
 
@@ -360,7 +588,14 @@ function Column({ stage }: { stage: KanbanStage }) {
         )}
       >
         {stage.leads.map((lead) => (
-          <DraggableCard key={lead.id} lead={lead} />
+          <DraggableCard
+            key={lead.id}
+            lead={lead}
+            stages={stages}
+            users={users}
+            permissions={permissions}
+            actions={getActions(lead)}
+          />
         ))}
         {stage.leads.length === 0 && !isOver && (
           <div className="flex min-h-32 flex-col items-center justify-center rounded-xl border border-dashed border-border/70 bg-card/25 px-5 text-center">
@@ -381,13 +616,19 @@ function Column({ stage }: { stage: KanbanStage }) {
 export default function KanbanBoard({
   stages: initial,
   products = [],
+  users = [],
+  permissions,
 }: {
   stages: KanbanStage[];
   products?: { id: string; name: string }[];
+  users?: { id: string; name: string }[];
+  permissions: BoardPermissions;
 }) {
+  const router = useRouter();
   const [stages, setStages] = useState(initial);
   const [activeLead, setActiveLead] = useState<KanbanLead | null>(null);
   const [pendingTd, setPendingTd] = useState<{ lead: KanbanLead; stageId: string } | null>(null);
+  const [pendingOutcome, setPendingOutcome] = useState<{ lead: KanbanLead; mode: "won" | "lost" } | null>(null);
   const [query, setQuery] = useState("");
   const [owner, setOwner] = useState("");
   const [attentionOnly, setAttentionOnly] = useState(false);
@@ -464,25 +705,29 @@ export default function KanbanBoard({
     });
   }
 
+  function requestMove(lead: KanbanLead, targetStageId: string) {
+    const fromStage = stages.find((stage) => stage.leads.some((item) => item.id === lead.id));
+    const target = stages.find((stage) => stage.id === targetStageId);
+    if (!fromStage || !target || fromStage.id === targetStageId) return;
+    if (target.entryAction === "book_test_drive") {
+      setPendingTd({ lead, stageId: targetStageId });
+      return;
+    }
+    applyMove(lead.id, fromStage.id, targetStageId);
+    startTransition(async () => {
+      await moveLead(lead.id, targetStageId).catch(() => {
+        toast.error("Couldn't move the lead");
+      });
+    });
+  }
+
   function onDragEnd(event: DragEndEvent) {
     setActiveLead(null);
     const leadId = String(event.active.id);
     const targetStageId = event.over ? String(event.over.id) : null;
     if (!targetStageId) return;
-    const fromStage = stages.find((stage) => stage.leads.some((lead) => lead.id === leadId));
-    if (!fromStage || fromStage.id === targetStageId) return;
-
-    const target = stages.find((stage) => stage.id === targetStageId);
-    if (target?.entryAction === "book_test_drive") {
-      const lead = stages.flatMap((stage) => stage.leads).find((item) => item.id === leadId)!;
-      setPendingTd({ lead, stageId: targetStageId });
-      return;
-    }
-
-    applyMove(leadId, fromStage.id, targetStageId);
-    startTransition(() => {
-      void moveLead(leadId, targetStageId);
-    });
+    const lead = stages.flatMap((stage) => stage.leads).find((item) => item.id === leadId);
+    if (lead) requestMove(lead, targetStageId);
   }
 
   function confirmTestDrive(data: { productId: string | null; date: string; time: string; location: string }) {
@@ -491,18 +736,89 @@ export default function KanbanBoard({
     const fromStage = stages.find((stage) => stage.leads.some((item) => item.id === lead.id));
     setPendingTd(null);
     if (!fromStage) return;
-    applyMove(lead.id, fromStage.id, stageId);
+    if (fromStage.id !== stageId) applyMove(lead.id, fromStage.id, stageId);
     startTransition(async () => {
       const result = await moveLeadToTestDrive(lead.id, stageId, data).catch(() => ({
         ok: false as const,
         error: "Something went wrong",
       }));
       if (result.ok) {
-        toast.success(`Test drive booked for ${lead.name}`, {
+        toast.success(`Test drive ${lead.testDrive ? "rescheduled" : "booked"} for ${lead.name}`, {
           description: `${data.date} at ${data.time}${data.location ? ` · ${data.location}` : ""}`,
         });
       } else {
         toast.error(result.error ?? "Couldn't book the test drive");
+      }
+    });
+  }
+
+  function removeLead(leadId: string) {
+    setStages((previous) =>
+      previous.map((stage) => ({ ...stage, leads: stage.leads.filter((lead) => lead.id !== leadId) })),
+    );
+  }
+
+  function getActions(lead: KanbanLead): LeadActionHandlers {
+    return {
+      open: () => router.push(`/leads/${lead.id}`),
+      schedule: () => router.push(`/leads/${lead.id}?tab=activities&schedule=1`),
+      move: (stageId) => requestMove(lead, stageId),
+      assign: (userId) => {
+        const user = users.find((item) => item.id === userId);
+        if (!user) return;
+        startTransition(async () => {
+          const result = await assignLead(lead.id, userId).catch(() => ({
+            ok: false as const,
+            error: "Something went wrong",
+          }));
+          if (!result.ok) {
+            toast.error(result.error);
+            return;
+          }
+          setStages((previous) =>
+            previous.map((stage) => ({
+              ...stage,
+              leads: stage.leads.map((item) =>
+                item.id === lead.id ? { ...item, assignedToId: user.id, assignee: user.name } : item,
+              ),
+            })),
+          );
+          toast.success(`Assigned to ${user.name}`);
+        });
+      },
+      testDrive: () => {
+        const stage = stages.find((item) => item.entryAction === "book_test_drive");
+        if (stage) setPendingTd({ lead, stageId: stage.id });
+      },
+      won: () => setPendingOutcome({ lead, mode: "won" }),
+      lost: () => setPendingOutcome({ lead, mode: "lost" }),
+      copyLink: () => {
+        void navigator.clipboard
+          .writeText(`${window.location.origin}/leads/${lead.id}`)
+          .then(() => toast.success("Lead link copied"))
+          .catch(() => toast.error("Couldn't copy the lead link"));
+      },
+    };
+  }
+
+  function confirmOutcome(reason?: string) {
+    if (!pendingOutcome) return;
+    const { lead, mode } = pendingOutcome;
+    setPendingOutcome(null);
+    startTransition(async () => {
+      try {
+        const formData = new FormData();
+        if (mode === "won") {
+          formData.set("returnTo", "/leads");
+          await markWon(lead.id, formData);
+        } else {
+          formData.set("lostReason", reason ?? "");
+          await markLost(lead.id, formData);
+        }
+        removeLead(lead.id);
+        toast.success(`${lead.name} marked ${mode}`);
+      } catch {
+        toast.error(`Couldn't mark ${lead.name} ${mode}`);
       }
     });
   }
@@ -653,7 +969,14 @@ export default function KanbanBoard({
           className="flex snap-x snap-mandatory select-none gap-4 overflow-x-auto pb-3 pt-1 [scrollbar-gutter:stable]"
         >
           {visibleStages.map((stage) => (
-            <Column key={stage.id} stage={stage} />
+            <Column
+              key={stage.id}
+              stage={stage}
+              stages={stages}
+              users={users}
+              permissions={permissions}
+              getActions={getActions}
+            />
           ))}
         </div>
         <DragOverlay>{activeLead && <LeadCard lead={activeLead} dragging />}</DragOverlay>
@@ -664,8 +987,80 @@ export default function KanbanBoard({
           onCancel={() => setPendingTd(null)}
           onConfirm={confirmTestDrive}
         />
+        <LeadOutcomeDialog
+          key={pendingOutcome ? `${pendingOutcome.lead.id}-${pendingOutcome.mode}` : "closed"}
+          pending={pendingOutcome}
+          onCancel={() => setPendingOutcome(null)}
+          onConfirm={confirmOutcome}
+        />
       </DndContext>
     </>
+  );
+}
+
+function LeadOutcomeDialog({
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  pending: { lead: KanbanLead; mode: "won" | "lost" } | null;
+  onCancel: () => void;
+  onConfirm: (reason?: string) => void;
+}) {
+  const [reason, setReason] = useState("");
+
+  return (
+    <Dialog open={!!pending} onOpenChange={(open) => !open && onCancel()}>
+      <ResponsiveDialogContent className="sm:max-w-md">
+        {pending && (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                {pending.mode === "won" ? (
+                  <Trophy className="size-4 text-emerald-400" />
+                ) : (
+                  <XCircle className="size-4 text-destructive" />
+                )}
+                Mark {pending.lead.name} {pending.mode}?
+              </DialogTitle>
+              <DialogDescription>
+                {pending.mode === "won"
+                  ? "This closes the opportunity as won and creates a customer if one is not already linked."
+                  : "Capture why the opportunity was lost so reporting and future coaching stay useful."}
+              </DialogDescription>
+            </DialogHeader>
+            {pending.mode === "lost" && (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">Lost reason</label>
+                <input
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value)}
+                  className="input"
+                  autoFocus
+                  placeholder="e.g. Bought elsewhere, budget, no response"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && reason.trim()) onConfirm(reason.trim());
+                  }}
+                />
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={onCancel}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant={pending.mode === "lost" ? "destructive" : "default"}
+                disabled={pending.mode === "lost" && !reason.trim()}
+                onClick={() => onConfirm(reason.trim() || undefined)}
+              >
+                Mark {pending.mode}
+              </Button>
+            </div>
+          </>
+        )}
+      </ResponsiveDialogContent>
+    </Dialog>
   );
 }
 
@@ -707,11 +1102,13 @@ function TestDriveDialog({
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <Car className="size-4 text-primary" />
-                Book the test drive
+                {pending.lead.testDrive ? "Reschedule the test drive" : "Book the test drive"}
               </DialogTitle>
               <DialogDescription>
                 <span className="font-medium text-foreground">{pending.lead.name}</span>
-                {" is moving to test drive — capture the details so the appointment isn't lost."}
+                {pending.lead.testDrive
+                  ? " already has a planned test drive. Update the appointment details below."
+                  : " is moving to test drive — capture the details so the appointment isn't lost."}
               </DialogDescription>
             </DialogHeader>
 
