@@ -11,6 +11,7 @@ import { softDeleteRecord } from "@/lib/trash";
 import { topPosition } from "@/lib/leadPos";
 import { triggerSurvey } from "@/lib/surveys";
 import { removeTimelinePin } from "@/lib/timelinePins";
+import { resolveTenantMemberUser } from "@/lib/tenantActor";
 import {
   hasPermission,
   requireLeadAccess,
@@ -53,10 +54,29 @@ async function nextPosition(stageId: string) {
   return (max._max.position ?? 0) + 1;
 }
 
-async function buildTitle(data: { name: string; productId: string | null; color: string | null }) {
+async function buildTitle(data: {
+  name: string;
+  productId: string | null;
+  color: string | null;
+  contactId?: string | null;
+  assignedToId?: string | null;
+}) {
+  if (data.assignedToId && !(await resolveTenantMemberUser(data.assignedToId))) {
+    throw new Error("That team member is not available in this workspace");
+  }
+  if (data.contactId) {
+    const contact = await prisma.contact.findUnique({
+      where: { id: data.contactId },
+      select: { id: true },
+    });
+    if (!contact) throw new Error("That contact is not available in this workspace");
+  }
   if (!data.productId) return data.name;
-  const product = await prisma.product.findUnique({ where: { id: data.productId } });
-  if (!product) return data.name;
+  const product = await prisma.product.findUnique({
+    where: { id: data.productId },
+    select: { name: true },
+  });
+  if (!product) throw new Error("That product is not available in this workspace");
   return [product.name, data.color].filter(Boolean).join(" – ");
 }
 
