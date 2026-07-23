@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 
+// Keep the return type inferred so shortcut icon fields remain required to callers.
 export default function manifest() {
   return {
     // Explicit, stable app identity distinct from the Messages sub-app
