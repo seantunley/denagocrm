@@ -1,5 +1,6 @@
 "use server";
 
+import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import {
   getAccessibleLeadScope,
@@ -20,9 +21,10 @@ import {
   updatePipelineStage,
 } from "@/lib/pipelines";
 import { logAuditStrict } from "@/lib/audit";
-import { basePrisma, prisma } from "@/lib/db";
+import { basePrisma } from "@/lib/db";
 import { parseRands } from "@/lib/format";
 import { parsePipelineStageAction } from "@/lib/pipelineStageActions";
+import { writeTenantId } from "@/lib/tenantWrite";
 
 const str = (formData: FormData, key: string) => {
   const value = String(formData.get(key) ?? "").trim();
@@ -164,11 +166,11 @@ export async function editSalesPipelineStage(id: string, formData: FormData) {
 /** Swap a stage with its neighbour to reorder the pipeline. */
 export async function moveStage(pipelineId: string, stageId: string, direction: "up" | "down") {
   const user = await requirePermission("pipelines.manage");
-  const stages = await listPipelineStages(pipelineId); // ordered by "order" asc
+  const stages = await listPipelineStages(pipelineId);
   const idx = stages.findIndex((s) => s.id === stageId);
   if (idx < 0) return;
   const swapWith = direction === "up" ? idx - 1 : idx + 1;
-  if (swapWith < 0 || swapWith >= stages.length) return; // already at the edge
+  if (swapWith < 0 || swapWith >= stages.length) return;
 
   const ids = stages.map((s) => s.id);
   [ids[idx], ids[swapWith]] = [ids[swapWith], ids[idx]];
@@ -208,18 +210,27 @@ export async function archiveSalesPipeline(id: string, formData: FormData) {
   revalidatePath("/forecast");
 }
 
+type LeadForecastBefore = {
+  probability: number;
+  forecastCategory: string;
+  expectedCloseDate: Date | null;
+  estimatedCostCents: number | null;
+  teamId: string | null;
+};
+
 export async function saveLeadForecast(leadId: string, formData: FormData) {
   const user = await requireLeadAccess(leadId, "forecast.manage");
-  const before = await prisma.lead.findUnique({
-    where: { id: leadId },
-    select: {
-      probability: true,
-      forecastCategory: true,
-      expectedCloseDate: true,
-      estimatedCostCents: true,
-      teamId: true,
-    },
-  });
+  const tenantId = writeTenantId();
+  const tenantScope = tenantId
+    ? Prisma.sql`AND "tenantId" = ${tenantId}`
+    : Prisma.empty;
+  const beforeRows = await basePrisma.$queryRaw<LeadForecastBefore[]>`
+    SELECT "probability", "forecastCategory", "expectedCloseDate", "estimatedCostCents", "teamId"
+    FROM "Lead"
+    WHERE "id" = ${leadId} AND "deletedAt" IS NULL ${tenantScope}
+    LIMIT 1
+  `;
+  const before = beforeRows[0] ?? null;
   if (!before) throw new Error("Lead not found");
 
   const teamId = str(formData, "teamId");
