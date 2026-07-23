@@ -23,11 +23,16 @@ test("lead pipeline activity summaries stay bounded", () => {
 test("lead pipeline preserves production card signals", () => {
   assert.match(pageSource, /signing:\s*signingByLead\.get\(lead\.id\)/);
   assert.match(pageSource, /stage\.order < testDriveStage\.order/);
-  assert.match(pageSource, /stageActionById\.get\(stage\.id\) === "book_test_drive"/);
+  assert.match(pageSource, /stage\.entryAction === "book_test_drive"/);
   assert.match(boardSource, /target\?\.entryAction === "book_test_drive"/);
   assert.doesNotMatch(boardSource, /\/test\/i\.test\(target\.name\)/);
   assert.match(boardSource, /follow-up automation/);
   assert.match(boardSource, /lead\.signing\.label/);
+});
+
+test("lead board staff picker stays inside the active tenant", () => {
+  assert.match(pageSource, /listTenantStaff\(\)/);
+  assert.doesNotMatch(pageSource, /prisma\.user\.findMany/);
 });
 
 test("needs-attention filtering includes overdue work", () => {
