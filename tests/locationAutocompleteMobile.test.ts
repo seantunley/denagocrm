@@ -23,6 +23,11 @@ test("mobile place suggestions use the supported Autocomplete Data API", () => {
   assert.match(source, /touch-manipulation/);
 });
 
+test("autocomplete location bias stays inside Google's circle radius limit", () => {
+  assert.match(source, /CAPE_TOWN_AUTOCOMPLETE_RADIUS_METRES = 50_000/);
+  assert.doesNotMatch(source, /radius:\s*100_000/);
+});
+
 test("ordinary browser referrers are preserved", () => {
   assert.doesNotMatch(source, /auth_referrer_policy/);
 });
