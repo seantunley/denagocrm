@@ -129,9 +129,22 @@ export async function sendCampaign(
       recipientCount: contacts.length,
       status: "queued",
       createdById: user.id,
-      recipients: { create: contacts.map((c) => ({ contactId: c.id, token: newToken() })) },
     },
   });
+  try {
+    // Flat child writes are required by the tenant guard: nested relation writes
+    // cannot be tenant-stamped safely while composite tenant FKs are staged.
+    await prisma.campaignRecipient.createMany({
+      data: contacts.map((contact) => ({
+        campaignId: campaign.id,
+        contactId: contact.id,
+        token: newToken(),
+      })),
+    });
+  } catch (error) {
+    await prisma.campaign.delete({ where: { id: campaign.id } }).catch(() => {});
+    throw error;
+  }
 
   await sendCampaignBatch(campaign.id, 60);
   await logAudit({

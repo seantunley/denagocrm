@@ -428,6 +428,13 @@ model Campaign {
   recipientCount Int       @default(0)
   sentCount      Int       @default(0)
   failedCount    Int       @default(0)
+  suppressedCount Int      @default(0)
+  deliveredCount Int       @default(0)
+  deferredCount  Int       @default(0)
+  bouncedCount   Int       @default(0)
+  droppedCount   Int       @default(0)
+  complaintCount Int       @default(0)
+  unsubscribeCount Int     @default(0)
   openCount      Int       @default(0) // unique recipients who opened
   clickCount     Int       @default(0) // unique recipients who clicked
   status         String    @default("draft") // draft | queued | sending | sent
@@ -436,6 +443,7 @@ model Campaign {
   createdById    String?
   createdBy      User?     @relation("CampaignCreator", fields: [createdById], references: [id])
   recipients     CampaignRecipient[]
+  events         CampaignEvent[]
 
   @@index([status])
   @@index([tenantId])
@@ -449,16 +457,55 @@ model CampaignRecipient {
   contactId  String
   contact    Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
   token      String    @unique // tracking/unsubscribe token
-  status     String    @default("queued") // queued | sent | failed
+  status     String    @default("queued") // queued | processing | accepted | processed | sent | delivered | deferred | bounced | dropped | failed | suppressed
+  claimId    String?
+  processingAt DateTime?
+  attemptCount Int     @default(0)
+  provider   String?
+  providerMessageId String?
   sentAt     DateTime?
+  processedAt DateTime?
+  deliveredAt DateTime?
+  deferredAt DateTime?
+  bouncedAt DateTime?
+  droppedAt DateTime?
+  complainedAt DateTime?
+  unsubscribedAt DateTime?
   openedAt   DateTime?
   openCount  Int       @default(0)
   clickedAt  DateTime?
   clickCount Int       @default(0)
   error      String?
+  events     CampaignEvent[]
 
   @@index([campaignId])
   @@index([status])
+  @@index([claimId])
+  @@index([providerMessageId])
+  @@index([tenantId])
+}
+
+model CampaignEvent {
+  id              String   @id @default(cuid())
+  tenantId        String?
+  campaignId      String
+  campaign        Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  recipientId     String
+  recipient       CampaignRecipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  provider        String
+  providerEventId String
+  type            String
+  occurredAt      DateTime
+  url             String?
+  reason          String?
+  response        String?
+  smtpCode        String?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+
+  @@unique([provider, providerEventId])
+  @@index([campaignId, type, occurredAt])
+  @@index([recipientId, type])
   @@index([tenantId])
 }
 
@@ -2212,6 +2259,19 @@ model TenantApiKey {
   revokedAt  DateTime?
 
   @@index([tenantId])
+}
+
+// Per-tenant outbound email credentials. Kept separate from legacy AppSetting
+// because AppSetting.key is still globally unique during the staged tenant rollout.
+model TenantEmailProvider {
+  tenantId         String   @id
+  provider         String   @default("sendgrid")
+  apiKey           String?
+  fromAddress      String?
+  unsubscribeEmail String?
+  webhookPublicKey String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
 
 // Inbound channel endpoint → owning tenant (Phase C 2b-C3). One row per external

@@ -5,6 +5,8 @@ import { sendSms } from "./sms";
 import { htmlToText } from "./signature";
 import { computeDue } from "./serviceDue";
 import { contactName } from "./format";
+import { canContactPerson } from "./consentGuard";
+import { getTenantEmailProviderConfig } from "./emailProviderConfig";
 
 export type SegmentCriteria = {
   source?: string;
@@ -52,8 +54,24 @@ export async function resolveContacts(criteria: SegmentCriteria, channel: string
       })
     );
   }
-  if (channel === "sms") return list.filter((c) => c.whatsapp || c.phone);
-  if (channel === "email") return list.filter((c) => c.email);
+  if (channel === "sms") {
+    const seen = new Set<string>();
+    return list.filter((c) => {
+      const address = String(c.whatsapp || c.phone || "").replace(/\D/g, "");
+      if (!address || seen.has(address)) return false;
+      seen.add(address);
+      return true;
+    });
+  }
+  if (channel === "email") {
+    const seen = new Set<string>();
+    return list.filter((c) => {
+      const address = String(c.email || "").trim().toLowerCase();
+      if (!address || seen.has(address)) return false;
+      seen.add(address);
+      return true;
+    });
+  }
   return list; // "any" — matching opted-in contacts regardless of channel
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -98,7 +116,7 @@ export function newToken() {
 
 async function finalizeIfDone(campaignId: string) {
   const remaining = await prisma.campaignRecipient.count({
-    where: { campaignId, status: "queued" },
+    where: { campaignId, status: { in: ["queued", "processing"] } },
   });
   if (remaining === 0) {
     await prisma.campaign.update({
@@ -106,6 +124,41 @@ async function finalizeIfDone(campaignId: string) {
       data: { status: "sent", sentAt: new Date() },
     });
   }
+}
+
+async function claimCampaignRecipients(campaignId: string, limit: number) {
+  const staleBefore = new Date(Date.now() - 15 * 60 * 1000);
+  await prisma.campaignRecipient.updateMany({
+    where: { campaignId, status: "processing", processingAt: { lt: staleBefore } },
+    data: { status: "queued", claimId: null, processingAt: null },
+  });
+  const candidates = await prisma.campaignRecipient.findMany({
+    where: { campaignId, status: "queued" },
+    select: { id: true },
+    take: limit,
+    orderBy: { id: "asc" },
+  });
+  if (candidates.length === 0) return [];
+
+  const claimId = crypto.randomUUID();
+  await prisma.campaignRecipient.updateMany({
+    where: {
+      id: { in: candidates.map((candidate) => candidate.id) },
+      campaignId,
+      status: "queued",
+    },
+    data: {
+      status: "processing",
+      claimId,
+      processingAt: new Date(),
+      attemptCount: { increment: 1 },
+    },
+  });
+  return prisma.campaignRecipient.findMany({
+    where: { campaignId, claimId, status: "processing" },
+    include: { contact: true },
+    orderBy: { id: "asc" },
+  });
 }
 
 /**
@@ -116,11 +169,7 @@ async function finalizeIfDone(campaignId: string) {
 export async function sendCampaignBatch(campaignId: string, limit = 80): Promise<number> {
   const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
   if (!campaign) return 0;
-  const recipients = await prisma.campaignRecipient.findMany({
-    where: { campaignId, status: "queued" },
-    include: { contact: true },
-    take: limit,
-  });
+  const recipients = await claimCampaignRecipients(campaignId, limit);
   if (recipients.length === 0) {
     await finalizeIfDone(campaignId);
     return 0;
@@ -131,16 +180,54 @@ export async function sendCampaignBatch(campaignId: string, limit = 80): Promise
 
   let sent = 0;
   let failed = 0;
+  let suppressed = 0;
+  const emailProvider = await getTenantEmailProviderConfig();
+  const unsubscribeMailbox = emailProvider.unsubscribeEmail || emailProvider.from;
   for (const r of recipients) {
     const c = r.contact;
+    const channel = campaign.channel === "email" ? "email" : "sms";
+    if (!(await canContactPerson({ contactId: c.id, channel, purpose: "marketing" }))) {
+      suppressed++;
+      await prisma.campaignRecipient.update({
+        where: { id: r.id },
+        data: {
+          status: "suppressed",
+          claimId: null,
+          processingAt: null,
+          error: "Consent withdrawn before send",
+        },
+      });
+      continue;
+    }
     const vars = { first_name: c.firstName, name: contactName(c) };
-    let res: { ok: boolean; error?: string };
+    let res: {
+      ok: boolean;
+      error?: string;
+      provider?: "sendgrid" | "smtp";
+      messageId?: string;
+    };
     if (campaign.channel === "email") {
       const subject = renderTemplate(campaign.subject ?? "", vars);
       const personalized = renderTemplate(campaign.htmlBody ?? campaign.body, vars);
       const html = buildTrackedEmail(personalized, r.token);
       const text = renderTemplate(campaign.body, vars);
-      res = await sendEmail({ to: c.email!, subject, text, html });
+      const unsubscribeUrl = `${appBaseUrl()}/api/unsubscribe/${r.token}`;
+      const mailboxMatch = unsubscribeMailbox?.match(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/);
+      const listUnsubscribe = [
+        mailboxMatch ? `<mailto:${mailboxMatch[0]}?subject=unsubscribe>` : null,
+        `<${unsubscribeUrl}>`,
+      ].filter(Boolean).join(", ");
+      res = await sendEmail({
+        to: c.email!,
+        subject,
+        text,
+        html,
+        headers: {
+          "List-Unsubscribe": listUnsubscribe,
+          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        },
+        campaign: { campaignId: campaign.id, recipientId: r.id },
+      });
     } else {
       res = await sendSms((c.whatsapp ?? c.phone)!, renderTemplate(campaign.body, vars));
     }
@@ -148,19 +235,38 @@ export async function sendCampaignBatch(campaignId: string, limit = 80): Promise
       sent++;
       await prisma.campaignRecipient.update({
         where: { id: r.id },
-        data: { status: "sent", sentAt: new Date() },
+        data: {
+          status: res.provider === "sendgrid" ? "accepted" : "sent",
+          sentAt: new Date(),
+          provider: res.provider ?? campaign.channel,
+          providerMessageId: res.messageId,
+          claimId: null,
+          processingAt: null,
+          error: null,
+        },
       });
     } else {
       failed++;
       await prisma.campaignRecipient.update({
         where: { id: r.id },
-        data: { status: "failed", error: (res.error ?? "send failed").slice(0, 200) },
+        data: {
+          status: "failed",
+          provider: res.provider ?? campaign.channel,
+          providerMessageId: res.messageId,
+          claimId: null,
+          processingAt: null,
+          error: (res.error ?? "send failed").slice(0, 200),
+        },
       });
     }
   }
   await prisma.campaign.update({
     where: { id: campaignId },
-    data: { sentCount: { increment: sent }, failedCount: { increment: failed } },
+    data: {
+      sentCount: { increment: sent },
+      failedCount: { increment: failed },
+      suppressedCount: { increment: suppressed },
+    },
   });
   await finalizeIfDone(campaignId);
   return recipients.length;

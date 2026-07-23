@@ -16,6 +16,7 @@ import { buildSignature } from "@/lib/signature";
 import { AddUserForm, ChangePasswordForm } from "@/components/TeamForms";
 import {
   saveSmtpSettings,
+  saveSendGridSettings,
   saveServiceReminderSettings,
   saveLifecycleSettings,
   createTemplate,
@@ -43,6 +44,7 @@ import AutomationsPage from "../automations/page";
 import ProductsPage from "../products/page";
 import { addStockLabel, removeStockLabel } from "@/app/actions/stock";
 import { getStockLabels } from "@/lib/stockLabels";
+import { getTenantEmailProviderConfig } from "@/lib/emailProviderConfig";
 import {
   SETTINGS_NAV_GROUPS,
   SETTINGS_TABS,
@@ -79,7 +81,7 @@ export default async function SettingsPage({
     ? "overview"
     : "account";
 
-  const [stages, users, settings, templates] = await Promise.all([
+  const [stages, users, settings, templates, emailProvider] = await Promise.all([
     prisma.pipelineStage.findMany({
       orderBy: { order: "asc" },
       include: { _count: { select: { leads: true } } },
@@ -87,6 +89,7 @@ export default async function SettingsPage({
     prisma.user.findMany({ orderBy: { createdAt: "asc" } }),
     prisma.appSetting.findMany(),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
+    getTenantEmailProviderConfig(),
   ]);
   const stockLabels = await getStockLabels();
   const setting = (key: string) => {
@@ -561,6 +564,82 @@ export default async function SettingsPage({
       {tab === "email" && (
         <div className="max-w-3xl">
           <div className="card p-0 divide-y divide-border/50">
+            <Row
+              title="Twilio SendGrid"
+              status={
+                emailProvider.apiKey && emailProvider.from ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                ) : (
+                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
+                )
+              }
+            >
+              <p className="text-xs text-muted-foreground mb-4">
+                Recommended for campaigns. SendGrid is preferred when configured; SMTP remains
+                available as the fallback for normal email.
+              </p>
+              <form action={saveSendGridSettings} className="grid md:grid-cols-2 gap-3">
+                <div className="md:col-span-2">
+                  <label className="label">SendGrid API key</label>
+                  <div className="flex gap-2">
+                    <input
+                      name="apiKey"
+                      type="password"
+                      autoComplete="new-password"
+                      className="input flex-1"
+                      placeholder={emailProvider.apiKey ? "•••••••• saved — leave blank to keep" : "SG.…"}
+                    />
+                    {emailProvider.apiKey ? (
+                      <ClearSecret settingKey="SENDGRID_API_KEY" label="SendGrid API key" />
+                    ) : null}
+                  </div>
+                </div>
+                <div>
+                  <label className="label">Verified from identity</label>
+                  <input
+                    name="from"
+                    className="input"
+                    defaultValue={emailProvider.from ?? ""}
+                    placeholder={'"Denago Cape Town" <news@example.com>'}
+                  />
+                </div>
+                <div>
+                  <label className="label">Unsubscribe mailbox</label>
+                  <input
+                    name="unsubscribeEmail"
+                    type="email"
+                    className="input"
+                    defaultValue={emailProvider.unsubscribeEmail ?? ""}
+                    placeholder="unsubscribe@example.com"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="label">Signed Event Webhook public key</label>
+                  <div className="flex gap-2 items-start">
+                    <textarea
+                      name="webhookPublicKey"
+                      rows={3}
+                      className="input flex-1 font-mono text-xs"
+                      placeholder={emailProvider.webhookPublicKey ? "Public key saved — leave blank to keep" : "Paste the SendGrid verification key"}
+                    />
+                    {emailProvider.webhookPublicKey ? (
+                      <ClearSecret
+                        settingKey="SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY"
+                        label="SendGrid webhook public key"
+                      />
+                    ) : null}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    Configure SendGrid’s signed Event Webhook to POST to{" "}
+                    <code>/api/webhooks/sendgrid</code>.
+                  </p>
+                </div>
+                <div className="md:col-span-2">
+                  <button className="btn-primary">Save SendGrid settings</button>
+                </div>
+              </form>
+            </Row>
+
             <Row
               title="Email sending (SMTP)"
               status={

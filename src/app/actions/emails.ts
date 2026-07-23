@@ -9,6 +9,7 @@ import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
 import { buildSignature, buildEmailHtml, htmlToText } from "@/lib/signature";
 import { readFile } from "@/lib/storage";
+import { saveTenantEmailProviderConfig } from "@/lib/emailProviderConfig";
 
 export type SendEmailState = { ok?: string; error?: string };
 
@@ -137,6 +138,18 @@ export async function saveSmtpSettings(formData: FormData) {
   for (const [key, value] of Object.entries(entries)) {
     await putSetting(key, value);
   }
+  revalidatePath("/settings");
+}
+
+export async function saveSendGridSettings(formData: FormData) {
+  const user = await requireOwner();
+  await saveTenantEmailProviderConfig({
+    userId: user.id,
+    apiKey: String(formData.get("apiKey") ?? "").trim() || undefined,
+    from: String(formData.get("from") ?? "").trim(),
+    unsubscribeEmail: String(formData.get("unsubscribeEmail") ?? "").trim(),
+    webhookPublicKey: String(formData.get("webhookPublicKey") ?? "").trim() || undefined,
+  });
   revalidatePath("/settings");
 }
 

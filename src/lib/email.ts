@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import { getSetting } from "./settings";
 import { formatZAR } from "./format";
+import { getTenantEmailProviderConfig } from "./emailProviderConfig";
 
 export type SmtpConfig = {
   host: string;
@@ -9,6 +10,28 @@ export type SmtpConfig = {
   user: string | null;
   pass: string | null;
   from: string;
+};
+
+export type SendGridConfig = {
+  apiKey: string;
+  from: string;
+};
+
+export type EmailSendResult = {
+  ok: boolean;
+  error?: string;
+  provider?: "sendgrid" | "smtp";
+  messageId?: string;
+};
+
+type EmailInput = {
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
+  attachments?: { filename: string; content: Buffer; contentType?: string }[];
+  headers?: Record<string, string>;
+  campaign?: { campaignId: string; recipientId: string };
 };
 
 export async function getSmtpConfig(): Promise<SmtpConfig | null> {
@@ -32,7 +55,17 @@ export async function getSmtpConfig(): Promise<SmtpConfig | null> {
 }
 
 export async function isSmtpConfigured(): Promise<boolean> {
-  return (await getSmtpConfig()) != null;
+  return (await getSendGridConfig()) != null || (await getSmtpConfig()) != null;
+}
+
+export async function getSendGridConfig(): Promise<SendGridConfig | null> {
+  const [configured, smtpFrom] = await Promise.all([
+    getTenantEmailProviderConfig(),
+    getSetting("SMTP_FROM"),
+  ]);
+  const from = configured.from || smtpFrom;
+  if (!configured.apiKey || !from) return null;
+  return { apiKey: configured.apiKey, from };
 }
 
 /**
@@ -47,13 +80,91 @@ function fromHeader(config: SmtpConfig): string {
   return from;
 }
 
-export async function sendEmail(input: {
-  to: string;
-  subject: string;
-  text: string;
-  html?: string;
-  attachments?: { filename: string; content: Buffer; contentType?: string }[];
-}): Promise<{ ok: boolean; error?: string }> {
+function sendGridAddress(value: string): { email: string; name?: string } {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(?:"?([^"<]+?)"?\s*)?<([^>]+)>$/);
+  if (!match) return { email: trimmed };
+  const name = match[1]?.trim();
+  return { email: match[2].trim(), ...(name ? { name } : {}) };
+}
+
+export function buildSendGridPayload(input: EmailInput, from: string) {
+  const content = [{ type: "text/plain", value: input.text }];
+  if (input.html) content.push({ type: "text/html", value: input.html });
+  return {
+    personalizations: [{
+      to: [sendGridAddress(input.to)],
+      subject: input.subject,
+      ...(input.campaign
+        ? {
+            custom_args: {
+              crm_campaign_id: input.campaign.campaignId,
+              crm_recipient_id: input.campaign.recipientId,
+            },
+          }
+        : {}),
+    }],
+    from: sendGridAddress(from),
+    content,
+    ...(input.headers ? { headers: input.headers } : {}),
+    ...(input.attachments?.length
+      ? {
+          attachments: input.attachments.map((attachment) => ({
+            content: attachment.content.toString("base64"),
+            filename: attachment.filename,
+            type: attachment.contentType,
+            disposition: "attachment",
+          })),
+        }
+      : {}),
+    categories: input.campaign ? ["crm_campaign"] : ["crm_transactional"],
+    tracking_settings: {
+      click_tracking: { enable: false, enable_text: false },
+      open_tracking: { enable: false },
+      subscription_tracking: { enable: false },
+    },
+  };
+}
+
+async function sendWithSendGrid(
+  input: EmailInput,
+  config: SendGridConfig,
+): Promise<EmailSendResult> {
+  const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(buildSendGridPayload(input, config.from)),
+  });
+  const messageId = response.headers.get("x-message-id") ?? undefined;
+  if (response.ok) return { ok: true, provider: "sendgrid", messageId };
+  const detail = (await response.text()).slice(0, 500);
+  return {
+    ok: false,
+    provider: "sendgrid",
+    messageId,
+    error: detail || `SendGrid rejected the message (${response.status}).`,
+  };
+}
+
+export async function sendEmail(input: EmailInput): Promise<EmailSendResult> {
+  const sendGrid = await getSendGridConfig();
+  if (sendGrid) {
+    try {
+      return await sendWithSendGrid(input, sendGrid);
+    } catch (err) {
+      const { logError } = await import("./errorLog");
+      await logError("sendgrid", err, `to: ${input.to} — ${input.subject}`);
+      return {
+        ok: false,
+        provider: "sendgrid",
+        error: err instanceof Error ? err.message : "Failed to send email",
+      };
+    }
+  }
+
   const config = await getSmtpConfig();
   if (!config) return { ok: false, error: "SMTP is not configured (see Settings → Email)." };
   try {
@@ -63,15 +174,16 @@ export async function sendEmail(input: {
       secure: config.secure,
       auth: config.user ? { user: config.user, pass: config.pass ?? "" } : undefined,
     });
-    await transporter.sendMail({
+    const info = await transporter.sendMail({
       from: fromHeader(config),
       to: input.to,
       subject: input.subject,
       text: input.text,
       html: input.html,
       attachments: input.attachments,
+      headers: input.headers,
     });
-    return { ok: true };
+    return { ok: true, provider: "smtp", messageId: info.messageId };
   } catch (err) {
     const { logError } = await import("./errorLog");
     await logError("smtp", err, `to: ${input.to} — ${input.subject}`);

@@ -33,9 +33,29 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
   if (!campaign) notFound();
 
   const isEmail = campaign.channel === "email";
-  const openRate = campaign.sentCount > 0 ? Math.round((campaign.openCount / campaign.sentCount) * 100) : 0;
-  const clickRate = campaign.sentCount > 0 ? Math.round((campaign.clickCount / campaign.sentCount) * 100) : 0;
-  const queued = campaign.recipientCount - campaign.sentCount - campaign.failedCount;
+  const deliveredBase = campaign.deliveredCount || campaign.sentCount;
+  const deliveryRate = campaign.sentCount > 0
+    ? Math.round((campaign.deliveredCount / campaign.sentCount) * 100)
+    : 0;
+  const openRate = deliveredBase > 0 ? Math.round((campaign.openCount / deliveredBase) * 100) : 0;
+  const clickRate = deliveredBase > 0 ? Math.round((campaign.clickCount / deliveredBase) * 100) : 0;
+  const queued = Math.max(
+    0,
+    campaign.recipientCount - campaign.sentCount - campaign.failedCount - campaign.suppressedCount,
+  );
+  const clickEvents = isEmail
+    ? await prisma.campaignEvent.findMany({
+        where: { campaignId: campaign.id, type: "click", url: { not: null } },
+        select: { url: true },
+        take: 5_000,
+      })
+    : [];
+  const topLinks = [...clickEvents.reduce((counts, event) => {
+    if (event.url) counts.set(event.url, (counts.get(event.url) ?? 0) + 1);
+    return counts;
+  }, new Map<string, number>())]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
 
   return (
     <EntityDetailShell
@@ -49,16 +69,22 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
       facts={[
         { label: "Audience", value: campaign.audience },
         { label: "Recipients", value: campaign.recipientCount },
-        { label: "Sent", value: campaign.sentCount },
+        { label: "Accepted", value: campaign.sentCount },
+        { label: "Delivered", value: campaign.deliveredCount },
         { label: "Failed", value: campaign.failedCount },
       ]}
     >
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat label="Recipients" value={String(campaign.recipientCount)} sub={queued > 0 ? `${queued} still queued` : "all processed"} />
-        <Stat label="Sent" value={String(campaign.sentCount)} sub={campaign.failedCount ? `${campaign.failedCount} failed` : undefined} />
+        <Stat label="Accepted" value={String(campaign.sentCount)} sub={campaign.suppressedCount ? `${campaign.suppressedCount} suppressed` : undefined} />
+        {isEmail && <Stat label="Delivered" value={`${deliveryRate}%`} sub={`${campaign.deliveredCount} confirmed`} />}
         {isEmail && <Stat label="Opened" value={`${openRate}%`} sub={`${campaign.openCount} recipients`} />}
         {isEmail && <Stat label="Clicked" value={`${clickRate}%`} sub={`${campaign.clickCount} recipients`} />}
+        {isEmail && <Stat label="Bounced" value={String(campaign.bouncedCount)} sub={`${campaign.droppedCount} dropped`} />}
+        {isEmail && <Stat label="Complaints" value={String(campaign.complaintCount)} />}
+        {isEmail && <Stat label="Unsubscribed" value={String(campaign.unsubscribeCount)} />}
+        {!isEmail && <Stat label="Sent" value={String(campaign.sentCount)} sub={campaign.failedCount ? `${campaign.failedCount} failed` : undefined} />}
       </div>
 
       {isEmail && (
@@ -66,6 +92,22 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           Open rates are approximate — some mail apps (e.g. Apple Mail Privacy Protection) auto-load
           the tracking pixel, and image-blocking hides it. Clicks are the reliable signal.
         </p>
+      )}
+
+      {isEmail && topLinks.length > 0 && (
+        <div className="card">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
+            Top clicked links
+          </p>
+          <div className="space-y-2">
+            {topLinks.map(([url, count]) => (
+              <div key={url} className="flex items-center gap-3 text-sm">
+                <span className="min-w-0 flex-1 truncate" title={url}>{url}</span>
+                <span className="tabular-nums text-muted-foreground">{count} clicks</span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {isEmail && campaign.htmlBody && (
@@ -99,7 +141,15 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
                   </Link>
                 </td>
                 <td>
-                  <StatusPill tone={r.status === "sent" ? "success" : r.status === "failed" ? "danger" : "neutral"}>
+                  <StatusPill tone={
+                    ["sent", "delivered"].includes(r.status)
+                      ? "success"
+                      : ["failed", "bounced", "dropped"].includes(r.status)
+                        ? "danger"
+                        : ["accepted", "processed", "deferred"].includes(r.status)
+                          ? "info"
+                          : "neutral"
+                  }>
                     {r.status}
                   </StatusPill>
                   {r.status === "failed" && r.error ? (

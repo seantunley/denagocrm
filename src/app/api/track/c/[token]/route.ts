@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { appBaseUrl } from "@/lib/campaigns";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveCampaignRecipientTenant } from "@/lib/tokenTenant";
+import crypto from "node:crypto";
 
 /** Click-tracking redirect: records a click, then forwards to the real URL. */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
@@ -17,21 +18,43 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
     async () => {
       const r = await prisma.campaignRecipient.findUnique({ where: { token } });
       if (r) {
-        const firstClick = !r.clickedAt;
-        await prisma.campaignRecipient.update({
-          where: { id: r.id },
-          data: {
-            clickCount: { increment: 1 },
-            clickedAt: r.clickedAt ?? new Date(),
-            openedAt: r.openedAt ?? new Date(), // a click implies an open
-          },
+        const now = new Date();
+        const firstClick = await prisma.campaignRecipient.updateMany({
+          where: { id: r.id, clickedAt: null },
+          data: { clickCount: { increment: 1 }, clickedAt: now },
         });
-        if (firstClick) {
+        if (firstClick.count === 0) {
+          await prisma.campaignRecipient.update({
+            where: { id: r.id },
+            data: { clickCount: { increment: 1 } },
+          });
+        } else {
           await prisma.campaign.update({
             where: { id: r.campaignId },
             data: { clickCount: { increment: 1 } },
           });
         }
+        const firstOpen = await prisma.campaignRecipient.updateMany({
+          where: { id: r.id, openedAt: null },
+          data: { openedAt: now }, // a click implies an open
+        });
+        if (firstOpen.count > 0) {
+          await prisma.campaign.update({
+            where: { id: r.campaignId },
+            data: { openCount: { increment: 1 } },
+          });
+        }
+        await prisma.campaignEvent.create({
+          data: {
+            campaignId: r.campaignId,
+            recipientId: r.id,
+            provider: "crm",
+            providerEventId: `click-${crypto.randomUUID()}`,
+            type: "click",
+            occurredAt: now,
+            url: safe,
+          },
+        });
       }
     },
     () => undefined,

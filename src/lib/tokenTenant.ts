@@ -51,6 +51,17 @@ export async function resolveCampaignRecipientTenant(
   return row ? { tenantId: row.tenantId } : null;
 }
 
+/** Owning tenant of a provider campaign event keyed by our opaque recipient id. */
+export async function resolveCampaignRecipientIdTenant(
+  recipientId: string,
+): Promise<{ tenantId: string | null } | null> {
+  const row = await basePrisma.campaignRecipient.findUnique({
+    where: { id: recipientId },
+    select: { tenantId: true },
+  });
+  return row ? { tenantId: row.tenantId } : null;
+}
+
 /** Owning tenant of a public survey-response token (page load + submission). */
 export async function resolveSurveyResponseTenant(
   token: string,

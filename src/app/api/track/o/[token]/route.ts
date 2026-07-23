@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveCampaignRecipientTenant } from "@/lib/tokenTenant";
+import crypto from "node:crypto";
 
 // 1x1 transparent GIF
 const PIXEL = Buffer.from(
@@ -20,17 +21,32 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
     async () => {
       const r = await prisma.campaignRecipient.findUnique({ where: { token } });
       if (r) {
-        const firstOpen = !r.openedAt;
-        await prisma.campaignRecipient.update({
-          where: { id: r.id },
-          data: { openCount: { increment: 1 }, openedAt: r.openedAt ?? new Date() },
+        const now = new Date();
+        const firstOpen = await prisma.campaignRecipient.updateMany({
+          where: { id: r.id, openedAt: null },
+          data: { openCount: { increment: 1 }, openedAt: now },
         });
-        if (firstOpen) {
+        if (firstOpen.count === 0) {
+          await prisma.campaignRecipient.update({
+            where: { id: r.id },
+            data: { openCount: { increment: 1 } },
+          });
+        } else {
           await prisma.campaign.update({
             where: { id: r.campaignId },
             data: { openCount: { increment: 1 } },
           });
         }
+        await prisma.campaignEvent.create({
+          data: {
+            campaignId: r.campaignId,
+            recipientId: r.id,
+            provider: "crm",
+            providerEventId: `open-${crypto.randomUUID()}`,
+            type: "open",
+            occurredAt: now,
+          },
+        });
       }
     },
     () => undefined,

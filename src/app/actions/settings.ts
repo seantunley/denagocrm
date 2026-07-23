@@ -13,6 +13,7 @@ import { logAuditStrict } from "@/lib/audit";
 import { bumpUserSessionVersion } from "@/lib/userSecurity";
 import { createUserInOwnerTenant } from "@/lib/tenantContext";
 import { deleteFile, saveFile } from "@/lib/storage";
+import { clearTenantEmailProviderSecret } from "@/lib/emailProviderConfig";
 import {
   detectProfileImageMime,
   isValidPhone,
@@ -395,10 +396,14 @@ export async function revealSecret(key: string): Promise<string> {
  *  key). Owner-only, and the key is allowlisted — a server action's bound arg
  *  comes from the client, so we must not delete an arbitrary AppSetting. */
 export async function clearSecret(key: string, _formData?: FormData): Promise<void> {
-  await requireOwner();
+  const user = await requireOwner();
   void _formData;
   if (!isManagedSecret(key)) throw new Error("Not a clearable secret.");
-  await putSetting(key, "");
+  if (key === "SENDGRID_API_KEY" || key === "SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY") {
+    await clearTenantEmailProviderSecret(user.id, key);
+  } else {
+    await putSetting(key, "");
+  }
   revalidatePath("/settings");
 }
 

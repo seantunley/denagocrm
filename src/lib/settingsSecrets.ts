@@ -21,6 +21,8 @@ export const MANAGED_SECRET_KEYS: ReadonlySet<string> = new Set([
   "ELEVENLABS_API_KEY",
   "OPENAI_API_KEY",
   "TELEGRAM_BOT_TOKEN",
+  "SENDGRID_API_KEY",
+  "SENDGRID_EVENT_WEBHOOK_PUBLIC_KEY",
 ]);
 
 /** Secrets WE generate (so regenerating them is safe). Externally-issued
