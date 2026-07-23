@@ -17,7 +17,7 @@ test("lead detail offers Add to Contacts only for an unlinked lead with both per
   assert.match(leadPage, /AddLeadToContactsButton/);
 });
 
-test("Add to Contacts reauthorizes and passes accessible contacts to the converter", () => {
+test("Add to Contacts reauthorizes and passes only accessible contacts to the atomic converter", () => {
   assert.match(
     leadActions,
     /addLeadToContacts[\s\S]+requireLeadAccess\(leadId, "leads\.link_contact"\)[\s\S]+hasPermission\(user, "contacts\.create"\)/,
@@ -27,10 +27,12 @@ test("Add to Contacts reauthorizes and passes accessible contacts to the convert
     leadActions,
     /addLeadToContactsAtomic\(\{[\s\S]+leadId,[\s\S]+userId: user\.id,[\s\S]+accessibleContactIds/,
   );
+  assert.match(leadActions, /action: "lead\.contact_linked"/);
 });
 
-test("the converter explicitly scopes tenant reads and writes", () => {
-  assert.match(conversion, /resolveActingTenant\(userId, tx\)/);
+test("the converter locks and explicitly scopes every database operation", () => {
+  assert.match(conversion, /FOR SHARE OF t, m/);
+  assert.match(conversion, /l\."tenantId" = \$\{tenantId\}[\s\S]+FOR UPDATE/);
   assert.match(conversion, /where: \{ id: leadId, tenantId, deletedAt: null \}/);
   assert.match(conversion, /where: \{ tenantId, deletedAt: null, OR: matchers \}/);
   assert.match(conversion, /tenantId,[\s\S]+firstName:/);
