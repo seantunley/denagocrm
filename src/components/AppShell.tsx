@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -333,8 +333,6 @@ function MobileNavPressTarget({
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = null;
   }
-
-  useEffect(() => cancelTimer, []);
 
   function startPress(event: ReactPointerEvent<HTMLElement>) {
     if (!hasQuickActions || event.button !== 0) return;
