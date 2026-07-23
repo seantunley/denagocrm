@@ -7,14 +7,11 @@ import {
   parsePipelineStageAction,
 } from "../src/lib/pipelineStageActions";
 
-const migration = readFileSync(
-  join(process.cwd(), "prisma", "migrations", "79_pipeline_stage_actions", "migration.sql"),
-  "utf8",
-);
-const pipelineSource = readFileSync(
-  join(process.cwd(), "src", "lib", "pipelines.ts"),
-  "utf8",
-);
+const read = (...parts: string[]) => readFileSync(join(process.cwd(), ...parts), "utf8");
+const migration = read("prisma", "migrations", "79_pipeline_stage_actions", "migration.sql");
+const pipelineSource = read("src", "lib", "pipelines.ts");
+const pipelineActionsSource = read("src", "app", "actions", "pipelines.ts");
+const leadActionsSource = read("src", "app", "actions", "leads.ts");
 
 test("pipeline stage actions accept only supported action identifiers", () => {
   assert.equal(parsePipelineStageAction("book_test_drive"), "book_test_drive");
@@ -31,10 +28,7 @@ test("test-drive stage action explains its required workflow", () => {
 
 test("migration backfills one deterministic open test-drive stage per tenant pipeline", () => {
   assert.match(migration, /ADD COLUMN IF NOT EXISTS "entryAction"/);
-  assert.match(
-    migration,
-    /PARTITION BY candidate\."tenantId", candidate\."pipelineId"/,
-  );
+  assert.match(migration, /PARTITION BY candidate\."tenantId", candidate\."pipelineId"/);
   assert.match(migration, /candidate\."name" ILIKE '%test%'/);
   assert.match(migration, /COALESCE\(candidate\."isClosed", false\) = false/);
   assert.match(migration, /configured\."tenantId" IS NOT DISTINCT FROM candidate\."tenantId"/);
@@ -62,4 +56,24 @@ test("raw pipeline stage helpers obey the active tenant scope", () => {
   assert.match(pipelineSource, /function tenantFilter/);
   assert.match(pipelineSource, /WHERE "id" = \$\{stageId\} \$\{scope\}/);
   assert.match(pipelineSource, /FROM "Lead"[\s\S]+"deletedAt" IS NULL \$\{scope\}/);
+});
+
+test("pipeline action audit reads do not bypass tenant scope", () => {
+  assert.match(pipelineActionsSource, /const before = await getPipelineStage\(id\)/);
+  assert.doesNotMatch(
+    pipelineActionsSource,
+    /SELECT \* FROM "PipelineStage" WHERE "id" = \$\{id\}/,
+  );
+  assert.match(pipelineActionsSource, /const before = await prisma\.lead\.findUnique\(/);
+});
+
+test("lead relation ids are validated even when a custom title is supplied", () => {
+  assert.match(leadActionsSource, /resolveTenantMemberUser\(data\.assignedToId\)/);
+  assert.match(leadActionsSource, /That contact is not available in this workspace/);
+  assert.match(leadActionsSource, /That product is not available in this workspace/);
+  assert.equal(
+    leadActionsSource.match(/const generatedTitle = await buildTitle\(data\);/g)?.length,
+    2,
+  );
+  assert.doesNotMatch(leadActionsSource, /trim\(\) \|\| \(await buildTitle\(data\)\)/);
 });
