@@ -7,6 +7,7 @@ import {
   reopenLead,
   deleteLead,
   linkLeadToContact,
+  addLeadToContacts,
   updateLead,
 } from "@/app/actions/leads";
 import LeadForm from "@/components/LeadForm";
@@ -32,6 +33,8 @@ import { isModuleEnabled } from "@/lib/modules/enabled";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { leadAttribution, isAdClick } from "@/lib/attribution";
+import { hasPermission } from "@/lib/permissions";
+import AddLeadToContactsButton from "@/components/AddLeadToContactsButton";
 import { Car, Check, FileText } from "lucide-react";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
@@ -97,6 +100,10 @@ export default async function LeadDetailPage({
   }));
   const path = `/leads/${lead.id}`;
   const aiOn = await isAiConfigured();
+  const canAddToContacts =
+    !lead.contactId &&
+    (await hasPermission(user, "leads.link_contact")) &&
+    (await hasPermission(user, "contacts.create"));
 
   // Research is stored on the lead itself (Research tab). Legacy research
   // notes (pre-migration) are still filtered out of the comms timeline.
@@ -124,6 +131,11 @@ export default async function LeadDetailPage({
           { label: "Quotes", value: lead.quotes.length },
         ]}
         actions={<>
+          {canAddToContacts && (
+            <form action={addLeadToContacts.bind(null, lead.id)}>
+              <AddLeadToContactsButton />
+            </form>
+          )}
           {lead.status === "open" && (
             <>
               <form action={createQuoteFromLead.bind(null, lead.id)}>
@@ -312,17 +324,27 @@ export default async function LeadDetailPage({
                 content: (
                   <div className="card max-w-xl">
                     <h2 className="font-semibold mb-3">Customer</h2>
-                    {lead.contact && (
+                    {lead.contact ? (
                       <Link
                         href={`/contacts/${lead.contact.id}`}
                         className="text-sm font-medium text-orange-400 hover:underline block mb-3"
                       >
                         {contactName(lead.contact)} →
                       </Link>
-                    )}
+                    ) : canAddToContacts ? (
+                      <div className="mb-4 rounded-lg border border-primary/20 bg-primary/[0.06] p-3">
+                        <p className="text-sm font-medium">This lead is not in Contacts yet.</p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Add their existing lead details as a customer record and link it here.
+                        </p>
+                        <form action={addLeadToContacts.bind(null, lead.id)} className="mt-3">
+                          <AddLeadToContactsButton compact />
+                        </form>
+                      </div>
+                    ) : null}
                     <form action={linkLeadToContact.bind(null, lead.id)} className="space-y-2">
                       <label className="label">
-                        {lead.contact ? "Change linked customer" : "Link to customer"}
+                        {lead.contact ? "Change linked customer" : "Link to an existing customer"}
                       </label>
                       <select
                         name="contactId"

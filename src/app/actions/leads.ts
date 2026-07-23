@@ -500,6 +500,93 @@ export async function linkLeadToContact(leadId: string, formData: FormData) {
   revalidatePath("/leads");
 }
 
+export async function addLeadToContacts(leadId: string) {
+  const user = await requireLeadAccess(leadId, "leads.link_contact");
+  if (!(await hasPermission(user, "contacts.create"))) {
+    throw new Error("You do not have permission to create contacts");
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const lead = await tx.lead.findUniqueOrThrow({ where: { id: leadId } });
+    if (lead.contactId) {
+      return { lead, contactId: lead.contactId, created: false, alreadyLinked: true };
+    }
+
+    const email = lead.email?.trim() || null;
+    const phone = lead.phone?.trim() || null;
+    const matchers = [
+      ...(email ? [{ email: { equals: email, mode: "insensitive" as const } }] : []),
+      ...(phone ? [{ phone }] : []),
+    ];
+    const matches = matchers.length
+      ? await tx.contact.findMany({
+          where: { deletedAt: null, OR: matchers },
+          orderBy: { createdAt: "asc" },
+          take: 2,
+          select: { id: true },
+        })
+      : [];
+
+    let contactId = matches.length === 1 ? matches[0].id : null;
+    let created = false;
+    if (!contactId) {
+      const [firstName, ...rest] = lead.name.trim().split(/\s+/);
+      const contact = await tx.contact.create({
+        data: {
+          firstName: firstName || lead.name,
+          lastName: rest.join(" ") || null,
+          email,
+          phone,
+          source: lead.source,
+          notes: lead.notes,
+          createdById: user.id,
+          ownerId: lead.assignedToId ?? user.id,
+        },
+      });
+      contactId = contact.id;
+      created = true;
+    }
+
+    const linkedLead = await tx.lead.update({
+      where: { id: leadId },
+      data: { contactId },
+    });
+    return { lead: linkedLead, contactId, created, alreadyLinked: false };
+  });
+
+  if (result.alreadyLinked) return;
+
+  if (result.created) {
+    await logAuditStrict({
+      action: "contact.created",
+      summary: `Created contact ${result.lead.name} from lead`,
+      leadId,
+      contactId: result.contactId,
+      user,
+      after: {
+        name: result.lead.name,
+        email: result.lead.email,
+        phone: result.lead.phone,
+        source: result.lead.source,
+      },
+    });
+  }
+  await logAuditStrict({
+    action: "lead.contact_linked",
+    summary: `${result.created ? "Added" : "Linked"} ${result.lead.name} to Contacts`,
+    leadId,
+    contactId: result.contactId,
+    user,
+    before: { contactId: null },
+    after: { contactId: result.contactId },
+  });
+
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/leads");
+  revalidatePath("/contacts");
+  revalidatePath(`/contacts/${result.contactId}`);
+}
+
 export async function deleteLead(leadId: string, formData: FormData) {
   const user = await requireLeadAccess(leadId, "leads.delete");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
