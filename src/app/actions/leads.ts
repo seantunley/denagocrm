@@ -12,7 +12,9 @@ import { topPosition } from "@/lib/leadPos";
 import { triggerSurvey } from "@/lib/surveys";
 import { removeTimelinePin } from "@/lib/timelinePins";
 import { resolveTenantMemberUser } from "@/lib/tenantActor";
+import { addLeadToContactsAtomic } from "@/lib/leadToContact";
 import {
+  getAccessibleContactIds,
   hasPermission,
   requireLeadAccess,
   requireLeadReadAccess,
@@ -506,52 +508,11 @@ export async function addLeadToContacts(leadId: string) {
     throw new Error("You do not have permission to create contacts");
   }
 
-  const result = await prisma.$transaction(async (tx) => {
-    const lead = await tx.lead.findUniqueOrThrow({ where: { id: leadId } });
-    if (lead.contactId) {
-      return { lead, contactId: lead.contactId, created: false, alreadyLinked: true };
-    }
-
-    const email = lead.email?.trim() || null;
-    const phone = lead.phone?.trim() || null;
-    const matchers = [
-      ...(email ? [{ email: { equals: email, mode: "insensitive" as const } }] : []),
-      ...(phone ? [{ phone }] : []),
-    ];
-    const matches = matchers.length
-      ? await tx.contact.findMany({
-          where: { deletedAt: null, OR: matchers },
-          orderBy: { createdAt: "asc" },
-          take: 2,
-          select: { id: true },
-        })
-      : [];
-
-    let contactId = matches.length === 1 ? matches[0].id : null;
-    let created = false;
-    if (!contactId) {
-      const [firstName, ...rest] = lead.name.trim().split(/\s+/);
-      const contact = await tx.contact.create({
-        data: {
-          firstName: firstName || lead.name,
-          lastName: rest.join(" ") || null,
-          email,
-          phone,
-          source: lead.source,
-          notes: lead.notes,
-          createdById: user.id,
-          ownerId: lead.assignedToId ?? user.id,
-        },
-      });
-      contactId = contact.id;
-      created = true;
-    }
-
-    const linkedLead = await tx.lead.update({
-      where: { id: leadId },
-      data: { contactId },
-    });
-    return { lead: linkedLead, contactId, created, alreadyLinked: false };
+  const accessibleContactIds = await getAccessibleContactIds(user);
+  const result = await addLeadToContactsAtomic({
+    leadId,
+    userId: user.id,
+    accessibleContactIds,
   });
 
   if (result.alreadyLinked) return;
