@@ -17,7 +17,7 @@ import { runInTenantScope } from "../src/lib/tenantScope";
 import { establishTenantScopeFromId, establishStaffTenantScope, withTokenTenantScope, withChannelTenantScope, validateInSystemScope, withSystemScope } from "../src/lib/tenantScopeEntry";
 import { runCronPerTenant, activeTenantIds } from "../src/lib/tenantCron";
 import { logAudit } from "../src/lib/audit";
-import { getSetting } from "../src/lib/settings";
+import { getSetting, putSetting } from "../src/lib/settings";
 import { TenantScopeError } from "../src/lib/tenantGuard";
 import { resolvePortalTenant } from "../src/lib/portal";
 import { resolveActingTenant } from "../src/lib/tenantContext";
@@ -112,6 +112,9 @@ const chIdDis = `chDis_${SFX}`;
 const chIdSus = `chSus_${SFX}`;
 const chIdGhost = `chGhost_${SFX}`;
 const cfgKey = `TESTCFG_${SFX}`; // a tenant-scoped AppSetting (review blocker 1 fixture)
+const cfgSetA = `APPSETA_${SFX}`; // AppSetting.tenantId slice: A's setting
+const cfgSetB = `APPSETB_${SFX}`; // AppSetting.tenantId slice: B's setting
+const cfgSetW = `APPSETW_${SFX}`; // AppSetting.tenantId slice: putSetting stamping
 
 let passed = 0;
 let failed = 0;
@@ -793,6 +796,36 @@ async function main() {
     // and are discarded when the disposable CI database is torn down.
     await basePrisma.auditLog.deleteMany({ where: { summary: { in: [auditSummary, sysAuditSummary] } } });
 
+    // ── AppSetting.tenantId slice: AppSetting is now tenant-scoped (its additive
+    //    tenantId column landed), so getSetting/putSetting resolve per the request
+    //    tenant via the guard — a concrete-scope read no longer 500s on a missing
+    //    column, install-global reads use a system-scope bypass, and one tenant's
+    //    setting is invisible to another. `key` stays the @id (one row per key), so
+    //    A and B use DISTINCT keys here. ─────────────────────────────────────────────
+    await basePrisma.$executeRaw`INSERT INTO "AppSetting" ("key","value","tenantId") VALUES (${cfgSetA}, 'valA', ${TENANT_A}), (${cfgSetB}, 'valB', ${TENANT_B})`;
+    const aReadsA = await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => await getSetting(cfgSetA));
+    check("appsetting: scope A reads A's setting (guard no longer 500s on the column)", aReadsA === "valA");
+    const aReadsB = await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => await getSetting(cfgSetB));
+    check("appsetting: scope A cannot read B's setting (guard-scoped, hidden)", aReadsB === null);
+    const bReadsB = await runInTenantScope({ tenantId: TENANT_B, system: false }, async () => await getSetting(cfgSetB));
+    check("appsetting: scope B reads B's setting", bReadsB === "valB");
+    const sysReadsA = await withSystemScope(async () => await getSetting(cfgSetA));
+    const sysReadsB = await withSystemScope(async () => await getSetting(cfgSetB));
+    check("appsetting: system scope reads BOTH tenants' settings (install-global bypass)", sysReadsA === "valA" && sysReadsB === "valB");
+    // A read with NO tenant scope under enforcement fails closed (why C1–C4 read
+    // pre-scope config via validateInSystemScope).
+    await runInTenantScope({ tenantId: null, system: false }, async () => {
+      await expectThrows(
+        "appsetting: read with no tenant scope fails closed (motivates validateInSystemScope)",
+        () => getSetting(cfgSetA),
+        (e) => e instanceof TenantScopeError,
+      );
+    });
+    // putSetting inside scope A stamps the acting tenant onto the new row.
+    await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => { await putSetting(cfgSetW, "written"); });
+    const wRow = await basePrisma.$queryRaw<{ tenantId: string | null }[]>`SELECT "tenantId" FROM "AppSetting" WHERE "key" = ${cfgSetW}`;
+    check("appsetting: putSetting inside scope A stamps tenant A on the created row", wRow[0]?.tenantId === TENANT_A);
+
     // ── DORMANT back-compat (enforcement OFF): C2 keys/OTP/push + C3 channel all run
     //    byte-for-byte the pre-tenancy path. ─────────────────────────────────────────
     __setTenantEnforcingForTests(false);
@@ -810,6 +843,8 @@ async function main() {
       (await prisma.contact.findMany({ where: { id: { in: [idA, idB] } }, select: { id: true } })).map((r) => r.id),
     );
     check("cron: DORMANT runCronPerTenant runs ONCE globally (tenantId null, sees both rows)", dormCron.length === 1 && dormCron[0].tenantId === null && dormCron[0].result.length === 2);
+    // AppSetting: dormant resolves by key regardless of tenant (byte-for-byte legacy).
+    check("appsetting: DORMANT getSetting reads by key regardless of tenant (unchanged)", (await getSetting(cfgSetA)) === "valA");
     __setTenantEnforcingForTests(true);
   } finally {
     __setTenantEnforcingForTests(null);
@@ -829,7 +864,7 @@ async function main() {
     await basePrisma.$executeRaw`DELETE FROM "TenantApiKey" WHERE "tenantId" IN (${TENANT_A}, ${TENANT_SUS}, ${ghostTenant})`;
     await basePrisma.$executeRaw`DELETE FROM "AppSetting" WHERE "key" = 'INTAKE_API_KEY'`;
     await basePrisma.$executeRaw`DELETE FROM "ChannelIdentity" WHERE "id" IN (${chIdA}, ${chIdB}, ${chIdDis}, ${chIdSus}, ${chIdGhost})`;
-    await basePrisma.appSetting.deleteMany({ where: { key: cfgKey } });
+    await basePrisma.appSetting.deleteMany({ where: { key: { in: [cfgKey, cfgSetA, cfgSetB, cfgSetW] } } });
     await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [userAId, userBId, userCId] } } });
     await basePrisma.user.deleteMany({ where: { id: { in: [userAId, userBId, userCId] } } });
     await basePrisma.tenant.deleteMany({ where: { id: { in: [TENANT_A, TENANT_B, TENANT_SUS, chTenantSus] } } });

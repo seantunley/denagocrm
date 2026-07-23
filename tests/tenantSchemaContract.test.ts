@@ -17,11 +17,12 @@ import { GLOBAL_MODELS } from "../src/lib/tenantGuard";
  * KNOWN PENDING: models intentionally not yet resolved. Each MUST be cleared
  * (given a tenantId, or moved to GLOBAL_MODELS) before enforcement is enabled.
  */
-const PENDING = new Set<string>([
-  // Decision 3: AppSetting becomes tenant-scoped — its additive tenantId slice is
-  // a prerequisite step and lands before enforcement.
-  "AppSetting",
-]);
+// Empty: AppSetting — the last pending model — got its additive `tenantId` slice
+// (migration 20260723120000). Every Prisma model is now either global or
+// tenant-scoped, so the guard can be activated without a model failing closed on a
+// missing column. New models must ship a tenantId or join GLOBAL_MODELS (adding
+// back to PENDING is only a temporary, deliberately-visible escape hatch).
+const PENDING = new Set<string>([]);
 
 const schema = readFileSync(
   fileURLToPath(new URL("../prisma/schema.prisma", import.meta.url)),
