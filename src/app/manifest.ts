@@ -28,22 +28,43 @@ export default function manifest(): MetadataRoute.Manifest {
     ],
     shortcuts: [
       {
-        name: "New lead",
-        short_name: "New lead",
+        name: "New Lead",
+        short_name: "New Lead",
         description: "Create a sales opportunity",
         url: "/leads/new?source=pwa-shortcut",
+        icons: [
+          {
+            src: "/icons/shortcut-lead-192.png",
+            sizes: "192x192",
+            type: "image/png",
+          },
+        ],
       },
       {
-        name: "New contact",
-        short_name: "New contact",
+        name: "New Contact",
+        short_name: "New Contact",
         description: "Create a customer contact",
         url: "/contacts/new?source=pwa-shortcut",
+        icons: [
+          {
+            src: "/icons/shortcut-contact-192.png",
+            sizes: "192x192",
+            type: "image/png",
+          },
+        ],
       },
       {
-        name: "Open pipeline",
-        short_name: "Pipeline",
-        description: "Open the leads pipeline",
-        url: "/leads?source=pwa-shortcut",
+        name: "New Activity",
+        short_name: "New Activity",
+        description: "Schedule a customer or team activity",
+        url: "/calendar?quick-create=activity&source=pwa-shortcut",
+        icons: [
+          {
+            src: "/icons/shortcut-activity-192.png",
+            sizes: "192x192",
+            type: "image/png",
+          },
+        ],
       },
     ],
   };

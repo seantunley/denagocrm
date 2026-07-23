@@ -21,6 +21,7 @@ import {
   scheduleQuickActivity,
 } from "@/app/actions/quickCreate";
 import LocationAutocomplete from "@/components/LocationAutocomplete";
+import { readPwaActivityShortcut } from "@/lib/pwaShortcuts";
 
 export type QuickCreateKind = "lead" | "contact" | "calendar" | "quote" | "jobcard" | "vehicle";
 
@@ -33,9 +34,9 @@ export type QuickCreateDefaults = {
 };
 
 const TITLES: Record<QuickCreateKind, string> = {
-  lead: "New lead",
-  contact: "New contact",
-  calendar: "New calendar item",
+  lead: "New Lead",
+  contact: "New Contact",
+  calendar: "New Activity",
   quote: "New quote",
   jobcard: "New job card",
   vehicle: "Register vehicle",
@@ -74,6 +75,17 @@ export default function QuickCreateDialog() {
       setCreateDefaults(detail.defaults ?? {});
     };
     window.addEventListener("denago:quick-create", onOpen);
+
+    const launcherShortcut = readPwaActivityShortcut(window.location.href);
+    if (launcherShortcut) {
+      openQuickCreate("calendar", { revalidate: "/calendar" });
+      window.history.replaceState(
+        window.history.state,
+        "",
+        launcherShortcut.cleanUrl,
+      );
+    }
+
     return () => window.removeEventListener("denago:quick-create", onOpen);
   }, []);
 
