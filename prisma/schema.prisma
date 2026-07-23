@@ -501,10 +501,11 @@ model BotSession {
 }
 
 model PipelineStage {
-  id    String @id @default(cuid())
-  name  String
-  order Int
-  color String @default("#64748b")
+  id          String  @id @default(cuid())
+  name        String
+  order       Int
+  color       String  @default("#64748b")
+  entryAction String? // null | book_test_drive — required workflow on stage entry
 
   // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
   tenantId String?

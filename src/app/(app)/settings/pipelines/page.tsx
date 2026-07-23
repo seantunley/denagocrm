@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { Plus, Zap } from "lucide-react";
 import { requirePermission } from "@/lib/permissions";
 import { listSalesPipelines, listPipelineStages } from "@/lib/pipelines";
 import {
@@ -14,6 +14,8 @@ import ModalTrigger from "@/components/Modal";
 import { buttonVariants } from "@/components/ui/button";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
+import { PIPELINE_STAGE_ACTION_META } from "@/lib/pipelineStageActions";
+import { prisma } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +26,18 @@ export default async function PipelineSettingsPage() {
   await Promise.all(
     pipelines.map(async (pipeline) => stagesByPipeline.set(pipeline.id, await listPipelineStages(pipeline.id)))
   );
+  const stageAutomationRules = await prisma.automationRule.findMany({
+    where: { active: true, trigger: "stage_entered", triggerStageId: { not: null } },
+    select: { name: true, triggerStageId: true },
+    orderBy: { name: "asc" },
+  });
+  const automationRulesByStage = new Map<string, string[]>();
+  for (const rule of stageAutomationRules) {
+    if (!rule.triggerStageId) continue;
+    const names = automationRulesByStage.get(rule.triggerStageId) ?? [];
+    names.push(rule.name);
+    automationRulesByStage.set(rule.triggerStageId, names);
+  }
 
   return (
     <SettingsWorkspace
@@ -140,6 +154,21 @@ export default async function PipelineSettingsPage() {
                       <span className="text-xs text-muted-foreground">{stage.defaultProbability}% probability</span>
                       {stage.staleAfterDays && <span className="text-xs text-muted-foreground">stale after {stage.staleAfterDays}d</span>}
                       {stage.isClosed && <span className="badge bg-muted text-muted-foreground">{stage.closedStatus || "closed"}</span>}
+                      {stage.entryAction === "book_test_drive" && (
+                        <span className="badge bg-primary/15 text-primary">
+                          <Zap className="size-3" />
+                          {PIPELINE_STAGE_ACTION_META.book_test_drive.shortLabel}
+                        </span>
+                      )}
+                      {(automationRulesByStage.get(stage.id)?.length ?? 0) > 0 && (
+                        <span
+                          className="badge bg-blue-500/10 text-blue-300"
+                          title={automationRulesByStage.get(stage.id)?.join(", ")}
+                        >
+                          {automationRulesByStage.get(stage.id)?.length} active automation
+                          {automationRulesByStage.get(stage.id)?.length === 1 ? "" : "s"}
+                        </span>
+                      )}
                     </summary>
                     <form action={editSalesPipelineStage.bind(null, stage.id)} className="grid md:grid-cols-6 gap-3 mt-4 items-end">
                       <label className="space-y-1 md:col-span-2">
@@ -169,6 +198,18 @@ export default async function PipelineSettingsPage() {
                           <option value="won">Won</option>
                           <option value="lost">Lost</option>
                         </select>
+                      </label>
+                      <label className="space-y-1 md:col-span-3">
+                        <span className="text-xs text-muted-foreground">When a lead enters this stage</span>
+                        <select name="entryAction" className="input" defaultValue={stage.entryAction ?? ""}>
+                          <option value="">No required stage action</option>
+                          <option value="book_test_drive">Require and book a test drive</option>
+                        </select>
+                        <span className="block text-[11px] leading-4 text-muted-foreground">
+                          {stage.entryAction === "book_test_drive"
+                            ? PIPELINE_STAGE_ACTION_META.book_test_drive.description
+                            : "The lead moves immediately; configurable automations can still run afterward."}
+                        </span>
                       </label>
                     </form>
                     </details>
@@ -208,6 +249,16 @@ export default async function PipelineSettingsPage() {
                     <option value="won">Won</option>
                     <option value="lost">Lost</option>
                   </select>
+                </label>
+                <label className="space-y-1 md:col-span-3">
+                  <span className="text-xs text-muted-foreground">When a lead enters this stage</span>
+                  <select name="entryAction" className="input" defaultValue="">
+                    <option value="">No required stage action</option>
+                    <option value="book_test_drive">Require and book a test drive</option>
+                  </select>
+                  <span className="block text-[11px] leading-4 text-muted-foreground">
+                    Required actions collect their details before the lead is moved.
+                  </span>
                 </label>
               </form>
             </details>

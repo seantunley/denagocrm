@@ -21,6 +21,7 @@ import {
 import { logAuditStrict } from "@/lib/audit";
 import { basePrisma } from "@/lib/db";
 import { parseRands } from "@/lib/format";
+import { parsePipelineStageAction } from "@/lib/pipelineStageActions";
 
 const str = (formData: FormData, key: string) => {
   const value = String(formData.get(key) ?? "").trim();
@@ -113,6 +114,7 @@ export async function createSalesPipelineStage(pipelineId: string, formData: For
     staleAfterDays: str(formData, "staleAfterDays") ? int(formData, "staleAfterDays") : null,
     isClosed: bool(formData, "isClosed"),
     closedStatus: str(formData, "closedStatus"),
+    entryAction: parsePipelineStageAction(str(formData, "entryAction")),
   };
   const stageId = await addPipelineStage(after);
   await logAuditStrict({
@@ -143,6 +145,7 @@ export async function editSalesPipelineStage(id: string, formData: FormData) {
     staleAfterDays: str(formData, "staleAfterDays") ? int(formData, "staleAfterDays") : null,
     isClosed: bool(formData, "isClosed"),
     closedStatus: str(formData, "closedStatus"),
+    entryAction: parsePipelineStageAction(str(formData, "entryAction")),
   };
   await updatePipelineStage(id, after);
   await logAuditStrict({

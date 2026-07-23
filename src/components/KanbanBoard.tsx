@@ -31,6 +31,7 @@ import {
   Hourglass,
   PenLine,
   Search,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import LocationAutocomplete from "@/components/LocationAutocomplete";
@@ -93,6 +94,8 @@ export type KanbanStage = {
   id: string;
   name: string;
   color: string;
+  entryAction: string | null;
+  automationRules: string[];
   leads: KanbanLead[];
 };
 
@@ -329,6 +332,26 @@ function Column({ stage }: { stage: KanbanStage }) {
         <p className="mt-1.5 text-[10px] text-muted-foreground">
           {stage.leads.length === 1 ? "1 active opportunity" : `${stage.leads.length} active opportunities`}
         </p>
+        {stage.entryAction === "book_test_drive" && (
+          <p className="mt-1.5 flex items-center gap-1 text-[10px] font-medium text-primary">
+            <Zap className="size-3" />
+            Requires test-drive booking
+          </p>
+        )}
+        {stage.automationRules.length > 0 && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <p className="mt-1.5 w-fit cursor-help text-[10px] font-medium text-muted-foreground underline decoration-dotted underline-offset-2">
+                {stage.automationRules.length} follow-up automation{stage.automationRules.length === 1 ? "" : "s"}
+              </p>
+            </TooltipTrigger>
+            <TooltipContent>
+              <ul className="space-y-1">
+                {stage.automationRules.map((rule) => <li key={rule}>{rule}</li>)}
+              </ul>
+            </TooltipContent>
+          </Tooltip>
+        )}
       </header>
       <div
         className={cn(
@@ -450,7 +473,7 @@ export default function KanbanBoard({
     if (!fromStage || fromStage.id === targetStageId) return;
 
     const target = stages.find((stage) => stage.id === targetStageId);
-    if (target && /test/i.test(target.name)) {
+    if (target?.entryAction === "book_test_drive") {
       const lead = stages.flatMap((stage) => stage.leads).find((item) => item.id === leadId)!;
       setPendingTd({ lead, stageId: targetStageId });
       return;

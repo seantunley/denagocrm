@@ -193,6 +193,9 @@ export async function moveLead(leadId: string, stageId: string) {
   if (currentScope && currentScope.pipelineId !== targetStage.pipelineId && !(await hasPermission(user, "leads.change_pipeline"))) {
     throw new Error("You do not have permission to move leads between pipelines");
   }
+  if (targetStage.entryAction === "book_test_drive") {
+    throw new Error("This stage requires test-drive booking details");
+  }
   const lead = await prisma.lead.update({
     where: { id: leadId },
     data: { stageId, position: await nextPosition(stageId), stageEnteredAt: new Date() },
@@ -211,7 +214,7 @@ export async function moveLead(leadId: string, stageId: string) {
   // test drive — otherwise a stale appointment (and its weather) lingers on the
   // card. Remove the activity and record the cancellation in the audit log.
   const pipelineStages = await listPipelineStages(targetStage.pipelineId);
-  const testDriveStage = pipelineStages.find((s) => /test/i.test(s.name)); // same rule the board uses
+  const testDriveStage = pipelineStages.find((stage) => stage.entryAction === "book_test_drive");
   if (testDriveStage && targetStage.order < testDriveStage.order) {
     const booking = await prisma.activity.findFirst({
       where: { leadId, type: "test_drive", status: "planned" },
@@ -262,10 +265,8 @@ export async function moveLeadToTestDrive(
   ) {
     return { ok: false, error: "You cannot move leads between pipelines." };
   }
-  const pipelineStages = await listPipelineStages(targetStage.pipelineId);
-  const testDriveStage = pipelineStages.find((s) => /test/i.test(s.name)); // same rule the board uses
-  if (!testDriveStage || testDriveStage.id !== stageId) {
-    return { ok: false, error: "That is not the test-drive stage." };
+  if (targetStage.entryAction !== "book_test_drive") {
+    return { ok: false, error: "That stage is not configured for test-drive booking." };
   }
 
   // A supplied product must be a real product, or the booking captures a bogus id.

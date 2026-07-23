@@ -20,13 +20,18 @@ type PlannedActivityRow = {
   type: string;
 };
 
+type StageActionRow = {
+  id: string;
+  entryAction: string | null;
+};
+
 export default async function LeadsPage() {
   const now = new Date();
   // Gate the Ads export link to the same permission the API route enforces
   // (owner or reports.view_all), so staff without it don't see a dead link.
   const currentUser = await getCurrentUser();
   const canExportAds = currentUser ? await hasPermission(currentUser, "reports.view_all") : false;
-  const [stages, products, contacts, users] = await Promise.all([
+  const [stages, products, contacts, users, stageActionRows, stageAutomationRules] = await Promise.all([
     prisma.pipelineStage.findMany({
       orderBy: { order: "asc" },
       include: {
@@ -48,7 +53,23 @@ export default async function LeadsPage() {
     }),
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
     prisma.user.findMany({ orderBy: { name: "asc" } }),
+    prisma.$queryRaw<StageActionRow[]>`
+      SELECT "id", "entryAction" FROM "PipelineStage"
+    `,
+    prisma.automationRule.findMany({
+      where: { active: true, trigger: "stage_entered", triggerStageId: { not: null } },
+      select: { name: true, triggerStageId: true },
+      orderBy: { name: "asc" },
+    }),
   ]);
+  const stageActionById = new Map(stageActionRows.map((stage) => [stage.id, stage.entryAction]));
+  const automationRulesByStage = new Map<string, string[]>();
+  for (const rule of stageAutomationRules) {
+    if (!rule.triggerStageId) continue;
+    const names = automationRulesByStage.get(rule.triggerStageId) ?? [];
+    names.push(rule.name);
+    automationRulesByStage.set(rule.triggerStageId, names);
+  }
 
   const leadIds = stages.flatMap((stage) => stage.leads.map((lead) => lead.id));
   let nextActivityRows: PlannedActivityRow[] = [];
@@ -110,14 +131,17 @@ export default async function LeadsPage() {
     }
   }
 
-  // The test-drive booking belongs to the test-drive stage; hide it on cards
-  // parked before that stage.
-  const testDriveStage = stages.find((stage) => /test/i.test(stage.name)) ?? null;
+  // The test-drive booking belongs to the stage configured to collect it; hide
+  // it on cards parked before that stage.
+  const testDriveStage =
+    stages.find((stage) => stageActionById.get(stage.id) === "book_test_drive") ?? null;
 
   const boardStages: KanbanStage[] = stages.map((stage) => ({
     id: stage.id,
     name: stage.name,
     color: stage.color,
+    entryAction: stageActionById.get(stage.id) ?? null,
+    automationRules: automationRulesByStage.get(stage.id) ?? [],
     leads: stage.leads.map((lead) => {
       const nextActivity = nextActivityByLead.get(lead.id);
       const nextTestDrive = nextTestDriveByLead.get(lead.id);

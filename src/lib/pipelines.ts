@@ -22,6 +22,7 @@ export type PipelineStageRow = {
   staleAfterDays: number | null;
   isClosed: boolean;
   closedStatus: string | null;
+  entryAction: string | null;
 };
 
 export type ForecastLeadRow = {
@@ -78,7 +79,7 @@ export async function getDefaultPipeline(): Promise<SalesPipelineRow | null> {
 export async function listPipelineStages(pipelineId: string): Promise<PipelineStageRow[]> {
   return basePrisma.$queryRaw<PipelineStageRow[]>`
     SELECT "id", "name", "order", "color", "pipelineId", "defaultProbability",
-      "staleAfterDays", "isClosed", "closedStatus"
+      "staleAfterDays", "isClosed", "closedStatus", "entryAction"
     FROM "PipelineStage"
     WHERE "pipelineId" = ${pipelineId}
     ORDER BY "order" ASC
@@ -88,7 +89,7 @@ export async function listPipelineStages(pipelineId: string): Promise<PipelineSt
 export async function getPipelineStage(stageId: string): Promise<PipelineStageRow | null> {
   const rows = await basePrisma.$queryRaw<PipelineStageRow[]>`
     SELECT "id", "name", "order", "color", "pipelineId", "defaultProbability",
-      "staleAfterDays", "isClosed", "closedStatus"
+      "staleAfterDays", "isClosed", "closedStatus", "entryAction"
     FROM "PipelineStage" WHERE "id" = ${stageId} LIMIT 1
   `;
   return rows[0] ?? null;
@@ -163,6 +164,24 @@ function normalizeClosedStage(input: { isClosed?: boolean; closedStatus?: string
   return { isClosed: true, closedStatus: input.closedStatus };
 }
 
+async function assertEntryActionAvailable(
+  pipelineId: string,
+  entryAction: string | null | undefined,
+  excludeStageId?: string,
+) {
+  if (!entryAction) return;
+  const existing = await basePrisma.$queryRaw<Array<{ id: string }>>`
+    SELECT "id" FROM "PipelineStage"
+    WHERE "pipelineId" = ${pipelineId}
+      AND "entryAction" = ${entryAction}
+      AND (${excludeStageId ?? null}::text IS NULL OR "id" <> ${excludeStageId ?? null})
+    LIMIT 1
+  `;
+  if (existing[0]) {
+    throw new Error("This pipeline already has a stage with that required action");
+  }
+}
+
 export async function addPipelineStage(input: {
   pipelineId: string;
   name: string;
@@ -171,6 +190,7 @@ export async function addPipelineStage(input: {
   staleAfterDays?: number | null;
   isClosed?: boolean;
   closedStatus?: string | null;
+  entryAction?: string | null;
 }) {
   const pipeline = await basePrisma.$queryRaw<Array<{ active: boolean }>>`
     SELECT "active" FROM "SalesPipeline" WHERE "id" = ${input.pipelineId} AND "deletedAt" IS NULL LIMIT 1
@@ -180,14 +200,18 @@ export async function addPipelineStage(input: {
     SELECT COALESCE(MAX("order"), -1) + 1 AS "nextOrder" FROM "PipelineStage" WHERE "pipelineId" = ${input.pipelineId}
   `;
   const closed = normalizeClosedStage(input);
+  if (closed.isClosed && input.entryAction) {
+    throw new Error("Closed stages cannot require an entry action");
+  }
+  await assertEntryActionAvailable(input.pipelineId, input.entryAction);
   const id = crypto.randomUUID();
   await basePrisma.$executeRaw`
     INSERT INTO "PipelineStage" (
-      "id", "name", "order", "color", "pipelineId", "defaultProbability", "staleAfterDays", "isClosed", "closedStatus"
+      "id", "name", "order", "color", "pipelineId", "defaultProbability", "staleAfterDays", "isClosed", "closedStatus", "entryAction"
     ) VALUES (
       ${id}, ${input.name}, ${rows[0]?.nextOrder ?? 0}, ${input.color}, ${input.pipelineId},
       ${Math.max(0, Math.min(100, input.defaultProbability))}, ${input.staleAfterDays ?? null},
-      ${closed.isClosed}, ${closed.closedStatus}
+      ${closed.isClosed}, ${closed.closedStatus}, ${input.entryAction ?? null}
     )
   `;
   return id;
@@ -200,14 +224,23 @@ export async function updatePipelineStage(id: string, input: {
   staleAfterDays?: number | null;
   isClosed: boolean;
   closedStatus?: string | null;
+  entryAction?: string | null;
 }) {
   const closed = normalizeClosedStage(input);
+  if (closed.isClosed && input.entryAction) {
+    throw new Error("Closed stages cannot require an entry action");
+  }
+  const current = await basePrisma.$queryRaw<Array<{ pipelineId: string }>>`
+    SELECT "pipelineId" FROM "PipelineStage" WHERE "id" = ${id} LIMIT 1
+  `;
+  if (!current[0]) throw new Error("Pipeline stage not found");
+  await assertEntryActionAvailable(current[0].pipelineId, input.entryAction, id);
   await basePrisma.$executeRaw`
     UPDATE "PipelineStage"
     SET "name" = ${input.name}, "color" = ${input.color},
       "defaultProbability" = ${Math.max(0, Math.min(100, input.defaultProbability))},
       "staleAfterDays" = ${input.staleAfterDays ?? null}, "isClosed" = ${closed.isClosed},
-      "closedStatus" = ${closed.closedStatus}
+      "closedStatus" = ${closed.closedStatus}, "entryAction" = ${input.entryAction ?? null}
     WHERE "id" = ${id}
   `;
 }
