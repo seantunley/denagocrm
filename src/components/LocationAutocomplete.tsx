@@ -2,6 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 
+type FormattableText = {
+  toString(): string;
+};
+
 type GooglePlace = {
   displayName?: string;
   formattedAddress?: string;
@@ -9,30 +13,35 @@ type GooglePlace = {
 };
 
 type PlacePrediction = {
-  text?: { toString(): string };
+  text: FormattableText;
+  mainText?: FormattableText;
+  secondaryText?: FormattableText;
   toPlace(): GooglePlace;
 };
 
-type PlaceAutocompleteElementOptions = {
-  includedRegionCodes?: string[];
-  locationBias?: { center: { lat: number; lng: number }; radius: number };
-  placeholder?: string;
-  requestedLanguage?: string;
-  requestedRegion?: string;
-  value?: string;
+type AutocompleteSuggestionItem = {
+  placePrediction?: PlacePrediction;
 };
 
-type PlaceAutocompleteElement = HTMLElement & {
-  name: string;
-  placeholder: string;
-  required: boolean;
-  value: string;
+type AutocompleteRequest = {
+  input: string;
+  sessionToken: unknown;
+  includedRegionCodes: string[];
+  language: string;
+  region: string;
+  locationBias: {
+    center: { lat: number; lng: number };
+    radius: number;
+  };
 };
 
 type PlacesLibrary = {
-  PlaceAutocompleteElement: new (
-    options?: PlaceAutocompleteElementOptions,
-  ) => PlaceAutocompleteElement;
+  AutocompleteSessionToken: new () => unknown;
+  AutocompleteSuggestion: {
+    fetchAutocompleteSuggestions(
+      request: AutocompleteRequest,
+    ): Promise<{ suggestions: AutocompleteSuggestionItem[] }>;
+  };
 };
 
 type GoogleMapsWindow = Window & {
@@ -50,6 +59,8 @@ type PlacesLoadResult = {
 const MAPS_ERROR_EVENT = "denago-google-maps-error";
 const MAPS_SCRIPT_SELECTOR = 'script[data-denago-google-maps="true"]';
 const MAPS_LOAD_TIMEOUT_MS = 15_000;
+const AUTOCOMPLETE_DELAY_MS = 250;
+const MIN_QUERY_LENGTH = 3;
 
 let placesLibraryPromise: Promise<PlacesLoadResult> | null = null;
 
@@ -85,8 +96,6 @@ async function loadGoogleMapsScript(
   installAuthFailureHook(mapsWindow);
 
   await new Promise<void>((resolve, reject) => {
-    // A failed or interrupted loader must never be reused. Its terminal event has
-    // already fired, so attaching listeners to it would leave this promise hanging.
     document.querySelectorAll(MAPS_SCRIPT_SELECTOR).forEach((stale) => stale.remove());
 
     const script = document.createElement("script");
@@ -159,9 +168,13 @@ async function getPlacesLibrary(): Promise<PlacesLoadResult> {
 
       const imported = await mapsWindow.google?.maps?.importLibrary("places");
       const library = imported as Partial<PlacesLibrary> | undefined;
-      if (!library || typeof library.PlaceAutocompleteElement !== "function") {
+      if (
+        !library ||
+        typeof library.AutocompleteSessionToken !== "function" ||
+        typeof library.AutocompleteSuggestion?.fetchAutocompleteSuggestions !== "function"
+      ) {
         throw new Error(
-          "Google loaded without Place Autocomplete. Enable Maps JavaScript API and Places API (New) on this key's project.",
+          "Google loaded without Autocomplete Data. Enable Maps JavaScript API and Places API (New) on this key's project.",
         );
       }
 
@@ -174,10 +187,12 @@ async function getPlacesLibrary(): Promise<PlacesLoadResult> {
   })();
 
   const result = await placesLibraryPromise;
-  // Failed configuration or a temporary browser/network error must not poison the
-  // whole tab. A retry or later mount should perform a completely fresh attempt.
   if (!result.library) placesLibraryPromise = null;
   return result;
+}
+
+function predictionLabel(prediction: PlacePrediction): string {
+  return prediction.text.toString();
 }
 
 export default function LocationAutocomplete({
@@ -201,8 +216,14 @@ export default function LocationAutocomplete({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
   const [currentValue, setCurrentValue] = useState(value ?? defaultValue);
-  const hostRef = useRef<HTMLDivElement>(null);
-  const widgetRef = useRef<PlaceAutocompleteElement | null>(null);
+  const [predictions, setPredictions] = useState<PlacePrediction[]>([]);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [searching, setSearching] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const libraryRef = useRef<PlacesLibrary | null>(null);
+  const sessionTokenRef = useRef<unknown>(null);
+  const searchTimerRef = useRef<number | null>(null);
+  const requestSequenceRef = useRef(0);
   const latestValueRef = useRef(currentValue);
   const onValueChangeRef = useRef(onValueChange);
 
@@ -213,17 +234,29 @@ export default function LocationAutocomplete({
   useEffect(() => {
     if (value === undefined) return;
     latestValueRef.current = value;
-    if (widgetRef.current) widgetRef.current.value = value;
+    setCurrentValue(value);
   }, [value]);
 
   useEffect(() => {
+    const handleOutsidePointer = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setPredictions([]);
+        setActiveIndex(-1);
+      }
+    };
+    document.addEventListener("pointerdown", handleOutsidePointer);
+    return () => document.removeEventListener("pointerdown", handleOutsidePointer);
+  }, []);
+
+  useEffect(() => {
     let disposed = false;
-    let widget: PlaceAutocompleteElement | null = null;
 
     const showFallback = (message: string) => {
       if (disposed) return;
-      widget?.remove();
-      widgetRef.current = null;
+      libraryRef.current = null;
+      sessionTokenRef.current = null;
+      setPredictions([]);
+      setSearching(false);
       setLoadError(message);
       setMode("fallback");
     };
@@ -241,109 +274,196 @@ export default function LocationAutocomplete({
     setLoadError(null);
 
     void getPlacesLibrary().then(({ library, error }) => {
-      if (disposed || !hostRef.current) return;
+      if (disposed) return;
       if (!library) {
         showFallback(error ?? "Google Maps autocomplete is unavailable.");
         return;
       }
-
-      try {
-        widget = new library.PlaceAutocompleteElement({
-          includedRegionCodes: ["za"],
-          locationBias: {
-            center: { lat: -33.925, lng: 18.48 },
-            radius: 100_000,
-          },
-          placeholder,
-          requestedLanguage: "en",
-          requestedRegion: "za",
-          value: latestValueRef.current,
-        });
-        widgetRef.current = widget;
-        widget.name = name;
-        widget.required = required;
-        widget.placeholder = placeholder;
-        widget.value = latestValueRef.current;
-        widget.className = className;
-        widget.style.display = "block";
-        widget.style.width = "100%";
-        widget.style.minHeight = "2.5rem";
-        widget.style.colorScheme = "dark";
-        widget.style.backgroundColor = "var(--card)";
-        widget.style.border = "1px solid var(--input)";
-        widget.style.borderRadius = "var(--radius-md)";
-        widget.style.color = "var(--foreground)";
-        widget.style.font = "inherit";
-        widget.style.fontSize = "0.875rem";
-
-        const updateValue = (next: string) => {
-          latestValueRef.current = next;
-          setCurrentValue(next);
-          onValueChangeRef.current?.(next);
-        };
-        const handleInput = () => updateValue(widget?.value ?? "");
-        const handleSelect = async (event: Event) => {
-          const prediction = (event as Event & {
-            placePrediction?: PlacePrediction;
-          }).placePrediction;
-          if (!prediction) return;
-
-          const predictionText = prediction.text?.toString() ?? widget?.value ?? "";
-          const place = prediction.toPlace();
-          try {
-            await place.fetchFields({ fields: ["displayName", "formattedAddress"] });
-          } catch (selectionError) {
-            console.error("[Google Maps autocomplete] Place details failed", selectionError);
-          }
-
-          const selected =
-            place.formattedAddress || place.displayName || predictionText || widget?.value || "";
-          if (widget) widget.value = selected;
-          updateValue(selected);
-        };
-        const handleRequestError = () => {
-          showFallback(
-            "Google denied the Places request. Check the browser key's referrer and API restrictions in Google Cloud.",
-          );
-        };
-
-        widget.addEventListener("input", handleInput);
-        widget.addEventListener("gmp-select", handleSelect);
-        widget.addEventListener("gmp-error", handleRequestError);
-        hostRef.current.replaceChildren(widget);
-        setMode("ready");
-      } catch (errorDuringWidgetSetup) {
-        showFallback(`Google Places widget setup failed: ${errorMessage(errorDuringWidgetSetup)}`);
-      }
+      libraryRef.current = library;
+      setMode("ready");
     });
 
     return () => {
       disposed = true;
       window.removeEventListener(MAPS_ERROR_EVENT, handleGlobalError);
-      widget?.remove();
-      widgetRef.current = null;
+      if (searchTimerRef.current != null) window.clearTimeout(searchTimerRef.current);
+      requestSequenceRef.current += 1;
     };
-  }, [className, name, placeholder, required, retryKey]);
+  }, [retryKey]);
+
+  const updateValue = (next: string) => {
+    latestValueRef.current = next;
+    setCurrentValue(next);
+    onValueChangeRef.current?.(next);
+  };
+
+  const queuePredictions = (next: string) => {
+    if (searchTimerRef.current != null) window.clearTimeout(searchTimerRef.current);
+    requestSequenceRef.current += 1;
+    const requestId = requestSequenceRef.current;
+    const query = next.trim();
+
+    if (!libraryRef.current || query.length < MIN_QUERY_LENGTH) {
+      if (!query) sessionTokenRef.current = null;
+      setPredictions([]);
+      setActiveIndex(-1);
+      setSearching(false);
+      return;
+    }
+
+    setSearching(true);
+    searchTimerRef.current = window.setTimeout(() => {
+      const library = libraryRef.current;
+      if (!library) return;
+      sessionTokenRef.current ??= new library.AutocompleteSessionToken();
+
+      void library.AutocompleteSuggestion.fetchAutocompleteSuggestions({
+        input: query,
+        sessionToken: sessionTokenRef.current,
+        includedRegionCodes: ["za"],
+        language: "en",
+        region: "za",
+        locationBias: {
+          center: { lat: -33.925, lng: 18.48 },
+          radius: 100_000,
+        },
+      })
+        .then(({ suggestions }) => {
+          if (requestId !== requestSequenceRef.current) return;
+          setPredictions(
+            suggestions.flatMap((suggestion) =>
+              suggestion.placePrediction ? [suggestion.placePrediction] : [],
+            ),
+          );
+          setActiveIndex(-1);
+        })
+        .catch((error) => {
+          if (requestId !== requestSequenceRef.current) return;
+          console.error("[Google Maps autocomplete] Suggestions failed", error);
+          libraryRef.current = null;
+          sessionTokenRef.current = null;
+          setPredictions([]);
+          setLoadError(
+            "Google denied the Places request. Check the browser key's referrer and API restrictions in Google Cloud.",
+          );
+          setMode("fallback");
+        })
+        .finally(() => {
+          if (requestId === requestSequenceRef.current) setSearching(false);
+        });
+    }, AUTOCOMPLETE_DELAY_MS);
+  };
+
+  const selectPrediction = async (prediction: PlacePrediction) => {
+    requestSequenceRef.current += 1;
+    if (searchTimerRef.current != null) window.clearTimeout(searchTimerRef.current);
+    setPredictions([]);
+    setActiveIndex(-1);
+    setSearching(true);
+
+    const fallbackLabel = predictionLabel(prediction);
+    try {
+      const place = prediction.toPlace();
+      await place.fetchFields({ fields: ["displayName", "formattedAddress"] });
+      updateValue(place.formattedAddress || place.displayName || fallbackLabel);
+    } catch (error) {
+      console.error("[Google Maps autocomplete] Place details failed", error);
+      updateValue(fallbackLabel);
+    } finally {
+      sessionTokenRef.current = null;
+      setSearching(false);
+    }
+  };
+
+  const displayedValue = value ?? currentValue;
 
   return (
-    <>
-      {mode !== "ready" && (
-        <input
-          name={name}
-          className={className}
-          required={required}
-          value={value ?? currentValue}
-          onChange={(event) => {
-            const next = event.target.value;
-            latestValueRef.current = next;
-            setCurrentValue(next);
-            onValueChangeRef.current?.(next);
-          }}
-          placeholder={placeholder}
-          autoComplete="street-address"
-        />
+    <div ref={rootRef} className="relative">
+      <input
+        name={name}
+        className={className}
+        required={required}
+        value={displayedValue}
+        onChange={(event) => {
+          const next = event.target.value;
+          updateValue(next);
+          queuePredictions(next);
+        }}
+        onFocus={() => {
+          if (displayedValue.trim().length >= MIN_QUERY_LENGTH) queuePredictions(displayedValue);
+        }}
+        onKeyDown={(event) => {
+          if (!predictions.length) return;
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setActiveIndex((index) => Math.min(index + 1, predictions.length - 1));
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            setActiveIndex((index) => Math.max(index - 1, 0));
+          } else if (event.key === "Enter" && activeIndex >= 0) {
+            event.preventDefault();
+            void selectPrediction(predictions[activeIndex]);
+          } else if (event.key === "Escape") {
+            setPredictions([]);
+            setActiveIndex(-1);
+          }
+        }}
+        placeholder={placeholder}
+        autoComplete="off"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={predictions.length > 0}
+        aria-controls={`${name}-place-predictions`}
+        aria-activedescendant={
+          activeIndex >= 0 ? `${name}-place-prediction-${activeIndex}` : undefined
+        }
+      />
+
+      {predictions.length > 0 && (
+        <div
+          id={`${name}-place-predictions`}
+          role="listbox"
+          className="relative z-50 mt-1 max-h-64 overflow-y-auto overscroll-contain rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-xl"
+        >
+          {predictions.map((prediction, index) => {
+            const main = prediction.mainText?.toString() || predictionLabel(prediction);
+            const secondary = prediction.secondaryText?.toString();
+            return (
+              <button
+                key={`${predictionLabel(prediction)}-${index}`}
+                id={`${name}-place-prediction-${index}`}
+                type="button"
+                role="option"
+                aria-selected={activeIndex === index}
+                className={`block w-full touch-manipulation rounded-md px-3 py-3 text-left text-sm ${
+                  activeIndex === index ? "bg-accent text-accent-foreground" : "hover:bg-accent/70"
+                }`}
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  void selectPrediction(prediction);
+                }}
+                onMouseEnter={() => setActiveIndex(index)}
+              >
+                <span className="block font-medium">{main}</span>
+                {secondary && (
+                  <span className="mt-0.5 block text-xs text-muted-foreground">{secondary}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
       )}
-      <div ref={hostRef} className={mode === "ready" ? "block" : "hidden"} />
+
+      {mode === "loading" && (
+        <p className="mt-1 text-[11px] text-muted-foreground" aria-live="polite">
+          Loading address suggestions…
+        </p>
+      )}
+      {mode === "ready" && searching && (
+        <p className="mt-1 text-[11px] text-muted-foreground" aria-live="polite">
+          Finding places…
+        </p>
+      )}
       {mode === "fallback" && loadError && (
         <div className="mt-1 flex items-start justify-between gap-3" aria-live="polite">
           <p className="text-xs text-amber-300">
@@ -359,6 +479,6 @@ export default function LocationAutocomplete({
           </button>
         </div>
       )}
-    </>
+    </div>
   );
 }
