@@ -26,5 +26,25 @@ export default function manifest(): MetadataRoute.Manifest {
         purpose: "maskable",
       },
     ],
+    shortcuts: [
+      {
+        name: "New lead",
+        short_name: "New lead",
+        description: "Create a sales opportunity",
+        url: "/leads/new?source=pwa-shortcut",
+      },
+      {
+        name: "New contact",
+        short_name: "New contact",
+        description: "Create a customer contact",
+        url: "/contacts/new?source=pwa-shortcut",
+      },
+      {
+        name: "Open pipeline",
+        short_name: "Pipeline",
+        description: "Open the leads pipeline",
+        url: "/leads?source=pwa-shortcut",
+      },
+    ],
   };
 }

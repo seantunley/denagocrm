@@ -27,7 +27,26 @@ export function GET() {
         { src: "/icons/messages-512.png", sizes: "512x512", type: "image/png" },
         { src: "/icons/messages-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
       ],
+      shortcuts: [
+        {
+          name: "Open chats",
+          short_name: "Chats",
+          description: "Open customer conversations",
+          url: "/messages?source=pwa-shortcut",
+        },
+        {
+          name: "Open help desk",
+          short_name: "Help desk",
+          description: "Open customer cases",
+          url: "/messages/cases?source=pwa-shortcut",
+        },
+      ],
     },
-    { headers: { "Content-Type": "application/manifest+json" } },
+    {
+      headers: {
+        "Content-Type": "application/manifest+json",
+        "Cache-Control": "public, max-age=0, must-revalidate",
+      },
+    },
   );
 }
