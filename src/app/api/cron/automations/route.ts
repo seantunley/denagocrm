@@ -19,21 +19,24 @@ import { runLifecycleJourneys } from "@/lib/lifecycleJourneys";
 import { runAiHealthIfDue, runBackupWatchdog } from "@/lib/systemHealth";
 import { basePrisma } from "@/lib/db";
 import { expireReservations } from "@/lib/stockPlatform";
+import { resolveTenantActor } from "@/lib/tenantActor";
+import { runCronPerTenant, type CronRun } from "@/lib/tenantCron";
+import { withSystemScope } from "@/lib/tenantScopeEntry";
 
 /**
- * Runs recurring operational queues. Invoked by Vercel Cron with
- *   Authorization: Bearer <CRON_SECRET>
+ * The per-tenant operational queues (idle automations, reminders, marketing
+ * queues, stock-reservation expiry, inbound email filing). Under enforcement this
+ * runs once per active tenant inside that tenant's scope, so every worker's
+ * guarded queries + the stock owner pick are confined to the tenant; dormant it
+ * runs once, unscoped — byte-for-byte the pre-tenancy sweep.
  */
-export async function GET(req: NextRequest) {
-  if (!isAuthorizedCron(req)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+async function runOperationalQueues() {
   // Load the enabled module set once, then skip any worker whose owning optional
   // pack is off — the cron must not keep a disabled module's queues running.
   // `null` in the response marks "skipped (module off)", distinct from 0 (ran,
   // nothing to do) and -1 (errored). Ungated workers below are core (no owning
   // optional module): idle lead automations, quote-signing reminders, inbound
-  // email filing, activity reminders, AI lead enrichment, health/backup.
+  // email filing, activity reminders, AI lead enrichment.
   const enabled = await getEnabledModuleIds().catch(() => null);
   const on = (id: ModuleId) => enabled === null || enabled.has(id);
 
@@ -61,20 +64,14 @@ export async function GET(req: NextRequest) {
     ? await runLifecycleJourneys().catch((e) => { logError("lifecycle-journeys", e); return -1; })
     : null;
   const stockActor = on("commerce")
-    ? await basePrisma.user.findFirst({ where: { role: "owner" }, orderBy: { createdAt: "asc" }, select: { id: true, name: true } })
+    ? await resolveTenantActor({ ownerOnly: true })
     : null;
   const stockReservationsExpired = !on("commerce")
     ? null
     : stockActor
       ? await expireReservations(stockActor).catch((e) => { logError("stock-reservation-expiry", e); return -1; })
       : 0;
-  await runAiHealthIfDue().catch((e) => logError("ai-health", e));
-  await runBackupWatchdog().catch(() => {});
-  await basePrisma.errorLog
-    .deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } } })
-    .catch(() => {});
-  return NextResponse.json({
-    ok: true,
+  return {
     fired,
     remindersSent,
     quoteReminders,
@@ -87,5 +84,51 @@ export async function GET(req: NextRequest) {
     lifecycleSent,
     activityReminders,
     stockReservationsExpired,
+  };
+}
+
+type OperationalResult = Awaited<ReturnType<typeof runOperationalQueues>>;
+
+async function runGlobalMaintenance() {
+  await withSystemScope(async () => {
+    await runAiHealthIfDue().catch((e) => logError("ai-health", e));
+    await runBackupWatchdog().catch(() => {});
+    await basePrisma.errorLog
+      .deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } } })
+      .catch(() => {});
   });
+}
+
+/**
+ * Runs recurring operational queues. Invoked by Vercel Cron with
+ *   Authorization: Bearer <CRON_SECRET>
+ */
+export async function GET(req: NextRequest) {
+  if (!isAuthorizedCron(req)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let runs: Array<CronRun<OperationalResult>>;
+  try {
+    // The helper isolates tenant failures, rotates the start tenant, and stops
+    // admitting new slices before the route deadline.
+    runs = await runCronPerTenant(async () => runOperationalQueues(), {
+      maxRuntimeMs: 45_000,
+      minStartBudgetMs: 8_000,
+      concurrency: 2,
+      rotationWindowMs: 15 * 60 * 1000,
+      onError: (tenantId, error) => logError(`automations-tenant:${tenantId}`, error),
+    });
+  } finally {
+    // Platform-global maintenance runs exactly once and is not starved by a failed
+    // tenant slice or tenant-enumeration error. In dormant mode the original error
+    // still propagates after this finally block, preserving the legacy response.
+    await runGlobalMaintenance();
+  }
+
+  const dormant = runs.length === 1 && runs[0].tenantId === null ? runs[0] : null;
+  if (dormant?.status === "ok") {
+    return NextResponse.json({ ok: true, ...dormant.result });
+  }
+  return NextResponse.json({ ok: true, tenants: runs });
 }

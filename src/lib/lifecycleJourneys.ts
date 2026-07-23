@@ -1,5 +1,6 @@
 import { differenceInCalendarMonths } from "date-fns";
 import { prisma } from "./db";
+import { resolveTenantActor } from "./tenantActor";
 import { getSetting } from "./settings";
 import { sendEmail } from "./email";
 import { logAudit } from "./audit";
@@ -20,7 +21,7 @@ async function recentlyMessaged(contactId: string, marker: string, days: number)
 }
 
 async function logJourneyMessage(contactId: string, subject: string, body: string) {
-  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  const firstUser = await resolveTenantActor();
   if (firstUser) {
     await prisma.communication.create({
       data: { type: "email", direction: "outbound", subject, body, contactId, userId: firstUser.id },

@@ -14,7 +14,9 @@ import { randomUUID } from "node:crypto";
 import { prisma, basePrisma } from "../src/lib/db";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 import { runInTenantScope } from "../src/lib/tenantScope";
-import { establishTenantScopeFromId, establishStaffTenantScope, withTokenTenantScope, withChannelTenantScope, validateInSystemScope } from "../src/lib/tenantScopeEntry";
+import { establishTenantScopeFromId, establishStaffTenantScope, withTokenTenantScope, withChannelTenantScope, validateInSystemScope, withSystemScope } from "../src/lib/tenantScopeEntry";
+import { runCronPerTenant, activeTenantIds } from "../src/lib/tenantCron";
+import { logAudit } from "../src/lib/audit";
 import { getSetting } from "../src/lib/settings";
 import { TenantScopeError } from "../src/lib/tenantGuard";
 import { resolvePortalTenant } from "../src/lib/portal";
@@ -685,6 +687,112 @@ async function main() {
     check("backfill: B's endpoint STILL owned by B after the refused reassignment", (await resolveChannelTenant("messenger", pageEndpointB)) === TENANT_B);
     check("backfill: same-tenant upsert is a no-op (no ownership change)", (await upsertChannel("messenger", pageEndpointB, "same", TENANT_B)) === "unchanged");
 
+    // ── cron scoping (Phase C 2b-C4): background jobs carry NO principal. Platform
+    //    sweeps run in the trusted system scope (guard bypass); per-tenant business
+    //    queues run once per ACTIVE tenant, each confined to its own scope. ──────────
+    // A guarded sweep with no scope fails closed — exactly why crons need a scope.
+    await runInTenantScope({ tenantId: null, system: false }, async () => {
+      await expectThrows(
+        "cron: a guarded sweep with NO scope fails closed (motivates the cron scope)",
+        () => prisma.contact.findMany({ where: { id: { in: [idA, idB] } } }),
+        (e) => e instanceof TenantScopeError,
+      );
+    });
+    // withSystemScope: the same sweep sees EVERY tenant's rows (guard bypass), no deadlock.
+    // NB: the guarded read must be AWAITED inside the callback — the ALS scope covers
+    // only work awaited within `fn`, not a lazy Prisma thenable returned unawaited.
+    const sysSweep = await withSystemScope(async () => {
+      return await prisma.contact.findMany({ where: { id: { in: [idA, idB] } }, select: { id: true } });
+    });
+    check("cron: withSystemScope sees BOTH tenants' rows (platform sweep, no deadlock)", sysSweep.length === 2);
+
+    // runCronPerTenant: one run per ACTIVE tenant, each confined — A's slice sees only
+    // A's contact, B's only B's — and NO run for a suspended tenant.
+    const perTenantRuns = await runCronPerTenant(async () =>
+      (await prisma.contact.findMany({ where: { id: { in: [idA, idB] } }, select: { id: true } })).map((r) => r.id),
+    );
+    const runA = perTenantRuns.find((r) => r.tenantId === TENANT_A);
+    const runB = perTenantRuns.find((r) => r.tenantId === TENANT_B);
+    check("cron: runCronPerTenant confines A's slice to A (sees only idA)", !!runA && runA.result.length === 1 && runA.result[0] === idA);
+    check("cron: runCronPerTenant confines B's slice to B (sees only idB)", !!runB && runB.result.length === 1 && runB.result[0] === idB);
+    check("cron: runCronPerTenant produces no run for the SUSPENDED tenant", !perTenantRuns.some((r) => r.tenantId === TENANT_SUS));
+    const activeIds = await activeTenantIds();
+    check("cron: activeTenantIds includes active A + B, excludes the suspended tenant", activeIds.includes(TENANT_A) && activeIds.includes(TENANT_B) && !activeIds.includes(TENANT_SUS));
+    // The per-tenant actor pick inside a cron scope resolves that tenant's owner.
+    const cronActor = perTenantRuns.length ? await runInTenantScope({ tenantId: TENANT_A, system: false }, () => resolveTenantActor({ ownerOnly: true })) : null;
+    check("cron: actor pick inside a per-tenant cron scope resolves that tenant's owner", cronActor?.id === userAId);
+
+    // ── C4 review blocker 1: ONE tenant's failure must NOT abort the rest of the
+    //    sweep — it is captured as `status:"error"` and later tenants still run.
+    const failReported: string[] = [];
+    const isoRuns = await runCronPerTenant(
+      async (tid) => {
+        if (tid === TENANT_A) throw new Error("boom-A");
+        return tid;
+      },
+      {
+        concurrency: 1,
+        maxRuntimeMs: 60_000,
+        minStartBudgetMs: 0,
+        rotationWindowMs: 60 * 60 * 1000,
+        onError: (tid) => { failReported.push(tid); },
+        now: () => 1_000_000, // constant clock → admit every tenant (no deadline skips)
+      },
+    );
+    const isoA = isoRuns.find((r) => r.tenantId === TENANT_A);
+    const isoB = isoRuns.find((r) => r.tenantId === TENANT_B);
+    check("cron-iso: failing tenant A captured as error (sweep NOT aborted)", isoA?.status === "error");
+    check("cron-iso: tenant B still runs after A throws", !!isoB && isoB.status === "ok" && isoB.result === TENANT_B);
+    check("cron-iso: onError reported the failing tenant", failReported.includes(TENANT_A));
+
+    // ── C4 review blocker 2: fairness. (a) the starting tenant ROTATES between
+    //    windows so fixed ordering can't starve later tenants; (b) the invocation
+    //    deadline CAPS admission — later tenants are visibly `skipped`, not run.
+    const order1: (string | null)[] = [];
+    await runCronPerTenant(async (tid) => { order1.push(tid); return tid; },
+      { concurrency: 1, maxRuntimeMs: 60_000, minStartBudgetMs: 0, rotationWindowMs: 1_000, now: () => 5_000 });
+    const order2: (string | null)[] = [];
+    await runCronPerTenant(async (tid) => { order2.push(tid); return tid; },
+      { concurrency: 1, maxRuntimeMs: 60_000, minStartBudgetMs: 0, rotationWindowMs: 1_000, now: () => 6_000 });
+    check("cron-fair: rotation changes the starting tenant across windows (no fixed starvation)",
+      order1.length >= 2 && order2.length >= 2 && order1[0] !== order2[0]);
+
+    let clock = 1_000_000;
+    const deadlineRuns = await runCronPerTenant(async () => { clock += 30_000; return "done"; },
+      { concurrency: 1, maxRuntimeMs: 50_000, minStartBudgetMs: 5_000, rotationWindowMs: 60 * 60 * 1000, now: () => clock });
+    // startDeadline = 1e6 + 50000 - 5000 = 1.045e6; each slice advances +30000 →
+    // only the first two are admitted, the rest fall past the deadline as skipped.
+    check("cron-fair: invocation deadline caps admission (later tenants skipped, not run)",
+      deadlineRuns.some((r) => r.status === "skipped") && deadlineRuns.filter((r) => r.status === "ok").length <= 2);
+
+    // ── C4 review blocker 3: a cron-generated audit row written INSIDE a tenant
+    //    scope must be stamped with THAT tenant (not null), and hidden from others.
+    //    logAudit's primary path writes via basePrisma, so it relies on
+    //    actingTenantId() honouring the ambient non-system scope.
+    const auditSummary = `c4-cron-audit-${SFX}`;
+    await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => {
+      await logAudit({ action: "cron.audit.test", summary: auditSummary, userName: "Automation" });
+    });
+    const auditRow = await basePrisma.auditLog.findFirst({ where: { summary: auditSummary }, select: { tenantId: true } });
+    check("audit: cron log inside tenant A's scope is stamped tenant A (not null)", auditRow?.tenantId === TENANT_A);
+    const bSeesAudit = await runInTenantScope({ tenantId: TENANT_B, system: false }, async () => {
+      // Await the guarded read INSIDE the callback — a lazy thenable returned
+      // unawaited would run after the scope reverts and fail closed.
+      return await prisma.auditLog.findFirst({ where: { summary: auditSummary } });
+    });
+    check("audit: tenant B cannot see tenant A's cron audit row (guard-scoped)", bSeesAudit === null);
+    // System-scope cron audit stays global (tenantId null) — no ambient tenant to inherit.
+    const sysAuditSummary = `c4-sys-audit-${SFX}`;
+    await withSystemScope(async () => {
+      await logAudit({ action: "cron.audit.sys", summary: sysAuditSummary, userName: "Automation" });
+    });
+    const sysAuditRow = await basePrisma.auditLog.findFirst({ where: { summary: sysAuditSummary }, select: { tenantId: true } });
+    check("audit: system-scope cron log stays global (tenantId null)", sysAuditRow !== null && sysAuditRow.tenantId === null);
+    // Clean up only the legacy AuditLog rows — the governance AuditEvent stream is
+    // append-only (a DB rule refuses DELETE), so those rows are immutable by design
+    // and are discarded when the disposable CI database is torn down.
+    await basePrisma.auditLog.deleteMany({ where: { summary: { in: [auditSummary, sysAuditSummary] } } });
+
     // ── DORMANT back-compat (enforcement OFF): C2 keys/OTP/push + C3 channel all run
     //    byte-for-byte the pre-tenancy path. ─────────────────────────────────────────
     __setTenantEnforcingForTests(false);
@@ -697,6 +805,11 @@ async function main() {
     check("push: DORMANT delivers to ALL devices (global, unchanged)", dormPushIds.includes(subAId) && dormPushIds.includes(subBId) && dormPushIds.includes(subCId));
     const chDorm = await withChannelTenantScope("whatsapp", `nope_${SFX}`, async () => "ran", () => "skipped");
     check("channel: DORMANT runs the event directly even for an unmapped id (byte-for-byte legacy)", chDorm === "ran");
+    // C4: dormant cron runs ONCE globally (tenantId null), the slice unscoped sees all rows.
+    const dormCron = await runCronPerTenant(async () =>
+      (await prisma.contact.findMany({ where: { id: { in: [idA, idB] } }, select: { id: true } })).map((r) => r.id),
+    );
+    check("cron: DORMANT runCronPerTenant runs ONCE globally (tenantId null, sees both rows)", dormCron.length === 1 && dormCron[0].tenantId === null && dormCron[0].result.length === 2);
     __setTenantEnforcingForTests(true);
   } finally {
     __setTenantEnforcingForTests(null);

@@ -91,7 +91,7 @@ async function deliverInvite(
   if (!channel) return null;
 
   if (resp.contactId) {
-    const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+    const firstUser = await resolveTenantActor();
     if (firstUser) {
       await prisma.communication.create({
         data: {

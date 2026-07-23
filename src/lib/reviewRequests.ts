@@ -1,4 +1,5 @@
 import { prisma } from "./db";
+import { resolveTenantActor } from "./tenantActor";
 import { getSetting } from "./settings";
 import { sendEmail } from "./email";
 import { logAudit } from "./audit";
@@ -47,7 +48,7 @@ export async function sendReviewRequest(
   });
   if (!res.ok) return false;
 
-  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  const firstUser = await resolveTenantActor();
   if (firstUser) {
     await prisma.communication.create({
       data: {

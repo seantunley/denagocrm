@@ -1,5 +1,6 @@
 import { subDays } from "date-fns";
 import { prisma, basePrisma } from "@/lib/db";
+import { resolveTenantActor } from "@/lib/tenantActor";
 import { sendEmail } from "@/lib/email";
 import { quoteExpired } from "@/lib/quoteExpiry";
 import { formatDate } from "@/lib/format";
@@ -25,7 +26,7 @@ export async function runQuoteSigningReminders(): Promise<number> {
   });
   if (quotes.length === 0) return 0;
 
-  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  const firstUser = await resolveTenantActor();
   let sent = 0;
   for (const q of quotes) {
     if (quoteExpired(q.validUntil)) continue;

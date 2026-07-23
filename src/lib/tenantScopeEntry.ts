@@ -6,16 +6,34 @@ import { enterTenantScope, runInTenantScope } from "./tenantScope";
 import { resolveChannelTenant, type ChannelKind } from "./channelTenant";
 
 /**
- * Run auth/session validation (which reads tenant-scoped infrastructure BEFORE
- * the principal's tenant is known) in a trusted `system` scope — but ONLY when
- * enforcement is on. When off this is a bare `fn()` call with zero AsyncLocalStorage
- * overhead, so the auth hot path is unchanged from pre-tenancy. The scope is
- * confined to `fn`, so it reverts when `fn` returns (no lingering system bypass on
- * the unauthenticated path); the principal's own scope is established separately.
+ * Run `fn` in a trusted `system` scope (`{ tenantId: null, system: true }`) — the
+ * db.ts guard BYPASSES this scope by design, so cross-tenant/platform work reads
+ * and writes every tenant's rows. For genuinely platform-global operations only:
+ * whole-DB backup export, the security runbook, trash purge, errorLog cleanup.
+ *
+ * DORMANT: when enforcement is off this is a bare `fn()` with zero AsyncLocalStorage
+ * overhead — byte-for-byte the pre-tenancy path. The scope is confined to `fn` and
+ * reverts when it returns, so no system bypass lingers onto a later request.
+ *
+ * CONTRACT: `fn` must AWAIT its DB work internally. The scope covers only what is
+ * awaited inside `fn`; returning a lazy Prisma thenable unawaited (`() => prisma.x
+ * .findMany()`) lets the query execute AFTER the scope has reverted — so it fails
+ * closed. Always `async () => { … await … }`.
  */
-export function validateInSystemScope<T>(fn: () => Promise<T>): Promise<T> {
+export function withSystemScope<T>(fn: () => Promise<T>): Promise<T> {
   if (!tenantEnforcing()) return fn();
   return runInTenantScope({ tenantId: null, system: true }, fn);
+}
+
+/**
+ * Run auth/session validation (which reads tenant-scoped infrastructure BEFORE the
+ * principal's tenant is known — e.g. the webhook signature/verify-token settings)
+ * in the trusted `system` scope. A named alias of {@link withSystemScope} for the
+ * pre-principal auth boundary; same dormant-safe behaviour. The principal's own
+ * tenant scope is established separately, after validation.
+ */
+export function validateInSystemScope<T>(fn: () => Promise<T>): Promise<T> {
+  return withSystemScope(fn);
 }
 
 /**

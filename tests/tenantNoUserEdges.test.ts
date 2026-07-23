@@ -252,3 +252,90 @@ for (const file of C3_ACTOR_SITES) {
     );
   });
 }
+
+// Phase C step 2b (C4) — cron scoping. Background jobs carry NO staff session, so
+// under enforcement they resolve no tenant and every guarded query fails closed.
+// Platform-global sweeps (backup, security) run in a trusted SYSTEM scope (guard
+// bypass); the per-tenant business queues (journeys, automations, competitor-watch)
+// run once per active tenant via runCronPerTenant. All dormant today.
+
+// Whole-DB / platform-maintenance crons must wrap their work in withSystemScope,
+// with the scope opening BEFORE the cross-tenant read (else the guarded reads
+// inside fail closed under enforcement with no principal).
+const SYSTEM_SCOPE_CRONS = [
+  { file: "src/app/api/cron/backup/route.ts", work: "exportAllData(" },
+  { file: "src/app/api/cron/security/route.ts", work: "runSecurityChecks(" },
+] as const;
+for (const { file, work } of SYSTEM_SCOPE_CRONS) {
+  test(`${file}: platform sweep runs inside withSystemScope`, () => {
+    const code = src(file);
+    assert.match(code, /from "@\/lib\/tenantScopeEntry"/, `${file} must import from tenantScopeEntry`);
+    assert.match(code, /withSystemScope\s*\(/, `${file} must call withSystemScope`);
+    const scopeAt = code.indexOf("withSystemScope(");
+    const workAt = code.indexOf(work);
+    assert.ok(scopeAt >= 0 && workAt >= 0, `${file} must call withSystemScope and ${work}`);
+    assert.ok(scopeAt < workAt, `${file}: withSystemScope must open before the platform sweep (${work})`);
+  });
+}
+
+// Per-tenant business crons must run their slice through runCronPerTenant: dormant →
+// one global sweep (unchanged), enforcing → one scoped run per active tenant.
+const PER_TENANT_CRONS = [
+  "src/app/api/cron/journeys/route.ts",
+  "src/app/api/cron/automations/route.ts",
+  "src/app/api/cron/competitor-watch/route.ts",
+] as const;
+for (const file of PER_TENANT_CRONS) {
+  test(`${file}: business queue runs per-tenant via runCronPerTenant`, () => {
+    const code = src(file);
+    assert.match(code, /from "@\/lib\/tenantCron"/, `${file} must import from tenantCron`);
+    assert.match(code, /runCronPerTenant\s*\(/, `${file} must run its slice via runCronPerTenant`);
+  });
+}
+
+// The automations cron mixes per-tenant queues with platform-global maintenance
+// (health + backup watchdog + ErrorLog retention). That maintenance must run ONCE
+// in the system scope — NOT inside the per-tenant loop (ErrorLog is a global model;
+// looping would repeat the same global delete per tenant).
+test("src/app/api/cron/automations/route.ts: global ErrorLog cleanup runs in withSystemScope, invoked after the per-tenant loop and never suppressed by a tenant failure", () => {
+  const code = src("src/app/api/cron/automations/route.ts");
+  assert.match(code, /withSystemScope\s*\(/, "global maintenance must run in withSystemScope");
+  // The maintenance is invoked AFTER the per-tenant fan-out (its call, not the
+  // helper's definition, is what runs late), and it lives in a `finally` so a
+  // failed tenant loop or tenant-enumeration error cannot skip it.
+  const loopAt = code.indexOf("runCronPerTenant(");
+  const maintCallAt = code.indexOf("runGlobalMaintenance()", loopAt);
+  const sysAt = code.indexOf("withSystemScope(");
+  const purgeAt = code.search(/errorLog\s*\n?\s*\.deleteMany|errorLog\s*\.deleteMany/);
+  assert.ok(loopAt >= 0 && maintCallAt > loopAt, "runGlobalMaintenance() must be invoked after the per-tenant loop");
+  assert.match(code, /finally\s*\{[\s\S]*runGlobalMaintenance\(\)/, "maintenance must run in a finally so a failed tenant loop can't skip it");
+  assert.ok(purgeAt >= 0 && sysAt >= 0 && purgeAt > sysAt, "the ErrorLog purge must sit inside the withSystemScope block");
+});
+
+// C4 actor-pick sites (cron/queue + staff/portal cleanup, §2.4) attribute
+// system-generated records via the tenant-aware resolver, not a global oldest-user
+// pick — else a per-tenant queue stamps another tenant's user onto the record.
+const C4_ACTOR_SITES = [
+  "src/lib/automations.ts",
+  "src/lib/journeyStepExecutor.ts",
+  "src/lib/lifecycleJourneys.ts",
+  "src/lib/serviceReminders.ts",
+  "src/lib/reviewRequests.ts",
+  "src/lib/signingReminders.ts",
+  "src/lib/imapSync.ts",
+  "src/lib/surveys.ts",
+  "src/app/actions/warranty.ts",
+  "src/app/actions/portal.ts",
+  "src/app/api/cron/automations/route.ts",
+] as const;
+for (const file of C4_ACTOR_SITES) {
+  test(`${file}: cron/queue actor pick uses resolveTenantActor (not the global oldest-user pick)`, () => {
+    const code = src(file);
+    assert.match(code, /resolveTenantActor\s*\(/, `${file} must resolve the actor via resolveTenantActor`);
+    assert.doesNotMatch(
+      code,
+      /user\.findFirst\(\s*\{\s*orderBy:\s*\{\s*createdAt:\s*"asc"\s*\}\s*\}\s*\)/,
+      `${file} must not keep the global oldest-user pick`,
+    );
+  });
+}

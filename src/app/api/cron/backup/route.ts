@@ -8,6 +8,7 @@ import {
   verifyPortableBackup,
 } from "@/lib/backup";
 import { basePrisma } from "@/lib/db";
+import { withSystemScope } from "@/lib/tenantScopeEntry";
 import { purgeTrash } from "@/lib/trash";
 import { readFile, putManagedBlob, listActiveBackupBlobs, deleteFile, activeBlobWriteTokenPresent } from "@/lib/storage";
 import {
@@ -136,6 +137,11 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // Whole-DB export + trash purge is a platform-global sweep across EVERY
+    // tenant's rows, so it runs in the trusted system scope (guard bypass). The
+    // guarded reads inside `exportAllData` would otherwise fail closed under
+    // enforcement (no principal → no tenant scope). Dormant → a bare call.
+    return await withSystemScope(async () => {
     const portable = await exportAllData();
     const beforeUpload = verifyPortableBackup(portable);
     if (!beforeUpload.ok) throw new Error(beforeUpload.errors.join("; "));
@@ -198,6 +204,7 @@ export async function GET(req: NextRequest) {
     await recordResult(result);
 
     return NextResponse.json(result, { status: degradedAssets.length ? 207 : 200 });
+    });
   } catch (error) {
     const result = {
       ok: false,

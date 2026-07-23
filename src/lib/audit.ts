@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { headers } from "next/headers";
 import { basePrisma, prisma } from "./db";
+import { currentTenantScope } from "./tenantScope";
 
 export type AuditEntry = {
   action: string;
@@ -68,22 +69,18 @@ function actorType(entry: AuditEntry, actorName: string) {
 }
 
 /**
- * The acting tenant for an audit entry, best-effort. Only read for a real
- * authenticated STAFF actor (`entry.user` present): customer/portal/website and
- * system/cron entries must stay null, even if the request happens to carry a
- * same-origin staff `denago_session` cookie — otherwise their attribution would
- * be corrupted by an unrelated tenant. Dynamically imported to avoid an import
- * cycle with auth, and fully guarded (no session/request → null, never throws).
+ * Resolve audit ownership without trusting an unrelated staff cookie.
  *
- * The session tenant is trusted ONLY when the current authenticated cookie user
- * IS the entry's actor. Otherwise — an owner logging an action attributed to
- * another user, or an actor set programmatically while a different staff cookie
- * rides along — the cookie user's tenant would be mis-stamped onto someone else's
- * event. When the actor and the session differ, we leave the tenant null rather
- * than attribute it to the wrong tenant.
+ * - Non-user work (cron, public token, portal, webhook) trusts only an explicit
+ *   normal tenant scope. A system scope and a missing/null scope remain global.
+ * - Staff-attributed work keeps the stricter actor/session identity check so an
+ *   action attributed to another user cannot inherit the cookie user's tenant.
  */
 async function actingTenantId(entry: AuditEntry): Promise<string | null> {
-  if (!entry.user) return null; // non-staff / system actor → no session tenant
+  if (!entry.user) {
+    const scope = currentTenantScope();
+    return scope && !scope.system && scope.tenantId ? scope.tenantId : null;
+  }
   try {
     const { getCurrentUser, getActiveTenantId } = await import("./auth");
     const current = await getCurrentUser();
