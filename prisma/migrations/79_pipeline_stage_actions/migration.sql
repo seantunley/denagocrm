@@ -24,11 +24,16 @@ ALTER TABLE "PipelineStage"
 ALTER TABLE "PipelineStage"
   VALIDATE CONSTRAINT "PipelineStage_entryAction_check";
 
+-- Closed stages cannot collect an entry action. Repair any value left by an older
+-- interrupted attempt before applying uniqueness.
 UPDATE "PipelineStage"
 SET "entryAction" = NULL
 WHERE COALESCE("isClosed", false) = true
   AND "entryAction" IS NOT NULL;
 
+-- Repair duplicate values left by an interrupted/older attempt. Keep the earliest
+-- stage in order for each tenant/pipeline/action namespace. NULL tenantId remains
+-- its own legacy namespace while enforcement is dormant.
 WITH ranked_existing AS (
   SELECT
     "id",
@@ -45,6 +50,9 @@ FROM ranked_existing AS ranked
 WHERE stage."id" = ranked."id"
   AND ranked.rn > 1;
 
+-- Preserve the old behaviour without assigning the action to every stage whose
+-- name contains "test". A tenant/pipeline that already has a configured action is
+-- left unchanged; otherwise the earliest open matching stage wins.
 WITH ranked_candidates AS (
   SELECT
     candidate."id",
