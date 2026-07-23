@@ -7,6 +7,11 @@ import {
   parsePipelineStageAction,
 } from "../src/lib/pipelineStageActions";
 
+const migration = readFileSync(
+  join(process.cwd(), "prisma", "migrations", "79_pipeline_stage_actions", "migration.sql"),
+  "utf8",
+);
+
 test("pipeline stage actions accept only supported action identifiers", () => {
   assert.equal(parsePipelineStageAction("book_test_drive"), "book_test_drive");
   assert.equal(parsePipelineStageAction(""), null);
@@ -20,12 +25,20 @@ test("test-drive stage action explains its required workflow", () => {
   );
 });
 
-test("migration preserves existing test-drive behaviour while removing the runtime name convention", () => {
-  const migration = readFileSync(
-    join(process.cwd(), "prisma", "migrations", "79_pipeline_stage_actions", "migration.sql"),
-    "utf8",
+test("migration backfills one deterministic open test-drive stage per pipeline", () => {
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS "entryAction"/);
+  assert.match(migration, /ROW_NUMBER\(\) OVER \([\s\S]+PARTITION BY candidate\."pipelineId"/);
+  assert.match(migration, /candidate\."name" ILIKE '%test%'/);
+  assert.match(migration, /COALESCE\(candidate\."isClosed", false\) = false/);
+  assert.match(migration, /ranked\.rn = 1/);
+  assert.match(migration, /configured\."entryAction" IS NOT NULL/);
+});
+
+test("database enforces one required action of each kind per pipeline", () => {
+  assert.match(
+    migration,
+    /CREATE UNIQUE INDEX IF NOT EXISTS "PipelineStage_pipeline_entryAction_key"[\s\S]+WHERE "entryAction" IS NOT NULL/,
   );
-  assert.match(migration, /ADD COLUMN "entryAction"/);
-  assert.match(migration, /SET "entryAction" = 'book_test_drive'/);
-  assert.match(migration, /WHERE "name" ILIKE '%test%'/);
+  assert.match(migration, /DROP CONSTRAINT IF EXISTS "PipelineStage_entryAction_check"/);
+  assert.match(migration, /VALIDATE CONSTRAINT "PipelineStage_entryAction_check"/);
 });
