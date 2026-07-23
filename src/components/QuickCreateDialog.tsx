@@ -22,10 +22,12 @@ import LocationAutocomplete from "@/components/LocationAutocomplete";
 
 export type QuickCreateKind = "lead" | "contact" | "calendar" | "quote" | "jobcard" | "vehicle";
 
-export type CalendarCreateDefaults = {
+export type QuickCreateDefaults = {
   dueDate?: string;
   workshop?: boolean;
   revalidate?: string;
+  contactId?: string;
+  contactLabel?: string;
 };
 
 const TITLES: Record<QuickCreateKind, string> = {
@@ -37,7 +39,7 @@ const TITLES: Record<QuickCreateKind, string> = {
   vehicle: "Register vehicle",
 };
 
-export function openQuickCreate(kind: QuickCreateKind, defaults?: CalendarCreateDefaults) {
+export function openQuickCreate(kind: QuickCreateKind, defaults?: QuickCreateDefaults) {
   window.dispatchEvent(new CustomEvent("denago:quick-create", { detail: { kind, defaults } }));
 }
 
@@ -56,22 +58,22 @@ type Options = {
  */
 export default function QuickCreateDialog() {
   const [kind, setKind] = useState<QuickCreateKind | null>(null);
-  const [calendarDefaults, setCalendarDefaults] = useState<CalendarCreateDefaults>({});
+  const [createDefaults, setCreateDefaults] = useState<QuickCreateDefaults>({});
   const [options, setOptions] = useState<Options | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [calendarType, setCalendarType] = useState<string>("call");
 
   useEffect(() => {
     const onOpen = (event: Event) => {
-      const detail = (event as CustomEvent<QuickCreateKind | { kind: QuickCreateKind; defaults?: CalendarCreateDefaults }>).detail;
+      const detail = (event as CustomEvent<QuickCreateKind | { kind: QuickCreateKind; defaults?: QuickCreateDefaults }>).detail;
       // Keep accepting the original string event shape for older callers.
       if (typeof detail === "string") {
         setKind(detail);
-        setCalendarDefaults({});
+        setCreateDefaults({});
         return;
       }
       setKind(detail.kind);
-      setCalendarDefaults(detail.defaults ?? {});
+      setCreateDefaults(detail.defaults ?? {});
     };
     window.addEventListener("denago:quick-create", onOpen);
     return () => window.removeEventListener("denago:quick-create", onOpen);
@@ -111,15 +113,15 @@ export default function QuickCreateDialog() {
 
   // Reset the calendar type to a sensible default whenever the dialog re-opens.
   useEffect(() => {
-    setCalendarType(calendarDefaults.workshop ? "meeting" : "call");
-  }, [calendarDefaults]);
+    setCalendarType(createDefaults.workshop ? "meeting" : "call");
+  }, [createDefaults]);
 
   const input =
     "w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20";
 
   function close() {
     setKind(null);
-    setCalendarDefaults({});
+    setCreateDefaults({});
     setLoadError(null);
   }
 
@@ -168,6 +170,10 @@ export default function QuickCreateDialog() {
                 stages={options.stages}
                 contacts={options.contacts}
                 users={options.users}
+                defaults={{
+                  contactId: createDefaults.contactId,
+                  name: createDefaults.contactLabel,
+                }}
                 submitLabel="Create lead"
                 variant="dialog"
               />
@@ -192,7 +198,7 @@ export default function QuickCreateDialog() {
 
             {kind === "calendar" && (
               <form action={scheduleCalendar} className="space-y-4">
-                <input type="hidden" name="revalidate" value={calendarDefaults.revalidate ?? "/"} />
+                <input type="hidden" name="revalidate" value={createDefaults.revalidate ?? "/"} />
                 <div className="rounded-xl border border-border bg-card/45 p-4">
                   <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">Schedule the next step</p>
                   <p className="mt-1 text-sm text-muted-foreground">Add the owner, customer context and location so the diary is useful to the whole team.</p>
@@ -216,13 +222,13 @@ export default function QuickCreateDialog() {
                   </div>
                   <div>
                     <label className="label">When *</label>
-                    <input type="datetime-local" name="dueDate" className={input} defaultValue={calendarDefaults.dueDate} required />
+                    <input type="datetime-local" name="dueDate" className={input} defaultValue={createDefaults.dueDate} required />
                   </div>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <label className="label">Customer or contact</label>
-                    <select name="contactId" className={input} defaultValue="">
+                    <select name="contactId" className={input} defaultValue={createDefaults.contactId ?? ""}>
                       <option value="">—</option>
                       {options.contacts.map((contact) => (
                         <option key={contact.id} value={contact.id}>{contact.label}</option>
@@ -258,7 +264,7 @@ export default function QuickCreateDialog() {
                 </div>
                 <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
                   <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <input type="checkbox" name="workshop" className="h-4 w-4 accent-orange-600" defaultChecked={calendarDefaults.workshop} />
+                    <input type="checkbox" name="workshop" className="h-4 w-4 accent-orange-600" defaultChecked={createDefaults.workshop} />
                     Workshop booking
                   </label>
                   <button className="btn-primary">Schedule activity</button>
