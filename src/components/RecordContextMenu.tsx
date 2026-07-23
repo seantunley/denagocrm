@@ -110,9 +110,22 @@ export default function RecordContextMenu({
     }
   }
 
+  function inferredQuickCreateDefaults(): QuickCreateDefaults | undefined {
+    const match = href.match(/^\/contacts\/([^/?#]+)/);
+    if (!match) return undefined;
+    return {
+      contactId: decodeURIComponent(match[1]),
+      contactLabel: label,
+      revalidate: href,
+    };
+  }
+
   function run(action: RecordContextAction) {
     if (action.quickCreate) {
-      openQuickCreate(action.quickCreate, action.quickCreateDefaults);
+      openQuickCreate(
+        action.quickCreate,
+        action.quickCreateDefaults ?? inferredQuickCreateDefaults(),
+      );
     } else if (action.copyValue) {
       void copy(action.copyValue, `${action.label.replace(/^Copy /, "")} copied`);
     } else if (action.href) {
