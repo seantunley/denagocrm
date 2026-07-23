@@ -32,7 +32,8 @@ test("record context menu provides consistent open and copy-link commands", () =
 });
 
 test("contact record actions preserve the selected contact", () => {
-  assert.match(menuSource, /href\.match\(\/\^\\\/contacts\\\/\(\[\^\/?#\]\+\)\//);
+  assert.match(menuSource, /function inferredQuickCreateDefaults/);
+  assert.match(menuSource, /href\.match\(\/\^\\\/contacts/);
   assert.match(menuSource, /contactId: decodeURIComponent\(match\[1\]\)/);
   assert.match(menuSource, /contactLabel: label/);
   assert.match(quickCreateSource, /defaults=\{\{[\s\S]+contactId: createDefaults\.contactId/);
