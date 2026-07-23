@@ -6,6 +6,7 @@ import { join } from "node:path";
 const read = (...parts: string[]) => readFileSync(join(process.cwd(), ...parts), "utf8");
 const leadPage = read("src", "app", "(app)", "leads", "[id]", "page.tsx");
 const leadActions = read("src", "app", "actions", "leads.ts");
+const conversion = read("src", "lib", "leadToContact.ts");
 
 test("lead detail offers Add to Contacts only for an unlinked lead with both permissions", () => {
   assert.match(
@@ -16,14 +17,30 @@ test("lead detail offers Add to Contacts only for an unlinked lead with both per
   assert.match(leadPage, /AddLeadToContactsButton/);
 });
 
-test("Add to Contacts reauthorizes, avoids an unambiguous duplicate, and links atomically", () => {
+test("Add to Contacts reauthorizes and passes only accessible contacts to the atomic converter", () => {
   assert.match(
     leadActions,
     /addLeadToContacts[\s\S]+requireLeadAccess\(leadId, "leads\.link_contact"\)[\s\S]+hasPermission\(user, "contacts\.create"\)/,
   );
-  assert.match(leadActions, /prisma\.\$transaction\(async \(tx\)/);
-  assert.match(leadActions, /matches\.length === 1/);
-  assert.match(leadActions, /tx\.contact\.create/);
-  assert.match(leadActions, /tx\.lead\.update[\s\S]+data: \{ contactId \}/);
+  assert.match(leadActions, /getAccessibleContactIds\(user\)/);
+  assert.match(
+    leadActions,
+    /addLeadToContactsAtomic\(\{[\s\S]+leadId,[\s\S]+userId: user\.id,[\s\S]+accessibleContactIds/,
+  );
   assert.match(leadActions, /action: "lead\.contact_linked"/);
+});
+
+test("the converter locks and explicitly scopes every database operation", () => {
+  assert.match(conversion, /FOR SHARE OF t, m/);
+  assert.match(conversion, /l\."tenantId" = \$\{tenantId\}[\s\S]+FOR UPDATE/);
+  assert.match(conversion, /where: \{ id: leadId, tenantId, deletedAt: null \}/);
+  assert.match(conversion, /where: \{ tenantId, deletedAt: null, OR: matchers \}/);
+  assert.match(conversion, /tenantId,[\s\S]+firstName:/);
+  assert.match(
+    conversion,
+    /updateMany\(\{[\s\S]+id: leadId,[\s\S]+tenantId,[\s\S]+deletedAt: null,[\s\S]+contactId: null/,
+  );
+  assert.match(conversion, /matching_contact_unavailable/);
+  assert.match(conversion, /ambiguous_contact_match/);
+  assert.match(conversion, /linked\.count !== 1/);
 });
