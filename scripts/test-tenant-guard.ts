@@ -788,8 +788,9 @@ async function main() {
     });
     const sysAuditRow = await basePrisma.auditLog.findFirst({ where: { summary: sysAuditSummary }, select: { tenantId: true } });
     check("audit: system-scope cron log stays global (tenantId null)", sysAuditRow !== null && sysAuditRow.tenantId === null);
-    // Inline cleanup of both audit tables (governance AuditEvent + legacy AuditLog).
-    await basePrisma.$executeRaw`DELETE FROM "AuditEvent" WHERE "summary" IN (${auditSummary}, ${sysAuditSummary})`;
+    // Clean up only the legacy AuditLog rows — the governance AuditEvent stream is
+    // append-only (a DB rule refuses DELETE), so those rows are immutable by design
+    // and are discarded when the disposable CI database is torn down.
     await basePrisma.auditLog.deleteMany({ where: { summary: { in: [auditSummary, sysAuditSummary] } } });
 
     // ── DORMANT back-compat (enforcement OFF): C2 keys/OTP/push + C3 channel all run
