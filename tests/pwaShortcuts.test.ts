@@ -6,6 +6,23 @@ import manifest from "../src/app/manifest";
 import { GET as messagesManifest } from "../src/app/messages/manifest.webmanifest/route";
 import { readPwaActivityShortcut } from "../src/lib/pwaShortcuts";
 
+function assertPngShortcutIcon(icon: {
+  src: string;
+  sizes: string;
+  type: string;
+}) {
+  assert.equal(icon.type, "image/png");
+  assert.equal(icon.sizes, "192x192");
+
+  const png = readFileSync(join(process.cwd(), "public", icon.src));
+  assert.deepEqual(
+    [...png.subarray(0, 8)],
+    [137, 80, 78, 71, 13, 10, 26, 10],
+  );
+  assert.equal(png.readUInt32BE(16), 192);
+  assert.equal(png.readUInt32BE(20), 192);
+}
+
 test("CRM manifest exposes launcher shortcuts inside the root app scope", () => {
   const data = manifest();
 
@@ -39,16 +56,7 @@ test("CRM manifest exposes launcher shortcuts inside the root app scope", () => 
 
     const icon = shortcut.icons?.[0];
     assert.ok(icon);
-    assert.equal(icon.type, "image/png");
-    assert.equal(icon.sizes, "192x192");
-
-    const png = readFileSync(join(process.cwd(), "public", icon.src));
-    assert.deepEqual(
-      [...png.subarray(0, 8)],
-      [137, 80, 78, 71, 13, 10, 26, 10],
-    );
-    assert.equal(png.readUInt32BE(16), 192);
-    assert.equal(png.readUInt32BE(20), 192);
+    assertPngShortcutIcon(icon);
   }
 });
 
@@ -72,15 +80,34 @@ test("Messages manifest exposes launcher shortcuts inside the messages scope", a
   const data = await response.json();
 
   assert.deepEqual(
-    data.shortcuts.map(({ name, url }: { name: string; url: string }) => ({ name, url })),
+    data.shortcuts.map(
+      ({
+        name,
+        url,
+        icons,
+      }: {
+        name: string;
+        url: string;
+        icons: { src: string }[];
+      }) => ({ name, url, icon: icons[0]?.src }),
+    ),
     [
-      { name: "Open chats", url: "/messages?source=pwa-shortcut" },
-      { name: "Open help desk", url: "/messages/cases?source=pwa-shortcut" },
+      {
+        name: "Open chats",
+        url: "/messages?source=pwa-shortcut",
+        icon: "/icons/shortcut-chats-192.png",
+      },
+      {
+        name: "Open help desk",
+        url: "/messages/cases?source=pwa-shortcut",
+        icon: "/icons/shortcut-helpdesk-192.png",
+      },
     ],
   );
 
   for (const shortcut of data.shortcuts) {
     assert.ok(shortcut.url.startsWith("/messages"));
+    assertPngShortcutIcon(shortcut.icons[0]);
   }
   assert.equal(response.headers.get("cache-control"), "public, max-age=0, must-revalidate");
 });
