@@ -323,9 +323,13 @@ export default function LocationAutocomplete({
         includedRegionCodes: ["za"],
         language: "en",
         region: "za",
+        // Google caps a locationBias circle at 50 km; a larger radius is rejected
+        // with "Invalid circle.radius" and the autocomplete request 400s (RpcError).
+        // This is a bias only — results outside are still returned and
+        // includedRegionCodes limits to ZA — so the 50 km max around Cape Town is fine.
         locationBias: {
           center: { lat: -33.925, lng: 18.48 },
-          radius: 100_000,
+          radius: 50_000,
         },
       })
         .then(({ suggestions }) => {
