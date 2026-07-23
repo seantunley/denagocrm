@@ -1,0 +1,23 @@
+name: Temporary lint diagnostic
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+      - run: npm ci --silent
+      - name: Capture lint output
+        run: npm run lint > lint.txt 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: lint.txt
