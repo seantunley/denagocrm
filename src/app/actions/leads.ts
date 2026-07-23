@@ -11,6 +11,7 @@ import { softDeleteRecord } from "@/lib/trash";
 import { topPosition } from "@/lib/leadPos";
 import { triggerSurvey } from "@/lib/surveys";
 import { removeTimelinePin } from "@/lib/timelinePins";
+import { resolveTenantMemberUser } from "@/lib/tenantActor";
 import {
   hasPermission,
   requireLeadAccess,
@@ -45,6 +46,12 @@ function leadData(formData: FormData) {
   };
 }
 
+async function requireAssignableUser(userId: string) {
+  const assignee = await resolveTenantMemberUser(userId);
+  if (!assignee) throw new Error("That team member is no longer available.");
+  return assignee;
+}
+
 async function nextPosition(stageId: string) {
   const max = await prisma.lead.aggregate({
     where: { stageId },
@@ -53,10 +60,27 @@ async function nextPosition(stageId: string) {
   return (max._max.position ?? 0) + 1;
 }
 
-async function buildTitle(data: { name: string; productId: string | null; color: string | null }) {
+async function buildTitle(data: {
+  name: string;
+  productId: string | null;
+  color: string | null;
+  contactId?: string | null;
+  assignedToId?: string | null;
+}) {
+  if (data.assignedToId) await requireAssignableUser(data.assignedToId);
+  if (data.contactId) {
+    const contact = await prisma.contact.findUnique({
+      where: { id: data.contactId },
+      select: { id: true },
+    });
+    if (!contact) throw new Error("That contact is not available in this workspace");
+  }
   if (!data.productId) return data.name;
-  const product = await prisma.product.findUnique({ where: { id: data.productId } });
-  if (!product) return data.name;
+  const product = await prisma.product.findUnique({
+    where: { id: data.productId },
+    select: { name: true },
+  });
+  if (!product) throw new Error("That product is not available in this workspace");
   return [product.name, data.color].filter(Boolean).join(" – ");
 }
 
@@ -88,9 +112,9 @@ export async function createLead(formData: FormData) {
     throw new Error("You do not have permission to assign leads to another user");
   }
 
-  const title = String(formData.get("title") ?? "").trim() || (await buildTitle(data));
+  const generatedTitle = await buildTitle(data);
+  const title = String(formData.get("title") ?? "").trim() || generatedTitle;
 
-  // Ensure every lead has a contact: link an existing one or create it.
   if (!data.contactId) {
     const matchers = [
       ...(data.email ? [{ email: data.email }] : []),
@@ -164,7 +188,8 @@ export async function updateLead(id: string, formData: FormData) {
     }
   }
 
-  const title = String(formData.get("title") ?? "").trim() || (await buildTitle(data));
+  const generatedTitle = await buildTitle(data);
+  const title = String(formData.get("title") ?? "").trim() || generatedTitle;
   const lead = await prisma.lead.update({
     where: { id },
     data: { ...data, title, ...(before.stageId !== data.stageId ? { stageEnteredAt: new Date() } : {}) },
@@ -210,9 +235,6 @@ export async function moveLead(leadId: string, stageId: string) {
     before: { stageId: before.stageId, position: before.position, pipelineId: currentScope?.pipelineId },
     after: { stageId, position: lead.position, pipelineId: targetStage.pipelineId },
   });
-  // Moving a lead back to a stage BEFORE the test-drive stage cancels any booked
-  // test drive — otherwise a stale appointment (and its weather) lingers on the
-  // card. Remove the activity and record the cancellation in the audit log.
   const pipelineStages = await listPipelineStages(targetStage.pipelineId);
   const testDriveStage = pipelineStages.find((stage) => stage.entryAction === "book_test_drive");
   if (testDriveStage && targetStage.order < testDriveStage.order) {
@@ -238,30 +260,20 @@ export async function moveLead(leadId: string, stageId: string) {
   revalidatePath("/forecast");
 }
 
-/**
- * Dragging a lead into the test-drive stage: move it AND capture the booking
- * (model, when, where) in one step so the appointment is never lost.
- */
 export async function moveLeadToTestDrive(
   leadId: string,
   stageId: string,
   data: { productId: string | null; date: string; time: string; location: string }
 ): Promise<{ ok: boolean; error?: string }> {
-  // Record-level authorization (not a bare module check): the caller must be able
-  // to access this lead and change its stage, mirroring moveLead().
   const user = await requireLeadAccess(leadId, "leads.change_stage");
-  const when = new Date(`${data.date}T${data.time || "09:00"}:00+02:00`); // SA time
+  const when = new Date(`${data.date}T${data.time || "09:00"}:00+02:00`);
   if (isNaN(when.getTime())) return { ok: false, error: "Pick a valid date and time" };
 
-  // Validate the destination stage exists/open, belongs to the lead's pipeline
-  // (or the user may cross pipelines), and is actually THE test-drive stage —
-  // the browser supplies stageId, so none of that can be trusted.
   const currentScope = await getLeadPipeline(leadId);
   if (!currentScope) return { ok: false, error: "Lead not found." };
   const changingStage = currentScope.stageId !== stageId;
   const targetStage = await validateOpenStage(stageId);
   if (
-    currentScope &&
     currentScope.pipelineId !== targetStage.pipelineId &&
     !(await hasPermission(user, "leads.change_pipeline"))
   ) {
@@ -271,7 +283,6 @@ export async function moveLeadToTestDrive(
     return { ok: false, error: "That stage is not configured for test-drive booking." };
   }
 
-  // A supplied product must be a real product, or the booking captures a bogus id.
   let productId: string | null = null;
   if (data.productId) {
     const product = await prisma.product.findUnique({
@@ -283,8 +294,6 @@ export async function moveLeadToTestDrive(
   }
 
   const position = await nextPosition(stageId);
-  // Move the lead AND create the appointment in one transaction — a failure
-  // between them must not leave the lead moved without its test drive booked.
   const lead = await prisma.$transaction(async (tx) => {
     const updated = await tx.lead.update({
       where: { id: leadId },
@@ -295,15 +304,15 @@ export async function moveLeadToTestDrive(
       include: { stage: true, product: true },
     });
     const activityData = {
-        type: "test_drive",
-        summary: `Test Drive${updated.product ? ` — ${updated.product.name}` : ""}`,
-        note: `${changingStage ? "Booked" : "Rescheduled"} from the pipeline board for ${updated.name}.`,
-        location: data.location.trim() || null,
-        dueDate: when,
-        leadId,
-        contactId: updated.contactId,
-        assignedToId: updated.assignedToId ?? user.id,
-        createdById: user.id,
+      type: "test_drive",
+      summary: `Test Drive${updated.product ? ` — ${updated.product.name}` : ""}`,
+      note: `${changingStage ? "Booked" : "Rescheduled"} from the pipeline board for ${updated.name}.`,
+      location: data.location.trim() || null,
+      dueDate: when,
+      leadId,
+      contactId: updated.contactId,
+      assignedToId: updated.assignedToId ?? user.id,
+      createdById: user.id,
     };
     const existing = await tx.activity.findFirst({
       where: { leadId, type: "test_drive", status: "planned" },
@@ -337,13 +346,9 @@ export async function moveLeadToTestDrive(
   return { ok: true };
 }
 
-/** Reassign a lead from the board without submitting the full edit form. */
 export async function assignLead(leadId: string, assignedToId: string) {
   const user = await requireLeadAccess(leadId, "leads.assign");
-  const assignee = await prisma.user.findUnique({
-    where: { id: assignedToId },
-    select: { id: true, name: true },
-  });
+  const assignee = await requireAssignableUser(assignedToId).catch(() => null);
   if (!assignee) return { ok: false as const, error: "That team member is no longer available." };
 
   const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
@@ -366,7 +371,6 @@ export async function assignLead(leadId: string, assignedToId: string) {
   return { ok: true as const, assignee };
 }
 
-/** Mark a lead as opened (clears the NEW pill) and refresh the board. */
 export async function markLeadViewed(leadId: string) {
   await requireLeadReadAccess(leadId);
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { viewedAt: true } });
@@ -376,7 +380,6 @@ export async function markLeadViewed(leadId: string) {
   }
 }
 
-/** Marks a lead won and ensures it is linked to a contact. */
 export async function markWon(leadId: string, formData?: FormData) {
   const user = await requireLeadAccess(leadId, "leads.mark_won");
   const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
