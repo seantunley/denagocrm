@@ -7,6 +7,7 @@ const read = (...parts: string[]) => readFileSync(join(process.cwd(), ...parts),
 const menuSource = read("src", "components", "RecordContextMenu.tsx");
 const quickCreateSource = read("src", "components", "QuickCreateDialog.tsx");
 const quickCreateRouteSource = read("src", "app", "api", "quick-create", "route.ts");
+const quickCreateActionSource = read("src", "app", "actions", "quickCreate.ts");
 
 const coveredSurfaces = [
   ["contacts", "page.tsx"],
@@ -40,9 +41,17 @@ test("contact record actions preserve the selected contact", () => {
   assert.match(quickCreateSource, /defaultValue=\{createDefaults\.contactId \?\? ""\}/);
 });
 
-test("record quick-create staff options stay inside the active tenant", () => {
+test("record quick-create metadata and writes remain tenant scoped", () => {
   assert.match(quickCreateRouteSource, /listTenantStaff\(\)/);
   assert.doesNotMatch(quickCreateRouteSource, /prisma\.user\.findMany/);
+  assert.match(quickCreateSource, /action=\{createQuickLead\}/);
+  assert.match(quickCreateSource, /action=\{createQuickContact\}/);
+  assert.match(quickCreateSource, /action=\{createQuickVehicle\}/);
+  assert.match(quickCreateSource, /scheduleQuickActivity\(formData\)/);
+  assert.match(quickCreateActionSource, /resolveTenantMemberUser\(id\)/);
+  assert.match(quickCreateActionSource, /prisma\.pipelineStage\.findUnique/);
+  assert.match(quickCreateActionSource, /prisma\.contact\.findUnique/);
+  assert.match(quickCreateActionSource, /prisma\.product\.findUnique/);
 });
 
 test("primary record surfaces use the shared context menu", () => {
