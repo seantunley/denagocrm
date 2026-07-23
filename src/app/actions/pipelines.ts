@@ -12,6 +12,7 @@ import {
   archivePipeline,
   captureForecastSnapshot,
   createPipeline,
+  getPipelineStage,
   listPipelineStages,
   reorderPipelineStages,
   updateLeadForecast,
@@ -19,7 +20,7 @@ import {
   updatePipelineStage,
 } from "@/lib/pipelines";
 import { logAuditStrict } from "@/lib/audit";
-import { basePrisma } from "@/lib/db";
+import { basePrisma, prisma } from "@/lib/db";
 import { parseRands } from "@/lib/format";
 import { parsePipelineStageAction } from "@/lib/pipelineStageActions";
 
@@ -132,10 +133,8 @@ export async function createSalesPipelineStage(pipelineId: string, formData: For
 
 export async function editSalesPipelineStage(id: string, formData: FormData) {
   const user = await requirePermission("pipelines.manage");
-  const before = await basePrisma.$queryRaw<Array<Record<string, unknown>>>`
-    SELECT * FROM "PipelineStage" WHERE "id" = ${id} LIMIT 1
-  `;
-  if (!before[0]) throw new Error("Pipeline stage not found");
+  const before = await getPipelineStage(id);
+  if (!before) throw new Error("Pipeline stage not found");
   const name = str(formData, "name");
   if (!name) throw new Error("Stage name is required");
   const after = {
@@ -154,7 +153,7 @@ export async function editSalesPipelineStage(id: string, formData: FormData) {
     entityType: "PipelineStage",
     entityId: id,
     user,
-    before: before[0],
+    before,
     after,
   });
   revalidatePath("/settings/pipelines");
@@ -211,14 +210,20 @@ export async function archiveSalesPipeline(id: string, formData: FormData) {
 
 export async function saveLeadForecast(leadId: string, formData: FormData) {
   const user = await requireLeadAccess(leadId, "forecast.manage");
-  const before = await basePrisma.$queryRaw<Array<Record<string, unknown>>>`
-    SELECT "probability", "forecastCategory", "expectedCloseDate", "estimatedCostCents", "teamId"
-    FROM "Lead" WHERE "id" = ${leadId} AND "deletedAt" IS NULL LIMIT 1
-  `;
-  if (!before[0]) throw new Error("Lead not found");
+  const before = await prisma.lead.findUnique({
+    where: { id: leadId },
+    select: {
+      probability: true,
+      forecastCategory: true,
+      expectedCloseDate: true,
+      estimatedCostCents: true,
+      teamId: true,
+    },
+  });
+  if (!before) throw new Error("Lead not found");
 
   const teamId = str(formData, "teamId");
-  if ((before[0].teamId ?? null) !== teamId && !(await hasPermission(user, "leads.assign"))) {
+  if ((before.teamId ?? null) !== teamId && !(await hasPermission(user, "leads.assign"))) {
     throw new Error("You do not have permission to change the lead team");
   }
   const forecastCategory = str(formData, "forecastCategory") ?? "pipeline";
@@ -241,7 +246,7 @@ export async function saveLeadForecast(leadId: string, formData: FormData) {
     entityId: leadId,
     leadId,
     user,
-    before: before[0],
+    before,
     after,
   });
   revalidatePath("/forecast");
