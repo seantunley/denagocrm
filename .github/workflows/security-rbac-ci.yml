@@ -111,6 +111,9 @@ jobs:
       - name: Unit tests
         run: npm run test:unit
 
+      - name: Run lead-to-contact integration tests
+        run: npm run test:lead-to-contact
+
       # Production build is intentionally NOT run here: Vercel builds every PR
       # preview and push, so a duplicate CI build only burns Actions minutes.
       # Build breakage surfaces as a red Vercel check on the PR instead.
