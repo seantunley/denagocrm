@@ -19,7 +19,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
-import { openQuickCreate, type QuickCreateKind } from "@/components/QuickCreateDialog";
+import {
+  openQuickCreate,
+  type QuickCreateDefaults,
+  type QuickCreateKind,
+} from "@/components/QuickCreateDialog";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -48,6 +52,7 @@ export type RecordContextAction = {
   href?: string;
   copyValue?: string;
   quickCreate?: QuickCreateKind;
+  quickCreateDefaults?: QuickCreateDefaults;
   icon?: RecordActionIcon;
   newTab?: boolean;
   separatorBefore?: boolean;
@@ -107,7 +112,7 @@ export default function RecordContextMenu({
 
   function run(action: RecordContextAction) {
     if (action.quickCreate) {
-      openQuickCreate(action.quickCreate);
+      openQuickCreate(action.quickCreate, action.quickCreateDefaults);
     } else if (action.copyValue) {
       void copy(action.copyValue, `${action.label.replace(/^Copy /, "")} copied`);
     } else if (action.href) {
