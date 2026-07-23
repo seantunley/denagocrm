@@ -30,7 +30,9 @@ import {
 import { resolveTenantActor, resolveTenantMemberUser, listTenantStaff } from "../src/lib/tenantActor";
 import { resolveApprover } from "../src/lib/signing/approvals";
 import { hashApiKey, resolveApiKeyTenant, authenticateIntakeKey } from "../src/lib/apiKeys";
-import { claimSlotCapacity } from "../src/lib/bookingSlots";
+import { claimSlotCapacity, getSlotConfig, slotInstantOrThrow } from "../src/lib/bookingSlots";
+import { NextRequest } from "next/server";
+import { POST as bookingsPOST } from "../src/app/api/bookings/route";
 import { serviceOtpKey } from "../src/lib/serviceOtp";
 import { pushRecipientsForCurrentScope } from "../src/lib/push";
 import { resolveChannelTenant } from "../src/lib/channelTenant";
@@ -825,6 +827,50 @@ async function main() {
     await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => { await putSetting(cfgSetW, "written"); });
     const wRow = await basePrisma.$queryRaw<{ tenantId: string | null }[]>`SELECT "tenantId" FROM "AppSetting" WHERE "key" = ${cfgSetW}`;
     check("appsetting: putSetting inside scope A stamps tenant A on the created row", wRow[0]?.tenantId === TENANT_A);
+
+    // ── HTTP-level booking test (design §8.5 — unblocked by the AppSetting.tenantId
+    //    slice): invoke the REAL bookings POST end-to-end under enforcement with
+    //    tenant A's per-tenant API key, and assert the PERSISTED Contact + Activity
+    //    carry tenant A. Exercises the whole chokepoint chain — key auth →
+    //    establishTenantScopeFromId → the guarded getSetting config read (which would
+    //    have 500'd on the missing AppSetting column before this slice) → the
+    //    basePrisma booking write stamped via writeTenantId(). ──────────────────────
+    // Pick a slot the route will accept using its OWN config + validator (no
+    // dependence on weekday/timezone or seeded booking settings; defaults apply
+    // because tenant A has no BOOKING_* rows).
+    const bookingConfig = await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => await getSlotConfig());
+    const bkTime = bookingConfig.times[0] ?? "10:00";
+    let bkDate = "";
+    for (let d = 9; d <= 31 && !bkDate; d++) {
+      const cand = new Date();
+      cand.setDate(cand.getDate() + d);
+      const iso = cand.toISOString().slice(0, 10);
+      try { slotInstantOrThrow(iso, bkTime, bookingConfig); bkDate = iso; } catch { /* not an allowed slot day — try the next */ }
+    }
+    check("booking-http: found a future slot the route accepts", bkDate !== "");
+    const bkEmail = `httpbook_${SFX}@test.invalid`;
+    const bookingReq = new NextRequest("https://denago.test/api/bookings", {
+      method: "POST",
+      headers: { "x-api-key": apiKeyRawA, "content-type": "application/json" },
+      body: JSON.stringify({ name: "HTTP Booking Test", email: bkEmail, phone: "0821234567", date: bkDate, time: bkTime }),
+    });
+    // Confine the route's enterWith(tenant) scope to THIS call so it can't leak into
+    // later assertions; the route still resolves tenant A from the key inside.
+    const bookingRes = await runInTenantScope({ tenantId: null, system: false }, async () => await bookingsPOST(bookingReq));
+    const bookingBody = (await bookingRes.json()) as { ok?: boolean; activityId?: string; error?: string };
+    check("booking-http: real POST returns 201 (whole chokepoint chain works enforcing)", bookingRes.status === 201 && bookingBody.ok === true);
+    const httpContact = await basePrisma.contact.findFirst({ where: { email: bkEmail }, select: { id: true, tenantId: true } });
+    check("booking-http: persisted Contact stamped tenant A (end-to-end)", httpContact?.tenantId === TENANT_A);
+    const httpActivity = bookingBody.activityId
+      ? await basePrisma.activity.findUnique({ where: { id: bookingBody.activityId }, select: { tenantId: true } })
+      : null;
+    check("booking-http: persisted Activity stamped tenant A (end-to-end)", httpActivity?.tenantId === TENANT_A);
+    // Inline cleanup: activity + audit rows (FK → contact) before the contact itself.
+    if (bookingBody.activityId) await basePrisma.activity.deleteMany({ where: { id: bookingBody.activityId } });
+    if (httpContact?.id) {
+      await basePrisma.auditLog.deleteMany({ where: { contactId: httpContact.id } });
+      await basePrisma.contact.deleteMany({ where: { id: httpContact.id } });
+    }
 
     // ── DORMANT back-compat (enforcement OFF): C2 keys/OTP/push + C3 channel all run
     //    byte-for-byte the pre-tenancy path. ─────────────────────────────────────────
