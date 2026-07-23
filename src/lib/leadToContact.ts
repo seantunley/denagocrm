@@ -1,5 +1,3 @@
-import "server-only";
-
 import { basePrisma } from "./db";
 import { soleActiveTenant } from "./tenant";
 
