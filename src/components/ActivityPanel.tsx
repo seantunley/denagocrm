@@ -1,7 +1,7 @@
 import { scheduleActivity, completeActivity, cancelActivity, updateActivity } from "@/app/actions/activities";
 import ModalTrigger from "@/components/Modal";
 import ActivityTypeFields from "@/components/ActivityTypeFields";
-import { formatDate, formatDue } from "@/lib/format";
+import { formatDue } from "@/lib/format";
 
 export const activityIcons: Record<string, string> = {
   call: "📞",
@@ -40,6 +40,7 @@ export default function ActivityPanel({
   leadId,
   contactId,
   revalidate,
+  startOpen = false,
 }: {
   activities: ActivityItem[];
   users: { id: string; name: string }[];
@@ -47,6 +48,7 @@ export default function ActivityPanel({
   leadId?: string;
   contactId?: string;
   revalidate: string;
+  startOpen?: boolean;
 }) {
   const planned = activities
     .filter((a) => a.status === "planned")
@@ -61,7 +63,7 @@ export default function ActivityPanel({
         <h2 className="font-semibold">Planned activities</h2>
       </div>
 
-      <details className="mb-4 group">
+      <details className="mb-4 group" open={startOpen}>
         <summary className="btn-secondary btn-sm inline-flex cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
           + Schedule activity
         </summary>

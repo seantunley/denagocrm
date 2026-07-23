@@ -257,6 +257,8 @@ export async function moveLeadToTestDrive(
   // (or the user may cross pipelines), and is actually THE test-drive stage —
   // the browser supplies stageId, so none of that can be trusted.
   const currentScope = await getLeadPipeline(leadId);
+  if (!currentScope) return { ok: false, error: "Lead not found." };
+  const changingStage = currentScope.stageId !== stageId;
   const targetStage = await validateOpenStage(stageId);
   if (
     currentScope &&
@@ -287,32 +289,38 @@ export async function moveLeadToTestDrive(
     const updated = await tx.lead.update({
       where: { id: leadId },
       data: {
-        stageId,
-        position,
-        stageEnteredAt: new Date(),
+        ...(changingStage ? { stageId, position, stageEnteredAt: new Date() } : {}),
         ...(productId ? { productId } : {}),
       },
       include: { stage: true, product: true },
     });
-    await tx.activity.create({
-      data: {
+    const activityData = {
         type: "test_drive",
         summary: `Test Drive${updated.product ? ` — ${updated.product.name}` : ""}`,
-        note: `Booked from the pipeline board for ${updated.name}.`,
+        note: `${changingStage ? "Booked" : "Rescheduled"} from the pipeline board for ${updated.name}.`,
         location: data.location.trim() || null,
         dueDate: when,
         leadId,
         contactId: updated.contactId,
         assignedToId: updated.assignedToId ?? user.id,
         createdById: user.id,
-      },
+    };
+    const existing = await tx.activity.findFirst({
+      where: { leadId, type: "test_drive", status: "planned" },
+      orderBy: { dueDate: "asc" },
+      select: { id: true },
     });
+    if (existing) {
+      await tx.activity.update({ where: { id: existing.id }, data: activityData });
+    } else {
+      await tx.activity.create({ data: activityData });
+    }
     return updated;
   });
 
   await logAudit({
     action: "lead.test_drive_booked",
-    summary: `Booked a test drive for “${lead.title}” (${when.toLocaleString("en-ZA", {
+    summary: `${changingStage ? "Booked" : "Rescheduled"} a test drive for “${lead.title}” (${when.toLocaleString("en-ZA", {
       timeZone: "Africa/Johannesburg",
       day: "numeric",
       month: "short",
@@ -323,10 +331,39 @@ export async function moveLeadToTestDrive(
     contactId: lead.contactId,
     user,
   });
-  await runLeadAutomations("stage_entered", leadId);
+  if (changingStage) await runLeadAutomations("stage_entered", leadId);
   revalidatePath("/leads");
   revalidatePath("/calendar");
   return { ok: true };
+}
+
+/** Reassign a lead from the board without submitting the full edit form. */
+export async function assignLead(leadId: string, assignedToId: string) {
+  const user = await requireLeadAccess(leadId, "leads.assign");
+  const assignee = await prisma.user.findUnique({
+    where: { id: assignedToId },
+    select: { id: true, name: true },
+  });
+  if (!assignee) return { ok: false as const, error: "That team member is no longer available." };
+
+  const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+  const lead = await prisma.lead.update({
+    where: { id: leadId },
+    data: { assignedToId: assignee.id },
+  });
+  await logAuditStrict({
+    action: "lead.assigned",
+    summary: `Assigned lead “${lead.title}” to ${assignee.name}`,
+    leadId,
+    contactId: lead.contactId,
+    user,
+    before,
+    after: lead,
+  });
+  revalidatePath("/leads");
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/forecast");
+  return { ok: true as const, assignee };
 }
 
 /** Mark a lead as opened (clears the NEW pill) and refresh the board. */
@@ -340,7 +377,7 @@ export async function markLeadViewed(leadId: string) {
 }
 
 /** Marks a lead won and ensures it is linked to a contact. */
-export async function markWon(leadId: string) {
+export async function markWon(leadId: string, formData?: FormData) {
   const user = await requireLeadAccess(leadId, "leads.mark_won");
   const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
   let contactId = before.contactId;
@@ -386,6 +423,7 @@ export async function markWon(leadId: string) {
   revalidatePath("/leads");
   revalidatePath("/forecast");
   revalidatePath(`/leads/${leadId}`);
+  if (formData?.get("returnTo") === "/leads") return;
   redirect(`/contacts/${contactId}`);
 }
 
