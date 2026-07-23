@@ -23,11 +23,18 @@ test("lead pipeline activity summaries stay bounded", () => {
 test("lead pipeline preserves production card signals", () => {
   assert.match(pageSource, /signing:\s*signingByLead\.get\(lead\.id\)/);
   assert.match(pageSource, /stage\.order < testDriveStage\.order/);
-  assert.match(pageSource, /stageActionById\.get\(stage\.id\) === "book_test_drive"/);
+  assert.match(pageSource, /stage\.entryAction === "book_test_drive"/);
   assert.match(boardSource, /target\.entryAction === "book_test_drive"/);
   assert.doesNotMatch(boardSource, /\/test\/i\.test\(target\.name\)/);
   assert.match(boardSource, /follow-up automation/);
   assert.match(boardSource, /lead\.signing\.label/);
+});
+
+test("lead board staff pickers and mutations stay inside the active tenant", () => {
+  assert.match(pageSource, /listTenantStaff\(\)/);
+  assert.doesNotMatch(pageSource, /prisma\.user\.findMany/);
+  assert.match(leadActionsSource, /resolveTenantMemberUser\(userId\)/);
+  assert.match(leadActionsSource, /requireAssignableUser\(assignedToId\)/);
 });
 
 test("lead card actions share the required-action stage gate", () => {
