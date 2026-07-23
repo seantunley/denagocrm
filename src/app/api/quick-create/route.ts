@@ -5,6 +5,7 @@ import { getAccessibleContactIds, getAccessibleVehicleIds, hasPermission, hasAny
 import { contactName } from "@/lib/format";
 import { getSetting } from "@/lib/settings";
 import { isModuleEnabled } from "@/lib/modules/enabled";
+import { listTenantStaff } from "@/lib/tenantActor";
 
 function inputDate(daysFromNow: number) {
   const date = new Date();
@@ -86,9 +87,7 @@ export async function GET() {
     needsContacts
       ? prisma.contact.findMany({ where: scoped(contactIds), orderBy: { firstName: "asc" }, take: 500 })
       : Promise.resolve([]),
-    needsUsers
-      ? prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } })
-      : Promise.resolve([]),
+    needsUsers ? listTenantStaff() : Promise.resolve([]),
     automotiveOn && needsVehicles
       ? prisma.vehicle.findMany({
           where: scoped(vehicleIds),

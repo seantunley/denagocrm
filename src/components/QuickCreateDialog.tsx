@@ -14,10 +14,12 @@ import ContactForm from "@/components/ContactForm";
 import JobCardForm from "@/components/JobCardForm";
 import VehicleForm from "@/components/VehicleForm";
 import { QuoteEditorDialog } from "@/components/quotes/QuoteEditorDialog";
-import { createLead } from "@/app/actions/leads";
-import { createContact } from "@/app/actions/contacts";
-import { createVehicle } from "@/app/actions/vehicles";
-import { scheduleActivity } from "@/app/actions/activities";
+import {
+  createQuickContact,
+  createQuickLead,
+  createQuickVehicle,
+  scheduleQuickActivity,
+} from "@/app/actions/quickCreate";
 import LocationAutocomplete from "@/components/LocationAutocomplete";
 
 export type QuickCreateKind = "lead" | "contact" | "calendar" | "quote" | "jobcard" | "vehicle";
@@ -50,10 +52,7 @@ type Options = {
   quoteDefaults: { validUntil: string; terms: string };
 };
 
-/**
- * Global create-anything dialog. Reuses the existing form components + server
- * actions; option lists are fetched once per session on first open.
- */
+/** Global create-anything dialog with tenant-validated server action gateways. */
 export default function QuickCreateDialog() {
   const [kind, setKind] = useState<QuickCreateKind | null>(null);
   const [calendarDefaults, setCalendarDefaults] = useState<CalendarCreateDefaults>({});
@@ -64,7 +63,6 @@ export default function QuickCreateDialog() {
   useEffect(() => {
     const onOpen = (event: Event) => {
       const detail = (event as CustomEvent<QuickCreateKind | { kind: QuickCreateKind; defaults?: CalendarCreateDefaults }>).detail;
-      // Keep accepting the original string event shape for older callers.
       if (typeof detail === "string") {
         setKind(detail);
         setCalendarDefaults({});
@@ -82,8 +80,6 @@ export default function QuickCreateDialog() {
     let cancelled = false;
     fetch("/api/quick-create")
       .then(async (response) => {
-        // A 403 (no create permission) returns { error } JSON — never treat that
-        // as an options payload, or the forms crash mapping undefined lists.
         if (!response.ok) {
           throw new Error(
             response.status === 403
@@ -109,7 +105,6 @@ export default function QuickCreateDialog() {
     };
   }, [kind, options]);
 
-  // Reset the calendar type to a sensible default whenever the dialog re-opens.
   useEffect(() => {
     setCalendarType(calendarDefaults.workshop ? "meeting" : "call");
   }, [calendarDefaults]);
@@ -125,7 +120,7 @@ export default function QuickCreateDialog() {
 
   async function scheduleCalendar(formData: FormData) {
     try {
-      await scheduleActivity(formData);
+      await scheduleQuickActivity(formData);
       close();
       toast.success("Activity scheduled");
     } catch (error) {
@@ -163,7 +158,7 @@ export default function QuickCreateDialog() {
           <>
             {kind === "lead" && (
               <LeadForm
-                action={createLead}
+                action={createQuickLead}
                 products={options.products}
                 stages={options.stages}
                 contacts={options.contacts}
@@ -174,14 +169,14 @@ export default function QuickCreateDialog() {
             )}
 
             {kind === "contact" && (
-              <ContactForm action={createContact} users={options.users} submitLabel="Create contact" variant="dialog" />
+              <ContactForm action={createQuickContact} users={options.users} submitLabel="Create contact" variant="dialog" />
             )}
 
             {kind === "jobcard" && <JobCardForm vehicles={options.vehicles} />}
 
             {kind === "vehicle" && (
               <VehicleForm
-                action={createVehicle}
+                action={createQuickVehicle}
                 contacts={options.contacts}
                 products={options.products}
                 submitLabel="Register vehicle"
