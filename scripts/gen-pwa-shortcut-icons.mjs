@@ -43,6 +43,24 @@ const shortcuts = [
       <path d="M3 10h18M10 16h4M12 14v4"/>
     `,
   },
+  {
+    file: "shortcut-chats-192.png",
+    start: "#fb923c",
+    end: "#ea580c",
+    artwork: `
+      <path d="M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+      <path d="M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1"/>
+    `,
+  },
+  {
+    file: "shortcut-helpdesk-192.png",
+    start: "#38bdf8",
+    end: "#0284c7",
+    artwork: `
+      <path d="M3 11h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5Zm0 0a9 9 0 1 1 18 0m0 0v5a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3Z"/>
+      <path d="M21 16v2a4 4 0 0 1-4 4h-5"/>
+    `,
+  },
 ];
 
 function shortcutSvg({ start, end, artwork }) {

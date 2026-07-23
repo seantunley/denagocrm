@@ -33,12 +33,26 @@ export function GET() {
           short_name: "Chats",
           description: "Open customer conversations",
           url: "/messages?source=pwa-shortcut",
+          icons: [
+            {
+              src: "/icons/shortcut-chats-192.png",
+              sizes: "192x192",
+              type: "image/png",
+            },
+          ],
         },
         {
           name: "Open help desk",
           short_name: "Help desk",
           description: "Open customer cases",
           url: "/messages/cases?source=pwa-shortcut",
+          icons: [
+            {
+              src: "/icons/shortcut-helpdesk-192.png",
+              sizes: "192x192",
+              type: "image/png",
+            },
+          ],
         },
       ],
     },
