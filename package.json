@@ -10,7 +10,6 @@
     "typecheck": "tsc --noEmit",
     "backup:verify": "tsx scripts/verify-backup.ts",
     "test:unit": "node --import tsx --test \"tests/**/*.test.ts\"",
-    "test:lead-to-contact": "tsx --tsconfig tsconfig.scripts.json scripts/test-lead-to-contact.ts",
     "test:journeys": "node --import tsx --test tests/journeyTypes.test.ts",
     "check:visual": "node scripts/check-visual-consistency.mjs",
     "prisma:generate": "prisma generate --schema ./prisma",
