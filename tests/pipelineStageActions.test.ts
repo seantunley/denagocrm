@@ -25,20 +25,28 @@ test("test-drive stage action explains its required workflow", () => {
   );
 });
 
-test("migration backfills one deterministic open test-drive stage per pipeline", () => {
+test("migration backfills one deterministic open test-drive stage per tenant pipeline", () => {
   assert.match(migration, /ADD COLUMN IF NOT EXISTS "entryAction"/);
-  assert.match(migration, /ROW_NUMBER\(\) OVER \([\s\S]+PARTITION BY candidate\."pipelineId"/);
-  assert.match(migration, /candidate\."name" ILIKE '%test%'/);
-  assert.match(migration, /COALESCE\(candidate\."isClosed", false\) = false/);
-  assert.match(migration, /ranked\.rn = 1/);
-  assert.match(migration, /configured\."entryAction" IS NOT NULL/);
-});
-
-test("database enforces one required action of each kind per pipeline", () => {
   assert.match(
     migration,
-    /CREATE UNIQUE INDEX IF NOT EXISTS "PipelineStage_pipeline_entryAction_key"[\s\S]+WHERE "entryAction" IS NOT NULL/,
+    /PARTITION BY candidate\."tenantId", candidate\."pipelineId"/,
   );
+  assert.match(migration, /candidate\."name" ILIKE '%test%'/);
+  assert.match(migration, /COALESCE\(candidate\."isClosed", false\) = false/);
+  assert.match(migration, /configured\."tenantId" IS NOT DISTINCT FROM candidate\."tenantId"/);
+  assert.match(migration, /ranked\.rn = 1/);
+});
+
+test("database enforces one required action per tenant pipeline", () => {
+  assert.match(
+    migration,
+    /CREATE UNIQUE INDEX IF NOT EXISTS "PipelineStage_tenant_pipeline_entryAction_key"[\s\S]+"tenantId", "pipelineId", "entryAction"/,
+  );
+  assert.match(
+    migration,
+    /CREATE UNIQUE INDEX IF NOT EXISTS "PipelineStage_legacy_pipeline_entryAction_key"[\s\S]+WHERE "tenantId" IS NULL/,
+  );
+  assert.match(migration, /UPDATE "PipelineStage"[\s\S]+COALESCE\("isClosed", false\) = true/);
   assert.match(migration, /DROP CONSTRAINT IF EXISTS "PipelineStage_entryAction_check"/);
   assert.match(migration, /VALIDATE CONSTRAINT "PipelineStage_entryAction_check"/);
 });
