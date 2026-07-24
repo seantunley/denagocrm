@@ -23,6 +23,12 @@ export type CampaignDraftEditorValue = {
   targetLeadCount: number | null;
   targetRevenueCents: number | null;
   successMetric: string | null;
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+  utmContent: string | null;
+  utmTerm: string | null;
+  attributionWindowDays: number;
   status: string;
 };
 
@@ -73,7 +79,7 @@ export default function CampaignDraftEditor({ initial }: { initial: CampaignDraf
   }, [value]);
 
   const set = (key: keyof CampaignDraftEditorValue, raw: string) => {
-    const numeric = new Set(["budgetCents", "targetLeadCount", "targetRevenueCents"]);
+    const numeric = new Set(["budgetCents", "targetLeadCount", "targetRevenueCents", "attributionWindowDays"]);
     setValue((current) => ({ ...current, [key]: numeric.has(key) ? (raw ? Number(raw) : null) : raw }));
   };
 
@@ -107,13 +113,25 @@ export default function CampaignDraftEditor({ initial }: { initial: CampaignDraf
       </section>
 
       <section className="card space-y-4">
-        <h2 className="font-semibold">2. Audience</h2>
-        <label className="space-y-1 block"><span className="label">Audience label</span><input className="input" value={value.audience} onChange={(e) => set("audience", e.target.value)} /></label>
-        <p className="text-xs text-muted-foreground">Saved segments and live audience preview are connected in the audience and approval PRs. This draft remains safe and unsent.</p>
+        <div><h2 className="font-semibold">2. Tracking and attribution</h2><p className="text-xs text-muted-foreground">Missing UTM values are safely defaulted at click time. Last-click attribution uses the selected lookback window.</p></div>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <label className="space-y-1"><span className="label">UTM source</span><input className="input" placeholder="denagocrm" value={value.utmSource ?? ""} onChange={(e) => set("utmSource", e.target.value)} /></label>
+          <label className="space-y-1"><span className="label">UTM medium</span><input className="input" placeholder={value.channel} value={value.utmMedium ?? ""} onChange={(e) => set("utmMedium", e.target.value)} /></label>
+          <label className="space-y-1"><span className="label">UTM campaign</span><input className="input" placeholder="campaign-name" value={value.utmCampaign ?? ""} onChange={(e) => set("utmCampaign", e.target.value)} /></label>
+          <label className="space-y-1"><span className="label">UTM content</span><input className="input" value={value.utmContent ?? ""} onChange={(e) => set("utmContent", e.target.value)} /></label>
+          <label className="space-y-1"><span className="label">UTM term</span><input className="input" value={value.utmTerm ?? ""} onChange={(e) => set("utmTerm", e.target.value)} /></label>
+          <label className="space-y-1"><span className="label">Attribution window (days)</span><input className="input" type="number" min="1" max="180" value={value.attributionWindowDays} onChange={(e) => set("attributionWindowDays", e.target.value)} /></label>
+        </div>
       </section>
 
       <section className="card space-y-4">
-        <h2 className="font-semibold">3. Content</h2>
+        <h2 className="font-semibold">3. Audience</h2>
+        <label className="space-y-1 block"><span className="label">Audience label</span><input className="input" value={value.audience} onChange={(e) => set("audience", e.target.value)} /></label>
+        <p className="text-xs text-muted-foreground">The exact resolved audience is frozen when the approved campaign is scheduled or queued.</p>
+      </section>
+
+      <section className="card space-y-4">
+        <h2 className="font-semibold">4. Content</h2>
         <label className="space-y-1 block"><span className="label">Channel</span><select className="input" value={value.channel} onChange={(e) => set("channel", e.target.value)}><option value="email">Email</option><option value="sms">SMS</option></select></label>
         {value.channel === "email" && <>
           <label className="space-y-1 block"><span className="label">Subject</span><input className="input" value={value.subject ?? ""} onChange={(e) => set("subject", e.target.value)} /></label>
