@@ -21,26 +21,35 @@ export function appBaseUrl() {
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-function segmentWhere(criteria: SegmentCriteria) {
-  const where: any = { deletedAt: null, marketingOptOut: false };
+function segmentWhere(tenantId: string, criteria: SegmentCriteria) {
+  const where: any = { tenantId, deletedAt: null, marketingOptOut: false };
   if (criteria.source) where.source = criteria.source;
   if (criteria.province) where.province = criteria.province;
-  if (criteria.tagId) where.tags = { some: { id: criteria.tagId } };
-  if (criteria.hasVehicle) where.vehicles = { some: { deletedAt: null } };
-  if (criteria.wonOnly) where.leads = { some: { status: "won" } };
+  if (criteria.tagId) where.tags = { some: { id: criteria.tagId, tenantId } };
+  if (criteria.hasVehicle) where.vehicles = { some: { tenantId, deletedAt: null } };
+  if (criteria.wonOnly) where.leads = { some: { tenantId, status: "won", deletedAt: null } };
   return where;
 }
 
-/** Resolve the contacts a segment reaches for a given channel (max 5000). */
-export async function resolveContacts(criteria: SegmentCriteria, channel: string) {
-  const where = segmentWhere(criteria);
+/** Resolve one tenant's contacts reached by a segment for a given channel (max 5000). */
+export async function resolveContacts(
+  tenantId: string,
+  criteria: SegmentCriteria,
+  channel: string,
+) {
+  const where = segmentWhere(tenantId, criteria);
   if (channel === "email") where.email = { not: null };
   const contacts = await prisma.contact.findMany({
     where,
     take: 5000,
     orderBy: { createdAt: "desc" },
     include: criteria.serviceDue
-      ? { vehicles: { where: { deletedAt: null }, include: { serviceRecords: true, mileageLogs: true } } }
+      ? {
+          vehicles: {
+            where: { tenantId, deletedAt: null },
+            include: { serviceRecords: true, mileageLogs: true },
+          },
+        }
       : undefined,
   });
   let list = contacts as any[];
@@ -49,7 +58,7 @@ export async function resolveContacts(criteria: SegmentCriteria, channel: string
       (c.vehicles ?? []).some((v: any) => {
         const s = computeDue(v).status;
         return s === "due_soon" || s === "overdue";
-      })
+      }),
     );
   }
   if (channel === "sms") return list.filter((c) => c.whatsapp || c.phone);
@@ -58,8 +67,12 @@ export async function resolveContacts(criteria: SegmentCriteria, channel: string
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-export async function countContacts(criteria: SegmentCriteria, channel: string) {
-  return (await resolveContacts(criteria, channel)).length;
+export async function countContacts(
+  tenantId: string,
+  criteria: SegmentCriteria,
+  channel: string,
+) {
+  return (await resolveContacts(tenantId, criteria, channel)).length;
 }
 
 function emailShell(inner: string, unsubUrl: string) {
@@ -85,8 +98,8 @@ You received this because you're a Denago Cape Town customer.
 export function buildTrackedEmail(personalizedHtml: string, token: string) {
   const base = appBaseUrl();
   const rewritten = personalizedHtml.replace(
-    /href="(https?:\/\/[^"]+)"/g,
-    (_m, url) => `href="${base}/api/track/c/${token}?u=${encodeURIComponent(url)}"`
+    /href="(https?:\/\/[^\"]+)"/g,
+    (_m, url) => `href="${base}/api/track/c/${token}?u=${encodeURIComponent(url)}"`,
   );
   const pixel = `<img src="${base}/api/track/o/${token}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;overflow:hidden;">`;
   return emailShell(rewritten + pixel, `${base}/api/unsubscribe/${token}`);
@@ -96,37 +109,43 @@ export function newToken() {
   return crypto.randomBytes(18).toString("hex");
 }
 
-async function finalizeIfDone(campaignId: string) {
+async function finalizeIfDone(campaignId: string, tenantId: string) {
   const remaining = await prisma.campaignRecipient.count({
-    where: { campaignId, status: "queued" },
+    where: { campaignId, tenantId, status: "queued" },
   });
   if (remaining === 0) {
     await prisma.campaign.update({
-      where: { id: campaignId },
+      where: { id: campaignId, tenantId },
       data: { status: "sent", sentAt: new Date() },
     });
   }
 }
 
 /**
- * Send one batch of queued recipients for a campaign. Called synchronously on
- * first send (instant feedback) and repeatedly from the cron to drain the rest.
- * Returns how many were processed.
+ * Send one tenant-scoped batch of queued recipients for a campaign. Called
+ * synchronously on first send and repeatedly from the cron to drain the rest.
  */
-export async function sendCampaignBatch(campaignId: string, limit = 80): Promise<number> {
-  const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
+export async function sendCampaignBatch(
+  campaignId: string,
+  tenantId: string,
+  limit = 80,
+): Promise<number> {
+  const campaign = await prisma.campaign.findFirst({ where: { id: campaignId, tenantId } });
   if (!campaign) return 0;
   const recipients = await prisma.campaignRecipient.findMany({
-    where: { campaignId, status: "queued" },
+    where: { campaignId, tenantId, status: "queued", contact: { tenantId } },
     include: { contact: true },
     take: limit,
   });
   if (recipients.length === 0) {
-    await finalizeIfDone(campaignId);
+    await finalizeIfDone(campaignId, tenantId);
     return 0;
   }
   if (campaign.status !== "sending") {
-    await prisma.campaign.update({ where: { id: campaignId }, data: { status: "sending" } });
+    await prisma.campaign.update({
+      where: { id: campaignId, tenantId },
+      data: { status: "sending" },
+    });
   }
 
   let sent = 0;
@@ -147,35 +166,36 @@ export async function sendCampaignBatch(campaignId: string, limit = 80): Promise
     if (res.ok) {
       sent++;
       await prisma.campaignRecipient.update({
-        where: { id: r.id },
+        where: { id: r.id, tenantId },
         data: { status: "sent", sentAt: new Date() },
       });
     } else {
       failed++;
       await prisma.campaignRecipient.update({
-        where: { id: r.id },
+        where: { id: r.id, tenantId },
         data: { status: "failed", error: (res.error ?? "send failed").slice(0, 200) },
       });
     }
   }
   await prisma.campaign.update({
-    where: { id: campaignId },
+    where: { id: campaignId, tenantId },
     data: { sentCount: { increment: sent }, failedCount: { increment: failed } },
   });
-  await finalizeIfDone(campaignId);
+  await finalizeIfDone(campaignId, tenantId);
   return recipients.length;
 }
 
-/** Drain queued recipients across all in-flight campaigns (cron). */
+/** Drain queued recipients across tenant-stamped in-flight campaigns. */
 export async function runCampaignQueue(maxTotal = 150): Promise<number> {
   const active = await prisma.campaign.findMany({
-    where: { status: { in: ["queued", "sending"] } },
+    where: { tenantId: { not: null }, status: { in: ["queued", "sending"] } },
     orderBy: { createdAt: "asc" },
   });
   let done = 0;
   for (const c of active) {
     if (done >= maxTotal) break;
-    done += await sendCampaignBatch(c.id, Math.min(80, maxTotal - done));
+    if (!c.tenantId) continue;
+    done += await sendCampaignBatch(c.id, c.tenantId, Math.min(80, maxTotal - done));
   }
   return done;
 }
