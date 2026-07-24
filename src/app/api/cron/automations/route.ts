@@ -13,7 +13,7 @@ import type { ModuleId } from "@/lib/modules/registry";
 import { logError } from "@/lib/errorLog";
 import { runAutoResearch } from "@/lib/ai";
 import { runActivityReminders } from "@/lib/activityReminders";
-import { runCampaignQueue } from "@/lib/campaigns";
+import { runSafeCampaignQueue } from "@/lib/marketingCampaignQueue";
 import { runSurveyQueue } from "@/lib/surveys";
 import { runLifecycleJourneys } from "@/lib/lifecycleJourneys";
 import { runAiHealthIfDue, runBackupWatchdog } from "@/lib/systemHealth";
@@ -31,12 +31,6 @@ import { withSystemScope } from "@/lib/tenantScopeEntry";
  * runs once, unscoped — byte-for-byte the pre-tenancy sweep.
  */
 async function runOperationalQueues() {
-  // Load the enabled module set once, then skip any worker whose owning optional
-  // pack is off — the cron must not keep a disabled module's queues running.
-  // `null` in the response marks "skipped (module off)", distinct from 0 (ran,
-  // nothing to do) and -1 (errored). Ungated workers below are core (no owning
-  // optional module): idle lead automations, quote-signing reminders, inbound
-  // email filing, activity reminders, AI lead enrichment.
   const enabled = await getEnabledModuleIds().catch(() => null);
   const on = (id: ModuleId) => enabled === null || enabled.has(id);
 
@@ -55,7 +49,7 @@ async function runOperationalQueues() {
   const activityReminders = await runActivityReminders().catch((e) => { logError("activity-reminders", e); return -1; });
   const aiResearch = await runAutoResearch().catch((e) => { logError("ai-auto-research", e); return -1; });
   const campaignSent = on("marketing")
-    ? await runCampaignQueue().catch((e) => { logError("campaign-queue", e); return -1; })
+    ? await runSafeCampaignQueue().catch((e) => { logError("campaign-queue", e); return -1; })
     : null;
   const surveysSent = on("marketing")
     ? await runSurveyQueue().catch((e) => { logError("survey-queue", e); return -1; })
@@ -99,19 +93,12 @@ async function runGlobalMaintenance() {
   });
 }
 
-/**
- * Runs recurring operational queues. Invoked by Vercel Cron with
- *   Authorization: Bearer <CRON_SECRET>
- */
+/** Runs recurring operational queues. */
 export async function GET(req: NextRequest) {
-  if (!isAuthorizedCron(req)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  if (!isAuthorizedCron(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   let runs: Array<CronRun<OperationalResult>>;
   try {
-    // The helper isolates tenant failures, rotates the start tenant, and stops
-    // admitting new slices before the route deadline.
     runs = await runCronPerTenant(async () => runOperationalQueues(), {
       maxRuntimeMs: 45_000,
       minStartBudgetMs: 8_000,
@@ -120,15 +107,10 @@ export async function GET(req: NextRequest) {
       onError: (tenantId, error) => logError(`automations-tenant:${tenantId}`, error),
     });
   } finally {
-    // Platform-global maintenance runs exactly once and is not starved by a failed
-    // tenant slice or tenant-enumeration error. In dormant mode the original error
-    // still propagates after this finally block, preserving the legacy response.
     await runGlobalMaintenance();
   }
 
   const dormant = runs.length === 1 && runs[0].tenantId === null ? runs[0] : null;
-  if (dormant?.status === "ok") {
-    return NextResponse.json({ ok: true, ...dormant.result });
-  }
+  if (dormant?.status === "ok") return NextResponse.json({ ok: true, ...dormant.result });
   return NextResponse.json({ ok: true, tenants: runs });
 }
