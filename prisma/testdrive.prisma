@@ -6,7 +6,7 @@ model DemoVehicle {
   tenantId        String?
   name            String
   productId       String?
-  stockUnitId     String?
+  stockUnitId     String?  @unique
   vin             String?
   regNumber       String?
   color           String?
@@ -24,7 +24,6 @@ model DemoVehicle {
   @@index([tenantId])
   @@index([status, branch])
   @@index([productId])
-  @@index([stockUnitId])
 }
 
 /// Operational source of truth for a test drive. A linked Activity keeps the booking
@@ -43,7 +42,7 @@ model TestDriveBooking {
   productId     String?
   salespersonId String
   accompanyingSalespersonId String?
-  activityId    String?
+  activityId    String? @unique
 
   scheduledStart  DateTime
   expectedReturnAt DateTime
@@ -89,7 +88,6 @@ model TestDriveBooking {
   @@index([leadId])
   @@index([contactId])
   @@index([salespersonId])
-  @@index([activityId])
   @@index([convertedQuoteId])
 }
 
