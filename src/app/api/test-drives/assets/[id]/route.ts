@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { hasAnyPermission } from "@/lib/permissions";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { readFile } from "@/lib/storage";
+import { canAccessTestDriveBooking } from "@/lib/testDriveAccess";
 
 export async function GET(
   _request: NextRequest,
@@ -19,9 +20,12 @@ export async function GET(
   const { id } = await params;
   const asset = await prisma.testDriveAsset.findUnique({
     where: { id },
-    include: { booking: { select: { deletedAt: true } } },
+    include: { booking: { select: { id: true, deletedAt: true } } },
   });
   if (!asset || asset.booking.deletedAt) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!(await canAccessTestDriveBooking(user, asset.booking.id))) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const inline = /^(image\/(png|jpe?g|webp)|application\/pdf)$/i.test(asset.mimeType);
   try {
