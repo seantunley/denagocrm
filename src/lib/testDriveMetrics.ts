@@ -1,4 +1,5 @@
 export type TestDriveMetricRow = {
+  leadId: string | null;
   status: string;
   scheduledStart: Date;
   expectedReturnAt: Date;
@@ -12,6 +13,7 @@ export type TestDriveMetricRow = {
 
 export type TestDriveMetrics = {
   bookings: number;
+  bookedLeads: number;
   bookingRate: number;
   attended: number;
   attendanceRate: number;
@@ -42,14 +44,17 @@ export function calculateTestDriveMetrics(args: {
 }): TestDriveMetrics {
   const operatingHoursPerDay = args.operatingHoursPerDay ?? 8;
   const bookings = args.bookings.filter((booking) => booking.status !== "cancelled");
+  const bookedLeads = new Set(
+    bookings.map((booking) => booking.leadId).filter((leadId): leadId is string => Boolean(leadId)),
+  ).size;
   const attendedRows = bookings.filter((booking) =>
     booking.actualStartAt !== null || booking.status === "checked_out" || booking.status === "completed"
   );
   const noShows = bookings.filter((booking) => booking.status === "no_show").length;
-  const quoteConversions = bookings.filter((booking) =>
+  const quoteConversions = attendedRows.filter((booking) =>
     Boolean(booking.convertedQuoteId) || booking.salesOutcome === "quote_created" || booking.salesOutcome === "sale_won"
   ).length;
-  const saleConversions = bookings.filter((booking) => booking.salesOutcome === "sale_won").length;
+  const saleConversions = attendedRows.filter((booking) => booking.salesOutcome === "sale_won").length;
   const incidents = attendedRows.filter((booking) =>
     Boolean(booking.newDamage?.trim()) || Boolean(booking.incidentReport?.trim())
   ).length;
@@ -61,15 +66,16 @@ export function calculateTestDriveMetrics(args: {
 
   return {
     bookings: bookings.length,
-    bookingRate: percent(bookings.length, args.eligibleLeadCount),
+    bookedLeads,
+    bookingRate: percent(bookedLeads, args.eligibleLeadCount),
     attended: attendedRows.length,
     attendanceRate: percent(attendedRows.length, bookings.length),
     noShows,
     noShowRate: percent(noShows, bookings.length),
     quoteConversions,
-    quoteConversionRate: percent(quoteConversions, bookings.length),
+    quoteConversionRate: percent(quoteConversions, attendedRows.length),
     saleConversions,
-    saleConversionRate: percent(saleConversions, bookings.length),
+    saleConversionRate: percent(saleConversions, attendedRows.length),
     bookedHours: Math.round(bookedHours * 10) / 10,
     utilisationRate: percent(bookedHours, availableHours),
     incidents,
