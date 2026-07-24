@@ -42,3 +42,24 @@ model SurveyDistribution {
   @@index([tenantId, status, scheduledFor])
   @@index([surveyId, surveyVersion])
 }
+
+model SurveyFollowUp {
+  id               String   @id @default(cuid())
+  tenantId         String?
+  surveyResponseId String   @unique
+  distributionId   String?
+  contactId        String?
+  severity         String   @default("medium")
+  status           String   @default("open")
+  ownerId          String?
+  dueAt             DateTime?
+  caseId            String?
+  note              String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  resolvedAt        DateTime?
+  resolvedById      String?
+
+  @@index([tenantId, status, dueAt])
+  @@index([contactId, createdAt(sort: Desc)])
+}
