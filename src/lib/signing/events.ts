@@ -37,7 +37,7 @@ export async function recordView(recipientId: string, requestId: string, name: s
 
   const request = await prisma.signatureRequest.findUnique({
     where: { id: requestId },
-    select: { id: true, title: true, quoteId: true, contactId: true },
+    select: { id: true, tenantId: true, title: true, quoteId: true, contactId: true },
   });
   if (!request?.quoteId) return;
   const quote = await prisma.quote.findUnique({
@@ -51,6 +51,7 @@ export async function recordView(recipientId: string, requestId: string, name: s
     type: "quote_opened",
     entityType,
     entityId,
+    tenantId: request.tenantId,
     payload: { source: { id: quote.id, entityType: "Quote", reference: `Q-${quote.number}`, status: quote.status, signatureRequestId: request.id, title: request.title } },
     dedupeKey: `quote-opened:${request.id}`,
   });
