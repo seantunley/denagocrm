@@ -1,9 +1,11 @@
+import crypto from "node:crypto";
 import { basePrisma } from "./db";
 import { sendEmail, renderTemplate } from "./email";
 import { sendSms } from "./sms";
 import { buildTrackedEmail } from "./campaigns";
-import { canContactPerson, type CommunicationChannel } from "./communicationPolicy";
+import { canContactPerson, classifyRetry, type CommunicationChannel } from "./communicationPolicy";
 import { contactName } from "./format";
+import { currentTenantScope } from "./tenantScope";
 
 const BATCH_SIZE = 50;
 const STALE_CLAIM_MINUTES = 15;
@@ -27,6 +29,12 @@ type ClaimedRecipient = {
   whatsapp: string | null;
 };
 
+function activeTenantId() {
+  const scope = currentTenantScope();
+  if (scope?.system) throw new Error("Campaign delivery must run in a tenant scope, not system scope");
+  return scope?.tenantId ?? null;
+}
+
 async function event(args: {
   tenantId: string | null;
   campaignId: string;
@@ -41,32 +49,40 @@ async function event(args: {
   `;
 }
 
-async function activateDueCampaigns() {
+async function activateDueCampaigns(tenantId: string | null) {
   await basePrisma.$executeRaw`
     UPDATE "Campaign" SET "status" = 'queued', "updatedAt" = CURRENT_TIMESTAMP
-    WHERE "status" = 'scheduled' AND "scheduledFor" <= CURRENT_TIMESTAMP
+    WHERE "tenantId" IS NOT DISTINCT FROM ${tenantId}
+      AND "status" = 'scheduled' AND "scheduledFor" <= CURRENT_TIMESTAMP
   `;
   await basePrisma.$executeRaw`
     UPDATE "CampaignRecipient" r SET "status" = 'queued'
     FROM "Campaign" c
-    WHERE r."campaignId" = c."id" AND c."status" = 'queued' AND r."status" = 'pending'
+    WHERE r."campaignId" = c."id"
+      AND c."tenantId" IS NOT DISTINCT FROM ${tenantId}
+      AND r."tenantId" IS NOT DISTINCT FROM ${tenantId}
+      AND c."status" = 'queued' AND r."status" = 'pending'
   `;
 }
 
-async function recoverStaleClaims() {
+async function recoverStaleClaims(tenantId: string | null) {
   await basePrisma.$executeRaw`
     UPDATE "CampaignRecipient" SET "status" = 'queued'
-    WHERE "status" = 'sending' AND "lastAttemptAt" < CURRENT_TIMESTAMP - (${STALE_CLAIM_MINUTES} * INTERVAL '1 minute')
+    WHERE "tenantId" IS NOT DISTINCT FROM ${tenantId}
+      AND "status" = 'sending'
+      AND "lastAttemptAt" < CURRENT_TIMESTAMP - (${STALE_CLAIM_MINUTES} * INTERVAL '1 minute')
   `;
 }
 
-async function claimBatch(limit = BATCH_SIZE): Promise<ClaimedRecipient[]> {
+async function claimBatch(tenantId: string | null, limit = BATCH_SIZE): Promise<ClaimedRecipient[]> {
   return basePrisma.$queryRaw<ClaimedRecipient[]>`
     WITH candidates AS (
       SELECT r."id"
       FROM "CampaignRecipient" r
       JOIN "Campaign" c ON c."id" = r."campaignId"
-      WHERE r."status" IN ('queued', 'failed_temporary')
+      WHERE r."tenantId" IS NOT DISTINCT FROM ${tenantId}
+        AND c."tenantId" IS NOT DISTINCT FROM ${tenantId}
+        AND r."status" IN ('queued', 'failed_temporary')
         AND c."status" IN ('queued', 'sending')
       ORDER BY c."createdAt", r."id"
       FOR UPDATE OF r SKIP LOCKED
@@ -89,8 +105,8 @@ async function claimBatch(limit = BATCH_SIZE): Promise<ClaimedRecipient[]> {
 
 async function suppress(recipient: ClaimedRecipient, reason: string) {
   await basePrisma.$transaction(async (tx) => {
-    await tx.$executeRaw`UPDATE "CampaignRecipient" SET "status" = 'suppressed', "suppressionReason" = ${reason} WHERE "id" = ${recipient.id}`;
-    await tx.$executeRaw`UPDATE "Campaign" SET "suppressedCount" = "suppressedCount" + 1 WHERE "id" = ${recipient.campaignId}`;
+    await tx.$executeRaw`UPDATE "CampaignRecipient" SET "status" = 'suppressed', "suppressionReason" = ${reason} WHERE "id" = ${recipient.id} AND "tenantId" IS NOT DISTINCT FROM ${recipient.tenantId}`;
+    await tx.$executeRaw`UPDATE "Campaign" SET "suppressedCount" = "suppressedCount" + 1 WHERE "id" = ${recipient.campaignId} AND "tenantId" IS NOT DISTINCT FROM ${recipient.tenantId}`;
   });
   await event({ tenantId: recipient.tenantId, campaignId: recipient.campaignId, recipientId: recipient.id, contactId: recipient.contactId, type: "suppressed", metadata: { reason } });
 }
@@ -100,9 +116,15 @@ function channelFor(value: string): CommunicationChannel {
 }
 
 async function deliver(recipient: ClaimedRecipient) {
-  const campaignState = await basePrisma.campaign.findUnique({ where: { id: recipient.campaignId }, select: { status: true } });
-  if (!campaignState || !new Set(["queued", "sending"]).has(campaignState.status)) {
-    await basePrisma.campaignRecipient.update({ where: { id: recipient.id }, data: { status: campaignState?.status === "cancelled" ? "cancelled" : "queued" } });
+  const rows = await basePrisma.$queryRaw<Array<{ status: string }>>`
+    SELECT "status" FROM "Campaign" WHERE "id" = ${recipient.campaignId} AND "tenantId" IS NOT DISTINCT FROM ${recipient.tenantId} LIMIT 1
+  `;
+  const campaignStatus = rows[0]?.status;
+  if (!campaignStatus || !new Set(["queued", "sending"]).has(campaignStatus)) {
+    await basePrisma.$executeRaw`
+      UPDATE "CampaignRecipient" SET "status" = ${campaignStatus === "cancelled" ? "cancelled" : "queued"}
+      WHERE "id" = ${recipient.id} AND "tenantId" IS NOT DISTINCT FROM ${recipient.tenantId} AND "status" = 'sending'
+    `;
     return;
   }
 
@@ -112,6 +134,7 @@ async function deliver(recipient: ClaimedRecipient) {
     purpose: "marketing",
     requestedChannel: channelFor(recipient.channel),
     campaignId: recipient.campaignId,
+    campaignRecipientId: recipient.id,
   });
   if (!eligibility.allowed || !eligibility.destination) {
     await suppress(recipient, eligibility.reason ?? "policy_blocked");
@@ -131,28 +154,30 @@ async function deliver(recipient: ClaimedRecipient) {
 
   if (result.ok) {
     await basePrisma.$transaction(async (tx) => {
-      await tx.$executeRaw`UPDATE "CampaignRecipient" SET "status" = 'sent', "sentAt" = CURRENT_TIMESTAMP, "providerStatus" = 'accepted', "error" = NULL WHERE "id" = ${recipient.id}`;
-      await tx.$executeRaw`UPDATE "Campaign" SET "sentCount" = "sentCount" + 1, "status" = CASE WHEN "status" = 'queued' THEN 'sending' ELSE "status" END WHERE "id" = ${recipient.campaignId}`;
+      await tx.$executeRaw`UPDATE "CampaignRecipient" SET "status" = 'sent', "sentAt" = CURRENT_TIMESTAMP, "providerStatus" = 'accepted', "error" = NULL WHERE "id" = ${recipient.id} AND "tenantId" IS NOT DISTINCT FROM ${recipient.tenantId}`;
+      await tx.$executeRaw`UPDATE "Campaign" SET "sentCount" = "sentCount" + 1, "status" = CASE WHEN "status" = 'queued' THEN 'sending' ELSE "status" END WHERE "id" = ${recipient.campaignId} AND "tenantId" IS NOT DISTINCT FROM ${recipient.tenantId}`;
     });
     await event({ tenantId: recipient.tenantId, campaignId: recipient.campaignId, recipientId: recipient.id, contactId: recipient.contactId, type: "sent" });
   } else {
-    const temporary = recipient.attemptCount < 3;
+    const retryStatus = classifyRetry(recipient.attemptCount);
+    const temporary = retryStatus === "failed_temporary";
     await basePrisma.$transaction(async (tx) => {
-      await tx.$executeRaw`UPDATE "CampaignRecipient" SET "status" = ${temporary ? "failed_temporary" : "failed_permanent"}, "error" = ${(result.error ?? "send failed").slice(0, 500)} WHERE "id" = ${recipient.id}`;
-      if (!temporary) await tx.$executeRaw`UPDATE "Campaign" SET "failedCount" = "failedCount" + 1 WHERE "id" = ${recipient.campaignId}`;
+      await tx.$executeRaw`UPDATE "CampaignRecipient" SET "status" = ${retryStatus}, "error" = ${(result.error ?? "send failed").slice(0, 500)} WHERE "id" = ${recipient.id} AND "tenantId" IS NOT DISTINCT FROM ${recipient.tenantId}`;
+      if (!temporary) await tx.$executeRaw`UPDATE "Campaign" SET "failedCount" = "failedCount" + 1 WHERE "id" = ${recipient.campaignId} AND "tenantId" IS NOT DISTINCT FROM ${recipient.tenantId}`;
     });
     await event({ tenantId: recipient.tenantId, campaignId: recipient.campaignId, recipientId: recipient.id, contactId: recipient.contactId, type: "failed", metadata: { temporary, error: result.error ?? "send failed" } });
   }
 }
 
-async function finaliseCampaigns() {
+async function finaliseCampaigns(tenantId: string | null) {
   await basePrisma.$executeRaw`
     UPDATE "Campaign" c SET
       "status" = CASE WHEN c."failedCount" > 0 OR c."suppressedCount" > 0 THEN 'completed_with_errors' ELSE 'completed' END,
       "completedAt" = CURRENT_TIMESTAMP,
       "sentAt" = COALESCE(c."sentAt", CURRENT_TIMESTAMP),
       "updatedAt" = CURRENT_TIMESTAMP
-    WHERE c."status" = 'sending'
+    WHERE c."tenantId" IS NOT DISTINCT FROM ${tenantId}
+      AND c."status" = 'sending'
       AND NOT EXISTS (
         SELECT 1 FROM "CampaignRecipient" r
         WHERE r."campaignId" = c."id" AND r."status" IN ('pending', 'queued', 'sending', 'failed_temporary')
@@ -161,15 +186,16 @@ async function finaliseCampaigns() {
 }
 
 export async function runSafeCampaignQueue(maxTotal = 150) {
-  await activateDueCampaigns();
-  await recoverStaleClaims();
+  const tenantId = activeTenantId();
+  await activateDueCampaigns(tenantId);
+  await recoverStaleClaims(tenantId);
   let processed = 0;
   while (processed < maxTotal) {
-    const batch = await claimBatch(Math.min(BATCH_SIZE, maxTotal - processed));
+    const batch = await claimBatch(tenantId, Math.min(BATCH_SIZE, maxTotal - processed));
     if (batch.length === 0) break;
     for (const recipient of batch) await deliver(recipient);
     processed += batch.length;
   }
-  await finaliseCampaigns();
+  await finaliseCampaigns(tenantId);
   return processed;
 }
