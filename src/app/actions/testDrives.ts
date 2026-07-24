@@ -437,7 +437,7 @@ export async function createDemoVehicle(formData: FormData) {
       color: text(formData, "color") ?? stockUnit?.color ?? null,
       branch: text(formData, "branch") ?? stockUnit?.location ?? null,
       odometerKm: intValue(formData, "odometerKm") ?? stockUnit?.odometerKm ?? 0,
-      batteryLevelPct: percentValue(formData, "batteryLevelPct") ?? stockUnit?.batteryLevelPct ?? null,
+      batteryLevelPct: percentValue(formData, "batteryLevelPct"),
       notes: text(formData, "notes"),
     },
   });
