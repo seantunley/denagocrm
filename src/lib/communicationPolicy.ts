@@ -20,9 +20,13 @@ function destination(contact: ContactPolicyRow, channel: CommunicationChannel) {
   return contact.phone?.trim() || contact.whatsapp?.trim() || null;
 }
 
-function inQuietHours(now: Date, timeZone = "Africa/Johannesburg") {
+export function isCommunicationQuietHour(now: Date, timeZone = "Africa/Johannesburg") {
   const hour = Number(new Intl.DateTimeFormat("en-ZA", { hour: "2-digit", hour12: false, timeZone }).format(now));
   return hour >= 20 || hour < 8;
+}
+
+export function classifyRetry(attemptCount: number, maxAttempts = 3) {
+  return attemptCount < maxAttempts ? "failed_temporary" : "failed_permanent";
 }
 
 export async function canContactPerson(args: {
@@ -31,6 +35,7 @@ export async function canContactPerson(args: {
   purpose: CommunicationPurpose;
   requestedChannel: CommunicationChannel;
   campaignId?: string;
+  campaignRecipientId?: string;
   distributionId?: string;
   now?: Date;
 }): Promise<EligibilityResult> {
@@ -56,12 +61,18 @@ export async function canContactPerson(args: {
       select: { granted: true },
     });
     if (consent && !consent.granted) return { allowed: false, reason: "consent_withdrawn" };
-    if (inQuietHours(args.now ?? new Date())) return { allowed: false, reason: "quiet_hours" };
+    if (isCommunicationQuietHour(args.now ?? new Date())) return { allowed: false, reason: "quiet_hours" };
   }
 
   if (args.campaignId) {
     const duplicate = await basePrisma.campaignRecipient.count({
-      where: { campaignId: args.campaignId, contactId: contact.id, status: { in: ["sending", "sent", "delivered"] } },
+      where: {
+        campaignId: args.campaignId,
+        contactId: contact.id,
+        tenantId: args.tenantId,
+        ...(args.campaignRecipientId ? { id: { not: args.campaignRecipientId } } : {}),
+        status: { in: ["sending", "sent", "delivered"] },
+      },
     });
     if (duplicate > 0) return { allowed: false, reason: "duplicate_delivery" };
   }
@@ -69,6 +80,7 @@ export async function canContactPerson(args: {
   const recent = await basePrisma.communication.count({
     where: {
       contactId: contact.id,
+      tenantId: args.tenantId,
       direction: "outbound",
       createdAt: { gte: new Date((args.now ?? new Date()).getTime() - 24 * 60 * 60 * 1000) },
       type: args.requestedChannel === "email" ? "email" : "sms",
