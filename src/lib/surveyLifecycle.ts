@@ -7,7 +7,7 @@ const TRANSITIONS: Record<SurveyStatus, readonly SurveyStatus[]> = {
   changes_requested: ["draft", "in_review"],
   approved: ["published", "draft"],
   published: ["inactive", "archived"],
-  inactive: ["published", "archived", "draft"],
+  inactive: ["archived"],
   archived: [],
 };
 
@@ -26,7 +26,10 @@ export function validateSurveyQuestions(questions: unknown[]) {
   if (questions.length > 100) errors.push("A survey may contain at most 100 questions");
   const ids = new Set<string>();
   for (const item of questions) {
-    if (!item || typeof item !== "object") { errors.push("Invalid question"); continue; }
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      errors.push("Invalid question");
+      continue;
+    }
     const question = item as Record<string, unknown>;
     const id = String(question.id ?? "").trim();
     const label = String(question.label ?? "").trim();
@@ -34,7 +37,20 @@ export function validateSurveyQuestions(questions: unknown[]) {
     if (!id || ids.has(id)) errors.push("Every question needs a unique ID");
     if (id) ids.add(id);
     if (!label) errors.push(`Question ${id || "without ID"} needs a label`);
-    if (!new Set(["nps", "rating", "text", "choice", "multi_choice", "yes_no"]).has(type)) errors.push(`Unsupported question type: ${type || "blank"}`);
+    if (!new Set(["nps", "rating", "text", "choice"]).has(type)) errors.push(`Unsupported question type: ${type || "blank"}`);
+
+    if (type === "choice") {
+      const options = Array.isArray(question.options)
+        ? question.options.map((option) => String(option).trim()).filter(Boolean)
+        : [];
+      if (options.length < 2) errors.push(`Choice question ${id || "without ID"} needs at least two options`);
+      if (new Set(options).size !== options.length) errors.push(`Choice question ${id || "without ID"} has duplicate options`);
+      if (options.length > 50) errors.push(`Choice question ${id || "without ID"} has too many options`);
+    }
+    if (type === "rating") {
+      const scale = Number(question.scale ?? 5);
+      if (!Number.isInteger(scale) || scale < 2 || scale > 10) errors.push(`Rating question ${id || "without ID"} needs a scale from 2 to 10`);
+    }
   }
   return [...new Set(errors)];
 }
