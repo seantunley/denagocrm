@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { getActiveTenantId } from "@/lib/auth";
 import { requirePermission } from "@/lib/permissions";
+import { requireModuleEnabled } from "@/lib/modules/enabled";
 import { logAuditStrict } from "@/lib/audit";
 import {
   createCampaignDraftRecord,
@@ -15,9 +16,14 @@ function formObject(formData: FormData): Record<string, unknown> {
   return Object.fromEntries(formData.entries());
 }
 
+async function marketingContext(permission: Parameters<typeof requirePermission>[0]) {
+  await requireModuleEnabled("marketing");
+  const user = await requirePermission(permission);
+  return { user, tenantId: await getActiveTenantId() };
+}
+
 export async function createCampaignDraft(formData?: FormData) {
-  const user = await requirePermission("campaigns.create");
-  const tenantId = await getActiveTenantId();
+  const { user, tenantId } = await marketingContext("campaigns.create");
   const id = await createCampaignDraftRecord({ tenantId, userId: user.id, input: formData ? formObject(formData) : {} });
   await logAuditStrict({
     action: "campaign.created",
@@ -31,8 +37,7 @@ export async function createCampaignDraft(formData?: FormData) {
 }
 
 export async function updateCampaignDraft(id: string, formData: FormData) {
-  const user = await requirePermission("campaigns.edit");
-  const tenantId = await getActiveTenantId();
+  const { user, tenantId } = await marketingContext("campaigns.edit");
   const before = await readCampaignDraftRecord(id, tenantId);
   if (!before) throw new Error("Campaign not found");
   await updateCampaignDraftRecord({ id, tenantId, input: formObject(formData) });
@@ -51,8 +56,7 @@ export async function updateCampaignDraft(id: string, formData: FormData) {
 }
 
 export async function duplicateCampaignDraft(id: string) {
-  const user = await requirePermission("campaigns.create");
-  const tenantId = await getActiveTenantId();
+  const { user, tenantId } = await marketingContext("campaigns.create");
   const source = await readCampaignDraftRecord(id, tenantId);
   if (!source) throw new Error("Campaign not found");
   const copyId = await createCampaignDraftRecord({
