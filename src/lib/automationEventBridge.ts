@@ -37,21 +37,28 @@ export function automationTriggerForAudit(event: AutomationAuditEvent): string |
   if (["delivery.scheduled", "quote.delivery_scheduled", "fulfilment.delivery_scheduled"].includes(action)) return "delivery_scheduled";
 
   if (["jobcard.opened", "jobcard.created"].includes(action)) return "job_card_created";
-  if (["jobcard.stage_changed", "jobcard.status_changed"].includes(action)) return "job_stage_changed";
+  if (["jobcard.stage", "jobcard.stage_changed", "jobcard.status_changed"].includes(action)) return "job_stage_changed";
   if (["jobcard.completed", "jobcard.closed"].includes(action)) return "job_card_completed";
 
-  if (["warranty.claim_created", "warranty.claim_opened", "warranty_claim.created"].includes(action)) return "warranty_claim_opened";
+  if (["warranty.claim_created", "warranty.claim.opened", "warranty.claim_opened", "warranty_claim.created"].includes(action)) return "warranty_claim_opened";
   if (["recall.created", "recall.issued", "service_bulletin.issued"].includes(action)) return "recall_issued";
 
-  if (action === "case.created") return "case_created";
+  if (["case.created", "portal.case_created"].includes(action)) return "case_created";
   if (["case.escalated", "case.sla_escalated"].includes(action)) return "case_escalated";
   if (action === "case.status_changed" && ["closed", "resolved"].includes(String(after.status ?? ""))) return "case_closed";
 
-  if (action.startsWith("portal.request") || ["portal.profile_change_requested", "portal.service_requested", "portal.warranty_requested"].includes(action)) {
+  if ([
+    "portal.service_request",
+    "portal.case_created",
+    "portal.warranty_claim_created",
+    "portal.profile_change_requested",
+    "portal.service_requested",
+    "portal.warranty_requested",
+  ].includes(action) || action.startsWith("portal.request")) {
     return "portal_request_received";
   }
 
-  if (["document.approved", "document_approval.approved", "workflow.approved"].includes(action)) return "document_approved";
+  if (["document.approved", "document_approval.approved", "workflow.approved", "studio.document.approved"].includes(action)) return "document_approved";
   if (["xero.invoice_status_changed", "xero.invoice.status_changed"].includes(action)) return "xero_invoice_status_changed";
 
   return null;
