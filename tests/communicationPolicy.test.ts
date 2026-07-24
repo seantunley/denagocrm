@@ -9,7 +9,7 @@ test("classifies retryable and permanent provider failures", () => {
 });
 
 test("enforces South African marketing quiet hours", () => {
-  assert.equal(isCommunicationQuietHour(new Date("2026-07-24T17:00:00.000Z")), true); // 19:00 SAST? false below
+  assert.equal(isCommunicationQuietHour(new Date("2026-07-24T17:00:00.000Z")), false); // 19:00 SAST
   assert.equal(isCommunicationQuietHour(new Date("2026-07-24T08:00:00.000Z")), false); // 10:00 SAST
   assert.equal(isCommunicationQuietHour(new Date("2026-07-24T19:30:00.000Z")), true); // 21:30 SAST
   assert.equal(isCommunicationQuietHour(new Date("2026-07-24T04:00:00.000Z")), true); // 06:00 SAST
