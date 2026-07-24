@@ -20,7 +20,7 @@ export type AuditEntry = {
   correlationId?: string | null;
 };
 
-const SENSITIVE_KEY = /(password|secret|token|authorization|cookie|otp|totp|backupcode|signature)/i;
+const SENSITIVE_KEY = /(password|secret|token|authorization|cookie|otp|totp|backupcode|signature|licen[cs]e|emergencycontact)/i;
 
 function sanitizeAuditValue(value: unknown, depth = 0): unknown {
   if (depth > 8) return "[TRUNCATED]";
