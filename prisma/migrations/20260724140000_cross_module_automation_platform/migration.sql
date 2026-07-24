@@ -103,9 +103,14 @@ CREATE INDEX IF NOT EXISTS "StockTransferRequest_tenantId_status_toBranch_idx" O
 CREATE INDEX IF NOT EXISTS "StockTransferRequest_stockUnitId_status_idx" ON "StockTransferRequest"("stockUnitId", "status");
 CREATE INDEX IF NOT EXISTS "StockTransferRequest_journeyRunId_idx" ON "StockTransferRequest"("journeyRunId");
 
--- StockEvent is the operational source of truth. Mirror only the four requested
--- lifecycle events into the durable JourneyEvent queue, in the same transaction
--- as the StockEvent insert. No financial fields are copied into automation payloads.
+-- Raw-only provenance column, matching the repository's pattern for operational
+-- columns intentionally kept out of broad Prisma APIs. It makes automated signing
+-- creation idempotent without leaking an internal key into customer messages.
+ALTER TABLE "SignatureRequest" ADD COLUMN IF NOT EXISTS "automationOutboxId" TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS "SignatureRequest_automationOutboxId_key" ON "SignatureRequest"("automationOutboxId") WHERE "automationOutboxId" IS NOT NULL;
+
+-- StockEvent is the operational source of truth. Mirror only requested lifecycle
+-- events into the durable JourneyEvent queue in the same transaction.
 CREATE OR REPLACE FUNCTION enqueue_stock_automation_event() RETURNS trigger AS $$
 DECLARE
   trigger_name TEXT;
@@ -152,7 +157,8 @@ BEGIN
       'status', NEW."toStatus",
       'sourceId', COALESCE(NEW."stockUnitId", NEW."purchaseOrderId", NEW."id"),
       'source', jsonb_build_object(
-        'id', NEW."id", 'stockUnitId', NEW."stockUnitId", 'purchaseOrderId', NEW."purchaseOrderId",
+        'id', NEW."id", 'entityType', 'StockEvent', 'stockUnitId', NEW."stockUnitId",
+        'purchaseOrderId', NEW."purchaseOrderId", 'quoteId', NEW."quoteId", 'leadId', NEW."leadId",
         'eventType', NEW."eventType", 'fromStatus', NEW."fromStatus", 'toStatus', NEW."toStatus",
         'reason', NEW."reason", 'detail', NEW."detail"
       )
