@@ -29,17 +29,37 @@ function deliveryOf(e: { type: string; channel: string | null; metadata: unknown
   return { ok: m.ok === true, error };
 }
 
+/** Human-readable rendering of one field response value for the ack list. */
+function describeResponse(kind: string, value: string): string {
+  if (kind === "checkbox") return value === "true" ? "✓ checked" : "✗ unchecked";
+  if (kind === "signature" || kind === "initials" || kind === "stamp") return "signed";
+  return value.length > 80 ? `${value.slice(0, 80)}…` : value;
+}
+
 export default async function SignatureDetail({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
   const { id } = await params;
   const req = await prisma.signatureRequest.findUnique({
     where: { id },
-    include: { recipients: { orderBy: { order: "asc" } }, events: { orderBy: { createdAt: "asc" } }, fields: true },
+    include: {
+      recipients: { orderBy: { order: "asc" } },
+      events: { orderBy: { createdAt: "asc" } },
+      fields: { include: { responses: { orderBy: { filledAt: "asc" } } } },
+    },
   });
   if (!req || req.deletedAt) notFound();
 
   const card = "rounded-xl border border-border bg-card p-4 shadow-sm";
   const closed = req.status === "completed" || req.status === "voided";
+
+  // Shared fields (recipientId null, fillable by anyone) keep only the FIRST
+  // value on SignatureField — the one the sealed PDF stamps. Every signer's
+  // actual answer lives in SignatureFieldResponse, so surface those here: it's
+  // the only place a second party's acknowledgement of a shared field is visible.
+  const recipientNames = new Map(req.recipients.map((r) => [r.id, { name: r.name, color: r.color }]));
+  const sharedResponses = req.fields
+    .filter((f) => f.recipientId === null && f.responses.length > 0)
+    .map((f) => ({ id: f.id, label: f.label || f.kind, kind: f.kind, responses: f.responses }));
 
   return (
     <EntityDetailShell
@@ -89,6 +109,33 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
           ))}
         </ul>
       </div>
+
+      {sharedResponses.length > 0 && (
+        <div className={card}>
+          <p className="mb-1 text-sm font-semibold text-foreground">Shared field responses</p>
+          <p className="mb-3 text-[11px] text-muted-foreground">Fields any signer can complete — each recipient&apos;s own answer (the sealed PDF stamps the first).</p>
+          <ul className="space-y-3">
+            {sharedResponses.map((f) => (
+              <li key={f.id} className="rounded-lg border border-border/60 p-3">
+                <div className="text-xs font-medium text-foreground">{f.label}</div>
+                <ul className="mt-2 space-y-1">
+                  {f.responses.map((resp) => {
+                    const who = recipientNames.get(resp.recipientId);
+                    return (
+                      <li key={resp.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+                        <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: who?.color ?? "#64748b" }} />
+                        <span className="font-medium text-foreground">{who?.name ?? "Unknown recipient"}</span>
+                        <span>· {describeResponse(f.kind, resp.value)}</span>
+                        <span className="text-muted-foreground/70">· {formatDateTime(resp.filledAt)}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className={card}>
         <p className="mb-3 text-sm font-semibold text-foreground">Audit trail</p>
