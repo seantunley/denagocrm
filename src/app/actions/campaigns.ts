@@ -118,6 +118,9 @@ export async function sendCampaign(
   const contacts = await resolveContacts(criteria, channel);
   if (contacts.length === 0) return { error: "No opted-in recipients match that audience." };
 
+  // Temporary compatibility path. The governed draft/review/approval workflow is
+  // introduced in the next PR. Explicitly queue recipients because the new safe
+  // database default is `pending` rather than send-ready.
   const campaign = await prisma.campaign.create({
     data: {
       name,
@@ -129,7 +132,7 @@ export async function sendCampaign(
       recipientCount: contacts.length,
       status: "queued",
       createdById: user.id,
-      recipients: { create: contacts.map((c) => ({ contactId: c.id, token: newToken() })) },
+      recipients: { create: contacts.map((c) => ({ contactId: c.id, token: newToken(), status: "queued" })) },
     },
   });
 
