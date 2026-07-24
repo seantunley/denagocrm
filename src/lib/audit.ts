@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { headers } from "next/headers";
 import { basePrisma, prisma } from "./db";
 import { currentTenantScope } from "./tenantScope";
+import { enqueueAutomationFromAudit } from "./automationEventBridge";
 
 export type AuditEntry = {
   action: string;
@@ -68,14 +69,6 @@ function actorType(entry: AuditEntry, actorName: string) {
   return "system";
 }
 
-/**
- * Resolve audit ownership without trusting an unrelated staff cookie.
- *
- * - Non-user work (cron, public token, portal, webhook) trusts only an explicit
- *   normal tenant scope. A system scope and a missing/null scope remain global.
- * - Staff-attributed work keeps the stricter actor/session identity check so an
- *   action attributed to another user cannot inherit the cookie user's tenant.
- */
 async function actingTenantId(entry: AuditEntry): Promise<string | null> {
   if (!entry.user) {
     const scope = currentTenantScope();
@@ -93,8 +86,8 @@ async function actingTenantId(entry: AuditEntry): Promise<string | null> {
 
 /**
  * Writes both the legacy customer-history record and the professional append-only
- * AuditEvent stream. Use logAuditStrict for permission, role, pipeline, forecast,
- * deletion, export, and other governance-sensitive changes.
+ * AuditEvent stream. Mapped business lifecycle events are queued for the Journey
+ * engine in the SAME transaction, so an audited change cannot lose its automation.
  */
 async function writeAudit(entry: AuditEntry) {
   const context = await requestContext();
@@ -108,6 +101,7 @@ async function writeAudit(entry: AuditEntry) {
   const fields = entry.changedFields ?? changedFields(safeBefore, safeAfter);
   const actorName = entry.userName ?? entry.user?.name ?? "System";
   const tenantId = await actingTenantId(entry);
+  const auditEventId = crypto.randomUUID();
 
   await basePrisma.$transaction(async (transaction) => {
     await transaction.$executeRaw`
@@ -116,7 +110,7 @@ async function writeAudit(entry: AuditEntry) {
         "summary", "beforeJson", "afterJson", "changedFieldsJson", "source", "ipAddress",
         "userAgent", "correlationId", "metadata"
       ) VALUES (
-        ${crypto.randomUUID()}, ${entry.user?.id ?? null}, ${actorName}, ${actorType(entry, actorName)},
+        ${auditEventId}, ${entry.user?.id ?? null}, ${actorName}, ${actorType(entry, actorName)},
         ${entry.action}, ${entityType}, ${entityId}, ${entry.summary},
         ${safeBefore == null ? null : JSON.stringify(safeBefore)}::jsonb,
         ${safeAfter == null ? null : JSON.stringify(safeAfter)}::jsonb,
@@ -137,6 +131,20 @@ async function writeAudit(entry: AuditEntry) {
         tenantId,
       },
     });
+
+    await enqueueAutomationFromAudit(transaction, {
+      auditEventId,
+      tenantId,
+      action: entry.action,
+      summary: entry.summary,
+      entityType,
+      entityId,
+      leadId: entry.leadId ?? null,
+      contactId: entry.contactId ?? null,
+      before: safeBefore,
+      after: safeAfter,
+      metadata: safeMetadata,
+    });
   });
 }
 
@@ -144,7 +152,6 @@ export async function logAudit(entry: AuditEntry): Promise<void> {
   try {
     await writeAudit(entry);
   } catch {
-    // Existing non-governance callers remain best-effort and keep their legacy timeline.
     try {
       await prisma.auditLog.create({
         data: {
