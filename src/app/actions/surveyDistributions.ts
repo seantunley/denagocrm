@@ -4,9 +4,16 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma, basePrisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
+import { requireModuleEnabled } from "@/lib/modules/enabled";
 import { getActiveTenantId } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { createSurveyDistribution } from "@/lib/surveyDistributionQueue";
+
+async function distributionContext() {
+  await requireModuleEnabled("marketing");
+  const user = await requirePermission("surveys.manage");
+  return { user, tenantId: await getActiveTenantId() };
+}
 
 async function resolveAudience(segment: string) {
   if (segment === "vehicle_owners") {
@@ -35,8 +42,7 @@ function refresh(id?: string) {
 }
 
 export async function createDistribution(formData: FormData) {
-  const user = await requirePermission("surveys.manage");
-  const tenantId = await getActiveTenantId();
+  const { user, tenantId } = await distributionContext();
   const surveyId = String(formData.get("surveyId") ?? "");
   const segment = String(formData.get("segment") ?? "customers");
   const scheduledRaw = String(formData.get("scheduledFor") ?? "").trim();
@@ -71,8 +77,7 @@ async function distribution(id: string, tenantId: string | null) {
 }
 
 export async function pauseDistribution(formData: FormData) {
-  const user = await requirePermission("surveys.manage");
-  const tenantId = await getActiveTenantId();
+  const { user, tenantId } = await distributionContext();
   const id = String(formData.get("id") ?? "");
   const current = await distribution(id, tenantId);
   if (!new Set(["queued", "sending", "scheduled"]).has(current.status)) throw new Error("This distribution cannot be paused");
@@ -82,8 +87,7 @@ export async function pauseDistribution(formData: FormData) {
 }
 
 export async function resumeDistribution(formData: FormData) {
-  const user = await requirePermission("surveys.manage");
-  const tenantId = await getActiveTenantId();
+  const { user, tenantId } = await distributionContext();
   const id = String(formData.get("id") ?? "");
   const current = await distribution(id, tenantId);
   if (current.status !== "paused") throw new Error("Only a paused distribution can be resumed");
@@ -93,22 +97,20 @@ export async function resumeDistribution(formData: FormData) {
 }
 
 export async function cancelDistribution(formData: FormData) {
-  const user = await requirePermission("surveys.manage");
-  const tenantId = await getActiveTenantId();
+  const { user, tenantId } = await distributionContext();
   const id = String(formData.get("id") ?? "");
   const current = await distribution(id, tenantId);
   if (new Set(["completed", "completed_with_errors", "cancelled"]).has(current.status)) throw new Error("This distribution is already closed");
   await basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`UPDATE "SurveyDistribution" SET "status" = 'cancelled', "cancelledAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}`;
-    await tx.$executeRaw`UPDATE "SurveyResponse" SET "status" = 'cancelled' WHERE "distributionId" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId} AND "status" IN ('queued', 'failed_temporary')`;
+    await tx.$executeRaw`UPDATE "SurveyResponse" SET "status" = 'cancelled', "providerStatus" = 'distribution_cancelled' WHERE "distributionId" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId} AND "status" IN ('queued', 'failed_temporary')`;
   });
   await logAudit({ action: "survey.distribution_cancelled", summary: `Cancelled survey distribution ${id}`, user });
   refresh(id);
 }
 
 export async function retryDistributionFailures(formData: FormData) {
-  const user = await requirePermission("surveys.manage");
-  const tenantId = await getActiveTenantId();
+  const { user, tenantId } = await distributionContext();
   const id = String(formData.get("id") ?? "");
   await distribution(id, tenantId);
   const count = await basePrisma.$executeRaw`
@@ -118,7 +120,9 @@ export async function retryDistributionFailures(formData: FormData) {
       AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
       AND "status" = 'failed_permanent'
   `;
-  if (count > 0) await basePrisma.$executeRaw`UPDATE "SurveyDistribution" SET "status" = 'queued', "failedCount" = GREATEST(0, "failedCount" - ${count}), "completedAt" = NULL, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}`;
+  if (count > 0) {
+    await basePrisma.$executeRaw`UPDATE "SurveyDistribution" SET "status" = 'queued', "failedCount" = GREATEST(0, "failedCount" - ${count}), "completedAt" = NULL, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}`;
+  }
   await logAudit({ action: "survey.distribution_retried", summary: `Queued ${count} failed survey invites for manual retry`, user });
   refresh(id);
 }
