@@ -1,0 +1,14 @@
+model SurveyVersion {
+  id            String   @id @default(cuid())
+  tenantId      String?
+  surveyId      String
+  version       Int
+  snapshot      Json
+  publishedAt   DateTime @default(now())
+  publishedById String?
+  label         String?
+
+  @@unique([surveyId, version])
+  @@index([tenantId])
+  @@index([surveyId, publishedAt(sort: Desc)])
+}
