@@ -90,7 +90,7 @@ You received this because you're a Denago Cape Town customer.
 export function buildTrackedEmail(personalizedHtml: string, token: string) {
   const base = appBaseUrl();
   const rewritten = personalizedHtml.replace(
-    /href="(https?:\/\/[^\"]+)"/g,
+    /href="(https?:\/\/[^"]+)"/g,
     (_m, url) => `href="${base}/api/track/c/${token}?u=${encodeURIComponent(url)}"`
   );
   const pixel = `<img src="${base}/api/track/o/${token}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;overflow:hidden;">`;
