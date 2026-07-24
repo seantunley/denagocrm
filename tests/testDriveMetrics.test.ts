@@ -16,9 +16,9 @@ const base = {
   incidentReport: null,
 };
 
-test("calculates unique-lead booking, attendance, no-show and attended conversion rates", () => {
+test("calculates period-matched booking, attendance, no-show and attended conversion rates", () => {
   const result = calculateTestDriveMetrics({
-    eligibleLeadCount: 10,
+    eligibleLeadIds: ["lead-1", "lead-2", "lead-3", "lead-5", "lead-6", "lead-7", "lead-8", "lead-9", "lead-10", "lead-11"],
     activeDemoVehicleCount: 2,
     periodDays: 1,
     bookings: [
@@ -42,25 +42,26 @@ test("calculates unique-lead booking, attendance, no-show and attended conversio
   assert.equal(result.saleConversionRate, 50);
 });
 
-test("does not count repeated bookings for one lead twice in booking rate", () => {
+test("does not count repeated or out-of-period leads in booking rate", () => {
   const result = calculateTestDriveMetrics({
-    eligibleLeadCount: 4,
+    eligibleLeadIds: ["lead-1", "lead-2", "lead-3", "lead-4"],
     activeDemoVehicleCount: 1,
     periodDays: 1,
     bookings: [
       { ...base, leadId: "lead-1", status: "completed", actualStartAt: at(9) },
       { ...base, leadId: "lead-1", status: "completed", actualStartAt: at(9) },
+      { ...base, leadId: "older-lead", status: "completed", actualStartAt: at(9) },
     ],
   });
 
-  assert.equal(result.bookings, 2);
+  assert.equal(result.bookings, 3);
   assert.equal(result.bookedLeads, 1);
   assert.equal(result.bookingRate, 25);
 });
 
 test("calculates utilisation from scheduled hours and active demo vehicles", () => {
   const result = calculateTestDriveMetrics({
-    eligibleLeadCount: 0,
+    eligibleLeadIds: [],
     activeDemoVehicleCount: 1,
     periodDays: 1,
     operatingHoursPerDay: 8,
@@ -77,7 +78,7 @@ test("calculates utilisation from scheduled hours and active demo vehicles", () 
 
 test("counts damage and incident records against attended drives", () => {
   const result = calculateTestDriveMetrics({
-    eligibleLeadCount: 2,
+    eligibleLeadIds: ["lead-1", "lead-2"],
     activeDemoVehicleCount: 1,
     periodDays: 1,
     bookings: [
