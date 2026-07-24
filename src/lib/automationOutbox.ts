@@ -201,7 +201,11 @@ async function createSigningRequest(item: {
   if (existing) return { requestId: existing, reused: true };
   const payload = object(item.payload);
   const eventSource = source(payload);
-  const document = await resolveSigningDocument(item);
+  let document = await resolveSigningDocument(item);
+  if (!document && value(payload.templateId)) {
+    const generated = await generateDocument({ id: item.id, tenantId: item.tenantId, payload: item.payload });
+    document = await prisma.document.findFirst({ where: { id: generated.documentId, deletedAt: null } });
+  }
   if (!document) throw new Error("No generated or linked document is available for signing");
   const contactId = document.contactId ?? value(payload.contactId) ?? value(eventSource.contactId);
   if (!contactId) throw new Error("The signing document is not linked to a contact");
