@@ -1,7 +1,7 @@
 -- Dedicated test-drive and demo-fleet operations.
--- Additive: the existing Activity calendar remains linked through activityId.
+-- Additive and replay-safe: the existing Activity calendar remains linked through activityId.
 
-CREATE TABLE "DemoVehicle" (
+CREATE TABLE IF NOT EXISTS "DemoVehicle" (
   "id" TEXT NOT NULL,
   "tenantId" TEXT,
   "name" TEXT NOT NULL,
@@ -24,12 +24,12 @@ CREATE TABLE "DemoVehicle" (
   CONSTRAINT "DemoVehicle_battery_check" CHECK ("batteryLevelPct" IS NULL OR "batteryLevelPct" BETWEEN 0 AND 100)
 );
 
-CREATE UNIQUE INDEX "DemoVehicle_stockUnitId_key" ON "DemoVehicle"("stockUnitId");
-CREATE INDEX "DemoVehicle_tenantId_idx" ON "DemoVehicle"("tenantId");
-CREATE INDEX "DemoVehicle_status_branch_idx" ON "DemoVehicle"("status", "branch");
-CREATE INDEX "DemoVehicle_productId_idx" ON "DemoVehicle"("productId");
+CREATE UNIQUE INDEX IF NOT EXISTS "DemoVehicle_stockUnitId_key" ON "DemoVehicle"("stockUnitId");
+CREATE INDEX IF NOT EXISTS "DemoVehicle_tenantId_idx" ON "DemoVehicle"("tenantId");
+CREATE INDEX IF NOT EXISTS "DemoVehicle_status_branch_idx" ON "DemoVehicle"("status", "branch");
+CREATE INDEX IF NOT EXISTS "DemoVehicle_productId_idx" ON "DemoVehicle"("productId");
 
-CREATE TABLE "TestDriveBooking" (
+CREATE TABLE IF NOT EXISTS "TestDriveBooking" (
   "id" TEXT NOT NULL,
   "tenantId" TEXT,
   "reference" TEXT NOT NULL,
@@ -84,21 +84,26 @@ CREATE TABLE "TestDriveBooking" (
   CONSTRAINT "TestDriveBooking_return_battery_check" CHECK ("returnBatteryPct" IS NULL OR "returnBatteryPct" BETWEEN 0 AND 100)
 );
 
-CREATE UNIQUE INDEX "TestDriveBooking_reference_key" ON "TestDriveBooking"("reference");
-CREATE UNIQUE INDEX "TestDriveBooking_activityId_key" ON "TestDriveBooking"("activityId");
-CREATE INDEX "TestDriveBooking_tenantId_idx" ON "TestDriveBooking"("tenantId");
-CREATE INDEX "TestDriveBooking_schedule_status_idx" ON "TestDriveBooking"("scheduledStart", "status");
-CREATE INDEX "TestDriveBooking_vehicle_schedule_idx" ON "TestDriveBooking"("demoVehicleId", "scheduledStart");
-CREATE INDEX "TestDriveBooking_leadId_idx" ON "TestDriveBooking"("leadId");
-CREATE INDEX "TestDriveBooking_contactId_idx" ON "TestDriveBooking"("contactId");
-CREATE INDEX "TestDriveBooking_salespersonId_idx" ON "TestDriveBooking"("salespersonId");
-CREATE INDEX "TestDriveBooking_convertedQuoteId_idx" ON "TestDriveBooking"("convertedQuoteId");
+CREATE UNIQUE INDEX IF NOT EXISTS "TestDriveBooking_reference_key" ON "TestDriveBooking"("reference");
+CREATE UNIQUE INDEX IF NOT EXISTS "TestDriveBooking_activityId_key" ON "TestDriveBooking"("activityId");
+CREATE INDEX IF NOT EXISTS "TestDriveBooking_tenantId_idx" ON "TestDriveBooking"("tenantId");
+CREATE INDEX IF NOT EXISTS "TestDriveBooking_schedule_status_idx" ON "TestDriveBooking"("scheduledStart", "status");
+CREATE INDEX IF NOT EXISTS "TestDriveBooking_vehicle_schedule_idx" ON "TestDriveBooking"("demoVehicleId", "scheduledStart");
+CREATE INDEX IF NOT EXISTS "TestDriveBooking_leadId_idx" ON "TestDriveBooking"("leadId");
+CREATE INDEX IF NOT EXISTS "TestDriveBooking_contactId_idx" ON "TestDriveBooking"("contactId");
+CREATE INDEX IF NOT EXISTS "TestDriveBooking_salespersonId_idx" ON "TestDriveBooking"("salespersonId");
+CREATE INDEX IF NOT EXISTS "TestDriveBooking_convertedQuoteId_idx" ON "TestDriveBooking"("convertedQuoteId");
 
-ALTER TABLE "TestDriveBooking"
-  ADD CONSTRAINT "TestDriveBooking_demoVehicleId_fkey"
-  FOREIGN KEY ("demoVehicleId") REFERENCES "DemoVehicle"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'TestDriveBooking_demoVehicleId_fkey') THEN
+    ALTER TABLE "TestDriveBooking"
+      ADD CONSTRAINT "TestDriveBooking_demoVehicleId_fkey"
+      FOREIGN KEY ("demoVehicleId") REFERENCES "DemoVehicle"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-CREATE TABLE "TestDriveAsset" (
+CREATE TABLE IF NOT EXISTS "TestDriveAsset" (
   "id" TEXT NOT NULL,
   "tenantId" TEXT,
   "bookingId" TEXT NOT NULL,
@@ -115,12 +120,18 @@ CREATE TABLE "TestDriveAsset" (
   CONSTRAINT "TestDriveAsset_size_check" CHECK ("sizeBytes" >= 0)
 );
 
-CREATE UNIQUE INDEX "TestDriveAsset_storedName_key" ON "TestDriveAsset"("storedName");
-CREATE INDEX "TestDriveAsset_tenantId_idx" ON "TestDriveAsset"("tenantId");
-CREATE INDEX "TestDriveAsset_booking_kind_idx" ON "TestDriveAsset"("bookingId", "kind");
-ALTER TABLE "TestDriveAsset"
-  ADD CONSTRAINT "TestDriveAsset_bookingId_fkey"
-  FOREIGN KEY ("bookingId") REFERENCES "TestDriveBooking"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+CREATE UNIQUE INDEX IF NOT EXISTS "TestDriveAsset_storedName_key" ON "TestDriveAsset"("storedName");
+CREATE INDEX IF NOT EXISTS "TestDriveAsset_tenantId_idx" ON "TestDriveAsset"("tenantId");
+CREATE INDEX IF NOT EXISTS "TestDriveAsset_booking_kind_idx" ON "TestDriveAsset"("bookingId", "kind");
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'TestDriveAsset_bookingId_fkey') THEN
+    ALTER TABLE "TestDriveAsset"
+      ADD CONSTRAINT "TestDriveAsset_bookingId_fkey"
+      FOREIGN KEY ("bookingId") REFERENCES "TestDriveBooking"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
 -- Existing test-drive activities become dedicated bookings immediately.
 INSERT INTO "TestDriveBooking" (
@@ -149,8 +160,7 @@ LEFT JOIN "Lead" l ON l."id" = a."leadId"
 WHERE a."type" = 'test_drive' AND a."contactId" IS NOT NULL
 ON CONFLICT ("activityId") DO NOTHING;
 
--- Keep the legacy calendar workflow compatible. Any test-drive Activity created by
--- the pipeline board is automatically mirrored into the dedicated module.
+-- Keep the legacy calendar and pipeline-board workflow compatible.
 CREATE OR REPLACE FUNCTION sync_test_drive_from_activity() RETURNS trigger AS $$
 DECLARE linked_product TEXT;
 BEGIN
@@ -200,7 +210,45 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS "Activity_sync_test_drive_booking" ON "Activity";
 CREATE TRIGGER "Activity_sync_test_drive_booking"
 AFTER INSERT OR UPDATE OF "type", "status", "leadId", "contactId", "location", "assignedToId", "dueDate", "doneAt"
 ON "Activity"
 FOR EACH ROW EXECUTE FUNCTION sync_test_drive_from_activity();
+
+-- Friendly application checks are backed by a concurrency-safe database guard.
+-- The advisory lock serialises simultaneous requests for the same demo vehicle.
+CREATE OR REPLACE FUNCTION prevent_demo_vehicle_booking_overlap() RETURNS trigger AS $$
+BEGIN
+  IF NEW."demoVehicleId" IS NULL
+     OR NEW."deletedAt" IS NOT NULL
+     OR NEW."status" NOT IN ('booked','confirmed','checked_out') THEN
+    RETURN NEW;
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext(NEW."demoVehicleId"));
+
+  IF EXISTS (
+    SELECT 1
+    FROM "TestDriveBooking" existing
+    WHERE existing."id" <> NEW."id"
+      AND existing."demoVehicleId" = NEW."demoVehicleId"
+      AND existing."deletedAt" IS NULL
+      AND existing."status" IN ('booked','confirmed','checked_out')
+      AND existing."scheduledStart" < NEW."expectedReturnAt"
+      AND existing."expectedReturnAt" > NEW."scheduledStart"
+  ) THEN
+    RAISE EXCEPTION USING
+      ERRCODE = '23P01',
+      MESSAGE = 'The demo vehicle is already booked for this time range.';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS "TestDriveBooking_prevent_overlap" ON "TestDriveBooking";
+CREATE TRIGGER "TestDriveBooking_prevent_overlap"
+BEFORE INSERT OR UPDATE OF "demoVehicleId", "scheduledStart", "expectedReturnAt", "status", "deletedAt"
+ON "TestDriveBooking"
+FOR EACH ROW EXECUTE FUNCTION prevent_demo_vehicle_booking_overlap();
