@@ -1,14 +1,17 @@
+// CampaignVersion and CampaignEvent intentionally use loose campaign/contact IDs
+// in this first additive phase. The legacy Campaign model remains untouched until
+// the draft/editor PR starts reading the new columns through Prisma.
+
 model CampaignVersion {
-  id String @id @default(cuid())
-  tenantId String?
-  campaignId String
-  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  version Int
-  snapshot Json
-  reason String?
-  createdById String?
+  id            String   @id @default(cuid())
+  tenantId      String?
+  campaignId    String
+  version       Int
+  snapshot      Json
+  reason        String?
+  createdById   String?
   createdByName String?
-  createdAt DateTime @default(now())
+  createdAt     DateTime @default(now())
 
   @@unique([campaignId, version])
   @@index([campaignId, createdAt(sort: Desc)])
@@ -16,17 +19,16 @@ model CampaignVersion {
 }
 
 model CampaignEvent {
-  id String @id @default(cuid())
-  tenantId String?
-  campaignId String
-  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  id                  String   @id @default(cuid())
+  tenantId            String?
+  campaignId          String
   campaignRecipientId String?
-  contactId String?
-  type String
-  url String?
-  providerMessageId String?
-  metadata Json?
-  occurredAt DateTime @default(now())
+  contactId           String?
+  type                String
+  url                 String?
+  providerMessageId   String?
+  metadata            Json?
+  occurredAt          DateTime @default(now())
 
   @@index([campaignId, type, occurredAt])
   @@index([campaignRecipientId, occurredAt])
