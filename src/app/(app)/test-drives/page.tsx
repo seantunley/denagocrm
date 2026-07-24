@@ -48,7 +48,7 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
   const contactScope = accessibleContactIds === null ? {} : { id: { in: accessibleContactIds } };
   const leadScope = accessibleLeadIds === null ? {} : { id: { in: accessibleLeadIds } };
 
-  const [bookings, metricBookings, activeDemoVehicleCount, eligibleLeadCount, contacts, leads, demos, products, staff] = await Promise.all([
+  const [bookings, metricBookings, activeDemoVehicleCount, eligibleLeads, contacts, leads, demos, products, staff] = await Promise.all([
     prisma.testDriveBooking.findMany({
       where: { deletedAt: null, ...bookingScope, ...(status ? { status } : {}) },
       include: { demoVehicle: true },
@@ -71,7 +71,10 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
       },
     }),
     prisma.demoVehicle.count({ where: { deletedAt: null, status: "active" } }),
-    prisma.lead.count({ where: { deletedAt: null, ...leadScope, createdAt: { gte: metricFrom, lte: now } } }),
+    prisma.lead.findMany({
+      where: { deletedAt: null, ...leadScope, createdAt: { gte: metricFrom, lte: now } },
+      select: { id: true },
+    }),
     prisma.contact.findMany({ where: { deletedAt: null, ...contactScope }, orderBy: { firstName: "asc" }, take: 500 }),
     prisma.lead.findMany({ where: { deletedAt: null, ...leadScope, status: "open" }, orderBy: { createdAt: "desc" }, take: 500, select: { id: true, title: true, name: true, contactId: true, productId: true } }),
     prisma.demoVehicle.findMany({ where: { deletedAt: null, status: "active" }, orderBy: { name: "asc" } }),
@@ -81,7 +84,7 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
 
   const metrics = calculateTestDriveMetrics({
     bookings: metricBookings,
-    eligibleLeadCount,
+    eligibleLeadIds: eligibleLeads.map((lead) => lead.id),
     activeDemoVehicleCount,
     periodDays: Math.max(1, differenceInCalendarDays(now, metricFrom) + 1),
   });
@@ -178,7 +181,7 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
       </PageHeader>
 
       <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <MetricCard icon={CalendarDays} label="Bookings · 30 days" value={metrics.bookings} detail={`${metrics.bookedLeads} unique leads · ${metrics.bookingRate}% booking rate`} />
+        <MetricCard icon={CalendarDays} label="Bookings · 30 days" value={metrics.bookings} detail={`${metrics.bookedLeads} unique new leads · ${metrics.bookingRate}% booking rate`} />
         <MetricCard icon={UserCheck} label="Attendance" value={`${metrics.attendanceRate}%`} detail={`${metrics.attended} attended · ${metrics.noShows} no-shows`} />
         <MetricCard icon={Route} label="Quote conversion" value={`${metrics.quoteConversionRate}%`} detail={`${metrics.saleConversionRate}% of attended drives became sales`} />
         <MetricCard icon={TriangleAlert} label="Incidents" value={`${metrics.incidentRate}%`} detail={`${metrics.incidents} damage / incident records`} accent={metrics.incidents > 0} />
