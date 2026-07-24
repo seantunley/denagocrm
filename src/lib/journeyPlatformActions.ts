@@ -7,7 +7,7 @@ import { basePrisma, prisma } from "./db";
 import { renderTemplate } from "./email";
 import { nextJobCardNumber } from "./numbering";
 import { sendPushToAll } from "./push";
-import { resolveTenantActor } from "./tenantActor";
+import { resolveTenantActor, resolveTenantMemberUser } from "./tenantActor";
 import { sendWhatsAppText, waDigits } from "./whatsapp";
 import { callAutomationWebhook } from "./automationWebhook";
 import { hashJourneyKey } from "./journeyEngineShared";
@@ -68,11 +68,18 @@ function source(context: JourneyContext) {
 }
 
 async function userIdFor(args: PlatformArgs, configured?: string | null) {
-  if (configured) return configured;
+  if (configured) {
+    const member = await resolveTenantMemberUser(configured);
+    if (!member) throw new Error("The configured automation assignee is not an active member of this tenant");
+    return member.id;
+  }
   const lead = record(args.context.lead);
   const contact = record(args.context.contact);
   const owner = lead.assignedToId ?? contact.ownerId;
-  if (typeof owner === "string" && owner) return owner;
+  if (typeof owner === "string" && owner) {
+    const member = await resolveTenantMemberUser(owner);
+    if (member) return member.id;
+  }
   const actor = await resolveTenantActor();
   if (!actor) throw new Error("No active CRM user is available");
   return actor.id;
@@ -362,6 +369,10 @@ export async function executePlatformJourneyAction(args: PlatformArgs): Promise<
     }
     case "request_internal_approval": {
       const existing = await prisma.automationApprovalRequest.findFirst({ where: { journeyRunId: args.runId, journeyStepId: step.id } });
+      if (existing?.status === "approved") return { status: "completed", note: "Internal approval granted", output: { approvalId: existing.id } };
+      if (existing && ["rejected", "cancelled"].includes(existing.status)) {
+        return { status: "completed", note: `Internal approval ${existing.status}`, nextStepId: null, output: { approvalId: existing.id, decision: existing.status } };
+      }
       const approval = existing ?? await prisma.automationApprovalRequest.create({
         data: {
           tenantId: args.tenantId,
@@ -378,8 +389,13 @@ export async function executePlatformJourneyAction(args: PlatformArgs): Promise<
           metadata: { journeyName: args.journeyName } as Prisma.InputJsonValue,
         },
       });
-      await sendPushToAll({ title: "Approval required", body: approval.title, url: "/automations/approvals" });
-      return { status: "completed", note: "Internal approval requested", output: { approvalId: approval.id } };
+      if (!existing) await sendPushToAll({ title: "Approval required", body: approval.title, url: "/automations/approvals" });
+      return {
+        status: "waiting",
+        note: "Waiting for internal approval",
+        nextRunAt: addDays(new Date(), 3650),
+        output: { approvalId: approval.id },
+      };
     }
     case "update_field": {
       const changed = await updateAllowedField(args);
