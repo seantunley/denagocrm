@@ -16,6 +16,7 @@ import {
 } from "@/lib/docbuilder/recordBinding";
 import { createSignatureRequestFromDoc } from "@/lib/signing/service";
 import { dispatchRequest } from "@/lib/signing/dispatch";
+import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
 import { saveFile } from "@/lib/storage";
 
 type SignPrepResult = { ok: boolean; requestId?: string; message: string; sent?: boolean; notified?: number };
@@ -170,95 +171,125 @@ export async function sendDocForSigning(
     };
   }
 
-  const result = await generateDocEditorPdf({
-    templateId,
-    quoteId: binding.quoteId,
-    jobCardId: binding.jobCardId,
-  });
-  if (!result) return { ok: false, message: "Could not generate the PDF." };
-
-  const storedName = await saveFile(
-    result.buffer,
-    `${result.title}.pdf`,
-    "application/pdf",
-  );
-  const document = await prisma.document.create({
-    data: {
-      fileName: `${result.title}.pdf`,
-      storedName,
-      mimeType: "application/pdf",
-      sizeBytes: result.buffer.length,
-      quoteId: result.quoteId,
-      jobCardId: result.jobCardId,
-      contactId: result.contactId,
-      tag: "for-signing",
-      uploadedById: user.id,
-    },
-  });
-
-  const created = await createSignatureRequestFromDoc({
-    doc: documentModel,
-    title: result.title,
-    unsignedPdfRef: storedName,
-    source: {
-      documentId: document.id,
-      quoteId: result.quoteId,
-      jobCardId: result.jobCardId,
-      contactId: result.contactId,
+  // Idempotency: reuse an existing OPEN (non-closed, non-deleted) request for the
+  // same template + source rather than minting a duplicate on a retry — a lost
+  // response after the request was created must not create a second request and a
+  // second set of live signing links.
+  const existing = await prisma.signatureRequest.findFirst({
+    where: {
       templateId,
+      quoteId: binding.quoteId ?? null,
+      jobCardId: binding.jobCardId ?? null,
+      deletedAt: null,
+      status: { notIn: [...CLOSED_REQUEST_STATUSES] },
     },
-    createdById: user.id,
+    orderBy: { createdAt: "desc" },
+    select: { id: true, title: true, status: true },
   });
-  await logAudit({
-    action: "doceditor.sign",
-    summary: `Prepared “${result.title}” for signing`,
-    entityType: "SignatureRequest",
-    entityId: created.id,
-    user,
-  });
-  revalidatePath(BASE);
 
-  // "Send now": dispatch in the same step, mirroring signhub.sendRequest's guard
-  // (a signer must be reachable) and its exact dispatchRequest call. If nobody is
-  // reachable the request survives as a draft — we report that, not a failure.
-  if (options?.dispatch) {
-    const full = await prisma.signatureRequest.findUnique({
-      where: { id: created.id },
-      include: { recipients: true },
+  // Already sent / in-progress for this document → a retry after a successful
+  // send. Return it; never re-create or re-dispatch (that would double-send links).
+  if (existing && existing.status !== "draft") {
+    return {
+      ok: true,
+      requestId: existing.id,
+      sent: true,
+      message: "A signing request for this document is already in progress — open the Signatures hub to manage it.",
+    };
+  }
+
+  let requestId: string;
+  let title: string;
+  let prepared: { recipients: number; fields: number } | null = null;
+
+  if (existing) {
+    // Reuse the existing draft (retry of a prepare that already created it).
+    requestId = existing.id;
+    title = existing.title;
+  } else {
+    const result = await generateDocEditorPdf({
+      templateId,
+      quoteId: binding.quoteId,
+      jobCardId: binding.jobCardId,
     });
-    const reachable = full?.recipients.filter((r) => r.role !== "viewer" && (r.email || r.phone)) ?? [];
-    if (reachable.length === 0) {
-      return {
-        ok: true,
-        requestId: created.id,
-        sent: false,
-        message: "Prepared, but no signer has an email or phone yet — open the Signatures hub to add contact details and send.",
-      };
-    }
-    const { notified } = await dispatchRequest(created.id);
+    if (!result) return { ok: false, message: "Could not generate the PDF." };
+
+    const storedName = await saveFile(result.buffer, `${result.title}.pdf`, "application/pdf");
+    const document = await prisma.document.create({
+      data: {
+        fileName: `${result.title}.pdf`,
+        storedName,
+        mimeType: "application/pdf",
+        sizeBytes: result.buffer.length,
+        quoteId: result.quoteId,
+        jobCardId: result.jobCardId,
+        contactId: result.contactId,
+        tag: "for-signing",
+        uploadedById: user.id,
+      },
+    });
+    const created = await createSignatureRequestFromDoc({
+      doc: documentModel,
+      title: result.title,
+      unsignedPdfRef: storedName,
+      source: {
+        documentId: document.id,
+        quoteId: result.quoteId,
+        jobCardId: result.jobCardId,
+        contactId: result.contactId,
+        templateId,
+      },
+      createdById: user.id,
+    });
     await logAudit({
-      action: "signing.send",
-      summary: `Sent “${result.title}” for signing`,
+      action: "doceditor.sign",
+      summary: `Prepared “${result.title}” for signing`,
       entityType: "SignatureRequest",
       entityId: created.id,
       user,
     });
+    requestId = created.id;
+    title = result.title;
+    prepared = { recipients: created.recipients, fields: created.fields };
+  }
+  revalidatePath(BASE);
+
+  // "Send now": dispatch in the same step. dispatchRequest only marks REACHABLE
+  // recipients "sent" and returns TRUTHFUL delivery counts, so we log a send and
+  // claim success only when a message actually went out.
+  if (options?.dispatch) {
+    const dispatch = await dispatchRequest(requestId);
     revalidatePath("/signatures");
-    revalidatePath(`/signatures/${created.id}`);
+    revalidatePath(`/signatures/${requestId}`);
+    if (dispatch.notified > 0) {
+      await logAudit({
+        action: "signing.send",
+        summary: `Sent “${title}” for signing`,
+        entityType: "SignatureRequest",
+        entityId: requestId,
+        user,
+      });
+      const stranded = dispatch.unreachable > 0 ? ` ${dispatch.unreachable} signer(s) had no contact channel and remain pending.` : "";
+      return { ok: true, requestId, sent: true, notified: dispatch.notified, message: `Sent to ${dispatch.notified} recipient(s).${stranded}` };
+    }
+    // Nothing delivered — never log a successful send. Report why.
     return {
       ok: true,
-      requestId: created.id,
-      sent: true,
-      notified,
-      message: `Sent to ${notified} recipient(s).`,
+      requestId,
+      sent: false,
+      message: dispatch.unreachable > 0
+        ? "Prepared, but no signer has a usable contact channel — add an email or phone in the Signatures hub, then send."
+        : "Prepared, but the message could not be delivered — open the Signatures hub to retry.",
     };
   }
 
   return {
     ok: true,
-    requestId: created.id,
+    requestId,
     sent: false,
-    message: `Signature request created — ${created.recipients} recipient(s), ${created.fields} field(s). Open the Signatures hub to send it.`,
+    message: prepared
+      ? `Signature request created — ${prepared.recipients} recipient(s), ${prepared.fields} field(s). Open the Signatures hub to send it.`
+      : "Existing draft reused. Open the Signatures hub to send it.",
   };
 }
 

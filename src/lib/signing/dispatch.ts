@@ -24,15 +24,34 @@ function emailHtml(name: string, title: string, url: string, verb: string): stri
 }
 function escapeText(s: string): string { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
-/** Notify one recipient (email + WhatsApp best-effort). Marks them "sent". */
-export async function notifyRecipient(recipientId: string, opts?: { reminder?: boolean }): Promise<void> {
+/** Outcome of a notify attempt: whether the recipient had a usable channel, and
+ *  whether at least one channel actually accepted the message. */
+export interface NotifyOutcome {
+  reachable: boolean; // had at least one usable channel (email, or phone + WhatsApp configured)
+  delivered: boolean; // at least one channel accepted the send
+}
+
+/**
+ * Notify one recipient (email + WhatsApp best-effort). Returns the delivery
+ * outcome. A recipient with NO usable channel is NOT marked "sent" — leaving them
+ * "pending" so a workflow isn't falsely advanced and the caller can surface that
+ * they have no contact details (rather than silently claiming a send that could
+ * never happen).
+ */
+export async function notifyRecipient(recipientId: string, opts?: { reminder?: boolean }): Promise<NotifyOutcome> {
   const r = await prisma.signatureRecipient.findUnique({ where: { id: recipientId }, include: { request: true } });
-  if (!r || r.role === "viewer") return;
+  if (!r || r.role === "viewer") return { reachable: false, delivered: false };
   // Never notify for a CLOSED request, or a recipient who already
   // signed/declined — the request can close (void/decline/expire/reject/
   // complete) between dispatch's claim and this external email/WhatsApp send.
-  if (isRequestClosed(r.request.status)) return;
-  if (r.status === "signed" || r.status === "declined") return;
+  if (isRequestClosed(r.request.status)) return { reachable: false, delivered: false };
+  if (r.status === "signed" || r.status === "declined") return { reachable: false, delivered: false };
+
+  const hasEmail = !!r.email;
+  const hasWhatsApp = !!r.phone && (await isWhatsAppConfigured());
+  // No usable channel → no attempt is possible. Do NOT claim pending→sent: a
+  // recipient we can't reach must stay pending, not look "sent" with nothing out.
+  if (!hasEmail && !hasWhatsApp) return { reachable: false, delivered: false };
 
   // AT-MOST-ONCE first send: atomically claim pending→sent BEFORE sending, so two
   // concurrent callers (e.g. two workflow advances) can't both read "pending" and
@@ -41,29 +60,33 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
   // recipient, so it skips the claim.
   if (!opts?.reminder) {
     const claimed = await prisma.signatureRecipient.updateMany({ where: { id: r.id, status: "pending" }, data: { status: "sent" } });
-    if (claimed.count !== 1) return;
+    if (claimed.count !== 1) return { reachable: true, delivered: false };
   }
 
   const url = signUrl(r.token);
   const verb = opts?.reminder ? "Reminder — please sign" : "Please sign your document";
   const evType = opts?.reminder ? "reminded" : "sent";
+  let delivered = false;
 
-  if (r.email) {
+  if (hasEmail) {
     const res = await sendEmail({
-      to: r.email, subject: `${verb}: ${r.request.title}`,
+      to: r.email!, subject: `${verb}: ${r.request.title}`,
       text: `Hi ${r.name},\n\n${verb}: "${r.request.title}" from Denago Cape Town.\n\nOpen and sign here:\n${url}\n\nThank you,\nDenago Cape Town`,
       html: emailHtml(r.name, r.request.title, url, verb),
     });
+    if (res.ok) delivered = true;
     await logSignEvent(r.requestId, { type: evType, recipientId: r.id, actor: "system", channel: "email", metadata: { ok: res.ok, error: res.error } });
   }
   // WhatsApp works inside the 24h customer-service window (or requires an approved
   // template for cold outreach — see @/lib/whatsapp). Best-effort; failures are logged.
-  if (r.phone && (await isWhatsAppConfigured())) {
-    const res = await sendWhatsAppText(waDigits(r.phone), `${verb}: "${r.request.title}"\nSign here: ${url}`);
+  if (hasWhatsApp) {
+    const res = await sendWhatsAppText(waDigits(r.phone!), `${verb}: "${r.request.title}"\nSign here: ${url}`);
+    if (res.ok) delivered = true;
     await logSignEvent(r.requestId, { type: evType, recipientId: r.id, actor: "system", channel: "whatsapp", metadata: { ok: res.ok, error: res.error } });
   }
 
   if (opts?.reminder) await prisma.signatureRecipient.update({ where: { id: r.id }, data: { remindedAt: new Date() } });
+  return { reachable: true, delivered };
 }
 
 /**
@@ -72,9 +95,19 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
  * already "sent", so notifyRecipient's at-most-once pending→sent claim would
  * otherwise skip them; a reminder deliberately re-notifies them.
  */
-export async function dispatchRequest(requestId: string, opts?: { reminder?: boolean }): Promise<{ notified: number }> {
+export interface DispatchResult {
+  /** Recipients targeted for this (re)send (1 for sequential, all unsigned for parallel). */
+  targeted: number;
+  /** Targets where at least one channel actually accepted the send. TRUTHFUL — not
+   *  the target count; a target whose email/WhatsApp all failed is not counted. */
+  notified: number;
+  /** Targets with no usable contact channel — left "pending", nothing sent. */
+  unreachable: number;
+}
+
+export async function dispatchRequest(requestId: string, opts?: { reminder?: boolean }): Promise<DispatchResult> {
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: { orderBy: { order: "asc" } } } });
-  if (!req) return { notified: 0 };
+  if (!req) return { targeted: 0, notified: 0, unreachable: 0 };
   // CONDITIONALLY claim the (re)send: only move a still-open request to "sent".
   // A read-check + unconditional update was a TOCTOU — a concurrent void/decline
   // could close the request between the two, and the unconditional update would
@@ -84,15 +117,21 @@ export async function dispatchRequest(requestId: string, opts?: { reminder?: boo
     where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
     data: { status: "sent", sentAt: req.sentAt ?? new Date() },
   });
-  if (claimed.count !== 1) return { notified: 0 };
+  if (claimed.count !== 1) return { targeted: 0, notified: 0, unreachable: 0 };
 
   const signers = req.recipients.filter((r) => r.role !== "viewer" && r.status !== "signed");
   const targets = req.ordering === "sequential" ? signers.slice(0, 1) : signers;
-  for (const r of targets) await notifyRecipient(r.id, { reminder: opts?.reminder });
+  let notified = 0;
+  let unreachable = 0;
+  for (const r of targets) {
+    const outcome = await notifyRecipient(r.id, { reminder: opts?.reminder });
+    if (!outcome.reachable) unreachable += 1;
+    else if (outcome.delivered) notified += 1;
+  }
   // NOTE: viewers are intentionally NOT notified here. notifyRecipient() returns
   // early for viewers (they never sign), so the previous per-viewer loop was dead
   // code. If viewer "for your records" copies are wanted, add a dedicated path.
-  return { notified: targets.length };
+  return { targeted: targets.length, notified, unreachable };
 }
 
 /** After someone signs (sequential): notify the next unsigned signer, if any. */

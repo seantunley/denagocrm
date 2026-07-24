@@ -179,6 +179,11 @@ export function DocEditor({
       } else {
         toast.error(`Couldn’t prepare for signing: ${result.message}`);
       }
+    } catch {
+      // A thrown/timed-out server action must not leave an unhandled rejection.
+      // The action reuses an existing open request for this document on retry, so
+      // trying again won't mint a duplicate — surface a retry prompt instead.
+      toast.error("Preparing for signing failed — please try again. If you’d already started, check the Signatures hub before retrying.");
     } finally {
       setSigning(false);
     }
