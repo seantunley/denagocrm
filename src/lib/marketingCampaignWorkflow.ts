@@ -7,6 +7,11 @@ import { evaluateAudience, validateAudienceTree, type AudienceGroup } from "./ma
 
 export type CampaignQaIssue = { code: string; message: string; severity: "error" | "warning" };
 
+type CampaignStateRow = {
+  status: string;
+  submittedById: string | null;
+};
+
 function validUrl(value: string | null) {
   if (!value) return true;
   try {
@@ -45,6 +50,43 @@ export async function campaignQa(id: string, tenantId: string | null): Promise<C
   return issues;
 }
 
+async function nextVersionAndSnapshot(
+  tx: Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0],
+  args: { campaignId: string; tenantId: string | null; reason: string; userId: string; userName: string },
+) {
+  const campaigns = await tx.$queryRaw<Array<Record<string, unknown>>>`
+    SELECT * FROM "Campaign"
+    WHERE "id" = ${args.campaignId}
+      AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
+    FOR UPDATE
+  `;
+  const snapshot = campaigns[0];
+  if (!snapshot) throw new Error("Campaign not found");
+  const rows = await tx.$queryRaw<Array<{ version: number }>>`
+    SELECT COALESCE(MAX("version"), 0) + 1 AS "version"
+    FROM "CampaignVersion"
+    WHERE "campaignId" = ${args.campaignId}
+      AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
+  `;
+  const version = Number(rows[0]?.version ?? 1);
+  await tx.$executeRaw`
+    INSERT INTO "CampaignVersion" (
+      "id", "tenantId", "campaignId", "version", "snapshot", "reason", "createdById", "createdByName", "createdAt"
+    ) VALUES (
+      ${`cv_${crypto.randomUUID()}`}, ${args.tenantId}, ${args.campaignId}, ${version},
+      ${JSON.stringify(snapshot)}::jsonb, ${args.reason}, ${args.userId}, ${args.userName}, CURRENT_TIMESTAMP
+    )
+  `;
+  const updated = await tx.$executeRaw`
+    UPDATE "Campaign"
+    SET "version" = ${version}, "updatedAt" = CURRENT_TIMESTAMP
+    WHERE "id" = ${args.campaignId}
+      AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
+  `;
+  if (updated !== 1) throw new Error("Campaign disappeared while versioning");
+  return version;
+}
+
 export async function saveCampaignVersion(args: {
   campaignId: string;
   tenantId: string | null;
@@ -54,56 +96,28 @@ export async function saveCampaignVersion(args: {
 }) {
   return basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`campaign-version:${args.campaignId}`}))`;
-    const campaigns = await tx.$queryRaw<Array<Record<string, unknown>>>`
-      SELECT * FROM "Campaign"
-      WHERE "id" = ${args.campaignId}
-        AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
-      FOR UPDATE
-    `;
-    const snapshot = campaigns[0];
-    if (!snapshot) throw new Error("Campaign not found");
-    const rows = await tx.$queryRaw<Array<{ version: number }>>`
-      SELECT COALESCE(MAX("version"), 0) + 1 AS "version"
-      FROM "CampaignVersion"
-      WHERE "campaignId" = ${args.campaignId}
-        AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
-    `;
-    const version = Number(rows[0]?.version ?? 1);
-    await tx.$executeRaw`
-      INSERT INTO "CampaignVersion" (
-        "id", "tenantId", "campaignId", "version", "snapshot", "reason", "createdById", "createdByName", "createdAt"
-      ) VALUES (
-        ${`cv_${crypto.randomUUID()}`}, ${args.tenantId}, ${args.campaignId}, ${version},
-        ${JSON.stringify(snapshot)}::jsonb, ${args.reason}, ${args.userId}, ${args.userName}, CURRENT_TIMESTAMP
-      )
-    `;
-    const updated = await tx.$executeRaw`
-      UPDATE "Campaign"
-      SET "version" = ${version}, "updatedAt" = CURRENT_TIMESTAMP
-      WHERE "id" = ${args.campaignId}
-        AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
-    `;
-    if (updated !== 1) throw new Error("Campaign disappeared while versioning");
-    return version;
+    return nextVersionAndSnapshot(tx, args);
   });
 }
 
-export async function transitionCampaign(args: {
-  campaignId: string;
-  tenantId: string | null;
-  from: string;
-  to: string;
-  userId: string;
-  userName: string;
-  note?: string | null;
-}) {
+async function updateCampaignState(
+  tx: Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0],
+  args: {
+    campaignId: string;
+    tenantId: string | null;
+    from: string;
+    to: string;
+    userId: string;
+    note?: string | null;
+  },
+) {
   assertCampaignTransition(args.from, args.to);
-  const rows = await basePrisma.$queryRaw<Array<{ status: string; submittedById: string | null }>>`
+  const rows = await tx.$queryRaw<CampaignStateRow[]>`
     SELECT "status", "submittedById"
     FROM "Campaign"
     WHERE "id" = ${args.campaignId}
       AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
-    LIMIT 1
+    FOR UPDATE
   `;
   const campaign = rows[0];
   if (!campaign || campaign.status !== args.from) throw new Error("Campaign changed while this action was being processed");
@@ -112,7 +126,7 @@ export async function transitionCampaign(args: {
   }
   if (args.to === "changes_requested" && !args.note?.trim()) throw new Error("Explain the required changes");
 
-  const updated = await basePrisma.$executeRaw`
+  const updated = await tx.$executeRaw`
     UPDATE "Campaign" SET
       "status" = ${args.to},
       "submittedForReviewAt" = CASE WHEN ${args.to} = 'in_review' THEN CURRENT_TIMESTAMP ELSE "submittedForReviewAt" END,
@@ -134,6 +148,38 @@ export async function transitionCampaign(args: {
       AND "status" = ${args.from}
   `;
   if (updated !== 1) throw new Error("Campaign changed while this action was being processed");
+}
+
+export async function transitionCampaign(args: {
+  campaignId: string;
+  tenantId: string | null;
+  from: string;
+  to: string;
+  userId: string;
+  userName: string;
+  note?: string | null;
+}) {
+  await basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`campaign-state:${args.campaignId}`}))`;
+    await updateCampaignState(tx, args);
+  });
+}
+
+export async function transitionCampaignWithVersion(args: {
+  campaignId: string;
+  tenantId: string | null;
+  from: string;
+  to: string;
+  userId: string;
+  userName: string;
+  reason: string;
+  note?: string | null;
+}) {
+  return basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`campaign-state:${args.campaignId}`}))`;
+    await updateCampaignState(tx, args);
+    return nextVersionAndSnapshot(tx, args);
+  });
 }
 
 type AudienceDefinition = {
@@ -203,7 +249,14 @@ async function resolveCampaignAudience(args: { campaignId: string; tenantId: str
   return { definition, contacts };
 }
 
-export async function freezeAudienceAndQueue(args: { campaignId: string; tenantId: string | null; scheduleFor?: Date | null }) {
+export async function freezeAudienceAndQueue(args: {
+  campaignId: string;
+  tenantId: string | null;
+  scheduleFor?: Date | null;
+  userId: string;
+  userName: string;
+  reason: string;
+}) {
   const campaign = await readCampaignDraftRecord(args.campaignId, args.tenantId);
   if (!campaign) throw new Error("Campaign not found");
   if (!isCampaignLaunchable(campaign.status)) throw new Error("Only approved campaigns may be scheduled or queued");
@@ -218,8 +271,8 @@ export async function freezeAudienceAndQueue(args: { campaignId: string; tenantI
     resolvedContactIds: uniqueContacts.map((contact) => contact.id),
   };
 
-  await basePrisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`campaign-launch:${args.campaignId}`}))`;
+  return basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`campaign-state:${args.campaignId}`}))`;
     const locked = await tx.$queryRaw<Array<{ status: string }>>`
       SELECT "status" FROM "Campaign"
       WHERE "id" = ${args.campaignId}
@@ -256,6 +309,7 @@ export async function freezeAudienceAndQueue(args: { campaignId: string; tenantI
         AND "status" = 'approved'
     `;
     if (updated !== 1) throw new Error("Campaign approval changed before launch");
+    const version = await nextVersionAndSnapshot(tx, args);
+    return { count: uniqueContacts.length, version };
   });
-  return uniqueContacts.length;
 }
