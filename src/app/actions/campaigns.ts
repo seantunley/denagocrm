@@ -1,12 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/db";
+import { basePrisma, prisma } from "@/lib/db";
 import { requirePermission, requireContactAccess } from "@/lib/permissions";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
 import { isSmsConfigured } from "@/lib/sms";
 import { saveFile } from "@/lib/storage";
 import { logAudit } from "@/lib/audit";
+import { resolveActingTenant } from "@/lib/tenantContext";
 import {
   resolveContacts,
   sendCampaignBatch,
@@ -19,6 +20,11 @@ import {
 export type CampaignState = { ok?: string; error?: string };
 const str = (v: FormDataEntryValue | null) => String(v ?? "").trim();
 
+async function tenantIdFor(userId: string): Promise<string | null> {
+  const tenant = await resolveActingTenant(userId);
+  return "tenantId" in tenant ? tenant.tenantId : null;
+}
+
 function criteriaFromForm(formData: FormData): SegmentCriteria {
   return {
     source: str(formData.get("f_source")) || undefined,
@@ -30,29 +36,37 @@ function criteriaFromForm(formData: FormData): SegmentCriteria {
   };
 }
 
-async function criteriaFor(formData: FormData): Promise<{ criteria: SegmentCriteria; label: string }> {
+async function criteriaFor(
+  formData: FormData,
+  tenantId: string,
+): Promise<{ criteria: SegmentCriteria; label: string }> {
   const segmentId = str(formData.get("segmentId"));
   if (segmentId) {
-    const seg = await prisma.segment.findUnique({ where: { id: segmentId } });
-    if (seg) return { criteria: JSON.parse(seg.criteria), label: seg.name };
+    const segment = await prisma.segment.findFirst({ where: { id: segmentId, tenantId } });
+    if (!segment) throw new Error("INVALID_CAMPAIGN_SEGMENT");
+    return { criteria: JSON.parse(segment.criteria), label: segment.name };
   }
   const criteria = criteriaFromForm(formData);
-  return { criteria, label: await audienceLabel(criteria) };
+  return { criteria, label: await audienceLabel(criteria, tenantId) };
 }
 
-async function audienceLabel(cr: SegmentCriteria): Promise<string> {
+async function audienceLabel(criteria: SegmentCriteria, tenantId: string): Promise<string> {
   const parts: string[] = [];
-  if (cr.source) parts.push(`source: ${cr.source}`);
-  if (cr.tagId) parts.push(`tag: ${(await prisma.tag.findUnique({ where: { id: cr.tagId } }))?.name ?? "?"}`);
-  if (cr.province) parts.push(cr.province);
-  if (cr.hasVehicle) parts.push("cart owners");
-  if (cr.serviceDue) parts.push("service due");
-  if (cr.wonOnly) parts.push("customers");
+  if (criteria.source) parts.push(`source: ${criteria.source}`);
+  if (criteria.tagId) {
+    const tag = await prisma.tag.findFirst({ where: { id: criteria.tagId, tenantId } });
+    parts.push(`tag: ${tag?.name ?? "?"}`);
+  }
+  if (criteria.province) parts.push(criteria.province);
+  if (criteria.hasVehicle) parts.push("cart owners");
+  if (criteria.serviceDue) parts.push("service due");
+  if (criteria.wonOnly) parts.push("customers");
   return parts.length ? parts.join(" · ") : "All customers";
 }
 
 export async function uploadCampaignImage(formData: FormData): Promise<string | null> {
-  await requirePermission("campaigns.manage");
+  const user = await requirePermission("campaigns.manage");
+  if (!(await tenantIdFor(user.id))) return null;
   const file = formData.get("file") as File | null;
   if (!file || !file.type.startsWith("image/")) return null;
   if (file.size > 5 * 1024 * 1024) return null;
@@ -61,17 +75,24 @@ export async function uploadCampaignImage(formData: FormData): Promise<string | 
 }
 
 export async function previewAudience(formData: FormData): Promise<{ count: number }> {
-  await requirePermission("campaigns.manage");
+  const user = await requirePermission("campaigns.manage");
+  const tenantId = await tenantIdFor(user.id);
+  if (!tenantId) return { count: 0 };
   const channel = str(formData.get("channel")) || "email";
-  const { criteria } = await criteriaFor(formData);
-  return { count: (await resolveContacts(criteria, channel)).length };
+  try {
+    const { criteria } = await criteriaFor(formData, tenantId);
+    return { count: (await resolveContacts(tenantId, criteria, channel)).length };
+  } catch {
+    return { count: 0 };
+  }
 }
 
 export async function sendCampaignTest(
   _prev: CampaignState | undefined,
-  formData: FormData
+  formData: FormData,
 ): Promise<CampaignState> {
-  await requirePermission("campaigns.manage");
+  const user = await requirePermission("campaigns.manage");
+  if (!(await tenantIdFor(user.id))) return { error: "No active tenant is available." };
   const channel = str(formData.get("channel")) || "email";
   const to = str(formData.get("testTo"));
   if (!to) return { error: "Enter a test address / number." };
@@ -97,9 +118,11 @@ export async function sendCampaignTest(
 
 export async function sendCampaign(
   _prev: CampaignState | undefined,
-  formData: FormData
+  formData: FormData,
 ): Promise<CampaignState> {
   const user = await requirePermission("campaigns.manage");
+  const tenantId = await tenantIdFor(user.id);
+  if (!tenantId) return { error: "No active tenant is available." };
   const name = str(formData.get("name"));
   const channel = str(formData.get("channel")) || "email";
   const subject = str(formData.get("subject"));
@@ -114,26 +137,43 @@ export async function sendCampaign(
   if (channel === "sms" && !(await isSmsConfigured()))
     return { error: "SMS isn't configured (Settings → Integrations)." };
 
-  const { criteria, label } = await criteriaFor(formData);
-  const contacts = await resolveContacts(criteria, channel);
+  let criteriaAndLabel: { criteria: SegmentCriteria; label: string };
+  try {
+    criteriaAndLabel = await criteriaFor(formData, tenantId);
+  } catch {
+    return { error: "That audience is not available in this tenant." };
+  }
+  const { criteria, label } = criteriaAndLabel;
+  const contacts = await resolveContacts(tenantId, criteria, channel);
   if (contacts.length === 0) return { error: "No opted-in recipients match that audience." };
 
-  const campaign = await prisma.campaign.create({
-    data: {
-      name,
-      channel,
-      subject: channel === "email" ? subject : null,
-      body: channel === "email" ? htmlToText(htmlBody) : smsBody,
-      htmlBody: channel === "email" ? htmlBody : null,
-      audience: label,
-      recipientCount: contacts.length,
-      status: "queued",
-      createdById: user.id,
-      recipients: { create: contacts.map((c) => ({ contactId: c.id, token: newToken() })) },
-    },
+  const campaign = await basePrisma.$transaction(async (tx) => {
+    const created = await tx.campaign.create({
+      data: {
+        tenantId,
+        name,
+        channel,
+        subject: channel === "email" ? subject : null,
+        body: channel === "email" ? htmlToText(htmlBody) : smsBody,
+        htmlBody: channel === "email" ? htmlBody : null,
+        audience: label,
+        recipientCount: contacts.length,
+        status: "queued",
+        createdById: user.id,
+      },
+    });
+    await tx.campaignRecipient.createMany({
+      data: contacts.map((contact) => ({
+        tenantId,
+        campaignId: created.id,
+        contactId: contact.id,
+        token: newToken(),
+      })),
+    });
+    return created;
   });
 
-  await sendCampaignBatch(campaign.id, 60);
+  await sendCampaignBatch(campaign.id, tenantId, 60);
   await logAudit({
     action: "campaign.started",
     summary: `Campaign "${name}" (${channel}) started — ${contacts.length} recipients`,
@@ -146,26 +186,37 @@ export async function sendCampaign(
 }
 
 export async function saveSegment(formData: FormData) {
-  await requirePermission("campaigns.manage");
+  const user = await requirePermission("campaigns.manage");
+  const tenantId = await tenantIdFor(user.id);
+  if (!tenantId) return;
   const name = str(formData.get("name"));
   if (!name) return;
+  const criteria = criteriaFromForm(formData);
+  if (criteria.tagId) {
+    const tagExists = await prisma.tag.count({ where: { id: criteria.tagId, tenantId } });
+    if (!tagExists) return;
+  }
   await prisma.segment.create({
-    data: { name, criteria: JSON.stringify(criteriaFromForm(formData)) },
+    data: { tenantId, name, criteria: JSON.stringify(criteria) },
   });
   revalidatePath("/campaigns");
 }
 
 export async function deleteSegment(id: string) {
-  await requirePermission("campaigns.manage");
-  await prisma.segment.delete({ where: { id } });
+  const user = await requirePermission("campaigns.manage");
+  const tenantId = await tenantIdFor(user.id);
+  if (!tenantId) return;
+  await prisma.segment.deleteMany({ where: { id, tenantId } });
   revalidatePath("/campaigns");
 }
 
 export async function setMarketingOptOut(contactId: string, optOut: boolean) {
-  // requireContactAccess enforces campaigns.manage AND access to THIS contact, so
-  // a scoped manager can't flip marketing consent on a contact outside their
-  // scope — a POPIA consent-integrity concern. (Was: permission only, any id.)
-  await requireContactAccess(contactId, "campaigns.manage");
-  await prisma.contact.update({ where: { id: contactId }, data: { marketingOptOut: optOut } });
+  const user = await requireContactAccess(contactId, "campaigns.manage");
+  const tenantId = await tenantIdFor(user.id);
+  if (!tenantId) return;
+  await prisma.contact.updateMany({
+    where: { id: contactId, tenantId },
+    data: { marketingOptOut: optOut },
+  });
   revalidatePath("/campaigns");
 }
