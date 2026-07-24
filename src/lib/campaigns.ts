@@ -5,6 +5,11 @@ import { sendSms } from "./sms";
 import { htmlToText } from "./signature";
 import { computeDue } from "./serviceDue";
 import { contactName } from "./format";
+import {
+  assertCampaignTransition,
+  campaignFinalStatus,
+  isCampaignStatus,
+} from "./campaignLifecycle";
 
 export type SegmentCriteria = {
   source?: string;
@@ -85,7 +90,7 @@ You received this because you're a Denago Cape Town customer.
 export function buildTrackedEmail(personalizedHtml: string, token: string) {
   const base = appBaseUrl();
   const rewritten = personalizedHtml.replace(
-    /href="(https?:\/\/[^"]+)"/g,
+    /href="(https?:\/\/[^\"]+)"/g,
     (_m, url) => `href="${base}/api/track/c/${token}?u=${encodeURIComponent(url)}"`
   );
   const pixel = `<img src="${base}/api/track/o/${token}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;overflow:hidden;">`;
@@ -98,24 +103,40 @@ export function newToken() {
 
 async function finalizeIfDone(campaignId: string) {
   const remaining = await prisma.campaignRecipient.count({
-    where: { campaignId, status: "queued" },
+    where: { campaignId, status: { in: ["pending", "queued", "sending"] } },
   });
-  if (remaining === 0) {
-    await prisma.campaign.update({
-      where: { id: campaignId },
-      data: { status: "sent", sentAt: new Date() },
-    });
+  if (remaining !== 0) return;
+
+  const campaign = await prisma.campaign.findUnique({
+    where: { id: campaignId },
+    select: { status: true, failedCount: true },
+  });
+  if (!campaign || !isCampaignStatus(campaign.status)) return;
+
+  let current = campaign.status;
+  if (current === "queued") {
+    assertCampaignTransition(current, "sending");
+    await prisma.campaign.update({ where: { id: campaignId }, data: { status: "sending" } });
+    current = "sending";
   }
+  if (current !== "sending") return;
+
+  const finalStatus = campaignFinalStatus({ failedCount: campaign.failedCount });
+  assertCampaignTransition(current, finalStatus);
+  await prisma.campaign.update({
+    where: { id: campaignId },
+    data: { status: finalStatus, sentAt: new Date() },
+  });
 }
 
 /**
- * Send one batch of queued recipients for a campaign. Called synchronously on
- * first send (instant feedback) and repeatedly from the cron to drain the rest.
- * Returns how many were processed.
+ * Legacy bounded sender retained until the queue-safety PR replaces recipient
+ * claiming and delivery policy. It now obeys the governed status vocabulary and
+ * will not process paused, cancelled, completed or archived campaigns.
  */
 export async function sendCampaignBatch(campaignId: string, limit = 80): Promise<number> {
   const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
-  if (!campaign) return 0;
+  if (!campaign || !["queued", "sending"].includes(campaign.status)) return 0;
   const recipients = await prisma.campaignRecipient.findMany({
     where: { campaignId, status: "queued" },
     include: { contact: true },
@@ -125,7 +146,8 @@ export async function sendCampaignBatch(campaignId: string, limit = 80): Promise
     await finalizeIfDone(campaignId);
     return 0;
   }
-  if (campaign.status !== "sending") {
+  if (campaign.status === "queued") {
+    assertCampaignTransition("queued", "sending");
     await prisma.campaign.update({ where: { id: campaignId }, data: { status: "sending" } });
   }
 
@@ -154,7 +176,7 @@ export async function sendCampaignBatch(campaignId: string, limit = 80): Promise
       failed++;
       await prisma.campaignRecipient.update({
         where: { id: r.id },
-        data: { status: "failed", error: (res.error ?? "send failed").slice(0, 200) },
+        data: { status: "failed_permanent", error: (res.error ?? "send failed").slice(0, 200) },
       });
     }
   }
