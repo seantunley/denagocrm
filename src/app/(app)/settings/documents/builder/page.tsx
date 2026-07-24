@@ -8,7 +8,7 @@ import {
   FileDown,
   Sparkles,
 } from "lucide-react";
-import { requireOwner } from "@/lib/auth";
+import { requireAnyPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { contactName, formatDate } from "@/lib/format";
 import {
@@ -70,7 +70,7 @@ const TOKENS = [
 ];
 
 export default async function BuilderIndexPage() {
-  await requireOwner();
+  await requireAnyPermission("docbuilder.view", "docbuilder.manage");
   await ensureBuilderSeeded();
   const [templates, quotes, jobCards] = await Promise.all([
     listBuilderTemplates(),
