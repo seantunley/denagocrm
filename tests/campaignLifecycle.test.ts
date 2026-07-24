@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   CAMPAIGN_RECIPIENT_STATUSES,
   CAMPAIGN_STATUSES,
@@ -58,4 +59,19 @@ test("recognises the governed recipient statuses", () => {
   for (const status of CAMPAIGN_RECIPIENT_STATUSES) assert.equal(isCampaignRecipientStatus(status), true);
   assert.equal(isCampaignRecipientStatus("failed"), false);
   assert.equal(isCampaignStatus("sent"), false);
+});
+
+test("the migration preserves history and seeds the governed foundation", () => {
+  const sql = readFileSync(
+    "prisma/migrations/20260724173000_campaign_schema_state_machine/migration.sql",
+    "utf8",
+  );
+  assert.match(sql, /WHEN "status" = 'sent'.*THEN 'completed'/s);
+  assert.match(sql, /THEN 'completed_with_errors'/);
+  assert.match(sql, /SET "status" = 'failed_permanent' WHERE "status" = 'failed'/);
+  assert.match(sql, /ALTER COLUMN "status" SET DEFAULT 'pending'/);
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS "CampaignVersion"/);
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS "CampaignEvent"/);
+  assert.match(sql, /'campaigns\.approve'/);
+  assert.match(sql, /WHERE legacy\."permissionKey" = 'campaigns\.manage'/);
 });
