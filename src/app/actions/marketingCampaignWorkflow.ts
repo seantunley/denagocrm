@@ -9,8 +9,8 @@ import { readCampaignDraftRecord } from "@/lib/marketingCampaignDrafts";
 import {
   campaignQa,
   freezeAudienceAndQueue,
-  saveCampaignVersion,
   transitionCampaign,
+  transitionCampaignWithVersion,
 } from "@/lib/marketingCampaignWorkflow";
 
 function note(formData?: FormData) {
@@ -30,9 +30,16 @@ export async function submitCampaignForReview(id: string) {
   const issues = await campaignQa(id, tenantId);
   const errors = issues.filter((issue) => issue.severity === "error");
   if (errors.length) throw new Error(errors.map((issue) => issue.message).join("; "));
-  await saveCampaignVersion({ campaignId: id, tenantId, reason: "Submitted for review", userId: user.id, userName: user.name });
-  await transitionCampaign({ campaignId: id, tenantId, from: campaign.status, to: "in_review", userId: user.id, userName: user.name });
-  await logAuditStrict({ action: "campaign.submitted", summary: `Submitted campaign “${campaign.name}” for review`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "in_review" } });
+  const version = await transitionCampaignWithVersion({
+    campaignId: id,
+    tenantId,
+    from: campaign.status,
+    to: "in_review",
+    userId: user.id,
+    userName: user.name,
+    reason: "Submitted for review",
+  });
+  await logAuditStrict({ action: "campaign.submitted", summary: `Submitted campaign “${campaign.name}” version ${version} for review`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "in_review", version } });
   revalidatePath(`/marketing/campaigns/${id}/review`);
 }
 
@@ -54,9 +61,17 @@ export async function approveCampaign(id: string, formData: FormData) {
   const issues = await campaignQa(id, tenantId);
   const errors = issues.filter((issue) => issue.severity === "error");
   if (errors.length) throw new Error(errors.map((issue) => issue.message).join("; "));
-  await saveCampaignVersion({ campaignId: id, tenantId, reason: "Approved for launch", userId: user.id, userName: user.name });
-  await transitionCampaign({ campaignId: id, tenantId, from: campaign.status, to: "approved", userId: user.id, userName: user.name, note: note(formData) });
-  await logAuditStrict({ action: "campaign.approved", summary: `Approved campaign “${campaign.name}”`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "approved" } });
+  const version = await transitionCampaignWithVersion({
+    campaignId: id,
+    tenantId,
+    from: campaign.status,
+    to: "approved",
+    userId: user.id,
+    userName: user.name,
+    reason: "Approved for launch",
+    note: note(formData),
+  });
+  await logAuditStrict({ action: "campaign.approved", summary: `Approved campaign “${campaign.name}” version ${version}`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "approved", version } });
   revalidatePath(`/marketing/campaigns/${id}/review`);
 }
 
@@ -77,9 +92,15 @@ export async function scheduleCampaign(id: string, formData: FormData) {
   if (Number.isNaN(scheduledFor.getTime())) throw new Error("Invalid scheduled date");
   const campaign = await readCampaignDraftRecord(id, tenantId);
   if (!campaign) throw new Error("Campaign not found");
-  await saveCampaignVersion({ campaignId: id, tenantId, reason: "Scheduled", userId: user.id, userName: user.name });
-  const count = await freezeAudienceAndQueue({ campaignId: id, tenantId, scheduleFor: scheduledFor });
-  await logAuditStrict({ action: "campaign.scheduled", summary: `Scheduled campaign “${campaign.name}” for ${count} recipients`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "scheduled", scheduledFor, recipientCount: count } });
+  const result = await freezeAudienceAndQueue({
+    campaignId: id,
+    tenantId,
+    scheduleFor: scheduledFor,
+    userId: user.id,
+    userName: user.name,
+    reason: "Scheduled with frozen audience",
+  });
+  await logAuditStrict({ action: "campaign.scheduled", summary: `Scheduled campaign “${campaign.name}” version ${result.version} for ${result.count} recipients`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "scheduled", scheduledFor, recipientCount: result.count, version: result.version } });
   revalidatePath(`/marketing/campaigns/${id}/review`);
 }
 
@@ -87,8 +108,14 @@ export async function sendApprovedCampaignNow(id: string) {
   const { user, tenantId } = await context("campaigns.send");
   const campaign = await readCampaignDraftRecord(id, tenantId);
   if (!campaign) throw new Error("Campaign not found");
-  await saveCampaignVersion({ campaignId: id, tenantId, reason: "Queued for send", userId: user.id, userName: user.name });
-  const count = await freezeAudienceAndQueue({ campaignId: id, tenantId, scheduleFor: null });
-  await logAuditStrict({ action: "campaign.queued", summary: `Queued campaign “${campaign.name}” for ${count} recipients`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "queued", recipientCount: count } });
+  const result = await freezeAudienceAndQueue({
+    campaignId: id,
+    tenantId,
+    scheduleFor: null,
+    userId: user.id,
+    userName: user.name,
+    reason: "Queued with frozen audience",
+  });
+  await logAuditStrict({ action: "campaign.queued", summary: `Queued campaign “${campaign.name}” version ${result.version} for ${result.count} recipients`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "queued", recipientCount: result.count, version: result.version } });
   revalidatePath(`/marketing/campaigns/${id}/review`);
 }
