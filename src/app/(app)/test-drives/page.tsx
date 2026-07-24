@@ -10,6 +10,7 @@ import {
   requireAnyPermission,
 } from "@/lib/permissions";
 import { accessibleTestDriveWhere } from "@/lib/testDriveAccess";
+import { listTenantStaff } from "@/lib/tenantActor";
 import { calculateTestDriveMetrics, testDriveStatusLabel } from "@/lib/testDriveMetrics";
 import { createTestDriveBooking } from "@/app/actions/testDrives";
 import ModalTrigger from "@/components/Modal";
@@ -47,7 +48,7 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
   const contactScope = accessibleContactIds === null ? {} : { id: { in: accessibleContactIds } };
   const leadScope = accessibleLeadIds === null ? {} : { id: { in: accessibleLeadIds } };
 
-  const [bookings, metricBookings, activeDemoVehicleCount, eligibleLeadCount, contacts, leads, demos, products, users] = await Promise.all([
+  const [bookings, metricBookings, activeDemoVehicleCount, eligibleLeadCount, contacts, leads, demos, products, staff] = await Promise.all([
     prisma.testDriveBooking.findMany({
       where: { deletedAt: null, ...bookingScope, ...(status ? { status } : {}) },
       include: { demoVehicle: true },
@@ -75,7 +76,7 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
     prisma.lead.findMany({ where: { deletedAt: null, ...leadScope, status: "open" }, orderBy: { createdAt: "desc" }, take: 500, select: { id: true, title: true, name: true, contactId: true, productId: true } }),
     prisma.demoVehicle.findMany({ where: { deletedAt: null, status: "active" }, orderBy: { name: "asc" } }),
     prisma.product.findMany({ where: { deletedAt: null, active: true }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
-    prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    listTenantStaff(),
   ]);
 
   const metrics = calculateTestDriveMetrics({
@@ -88,17 +89,15 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
   const contactIds = [...new Set(bookings.map((booking) => booking.contactId))];
   const leadIds = [...new Set(bookings.map((booking) => booking.leadId).filter(Boolean) as string[])];
   const productIds = [...new Set(bookings.map((booking) => booking.productId).filter(Boolean) as string[])];
-  const userIds = [...new Set(bookings.flatMap((booking) => [booking.salespersonId, booking.accompanyingSalespersonId]).filter(Boolean) as string[])];
-  const [bookingContacts, bookingLeads, bookingProducts, bookingUsers] = await Promise.all([
+  const [bookingContacts, bookingLeads, bookingProducts] = await Promise.all([
     prisma.contact.findMany({ where: { id: { in: contactIds } }, select: { id: true, firstName: true, lastName: true, company: true, isCompany: true } }),
     prisma.lead.findMany({ where: { id: { in: leadIds } }, select: { id: true, title: true } }),
     prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true, name: true } }),
-    prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true } }),
   ]);
   const contactMap = new Map(bookingContacts.map((contact) => [contact.id, contactName(contact)]));
   const leadMap = new Map(bookingLeads.map((lead) => [lead.id, lead.title]));
   const productMap = new Map(bookingProducts.map((product) => [product.id, product.name]));
-  const userMap = new Map(bookingUsers.map((member) => [member.id, member.name]));
+  const staffMap = new Map(staff.map((member) => [member.id, member.name]));
 
   const defaultStart = addHours(now, 24);
   defaultStart.setMinutes(0, 0, 0);
@@ -153,14 +152,14 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
                 <div>
                   <label className="label">Salesperson</label>
                   <select name="salespersonId" className="input" defaultValue={user.id}>
-                    {users.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
+                    {staff.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
                   </select>
                 </div>
                 <div>
                   <label className="label">Accompanying salesperson</label>
                   <select name="accompanyingSalespersonId" className="input" defaultValue="">
                     <option value="">None</option>
-                    {users.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
+                    {staff.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
                   </select>
                 </div>
                 <div>
@@ -223,7 +222,7 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
                     <p>{formatDateTime(booking.scheduledStart)}</p>
                     <p className="text-xs text-muted-foreground">Return {format(booking.expectedReturnAt, "HH:mm")}</p>
                   </td>
-                  <td>{userMap.get(booking.salespersonId) ?? "Salesperson"}</td>
+                  <td>{staffMap.get(booking.salespersonId) ?? "Unavailable user"}</td>
                   <td><span className={`badge ${statusClass[booking.status] ?? "bg-muted text-muted-foreground"}`}>{testDriveStatusLabel(booking.status)}</span></td>
                 </tr>
               ))}
