@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { basePrisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
+import { requireModuleEnabled } from "@/lib/modules/enabled";
 import { getActiveTenantId } from "@/lib/auth";
 import { resolveTenantMemberUser } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
@@ -12,6 +13,13 @@ function refresh(id?: string) {
   revalidatePath("/marketing/surveys/insights");
   revalidatePath("/marketing/surveys/follow-ups");
   if (id) revalidatePath(`/marketing/surveys/follow-ups/${id}`);
+}
+
+async function recoveryContext(permission: "surveys.manage" | "cases.create" = "surveys.manage") {
+  await requireModuleEnabled("marketing");
+  const user = await requirePermission(permission);
+  const tenantId = await getActiveTenantId();
+  return { user, tenantId };
 }
 
 async function loadFollowUp(id: string, tenantId: string | null) {
@@ -33,8 +41,7 @@ async function loadFollowUp(id: string, tenantId: string | null) {
 }
 
 export async function assignSurveyFollowUp(formData: FormData) {
-  const user = await requirePermission("surveys.manage");
-  const tenantId = await getActiveTenantId();
+  const { user, tenantId } = await recoveryContext();
   const id = String(formData.get("id") ?? "");
   const ownerId = String(formData.get("ownerId") ?? "").trim() || null;
   await loadFollowUp(id, tenantId);
@@ -55,8 +62,7 @@ export async function assignSurveyFollowUp(formData: FormData) {
 }
 
 export async function resolveSurveyFollowUp(formData: FormData) {
-  const user = await requirePermission("surveys.manage");
-  const tenantId = await getActiveTenantId();
+  const { user, tenantId } = await recoveryContext();
   const id = String(formData.get("id") ?? "");
   const note = String(formData.get("note") ?? "").trim();
   if (!note) throw new Error("Record how the feedback was resolved");
@@ -72,8 +78,7 @@ export async function resolveSurveyFollowUp(formData: FormData) {
 }
 
 export async function reopenSurveyFollowUp(formData: FormData) {
-  const user = await requirePermission("surveys.manage");
-  const tenantId = await getActiveTenantId();
+  const { user, tenantId } = await recoveryContext();
   const id = String(formData.get("id") ?? "");
   await loadFollowUp(id, tenantId);
   await basePrisma.$executeRaw`
@@ -86,9 +91,8 @@ export async function reopenSurveyFollowUp(formData: FormData) {
 }
 
 export async function createCaseFromSurveyFollowUp(formData: FormData) {
-  const user = await requirePermission("cases.create");
+  const { user, tenantId } = await recoveryContext("cases.create");
   await requirePermission("surveys.manage");
-  const tenantId = await getActiveTenantId();
   const id = String(formData.get("id") ?? "");
   const followUp = await loadFollowUp(id, tenantId);
   if (!followUp.contactId) throw new Error("This response is not linked to a customer contact");
