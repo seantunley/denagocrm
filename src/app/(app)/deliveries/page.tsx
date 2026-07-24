@@ -10,7 +10,7 @@ import {
 import ProofOfDelivery from "@/components/ProofOfDelivery";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { quoteTotalCents } from "@/lib/pricing";
-import { PageHeader } from "@/components/page-header";
+import { WorkspaceHero } from "@/components/workspace-hero";
 import {
   getAccessibleQuoteIds,
   hasPermission,
@@ -93,43 +93,27 @@ export default async function DeliveriesPage() {
   const count = (key: Col) => quotes.filter((quote) => colOf(quote) === key).length;
   const pipelineValue = quotes.reduce((sum, quote) => sum + quoteTotalCents(quote.items), 0);
 
-  const stat = "rounded-xl border border-border bg-card p-4";
   const chip = "inline-flex items-center gap-1 rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground";
 
   return (
-    <div className="space-y-5">
-      <PageHeader
+    <div className="space-y-6">
+      <WorkspaceHero
+        icon={Truck}
+        eyebrow="Fulfilment operations"
         title="Deliveries"
         description={
           canManage
             ? "Invoice, deposit, scheduling and handover — the whole delivery flow in one board."
             : "Read-only visibility of vehicles moving through to handover."
         }
+        actions={<Link href="/quotes" className="btn-secondary btn-sm"><FileText className="size-4" /> Open quotes</Link>}
+        stats={[
+          { label: "Active handovers", value: quotes.length, detail: formatZAR(Math.round(pipelineValue)), icon: Truck },
+          { label: "To invoice", value: count("invoice"), detail: "Accepted, ready to invoice", icon: FileText, tone: "primary" },
+          { label: "Awaiting deposit", value: count("deposit"), detail: "Payment confirmation", icon: Wallet, tone: count("deposit") ? "warning" : "default" },
+          { label: "Ready / scheduled", value: count("schedule") + count("deliver"), detail: "Handover pipeline", icon: PackageCheck, tone: "success" },
+        ]}
       />
-
-      {/* Stat strip */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-        <div className={stat}>
-          <div className="text-2xl font-bold text-foreground">{quotes.length}</div>
-          <div className="text-xs text-muted-foreground">Active handovers</div>
-        </div>
-        <div className={stat}>
-          <div className="text-2xl font-bold text-blue-300">{count("invoice")}</div>
-          <div className="text-xs text-muted-foreground">To invoice</div>
-        </div>
-        <div className={stat}>
-          <div className="text-2xl font-bold text-amber-300">{count("deposit")}</div>
-          <div className="text-xs text-muted-foreground">Awaiting deposit</div>
-        </div>
-        <div className={stat}>
-          <div className="text-2xl font-bold text-emerald-300">{count("schedule") + count("deliver")}</div>
-          <div className="text-xs text-muted-foreground">Ready / scheduled</div>
-        </div>
-        <div className={stat}>
-          <div className="text-2xl font-bold text-foreground">{formatZAR(Math.round(pipelineValue))}</div>
-          <div className="text-xs text-muted-foreground">Pipeline value</div>
-        </div>
-      </div>
 
       {quotes.length === 0 ? (
         <div className="rounded-xl border border-border bg-card p-10 text-center shadow-sm">

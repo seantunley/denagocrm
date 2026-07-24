@@ -9,21 +9,13 @@ import {
   npsFromScores,
   surveyTypeLabel,
 } from "@/lib/surveyTypes";
-import { PageHeader } from "@/components/page-header";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import RecordContextMenu from "@/components/RecordContextMenu";
+import { BarChart3, MessageSquareText, Plus, Send, Star } from "lucide-react";
+import { WorkspaceHero } from "@/components/workspace-hero";
+import { SectionHeading, Surface } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
-
-function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="card">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
-      <p className="text-3xl font-bold mt-1">{value}</p>
-      {sub && <p className="text-xs text-slate-500 mt-0.5">{sub}</p>}
-    </div>
-  );
-}
 
 export default async function SurveysPage() {
   await requireCrm();
@@ -62,18 +54,22 @@ export default async function SurveysPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Surveys & feedback" description={`${totalCompleted} responses · ${responseRate}% response rate · CSAT, NPS and post-sale feedback.`} />
+      <WorkspaceHero
+        icon={MessageSquareText}
+        eyebrow="Customer intelligence"
+        title="Surveys & feedback"
+        description="Measure CSAT, NPS and post-sale experience, then turn customer responses into visible operational signals."
+        stats={[
+          { label: "Responses", value: totalCompleted, detail: `${responseRate}% response rate`, icon: Send, tone: "primary" },
+          { label: "Average CSAT", value: avgCsat === "—" ? "—" : `${avgCsat} / 5`, detail: "Service & sales ratings", icon: Star, tone: avgCsat === "—" ? "default" : "success" },
+          { label: "NPS", value: nps === null ? "—" : nps, detail: nps === null ? "No scores yet" : "−100 to +100", icon: BarChart3 },
+          { label: "Surveys", value: surveys.length, detail: `${surveys.filter((survey) => survey.active).length} active`, icon: MessageSquareText },
+        ]}
+      />
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label="Responses" value={String(totalCompleted)} sub={`${responseRate}% response rate`} />
-        <StatCard label="Avg CSAT" value={avgCsat === "—" ? "—" : `${avgCsat} / 5`} sub="service & sales ratings" />
-        <StatCard label="NPS" value={nps === null ? "—" : String(nps)} sub={nps === null ? "no scores yet" : "−100 to +100"} />
-        <StatCard label="Surveys" value={String(surveys.length)} sub={`${surveys.filter((s) => s.active).length} active`} />
-      </div>
-
-      <div className="card">
-        <h2 className="font-semibold mb-3">New survey</h2>
-        <form action={createSurvey} className="flex flex-col sm:flex-row gap-2">
+      <Surface className="p-5">
+        <SectionHeading title={<span className="inline-flex items-center gap-2"><Plus className="size-4 text-primary" /> Create a survey</span>} description="Start with a proven format, then tailor its questions, trigger and delivery." />
+        <form action={createSurvey} className="mt-4 flex flex-col gap-2 sm:flex-row">
           <input
             name="title"
             className="input sm:flex-1"
@@ -87,12 +83,12 @@ export default async function SurveysPage() {
               </option>
             ))}
           </select>
-          <button className="btn-primary">Create</button>
+          <button className="btn-primary"><Plus className="size-4" /> Create survey</button>
         </form>
         <p className="text-xs text-slate-500 mt-2">
           We&apos;ll pre-fill sensible questions — you can edit everything next.
         </p>
-      </div>
+      </Surface>
 
       <ResponsiveEntityTable>
         <table className="table-base">

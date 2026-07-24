@@ -13,8 +13,8 @@ import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { formatZAR } from "@/lib/format";
 import { saveTargets } from "@/app/actions/targets";
-import { PageHeader } from "@/components/page-header";
-import { Eyebrow, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
+import { SectionHeading, StatusPill, Surface } from "@/components/visual-system";
+import { WorkspaceHero } from "@/components/workspace-hero";
 
 export const dynamic = "force-dynamic";
 
@@ -66,39 +66,21 @@ export default async function TargetsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Targets" description={`Live progress against your ${monthName} sales and service goals.`} />
-
-      <Surface className="relative overflow-hidden border-primary/15 bg-gradient-to-br from-primary/[0.12] via-card to-card">
-        <div className="pointer-events-none absolute -right-20 -top-24 size-64 rounded-full bg-primary/10 blur-3xl" />
-        <div className="relative grid gap-6 p-5 sm:p-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-          <div>
-            <Eyebrow>Monthly performance</Eyebrow>
-            <h2 className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-foreground sm:text-3xl">
-              {configured.length ? `${overallProgress}% of plan` : "Set the plan for this month"}
-            </h2>
-            <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-              {configured.length
-                ? `${achieved} of ${configured.length} configured targets achieved, with ${daysRemaining} day${daysRemaining === 1 ? "" : "s"} remaining.`
-                : "Add targets to turn live CRM activity into a simple month-to-date scorecard."}
-            </p>
-            {configured.length > 0 && (
-              <div className="mt-5 h-2.5 max-w-xl overflow-hidden rounded-full bg-background/70 ring-1 ring-border/60">
-                <div className="h-full rounded-full bg-gradient-to-r from-primary to-orange-300 transition-[width]" style={{ width: `${overallProgress}%` }} />
-              </div>
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-2 sm:flex">
-            <div className="rounded-xl border border-border/70 bg-background/45 px-4 py-3 backdrop-blur-sm">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Goals achieved</p>
-              <p className="mt-1 text-xl font-semibold tabular-nums text-foreground">{achieved}<span className="text-sm font-normal text-muted-foreground"> / {configured.length || 4}</span></p>
-            </div>
-            <div className="rounded-xl border border-border/70 bg-background/45 px-4 py-3 backdrop-blur-sm">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Days remaining</p>
-              <p className="mt-1 text-xl font-semibold tabular-nums text-foreground">{daysRemaining}</p>
-            </div>
-          </div>
-        </div>
-      </Surface>
+      <WorkspaceHero
+        icon={Target}
+        eyebrow="Monthly performance"
+        title="Targets"
+        description={configured.length
+          ? `Live progress against your ${monthName} sales and service plan.`
+          : `Set your ${monthName} plan and turn live CRM activity into a shared scorecard.`}
+        actions={user.role === "owner" ? <a href="#monthly-plan" className="btn-primary btn-sm"><Gauge className="size-4" /> Set monthly plan</a> : undefined}
+        stats={[
+          { label: "Plan progress", value: configured.length ? `${overallProgress}%` : "Not set", detail: configured.length ? `${achieved} goals achieved` : "Add monthly targets", icon: Gauge, tone: configured.length ? "primary" : "warning" },
+          { label: "Goals achieved", value: `${achieved} / ${configured.length || 4}`, detail: "Configured measures", icon: Check, tone: achieved > 0 && achieved === configured.length ? "success" : "default" },
+          { label: "Days remaining", value: daysRemaining, detail: monthName, icon: CalendarDays },
+          { label: "Configured", value: `${configured.length} / ${METRICS.length}`, detail: "Live CRM measures", icon: Target },
+        ]}
+      />
 
       <div className={`grid items-start gap-6 ${user.role === "owner" ? "xl:grid-cols-[minmax(0,1fr)_22rem]" : ""}`}>
         <div className="space-y-4">
@@ -138,7 +120,8 @@ export default async function TargetsPage() {
         </div>
 
         {user.role === "owner" && (
-          <Surface className="p-5 xl:sticky xl:top-6">
+          <div id="monthly-plan" className="scroll-mt-6 xl:sticky xl:top-6">
+          <Surface className="p-5">
             <div className="flex items-start gap-3">
               <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-primary/20 bg-primary/10 text-primary"><Target className="size-4" /></span>
               <div><h2 className="font-semibold tracking-tight">Set monthly targets</h2><p className="mt-1 text-xs leading-5 text-muted-foreground">Update the plan without changing recorded actuals.</p></div>
@@ -162,6 +145,7 @@ export default async function TargetsPage() {
               <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><CalendarDays className="size-3.5" /> Applies to {monthName} only.</p>
             </form>
           </Surface>
+          </div>
         )}
       </div>
     </div>

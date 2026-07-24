@@ -1,10 +1,10 @@
 import { prisma } from "@/lib/db";
-import { Plus } from "lucide-react";
+import { AlertTriangle, BadgeDollarSign, Boxes, PackageCheck, Plus } from "lucide-react";
 import ModalTrigger from "@/components/Modal";
 import PartForm from "@/components/PartForm";
 import { formatZAR } from "@/lib/format";
 import { createPart, updatePart, adjustPartStock, deletePart } from "@/app/actions/parts";
-import { PageHeader } from "@/components/page-header";
+import { WorkspaceHero } from "@/components/workspace-hero";
 import { buttonVariants } from "@/components/ui/button";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 
@@ -57,14 +57,26 @@ export default async function PartsPage() {
     orderBy: { name: "asc" },
   });
   const lowCount = parts.filter((p) => p.reorderAt != null && p.stockQty <= p.reorderAt).length;
+  const stockUnits = parts.reduce((total, part) => total + part.stockQty, 0);
+  const retailValue = parts.reduce((total, part) => total + part.stockQty * part.priceCents, 0);
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Parts" description={lowCount > 0 ? `${lowCount} part${lowCount === 1 ? "" : "s"} at or below reorder level` : "Workshop parts inventory is healthy."}>
-        <ModalTrigger label={<><Plus className="size-4" />New part</>} title="New part" buttonClass={buttonVariants({ size: "sm" })}>
+      <WorkspaceHero
+        icon={Boxes}
+        eyebrow="Workshop inventory"
+        title="Parts"
+        description="Control workshop availability, storage locations, replenishment thresholds and sell value from one inventory view."
+        actions={<ModalTrigger label={<><Plus className="size-4" />New part</>} title="New part" buttonClass={buttonVariants({ size: "sm" })}>
           <PartForm action={createPart} variant="dialog" />
-        </ModalTrigger>
-      </PageHeader>
+        </ModalTrigger>}
+        stats={[
+          { label: "Part lines", value: parts.length, detail: "Active catalogue", icon: Boxes },
+          { label: "Units on hand", value: stockUnits, detail: "Across all locations", icon: PackageCheck, tone: "primary" },
+          { label: "Reorder alerts", value: lowCount, detail: lowCount ? "At or below threshold" : "Inventory is healthy", icon: AlertTriangle, tone: lowCount ? "warning" : "success" },
+          { label: "Retail value", value: formatZAR(retailValue), detail: "Current on-hand value", icon: BadgeDollarSign },
+        ]}
+      />
 
       <ResponsiveEntityTable>
         <table className="table-base">

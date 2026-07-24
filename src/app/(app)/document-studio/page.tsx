@@ -1,11 +1,13 @@
 import Link from "next/link";
 import {
   FileText,
+  Layers3,
   PenLine,
   Plus,
   Rocket,
   ScrollText,
   Star,
+  Workflow,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { DOC_DEFS, DOC_GROUPS, type DocKey } from "@/lib/docTemplates";
@@ -17,7 +19,7 @@ import {
   createReusableBlock,
   createStudioTemplate,
 } from "@/app/actions/studio";
-import { PageHeader } from "@/components/page-header";
+import { WorkspaceHero } from "@/components/workspace-hero";
 import { Button, buttonVariants } from "@/components/ui/button";
 
 export const dynamic = "force-dynamic";
@@ -66,21 +68,32 @@ export default async function DocumentStudioPage() {
 
   const input =
     "h-9 rounded-md border border-input bg-card px-3 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20";
+  const operationalTemplateCount = keys.reduce(
+    (total, key) => total + typedByKey[key].length,
+    0,
+  );
 
   return (
     <div className="space-y-7">
-      <PageHeader
+      <WorkspaceHero
+        icon={Layers3}
+        eyebrow="Document operations"
         title="Document Studio"
         description="Operational documents and free-form templates are managed separately so every edit has a clear production effect."
-      >
-        <Link
+        actions={<Link
           href="/documents"
           className={buttonVariants({ variant: "outline", size: "sm" })}
         >
           <FileText className="size-4" />
           Open document repository
-        </Link>
-      </PageHeader>
+        </Link>}
+        stats={[
+          { label: "Operational templates", value: operationalTemplateCount, detail: `${DOC_GROUPS.length} production groups`, icon: Workflow, tone: "primary" },
+          { label: "Studio templates", value: studioTemplates.length, detail: "Free-form layouts", icon: Layers3 },
+          { label: "Reusable blocks", value: clauses.length, detail: "Shared clauses & content", icon: ScrollText },
+          { label: "Recent documents", value: instances.length, detail: "Latest tracked instances", icon: FileText, tone: "success" },
+        ]}
+      />
 
       <section className="rounded-2xl border border-orange-500/25 bg-orange-500/[0.06] p-5">
         <h2 className="text-base font-semibold text-foreground">

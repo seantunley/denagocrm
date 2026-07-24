@@ -4,7 +4,8 @@ import { contactName, formatDate } from "@/lib/format";
 import { computeWarranty, warrantyColors, warrantyLabels, claimColors } from "@/lib/warranty";
 import { createRecall, deleteRecall } from "@/app/actions/warranty";
 import RecallNotifyButton from "@/components/RecallNotifyButton";
-import { PageHeader } from "@/components/page-header";
+import { WorkspaceHero } from "@/components/workspace-hero";
+import { AlertTriangle, CarFront, ClipboardCheck, Megaphone, ShieldCheck } from "lucide-react";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import {
   getAccessibleVehicleIds,
@@ -42,12 +43,21 @@ export default async function WarrantyPage() {
   const modelCounts = new Map<string, number>();
   for (const vehicle of vehicles) modelCounts.set(vehicle.model, (modelCounts.get(vehicle.model) ?? 0) + 1);
   const models = [...modelCounts.keys()].sort();
+  const expired = expiring.filter(({ warranty }) => warranty.status === "expired").length;
 
   return (
     <div className="space-y-8">
-      <PageHeader
+      <WorkspaceHero
+        icon={ShieldCheck}
+        eyebrow="Ownership protection"
         title="Warranty & recalls"
-        description={`${expiring.length} accessible expiring · ${claims.length} open claims · ${recalls.length} recall bulletins`}
+        description="Track expiring cover, progress active claims and coordinate recall bulletins across the accessible fleet."
+        stats={[
+          { label: "Warranty attention", value: expiring.length, detail: `${expired} already expired`, icon: AlertTriangle, tone: expiring.length ? "warning" : "success" },
+          { label: "Open claims", value: claims.length, detail: "Open or approved", icon: ClipboardCheck, tone: claims.length ? "primary" : "default" },
+          { label: "Recall bulletins", value: recalls.length, detail: `${models.length} fleet models`, icon: Megaphone },
+          { label: "Fleet covered", value: vehicles.length, detail: "Accessible vehicles checked", icon: CarFront },
+        ]}
       />
 
       <section className="space-y-3">

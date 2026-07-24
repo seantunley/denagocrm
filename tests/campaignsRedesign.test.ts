@@ -46,19 +46,19 @@ test("campaign workspace reads only the active tenant", () => {
   assert.match(pageSource, /prisma\.tag\.findMany\(\{ where: \{ tenantId \}/);
   assert.match(pageSource, /prisma\.emailTemplate\.findMany\(\{ where: \{ tenantId \}/);
   assert.match(pageSource, /prisma\.segment\.findMany\(\{ where: \{ tenantId \}/);
-  assert.match(pageSource, /prisma\.campaign\.aggregate\(\{\s*where: \{ tenantId \}/s);
+  assert.match(pageSource, /prisma\.campaign\.aggregate\(\{[\s\S]*?where: \{ tenantId \}/);
   assert.match(pageSource, /resolveContacts\(tenantId, criteria, "any"\)/);
 });
 
 test("campaign mutations stamp and constrain tenant ownership", () => {
   assert.match(campaignActionsSource, /resolveActingTenant\(userId\)/);
   assert.match(campaignActionsSource, /findFirst\(\{ where: \{ id: segmentId, tenantId \} \}\)/);
-  assert.match(campaignActionsSource, /tenantId,\s*campaignId: created\.id/s);
+  assert.match(campaignActionsSource, /tenantId,[\s\S]*?campaignId: created\.id/);
   assert.match(campaignActionsSource, /deleteMany\(\{ where: \{ id, tenantId \} \}\)/);
-  assert.match(campaignActionsSource, /updateMany\(\{\s*where: \{ id: contactId, tenantId \}/s);
+  assert.match(campaignActionsSource, /updateMany\(\{[\s\S]*?where: \{ id: contactId, tenantId \}/);
   assert.match(campaignLibSource, /const where: any = \{ tenantId, deletedAt: null, marketingOptOut: false \}/);
   assert.match(campaignLibSource, /where: \{ campaignId, tenantId, status: "queued"/);
   assert.match(emailActionsSource, /emailTemplate\.create\(\{ data: \{ tenantId, name, subject, body \} \}\)/);
-  assert.match(emailActionsSource, /emailTemplate\.updateMany\(\{\s*where: \{ id, tenantId \}/s);
+  assert.match(emailActionsSource, /emailTemplate\.updateMany\(\{[\s\S]*?where: \{ id, tenantId \}/);
   assert.match(emailActionsSource, /emailTemplate\.deleteMany\(\{ where: \{ id, tenantId \} \}\)/);
 });
