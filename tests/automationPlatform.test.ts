@@ -5,61 +5,28 @@ import { automationTriggerForAudit } from "../src/lib/automationAuditMap";
 import { parseConditionGroup, parseJourneyDefinition } from "../src/lib/journeyTypes";
 
 const requestedTriggers = [
-  "activity_overdue",
-  "test_drive_booked",
-  "test_drive_completed",
-  "test_drive_no_show",
-  "quote_sent",
-  "quote_opened",
-  "quote_expiring",
-  "stock_received",
-  "stock_inspection_failed",
-  "pdi_passed",
-  "pdi_failed",
-  "delivery_scheduled",
-  "delivery_delayed",
-  "job_card_created",
-  "job_stage_changed",
-  "job_card_completed",
-  "service_due",
-  "warranty_expiring",
-  "warranty_claim_opened",
-  "recall_issued",
-  "case_created",
-  "case_escalated",
-  "case_overdue",
-  "case_closed",
-  "portal_request_received",
-  "document_approved",
-  "signature_request_stalled",
+  "activity_overdue", "test_drive_booked", "test_drive_completed", "test_drive_no_show",
+  "quote_sent", "quote_opened", "quote_expiring", "stock_received", "stock_inspection_failed",
+  "pdi_passed", "pdi_failed", "delivery_scheduled", "delivery_delayed", "job_card_created",
+  "job_stage_changed", "job_card_completed", "service_due", "warranty_expiring",
+  "warranty_claim_opened", "recall_issued", "case_created", "case_escalated", "case_overdue",
+  "case_closed", "portal_request_received", "document_approved", "signature_request_stalled",
   "xero_invoice_status_changed",
 ];
 
 const requestedActions = [
-  "send_whatsapp",
-  "create_case",
-  "create_job_card",
-  "create_workshop_booking",
-  "create_signing_request",
-  "request_internal_approval",
-  "update_field",
-  "assign_branch",
-  "assign_team",
-  "generate_document",
-  "call_webhook",
-  "create_xero_draft_invoice",
-  "send_portal_notification",
-  "escalate_to_manager",
-  "create_stock_transfer",
-  "create_test_drive_follow_up",
-  "set_portal_access",
+  "send_whatsapp", "create_case", "create_job_card", "create_workshop_booking",
+  "create_signing_request", "request_internal_approval", "update_field", "assign_branch",
+  "assign_team", "generate_document", "call_webhook", "create_xero_draft_invoice",
+  "send_portal_notification", "escalate_to_manager", "create_stock_transfer",
+  "create_test_drive_follow_up", "set_portal_access",
 ];
 
 test("the automation catalogue contains every requested trigger and action", () => {
-  const triggers = new Set(AUTOMATION_TRIGGERS.map((item) => item.value));
-  const actions = new Set(AUTOMATION_ACTIONS.map((item) => item.value));
-  assert.deepEqual(requestedTriggers.filter((value) => !triggers.has(value as never)), []);
-  assert.deepEqual(requestedActions.filter((value) => !actions.has(value as never)), []);
+  const triggers = new Set<string>(AUTOMATION_TRIGGERS.map((item) => item.value));
+  const actions = new Set<string>(AUTOMATION_ACTIONS.map((item) => item.value));
+  assert.deepEqual(requestedTriggers.filter((value) => !triggers.has(value)), []);
+  assert.deepEqual(requestedActions.filter((value) => !actions.has(value)), []);
 });
 
 test("current audited business actions map to their cross-module triggers", () => {
