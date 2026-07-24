@@ -37,15 +37,18 @@ const hoursBetween = (start: Date, end: Date) =>
 
 export function calculateTestDriveMetrics(args: {
   bookings: TestDriveMetricRow[];
-  eligibleLeadCount: number;
+  eligibleLeadIds: readonly string[];
   activeDemoVehicleCount: number;
   periodDays: number;
   operatingHoursPerDay?: number;
 }): TestDriveMetrics {
   const operatingHoursPerDay = args.operatingHoursPerDay ?? 8;
   const bookings = args.bookings.filter((booking) => booking.status !== "cancelled");
+  const eligibleLeadIds = new Set(args.eligibleLeadIds);
   const bookedLeads = new Set(
-    bookings.map((booking) => booking.leadId).filter((leadId): leadId is string => Boolean(leadId)),
+    bookings
+      .map((booking) => booking.leadId)
+      .filter((leadId): leadId is string => Boolean(leadId) && eligibleLeadIds.has(leadId)),
   ).size;
   const attendedRows = bookings.filter((booking) =>
     booking.actualStartAt !== null || booking.status === "checked_out" || booking.status === "completed"
@@ -67,7 +70,7 @@ export function calculateTestDriveMetrics(args: {
   return {
     bookings: bookings.length,
     bookedLeads,
-    bookingRate: percent(bookedLeads, args.eligibleLeadCount),
+    bookingRate: percent(bookedLeads, eligibleLeadIds.size),
     attended: attendedRows.length,
     attendanceRate: percent(attendedRows.length, bookings.length),
     noShows,
