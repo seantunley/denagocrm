@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Activity, Clock3, PauseCircle, PlayCircle, Plus, Workflow, XCircle } from "lucide-react";
+import { Activity, ArrowRight, Clock3, PauseCircle, PlayCircle, Plus, Route, Workflow, XCircle } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import {
@@ -77,6 +77,22 @@ export default async function AutomationsPage() {
           />
         </ModalTrigger>}
       />
+
+      {isOwner && (
+        <Surface className="p-5">
+          <SectionHeading
+            title="Marketing journeys"
+            description="Versioned multi-step workflows with waits, messaging, CRM actions and segment enrolment — the advanced counterpart to the simple rules below."
+            action={
+              <Link href="/journeys" className={buttonVariants({ variant: "secondary", size: "sm" })}>
+                <Route className="size-4" />
+                Open journeys
+                <ArrowRight className="size-4" />
+              </Link>
+            }
+          />
+        </Surface>
+      )}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
       <Surface className="p-5">
