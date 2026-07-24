@@ -5,6 +5,7 @@ import { calculateTestDriveMetrics } from "../src/lib/testDriveMetrics";
 const at = (hour: number) => new Date(`2026-07-01T${String(hour).padStart(2, "0")}:00:00Z`);
 
 const base = {
+  leadId: null,
   scheduledStart: at(9),
   expectedReturnAt: at(10),
   actualStartAt: null,
@@ -15,29 +16,46 @@ const base = {
   incidentReport: null,
 };
 
-test("calculates attendance, no-show and conversion rates", () => {
+test("calculates unique-lead booking, attendance, no-show and attended conversion rates", () => {
   const result = calculateTestDriveMetrics({
     eligibleLeadCount: 10,
     activeDemoVehicleCount: 2,
     periodDays: 1,
     bookings: [
-      { ...base, status: "completed", actualStartAt: at(9), actualReturnAt: at(10), convertedQuoteId: "quote-1", salesOutcome: "sale_won" },
-      { ...base, status: "completed", actualStartAt: at(9), actualReturnAt: at(10), salesOutcome: "follow_up" },
-      { ...base, status: "no_show" },
-      { ...base, status: "cancelled" },
+      { ...base, leadId: "lead-1", status: "completed", actualStartAt: at(9), actualReturnAt: at(10), convertedQuoteId: "quote-1", salesOutcome: "sale_won" },
+      { ...base, leadId: "lead-2", status: "completed", actualStartAt: at(9), actualReturnAt: at(10), salesOutcome: "follow_up" },
+      { ...base, leadId: "lead-3", status: "no_show" },
+      { ...base, leadId: "lead-4", status: "cancelled" },
     ],
   });
 
   assert.equal(result.bookings, 3);
+  assert.equal(result.bookedLeads, 3);
   assert.equal(result.bookingRate, 30);
   assert.equal(result.attended, 2);
   assert.equal(result.attendanceRate, 67);
   assert.equal(result.noShows, 1);
   assert.equal(result.noShowRate, 33);
   assert.equal(result.quoteConversions, 1);
-  assert.equal(result.quoteConversionRate, 33);
+  assert.equal(result.quoteConversionRate, 50);
   assert.equal(result.saleConversions, 1);
-  assert.equal(result.saleConversionRate, 33);
+  assert.equal(result.saleConversionRate, 50);
+});
+
+test("does not count repeated bookings for one lead twice in booking rate", () => {
+  const result = calculateTestDriveMetrics({
+    eligibleLeadCount: 4,
+    activeDemoVehicleCount: 1,
+    periodDays: 1,
+    bookings: [
+      { ...base, leadId: "lead-1", status: "completed", actualStartAt: at(9) },
+      { ...base, leadId: "lead-1", status: "completed", actualStartAt: at(9) },
+    ],
+  });
+
+  assert.equal(result.bookings, 2);
+  assert.equal(result.bookedLeads, 1);
+  assert.equal(result.bookingRate, 25);
 });
 
 test("calculates utilisation from scheduled hours and active demo vehicles", () => {
