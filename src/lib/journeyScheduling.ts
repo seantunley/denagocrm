@@ -55,14 +55,14 @@ async function scheduleJourney(journey: SchedulableJourney) {
     const segmentId = typeof config.segmentId === "string" ? config.segmentId : null;
     if (!segmentId) return created;
     const segment = await prisma.segment.findUnique({ where: { id: segmentId } });
-    if (!segment) return created;
+    if (!segment?.tenantId) return created;
     let criteria: SegmentCriteria;
     try {
       criteria = JSON.parse(segment.criteria) as SegmentCriteria;
     } catch {
       throw new Error(`Segment ${segment.name} has invalid criteria JSON`);
     }
-    const contacts = await resolveContacts(criteria, "any");
+    const contacts = await resolveContacts(segment.tenantId, criteria, "any");
     const window = recurrenceWindow(config.repeat);
     for (const contact of contacts) {
       if (await emitJourneyEvent({

@@ -9,8 +9,14 @@ import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
 import { buildSignature, buildEmailHtml, htmlToText } from "@/lib/signature";
 import { readFile } from "@/lib/storage";
+import { resolveActingTenant } from "@/lib/tenantContext";
 
 export type SendEmailState = { ok?: string; error?: string };
+
+async function tenantIdFor(userId: string): Promise<string | null> {
+  const tenant = await resolveActingTenant(userId);
+  return "tenantId" in tenant ? tenant.tenantId : null;
+}
 
 /** Sends an email and logs it as an outbound communication on the lead/contact. */
 export async function sendEmailAction(
@@ -167,31 +173,42 @@ export async function saveLifecycleSettings(formData: FormData) {
 // ---- Email templates ----
 
 export async function createTemplate(formData: FormData) {
-  await requireOwner();
+  const user = await requireOwner();
+  const tenantId = await tenantIdFor(user.id);
+  if (!tenantId) return;
   const name = String(formData.get("name") ?? "").trim();
   const subject = String(formData.get("subject") ?? "").trim();
   const body = String(formData.get("body") ?? "").trim();
   if (!name || !subject || !body) return;
-  await prisma.emailTemplate.create({ data: { name, subject, body } });
+  await prisma.emailTemplate.create({ data: { tenantId, name, subject, body } });
   revalidatePath("/settings");
   revalidatePath("/campaigns");
 }
 
 export async function updateTemplate(id: string, formData: FormData) {
-  await requireOwner();
+  const user = await requireOwner();
+  const tenantId = await tenantIdFor(user.id);
+  if (!tenantId) return;
   const name = String(formData.get("name") ?? "").trim();
   const subject = String(formData.get("subject") ?? "").trim();
   const body = String(formData.get("body") ?? "").trim();
   if (!name || !subject || !body) return;
-  await prisma.emailTemplate.update({ where: { id }, data: { name, subject, body } });
+  await prisma.emailTemplate.updateMany({
+    where: { id, tenantId },
+    data: { name, subject, body },
+  });
   revalidatePath("/settings");
+  revalidatePath("/campaigns");
 }
 
 export async function deleteTemplate(id: string, formData: FormData) {
-  await requireOwner();
+  const user = await requireOwner();
+  const tenantId = await tenantIdFor(user.id);
+  if (!tenantId) return;
   void formData;
-  await prisma.emailTemplate.delete({ where: { id } });
+  await prisma.emailTemplate.deleteMany({ where: { id, tenantId } });
   revalidatePath("/settings");
+  revalidatePath("/campaigns");
 }
 
 /** Incoming-mail (IMAP) credentials — password encrypted at rest. */
@@ -209,5 +226,4 @@ export async function saveImapSettings(formData: FormData) {
   for (const [key, value] of Object.entries(entries)) {
     await putSetting(key, value);
   }
-  revalidatePath("/settings");
 }
