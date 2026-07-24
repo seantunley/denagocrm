@@ -3,6 +3,7 @@ import { basePrisma } from "./db";
 import { assertCampaignTransition, isCampaignLaunchable } from "./campaignLifecycle";
 import { readCampaignDraftRecord } from "./marketingCampaignDrafts";
 import { resolveContacts, newToken, type SegmentCriteria } from "./campaigns";
+import { evaluateAudience, validateAudienceTree, type AudienceGroup } from "./marketingAudiences";
 
 export type CampaignQaIssue = { code: string; message: string; severity: "error" | "warning" };
 
@@ -44,14 +45,6 @@ export async function campaignQa(id: string, tenantId: string | null): Promise<C
   return issues;
 }
 
-async function campaignSnapshot(id: string, tenantId: string | null) {
-  const rows = await basePrisma.$queryRaw<Array<Record<string, unknown>>>`
-    SELECT * FROM "Campaign" WHERE "id" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId} LIMIT 1
-  `;
-  if (!rows[0]) throw new Error("Campaign not found");
-  return rows[0];
-}
-
 export async function saveCampaignVersion(args: {
   campaignId: string;
   tenantId: string | null;
@@ -59,17 +52,40 @@ export async function saveCampaignVersion(args: {
   userId: string;
   userName: string;
 }) {
-  const snapshot = await campaignSnapshot(args.campaignId, args.tenantId);
-  const rows = await basePrisma.$queryRaw<Array<{ version: number }>>`
-    SELECT COALESCE(MAX("version"), 0) + 1 AS "version" FROM "CampaignVersion" WHERE "campaignId" = ${args.campaignId}
-  `;
-  const version = Number(rows[0]?.version ?? 1);
-  await basePrisma.$executeRaw`
-    INSERT INTO "CampaignVersion" ("id", "tenantId", "campaignId", "version", "snapshot", "reason", "createdById", "createdByName", "createdAt")
-    VALUES (${`cv_${crypto.randomUUID()}`}, ${args.tenantId}, ${args.campaignId}, ${version}, ${JSON.stringify(snapshot)}::jsonb, ${args.reason}, ${args.userId}, ${args.userName}, CURRENT_TIMESTAMP)
-  `;
-  await basePrisma.$executeRaw`UPDATE "Campaign" SET "version" = ${version}, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${args.campaignId}`;
-  return version;
+  return basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`campaign-version:${args.campaignId}`}))`;
+    const campaigns = await tx.$queryRaw<Array<Record<string, unknown>>>`
+      SELECT * FROM "Campaign"
+      WHERE "id" = ${args.campaignId}
+        AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
+      FOR UPDATE
+    `;
+    const snapshot = campaigns[0];
+    if (!snapshot) throw new Error("Campaign not found");
+    const rows = await tx.$queryRaw<Array<{ version: number }>>`
+      SELECT COALESCE(MAX("version"), 0) + 1 AS "version"
+      FROM "CampaignVersion"
+      WHERE "campaignId" = ${args.campaignId}
+        AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
+    `;
+    const version = Number(rows[0]?.version ?? 1);
+    await tx.$executeRaw`
+      INSERT INTO "CampaignVersion" (
+        "id", "tenantId", "campaignId", "version", "snapshot", "reason", "createdById", "createdByName", "createdAt"
+      ) VALUES (
+        ${`cv_${crypto.randomUUID()}`}, ${args.tenantId}, ${args.campaignId}, ${version},
+        ${JSON.stringify(snapshot)}::jsonb, ${args.reason}, ${args.userId}, ${args.userName}, CURRENT_TIMESTAMP
+      )
+    `;
+    const updated = await tx.$executeRaw`
+      UPDATE "Campaign"
+      SET "version" = ${version}, "updatedAt" = CURRENT_TIMESTAMP
+      WHERE "id" = ${args.campaignId}
+        AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
+    `;
+    if (updated !== 1) throw new Error("Campaign disappeared while versioning");
+    return version;
+  });
 }
 
 export async function transitionCampaign(args: {
@@ -82,42 +98,113 @@ export async function transitionCampaign(args: {
   note?: string | null;
 }) {
   assertCampaignTransition(args.from, args.to);
-  const fields: Record<string, Date | string | null> = {};
-  const now = new Date();
-  if (args.to === "in_review") fields.submittedForReviewAt = now;
-  if (args.to === "approved") { fields.approvedAt = now; fields.approvedById = args.userId; fields.reviewNote = args.note ?? null; }
-  if (args.to === "changes_requested") { fields.changesRequestedAt = now; fields.reviewNote = args.note ?? null; }
-  if (args.to === "paused") fields.pausedAt = now;
-  if (args.to === "cancelled") fields.cancelledAt = now;
-  if (args.to === "archived") fields.archivedAt = now;
+  const rows = await basePrisma.$queryRaw<Array<{ status: string; submittedById: string | null }>>`
+    SELECT "status", "submittedById"
+    FROM "Campaign"
+    WHERE "id" = ${args.campaignId}
+      AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
+    LIMIT 1
+  `;
+  const campaign = rows[0];
+  if (!campaign || campaign.status !== args.from) throw new Error("Campaign changed while this action was being processed");
+  if (args.to === "approved" && campaign.submittedById === args.userId) {
+    throw new Error("The person who submitted a campaign cannot approve it");
+  }
+  if (args.to === "changes_requested" && !args.note?.trim()) {
+    throw new Error("Explain the required changes");
+  }
+
   const updated = await basePrisma.$executeRaw`
     UPDATE "Campaign" SET
       "status" = ${args.to},
-      "submittedForReviewAt" = COALESCE(${fields.submittedForReviewAt ?? null}, "submittedForReviewAt"),
-      "approvedAt" = COALESCE(${fields.approvedAt ?? null}, "approvedAt"),
-      "approvedById" = COALESCE(${fields.approvedById ?? null}, "approvedById"),
-      "changesRequestedAt" = COALESCE(${fields.changesRequestedAt ?? null}, "changesRequestedAt"),
-      "reviewNote" = COALESCE(${fields.reviewNote ?? null}, "reviewNote"),
-      "pausedAt" = COALESCE(${fields.pausedAt ?? null}, "pausedAt"),
-      "cancelledAt" = COALESCE(${fields.cancelledAt ?? null}, "cancelledAt"),
-      "archivedAt" = COALESCE(${fields.archivedAt ?? null}, "archivedAt"),
+      "submittedForReviewAt" = CASE WHEN ${args.to} = 'in_review' THEN CURRENT_TIMESTAMP ELSE "submittedForReviewAt" END,
+      "submittedById" = CASE WHEN ${args.to} = 'in_review' THEN ${args.userId} ELSE "submittedById" END,
+      "approvedAt" = CASE WHEN ${args.to} = 'approved' THEN CURRENT_TIMESTAMP WHEN ${args.to} = 'draft' THEN NULL ELSE "approvedAt" END,
+      "approvedById" = CASE WHEN ${args.to} = 'approved' THEN ${args.userId} WHEN ${args.to} = 'draft' THEN NULL ELSE "approvedById" END,
+      "changesRequestedAt" = CASE WHEN ${args.to} = 'changes_requested' THEN CURRENT_TIMESTAMP ELSE "changesRequestedAt" END,
+      "reviewNote" = CASE
+        WHEN ${args.to} = 'changes_requested' THEN ${args.note?.trim() ?? null}
+        WHEN ${args.to} IN ('in_review', 'approved', 'draft') THEN NULL
+        ELSE "reviewNote"
+      END,
+      "pausedAt" = CASE WHEN ${args.to} = 'paused' THEN CURRENT_TIMESTAMP WHEN ${args.to} = 'queued' THEN NULL ELSE "pausedAt" END,
+      "cancelledAt" = CASE WHEN ${args.to} = 'cancelled' THEN CURRENT_TIMESTAMP ELSE "cancelledAt" END,
+      "archivedAt" = CASE WHEN ${args.to} = 'archived' THEN CURRENT_TIMESTAMP ELSE "archivedAt" END,
       "updatedAt" = CURRENT_TIMESTAMP
-    WHERE "id" = ${args.campaignId} AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId} AND "status" = ${args.from}
+    WHERE "id" = ${args.campaignId}
+      AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
+      AND "status" = ${args.from}
   `;
   if (updated !== 1) throw new Error("Campaign changed while this action was being processed");
 }
 
-async function criteriaForCampaign(campaignId: string, tenantId: string | null): Promise<SegmentCriteria> {
-  const rows = await basePrisma.$queryRaw<Array<{ segmentId: string | null; audienceSnapshot: unknown }>>`
-    SELECT "segmentId", "audienceSnapshot" FROM "Campaign" WHERE "id" = ${campaignId} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
+type AudienceDefinition = {
+  kind: "advanced" | "legacy";
+  segmentId: string | null;
+  definition: AudienceGroup | SegmentCriteria;
+  version?: number | null;
+};
+
+function isAudienceGroup(value: unknown): value is AudienceGroup {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const object = value as Record<string, unknown>;
+  return (object.operator === "AND" || object.operator === "OR") && Array.isArray(object.rules);
+}
+
+function parseJson(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try { return JSON.parse(value); } catch { return null; }
+}
+
+async function resolveCampaignAudience(args: {
+  campaignId: string;
+  tenantId: string | null;
+  channel: string;
+}) {
+  const campaigns = await basePrisma.$queryRaw<Array<{ segmentId: string | null; audienceSnapshot: unknown }>>`
+    SELECT "segmentId", "audienceSnapshot"
+    FROM "Campaign"
+    WHERE "id" = ${args.campaignId}
+      AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
+    LIMIT 1
   `;
-  const row = rows[0];
-  if (!row) throw new Error("Campaign not found");
-  if (row.segmentId) {
-    const segment = await basePrisma.segment.findFirst({ where: { id: row.segmentId, tenantId } });
-    if (segment) return JSON.parse(segment.criteria) as SegmentCriteria;
+  const campaign = campaigns[0];
+  if (!campaign) throw new Error("Campaign not found");
+
+  let definition: AudienceDefinition;
+  if (campaign.segmentId) {
+    const segments = await basePrisma.$queryRaw<Array<{ criteria: unknown; ruleTree: unknown; currentVersion: number | null }>>`
+      SELECT "criteria", "ruleTree", "currentVersion"
+      FROM "Segment"
+      WHERE "id" = ${campaign.segmentId}
+        AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
+        AND COALESCE("status", 'active') <> 'archived'
+      LIMIT 1
+    `;
+    const segment = segments[0];
+    if (!segment) throw new Error("The selected audience no longer exists");
+    const tree = parseJson(segment.ruleTree);
+    if (isAudienceGroup(tree)) {
+      validateAudienceTree(tree);
+      definition = { kind: "advanced", segmentId: campaign.segmentId, definition: tree, version: segment.currentVersion };
+    } else {
+      const criteria = parseJson(segment.criteria);
+      definition = { kind: "legacy", segmentId: campaign.segmentId, definition: (criteria && typeof criteria === "object" ? criteria : {}) as SegmentCriteria, version: segment.currentVersion };
+    }
+  } else {
+    const snapshot = parseJson(campaign.audienceSnapshot);
+    if (isAudienceGroup(snapshot)) {
+      validateAudienceTree(snapshot);
+      definition = { kind: "advanced", segmentId: null, definition: snapshot };
+    } else {
+      definition = { kind: "legacy", segmentId: null, definition: (snapshot && typeof snapshot === "object" ? snapshot : {}) as SegmentCriteria };
+    }
   }
-  return (row.audienceSnapshot && typeof row.audienceSnapshot === "object" ? row.audienceSnapshot : {}) as SegmentCriteria;
+
+  const contacts = definition.kind === "advanced"
+    ? await evaluateAudience(definition.definition as AudienceGroup, args.channel)
+    : await resolveContacts(definition.definition as SegmentCriteria, args.channel);
+  return { definition, contacts };
 }
 
 export async function freezeAudienceAndQueue(args: {
@@ -129,32 +216,55 @@ export async function freezeAudienceAndQueue(args: {
   if (!campaign) throw new Error("Campaign not found");
   if (!isCampaignLaunchable(campaign.status)) throw new Error("Only approved campaigns may be scheduled or queued");
   if (args.scheduleFor && args.scheduleFor <= new Date()) throw new Error("Scheduled time must be in the future");
-  const criteria = await criteriaForCampaign(args.campaignId, args.tenantId);
-  const contacts = await resolveContacts(criteria, campaign.channel);
-  if (contacts.length === 0) throw new Error("No eligible recipients match this audience");
+  const { definition, contacts } = await resolveCampaignAudience({ campaignId: args.campaignId, tenantId: args.tenantId, channel: campaign.channel });
+  const uniqueContacts = [...new Map(contacts.map((contact) => [contact.id, contact])).values()].slice(0, 5000);
+  if (uniqueContacts.length === 0) throw new Error("No eligible recipients match this audience");
+  const resolvedAt = new Date().toISOString();
+  const exactSnapshot = {
+    ...definition,
+    resolvedAt,
+    channel: campaign.channel,
+    resolvedContactIds: uniqueContacts.map((contact) => contact.id),
+  };
 
   await basePrisma.$transaction(async (tx) => {
-    await tx.campaignRecipient.deleteMany({ where: { campaignId: args.campaignId, status: { in: ["pending", "queued"] } } });
-    for (const contact of contacts) {
-      await tx.campaignRecipient.create({
-        data: {
-          campaignId: args.campaignId,
-          contactId: contact.id,
-          token: newToken(),
-          status: args.scheduleFor ? "pending" : "queued",
-          tenantId: args.tenantId,
-        },
-      });
-    }
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`campaign-launch:${args.campaignId}`}))`;
+    const locked = await tx.$queryRaw<Array<{ status: string }>>`
+      SELECT "status" FROM "Campaign"
+      WHERE "id" = ${args.campaignId}
+        AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
+      FOR UPDATE
+    `;
+    if (locked[0]?.status !== "approved") throw new Error("Campaign approval changed before launch");
+
     await tx.$executeRaw`
+      DELETE FROM "CampaignRecipient"
+      WHERE "campaignId" = ${args.campaignId}
+        AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
+        AND "status" IN ('pending', 'queued')
+    `;
+    await tx.campaignRecipient.createMany({
+      data: uniqueContacts.map((contact) => ({
+        campaignId: args.campaignId,
+        contactId: contact.id,
+        token: newToken(),
+        status: args.scheduleFor ? "pending" : "queued",
+        tenantId: args.tenantId,
+      })),
+      skipDuplicates: true,
+    });
+    const updated = await tx.$executeRaw`
       UPDATE "Campaign" SET
-        "audienceSnapshot" = ${JSON.stringify(criteria)}::jsonb,
-        "recipientCount" = ${contacts.length},
+        "audienceSnapshot" = ${JSON.stringify(exactSnapshot)}::jsonb,
+        "recipientCount" = ${uniqueContacts.length},
         "scheduledFor" = ${args.scheduleFor ?? null},
         "status" = ${args.scheduleFor ? "scheduled" : "queued"},
         "updatedAt" = CURRENT_TIMESTAMP
-      WHERE "id" = ${args.campaignId} AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId} AND "status" = 'approved'
+      WHERE "id" = ${args.campaignId}
+        AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
+        AND "status" = 'approved'
     `;
+    if (updated !== 1) throw new Error("Campaign approval changed before launch");
   });
-  return contacts.length;
+  return uniqueContacts.length;
 }
