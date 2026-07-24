@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-export const maxDuration = 60; // IMAP + Graph sync can take a few seconds
+export const maxDuration = 60;
 import { runIdleAutomations } from "@/lib/automations";
 import { runServiceReminders } from "@/lib/serviceReminders";
 import { runQuoteSigningReminders } from "@/lib/signingReminders";
@@ -14,7 +14,7 @@ import { logError } from "@/lib/errorLog";
 import { runAutoResearch } from "@/lib/ai";
 import { runActivityReminders } from "@/lib/activityReminders";
 import { runSafeCampaignQueue } from "@/lib/marketingCampaignQueue";
-import { runSurveyQueue } from "@/lib/surveys";
+import { runSafeSurveyDistributionQueue } from "@/lib/surveyDistributionQueue";
 import { runLifecycleJourneys } from "@/lib/lifecycleJourneys";
 import { runAiHealthIfDue, runBackupWatchdog } from "@/lib/systemHealth";
 import { basePrisma } from "@/lib/db";
@@ -23,13 +23,6 @@ import { resolveTenantActor } from "@/lib/tenantActor";
 import { runCronPerTenant, type CronRun } from "@/lib/tenantCron";
 import { withSystemScope } from "@/lib/tenantScopeEntry";
 
-/**
- * The per-tenant operational queues (idle automations, reminders, marketing
- * queues, stock-reservation expiry, inbound email filing). Under enforcement this
- * runs once per active tenant inside that tenant's scope, so every worker's
- * guarded queries + the stock owner pick are confined to the tenant; dormant it
- * runs once, unscoped — byte-for-byte the pre-tenancy sweep.
- */
 async function runOperationalQueues() {
   const enabled = await getEnabledModuleIds().catch(() => null);
   const on = (id: ModuleId) => enabled === null || enabled.has(id);
@@ -51,8 +44,8 @@ async function runOperationalQueues() {
   const campaignSent = on("marketing")
     ? await runSafeCampaignQueue().catch((e) => { logError("campaign-queue", e); return -1; })
     : null;
-  const surveysSent = on("marketing")
-    ? await runSurveyQueue().catch((e) => { logError("survey-queue", e); return -1; })
+  const surveyQueue = on("marketing")
+    ? await runSafeSurveyDistributionQueue().catch((e) => { logError("survey-distribution-queue", e); return -1; })
     : null;
   const lifecycleSent = on("marketing")
     ? await runLifecycleJourneys().catch((e) => { logError("lifecycle-journeys", e); return -1; })
@@ -74,7 +67,7 @@ async function runOperationalQueues() {
     inboundEmail,
     aiResearch,
     campaignSent,
-    surveysSent,
+    surveyQueue,
     lifecycleSent,
     activityReminders,
     stockReservationsExpired,
@@ -93,7 +86,6 @@ async function runGlobalMaintenance() {
   });
 }
 
-/** Runs recurring operational queues. */
 export async function GET(req: NextRequest) {
   if (!isAuthorizedCron(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
