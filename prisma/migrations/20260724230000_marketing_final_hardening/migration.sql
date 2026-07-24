@@ -1,3 +1,4 @@
+ALTER TABLE "Campaign" ADD COLUMN IF NOT EXISTS "submittedById" TEXT;
 ALTER TABLE "CampaignRecipient" ADD COLUMN IF NOT EXISTS "nextAttemptAt" TIMESTAMP(3);
 CREATE INDEX IF NOT EXISTS "CampaignRecipient_tenant_queue_due_idx"
   ON "CampaignRecipient"("tenantId", "status", "nextAttemptAt", "campaignId");
