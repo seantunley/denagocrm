@@ -1,25 +1,15 @@
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, BadgeDollarSign, Gauge, RotateCcw, ShieldCheck, TrendingUp } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireAnyPermission, getAccessibleJobCardIds } from "@/lib/permissions";
 import { jobProfit, totalLoggedHours } from "@/lib/workshop";
 import { formatZAR } from "@/lib/format";
-import { PageHeader } from "@/components/page-header";
+import { WorkspaceHero } from "@/components/workspace-hero";
 import { stageMeta, isTerminalStage } from "@/lib/workshop-constants";
 
 export const dynamic = "force-dynamic";
 
 const DAY = 86_400_000;
-
-function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="card">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
-      <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">{value}</p>
-      {sub && <p className="mt-0.5 text-xs text-muted-foreground">{sub}</p>}
-    </div>
-  );
-}
 
 export default async function WorkshopInsightsPage() {
   const user = await requireAnyPermission("jobcards.view_all", "jobcards.view_owned");
@@ -79,17 +69,19 @@ export default async function WorkshopInsightsPage() {
 
   return (
     <div className="space-y-6">
-      <Link href="/jobcards" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="size-4" /> Workshop jobs
-      </Link>
-      <PageHeader title="Workshop insights" description="Work-in-progress, profitability, productivity and recovery across the workshop." />
-
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Work in progress" value={formatZAR(wipCents)} sub={`${active.length} active job${active.length === 1 ? "" : "s"}`} />
-        <Stat label="Profit · 90 days" value={formatZAR(totals.profit)} sub={`${marginPct}% margin on ${formatZAR(totals.revenue)}`} />
-        <Stat label="Comeback rate · 90 days" value={`${comebackRate}%`} sub={`${totals.comebacks} of ${completed.length} completed`} />
-        <Stat label="Warranty recovered · 90 days" value={formatZAR(totals.warranty)} />
-      </div>
+      <WorkspaceHero
+        icon={TrendingUp}
+        eyebrow="Workshop intelligence"
+        title="Workshop insights"
+        description="Understand work-in-progress, profitability, technician productivity and warranty recovery across workshop operations."
+        actions={<Link href="/jobcards" className="btn-secondary btn-sm"><ArrowLeft className="size-4" /> Workshop jobs</Link>}
+        stats={[
+          { label: "Work in progress", value: formatZAR(wipCents), detail: `${active.length} active job${active.length === 1 ? "" : "s"}`, icon: Gauge, tone: "primary" },
+          { label: "Profit · 90 days", value: formatZAR(totals.profit), detail: `${marginPct}% margin on ${formatZAR(totals.revenue)}`, icon: BadgeDollarSign, tone: totals.profit >= 0 ? "success" : "danger" },
+          { label: "Comeback rate · 90 days", value: `${comebackRate}%`, detail: `${totals.comebacks} of ${completed.length} completed`, icon: RotateCcw, tone: comebackRate > 10 ? "warning" : "default" },
+          { label: "Warranty recovered", value: formatZAR(totals.warranty), detail: "Last 90 days", icon: ShieldCheck },
+        ]}
+      />
 
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="card">

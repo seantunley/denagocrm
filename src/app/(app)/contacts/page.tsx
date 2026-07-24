@@ -16,7 +16,7 @@ import {
 import { createContact } from "@/app/actions/contacts";
 import ContactForm from "@/components/ContactForm";
 import ModalTrigger from "@/components/Modal";
-import { PageHeader } from "@/components/page-header";
+import { WorkspaceHero } from "@/components/workspace-hero";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -102,7 +102,9 @@ export default async function ContactsPage({
 
   return (
     <div className="space-y-6">
-      <PageHeader
+      <WorkspaceHero
+        icon={UsersRound}
+        eyebrow="Customer relationships"
         title="Customer relationships"
         description={
           q
@@ -111,14 +113,14 @@ export default async function ContactsPage({
               ? "Your complete view of every customer, company and conversation."
               : "Customers assigned to you or your teams."
         }
-      >
-        {canMerge && (
+        actions={<>
+          {canMerge && (
           <Link href="/duplicates" className={buttonVariants({ variant: "outline", size: "sm" })}>
             <Merge className="size-4" />
             Duplicates
           </Link>
-        )}
-        {canCreate && (
+          )}
+          {canCreate && (
           <ModalTrigger
             label={
               <>
@@ -136,17 +138,15 @@ export default async function ContactsPage({
               variant="dialog"
             />
           </ModalTrigger>
-        )}
-      </PageHeader>
-
-      <section className="relative overflow-hidden rounded-2xl border border-white/[0.07] bg-card shadow-sm">
-        <div className="pointer-events-none absolute -left-24 -top-28 size-72 rounded-full bg-orange-500/[0.07] blur-3xl" />
-        <div className={cn("relative grid divide-y divide-border sm:divide-x sm:divide-y-0", automotiveOn ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
-          <SummaryStat icon={UsersRound} value={contacts.length} label={q ? "Matching contacts" : "Contacts shown"} />
-          {automotiveOn && <SummaryStat icon={CarFront} value={vehicleCount} label="Linked vehicles" />}
-          <SummaryStat icon={ArrowRight} value={leadCount} label="Open opportunities" accent={leadCount > 0} />
-        </div>
-      </section>
+          )}
+        </>}
+        stats={[
+          { label: q ? "Matching contacts" : "Contacts shown", value: contacts.length, detail: accessibleIds === null ? "Across the organisation" : "Within your access", icon: UsersRound },
+          ...(automotiveOn ? [{ label: "Linked vehicles", value: vehicleCount, detail: "Customer-owned fleet", icon: CarFront }] : []),
+          { label: "Open opportunities", value: leadCount, detail: leadCount ? "Active customer demand" : "No live opportunities", icon: ArrowRight, tone: leadCount > 0 ? "primary" as const : "default" as const },
+          { label: "View", value: cards ? "Cards" : "List", detail: q ? "Filtered results" : "Current workspace", icon: cards ? Grid2X2 : List },
+        ]}
+      />
 
       <section className="flex flex-col gap-3 rounded-2xl border border-border bg-card/70 p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
         <form className="flex min-w-0 flex-1 items-center gap-2" role="search">
@@ -198,20 +198,6 @@ export default async function ContactsPage({
           canManageActivities={canManageActivities}
         />
       )}
-    </div>
-  );
-}
-
-function SummaryStat({ icon: Icon, value, label, accent = false }: { icon: typeof UsersRound; value: number; label: string; accent?: boolean }) {
-  return (
-    <div className="flex items-center gap-3 px-5 py-4">
-      <span className={cn("flex size-9 items-center justify-center rounded-xl border", accent ? "border-orange-400/20 bg-orange-400/10 text-orange-400" : "border-white/[0.06] bg-white/[0.035] text-muted-foreground")}>
-        <Icon className="size-[18px]" />
-      </span>
-      <div>
-        <p className="text-xl font-semibold tabular-nums tracking-tight text-foreground">{value}</p>
-        <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">{label}</p>
-      </div>
     </div>
   );
 }

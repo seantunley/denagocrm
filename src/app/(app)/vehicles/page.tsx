@@ -1,12 +1,12 @@
 import Link from "next/link";
-import { Clock3, Plus } from "lucide-react";
+import { AlertTriangle, CarFront, Clock3, Plus, UsersRound } from "lucide-react";
 import { prisma } from "@/lib/db";
 import ModalTrigger from "@/components/Modal";
 import VehicleForm from "@/components/VehicleForm";
 import { createVehicle } from "@/app/actions/vehicles";
 import { contactName, formatDate } from "@/lib/format";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
-import { PageHeader } from "@/components/page-header";
+import { WorkspaceHero } from "@/components/workspace-hero";
 import { buttonVariants } from "@/components/ui/button";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import {
@@ -53,17 +53,26 @@ export default async function VehiclesPage({
     .filter((r) =>
       filter === "due" ? r.due.status === "overdue" || r.due.status === "due_soon" : true
     );
+  const dueRows = vehicles.map((vehicle) => computeDue(vehicle));
+  const overdueCount = dueRows.filter((due) => due.status === "overdue").length;
+  const dueSoonCount = dueRows.filter((due) => due.status === "due_soon").length;
+  const customerCount = new Set(vehicles.map((vehicle) => vehicle.contactId)).size;
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Vehicle fleet" description={`${rows.length} accessible vehicle${rows.length === 1 ? "" : "s"}${filter === "due" ? " due for attention" : " registered across your customer base"}.`}>
-          <Link
+      <WorkspaceHero
+        icon={CarFront}
+        eyebrow="Fleet & ownership"
+        title="Vehicle fleet"
+        description={`${rows.length} accessible vehicle${rows.length === 1 ? "" : "s"}${filter === "due" ? " due for attention" : " registered across your customer base"}.`}
+        actions={<>
+        <Link
             href={filter === "due" ? "/vehicles" : "/vehicles?filter=due"}
             className={buttonVariants({ variant: filter === "due" ? "default" : "outline", size: "sm" })}
           >
             <Clock3 className="size-4" />{filter === "due" ? "Showing due" : "Service due"}
-          </Link>
-          {canManage && (
+        </Link>
+        {canManage && (
             <ModalTrigger label={<><Plus className="size-4" />Register vehicle</>} title="Register vehicle" buttonClass={buttonVariants({ size: "sm" })}>
               <VehicleForm
                 action={createVehicle}
@@ -78,8 +87,15 @@ export default async function VehiclesPage({
                 variant="dialog"
               />
             </ModalTrigger>
-          )}
-      </PageHeader>
+        )}
+        </>}
+        stats={[
+          { label: "Vehicles", value: vehicles.length, detail: `${customerCount} linked customers`, icon: CarFront },
+          { label: "Overdue service", value: overdueCount, detail: overdueCount ? "Requires immediate action" : "No overdue services", icon: AlertTriangle, tone: overdueCount ? "danger" : "success" },
+          { label: "Due soon", value: dueSoonCount, detail: "Upcoming service window", icon: Clock3, tone: dueSoonCount ? "warning" : "default" },
+          { label: "Owners", value: customerCount, detail: "Accessible customer base", icon: UsersRound },
+        ]}
+      />
 
       <ResponsiveEntityTable>
         <table className="table-base">

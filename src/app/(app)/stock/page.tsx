@@ -25,10 +25,10 @@ import StockPurchaseOrderForm from "@/components/StockPurchaseOrderForm";
 import { formatZAR } from "@/lib/format";
 import { receivePurchaseOrder, cancelPurchaseOrder, addStockUnit } from "@/app/actions/stock";
 import { StockReceiveForm } from "@/components/StockReceiveForm";
-import { PageHeader } from "@/components/page-header";
+import { WorkspaceHero } from "@/components/workspace-hero";
 import { buttonVariants } from "@/components/ui/button";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
-import { EmptyState, FeedbackBanner, MetricCard, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
+import { EmptyState, FeedbackBanner, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import { listStockUnits, stockDashboard } from "@/lib/stockPlatform";
 import { getStockLabels } from "@/lib/stockLabels";
@@ -131,19 +131,31 @@ export default async function StockPage({
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Stock operations" description="Control every physical Denago unit from supplier order through reservation, PDI, delivery and warranty activation.">
-        <a href={reportHref} target="_blank" rel="noreferrer" className={buttonVariants({ variant: "outline", size: "sm" })}>
+      <WorkspaceHero
+        icon={Warehouse}
+        eyebrow="Inventory control"
+        title="Stock operations"
+        description="Control every physical Denago unit from supplier order through reservation, PDI, delivery and warranty activation."
+        actions={<>
+          <a href={reportHref} target="_blank" rel="noreferrer" className={buttonVariants({ variant: "outline", size: "sm" })}>
           <FileDown className="size-4" /> Print report
-        </a>
-        {canManage && <>
-          <ModalTrigger label={<><ShoppingCart className="size-4" /> Purchase order</>} title="New purchase order" buttonClass={buttonVariants({ size: "sm" })}>
-            <StockPurchaseOrderForm products={products.map((product) => ({ id: product.id, name: product.name, colors: product.colors.map((color) => color.name) }))} />
-          </ModalTrigger>
-          <ModalTrigger label={<><PackagePlus className="size-4" /> Add floor unit</>} title="Add a stock unit" buttonClass={buttonVariants({ variant: "outline", size: "sm" })}>
-            <StockUnitForm action={addStockUnit} products={products.map((product) => ({ id: product.id, name: product.name, colors: product.colors.map((color) => color.name) }))} variant="dialog" />
-          </ModalTrigger>
+          </a>
+          {canManage && <>
+            <ModalTrigger label={<><ShoppingCart className="size-4" /> Purchase order</>} title="New purchase order" buttonClass={buttonVariants({ size: "sm" })}>
+              <StockPurchaseOrderForm products={products.map((product) => ({ id: product.id, name: product.name, colors: product.colors.map((color) => color.name) }))} />
+            </ModalTrigger>
+            <ModalTrigger label={<><PackagePlus className="size-4" /> Add floor unit</>} title="Add a stock unit" buttonClass={buttonVariants({ variant: "outline", size: "sm" })}>
+              <StockUnitForm action={addStockUnit} products={products.map((product) => ({ id: product.id, name: product.name, colors: product.colors.map((color) => color.name) }))} variant="dialog" />
+            </ModalTrigger>
+          </>}
         </>}
-      </PageHeader>
+        stats={[
+          { label: "Available", value: dashboard.available, detail: formatZAR(dashboard.availableValueCents), icon: PackageCheck, tone: "success" },
+          { label: "Incoming & inspection", value: dashboard.incoming, detail: formatZAR(dashboard.incomingValueCents), icon: Truck, tone: "primary" },
+          { label: "Committed", value: dashboard.reserved + dashboard.allocated, detail: `${dashboard.reserved} reserved · ${dashboard.allocated} allocated`, icon: CalendarClock },
+          { label: "Average stock age", value: `${dashboard.averageAgeDays}d`, detail: `${dashboard.aged60} older than 60 days`, icon: Clock3, tone: dashboard.aged60 ? "warning" : "default" },
+        ]}
+      />
 
       {alerts > 0 && <FeedbackBanner tone="warning" title={`${alerts} stock item${alerts === 1 ? "" : "s"} need attention`}>
         {dashboard.expiringReservations > 0 && `${dashboard.expiringReservations} reservation${dashboard.expiringReservations === 1 ? "" : "s"} expire within 24 hours. `}
@@ -151,13 +163,6 @@ export default async function StockPage({
         {dashboard.missingSerial > 0 && `${dashboard.missingSerial} received unit${dashboard.missingSerial === 1 ? " is" : "s are"} missing a serial. `}
         {dashboard.aged60 > 0 && `${dashboard.aged60} available unit${dashboard.aged60 === 1 ? " has" : "s have"} been held for more than 60 days.`}
       </FeedbackBanner>}
-
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <MetricCard icon={PackageCheck} label="Available" value={dashboard.available} detail={formatZAR(dashboard.availableValueCents)} accent />
-        <MetricCard icon={Truck} label="Incoming & inspection" value={dashboard.incoming} detail={formatZAR(dashboard.incomingValueCents)} />
-        <MetricCard icon={CalendarClock} label="Committed" value={dashboard.reserved + dashboard.allocated} detail={`${dashboard.reserved} reserved · ${dashboard.allocated} allocated`} />
-        <MetricCard icon={Clock3} label="Average stock age" value={`${dashboard.averageAgeDays}d`} detail={`${dashboard.aged60} older than 60 days`} />
-      </div>
 
       <div className="grid gap-5 2xl:grid-cols-[minmax(0,1.55fr)_minmax(20rem,0.8fr)]">
         <Surface className="p-5">
