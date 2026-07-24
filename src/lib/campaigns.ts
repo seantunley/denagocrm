@@ -5,6 +5,7 @@ import { sendSms } from "./sms";
 import { htmlToText } from "./signature";
 import { computeDue } from "./serviceDue";
 import { contactName } from "./format";
+import { currentTenantScope } from "./tenantScope";
 
 export type SegmentCriteria = {
   source?: string;
@@ -32,11 +33,24 @@ function segmentWhere(tenantId: string, criteria: SegmentCriteria) {
 }
 
 /** Resolve one tenant's contacts reached by a segment for a given channel (max 5000). */
-export async function resolveContacts(
+export function resolveContacts(
   tenantId: string,
   criteria: SegmentCriteria,
   channel: string,
-) {
+): Promise<any[]>;
+/** Legacy internal callers may rely on an already-established tenant scope. */
+export function resolveContacts(criteria: SegmentCriteria, channel: string): Promise<any[]>;
+export async function resolveContacts(
+  tenantOrCriteria: string | SegmentCriteria,
+  criteriaOrChannel: SegmentCriteria | string,
+  maybeChannel?: string,
+): Promise<any[]> {
+  const explicitTenant = typeof tenantOrCriteria === "string" ? tenantOrCriteria : null;
+  const tenantId = explicitTenant ?? currentTenantScope()?.tenantId ?? null;
+  const criteria = (explicitTenant ? criteriaOrChannel : tenantOrCriteria) as SegmentCriteria;
+  const channel = (explicitTenant ? maybeChannel : criteriaOrChannel) as string;
+  if (!tenantId) return [];
+
   const where = segmentWhere(tenantId, criteria);
   if (channel === "email") where.email = { not: null };
   const contacts = await prisma.contact.findMany({
