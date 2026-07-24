@@ -25,6 +25,12 @@ export type CampaignDraftRecord = {
   targetRevenueCents: number | null;
   successMetric: string | null;
   ownerId: string | null;
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+  utmContent: string | null;
+  utmTerm: string | null;
+  attributionWindowDays: number;
   status: string;
   updatedAt: Date;
 };
@@ -41,6 +47,7 @@ const integer = (value: unknown) => {
 export function normaliseCampaignDraft(input: Record<string, unknown>): CampaignDraftInput {
   const channel = text(input.channel) || "email";
   if (!new Set(["email", "sms"]).has(channel)) throw new Error("Unsupported campaign channel");
+  const attributionWindowDays = Math.max(1, Math.min(180, Number(input.attributionWindowDays) || 30));
   return {
     name: text(input.name) || "Untitled campaign",
     channel,
@@ -62,6 +69,12 @@ export function normaliseCampaignDraft(input: Record<string, unknown>): Campaign
     targetRevenueCents: integer(input.targetRevenueCents),
     successMetric: nullable(input.successMetric),
     ownerId: nullable(input.ownerId),
+    utmSource: nullable(input.utmSource),
+    utmMedium: nullable(input.utmMedium),
+    utmCampaign: nullable(input.utmCampaign),
+    utmContent: nullable(input.utmContent),
+    utmTerm: nullable(input.utmTerm),
+    attributionWindowDays,
   };
 }
 
@@ -77,14 +90,16 @@ export async function createCampaignDraftRecord(args: {
       "id", "tenantId", "name", "channel", "subject", "preheader", "body", "htmlBody",
       "audience", "segmentId", "objective", "offer", "productId", "landingPageUrl",
       "primaryCtaLabel", "primaryCtaUrl", "internalNotes", "budgetCents", "targetLeadCount",
-      "targetRevenueCents", "successMetric", "ownerId", "status", "createdById", "createdAt", "updatedAt"
+      "targetRevenueCents", "successMetric", "ownerId", "utmSource", "utmMedium", "utmCampaign",
+      "utmContent", "utmTerm", "attributionWindowDays", "status", "createdById", "createdAt", "updatedAt"
     ) VALUES (
       ${id}, ${args.tenantId}, ${draft.name}, ${draft.channel}, ${draft.subject}, ${draft.preheader},
       ${draft.body ?? ""}, ${draft.htmlBody}, ${draft.audience}, ${draft.segmentId}, ${draft.objective},
       ${draft.offer}, ${draft.productId}, ${draft.landingPageUrl}, ${draft.primaryCtaLabel},
       ${draft.primaryCtaUrl}, ${draft.internalNotes}, ${draft.budgetCents}, ${draft.targetLeadCount},
-      ${draft.targetRevenueCents}, ${draft.successMetric}, ${draft.ownerId ?? args.userId}, 'draft',
-      ${args.userId}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      ${draft.targetRevenueCents}, ${draft.successMetric}, ${draft.ownerId ?? args.userId}, ${draft.utmSource},
+      ${draft.utmMedium}, ${draft.utmCampaign}, ${draft.utmContent}, ${draft.utmTerm}, ${draft.attributionWindowDays},
+      'draft', ${args.userId}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
     )
   `;
   return id;
@@ -95,7 +110,8 @@ export async function readCampaignDraftRecord(id: string, tenantId: string | nul
     SELECT "id", "tenantId", "name", "channel", "subject", "preheader", "body", "htmlBody",
       "audience", "segmentId", "objective", "offer", "productId", "landingPageUrl",
       "primaryCtaLabel", "primaryCtaUrl", "internalNotes", "budgetCents", "targetLeadCount",
-      "targetRevenueCents", "successMetric", "ownerId", "status", "updatedAt"
+      "targetRevenueCents", "successMetric", "ownerId", "utmSource", "utmMedium", "utmCampaign",
+      "utmContent", "utmTerm", "attributionWindowDays", "status", "updatedAt"
     FROM "Campaign"
     WHERE "id" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
     LIMIT 1
@@ -121,7 +137,10 @@ export async function updateCampaignDraftRecord(args: {
       "primaryCtaLabel" = ${draft.primaryCtaLabel}, "primaryCtaUrl" = ${draft.primaryCtaUrl},
       "internalNotes" = ${draft.internalNotes}, "budgetCents" = ${draft.budgetCents},
       "targetLeadCount" = ${draft.targetLeadCount}, "targetRevenueCents" = ${draft.targetRevenueCents},
-      "successMetric" = ${draft.successMetric}, "ownerId" = ${draft.ownerId}, "updatedAt" = CURRENT_TIMESTAMP
+      "successMetric" = ${draft.successMetric}, "ownerId" = ${draft.ownerId},
+      "utmSource" = ${draft.utmSource}, "utmMedium" = ${draft.utmMedium}, "utmCampaign" = ${draft.utmCampaign},
+      "utmContent" = ${draft.utmContent}, "utmTerm" = ${draft.utmTerm},
+      "attributionWindowDays" = ${draft.attributionWindowDays}, "updatedAt" = CURRENT_TIMESTAMP
     WHERE "id" = ${args.id} AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
   `;
 }
