@@ -5,6 +5,7 @@ import { isValidSignToken } from "@/lib/signing/tokens";
 import { logSignEvent, reqMeta } from "@/lib/signing/events";
 import { advanceAfterSignature } from "@/lib/signing/workflow";
 import { isRequestClosed } from "@/lib/signing/status";
+import { missingRequiredForRecipient } from "@/lib/signing/fieldValidation";
 import { logAudit } from "@/lib/audit";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
@@ -75,12 +76,23 @@ async function handleSign(token: string, req: Request): Promise<Response> {
   const requestFields = await prisma.signatureField.findMany({ where: { requestId: request.id } });
   const fillable = new Map(requestFields.filter((f) => f.recipientId === recipient.id || f.recipientId === null).map((f) => [f.id, f]));
 
-  // Required-field validation: every required field this recipient must fill has
-  // to arrive with a value (or already be filled). The page enforced this
-  // client-side; the API must too.
-  const submitted = new Map(fields.filter((f) => f.value && f.value.trim() !== "").map((f) => [f.id, f.value]));
-  const missingRequired = [...fillable.values()].some((f) => f.required && !f.filledAt && !submitted.has(f.id));
-  if (missingRequired) {
+  // Required-field validation PER RECIPIENT. Every required fillable field must
+  // arrive with a complete, kind-aware value in THIS submission (checkbox = must
+  // be "true", not the string "false"), or already have this recipient's own
+  // durable response. We must NOT accept a globally-filled SignatureField as
+  // satisfied: on a SHARED field the first signer's value cannot let a later
+  // signer skip their own acknowledgement — that's the point of one response per
+  // recipient. The page enforces this client-side; the API repeats it.
+  const submittedValue = new Map(fields.map((f) => [f.id, f.value]));
+  const priorResponseFieldIds = new Set(
+    (
+      await prisma.signatureFieldResponse.findMany({
+        where: { recipientId: recipient.id, field: { requestId: request.id } },
+        select: { fieldId: true },
+      })
+    ).map((r) => r.fieldId),
+  );
+  if (missingRequiredForRecipient([...fillable.values()], submittedValue, priorResponseFieldIds)) {
     return new Response("Please complete all required fields before signing.", { status: 400 });
   }
 
