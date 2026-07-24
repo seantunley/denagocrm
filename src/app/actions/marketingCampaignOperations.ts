@@ -4,11 +4,13 @@ import { revalidatePath } from "next/cache";
 import { getActiveTenantId } from "@/lib/auth";
 import { basePrisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
+import { requireModuleEnabled } from "@/lib/modules/enabled";
 import { logAuditStrict } from "@/lib/audit";
 import { readCampaignDraftRecord } from "@/lib/marketingCampaignDrafts";
 import { transitionCampaign } from "@/lib/marketingCampaignWorkflow";
 
 async function operationContext(permission: Parameters<typeof requirePermission>[0]) {
+  await requireModuleEnabled("marketing");
   const user = await requirePermission(permission);
   return { user, tenantId: await getActiveTenantId() };
 }
@@ -42,7 +44,8 @@ export async function cancelCampaign(id: string, formData: FormData) {
   if (!reason) throw new Error("Cancellation reason is required");
   await basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`
-      UPDATE "CampaignRecipient" SET "status" = 'cancelled'
+      UPDATE "CampaignRecipient"
+      SET "status" = 'cancelled', "providerStatus" = 'campaign_cancelled', "nextAttemptAt" = NULL
       WHERE "campaignId" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
         AND "status" IN ('pending', 'queued', 'failed_temporary')
     `;
@@ -62,7 +65,8 @@ export async function retryCampaignFailures(id: string) {
   const campaign = await campaignOrThrow(id, tenantId);
   if (!new Set(["sending", "completed_with_errors", "failed"]).has(campaign.status)) throw new Error("This campaign has no retryable state");
   const count = await basePrisma.$executeRaw`
-    UPDATE "CampaignRecipient" SET "status" = 'queued', "error" = NULL
+    UPDATE "CampaignRecipient"
+    SET "status" = 'queued', "error" = NULL, "nextAttemptAt" = CURRENT_TIMESTAMP, "providerStatus" = 'manual_retry'
     WHERE "campaignId" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
       AND "status" = 'failed_temporary'
   `;
@@ -77,13 +81,38 @@ export async function retryCampaignFailures(id: string) {
 
 export async function retryCampaignRecipients(id: string, recipientIds: string[]) {
   const { user, tenantId } = await operationContext("campaigns.retry");
-  if (recipientIds.length === 0 || recipientIds.length > 100) throw new Error("Choose between 1 and 100 recipients");
-  const count = await basePrisma.campaignRecipient.updateMany({
-    where: { id: { in: recipientIds }, campaignId: id, tenantId, status: { in: ["failed_temporary", "failed_permanent"] } },
-    data: { status: "queued", error: null },
+  const uniqueIds = [...new Set(recipientIds)];
+  if (uniqueIds.length === 0 || uniqueIds.length > 100) throw new Error("Choose between 1 and 100 recipients");
+  await campaignOrThrow(id, tenantId);
+  const rows = await basePrisma.$queryRaw<Array<{ id: string; status: string }>>`
+    SELECT "id", "status"
+    FROM "CampaignRecipient"
+    WHERE "tenantId" IS NOT DISTINCT FROM ${tenantId}
+      AND "campaignId" = ${id}
+      AND "id" = ANY(${uniqueIds}::text[])
+      AND "status" IN ('failed_temporary', 'failed_permanent')
+    FOR UPDATE
+  `;
+  if (rows.length === 0) throw new Error("No selected recipients are eligible for retry");
+  const permanent = rows.filter((row) => row.status === "failed_permanent").length;
+  const allowedIds = rows.map((row) => row.id);
+  await basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`
+      UPDATE "CampaignRecipient"
+      SET "status" = 'queued', "error" = NULL, "nextAttemptAt" = CURRENT_TIMESTAMP, "providerStatus" = 'manual_retry'
+      WHERE "tenantId" IS NOT DISTINCT FROM ${tenantId}
+        AND "campaignId" = ${id}
+        AND "id" = ANY(${allowedIds}::text[])
+        AND "status" IN ('failed_temporary', 'failed_permanent')
+    `;
+    await tx.$executeRaw`
+      UPDATE "Campaign"
+      SET "status" = 'queued', "completedAt" = NULL,
+        "failedCount" = GREATEST(0, "failedCount" - ${permanent}), "updatedAt" = CURRENT_TIMESTAMP
+      WHERE "id" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
+    `;
   });
-  await basePrisma.$executeRaw`UPDATE "Campaign" SET "status" = 'queued', "completedAt" = NULL WHERE "id" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}`;
-  await logAuditStrict({ action: "campaign.recipient_retried", summary: `Manually queued ${count.count} campaign recipients for retry`, entityType: "Campaign", entityId: id, user, after: { recipientIds, retried: count.count } });
+  await logAuditStrict({ action: "campaign.recipient_retried", summary: `Manually queued ${allowedIds.length} campaign recipients for retry`, entityType: "Campaign", entityId: id, user, after: { recipientIds: allowedIds, retried: allowedIds.length } });
   revalidatePath(`/marketing/campaigns/${id}`);
 }
 
