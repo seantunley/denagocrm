@@ -94,6 +94,10 @@ export const SCHEDULED_AUTOMATION_TRIGGERS = new Set<AutomationTrigger>(
   AUTOMATION_TRIGGERS.filter((trigger) => trigger.mode === "scheduled").map((trigger) => trigger.value),
 );
 
+export function isScheduledAutomationTrigger(value: string): value is AutomationTrigger {
+  return (SCHEDULED_AUTOMATION_TRIGGERS as ReadonlySet<string>).has(value);
+}
+
 export function triggerLabel(value: string): string {
   return AUTOMATION_TRIGGERS.find((trigger) => trigger.value === value)?.label ?? value.replaceAll("_", " ");
 }
