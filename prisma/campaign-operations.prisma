@@ -1,0 +1,35 @@
+model CampaignVersion {
+  id String @id @default(cuid())
+  tenantId String?
+  campaignId String
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  version Int
+  snapshot Json
+  reason String?
+  createdById String?
+  createdByName String?
+  createdAt DateTime @default(now())
+
+  @@unique([campaignId, version])
+  @@index([campaignId, createdAt(sort: Desc)])
+  @@index([tenantId])
+}
+
+model CampaignEvent {
+  id String @id @default(cuid())
+  tenantId String?
+  campaignId String
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaignRecipientId String?
+  contactId String?
+  type String
+  url String?
+  providerMessageId String?
+  metadata Json?
+  occurredAt DateTime @default(now())
+
+  @@index([campaignId, type, occurredAt])
+  @@index([campaignRecipientId, occurredAt])
+  @@index([contactId, occurredAt])
+  @@index([tenantId])
+}
