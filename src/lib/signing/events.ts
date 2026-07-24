@@ -2,6 +2,7 @@ import "server-only";
 import { headers } from "next/headers";
 import { prisma } from "@/lib/db";
 import { emitJourneyEvent } from "@/lib/journeyEvents";
+import type { JourneyEntityType } from "@/lib/journeyContext";
 
 export async function reqMeta(): Promise<{ ip: string | null; ua: string | null }> {
   try {
@@ -44,7 +45,7 @@ export async function recordView(recipientId: string, requestId: string, name: s
     select: { id: true, number: true, leadId: true, contactId: true, status: true },
   });
   if (!quote) return;
-  const entityType = quote.leadId ? "lead" : quote.contactId || request.contactId ? "contact" : "system";
+  const entityType: JourneyEntityType = quote.leadId ? "lead" : quote.contactId || request.contactId ? "contact" : "system";
   const entityId = quote.leadId ?? quote.contactId ?? request.contactId ?? quote.id;
   await emitJourneyEvent({
     type: "quote_opened",
