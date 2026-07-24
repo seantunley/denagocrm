@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
+import { getActiveTenantId } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendSurvey, submitResponse } from "@/lib/surveys";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
@@ -13,33 +14,28 @@ import {
   type SurveyQuestion,
   type SurveyType,
 } from "@/lib/surveyTypes";
+import {
+  createInactiveSurveyDraft,
+  updateSurveyDraftRecord,
+} from "@/lib/marketingSurveyWorkflow";
 
 export async function createSurvey(formData: FormData) {
   const user = await requirePermission("surveys.manage");
+  const tenantId = await getActiveTenantId();
   const title = String(formData.get("title") ?? "").trim();
   const type = (String(formData.get("type") ?? "adhoc") as SurveyType) || "adhoc";
   if (!title) throw new Error("Give the survey a name");
 
-  const trigger = SURVEY_TRIGGER_DEFAULT[type];
-  const survey = await prisma.survey.create({
-    data: {
-      title,
-      type,
-      questions: defaultQuestions(type) as object,
-      trigger,
-      createdById: user.id,
-    },
+  const id = await createInactiveSurveyDraft({
+    tenantId,
+    userId: user.id,
+    title,
+    type,
+    questions: defaultQuestions(type),
   });
-  await logAudit({ action: "survey.created", summary: `Created survey "${title}"`, user });
-  redirect(`/surveys/${survey.id}`);
+  await logAudit({ action: "survey.created", summary: `Created inactive survey draft "${title}"`, user });
+  redirect(`/surveys/${id}`);
 }
-
-const SURVEY_TRIGGER_DEFAULT: Record<SurveyType, string | null> = {
-  csat: "job_complete",
-  sales: "delivery",
-  nps: null,
-  adhoc: null,
-};
 
 export async function saveSurvey(
   id: string,
@@ -54,21 +50,24 @@ export async function saveSurvey(
   }
 ) {
   const user = await requirePermission("surveys.manage");
-  await prisma.survey.update({
-    where: { id },
-    data: {
-      title: data.title.trim() || "Untitled survey",
-      intro: data.intro.trim() || null,
-      thankYou: data.thankYou.trim() || null,
-      active: data.active,
-      trigger: data.trigger || null,
-      delayHours: Math.max(0, Math.round(data.delayHours) || 0),
-      questions: data.questions as object,
-    },
+  const tenantId = await getActiveTenantId();
+  await updateSurveyDraftRecord({
+    id,
+    tenantId,
+    title: data.title,
+    intro: data.intro,
+    thankYou: data.thankYou,
+    delayHours: data.delayHours,
+    questions: data.questions,
   });
-  await logAudit({ action: "survey.updated", summary: `Updated survey "${data.title}"`, user });
+  await logAudit({
+    action: "survey.updated",
+    summary: `Updated survey draft "${data.title}". Activation and triggers require review and publication.`,
+    user,
+  });
   revalidatePath(`/surveys/${id}`);
   revalidatePath("/surveys");
+  revalidatePath("/marketing/surveys");
   return { ok: true as const };
 }
 
@@ -76,7 +75,7 @@ export async function deleteSurvey(formData: FormData) {
   const user = await requirePermission("surveys.manage");
   const id = String(formData.get("id") ?? "");
   const survey = await prisma.survey.findUnique({ where: { id } });
-  await prisma.survey.update({ where: { id }, data: { deletedAt: new Date() } });
+  await prisma.survey.update({ where: { id }, data: { deletedAt: new Date(), active: false, trigger: null } });
   await logAudit({
     action: "survey.deleted",
     summary: `Deleted survey "${survey?.title ?? id}"`,
@@ -119,6 +118,11 @@ export async function sendToAudience(_prev: SendResult, formData: FormData): Pro
   const segment = String(formData.get("segment") ?? "customers");
   const survey = await prisma.survey.findUniqueOrThrow({ where: { id: surveyId } });
 
+  const lifecycle = survey as typeof survey & { status?: string; publishedVersion?: number | null };
+  if (!survey.active || lifecycle.status !== "published" || !lifecycle.publishedVersion) {
+    throw new Error("Only an approved, published survey version can be distributed");
+  }
+
   if (segment === "test") {
     const u = await prisma.user.findUnique({ where: { id: user.id } });
     const ok = u?.email ? await sendSurvey(survey, { name: u.name, email: u.email }) : false;
@@ -136,7 +140,7 @@ export async function sendToAudience(_prev: SendResult, formData: FormData): Pro
   }
   await logAudit({
     action: "survey.blast",
-    summary: `Sent "${survey.title}" to ${sent} recipient(s) (${segment})`,
+    summary: `Sent "${survey.title}" version ${lifecycle.publishedVersion} to ${sent} recipient(s) (${segment})`,
     user,
   });
   revalidatePath(`/surveys/${surveyId}`);
@@ -144,11 +148,6 @@ export async function sendToAudience(_prev: SendResult, formData: FormData): Pro
 }
 
 export async function submitSurveyResponse(token: string, answers: Record<string, unknown>) {
-  // Phase C no-user edge: this public, unauthenticated action derives the survey's
-  // tenant from a narrow trusted lookup FIRST, then runs the guarded read + write
-  // (surveyResponse update, contact-timeline note, audit) inside that scope — a
-  // guarded read before the scope exists would dead-lock under enforcement. Dormant
-  // no-op when off; an unknown/untenanted token fails closed as not_found.
   return withTokenTenantScope(
     () => resolveSurveyResponseTenant(token),
     () => submitResponse(token, answers),
