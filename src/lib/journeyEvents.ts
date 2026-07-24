@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
+import { currentTenantScope } from "./tenantScope";
 import { loadJourneyContext, type JourneyEntityType } from "./journeyContext";
 import {
   enqueueJourneyRun,
@@ -17,10 +18,14 @@ export async function emitJourneyEvent(args: {
   payload?: Record<string, unknown>;
   dedupeKey: string;
   journeyId?: string;
+  tenantId?: string | null;
 }) {
+  const scope = currentTenantScope();
+  const tenantId = args.tenantId ?? (scope && !scope.system ? scope.tenantId : null);
   try {
     return await prisma.journeyEvent.create({
       data: {
+        tenantId,
         type: args.type,
         entityType: args.entityType,
         entityId: args.entityId,
@@ -41,9 +46,22 @@ function triggerMatches(
   context: Awaited<ReturnType<typeof loadJourneyContext>>
 ) {
   if (!context) return false;
+  const event = context.event ?? {};
   if (trigger === "stage_entered") {
     const lead = (context.lead ?? {}) as Record<string, unknown>;
     return !config.stageId || config.stageId === lead.stageId;
+  }
+  if (trigger === "job_stage_changed") {
+    return !config.stage || String(config.stage) === String(event.stage ?? "");
+  }
+  if (trigger === "xero_invoice_status_changed") {
+    const allowed = Array.isArray(config.statuses)
+      ? config.statuses.map(String)
+      : String(config.statuses ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+    return allowed.length === 0 || allowed.includes(String(event.status ?? ""));
+  }
+  if (trigger === "case_created" || trigger === "case_escalated" || trigger === "case_overdue") {
+    return !config.priority || String(config.priority) === String(event.priority ?? "");
   }
   return true;
 }
@@ -76,15 +94,21 @@ export async function processJourneyEvents(limit = 50) {
         where: {
           status: "active",
           ...(event.journeyId ? { id: event.journeyId } : {}),
+          ...(event.tenantId ? { tenantId: event.tenantId } : { tenantId: null }),
         },
         include: { versions: { where: { state: "published" } } },
       });
       const payload = jsonObject(event.payload);
-      const eventPayload = { ...payload, type: event.type };
+      const eventPayload = {
+        ...payload,
+        type: event.type,
+        entityType: event.entityType,
+        sourceId: event.entityId,
+      };
       const context = await loadJourneyContext(
         event.entityType as JourneyEntityType,
         event.entityId,
-        eventPayload
+        eventPayload,
       );
       if (!context) throw new Error("Journey event entity no longer exists");
 
