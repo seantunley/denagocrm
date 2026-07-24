@@ -38,6 +38,12 @@ export default async function EditMarketingCampaignPage({ params }: { params: Pr
         targetLeadCount: campaign.targetLeadCount,
         targetRevenueCents: campaign.targetRevenueCents,
         successMetric: campaign.successMetric,
+        utmSource: campaign.utmSource,
+        utmMedium: campaign.utmMedium,
+        utmCampaign: campaign.utmCampaign,
+        utmContent: campaign.utmContent,
+        utmTerm: campaign.utmTerm,
+        attributionWindowDays: campaign.attributionWindowDays,
         status: campaign.status,
       }} />
     </div>
