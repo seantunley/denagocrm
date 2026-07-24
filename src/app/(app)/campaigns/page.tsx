@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import {
   BarChart3,
   CheckCircle2,
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { resolveActingTenant } from "@/lib/tenantContext";
 import Tabs from "@/components/Tabs";
 import CampaignComposer from "@/components/CampaignComposer";
 import SegmentBuilder from "@/components/SegmentBuilder";
@@ -76,7 +78,10 @@ export default async function CampaignsPage({
 }: {
   searchParams: Promise<{ tab?: string }>;
 }) {
-  await requireUser();
+  const user = await requireUser();
+  const tenant = await resolveActingTenant(user.id);
+  if ("error" in tenant) redirect("/");
+  const tenantId = tenant.tenantId;
   const { tab } = await searchParams;
   const initialTab = tab && CAMPAIGN_TABS.includes(tab) ? tab : "overview";
 
@@ -93,16 +98,18 @@ export default async function CampaignsPage({
     smtpConfigured,
     smsConfigured,
   ] = await Promise.all([
-    prisma.tag.findMany({ orderBy: { name: "asc" } }),
-    prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
-    prisma.segment.findMany({ orderBy: { name: "asc" } }),
+    prisma.tag.findMany({ where: { tenantId }, orderBy: { name: "asc" } }),
+    prisma.emailTemplate.findMany({ where: { tenantId }, orderBy: { name: "asc" } }),
+    prisma.segment.findMany({ where: { tenantId }, orderBy: { name: "asc" } }),
     prisma.campaign.findMany({
+      where: { tenantId },
       orderBy: { createdAt: "desc" },
       take: 50,
       include: { createdBy: true },
     }),
     prisma.contact.findMany({
       where: {
+        tenantId,
         marketingOptOut: false,
         OR: [{ email: { not: null } }, { phone: { not: null } }],
       },
@@ -110,13 +117,14 @@ export default async function CampaignsPage({
       take: 200,
     }),
     prisma.contact.findMany({
-      where: { marketingOptOut: true },
+      where: { tenantId, marketingOptOut: true },
       orderBy: { updatedAt: "desc" },
       take: 200,
     }),
-    prisma.contact.count({ where: { marketingOptOut: false } }),
-    prisma.contact.count({ where: { marketingOptOut: true } }),
+    prisma.contact.count({ where: { tenantId, marketingOptOut: false } }),
+    prisma.contact.count({ where: { tenantId, marketingOptOut: true } }),
     prisma.campaign.aggregate({
+      where: { tenantId },
       _sum: {
         recipientCount: true,
         sentCount: true,
@@ -137,7 +145,7 @@ export default async function CampaignsPage({
         id: segment.id,
         name: segment.name,
         criteria,
-        count: (await resolveContacts(criteria, "any")).length,
+        count: (await resolveContacts(tenantId, criteria, "any")).length,
       };
     }),
   );
