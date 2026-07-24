@@ -24,7 +24,7 @@ CREATE TABLE "DemoVehicle" (
   CONSTRAINT "DemoVehicle_battery_check" CHECK ("batteryLevelPct" IS NULL OR "batteryLevelPct" BETWEEN 0 AND 100)
 );
 
-CREATE UNIQUE INDEX "DemoVehicle_stockUnitId_key" ON "DemoVehicle"("stockUnitId") WHERE "stockUnitId" IS NOT NULL AND "deletedAt" IS NULL;
+CREATE UNIQUE INDEX "DemoVehicle_stockUnitId_key" ON "DemoVehicle"("stockUnitId");
 CREATE INDEX "DemoVehicle_tenantId_idx" ON "DemoVehicle"("tenantId");
 CREATE INDEX "DemoVehicle_status_branch_idx" ON "DemoVehicle"("status", "branch");
 CREATE INDEX "DemoVehicle_productId_idx" ON "DemoVehicle"("productId");
@@ -85,7 +85,7 @@ CREATE TABLE "TestDriveBooking" (
 );
 
 CREATE UNIQUE INDEX "TestDriveBooking_reference_key" ON "TestDriveBooking"("reference");
-CREATE UNIQUE INDEX "TestDriveBooking_activityId_key" ON "TestDriveBooking"("activityId") WHERE "activityId" IS NOT NULL;
+CREATE UNIQUE INDEX "TestDriveBooking_activityId_key" ON "TestDriveBooking"("activityId");
 CREATE INDEX "TestDriveBooking_tenantId_idx" ON "TestDriveBooking"("tenantId");
 CREATE INDEX "TestDriveBooking_schedule_status_idx" ON "TestDriveBooking"("scheduledStart", "status");
 CREATE INDEX "TestDriveBooking_vehicle_schedule_idx" ON "TestDriveBooking"("demoVehicleId", "scheduledStart");
@@ -183,7 +183,10 @@ BEGIN
   )
   ON CONFLICT ("activityId") DO UPDATE SET
     "tenantId" = EXCLUDED."tenantId",
-    "status" = EXCLUDED."status",
+    "status" = CASE
+      WHEN "TestDriveBooking"."status" = 'no_show' AND EXCLUDED."status" = 'cancelled' THEN 'no_show'
+      ELSE EXCLUDED."status"
+    END,
     "leadId" = EXCLUDED."leadId",
     "contactId" = EXCLUDED."contactId",
     "branch" = EXCLUDED."branch",
