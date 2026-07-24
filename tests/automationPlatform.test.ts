@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AUTOMATION_ACTIONS, AUTOMATION_TRIGGERS } from "../src/lib/automationCatalog";
-import { automationTriggerForAudit } from "../src/lib/automationAuditMap";
+import { automationTriggerForAudit, automationTriggersForAudit } from "../src/lib/automationAuditMap";
 import { parseConditionGroup, parseJourneyDefinition } from "../src/lib/journeyTypes";
 
 const requestedTriggers = [
@@ -35,6 +35,7 @@ test("current audited business actions map to their cross-module triggers", () =
     ["test_drive.completed", {}, "test_drive_completed"],
     ["test_drive.no_show", {}, "test_drive_no_show"],
     ["quote.sent", {}, "quote_sent"],
+    ["fulfilment.delivery_scheduled", {}, "delivery_scheduled"],
     ["jobcard.opened", {}, "job_card_created"],
     ["jobcard.stage", {}, "job_stage_changed"],
     ["jobcard.completed", {}, "job_card_completed"],
@@ -43,7 +44,6 @@ test("current audited business actions map to their cross-module triggers", () =
     ["case.created", {}, "case_created"],
     ["case.status_changed", { status: "closed" }, "case_closed"],
     ["portal.service_request", {}, "portal_request_received"],
-    ["portal.warranty_claim_created", {}, "portal_request_received"],
     ["portal.profile_change_requested", {}, "portal_request_received"],
     ["document.approved", {}, "document_approved"],
     ["xero.invoice_status_changed", {}, "xero_invoice_status_changed"],
@@ -52,6 +52,17 @@ test("current audited business actions map to their cross-module triggers", () =
     assert.equal(automationTriggerForAudit({ action, after }), expected, action);
   }
   assert.equal(automationTriggerForAudit({ action: "case.status_changed", after: { status: "open" } }), null);
+});
+
+test("portal-created cases and warranty claims emit both domain and portal triggers", () => {
+  assert.deepEqual(
+    automationTriggersForAudit({ action: "portal.case_created" }).sort(),
+    ["case_created", "portal_request_received"].sort(),
+  );
+  assert.deepEqual(
+    automationTriggersForAudit({ action: "portal.warranty_claim_created" }).sort(),
+    ["portal_request_received", "warranty_claim_opened"].sort(),
+  );
 });
 
 test("journey definitions accept new platform actions and dynamic event conditions", () => {
