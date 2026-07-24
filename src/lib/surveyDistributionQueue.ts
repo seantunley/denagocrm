@@ -31,6 +31,8 @@ type ClaimedInvite = {
   token: string;
   name: string | null;
   attemptCount: number;
+  reminderCount: number;
+  maxReminders: number;
   distributionChannel: string;
   purpose: string;
   snapshot: SurveySnapshot;
@@ -39,7 +41,7 @@ type ClaimedInvite = {
   whatsapp: string | null;
 };
 
-function tenantId() {
+function activeTenantId() {
   const scope = currentTenantScope();
   if (!scope || scope.system) throw new Error("Survey distribution queue requires a tenant scope");
   return scope.tenantId;
@@ -103,7 +105,7 @@ export async function createSurveyDistribution(args: {
     if (eligible.length === 0) throw new Error("No accessible contacts remain in the selected audience");
 
     const id = `sd_${crypto.randomUUID()}`;
-    const scheduled = args.scheduledFor && args.scheduledFor.getTime() > Date.now();
+    const scheduled = Boolean(args.scheduledFor && args.scheduledFor.getTime() > Date.now());
     await tx.$executeRaw`
       INSERT INTO "SurveyDistribution" (
         "id", "tenantId", "surveyId", "surveyVersion", "name", "purpose", "channel", "status",
@@ -184,29 +186,45 @@ async function claimBatch(tid: string | null, limit: number): Promise<ClaimedInv
       RETURNING r.*
     )
     SELECT r."id", r."tenantId", r."distributionId", r."surveyId", r."surveyVersion",
-      r."contactId", r."token", r."name", r."attemptCount",
-      d."channel" AS "distributionChannel", d."purpose", v."snapshot",
+      r."contactId", r."token", r."name", r."attemptCount", r."reminderCount",
+      d."maxReminders", d."channel" AS "distributionChannel", d."purpose", v."snapshot",
       c."email", c."phone", c."whatsapp"
     FROM claimed r
     JOIN "SurveyDistribution" d ON d."id" = r."distributionId"
     JOIN "SurveyVersion" v ON v."surveyId" = r."surveyId" AND v."version" = r."surveyVersion"
+      AND v."tenantId" IS NOT DISTINCT FROM ${tid}
     LEFT JOIN "Contact" c ON c."id" = r."contactId" AND c."tenantId" IS NOT DISTINCT FROM ${tid}
   `;
 }
 
 async function suppress(invite: ClaimedInvite, reason: string) {
   await basePrisma.$transaction(async (tx) => {
-    await tx.$executeRaw`
+    const changed = await tx.$executeRaw`
       UPDATE "SurveyResponse"
       SET "status" = 'suppressed', "suppressionReason" = ${reason}, "providerStatus" = 'suppressed'
-      WHERE "id" = ${invite.id} AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
+      WHERE "id" = ${invite.id}
+        AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
+        AND "status" = 'sending'
     `;
-    await tx.$executeRaw`
-      UPDATE "SurveyDistribution"
-      SET "suppressedCount" = "suppressedCount" + 1, "updatedAt" = CURRENT_TIMESTAMP
-      WHERE "id" = ${invite.distributionId} AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
-    `;
+    if (changed === 1) {
+      await tx.$executeRaw`
+        UPDATE "SurveyDistribution"
+        SET "suppressedCount" = "suppressedCount" + 1, "updatedAt" = CURRENT_TIMESTAMP
+        WHERE "id" = ${invite.distributionId} AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
+      `;
+    }
   });
+}
+
+async function restoreClaimForClosedDistribution(invite: ClaimedInvite, state: string | undefined) {
+  const next = state === "paused" ? "queued" : "cancelled";
+  await basePrisma.$executeRaw`
+    UPDATE "SurveyResponse"
+    SET "status" = ${next}, "providerStatus" = ${state ? `distribution_${state}` : "distribution_missing"}
+    WHERE "id" = ${invite.id}
+      AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
+      AND "status" = 'sending'
+  `;
 }
 
 async function deliver(invite: ClaimedInvite) {
@@ -216,11 +234,9 @@ async function deliver(invite: ClaimedInvite) {
       AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
     LIMIT 1
   `;
-  if (!distributions[0] || !new Set(["queued", "sending"]).has(distributions[0].status)) {
-    await basePrisma.$executeRaw`
-      UPDATE "SurveyResponse" SET "status" = 'queued'
-      WHERE "id" = ${invite.id} AND "status" = 'sending'
-    `;
+  const state = distributions[0]?.status;
+  if (!state || !new Set(["queued", "sending"]).has(state)) {
+    await restoreClaimForClosedDistribution(invite, state);
     return;
   }
 
@@ -248,19 +264,25 @@ async function deliver(invite: ClaimedInvite) {
 
   if (result.ok) {
     await basePrisma.$transaction(async (tx) => {
-      await tx.$executeRaw`
+      const changed = await tx.$executeRaw`
         UPDATE "SurveyResponse"
         SET "status" = 'sent', "channel" = ${requested}, "inviteSentAt" = CURRENT_TIMESTAMP,
           "sentAt" = CURRENT_TIMESTAMP, "providerStatus" = 'accepted', "nextAttemptAt" = NULL
-        WHERE "id" = ${invite.id} AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
+        WHERE "id" = ${invite.id}
+          AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
+          AND "status" = 'sending'
       `;
-      await tx.$executeRaw`
-        UPDATE "SurveyDistribution"
-        SET "sentCount" = "sentCount" + 1,
-          "status" = CASE WHEN "status" = 'queued' THEN 'sending' ELSE "status" END,
-          "startedAt" = COALESCE("startedAt", CURRENT_TIMESTAMP), "updatedAt" = CURRENT_TIMESTAMP
-        WHERE "id" = ${invite.distributionId} AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
-      `;
+      if (changed === 1) {
+        await tx.$executeRaw`
+          UPDATE "SurveyDistribution"
+          SET "sentCount" = "sentCount" + 1,
+            "status" = CASE WHEN "status" = 'queued' THEN 'sending' ELSE "status" END,
+            "startedAt" = COALESCE("startedAt", CURRENT_TIMESTAMP), "updatedAt" = CURRENT_TIMESTAMP
+          WHERE "id" = ${invite.distributionId}
+            AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
+            AND "status" IN ('queued', 'sending')
+        `;
+      }
     });
     return;
   }
@@ -268,19 +290,42 @@ async function deliver(invite: ClaimedInvite) {
   const status = classifyRetry(invite.attemptCount);
   const delayMinutes = invite.attemptCount <= 1 ? 5 : 30;
   await basePrisma.$transaction(async (tx) => {
-    await tx.$executeRaw`
+    const changed = await tx.$executeRaw`
       UPDATE "SurveyResponse"
       SET "status" = ${status}, "providerStatus" = 'failed',
         "nextAttemptAt" = CASE WHEN ${status} = 'failed_temporary' THEN CURRENT_TIMESTAMP + (${delayMinutes} * INTERVAL '1 minute') ELSE NULL END
-      WHERE "id" = ${invite.id} AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
+      WHERE "id" = ${invite.id}
+        AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
+        AND "status" = 'sending'
     `;
-    if (status === "failed_permanent") {
+    if (changed === 1 && status === "failed_permanent") {
       await tx.$executeRaw`
         UPDATE "SurveyDistribution" SET "failedCount" = "failedCount" + 1, "updatedAt" = CURRENT_TIMESTAMP
         WHERE "id" = ${invite.distributionId} AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
       `;
     }
   });
+}
+
+const PERMANENT_REMINDER_BLOCKS = new Set([
+  "contact_not_found_or_cross_tenant",
+  "contact_deleted",
+  "marketing_opt_out",
+  "consent_withdrawn",
+  "missing_email_destination",
+  "missing_sms_destination",
+]);
+
+async function closeReminderLease(invite: ClaimedInvite, status: string, consumeAll: boolean) {
+  await basePrisma.$executeRaw`
+    UPDATE "SurveyResponse"
+    SET "providerStatus" = ${status},
+      "reminderCount" = CASE WHEN ${consumeAll} THEN ${invite.maxReminders} ELSE "reminderCount" END,
+      "lastReminderAt" = CURRENT_TIMESTAMP
+    WHERE "id" = ${invite.id}
+      AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
+      AND "providerStatus" = 'reminder_sending'
+  `;
 }
 
 async function sendDueReminders(tid: string | null, limit = 50) {
@@ -296,6 +341,7 @@ async function sendDueReminders(tid: string | null, limit = 50) {
         AND r."reminderCount" < d."maxReminders"
         AND r."inviteSentAt" <= CURRENT_TIMESTAMP - (d."reminderAfterHours" * INTERVAL '1 hour')
         AND (r."lastReminderAt" IS NULL OR r."lastReminderAt" <= CURRENT_TIMESTAMP - (d."reminderAfterHours" * INTERVAL '1 hour'))
+        AND (r."providerStatus" IS DISTINCT FROM 'reminder_sending' OR r."lastAttemptAt" < CURRENT_TIMESTAMP - (${STALE_MINUTES} * INTERVAL '1 minute'))
         AND d."status" = 'sending'
       ORDER BY r."inviteSentAt", r."id"
       FOR UPDATE OF r SKIP LOCKED
@@ -307,21 +353,35 @@ async function sendDueReminders(tid: string | null, limit = 50) {
       RETURNING r.*
     )
     SELECT r."id", r."tenantId", r."distributionId", r."surveyId", r."surveyVersion",
-      r."contactId", r."token", r."name", r."attemptCount",
-      d."channel" AS "distributionChannel", d."purpose", v."snapshot",
+      r."contactId", r."token", r."name", r."attemptCount", r."reminderCount",
+      d."maxReminders", d."channel" AS "distributionChannel", d."purpose", v."snapshot",
       c."email", c."phone", c."whatsapp"
     FROM claimed r
     JOIN "SurveyDistribution" d ON d."id" = r."distributionId"
     JOIN "SurveyVersion" v ON v."surveyId" = r."surveyId" AND v."version" = r."surveyVersion"
+      AND v."tenantId" IS NOT DISTINCT FROM ${tid}
     LEFT JOIN "Contact" c ON c."id" = r."contactId" AND c."tenantId" IS NOT DISTINCT FROM ${tid}
   `;
 
   let sent = 0;
   for (const invite of reminders) {
     const requested = channelFor(invite);
-    if (!requested || !invite.contactId) continue;
-    const eligibility = await canContactPerson({ contactId: invite.contactId, tenantId: invite.tenantId, purpose: purposeFor(invite.purpose), requestedChannel: requested, distributionId: invite.distributionId });
-    if (!eligibility.allowed || !eligibility.destination) continue;
+    if (!requested || !invite.contactId) {
+      await closeReminderLease(invite, "reminder_destination_missing", true);
+      continue;
+    }
+    const eligibility = await canContactPerson({
+      contactId: invite.contactId,
+      tenantId: invite.tenantId,
+      purpose: purposeFor(invite.purpose),
+      requestedChannel: requested,
+      distributionId: invite.distributionId,
+    });
+    if (!eligibility.allowed || !eligibility.destination) {
+      const reason = eligibility.reason || "policy_blocked";
+      await closeReminderLease(invite, `reminder_${reason}`, PERMANENT_REMINDER_BLOCKS.has(reason));
+      continue;
+    }
     const text = inviteText(invite.snapshot, invite.name, invite.token, true);
     const result = requested === "email"
       ? await sendEmail({ to: eligibility.destination, subject: `Reminder: ${invite.snapshot.title}`, text })
@@ -331,7 +391,9 @@ async function sendDueReminders(tid: string | null, limit = 50) {
       SET "providerStatus" = ${result.ok ? "reminder_sent" : "reminder_failed"},
         "reminderCount" = "reminderCount" + CASE WHEN ${result.ok} THEN 1 ELSE 0 END,
         "lastReminderAt" = CURRENT_TIMESTAMP
-      WHERE "id" = ${invite.id} AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
+      WHERE "id" = ${invite.id}
+        AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
+        AND "providerStatus" = 'reminder_sending'
     `;
     if (result.ok) sent += 1;
   }
@@ -348,13 +410,22 @@ async function finalise(tid: string | null) {
       AND NOT EXISTS (
         SELECT 1 FROM "SurveyResponse" r
         WHERE r."distributionId" = d."id"
+          AND r."tenantId" IS NOT DISTINCT FROM ${tid}
           AND r."status" IN ('queued', 'sending', 'failed_temporary')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM "SurveyResponse" r
+        WHERE r."distributionId" = d."id"
+          AND r."tenantId" IS NOT DISTINCT FROM ${tid}
+          AND r."status" = 'sent'
+          AND r."completedAt" IS NULL
+          AND r."reminderCount" < d."maxReminders"
       )
   `;
 }
 
 export async function runSafeSurveyDistributionQueue(maxTotal = 200) {
-  const tid = tenantId();
+  const tid = activeTenantId();
   await activateDueDistributions(tid);
   await recoverStaleClaims(tid);
   let processed = 0;
