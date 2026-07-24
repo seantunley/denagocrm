@@ -1,6 +1,7 @@
 import "server-only";
 import { headers } from "next/headers";
 import { prisma } from "@/lib/db";
+import { emitJourneyEvent } from "@/lib/journeyEvents";
 
 export async function reqMeta(): Promise<{ ip: string | null; ua: string | null }> {
   try {
@@ -21,10 +22,10 @@ export async function logSignEvent(requestId: string, e: {
   });
 }
 
-/** First-view bookkeeping — logs an "opened" event once and advances status. */
+/** First-view bookkeeping — logs an opened event once and advances status. */
 export async function recordView(recipientId: string, requestId: string, name: string): Promise<void> {
   const r = await prisma.signatureRecipient.findUnique({ where: { id: recipientId }, select: { viewedAt: true, status: true } });
-  if (r?.viewedAt) return; // already recorded
+  if (r?.viewedAt) return;
   const meta = await reqMeta();
   await prisma.signatureRecipient.update({
     where: { id: recipientId },
@@ -32,4 +33,24 @@ export async function recordView(recipientId: string, requestId: string, name: s
   });
   await logSignEvent(requestId, { type: "opened", recipientId, actor: name, channel: "web", ip: meta.ip, userAgent: meta.ua });
   await prisma.signatureRequest.updateMany({ where: { id: requestId, status: { in: ["sent", "draft"] } }, data: { status: "viewed" } });
+
+  const request = await prisma.signatureRequest.findUnique({
+    where: { id: requestId },
+    select: { id: true, title: true, quoteId: true, contactId: true },
+  });
+  if (!request?.quoteId) return;
+  const quote = await prisma.quote.findUnique({
+    where: { id: request.quoteId },
+    select: { id: true, number: true, leadId: true, contactId: true, status: true },
+  });
+  if (!quote) return;
+  const entityType = quote.leadId ? "lead" : quote.contactId || request.contactId ? "contact" : "system";
+  const entityId = quote.leadId ?? quote.contactId ?? request.contactId ?? quote.id;
+  await emitJourneyEvent({
+    type: "quote_opened",
+    entityType,
+    entityId,
+    payload: { source: { id: quote.id, entityType: "Quote", reference: `Q-${quote.number}`, status: quote.status, signatureRequestId: request.id, title: request.title } },
+    dedupeKey: `quote-opened:${request.id}`,
+  });
 }
