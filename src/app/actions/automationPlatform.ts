@@ -25,10 +25,33 @@ export async function decideAutomationApproval(
   if (before.assignedToId && before.assignedToId !== user.id && user.role !== "owner") {
     throw new Error("This approval is assigned to another user");
   }
-  const updated = await prisma.automationApprovalRequest.update({
-    where: { id },
-    data: { status: decision, decidedById: user.id, decidedAt: new Date(), decisionNote: note },
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const approval = await tx.automationApprovalRequest.update({
+      where: { id },
+      data: { status: decision, decidedById: user.id, decidedAt: new Date(), decisionNote: note },
+    });
+    if (before.journeyRunId) {
+      if (decision === "approved") {
+        await tx.journeyRun.updateMany({
+          where: { id: before.journeyRunId, tenantId, status: "waiting" },
+          data: { status: "queued", nextRunAt: new Date(), attempts: 0, lastError: null },
+        });
+      } else {
+        await tx.journeyRun.updateMany({
+          where: { id: before.journeyRunId, tenantId, status: { in: ["queued", "waiting"] } },
+          data: {
+            status: "cancelled",
+            currentStepId: null,
+            completedAt: new Date(),
+            lastError: `Approval rejected${note ? `: ${note}` : ""}`.slice(0, 1000),
+          },
+        });
+      }
+    }
+    return approval;
   });
+
   await logAuditStrict({
     action: `automation.approval_${decision}`,
     summary: `${decision === "approved" ? "Approved" : "Rejected"} automation request “${updated.title}”`,
@@ -41,6 +64,7 @@ export async function decideAutomationApproval(
     after: updated,
   });
   revalidatePath("/automations/approvals");
+  revalidatePath("/journeys");
 }
 
 export async function retryAutomationOutbox(id: string) {
