@@ -3,7 +3,13 @@ import { addHours, addDays, differenceInCalendarDays, format, startOfDay, subDay
 import { CalendarDays, CarFront, Gauge, Plus, Route, TriangleAlert, UserCheck } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { contactName, formatDateTime } from "@/lib/format";
-import { hasPermission, requireAnyPermission } from "@/lib/permissions";
+import {
+  getAccessibleContactIds,
+  getAccessibleLeadIds,
+  hasPermission,
+  requireAnyPermission,
+} from "@/lib/permissions";
+import { accessibleTestDriveWhere } from "@/lib/testDriveAccess";
 import { calculateTestDriveMetrics, testDriveStatusLabel } from "@/lib/testDriveMetrics";
 import { createTestDriveBooking } from "@/app/actions/testDrives";
 import ModalTrigger from "@/components/Modal";
@@ -32,17 +38,26 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
   const { status } = await searchParams;
   const now = new Date();
   const metricFrom = subDays(startOfDay(now), 29);
+  const [bookingScope, accessibleContactIds, accessibleLeadIds] = await Promise.all([
+    accessibleTestDriveWhere(user),
+    getAccessibleContactIds(user),
+    getAccessibleLeadIds(user),
+  ]);
+  const canCreate = canManage && (accessibleContactIds === null || accessibleContactIds.length > 0);
+  const contactScope = accessibleContactIds === null ? {} : { id: { in: accessibleContactIds } };
+  const leadScope = accessibleLeadIds === null ? {} : { id: { in: accessibleLeadIds } };
 
   const [bookings, metricBookings, activeDemoVehicleCount, eligibleLeadCount, contacts, leads, demos, products, users] = await Promise.all([
     prisma.testDriveBooking.findMany({
-      where: { deletedAt: null, ...(status ? { status } : {}) },
+      where: { deletedAt: null, ...bookingScope, ...(status ? { status } : {}) },
       include: { demoVehicle: true },
       orderBy: { scheduledStart: "desc" },
       take: 200,
     }),
     prisma.testDriveBooking.findMany({
-      where: { deletedAt: null, scheduledStart: { gte: metricFrom, lte: addDays(now, 1) } },
+      where: { deletedAt: null, ...bookingScope, scheduledStart: { gte: metricFrom, lte: addDays(now, 1) } },
       select: {
+        leadId: true,
         status: true,
         scheduledStart: true,
         expectedReturnAt: true,
@@ -55,9 +70,9 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
       },
     }),
     prisma.demoVehicle.count({ where: { deletedAt: null, status: "active" } }),
-    prisma.lead.count({ where: { deletedAt: null, createdAt: { gte: metricFrom, lte: now } } }),
-    prisma.contact.findMany({ where: { deletedAt: null }, orderBy: { firstName: "asc" }, take: 500 }),
-    prisma.lead.findMany({ where: { deletedAt: null, status: "open" }, orderBy: { createdAt: "desc" }, take: 500, select: { id: true, title: true, name: true, contactId: true, productId: true } }),
+    prisma.lead.count({ where: { deletedAt: null, ...leadScope, createdAt: { gte: metricFrom, lte: now } } }),
+    prisma.contact.findMany({ where: { deletedAt: null, ...contactScope }, orderBy: { firstName: "asc" }, take: 500 }),
+    prisma.lead.findMany({ where: { deletedAt: null, ...leadScope, status: "open" }, orderBy: { createdAt: "desc" }, take: 500, select: { id: true, title: true, name: true, contactId: true, productId: true } }),
     prisma.demoVehicle.findMany({ where: { deletedAt: null, status: "active" }, orderBy: { name: "asc" } }),
     prisma.product.findMany({ where: { deletedAt: null, active: true }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
     prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
@@ -95,7 +110,7 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
         <Link href="/test-drives/demo-fleet" className={buttonVariants({ variant: "secondary", size: "sm" })}>
           <CarFront className="size-4" /> Demo fleet
         </Link>
-        {canManage && (
+        {canCreate && (
           <ModalTrigger
             label={<><Plus className="size-4" />Book test drive</>}
             title="Book a test drive"
@@ -164,9 +179,9 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
       </PageHeader>
 
       <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <MetricCard icon={CalendarDays} label="Bookings · 30 days" value={metrics.bookings} detail={`${metrics.bookingRate}% of new leads`} />
+        <MetricCard icon={CalendarDays} label="Bookings · 30 days" value={metrics.bookings} detail={`${metrics.bookedLeads} unique leads · ${metrics.bookingRate}% booking rate`} />
         <MetricCard icon={UserCheck} label="Attendance" value={`${metrics.attendanceRate}%`} detail={`${metrics.attended} attended · ${metrics.noShows} no-shows`} />
-        <MetricCard icon={Route} label="Quote conversion" value={`${metrics.quoteConversionRate}%`} detail={`${metrics.saleConversionRate}% converted to sale`} />
+        <MetricCard icon={Route} label="Quote conversion" value={`${metrics.quoteConversionRate}%`} detail={`${metrics.saleConversionRate}% of attended drives became sales`} />
         <MetricCard icon={TriangleAlert} label="Incidents" value={`${metrics.incidentRate}%`} detail={`${metrics.incidents} damage / incident records`} accent={metrics.incidents > 0} />
       </section>
 
