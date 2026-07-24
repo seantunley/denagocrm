@@ -6,7 +6,8 @@ import { sendSms } from "./sms";
 import { sendPushToAll } from "./push";
 import { logAudit } from "./audit";
 import { emitJourneyEvent } from "./journeyEvents";
-import { JourneyContext, journeyTemplateVars } from "./journeyContext";
+import { journeyTemplateVars, type JourneyContext } from "./journeyContext";
+import { executePlatformJourneyAction } from "./journeyPlatformActions";
 import {
   evaluateConditions,
   parseConditionGroup,
@@ -96,8 +97,9 @@ export async function executeJourneyStep(args: {
   category: string;
   journeyName: string;
   runId: string;
+  tenantId: string | null;
 }): Promise<StepResult> {
-  const { step, context, category, journeyName, runId } = args;
+  const { step, context, category, journeyName, runId, tenantId } = args;
   const vars = journeyTemplateVars(context);
   const { leadId, contactId } = ids(context);
 
@@ -177,7 +179,7 @@ export async function executeJourneyStep(args: {
       const userId = await fallbackUserId(context, stringConfig(step, "assignToId"));
       const dueDays = Math.max(0, numberConfig(step, "dueDays", 1));
       const summary = renderTemplate(stringConfig(step, "summary") ?? journeyName, vars);
-      await prisma.activity.create({
+      const activity = await prisma.activity.create({
         data: {
           type: stringConfig(step, "activityType") ?? "todo",
           summary,
@@ -189,7 +191,7 @@ export async function executeJourneyStep(args: {
           createdById: userId,
         },
       });
-      return { status: "completed", note: `Activity created for ${dueDays} day(s)` };
+      return { status: "completed", note: `Activity created for ${dueDays} day(s)`, output: { activityId: activity.id } };
     }
 
     case "send_push": {
@@ -207,16 +209,14 @@ export async function executeJourneyStep(args: {
       const stageId = stringConfig(step, "stageId");
       if (!stageId) return { status: "skipped", note: "Stage move skipped: no stage configured" };
       const max = await prisma.lead.aggregate({ where: { stageId }, _max: { position: true } });
-      await prisma.lead.update({
-        where: { id: leadId },
-        data: { stageId, position: (max._max.position ?? 0) + 1 },
-      });
+      await prisma.lead.update({ where: { id: leadId }, data: { stageId, position: (max._max.position ?? 0) + 1 } });
       await emitJourneyEvent({
         type: "stage_entered",
         entityType: "lead",
         entityId: leadId,
         payload: { stageId, sourceRunId: runId, sourceStepId: step.id },
         dedupeKey: `journey-stage:${runId}:${step.id}:${stageId}`,
+        tenantId,
       });
       return { status: "completed", note: "Lead moved to configured stage" };
     }
@@ -236,15 +236,23 @@ export async function executeJourneyStep(args: {
       if (!tagId) return { status: "skipped", note: "Tag step skipped: no tag configured" };
       await prisma.contact.update({
         where: { id: contactId },
-        data: {
-          tags: step.type === "add_tag"
-            ? { connect: { id: tagId } }
-            : { disconnect: { id: tagId } },
-        },
+        data: { tags: step.type === "add_tag" ? { connect: { id: tagId } } : { disconnect: { id: tagId } } },
       });
       return { status: "completed", note: step.type === "add_tag" ? "Tag added" : "Tag removed" };
     }
   }
+
+  const platform = await executePlatformJourneyAction({
+    step,
+    context,
+    journeyName,
+    runId,
+    tenantId,
+    vars,
+    leadId,
+    contactId,
+  });
+  if (platform) return platform;
 
   await logAudit({
     action: "journey.unknown_step",
