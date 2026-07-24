@@ -12,6 +12,8 @@ type CampaignStateRow = {
   submittedById: string | null;
 };
 
+type TransactionClient = Pick<typeof basePrisma, "$queryRaw" | "$executeRaw" | "campaignRecipient">;
+
 function validUrl(value: string | null) {
   if (!value) return true;
   try {
@@ -51,7 +53,7 @@ export async function campaignQa(id: string, tenantId: string | null): Promise<C
 }
 
 async function nextVersionAndSnapshot(
-  tx: Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0],
+  tx: TransactionClient,
   args: { campaignId: string; tenantId: string | null; reason: string; userId: string; userName: string },
 ) {
   const campaigns = await tx.$queryRaw<Array<Record<string, unknown>>>`
@@ -101,7 +103,7 @@ export async function saveCampaignVersion(args: {
 }
 
 async function updateCampaignState(
-  tx: Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0],
+  tx: TransactionClient,
   args: {
     campaignId: string;
     tenantId: string | null;
