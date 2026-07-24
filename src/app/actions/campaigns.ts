@@ -3,15 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requirePermission, requireContactAccess } from "@/lib/permissions";
-import { sendEmail, isSmtpConfigured } from "@/lib/email";
-import { isSmsConfigured } from "@/lib/sms";
+import { sendEmail } from "@/lib/email";
 import { saveFile } from "@/lib/storage";
-import { logAudit } from "@/lib/audit";
 import {
   resolveContacts,
-  sendCampaignBatch,
   buildTrackedEmail,
-  newToken,
   htmlToText,
   type SegmentCriteria,
 } from "@/lib/campaigns";
@@ -52,7 +48,7 @@ async function audienceLabel(cr: SegmentCriteria): Promise<string> {
 }
 
 export async function uploadCampaignImage(formData: FormData): Promise<string | null> {
-  await requirePermission("campaigns.manage");
+  await requirePermission("campaigns.edit");
   const file = formData.get("file") as File | null;
   if (!file || !file.type.startsWith("image/")) return null;
   if (file.size > 5 * 1024 * 1024) return null;
@@ -61,7 +57,7 @@ export async function uploadCampaignImage(formData: FormData): Promise<string | 
 }
 
 export async function previewAudience(formData: FormData): Promise<{ count: number }> {
-  await requirePermission("campaigns.manage");
+  await requirePermission("campaigns.edit");
   const channel = str(formData.get("channel")) || "email";
   const { criteria } = await criteriaFor(formData);
   return { count: (await resolveContacts(criteria, channel)).length };
@@ -71,7 +67,7 @@ export async function sendCampaignTest(
   _prev: CampaignState | undefined,
   formData: FormData
 ): Promise<CampaignState> {
-  await requirePermission("campaigns.manage");
+  await requirePermission("campaigns.test_send");
   const channel = str(formData.get("channel")) || "email";
   const to = str(formData.get("testTo"));
   if (!to) return { error: "Enter a test address / number." };
@@ -95,80 +91,44 @@ export async function sendCampaignTest(
   return res.ok ? { ok: `Test SMS sent to ${to}.` } : { error: res.error ?? "Send failed." };
 }
 
+/**
+ * Compatibility action retained for the legacy Campaigns screen.
+ *
+ * Direct launch from a web request is deliberately retired. Creating recipients,
+ * bypassing approval and calling a provider from this action would defeat the
+ * governed campaign state machine and atomic queue introduced under /marketing.
+ */
 export async function sendCampaign(
   _prev: CampaignState | undefined,
-  formData: FormData
+  _formData: FormData
 ): Promise<CampaignState> {
-  const user = await requirePermission("campaigns.manage");
-  const name = str(formData.get("name"));
-  const channel = str(formData.get("channel")) || "email";
-  const subject = str(formData.get("subject"));
-  const htmlBody = str(formData.get("htmlBody"));
-  const smsBody = str(formData.get("body"));
-  if (!name) return { error: "Give the campaign a name." };
-  if (channel === "email" && !subject) return { error: "Email needs a subject." };
-  if (channel === "email" && !htmlBody) return { error: "Write the email." };
-  if (channel === "sms" && !smsBody) return { error: "Write the message." };
-  if (channel === "email" && !(await isSmtpConfigured()))
-    return { error: "Email isn't configured (Settings → Email)." };
-  if (channel === "sms" && !(await isSmsConfigured()))
-    return { error: "SMS isn't configured (Settings → Integrations)." };
-
-  const { criteria, label } = await criteriaFor(formData);
-  const contacts = await resolveContacts(criteria, channel);
-  if (contacts.length === 0) return { error: "No opted-in recipients match that audience." };
-
-  // Temporary compatibility path. The governed draft/review/approval workflow is
-  // introduced in the next PR. Explicitly queue recipients because the new safe
-  // database default is `pending` rather than send-ready.
-  const campaign = await prisma.campaign.create({
-    data: {
-      name,
-      channel,
-      subject: channel === "email" ? subject : null,
-      body: channel === "email" ? htmlToText(htmlBody) : smsBody,
-      htmlBody: channel === "email" ? htmlBody : null,
-      audience: label,
-      recipientCount: contacts.length,
-      status: "queued",
-      createdById: user.id,
-      recipients: { create: contacts.map((c) => ({ contactId: c.id, token: newToken(), status: "queued" })) },
-    },
-  });
-
-  await sendCampaignBatch(campaign.id, 60);
-  await logAudit({
-    action: "campaign.started",
-    summary: `Campaign "${name}" (${channel}) started — ${contacts.length} recipients`,
-    user,
-  });
-  revalidatePath("/campaigns");
+  await requirePermission("campaigns.create");
   return {
-    ok: `Campaign started — sending to ${contacts.length} recipient${contacts.length === 1 ? "" : "s"}. Progress shows below.`,
+    error: "Direct campaign launch has been retired. Create a governed draft in Marketing → Campaigns, submit it for review, approve it, then schedule or queue it.",
   };
 }
 
 export async function saveSegment(formData: FormData) {
-  await requirePermission("campaigns.manage");
+  await requirePermission("campaigns.edit");
   const name = str(formData.get("name"));
   if (!name) return;
   await prisma.segment.create({
     data: { name, criteria: JSON.stringify(criteriaFromForm(formData)) },
   });
   revalidatePath("/campaigns");
+  revalidatePath("/marketing/audiences");
 }
 
 export async function deleteSegment(id: string) {
-  await requirePermission("campaigns.manage");
+  await requirePermission("campaigns.edit");
   await prisma.segment.delete({ where: { id } });
   revalidatePath("/campaigns");
+  revalidatePath("/marketing/audiences");
 }
 
 export async function setMarketingOptOut(contactId: string, optOut: boolean) {
-  // requireContactAccess enforces campaigns.manage AND access to THIS contact, so
-  // a scoped manager can't flip marketing consent on a contact outside their
-  // scope — a POPIA consent-integrity concern. (Was: permission only, any id.)
   await requireContactAccess(contactId, "campaigns.manage");
   await prisma.contact.update({ where: { id: contactId }, data: { marketingOptOut: optOut } });
   revalidatePath("/campaigns");
+  revalidatePath("/marketing/campaigns");
 }
