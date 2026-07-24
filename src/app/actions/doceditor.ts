@@ -15,9 +15,10 @@ import {
   type BuilderRecordKind,
 } from "@/lib/docbuilder/recordBinding";
 import { createSignatureRequestFromDoc } from "@/lib/signing/service";
+import { dispatchRequest } from "@/lib/signing/dispatch";
 import { saveFile } from "@/lib/storage";
 
-type SignPrepResult = { ok: boolean; requestId?: string; message: string };
+type SignPrepResult = { ok: boolean; requestId?: string; message: string; sent?: boolean; notified?: number };
 
 const BASE = "/settings/documents/builder";
 
@@ -129,11 +130,17 @@ export async function generateDocEditorDocument(formData: FormData) {
   redirect(`/api/files/${document.id}`);
 }
 
-/** Prepare a compatible builder document for signing. */
+/**
+ * Prepare a compatible builder document for signing. With `options.dispatch`,
+ * the request is also SENT to recipients in the same step (the send wizard's
+ * "Send now") — reusing the exact dispatch path the Signatures hub uses — instead
+ * of only creating a draft the user must go to the hub to send.
+ */
 export async function sendDocForSigning(
   templateId: string,
   quoteId?: string | null,
   jobCardId?: string | null,
+  options?: { dispatch?: boolean },
 ): Promise<SignPrepResult> {
   const user = await requireOwner();
   if (quoteId && jobCardId) {
@@ -210,9 +217,47 @@ export async function sendDocForSigning(
     user,
   });
   revalidatePath(BASE);
+
+  // "Send now": dispatch in the same step, mirroring signhub.sendRequest's guard
+  // (a signer must be reachable) and its exact dispatchRequest call. If nobody is
+  // reachable the request survives as a draft — we report that, not a failure.
+  if (options?.dispatch) {
+    const full = await prisma.signatureRequest.findUnique({
+      where: { id: created.id },
+      include: { recipients: true },
+    });
+    const reachable = full?.recipients.filter((r) => r.role !== "viewer" && (r.email || r.phone)) ?? [];
+    if (reachable.length === 0) {
+      return {
+        ok: true,
+        requestId: created.id,
+        sent: false,
+        message: "Prepared, but no signer has an email or phone yet — open the Signatures hub to add contact details and send.",
+      };
+    }
+    const { notified } = await dispatchRequest(created.id);
+    await logAudit({
+      action: "signing.send",
+      summary: `Sent “${result.title}” for signing`,
+      entityType: "SignatureRequest",
+      entityId: created.id,
+      user,
+    });
+    revalidatePath("/signatures");
+    revalidatePath(`/signatures/${created.id}`);
+    return {
+      ok: true,
+      requestId: created.id,
+      sent: true,
+      notified,
+      message: `Sent to ${notified} recipient(s).`,
+    };
+  }
+
   return {
     ok: true,
     requestId: created.id,
+    sent: false,
     message: `Signature request created — ${created.recipients} recipient(s), ${created.fields} field(s). Open the Signatures hub to send it.`,
   };
 }
