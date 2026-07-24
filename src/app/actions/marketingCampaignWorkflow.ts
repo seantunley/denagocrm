@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { getActiveTenantId } from "@/lib/auth";
 import { requirePermission } from "@/lib/permissions";
+import { requireModuleEnabled } from "@/lib/modules/enabled";
 import { logAuditStrict } from "@/lib/audit";
 import { readCampaignDraftRecord } from "@/lib/marketingCampaignDrafts";
 import {
@@ -17,6 +18,7 @@ function note(formData?: FormData) {
 }
 
 async function context(permission: Parameters<typeof requirePermission>[0]) {
+  await requireModuleEnabled("marketing");
   const user = await requirePermission(permission);
   return { user, tenantId: await getActiveTenantId() };
 }
