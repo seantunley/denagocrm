@@ -8,8 +8,8 @@ import { readPwaActivityShortcut } from "../src/lib/pwaShortcuts";
 
 function assertPngShortcutIcon(icon: {
   src: string;
-  sizes: string;
-  type: string;
+  sizes?: string;
+  type?: string;
 }) {
   assert.equal(icon.type, "image/png");
   assert.equal(icon.sizes, "192x192");
