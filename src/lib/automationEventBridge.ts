@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import type { Prisma } from "@prisma/client";
-import { automationTriggerForAudit } from "./automationAuditMap";
+import { automationTriggersForAudit } from "./automationAuditMap";
 import { hashJourneyKey } from "./journeyEngineShared";
 import type { JourneyEntityType } from "./journeyContext";
 
@@ -99,33 +99,36 @@ export async function enqueueAutomationFromAudit(
   transaction: Prisma.TransactionClient,
   event: AutomationAuditEvent,
 ): Promise<void> {
-  const trigger = automationTriggerForAudit(event);
-  if (!trigger) return;
+  const triggers = automationTriggersForAudit(event);
+  if (!triggers.length) return;
   const target = entity(event);
   const after = object(event.after);
   const before = object(event.before);
   const metadata = event.metadata ?? {};
-  const source = await enrichedSource(transaction, trigger, event, metadata);
-  const payload = {
-    summary: event.summary,
-    status: after.status ?? source.status ?? metadata.status ?? null,
-    stage: inferredStage(event, after) ?? metadata.stage ?? null,
-    previousStage: before.stage ?? before.stageKey ?? before.status ?? null,
-    priority: after.priority ?? metadata.priority ?? null,
-    branch: after.branch ?? after.location ?? metadata.branch ?? null,
-    outcome: after.salesOutcome ?? metadata.outcome ?? null,
-    source: { ...source, before, after },
-  };
 
-  await transaction.journeyEvent.create({
-    data: {
-      id: `je_${crypto.randomUUID()}`,
-      tenantId: event.tenantId,
-      type: trigger,
-      entityType: target.entityType,
-      entityId: target.entityId,
-      payload: payload as Prisma.InputJsonValue,
-      dedupeKey: hashJourneyKey(`audit:${event.auditEventId}:${trigger}`),
-    },
-  });
+  for (const trigger of triggers) {
+    const source = await enrichedSource(transaction, trigger, event, metadata);
+    const payload = {
+      summary: event.summary,
+      status: after.status ?? source.status ?? metadata.status ?? null,
+      stage: inferredStage(event, after) ?? metadata.stage ?? null,
+      previousStage: before.stage ?? before.stageKey ?? before.status ?? null,
+      priority: after.priority ?? metadata.priority ?? null,
+      branch: after.branch ?? after.location ?? metadata.branch ?? null,
+      outcome: after.salesOutcome ?? metadata.outcome ?? null,
+      source: { ...source, before, after },
+    };
+
+    await transaction.journeyEvent.create({
+      data: {
+        id: `je_${crypto.randomUUID()}`,
+        tenantId: event.tenantId,
+        type: trigger,
+        entityType: target.entityType,
+        entityId: target.entityId,
+        payload: payload as Prisma.InputJsonValue,
+        dedupeKey: hashJourneyKey(`audit:${event.auditEventId}:${trigger}`),
+      },
+    });
+  }
 }
