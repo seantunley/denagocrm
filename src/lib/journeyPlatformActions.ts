@@ -248,10 +248,17 @@ async function assignTeam(args: PlatformArgs) {
     assigneeId = [...candidates].sort((a, b) => (counts.get(a) ?? 0) - (counts.get(b) ?? 0))[0] ?? null;
   }
   if (!assigneeId) return null;
-  if (args.leadId) await prisma.lead.update({ where: { id: args.leadId }, data: { assignedToId: assigneeId } });
-  else if (args.contactId) await prisma.contact.update({ where: { id: args.contactId }, data: { ownerId: assigneeId } });
+  // Team/TeamMember predate multi-tenancy and are NOT tenant-partitioned (see
+  // GLOBAL_MODELS) — team membership alone doesn't prove the chosen user is a
+  // member of THIS run's tenant. Validate the specific id the same way every
+  // other explicit assignee is validated (userIdFor/resolveApprover) before
+  // writing it onto a tenant-owned record.
+  const member = await resolveTenantMemberUser(assigneeId);
+  if (!member) return null;
+  if (args.leadId) await prisma.lead.update({ where: { id: args.leadId }, data: { assignedToId: member.id } });
+  else if (args.contactId) await prisma.contact.update({ where: { id: args.contactId }, data: { ownerId: member.id } });
   else return null;
-  return assigneeId;
+  return member.id;
 }
 
 async function escalate(args: PlatformArgs) {
@@ -317,6 +324,19 @@ async function setPortalAccess(args: PlatformArgs) {
     if (targetType === "contact") await basePrisma.$executeRaw`UPDATE "PortalAccessGrant" SET "active" = false WHERE "tenantId" IS NOT DISTINCT FROM ${args.tenantId} AND "viewerContactId" = ${viewerContactId} AND "grantedContactId" = ${targetId}`;
     else await basePrisma.$executeRaw`UPDATE "PortalAccessGrant" SET "active" = false WHERE "tenantId" IS NOT DISTINCT FROM ${args.tenantId} AND "viewerContactId" = ${viewerContactId} AND "fleetId" = ${targetId}`;
     return true;
+  }
+  // viewerContactId/targetId come from step CONFIG (author-editable, not a
+  // validated request) — confirm both actually belong to THIS run's tenant
+  // before minting a grant, so a misconfigured or cross-tenant step config
+  // can't hand tenant-A's viewer visibility into a tenant-B contact/fleet.
+  const viewer = await prisma.contact.findFirst({ where: { id: viewerContactId, tenantId: args.tenantId }, select: { id: true } });
+  if (!viewer) return false;
+  if (targetType === "contact") {
+    const target = await prisma.contact.findFirst({ where: { id: targetId, tenantId: args.tenantId }, select: { id: true } });
+    if (!target) return false;
+  } else {
+    const target = await prisma.fleet.findFirst({ where: { id: targetId, tenantId: args.tenantId }, select: { id: true } });
+    if (!target) return false;
   }
   const id = crypto.randomUUID();
   if (targetType === "contact") {
