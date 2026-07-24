@@ -11,6 +11,35 @@ import {
 
 const MAX_EVENT_ATTEMPTS = 3;
 
+/**
+ * Prisma JSON fields accept JSON values, not arbitrary JavaScript objects.
+ * Scheduled scanners frequently pass Dates from Prisma records, so normalise the
+ * complete payload at the single event-ingress boundary rather than relying on
+ * every trigger to serialise its own fields.
+ */
+export function automationJsonValue(value: unknown, depth = 0): Prisma.InputJsonValue {
+  if (depth > 20) return "[TRUNCATED]";
+  if (value === null) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : String(value);
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => item !== undefined && typeof item !== "function" && typeof item !== "symbol")
+      .map((item) => automationJsonValue(item, depth + 1));
+  }
+  if (value && typeof value === "object") {
+    const output: Record<string, Prisma.InputJsonValue> = {};
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      if (nested === undefined || typeof nested === "function" || typeof nested === "symbol") continue;
+      output[key] = automationJsonValue(nested, depth + 1);
+    }
+    return output;
+  }
+  return String(value);
+}
+
 export async function emitJourneyEvent(args: {
   type: string;
   entityType: JourneyEntityType;
@@ -29,7 +58,7 @@ export async function emitJourneyEvent(args: {
         type: args.type,
         entityType: args.entityType,
         entityId: args.entityId,
-        payload: (args.payload ?? {}) as Prisma.InputJsonValue,
+        payload: automationJsonValue(args.payload ?? {}),
         dedupeKey: hashJourneyKey(args.dedupeKey),
         journeyId: args.journeyId,
       },
