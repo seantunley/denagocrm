@@ -110,9 +110,7 @@ export async function transitionCampaign(args: {
   if (args.to === "approved" && campaign.submittedById === args.userId) {
     throw new Error("The person who submitted a campaign cannot approve it");
   }
-  if (args.to === "changes_requested" && !args.note?.trim()) {
-    throw new Error("Explain the required changes");
-  }
+  if (args.to === "changes_requested" && !args.note?.trim()) throw new Error("Explain the required changes");
 
   const updated = await basePrisma.$executeRaw`
     UPDATE "Campaign" SET
@@ -156,11 +154,7 @@ function parseJson(value: unknown): unknown {
   try { return JSON.parse(value); } catch { return null; }
 }
 
-async function resolveCampaignAudience(args: {
-  campaignId: string;
-  tenantId: string | null;
-  channel: string;
-}) {
+async function resolveCampaignAudience(args: { campaignId: string; tenantId: string | null; channel: string }) {
   const campaigns = await basePrisma.$queryRaw<Array<{ segmentId: string | null; audienceSnapshot: unknown }>>`
     SELECT "segmentId", "audienceSnapshot"
     FROM "Campaign"
@@ -173,12 +167,14 @@ async function resolveCampaignAudience(args: {
 
   let definition: AudienceDefinition;
   if (campaign.segmentId) {
-    const segments = await basePrisma.$queryRaw<Array<{ criteria: unknown; ruleTree: unknown; currentVersion: number | null }>>`
-      SELECT "criteria", "ruleTree", "currentVersion"
-      FROM "Segment"
-      WHERE "id" = ${campaign.segmentId}
-        AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
-        AND COALESCE("status", 'active') <> 'archived'
+    const segments = await basePrisma.$queryRaw<Array<{ criteria: unknown; ruleTree: unknown; latestVersion: number | null }>>`
+      SELECT s."criteria", s."ruleTree",
+        (SELECT MAX(v."version") FROM "MarketingAudienceVersion" v
+          WHERE v."segmentId" = s."id" AND v."tenantId" IS NOT DISTINCT FROM s."tenantId") AS "latestVersion"
+      FROM "Segment" s
+      WHERE s."id" = ${campaign.segmentId}
+        AND s."tenantId" IS NOT DISTINCT FROM ${args.tenantId}
+        AND COALESCE(s."status", 'active') <> 'archived'
       LIMIT 1
     `;
     const segment = segments[0];
@@ -186,10 +182,10 @@ async function resolveCampaignAudience(args: {
     const tree = parseJson(segment.ruleTree);
     if (isAudienceGroup(tree)) {
       validateAudienceTree(tree);
-      definition = { kind: "advanced", segmentId: campaign.segmentId, definition: tree, version: segment.currentVersion };
+      definition = { kind: "advanced", segmentId: campaign.segmentId, definition: tree, version: segment.latestVersion };
     } else {
       const criteria = parseJson(segment.criteria);
-      definition = { kind: "legacy", segmentId: campaign.segmentId, definition: (criteria && typeof criteria === "object" ? criteria : {}) as SegmentCriteria, version: segment.currentVersion };
+      definition = { kind: "legacy", segmentId: campaign.segmentId, definition: (criteria && typeof criteria === "object" ? criteria : {}) as SegmentCriteria, version: segment.latestVersion };
     }
   } else {
     const snapshot = parseJson(campaign.audienceSnapshot);
@@ -207,11 +203,7 @@ async function resolveCampaignAudience(args: {
   return { definition, contacts };
 }
 
-export async function freezeAudienceAndQueue(args: {
-  campaignId: string;
-  tenantId: string | null;
-  scheduleFor?: Date | null;
-}) {
+export async function freezeAudienceAndQueue(args: { campaignId: string; tenantId: string | null; scheduleFor?: Date | null }) {
   const campaign = await readCampaignDraftRecord(args.campaignId, args.tenantId);
   if (!campaign) throw new Error("Campaign not found");
   if (!isCampaignLaunchable(campaign.status)) throw new Error("Only approved campaigns may be scheduled or queued");
@@ -219,10 +211,9 @@ export async function freezeAudienceAndQueue(args: {
   const { definition, contacts } = await resolveCampaignAudience({ campaignId: args.campaignId, tenantId: args.tenantId, channel: campaign.channel });
   const uniqueContacts = [...new Map(contacts.map((contact) => [contact.id, contact])).values()].slice(0, 5000);
   if (uniqueContacts.length === 0) throw new Error("No eligible recipients match this audience");
-  const resolvedAt = new Date().toISOString();
   const exactSnapshot = {
     ...definition,
-    resolvedAt,
+    resolvedAt: new Date().toISOString(),
     channel: campaign.channel,
     resolvedContactIds: uniqueContacts.map((contact) => contact.id),
   };
