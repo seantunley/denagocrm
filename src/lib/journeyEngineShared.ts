@@ -20,7 +20,7 @@ export function getActiveVersion<T extends { version: number }>(journey: {
 }
 
 export async function enqueueJourneyRun(args: {
-  journey: { id: string; name: string; category: string };
+  journey: { id: string; tenantId: string | null; name: string; category: string };
   version: {
     id: string;
     version: number;
@@ -47,6 +47,7 @@ export async function enqueueJourneyRun(args: {
   try {
     await prisma.journeyRun.create({
       data: {
+        tenantId: args.journey.tenantId,
         journeyId: args.journey.id,
         journeyVersionId: args.version.id,
         entityType: args.entityType,
