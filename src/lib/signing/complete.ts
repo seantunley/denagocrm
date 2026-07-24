@@ -49,6 +49,43 @@ function certificateHtml(title: string, requestId: string, rows: RecipientRow[])
   </div>`;
 }
 
+/** Text form of one shared-field response for the acknowledgements record. */
+function describeResponseValue(kind: string, value: string): string {
+  if (kind === "checkbox") return value === "true" ? "✓ checked" : "✗ unchecked";
+  if (kind === "signature" || kind === "initials" || kind === "stamp") return "signed";
+  return value.length > 120 ? `${value.slice(0, 120)}…` : value;
+}
+
+type AckField = { label: string; kind: string; responses: { recipientId: string; value: string; filledAt: Date }[] };
+
+/**
+ * A "Shared field acknowledgements" page for the certificate. A shared field
+ * (recipientId null) has one placed position, so the stamped document shows only
+ * the first signer's value — every signer's own answer lives in
+ * SignatureFieldResponse. Record all of them here so the sealed PDF's audit
+ * pages, not just the live hub, carry the full acknowledgement trail. Returns ""
+ * (no page) when there are no shared responses.
+ */
+function acknowledgementsHtml(fields: AckField[], nameById: Map<string, string>): string {
+  if (fields.length === 0) return "";
+  const blocks = fields.map((f) => {
+    const items = f.responses.map((r) => {
+      const who = esc(nameById.get(r.recipientId) ?? "Unknown recipient");
+      const when = r.filledAt ? esc(formatDateTime(r.filledAt)) : "—";
+      return `<li style="font-size:9pt;color:#334155;margin:2px 0"><strong>${who}</strong> · ${esc(describeResponseValue(f.kind, r.value))} <span style="color:#94a3b8">· ${when}</span></li>`;
+    }).join("");
+    return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin:10px 0">
+      <div style="font-size:10pt;font-weight:600;color:#020617;margin-bottom:6px">${esc(f.label || f.kind)}</div>
+      <ul style="margin:0;padding-left:16px">${items}</ul>
+    </div>`;
+  }).join("");
+  return `<div style="page-break-before:always;padding-top:6px">
+    <h1 style="font-size:18pt;color:#020617;margin:0 0 4px">Shared field acknowledgements</h1>
+    <p style="color:#64748b;font-size:10pt;margin:0 0 12px">Each signer’s response to a field any recipient could complete. The document stamps the first; all are recorded here.</p>
+    ${blocks}
+  </div>`;
+}
+
 /** Assemble the final signed PDF (document + certificate), seal it, file it, notify everyone. */
 export async function completeSignatureRequest(requestId: string): Promise<void> {
   const req = await prisma.signatureRequest.findUnique({
@@ -85,7 +122,24 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     }
   }
 
-  const html = renderDocumentHtml(doc, ctx, logoDataUri(), { hideOverlays: true, stampedFields, appendHtml: certificateHtml(req.title, req.id, rows) });
+  // Shared fields (recipientId null) keep only the first value on SignatureField;
+  // pull every recipient's own answer from SignatureFieldResponse so the sealed
+  // PDF's audit pages carry the full acknowledgement trail, not just the stamp.
+  const sharedResponseFields = await prisma.signatureField.findMany({
+    where: { requestId, recipientId: null, responses: { some: {} } },
+    include: { responses: { orderBy: { filledAt: "asc" } } },
+  });
+  const ackFields: AckField[] = sharedResponseFields.map((f) => ({
+    label: f.label,
+    kind: f.kind,
+    responses: f.responses.map((r) => ({ recipientId: r.recipientId, value: r.value, filledAt: r.filledAt })),
+  }));
+
+  const html = renderDocumentHtml(doc, ctx, logoDataUri(), {
+    hideOverlays: true,
+    stampedFields,
+    appendHtml: certificateHtml(req.title, req.id, rows) + acknowledgementsHtml(ackFields, nameByRecipient),
+  });
   let pdf = await htmlToPdf(html);
   pdf = await sealPdf(pdf, { reason: `Signed: ${req.title}`, name: "Denago Cape Town" });
   const hash = crypto.createHash("sha256").update(pdf).digest("hex");
