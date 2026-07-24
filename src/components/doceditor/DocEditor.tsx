@@ -15,12 +15,12 @@ import { toast } from "sonner";
 import {
   Eye,
   FileDown,
+  FileSignature,
   PanelLeft,
   PanelRight,
   Plus,
   Redo2,
   Save,
-  Send,
   Undo2,
   X,
 } from "lucide-react";
@@ -267,10 +267,10 @@ export function DocEditor({
             if (result.ok) toast.success(result.message);
             else toast.error(`Couldn’t prepare for signing: ${result.message}`);
           }}
-          title="Seal and file the PDF and prepare recipients for signing"
+          title="Seal and file the PDF, then open the Signatures hub to send it to recipients"
         >
-          <Send className="size-4" />
-          Send
+          <FileSignature className="size-4" />
+          Prepare for signing
         </button>
         <details className="relative">
           <summary className={`${buttonClass} cursor-pointer list-none`}>
