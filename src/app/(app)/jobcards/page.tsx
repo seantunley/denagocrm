@@ -13,11 +13,10 @@ import { prisma } from "@/lib/db";
 import ModalTrigger from "@/components/Modal";
 import JobCardForm from "@/components/JobCardForm";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { PageHeader } from "@/components/page-header";
+import { WorkspaceHero } from "@/components/workspace-hero";
 import { buttonVariants } from "@/components/ui/button";
-import { EmptyState, MetricCard, StatusPill, Surface } from "@/components/visual-system";
+import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
 import {
-  KpiGrid,
   MobileDataCard,
   MobileDataField,
   MobileDataFields,
@@ -124,19 +123,19 @@ export default async function JobCardsPage({
 
   return (
     <div className="space-y-6">
-      <PageHeader
+      <WorkspaceHero
+        icon={Wrench}
+        eyebrow="Workshop operations"
         title="Job cards"
         description="Run every workshop job from vehicle intake through technician work, customer approval and service history."
-      >
-        {newJobTrigger}
-      </PageHeader>
-
-      <KpiGrid>
-        <MetricCard icon={CircleDotDashed} label="Active jobs" value={counts.active} detail={`${counts.unassigned} unassigned`} />
-        <MetricCard icon={Wrench} label="In repair" value={counts.repair} detail="On the workshop floor" accent />
-        <MetricCard icon={CheckCircle2} label="Ready for collection" value={counts.ready} detail="Awaiting customer" />
-        <MetricCard icon={UserRoundX} label="Work in progress" value={formatZAR(Math.round(wipCents))} detail="Billed value on active jobs" />
-      </KpiGrid>
+        actions={newJobTrigger}
+        stats={[
+          { label: "Active jobs", value: counts.active, detail: `${counts.unassigned} unassigned`, icon: CircleDotDashed, tone: "primary" },
+          { label: "In repair", value: counts.repair, detail: "On the workshop floor", icon: Wrench, tone: "warning" },
+          { label: "Ready for collection", value: counts.ready, detail: "Awaiting customer", icon: CheckCircle2, tone: "success" },
+          { label: "Work in progress", value: formatZAR(Math.round(wipCents)), detail: "Billed value on active jobs", icon: UserRoundX },
+        ]}
+      />
 
       {loadRows.length > 0 && (
         <div className="card">

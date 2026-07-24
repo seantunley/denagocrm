@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
-import { Plus, Pencil, Warehouse, Wrench, Package } from "lucide-react";
+import Link from "next/link";
+import { Boxes, Plus, Pencil, Settings2, Warehouse, Wrench, Package } from "lucide-react";
 import { requirePermission } from "@/lib/permissions";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { prisma } from "@/lib/db";
@@ -16,7 +17,7 @@ import {
 import ConfirmDelete from "@/components/ConfirmDelete";
 import ModalTrigger from "@/components/Modal";
 import { buttonVariants } from "@/components/ui/button";
-import { PageHeader } from "@/components/page-header";
+import { WorkspaceHero } from "@/components/workspace-hero";
 import { formatZAR } from "@/lib/format";
 import { EmptyState, StatusPill } from "@/components/visual-system";
 
@@ -87,7 +88,19 @@ export default async function WorkshopSettingsPage() {
 
   return (
     <div className="space-y-10">
-      <PageHeader title="Workshop" description="Default labour rate and the physical bays jobs are scheduled into." />
+      <WorkspaceHero
+        icon={Settings2}
+        eyebrow="Workshop configuration"
+        title="Workshop"
+        description="Configure labour value, physical capacity and reusable service packages for consistent job-card operations."
+        actions={<Link href="/jobcards" className="btn-secondary btn-sm"><Wrench className="size-4" /> Open job cards</Link>}
+        stats={[
+          { label: "Labour rate", value: `${formatZAR(rateCents)} / h`, detail: "Default technician value", icon: Wrench, tone: "primary" },
+          { label: "Active bays", value: bays.filter((bay) => bay.active).length, detail: `${bays.length} configured`, icon: Warehouse, tone: bays.some((bay) => bay.active) ? "success" : "warning" },
+          { label: "Service packages", value: packages.filter((pkg) => pkg.active).length, detail: `${packages.length} configured`, icon: Package },
+          { label: "Package items", value: packages.reduce((total, pkg) => total + pkg.items.length, 0), detail: "Parts & labour presets", icon: Boxes },
+        ]}
+      />
 
       {/* Labour rate ───────────────────────────────────────────────────────── */}
       <section className="space-y-3">

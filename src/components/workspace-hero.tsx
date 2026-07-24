@@ -55,7 +55,13 @@ export function WorkspaceHero({
         </div>
 
         {stats.length > 0 ? (
-          <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border/70 bg-border/70 sm:grid-cols-4">
+          <div className={cn(
+            "mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border/70 bg-border/70",
+            stats.length === 1 && "sm:grid-cols-1",
+            stats.length === 2 && "sm:grid-cols-2",
+            stats.length === 3 && "sm:grid-cols-3",
+            stats.length >= 4 && "sm:grid-cols-4",
+          )}>
             {stats.map((stat, index) => {
               const StatIcon = stat.icon;
               return <div key={index} className="min-w-0 bg-background/55 px-4 py-3 backdrop-blur-sm">

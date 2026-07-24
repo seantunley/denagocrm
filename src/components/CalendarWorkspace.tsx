@@ -37,7 +37,7 @@ import {
   completeActivity,
   rescheduleActivity,
 } from "@/app/actions/activities";
-import { PageHeader } from "@/components/page-header";
+import { WorkspaceHero, type WorkspaceStat } from "@/components/workspace-hero";
 import { openQuickCreate } from "@/components/QuickCreateDialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -607,7 +607,7 @@ export default function CalendarWorkspace({
     };
   }
 
-  const statCards =
+  const statCards: WorkspaceStat[] =
     mode === "workshop"
       ? [
           {
@@ -615,28 +615,28 @@ export default function CalendarWorkspace({
             value: stats.today,
             detail: "planned jobs",
             icon: CalendarDays,
-            tone: "text-primary",
+            tone: "primary",
           },
           {
             label: "Bookings",
             value: stats.featured,
             detail: "this month",
             icon: Wrench,
-            tone: "text-emerald-300",
+            tone: "success",
           },
           {
             label: "Open slots",
             value: stats.openSlots,
             detail: "configured capacity",
             icon: Clock4,
-            tone: "text-sky-300",
+            tone: "primary",
           },
           {
             label: "Overdue",
             value: stats.overdue,
             detail: "need attention",
             icon: CircleAlert,
-            tone: "text-red-300",
+            tone: "danger",
           },
         ]
       : [
@@ -645,41 +645,43 @@ export default function CalendarWorkspace({
             value: stats.today,
             detail: "planned activities",
             icon: CalendarDays,
-            tone: "text-primary",
+            tone: "primary",
           },
           {
             label: "Test drives",
             value: stats.featured,
             detail: "this month",
             icon: Car,
-            tone: "text-orange-300",
+            tone: "warning",
           },
           {
             label: "Completed",
             value: stats.completed,
             detail: "this month",
             icon: CheckCircle2,
-            tone: "text-emerald-300",
+            tone: "success",
           },
           {
             label: "Overdue",
             value: stats.overdue,
             detail: "need attention",
             icon: CircleAlert,
-            tone: "text-red-300",
+            tone: "danger",
           },
         ];
 
   return (
     <div className="space-y-5">
-      <PageHeader
+      <WorkspaceHero
+        icon={mode === "workshop" ? Wrench : CalendarDays}
+        eyebrow={mode === "workshop" ? "Workshop capacity" : "Sales activity"}
         title={`${mode === "workshop" ? "Workshop" : "Sales"} calendar`}
         description={
           mode === "workshop"
             ? "Plan service capacity, workshop bookings and the team responsible."
             : "Coordinate customer follow-ups, meetings and test drives."
         }
-      >
+        actions={<>
         <div className="flex overflow-hidden rounded-lg border border-border bg-card/60">
           <Link
             href={`/calendar?m=${monthKey}`}
@@ -710,31 +712,9 @@ export default function CalendarWorkspace({
             Schedule
           </Button>
         )}
-      </PageHeader>
-
-      <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-        {statCards.map((stat) => (
-          <div
-            key={stat.label}
-            className="rounded-xl border border-border bg-card/65 p-3.5 shadow-sm"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                {stat.label}
-              </p>
-              <stat.icon className={cn("size-4", stat.tone)} />
-            </div>
-            <div className="mt-2 flex items-end gap-2">
-              <span className="text-2xl font-semibold tabular-nums text-foreground">
-                {stat.value}
-              </span>
-              <span className="pb-0.5 text-[10px] text-muted-foreground">
-                {stat.detail}
-              </span>
-            </div>
-          </div>
-        ))}
-      </section>
+        </>}
+        stats={statCards}
+      />
 
       <section className="rounded-2xl border border-border bg-card/65 p-3 shadow-sm sm:p-4">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">

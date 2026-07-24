@@ -3,23 +3,20 @@ import { requireOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { ApprovalActions } from "./ApprovalActions";
-import { PageHeader } from "@/components/page-header";
-import { ShieldCheck } from "lucide-react";
+import {
+  CheckCircle2,
+  Clock3,
+  FileSignature,
+  FileText,
+  ShieldCheck,
+  Timer,
+  Workflow,
+} from "lucide-react";
 import RecordContextMenu from "@/components/RecordContextMenu";
+import { WorkspaceHero } from "@/components/workspace-hero";
+import { EmptyState, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
-
-const STATUS_STYLE: Record<string, string> = {
-  draft: "bg-slate-700/40 text-slate-300",
-  sent: "bg-blue-500/15 text-blue-300",
-  viewed: "bg-indigo-500/15 text-indigo-300",
-  in_progress: "bg-amber-500/15 text-amber-300",
-  completed: "bg-emerald-500/15 text-emerald-300",
-  declined: "bg-red-500/15 text-red-300",
-  expired: "bg-slate-600/30 text-slate-400",
-  voided: "bg-slate-600/30 text-slate-400",
-  rejected: "bg-rose-500/15 text-rose-300",
-};
 
 // Per-recipient status → dot colour + label, for the signer chips on each row.
 const RECIPIENT_STATUS: Record<string, { dot: string; label: string }> = {
@@ -53,6 +50,14 @@ function median(nums: number[]): number | null {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
+function requestTone(status: string): "neutral" | "info" | "warning" | "success" | "danger" {
+  if (status === "completed") return "success";
+  if (["declined", "rejected"].includes(status)) return "danger";
+  if (status === "in_progress") return "warning";
+  if (["sent", "viewed"].includes(status)) return "info";
+  return "neutral";
+}
+
 export default async function SignaturesPage() {
   await requireOwner();
   const requests = await prisma.signatureRequest.findMany({
@@ -79,30 +84,42 @@ export default async function SignaturesPage() {
     .map((r) => (r.completedAt!.getTime() - r.sentAt!.getTime()) / 3600000);
   const medHours = median(times);
 
-  const card = "rounded-xl border border-border bg-card p-4 shadow-sm";
-  const stat = "rounded-xl border border-border bg-card p-4 text-center";
-
   return (
-    <div className="space-y-5">
-      <PageHeader
+    <div className="space-y-6">
+      <WorkspaceHero
+        icon={FileSignature}
+        eyebrow="Document execution"
         title="Signatures"
         description="Send documents for signing, track progress, and keep a complete in-house audit trail."
+        actions={
+          <>
+            <Link href="/settings/signing-workflows" className="btn-secondary btn-sm">
+              <Workflow className="size-4" /> Workflows
+            </Link>
+            <Link href="/documents" className="btn-primary btn-sm">
+              <FileText className="size-4" /> Open documents
+            </Link>
+          </>
+        }
+        stats={[
+          { label: "Requests", value: total, detail: `${requests.filter((request) => request.status === "draft").length} draft`, icon: FileText },
+          { label: "Awaiting", value: active, detail: active ? "Needs signer action" : "Nothing outstanding", icon: Clock3, tone: active ? "warning" : "success" },
+          { label: "Completed", value: completed, detail: `${completionRate}% completion`, icon: CheckCircle2, tone: "success" },
+          { label: "Median time", value: medHours == null ? "—" : medHours < 1 ? `${Math.round(medHours * 60)}m` : `${medHours.toFixed(1)}h`, detail: "Sent to completed", icon: Timer },
+        ]}
       />
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-        <div className={stat}><div className="text-2xl font-bold text-foreground">{total}</div><div className="text-xs text-muted-foreground">Total</div></div>
-        <div className={stat}><div className="text-2xl font-bold text-amber-300">{active}</div><div className="text-xs text-muted-foreground">Awaiting</div></div>
-        <div className={stat}><div className="text-2xl font-bold text-emerald-300">{completed}</div><div className="text-xs text-muted-foreground">Completed</div></div>
-        <div className={stat}><div className="text-2xl font-bold text-foreground">{completionRate}%</div><div className="text-xs text-muted-foreground">Completion</div></div>
-        <div className={stat}><div className="text-2xl font-bold text-foreground">{medHours == null ? "—" : medHours < 1 ? `${Math.round(medHours * 60)}m` : `${medHours.toFixed(1)}h`}</div><div className="text-xs text-muted-foreground">Median time</div></div>
-      </div>
-
       {pendingApprovals.length > 0 && (
-        <div className={`${card} border-amber-500/30 bg-amber-500/[0.06]`}>
-          <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-amber-200"><ShieldCheck className="size-4" aria-hidden="true" />Pending approvals ({pendingApprovals.length})</h2>
-          <ul className="divide-y divide-border/50">
+        <Surface className="overflow-hidden border-amber-500/25 bg-amber-500/[0.05]">
+          <div className="border-b border-amber-500/15 p-4">
+            <SectionHeading
+              title={<span className="inline-flex items-center gap-2"><ShieldCheck className="size-4 text-amber-300" /> Pending approvals</span>}
+              description={`${pendingApprovals.length} approval ${pendingApprovals.length === 1 ? "gate is" : "gates are"} holding document delivery.`}
+            />
+          </div>
+          <ul className="divide-y divide-border/60 px-4">
             {pendingApprovals.map((s) => (
-              <li key={s.id} className="flex flex-wrap items-center gap-3 py-2.5">
+              <li key={s.id} className="flex flex-wrap items-center gap-3 py-3.5">
                 <div className="min-w-0 flex-1">
                   <Link href={`/signatures/${s.request.id}`} className="truncate text-[13px] font-medium text-foreground hover:text-primary">{s.request.title}</Link>
                   <div className="text-[11px] text-muted-foreground">{s.label} · requested {formatDate(s.createdAt)}{s.assigneeName ? ` · ${s.assigneeName}` : ""}</div>
@@ -111,14 +128,26 @@ export default async function SignaturesPage() {
               </li>
             ))}
           </ul>
-        </div>
+        </Surface>
       )}
 
-      <div className={card}>
+      <Surface className="overflow-hidden">
+        <div className="border-b border-border p-4">
+          <SectionHeading
+            title={<span className="inline-flex items-center gap-2"><FileSignature className="size-4 text-primary" /> Signing requests</span>}
+            description={declined ? `${declined} declined request${declined === 1 ? "" : "s"} need follow-up.` : "Live progress and signer activity across every request."}
+          />
+        </div>
         {requests.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground/70">Nothing yet. Open a document in the editor and choose “Send for signing”.</p>
+          <EmptyState
+            icon={FileSignature}
+            title="No signature requests yet"
+            description="Open a document in the editor and choose “Send for signing” to start a tracked request."
+            action={<Link href="/documents" className="btn-primary btn-sm">Open documents</Link>}
+            className="m-4"
+          />
         ) : (
-          <ul className="divide-y divide-border/50">
+          <ul className="divide-y divide-border/60">
             {requests.map((r) => {
               const signers = [...r.recipients]
                 .filter((x) => x.role !== "viewer")
@@ -134,11 +163,14 @@ export default async function SignaturesPage() {
                   : null;
               return (
                 <RecordContextMenu key={r.id} label={r.title} href={`/signatures/${r.id}`}>
-                <li className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:gap-3">
+                <li className="group flex flex-col gap-3 p-4 transition-colors hover:bg-muted/20 sm:flex-row sm:items-start">
+                  <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-border bg-muted/35 text-muted-foreground group-hover:border-primary/25 group-hover:text-primary">
+                    <FileSignature className="size-4" />
+                  </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <Link href={`/signatures/${r.id}`} className="truncate text-[13px] font-medium text-foreground hover:text-primary">{r.title}</Link>
-                      <span className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-semibold ${STATUS_STYLE[r.status] ?? "bg-slate-700/40 text-slate-300"}`}>{r.status.replace("_", " ")}</span>
+                      <StatusPill tone={requestTone(r.status)}>{r.status.replace("_", " ")}</StatusPill>
                     </div>
                     <div className="mt-0.5 text-[11px] text-muted-foreground">
                       {signed}/{signers.length} signed · {r.ordering}
@@ -173,9 +205,7 @@ export default async function SignaturesPage() {
             })}
           </ul>
         )}
-      </div>
-
-      {declined > 0 && <p className="text-xs text-red-300/80">{declined} request{declined > 1 ? "s" : ""} declined — follow up from the detail view.</p>}
+      </Surface>
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
 import { contactName, formatDate } from "@/lib/format";
 import ServiceReminderButton from "@/components/ServiceReminderButton";
-import { PageHeader } from "@/components/page-header";
+import { WorkspaceHero } from "@/components/workspace-hero";
 import {
   getAccessibleVehicleIds,
   hasPermission,
@@ -11,7 +11,7 @@ import {
 } from "@/lib/permissions";
 import { MobileDataCard, MobileDataField, MobileDataFields, MobileDataHeader, MobileDataList, ResponsiveDataView } from "@/components/responsive-patterns";
 import { EmptyState, StatusPill } from "@/components/visual-system";
-import { CalendarCheck2 } from "lucide-react";
+import { AlertTriangle, CalendarCheck2, CarFront, Clock3 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -42,12 +42,20 @@ export default async function ServiceDuePage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Service due" description={`${overdue} accessible overdue · ${soon} due soon${canManage ? " · Book workshop time or send a customer reminder." : ""}`} />
-      <div className="grid grid-cols-3 gap-3">
-        <div className="card"><p className="text-xs uppercase tracking-wide text-slate-400">Overdue</p><p className="text-3xl font-bold mt-1 text-red-300">{overdue}</p></div>
-        <div className="card"><p className="text-xs uppercase tracking-wide text-slate-400">Due soon</p><p className="text-3xl font-bold mt-1 text-amber-300">{soon}</p></div>
-        <div className="card"><p className="text-xs uppercase tracking-wide text-slate-400">Total to action</p><p className="text-3xl font-bold mt-1">{rows.length}</p></div>
-      </div>
+      <WorkspaceHero
+        icon={CalendarCheck2}
+        eyebrow="Service retention"
+        title="Service due"
+        description={canManage
+          ? "Prioritise overdue vehicles, book workshop capacity and keep customers informed before service windows pass."
+          : "Accessible vehicles that are overdue or approaching their next service window."}
+        stats={[
+          { label: "Overdue", value: overdue, detail: overdue ? "Requires immediate action" : "Nothing overdue", icon: AlertTriangle, tone: overdue ? "danger" : "success" },
+          { label: "Due soon", value: soon, detail: "Upcoming service window", icon: Clock3, tone: soon ? "warning" : "default" },
+          { label: "Total to action", value: rows.length, detail: "Current service queue", icon: CalendarCheck2, tone: rows.length ? "primary" : "success" },
+          { label: "Fleet checked", value: vehicles.length, detail: `${Math.max(0, vehicles.length - rows.length)} currently clear`, icon: CarFront },
+        ]}
+      />
 
       {rows.length === 0 ? <EmptyState icon={CalendarCheck2} title="Service schedule is clear" description="No accessible vehicles are overdue or due soon." /> : <ResponsiveDataView
         mobile={<MobileDataList>{rows.map(({ vehicle, due }) => {
