@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { contactName, formatDateTime } from "@/lib/format";
-import { hasPermission } from "@/lib/permissions";
+import { getAccessibleQuoteIds, hasPermission } from "@/lib/permissions";
 import { requireTestDriveReadAccess } from "@/lib/testDriveAccess";
 import { listTenantStaff } from "@/lib/tenantActor";
 import { testDriveStatusLabel } from "@/lib/testDriveMetrics";
@@ -47,7 +47,11 @@ const statusClass: Record<string, string> = {
 export default async function TestDriveDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const user = await requireTestDriveReadAccess(id);
-  const canManage = await hasPermission(user, "activities.manage");
+  const [canManage, accessibleQuoteIds] = await Promise.all([
+    hasPermission(user, "activities.manage"),
+    getAccessibleQuoteIds(user),
+  ]);
+  const quoteScope = accessibleQuoteIds === null ? {} : { id: { in: accessibleQuoteIds } };
   const booking = await prisma.testDriveBooking.findFirst({
     where: { id, deletedAt: null },
     include: { demoVehicle: true, assets: { orderBy: { createdAt: "desc" } } },
@@ -64,7 +68,7 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
     }),
     listTenantStaff(),
     prisma.quote.findMany({
-      where: { contactId: booking.contactId, deletedAt: null },
+      where: { contactId: booking.contactId, deletedAt: null, ...quoteScope },
       orderBy: { createdAt: "desc" },
       take: 50,
       select: { id: true, number: true, status: true },
