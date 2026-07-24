@@ -144,8 +144,21 @@ async function handleSign(token: string, req: Request): Promise<Response> {
       if (claimed.count === 0) throw new SignAbort(409, "Already signed");
       // Field values land in the same transaction, so they're visible exactly
       // when the recipient becomes "signed".
+      //
+      // Each recipient's answer is recorded individually in SignatureFieldResponse
+      // (one durable row per recipient). SignatureField.value is claimed
+      // first-write-wins — it holds the single value the sealed PDF stamps at the
+      // field's one placed position. On a SHARED field (recipientId null) this
+      // means a later signer's answer no longer overwrites (or, under the old
+      // guard, silently vanishes): the stamped value stays the first signer's,
+      // while every signer's response is preserved as its own row.
       for (const u of updates) {
-        await tx.signatureField.update({ where: { id: u.id }, data: { value: u.value, filledAt } });
+        await tx.signatureFieldResponse.upsert({
+          where: { fieldId_recipientId: { fieldId: u.id, recipientId: recipient.id } },
+          create: { fieldId: u.id, recipientId: recipient.id, value: u.value, filledAt, tenantId: recipient.tenantId },
+          update: { value: u.value, filledAt },
+        });
+        await tx.signatureField.updateMany({ where: { id: u.id, filledAt: null }, data: { value: u.value, filledAt } });
       }
     });
   } catch (e) {
