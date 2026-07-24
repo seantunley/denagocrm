@@ -12,10 +12,10 @@ function group(value: unknown): value is AudienceGroup {
 function compare(actual: unknown, operator: string, expected: unknown) {
   if (operator === "is_empty") return actual == null || actual === "";
   if (operator === "is_not_empty") return actual != null && actual !== "";
-  if (operator === "equals") return String(actual ?? "") === String(expected ?? "");
-  if (operator === "not_equals") return String(actual ?? "") !== String(expected ?? "");
+  if (operator === "equals") return Array.isArray(actual) ? actual.map(String).includes(String(expected ?? "")) : String(actual ?? "") === String(expected ?? "");
+  if (operator === "not_equals") return !compare(actual, "equals", expected);
   if (operator === "contains") return Array.isArray(actual) ? actual.map(String).includes(String(expected)) : String(actual ?? "").toLowerCase().includes(String(expected ?? "").toLowerCase());
-  if (operator === "in") return (Array.isArray(expected) ? expected : String(expected ?? "").split(",")).map(String).includes(String(actual ?? ""));
+  if (operator === "in") return (Array.isArray(expected) ? expected : String(expected ?? "").split(",")).map(String).some((choice) => Array.isArray(actual) ? actual.map(String).includes(choice) : choice === String(actual ?? ""));
   const a = Number(actual); const b = Number(expected);
   if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
   if (operator === "greater_than") return a > b;
@@ -24,6 +24,7 @@ function compare(actual: unknown, operator: string, expected: unknown) {
   return a <= b;
 }
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
 function valueFor(contact: Record<string, any>, field: string) {
   if (field === "source") return contact.source;
   if (field === "province") return contact.province;
@@ -38,7 +39,6 @@ function valueFor(contact: Record<string, any>, field: string) {
   if (field === "phone_available") return Boolean(contact.whatsapp || contact.phone);
   if (field === "tag") return (contact.tags ?? []).map((tag: any) => tag.id);
   if (field === "quote_status") return (contact.quotes ?? []).map((quote: any) => quote.status);
-  if (field === "fleet") return Boolean(contact.fleet);
   if (field === "customer_value") return (contact.leads ?? []).filter((lead: any) => lead.status === "won").reduce((sum: number, lead: any) => sum + Number(lead.valueCents ?? 0), 0);
   return undefined;
 }
@@ -60,6 +60,7 @@ function matchesNode(contact: Record<string, any>, node: AudienceRule | Audience
   }
   return compare(valueFor(contact, node.field), node.operator, node.value);
 }
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 export function explainAudience(tree: AudienceGroup) {
   const explain = (node: AudienceRule | AudienceGroup): string => group(node)
@@ -77,7 +78,6 @@ export async function evaluateAudience(tree: AudienceGroup, channel = "any") {
       vehicles: { where: { deletedAt: null }, include: { serviceRecords: true, mileageLogs: true } },
       leads: { where: { deletedAt: null } },
       quotes: { where: { deletedAt: null } },
-      fleet: true,
     },
   });
   return contacts.filter((contact) => matchesNode(contact, tree)).filter((contact) => channel === "email" ? Boolean(contact.email) : channel === "sms" ? Boolean(contact.whatsapp || contact.phone) : true);
