@@ -11,6 +11,7 @@ import testDrives from "./data/test-drives.json";
 import documents from "./data/documents.json";
 import marketing from "./data/marketing.json";
 import commsAutomation from "./data/comms-automation.json";
+import automationPlatform from "./data/automation-platform.json";
 import channels from "./data/channels.json";
 import admin from "./data/admin.json";
 
@@ -26,6 +27,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...(documents as HelpArticle[]),
   ...(marketing as HelpArticle[]),
   ...(commsAutomation as HelpArticle[]),
+  ...(automationPlatform as HelpArticle[]),
   ...(channels as HelpArticle[]),
   ...(admin as HelpArticle[]),
 ];
@@ -36,9 +38,6 @@ export function getArticle(slug: string): HelpArticle | undefined {
   return BY_SLUG.get(slug);
 }
 
-// When an `enabled` module set is passed, articles owned by a disabled pack are
-// dropped (core is always kept); omitting it returns every article unchanged, so
-// existing callers and tests are behaviour-preserving.
 function visibleArticles(enabled?: ReadonlySet<ModuleId>): HelpArticle[] {
   if (!enabled) return HELP_ARTICLES;
   return HELP_ARTICLES.filter((a) => isArticleEnabled(a, enabled));
@@ -48,12 +47,10 @@ export function articlesInCategory(key: HelpCategoryKey, enabled?: ReadonlySet<M
   return visibleArticles(enabled).filter((a) => a.category === key);
 }
 
-/** Categories that actually have articles, in display order, with their articles attached. */
 export function categoriesWithArticles(enabled?: ReadonlySet<ModuleId>): { key: HelpCategoryKey; label: string; description: string; icon: string; articles: HelpArticle[] }[] {
   return HELP_CATEGORIES.map((c) => ({ ...c, articles: articlesInCategory(c.key, enabled) })).filter((c) => c.articles.length > 0);
 }
 
-/** Lightweight relevance search over title, summary, keywords and body text. */
 export function searchArticles(query: string, enabled?: ReadonlySet<ModuleId>): HelpArticle[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
@@ -76,7 +73,6 @@ export function searchArticles(query: string, enabled?: ReadonlySet<ModuleId>): 
   return scored.sort((x, y) => y.score - x.score).map((s) => s.a);
 }
 
-/** Compact index for the client-side search box (no heavy body payload). */
 export type HelpSearchEntry = { slug: string; title: string; summary: string; category: HelpCategoryKey; keywords: string[] };
 export const HELP_SEARCH_INDEX: HelpSearchEntry[] = HELP_ARTICLES.map((a) => ({
   slug: a.slug,
