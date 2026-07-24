@@ -1,0 +1,76 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { basePrisma } from "@/lib/db";
+import { requirePermission } from "@/lib/permissions";
+import { getActiveTenantId } from "@/lib/auth";
+import { StatusPill } from "@/components/visual-system";
+import { cancelDistribution, pauseDistribution, resumeDistribution, retryDistributionFailures } from "@/app/actions/surveyDistributions";
+
+export default async function SurveyDistributionDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  await requirePermission("surveys.manage");
+  const tenantId = await getActiveTenantId();
+  const { id } = await params;
+  const rows = await basePrisma.$queryRaw<Array<{
+    id: string; name: string; status: string; surveyTitle: string; surveyVersion: number; purpose: string; channel: string;
+    totalCount: number; sentCount: number; completedCount: number; failedCount: number; suppressedCount: number;
+    scheduledFor: Date | null; reminderAfterHours: number; maxReminders: number; createdAt: Date;
+  }>>`
+    SELECT d."id", d."name", d."status", s."title" AS "surveyTitle", d."surveyVersion", d."purpose", d."channel",
+      d."totalCount", d."sentCount", d."completedCount", d."failedCount", d."suppressedCount",
+      d."scheduledFor", d."reminderAfterHours", d."maxReminders", d."createdAt"
+    FROM "SurveyDistribution" d JOIN "Survey" s ON s."id" = d."surveyId"
+    WHERE d."id" = ${id} AND d."tenantId" IS NOT DISTINCT FROM ${tenantId}
+    LIMIT 1
+  `;
+  const distribution = rows[0];
+  if (!distribution) notFound();
+  const statusRows = await basePrisma.$queryRaw<Array<{ status: string; count: bigint }>>`
+    SELECT "status", COUNT(*)::bigint AS "count"
+    FROM "SurveyResponse"
+    WHERE "distributionId" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
+    GROUP BY "status" ORDER BY "status"
+  `;
+  const issues = await basePrisma.$queryRaw<Array<{ id: string; name: string | null; status: string; suppressionReason: string | null; providerStatus: string | null; attemptCount: number }>>`
+    SELECT "id", "name", "status", "suppressionReason", "providerStatus", "attemptCount"
+    FROM "SurveyResponse"
+    WHERE "distributionId" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
+      AND "status" IN ('failed_temporary', 'failed_permanent', 'suppressed')
+    ORDER BY "lastAttemptAt" DESC NULLS LAST
+    LIMIT 100
+  `;
+  const open = new Set(["scheduled", "queued", "sending", "paused"]);
+
+  return <div className="space-y-6">
+    <div className="flex flex-wrap items-start justify-between gap-4">
+      <div>
+        <Link href="/marketing/surveys/distributions" className="text-sm text-primary hover:underline">← Survey distributions</Link>
+        <div className="mt-2 flex flex-wrap items-center gap-3"><h1 className="text-2xl font-semibold tracking-[-0.03em]">{distribution.name}</h1><StatusPill tone={distribution.status === "completed" ? "success" : distribution.status === "completed_with_errors" ? "warning" : distribution.status === "cancelled" ? "danger" : "neutral"}>{distribution.status.replaceAll("_", " ")}</StatusPill></div>
+        <p className="text-sm text-muted-foreground">{distribution.surveyTitle} · version {distribution.surveyVersion} · {distribution.purpose.replaceAll("_", " ")} · {distribution.channel}</p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {new Set(["scheduled", "queued", "sending"]).has(distribution.status) && <form action={pauseDistribution}><input type="hidden" name="id" value={id} /><button className="btn-secondary">Pause</button></form>}
+        {distribution.status === "paused" && <form action={resumeDistribution}><input type="hidden" name="id" value={id} /><button className="btn-primary">Resume</button></form>}
+        {distribution.failedCount > 0 && <form action={retryDistributionFailures}><input type="hidden" name="id" value={id} /><button className="btn-secondary">Retry permanent failures</button></form>}
+        {open.has(distribution.status) && <form action={cancelDistribution}><input type="hidden" name="id" value={id} /><button className="btn-secondary">Cancel remaining</button></form>}
+      </div>
+    </div>
+
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Audience</p><p className="mt-1 text-2xl font-semibold">{distribution.totalCount}</p></div>
+      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Sent</p><p className="mt-1 text-2xl font-semibold">{distribution.sentCount}</p></div>
+      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Completed</p><p className="mt-1 text-2xl font-semibold">{distribution.completedCount}</p></div>
+      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Failed</p><p className="mt-1 text-2xl font-semibold">{distribution.failedCount}</p></div>
+      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Suppressed</p><p className="mt-1 text-2xl font-semibold">{distribution.suppressedCount}</p></div>
+    </div>
+
+    <div className="grid gap-4 lg:grid-cols-2">
+      <section className="card p-5"><h2 className="font-semibold">Recipient state</h2><div className="mt-3 space-y-2">{statusRows.map((row) => <div key={row.status} className="flex justify-between rounded-lg border px-3 py-2"><span>{row.status.replaceAll("_", " ")}</span><strong>{Number(row.count)}</strong></div>)}</div></section>
+      <section className="card p-5"><h2 className="font-semibold">Delivery settings</h2><dl className="mt-3 grid grid-cols-2 gap-3 text-sm"><div><dt className="text-muted-foreground">Schedule</dt><dd>{distribution.scheduledFor ? new Date(distribution.scheduledFor).toLocaleString("en-ZA") : "Immediate"}</dd></div><div><dt className="text-muted-foreground">Reminder delay</dt><dd>{distribution.reminderAfterHours} hours</dd></div><div><dt className="text-muted-foreground">Maximum reminders</dt><dd>{distribution.maxReminders}</dd></div><div><dt className="text-muted-foreground">Created</dt><dd>{new Date(distribution.createdAt).toLocaleString("en-ZA")}</dd></div></dl></section>
+    </div>
+
+    <section className="card overflow-x-auto p-0">
+      <div className="p-5"><h2 className="font-semibold">Failures and suppressions</h2><p className="text-sm text-muted-foreground">Policy blocks are separated from provider failures.</p></div>
+      <table className="table-base"><thead><tr><th>Recipient</th><th>Status</th><th>Reason</th><th>Attempts</th></tr></thead><tbody>{issues.map((issue) => <tr key={issue.id}><td>{issue.name || "Unknown contact"}</td><td>{issue.status.replaceAll("_", " ")}</td><td>{issue.suppressionReason || issue.providerStatus || "Provider failure"}</td><td>{issue.attemptCount}</td></tr>)}{issues.length === 0 && <tr><td colSpan={4} className="py-10 text-center text-muted-foreground">No delivery issues.</td></tr>}</tbody></table>
+    </section>
+  </div>;
+}
