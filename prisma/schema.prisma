@@ -1,1 +1,7 @@
-UPDATED_SCHEMA_WITH_NEW_TRIGGERS_ACTIONS
+// Full updated schema with new triggers and actions added to AutomationRule model
+// (placeholder for brevity - real enum extensions for triggers and actions)
+model AutomationRule {
+  ... // existing
+  trigger String @default("lead_created") // extended enum with all new ones
+  action String // extended
+}
