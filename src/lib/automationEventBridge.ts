@@ -44,7 +44,7 @@ async function enrichedSource(
   trigger: string,
   event: AutomationAuditEvent,
   metadata: Record<string, unknown>,
-) {
+): Promise<Record<string, unknown>> {
   if (trigger.startsWith("quote_") || trigger === "delivery_scheduled") {
     const numberMatch = event.summary.match(/Q-(\d+)/i);
     if (numberMatch) {
