@@ -4,9 +4,10 @@ import crypto from "crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requirePermission } from "@/lib/permissions";
+import { canAccessQuote, requirePermission } from "@/lib/permissions";
 import { logAuditStrict } from "@/lib/audit";
 import { saveFile } from "@/lib/storage";
+import { resolveTenantMemberUser } from "@/lib/tenantActor";
 import {
   assertTestDriveCustomerAccess,
   requireTestDriveManageAccess,
@@ -54,7 +55,7 @@ function optionalDate(value: string | null, label: string): Date | null {
 }
 
 function newReference() {
-  return `TD-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+  return `TD-${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
 }
 
 async function requireBooking(id: string) {
@@ -114,6 +115,12 @@ async function assertDemoVehicleAvailable(args: {
   if (overlap) throw new Error(`The demo vehicle is already booked on ${overlap.reference}`);
 }
 
+async function requireAssignableStaff(userId: string, label: string) {
+  const member = await resolveTenantMemberUser(userId);
+  if (!member) throw new Error(`${label} is not an active member of this workspace`);
+  return member;
+}
+
 export async function createTestDriveBooking(formData: FormData) {
   const user = await requirePermission("activities.manage");
   const contactId = requiredText(formData, "contactId", "Customer");
@@ -132,8 +139,10 @@ export async function createTestDriveBooking(formData: FormData) {
   const [contact, lead, salesperson, accompanying, demoVehicle, product] = await Promise.all([
     prisma.contact.findFirst({ where: { id: contactId, deletedAt: null } }),
     leadId ? prisma.lead.findFirst({ where: { id: leadId, deletedAt: null } }) : null,
-    prisma.user.findUnique({ where: { id: salespersonId } }),
-    accompanyingSalespersonId ? prisma.user.findUnique({ where: { id: accompanyingSalespersonId } }) : null,
+    requireAssignableStaff(salespersonId, "Salesperson"),
+    accompanyingSalespersonId
+      ? requireAssignableStaff(accompanyingSalespersonId, "Accompanying salesperson")
+      : null,
     demoVehicleId ? prisma.demoVehicle.findFirst({ where: { id: demoVehicleId, deletedAt: null } }) : null,
     productId ? prisma.product.findFirst({ where: { id: productId, deletedAt: null } }) : null,
   ]);
@@ -212,12 +221,12 @@ export async function updateTestDriveBooking(id: string, formData: FormData) {
   if (expectedReturnAt <= scheduledStart) throw new Error("Expected return must be after the start time");
   await assertDemoVehicleAvailable({ demoVehicleId, start: scheduledStart, end: expectedReturnAt, excludeBookingId: id });
 
-  const [salesperson, accompanying] = await Promise.all([
-    prisma.user.findUnique({ where: { id: salespersonId } }),
-    accompanyingSalespersonId ? prisma.user.findUnique({ where: { id: accompanyingSalespersonId } }) : null,
+  await Promise.all([
+    requireAssignableStaff(salespersonId, "Salesperson"),
+    accompanyingSalespersonId
+      ? requireAssignableStaff(accompanyingSalespersonId, "Accompanying salesperson")
+      : Promise.resolve(null),
   ]);
-  if (!salesperson) throw new Error("Salesperson not found");
-  if (accompanyingSalespersonId && !accompanying) throw new Error("Accompanying salesperson not found");
 
   const updated = await prisma.$transaction(async (tx) => {
     const result = await tx.testDriveBooking.update({
@@ -334,6 +343,9 @@ export async function completeTestDrive(id: string, formData: FormData) {
   if (!["follow_up", "quote_created", "sale_won", "no_interest", "undecided"].includes(salesOutcome)) throw new Error("Invalid sales outcome");
   const convertedQuoteId = text(formData, "convertedQuoteId");
   if (convertedQuoteId) {
+    if (!(await canAccessQuote(user, convertedQuoteId))) {
+      throw new Error("You do not have access to that quote");
+    }
     const quote = await prisma.quote.findFirst({ where: { id: convertedQuoteId, deletedAt: null } });
     if (!quote || (quote.contactId && quote.contactId !== before.contactId)) throw new Error("The selected quote is not available for this customer");
   }
