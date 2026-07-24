@@ -11,13 +11,14 @@ import { defaultIntro, type SurveyQuestion, type SurveyType } from "./surveyType
 export type FrozenSurveySnapshot = {
   title: string;
   type: string;
-  intro: string | null;
+  intro: string;
   thankYou: string | null;
   questions: SurveyQuestion[];
   trigger: string | null;
   delayHours: number;
 };
 
+type StoredSurveySnapshot = Omit<FrozenSurveySnapshot, "intro"> & { intro: string | null };
 type FrozenResponseRow = {
   id: string;
   tenantId: string | null;
@@ -25,7 +26,7 @@ type FrozenResponseRow = {
   surveyVersion: number | null;
   status: string;
   contactId: string | null;
-  snapshot: FrozenSurveySnapshot;
+  snapshot: StoredSurveySnapshot;
 };
 
 function tenantFromScope() {
@@ -34,7 +35,7 @@ function tenantFromScope() {
   return scope.tenantId;
 }
 
-export async function loadFrozenSurveyResponse(token: string): Promise<FrozenResponseRow | null> {
+export async function loadFrozenSurveyResponse(token: string): Promise<(Omit<FrozenResponseRow, "snapshot"> & { snapshot: FrozenSurveySnapshot }) | null> {
   const tenantId = tenantFromScope();
   if (tenantId === undefined) return null;
   const rows = await basePrisma.$queryRaw<FrozenResponseRow[]>`
@@ -73,10 +74,29 @@ export async function loadFrozenSurveyResponse(token: string): Promise<FrozenRes
   };
 }
 
-function answerMissing(question: SurveyQuestion, value: unknown) {
-  if ((question as SurveyQuestion & { required?: boolean }).required === false) return false;
-  if (question.type === "checkbox") return value !== true && value !== "true";
-  return value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0);
+function validateAnswer(question: SurveyQuestion, value: unknown): unknown | undefined {
+  const missing = value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0);
+  if (missing) return question.required ? undefined : null;
+
+  if (question.type === "rating") {
+    const numeric = typeof value === "number" ? value : Number(value);
+    const scale = Math.max(1, question.scale ?? 5);
+    return Number.isInteger(numeric) && numeric >= 1 && numeric <= scale ? numeric : undefined;
+  }
+  if (question.type === "nps") {
+    const numeric = typeof value === "number" ? value : Number(value);
+    return Number.isInteger(numeric) && numeric >= 0 && numeric <= 10 ? numeric : undefined;
+  }
+  if (question.type === "choice") {
+    if (question.multi) {
+      if (!Array.isArray(value)) return undefined;
+      const selected = [...new Set(value.filter((item): item is string => typeof item === "string"))];
+      return selected.length > 0 && selected.every((item) => question.options.includes(item)) ? selected : undefined;
+    }
+    return typeof value === "string" && question.options.includes(value) ? value : undefined;
+  }
+  if (question.type === "text") return typeof value === "string" ? value.trim().slice(0, 10_000) : undefined;
+  return undefined;
 }
 
 function summarise(questions: SurveyQuestion[], answers: Record<string, unknown>, score: number | null) {
@@ -94,22 +114,21 @@ export async function submitFrozenSurveyResponse(token: string, supplied: Record
   if (!response) return { ok: false as const, error: "not_found" as const };
   if (response.status === "completed") return { ok: false as const, error: "done" as const, survey: response.snapshot };
 
-  const allowedIds = new Set(response.snapshot.questions.map((question) => question.id));
-  const answers = Object.fromEntries(Object.entries(supplied).filter(([key]) => allowedIds.has(key)));
-  const missing = response.snapshot.questions.filter((question) => answerMissing(question, answers[question.id]));
-  if (missing.length) {
-    return { ok: false as const, error: "validation" as const, fields: missing.map((question) => question.id), survey: response.snapshot };
+  const answers: Record<string, unknown> = {};
+  const invalid: string[] = [];
+  for (const question of response.snapshot.questions) {
+    const value = validateAnswer(question, supplied[question.id]);
+    if (value === undefined) invalid.push(question.id);
+    else if (value !== null) answers[question.id] = value;
   }
+  if (invalid.length) return { ok: false as const, error: "validation" as const, fields: invalid, survey: response.snapshot };
 
   let score: number | null = null;
   let comment: string | null = null;
   for (const question of response.snapshot.questions) {
     const answer = answers[question.id];
-    if (score === null && (question.type === "nps" || question.type === "rating")) {
-      const numeric = typeof answer === "number" ? answer : Number(answer);
-      if (Number.isFinite(numeric)) score = numeric;
-    }
-    if (comment === null && question.type === "text" && typeof answer === "string" && answer.trim()) comment = answer.trim();
+    if (score === null && (question.type === "nps" || question.type === "rating") && typeof answer === "number") score = answer;
+    if (comment === null && question.type === "text" && typeof answer === "string" && answer) comment = answer;
   }
 
   const changed = await basePrisma.$executeRaw`
