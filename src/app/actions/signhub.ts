@@ -39,6 +39,30 @@ export async function sendRequest(requestId: string): Promise<{ ok: boolean; not
   return { ok: true, notified };
 }
 
+/**
+ * RE-send an already-sent request. Unlike sendRequest (first dispatch),
+ * this must pass `reminder: true` — recipients already in "sent"/"viewed"
+ * are otherwise silently skipped by notifyRecipient's at-most-once
+ * pending→sent claim, while dispatchRequest's `notified` count still
+ * includes them, so the hub reported "Sent to N recipient(s)" when nothing
+ * actually went out. Mirrors the already-correct resendRecordSigning.
+ */
+export async function resendRequest(requestId: string): Promise<{ ok: boolean; notified?: number; error?: string }> {
+  const user = await requireOwner();
+  const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } });
+  if (!req || req.deletedAt) return { ok: false, error: "Not found" };
+  if (req.status === "draft") return { ok: false, error: "This request hasn't been sent yet." };
+  if (isRequestClosed(req.status)) return { ok: false, error: "This request is closed." };
+  const reachable = req.recipients.filter((r) => r.role !== "viewer" && (r.email || r.phone));
+  if (reachable.length === 0) return { ok: false, error: "Add an email or phone to at least one signer first." };
+
+  const { notified } = await dispatchRequest(requestId, { reminder: true });
+  await logAudit({ action: "signing.remind", summary: `Resent “${req.title}” for signing`, entityType: "SignatureRequest", entityId: requestId, user });
+  revalidatePath("/signatures");
+  revalidatePath(`/signatures/${requestId}`);
+  return { ok: true, notified };
+}
+
 export async function remindRecipient(recipientId: string): Promise<{ ok: boolean }> {
   const user = await requireOwner();
   const r = await prisma.signatureRecipient.findUnique({ where: { id: recipientId } });
