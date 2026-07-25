@@ -3,7 +3,7 @@ import { basePrisma } from "./db";
 import { sendEmail, renderTemplate } from "./email";
 import { sendSms } from "./sms";
 import { buildTrackedEmail } from "./campaigns";
-import { canContactPerson, classifyRetry, type CommunicationChannel } from "./communicationPolicy";
+import { canContactPerson, classifyRetry, nextCommunicationWindow, type CommunicationChannel } from "./communicationPolicy";
 import { contactName } from "./format";
 import { currentTenantScope } from "./tenantScope";
 
@@ -44,8 +44,8 @@ async function event(args: {
   metadata?: Record<string, unknown>;
 }) {
   await basePrisma.$executeRaw`
-    INSERT INTO "CampaignEvent" ("id", "tenantId", "campaignId", "campaignRecipientId", "contactId", "type", "metadata", "occurredAt")
-    VALUES (${`ce_${crypto.randomUUID()}`}, ${args.tenantId}, ${args.campaignId}, ${args.recipientId ?? null}, ${args.contactId ?? null}, ${args.type}, ${JSON.stringify(args.metadata ?? {})}::jsonb, CURRENT_TIMESTAMP)
+    INSERT INTO "MarketingCampaignEvent" ("id", "tenantId", "campaignId", "campaignRecipientId", "contactId", "type", "metadata", "occurredAt")
+    VALUES (${`mce_${crypto.randomUUID()}`}, ${args.tenantId}, ${args.campaignId}, ${args.recipientId ?? null}, ${args.contactId ?? null}, ${args.type}, ${JSON.stringify(args.metadata ?? {})}::jsonb, CURRENT_TIMESTAMP)
   `;
 }
 
@@ -125,6 +125,22 @@ async function suppress(recipient: ClaimedRecipient, reason: string) {
   if (changed) await event({ tenantId: recipient.tenantId, campaignId: recipient.campaignId, recipientId: recipient.id, contactId: recipient.contactId, type: "suppressed", metadata: { reason } });
 }
 
+async function defer(recipient: ClaimedRecipient, reason: string) {
+  const now = new Date();
+  const nextAttemptAt = reason === "quiet_hours"
+    ? nextCommunicationWindow(now)
+    : new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const updated = await basePrisma.$executeRaw`
+    UPDATE "CampaignRecipient"
+    SET "status" = 'queued', "nextAttemptAt" = ${nextAttemptAt},
+      "providerStatus" = ${`deferred_${reason}`}, "suppressionReason" = NULL
+    WHERE "id" = ${recipient.id}
+      AND "tenantId" IS NOT DISTINCT FROM ${recipient.tenantId}
+      AND "status" = 'sending'
+  `;
+  if (updated === 1) await event({ tenantId: recipient.tenantId, campaignId: recipient.campaignId, recipientId: recipient.id, contactId: recipient.contactId, type: "deferred", metadata: { reason, nextAttemptAt: nextAttemptAt.toISOString() } });
+}
+
 function channelFor(value: string): CommunicationChannel {
   return value === "email" ? "email" : "sms";
 }
@@ -161,7 +177,9 @@ async function deliver(recipient: ClaimedRecipient) {
     campaignRecipientId: recipient.id,
   });
   if (!eligibility.allowed || !eligibility.destination) {
-    await suppress(recipient, eligibility.reason ?? "policy_blocked");
+    const reason = eligibility.reason ?? "policy_blocked";
+    if (reason === "quiet_hours" || reason === "frequency_cap") await defer(recipient, reason);
+    else await suppress(recipient, reason);
     return;
   }
 
