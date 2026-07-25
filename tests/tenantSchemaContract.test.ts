@@ -20,20 +20,19 @@ import { GLOBAL_MODELS } from "../src/lib/tenantGuard";
  */
 // Until this test read EVERY prisma/*.prisma file (it previously read only
 // schema.prisma), the models below sat in side-files (journeys.prisma,
-// governance.prisma) and escaped the contract unnoticed — none carry `tenantId`
-// and none are global. They are listed here as the deliberately-visible escape
-// hatch so the gap is TRACKED, not silent. Each MUST be resolved before tenant
-// enforcement is enabled, or its queries fail closed on a missing column:
+// governance.prisma) and escaped the contract unnoticed. They are listed here
+// as the deliberately-visible escape hatch so the gap is TRACKED, not silent.
+// Each MUST be resolved before tenant enforcement is enabled, or its queries
+// fail closed on a missing column:
 //   - Journey* (journeys.prisma): PR #200 adds their `tenantId` slice — remove
 //     from PENDING once that merges.
-//   - governance.prisma RBAC/forecast models: SalesPipeline/Team/TeamMember/
-//     UserRole/ForecastSnapshot/AuditEvent are tenant-owned and need a `tenantId`
-//     slice; Role/Permission/RolePermission need a product decision on whether the
-//     permission catalog is global or per-tenant (RBAC design — owner call).
+// governance.prisma's RBAC/forecast models are already resolved (not pending):
+// SalesPipeline/Team/TeamMember/UserRole/ForecastSnapshot/AuditEvent got a
+// tenantId slice (migration 20260725160000); Role/Permission/RolePermission
+// were decided GLOBAL — one shared permission taxonomy, not per-tenant — and
+// moved to GLOBAL_MODELS in tenantGuard.ts instead.
 const PENDING = new Set<string>([
   "Journey", "JourneyVersion", "JourneyEvent", "JourneyRun", "JourneyStepLog",
-  "SalesPipeline", "Team", "TeamMember", "Role", "Permission",
-  "RolePermission", "UserRole", "ForecastSnapshot", "AuditEvent",
 ]);
 
 // Prisma is configured with `schema: "./prisma"` (folder mode), so it loads

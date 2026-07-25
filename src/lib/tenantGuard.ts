@@ -24,6 +24,12 @@ export const GLOBAL_MODELS: ReadonlySet<string> = new Set([
   "OtpChallenge",
   "Passkey",
   "PushSubscription",
+  // RBAC design decision: the permission taxonomy is shared across every
+  // tenant (one catalog, not per-dealer). Only the ASSIGNMENT of a role to a
+  // user (UserRole) is tenant-scoped — see governance.prisma.
+  "Role",
+  "Permission",
+  "RolePermission",
 ]);
 
 export function isTenantScopedModel(model: string): boolean {

@@ -2,6 +2,7 @@
 /// pipelineId column added in migration 45; the legacy model remains in schema.prisma.
 model SalesPipeline {
   id          String   @id @default(cuid())
+  tenantId    String? // Multi-tenancy (Phase B — additive/inert): owning tenant. Each dealer configures its own pipeline stages.
   name        String
   description String?
   type        String   @default("sales")
@@ -10,10 +11,13 @@ model SalesPipeline {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   deletedAt   DateTime?
+
+  @@index([tenantId])
 }
 
 model Team {
   id          String   @id @default(cuid())
+  tenantId    String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name        String
   description String?
   active      Boolean  @default(true)
@@ -25,10 +29,12 @@ model Team {
   members TeamMember[]
 
   @@index([managerId])
+  @@index([tenantId])
 }
 
 model TeamMember {
   id        String   @id @default(cuid())
+  tenantId  String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   teamId    String
   userId    String
   isManager Boolean  @default(false)
@@ -38,6 +44,7 @@ model TeamMember {
 
   @@unique([teamId, userId])
   @@index([userId])
+  @@index([tenantId])
 }
 
 model Role {
@@ -73,16 +80,19 @@ model RolePermission {
 model UserRole {
   userId    String
   roleId    String
+  tenantId  String? // Multi-tenancy (Phase B — additive/inert): owning tenant. Role/Permission/RolePermission stay global (one shared taxonomy); the assignment of a role TO a user is tenant-scoped.
   createdAt DateTime @default(now())
 
   role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   @@id([userId, roleId])
   @@index([roleId])
+  @@index([tenantId])
 }
 
 model ForecastSnapshot {
   id                   String   @id @default(cuid())
+  tenantId             String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   period               String
   pipelineId           String?
   teamId               String?
@@ -96,11 +106,13 @@ model ForecastSnapshot {
 
   @@index([period, capturedAt])
   @@index([pipelineId, teamId, userId, capturedAt])
+  @@index([tenantId])
 }
 
 /// Professional append-only audit stream. Database triggers reject UPDATE and DELETE.
 model AuditEvent {
   id                String   @id @default(cuid())
+  tenantId          String? // Multi-tenancy (Phase B — additive/inert): owning tenant. Nullable: platform/super-admin actions have no owning tenant.
   actorUserId       String?
   actorName         String
   actorType         String   @default("user")
@@ -122,4 +134,5 @@ model AuditEvent {
   @@index([entityType, entityId, createdAt])
   @@index([actorUserId, createdAt])
   @@index([eventType, createdAt])
+  @@index([tenantId])
 }
