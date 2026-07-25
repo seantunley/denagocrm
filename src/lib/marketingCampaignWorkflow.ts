@@ -246,7 +246,7 @@ async function resolveCampaignAudience(args: { campaignId: string; tenantId: str
   }
 
   const contacts = definition.kind === "advanced"
-    ? await evaluateAudience(definition.definition as AudienceGroup, args.channel)
+    ? await evaluateAudience(definition.definition as AudienceGroup, args.channel, args.tenantId)
     : await resolveContacts(definition.definition as SegmentCriteria, args.channel);
   return { definition, contacts };
 }
@@ -264,7 +264,7 @@ export async function freezeAudienceAndQueue(args: {
   if (!isCampaignLaunchable(campaign.status)) throw new Error("Only approved campaigns may be scheduled or queued");
   if (args.scheduleFor && args.scheduleFor <= new Date()) throw new Error("Scheduled time must be in the future");
   const { definition, contacts } = await resolveCampaignAudience({ campaignId: args.campaignId, tenantId: args.tenantId, channel: campaign.channel });
-  const uniqueContacts = [...new Map(contacts.map((contact) => [contact.id, contact])).values()].slice(0, 5000);
+  const uniqueContacts = [...new Map(contacts.map((contact) => [contact.id, contact])).values()];
   if (uniqueContacts.length === 0) throw new Error("No eligible recipients match this audience");
   const exactSnapshot = {
     ...definition,
