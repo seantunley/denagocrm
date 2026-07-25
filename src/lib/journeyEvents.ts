@@ -58,7 +58,7 @@ export async function emitJourneyEvent(args: {
         type: args.type,
         entityType: args.entityType,
         entityId: args.entityId,
-        payload: automationJsonValue(args.payload ?? {}),
+        payload: automationJsonValue(args.payload ?? {}) ?? Prisma.JsonNull,
         dedupeKey: hashJourneyKey(args.dedupeKey),
         journeyId: args.journeyId,
       },
