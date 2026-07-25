@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { GLOBAL_MODELS } from "../src/lib/tenantGuard";
 
 /**
@@ -17,17 +18,34 @@ import { GLOBAL_MODELS } from "../src/lib/tenantGuard";
  * KNOWN PENDING: models intentionally not yet resolved. Each MUST be cleared
  * (given a tenantId, or moved to GLOBAL_MODELS) before enforcement is enabled.
  */
-// Empty: AppSetting — the last pending model — got its additive `tenantId` slice
-// (migration 20260723120000). Every Prisma model is now either global or
-// tenant-scoped, so the guard can be activated without a model failing closed on a
-// missing column. New models must ship a tenantId or join GLOBAL_MODELS (adding
-// back to PENDING is only a temporary, deliberately-visible escape hatch).
-const PENDING = new Set<string>([]);
+// Until this test read EVERY prisma/*.prisma file (it previously read only
+// schema.prisma), the models below sat in side-files (journeys.prisma,
+// governance.prisma) and escaped the contract unnoticed — none carry `tenantId`
+// and none are global. They are listed here as the deliberately-visible escape
+// hatch so the gap is TRACKED, not silent. Each MUST be resolved before tenant
+// enforcement is enabled, or its queries fail closed on a missing column:
+//   - Journey* (journeys.prisma): PR #200 adds their `tenantId` slice — remove
+//     from PENDING once that merges.
+//   - governance.prisma RBAC/forecast models: SalesPipeline/Team/TeamMember/
+//     UserRole/ForecastSnapshot/AuditEvent are tenant-owned and need a `tenantId`
+//     slice; Role/Permission/RolePermission need a product decision on whether the
+//     permission catalog is global or per-tenant (RBAC design — owner call).
+const PENDING = new Set<string>([
+  "Journey", "JourneyVersion", "JourneyEvent", "JourneyRun", "JourneyStepLog",
+  "SalesPipeline", "Team", "TeamMember", "Role", "Permission",
+  "RolePermission", "UserRole", "ForecastSnapshot", "AuditEvent",
+]);
 
-const schema = readFileSync(
-  fileURLToPath(new URL("../prisma/schema.prisma", import.meta.url)),
-  "utf8",
-);
+// Prisma is configured with `schema: "./prisma"` (folder mode), so it loads
+// EVERY `prisma/*.prisma` file — not just schema.prisma. Read them all, or a
+// model added to a side-file (journeys/governance/marketing/etc.) would escape
+// this contract entirely and silently break the guard at enforcement time.
+const prismaDir = fileURLToPath(new URL("../prisma", import.meta.url));
+const schema = readdirSync(prismaDir)
+  .filter((f) => f.endsWith(".prisma"))
+  .sort()
+  .map((f) => readFileSync(join(prismaDir, f), "utf8"))
+  .join("\n");
 
 /** Parse `model X { ... }` blocks (Prisma model bodies have no nested braces). */
 function parseModels(src: string): Map<string, string> {
