@@ -465,11 +465,15 @@ export async function updateDemoVehicle(id: string, formData: FormData) {
   const status = requiredText(formData, "status", "Status");
   if (!["active", "maintenance", "unavailable", "retired"].includes(status)) throw new Error("Invalid demo vehicle status");
   if (status !== "active") {
+    // Match the prevent_unavailable_demo_with_live_bookings DB trigger, which
+    // blocks booked/confirmed/checked_out — not just checked_out. Otherwise a
+    // vehicle with a future *booked* drive passes this check and then throws a raw
+    // 23514 from the trigger instead of a friendly message.
     const activeDrive = await prisma.testDriveBooking.findFirst({
-      where: { demoVehicleId: id, status: "checked_out", deletedAt: null },
+      where: { demoVehicleId: id, status: { in: ["booked", "confirmed", "checked_out"] }, deletedAt: null },
       select: { reference: true },
     });
-    if (activeDrive) throw new Error(`${activeDrive.reference} is currently out on a test drive`);
+    if (activeDrive) throw new Error(`${activeDrive.reference} has a live booking on this vehicle`);
   }
   const updated = await prisma.demoVehicle.update({
     where: { id },
