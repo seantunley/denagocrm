@@ -2,8 +2,8 @@ import crypto from "node:crypto";
 import { basePrisma } from "./db";
 import { sendEmail } from "./email";
 import { sendSms } from "./sms";
-import { canContactPerson, classifyRetry, type CommunicationChannel, type CommunicationPurpose } from "./communicationPolicy";
-import { currentTenantScope } from "./tenantScopeEntry";
+import { canContactPerson, classifyRetry, nextCommunicationWindow, type CommunicationChannel, type CommunicationPurpose } from "./communicationPolicy";
+import { currentTenantScope } from "./tenantScope";
 
 const APP_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za").replace(/\/$/, "");
 const BATCH_SIZE = 75;
@@ -216,6 +216,28 @@ async function suppress(invite: ClaimedInvite, reason: string) {
   });
 }
 
+/**
+ * quiet_hours/frequency_cap are TEMPORARY policy blocks, not a reason to give
+ * up on this recipient — requeue for the next eligible window instead of
+ * suppress()'ing them, matching the campaign queue's defer(). Otherwise a
+ * survey processed overnight (quiet hours) would permanently suppress every
+ * recipient instead of waiting until morning.
+ */
+async function defer(invite: ClaimedInvite, reason: string) {
+  const now = new Date();
+  const nextAttemptAt = reason === "quiet_hours"
+    ? nextCommunicationWindow(now)
+    : new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  await basePrisma.$executeRaw`
+    UPDATE "SurveyResponse"
+    SET "status" = 'queued', "nextAttemptAt" = ${nextAttemptAt},
+      "providerStatus" = ${`deferred_${reason}`}, "suppressionReason" = NULL
+    WHERE "id" = ${invite.id}
+      AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
+      AND "status" = 'sending'
+  `;
+}
+
 async function restoreClaimForClosedDistribution(invite: ClaimedInvite, state: string | undefined) {
   const next = state === "paused" ? "queued" : "cancelled";
   await basePrisma.$executeRaw`
@@ -253,7 +275,9 @@ async function deliver(invite: ClaimedInvite) {
     distributionId: invite.distributionId,
   });
   if (!eligibility.allowed || !eligibility.destination) {
-    await suppress(invite, eligibility.reason || "policy_blocked");
+    const reason = eligibility.reason || "policy_blocked";
+    if (reason === "quiet_hours" || reason === "frequency_cap") await defer(invite, reason);
+    else await suppress(invite, reason);
     return;
   }
 

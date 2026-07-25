@@ -17,7 +17,7 @@ async function distributionContext() {
 
 async function resolveAudience(segment: string) {
   if (segment === "vehicle_owners") {
-    const rows = await prisma.vehicle.findMany({ where: { deletedAt: null, contactId: { not: null } }, select: { contactId: true }, distinct: ["contactId"], take: 5000 });
+    const rows = await prisma.vehicle.findMany({ where: { deletedAt: null }, select: { contactId: true }, distinct: ["contactId"], take: 5000 });
     return rows.map((row) => row.contactId).filter((id): id is string => Boolean(id));
   }
   if (segment === "won_leads") {

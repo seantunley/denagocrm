@@ -66,7 +66,7 @@ test("the migration preserves history and seeds the governed foundation", () => 
     "prisma/migrations/20260724173000_campaign_schema_state_machine/migration.sql",
     "utf8",
   );
-  assert.match(sql, /WHEN "status" = 'sent'.*THEN 'completed'/s);
+  assert.match(sql, /WHEN "status" = 'sent'[\s\S]*THEN 'completed'/);
   assert.match(sql, /THEN 'completed_with_errors'/);
   assert.match(sql, /SET "status" = 'failed_permanent' WHERE "status" = 'failed'/);
   assert.match(sql, /ALTER COLUMN "status" SET DEFAULT 'pending'/);

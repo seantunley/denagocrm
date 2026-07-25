@@ -1,7 +1,7 @@
 import "server-only";
 
 import { basePrisma, prisma } from "./db";
-import { currentTenantScope } from "./tenantScopeEntry";
+import { currentTenantScope } from "./tenantScope";
 import { resolveTenantActor } from "./tenantActor";
 import { createSurveyDistribution } from "./surveyDistributionQueue";
 import { logAudit } from "./audit";

@@ -51,7 +51,7 @@ export function validateAudienceTree(tree: AudienceGroup) {
   return tree;
 }
 
-function compare(actual: unknown, operator: string, expected: unknown) {
+function compare(actual: unknown, operator: string, expected: unknown): boolean {
   if (operator === "is_empty") return actual == null || actual === "" || (Array.isArray(actual) && actual.length === 0);
   if (operator === "is_not_empty") return !compare(actual, "is_empty", expected);
   if (operator === "equals") return Array.isArray(actual) ? actual.map(String).includes(String(expected ?? "")) : String(actual ?? "") === String(expected ?? "");
@@ -105,6 +105,11 @@ function matchesNode(contact: Record<string, any>, node: AudienceRule | Audience
   }
   if (node.legacyCriteria) {
     const criteria = node.legacyCriteria;
+    // A historical Segment.criteria value that wasn't valid JSON is backfilled
+    // as this conservative marker (see migration 20260725130000) instead of a
+    // parsed rule — never silently match every contact for a segment whose
+    // real historical rule is unknown; exclude until someone reviews it.
+    if (criteria.invalidHistoricalCriteria) return false;
     return (!criteria.source || contact.source === criteria.source)
       && (!criteria.province || contact.province === criteria.province)
       && (!criteria.tagId || (contact.tags ?? []).some((tag: any) => tag.id === criteria.tagId))

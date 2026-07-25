@@ -19,6 +19,7 @@ export const PERMISSIONS = [
   "campaigns.view", "campaigns.manage", "campaigns.create", "campaigns.edit",
   "campaigns.review", "campaigns.approve", "campaigns.schedule", "campaigns.send",
   "campaigns.pause", "campaigns.cancel", "campaigns.archive", "campaigns.retry",
+  "campaigns.test_send", "campaigns.manage_audiences", "campaigns.manage_templates",
   "surveys.view", "surveys.manage",
   "vehicles.view_all", "vehicles.view_owned", "vehicles.manage",
   "jobcards.view_all", "jobcards.view_owned", "jobcards.manage",

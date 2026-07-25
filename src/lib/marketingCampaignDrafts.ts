@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { basePrisma } from "./db";
-import { isCampaignEditable } from "./campaignLifecycle";
+import { isCampaignEditable, parseCampaignStatus } from "./campaignLifecycle";
 
 export type CampaignDraftRecord = {
   id: string;
@@ -126,7 +126,7 @@ export async function updateCampaignDraftRecord(args: {
 }) {
   const existing = await readCampaignDraftRecord(args.id, args.tenantId);
   if (!existing) throw new Error("Campaign not found");
-  if (!isCampaignEditable(existing.status)) throw new Error("This campaign is locked and must be returned to draft before editing");
+  if (!isCampaignEditable(parseCampaignStatus(existing.status))) throw new Error("This campaign is locked and must be returned to draft before editing");
   const draft = normaliseCampaignDraft({ ...existing, ...args.input });
   await basePrisma.$executeRaw`
     UPDATE "Campaign" SET

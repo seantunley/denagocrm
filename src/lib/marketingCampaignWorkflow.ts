@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { basePrisma } from "./db";
-import { assertCampaignTransition, isCampaignLaunchable } from "./campaignLifecycle";
+import { assertCampaignTransition, isCampaignLaunchable, parseCampaignStatus } from "./campaignLifecycle";
 import { readCampaignDraftRecord } from "./marketingCampaignDrafts";
 import { resolveContacts, newToken, type SegmentCriteria } from "./campaigns";
 import { evaluateAudience, validateAudienceTree, type AudienceGroup } from "./marketingAudiences";
@@ -261,7 +261,7 @@ export async function freezeAudienceAndQueue(args: {
 }) {
   const campaign = await readCampaignDraftRecord(args.campaignId, args.tenantId);
   if (!campaign) throw new Error("Campaign not found");
-  if (!isCampaignLaunchable(campaign.status)) throw new Error("Only approved campaigns may be scheduled or queued");
+  if (!isCampaignLaunchable(parseCampaignStatus(campaign.status))) throw new Error("Only approved campaigns may be scheduled or queued");
   if (args.scheduleFor && args.scheduleFor <= new Date()) throw new Error("Scheduled time must be in the future");
   const { definition, contacts } = await resolveCampaignAudience({ campaignId: args.campaignId, tenantId: args.tenantId, channel: campaign.channel });
   const uniqueContacts = [...new Map(contacts.map((contact) => [contact.id, contact])).values()];
