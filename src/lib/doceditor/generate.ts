@@ -35,7 +35,26 @@ function logoDataUri(): string | undefined {
   return logoCache ?? undefined;
 }
 
-type Resolved = { doc: DocumentModel; ctx: RenderCtx; title: string; quoteId: string | null; jobCardId: string | null; contactId: string | null };
+export type Resolved = { doc: DocumentModel; ctx: RenderCtx; title: string; quoteId: string | null; jobCardId: string | null; contactId: string | null };
+
+/**
+ * Load a template + bind it to a quote/job card (shared by PDF and export).
+ * EXPORTED so the signing path can fingerprint the RESOLVED artefact ({doc, ctx}
+ * — recipients, fields AND the bound quote/job-card/contact values) without
+ * paying for a full PDF render. Hashing only the template model + record IDs
+ * misses the case where a quote's prices/customer details change under the same
+ * id: the resolved ctx here does change, so a fingerprint over it does too.
+ */
+export async function resolveDocEditorContent(templateId: string, quoteId?: string | null, jobCardId?: string | null): Promise<Resolved | null> {
+  return resolve(templateId, quoteId, jobCardId);
+}
+
+/** Render an already-resolved template to a multi-page (unsigned) PDF. */
+export async function renderResolvedToPdf(r: Resolved): Promise<{ buffer: Buffer; title: string; quoteId: string | null; jobCardId: string | null; contactId: string | null }> {
+  const html = renderDocumentHtml(r.doc, r.ctx, logoDataUri());
+  const buffer = await htmlToPdf(html);
+  return { buffer, title: r.title, quoteId: r.quoteId, jobCardId: r.jobCardId, contactId: r.contactId };
+}
 
 /** Load a template + bind it to a quote/job card (shared by PDF and export). */
 async function resolve(templateId: string, quoteId?: string | null, jobCardId?: string | null): Promise<Resolved | null> {
@@ -75,9 +94,7 @@ export async function generateDocEditorPdf(opts: {
 }): Promise<{ buffer: Buffer; title: string; quoteId: string | null; jobCardId: string | null; contactId: string | null } | null> {
   const r = await resolve(opts.templateId, opts.quoteId, opts.jobCardId);
   if (!r) return null;
-  const html = renderDocumentHtml(r.doc, r.ctx, logoDataUri());
-  const buffer = await htmlToPdf(html);
-  return { buffer, title: r.title, quoteId: r.quoteId, jobCardId: r.jobCardId, contactId: r.contactId };
+  return renderResolvedToPdf(r);
 }
 
 export type ExportFormat = "html" | "email" | "doc";

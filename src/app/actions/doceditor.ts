@@ -8,7 +8,7 @@ import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { documentSchema, parseDocument } from "@/lib/doceditor/model";
 import { blankDocument, standardQuoteTemplate } from "@/lib/doceditor/factory";
-import { generateDocEditorPdf } from "@/lib/doceditor/generate";
+import { generateDocEditorPdf, resolveDocEditorContent, renderResolvedToPdf } from "@/lib/doceditor/generate";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import {
   parseBuilderRecord,
@@ -18,7 +18,7 @@ import {
 import { createOrReuseSignatureRequestFromDoc } from "@/lib/signing/service";
 import { dispatchRequest } from "@/lib/signing/dispatch";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
-import { saveFile } from "@/lib/storage";
+import { saveFile, deleteFile } from "@/lib/storage";
 
 type SignPrepResult = { ok: boolean; requestId?: string; message: string; sent?: boolean; notified?: number };
 
@@ -172,20 +172,30 @@ export async function sendDocForSigning(
     };
   }
 
-  // Idempotency: a request is identified by an immutable fingerprint of
-  // template + source record + the exact resolved document (recipients,
-  // fields, content) it would produce — NOT just templateId+source, which
-  // would reuse a stale draft's recipients/fields after the template was
-  // edited. The DB enforces at most one OPEN request per fingerprint (see
-  // migration 20260725120000_signing_request_fingerprint); this lookup is a
-  // fast-path, not the source of truth — createOrReuseSignatureRequestFromDoc
-  // below is what actually arbitrates a concurrent create race.
+  // Resolve the bound document ONCE — template model + the actual quote/job-card/
+  // contact values it merges in. This is the resolved artefact the fingerprint
+  // below must represent, and (on the new-request path) exactly what we render to
+  // PDF, so a request is never sent against different content than it was
+  // fingerprinted on.
+  const resolved = await resolveDocEditorContent(templateId, binding.quoteId, binding.jobCardId);
+  if (!resolved) return { ok: false, message: "Could not resolve the document." };
+
+  // Idempotency: a request is identified by an immutable fingerprint of the
+  // RESOLVED artefact — template model AND the bound record's resolved values
+  // (ctx). Hashing only templateId + record IDs + the template model would miss
+  // a quote whose prices or customer details changed under the same id, and
+  // wrongly reuse/redispatch the earlier PDF. The DB enforces at most one OPEN
+  // request per fingerprint (see migration
+  // 20260725120000_signing_request_fingerprint); this lookup is a fast-path, not
+  // the source of truth — createOrReuseSignatureRequestFromDoc below is what
+  // actually arbitrates a concurrent create race.
   const contentFingerprint = createHash("sha256")
     .update(JSON.stringify({
       templateId,
       quoteId: binding.quoteId ?? null,
       jobCardId: binding.jobCardId ?? null,
       document: documentModel,
+      resolved: { doc: resolved.doc, ctx: resolved.ctx, title: resolved.title },
     }))
     .digest("hex");
 
@@ -220,12 +230,10 @@ export async function sendDocForSigning(
     requestId = existing.id;
     title = existing.title;
   } else {
-    const result = await generateDocEditorPdf({
-      templateId,
-      quoteId: binding.quoteId,
-      jobCardId: binding.jobCardId,
-    });
-    if (!result) return { ok: false, message: "Could not generate the PDF." };
+    // Render the SAME resolved artefact we fingerprinted above — not a fresh
+    // resolve, which could race a concurrent edit and store a PDF that no longer
+    // matches contentFingerprint.
+    const result = await renderResolvedToPdf(resolved);
 
     const storedName = await saveFile(result.buffer, `${result.title}.pdf`, "application/pdf");
     const document = await prisma.document.create({
@@ -255,7 +263,21 @@ export async function sendDocForSigning(
       createdById: user.id,
       contentFingerprint,
     });
-    if (!created.reused) {
+    if (created.reused) {
+      // We lost the fingerprint race: the winner has its own Document + PDF, so
+      // the ones we generated a moment ago are orphans. Reconcile them — remove
+      // the stored blob and soft-delete the Document row — so a concurrent
+      // double-send doesn't litter the repository with an unreferenced
+      // for-signing PDF. Best-effort: a cleanup failure must not fail the send
+      // (the winner's request is valid regardless).
+      await deleteFile(storedName).catch(() => {});
+      await prisma.document
+        .update({
+          where: { id: document.id },
+          data: { deletedAt: new Date(), deletedByName: "System", deleteReason: "Superseded by concurrent identical signing request" },
+        })
+        .catch(() => {});
+    } else {
       await logAudit({
         action: "doceditor.sign",
         summary: `Prepared “${result.title}” for signing`,

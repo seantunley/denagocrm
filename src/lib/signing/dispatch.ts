@@ -87,7 +87,12 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
   }
 
   if (opts?.reminder) {
-    await prisma.signatureRecipient.update({ where: { id: r.id }, data: { remindedAt: new Date() } });
+    // Stamp remindedAt only when a provider actually accepted the re-send —
+    // otherwise the "last reminded" timestamp claims a nudge that never went
+    // out (and would suppress the next genuine reminder attempt).
+    if (delivered) {
+      await prisma.signatureRecipient.update({ where: { id: r.id }, data: { remindedAt: new Date() } });
+    }
   } else {
     // Finalize the "sending" claim: only "sent" once a provider actually accepted
     // it. Total failure returns to "pending" so the normal at-most-once claim
