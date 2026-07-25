@@ -2,7 +2,8 @@ import Link from "next/link";
 import { CheckCircle2, Clock3, ShieldQuestion, XCircle } from "lucide-react";
 import { decideAutomationApproval } from "@/app/actions/automationPlatform";
 import { PageHeader } from "@/components/page-header";
-import { EmptyState, MetricCard, Surface } from "@/components/visual-system";
+import { EmptyState, MetricCard } from "@/components/visual-system";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { getActiveTenantId } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
@@ -40,7 +41,7 @@ export default async function AutomationApprovalsPage() {
       {rows.length === 0 ? (
         <EmptyState icon={ShieldQuestion} title="No approval requests" description="Requests appear here when a journey reaches a Request internal approval step." />
       ) : (
-        <Surface className="overflow-x-auto p-0">
+        <ResponsiveEntityTable>
           <table className="table-base">
             <thead><tr><th>Request</th><th>Linked record</th><th>Assigned to</th><th>Status</th><th>Created</th><th>Decision</th></tr></thead>
             <tbody>
@@ -49,12 +50,12 @@ export default async function AutomationApprovalsPage() {
                 const recordHref = row.leadId ? `/leads/${row.leadId}` : row.contactId ? `/contacts/${row.contactId}` : null;
                 return (
                   <tr key={row.id}>
-                    <td className="min-w-72"><p className="font-medium">{row.title}</p>{row.description && <p className="mt-1 max-w-xl whitespace-pre-wrap text-xs text-muted-foreground">{row.description}</p>}{row.decisionNote && <p className="mt-1 text-xs text-muted-foreground">Decision note: {row.decisionNote}</p>}</td>
-                    <td>{recordHref ? <Link href={recordHref} className="text-primary hover:underline">Open record</Link> : row.entityType ?? "System"}</td>
-                    <td>{row.assignedToId ? staffMap.get(row.assignedToId) ?? "Assigned user" : "Any automation manager"}</td>
-                    <td><span className={`badge ${row.status === "pending" ? "bg-amber-500/15 text-amber-300" : row.status === "approved" ? "bg-emerald-500/15 text-emerald-300" : "bg-red-500/15 text-red-300"}`}>{row.status}</span></td>
-                    <td>{formatDateTime(row.createdAt)}</td>
-                    <td className="min-w-64">
+                    <td data-primary data-label="Request" className="min-w-72"><p className="font-medium">{row.title}</p>{row.description && <p className="mt-1 max-w-xl whitespace-pre-wrap text-xs text-muted-foreground">{row.description}</p>}{row.decisionNote && <p className="mt-1 text-xs text-muted-foreground">Decision note: {row.decisionNote}</p>}</td>
+                    <td data-label="Linked record">{recordHref ? <Link href={recordHref} className="text-primary hover:underline">Open record</Link> : row.entityType ?? "System"}</td>
+                    <td data-label="Assigned to">{row.assignedToId ? staffMap.get(row.assignedToId) ?? "Assigned user" : "Any automation manager"}</td>
+                    <td data-label="Status"><span className={`badge ${row.status === "pending" ? "bg-amber-500/15 text-amber-300" : row.status === "approved" ? "bg-emerald-500/15 text-emerald-300" : "bg-red-500/15 text-red-300"}`}>{row.status}</span></td>
+                    <td data-label="Created">{formatDateTime(row.createdAt)}</td>
+                    <td data-actions className="min-w-64">
                       {canDecide ? (
                         <div className="space-y-2">
                           <form action={decideAutomationApproval.bind(null, row.id, "approved")} className="flex gap-2"><input name="note" className="input h-9" placeholder="Optional note" /><button className="btn-primary btn-sm">Approve</button></form>
@@ -67,7 +68,7 @@ export default async function AutomationApprovalsPage() {
               })}
             </tbody>
           </table>
-        </Surface>
+        </ResponsiveEntityTable>
       )}
     </div>
   );

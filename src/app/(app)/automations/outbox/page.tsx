@@ -1,7 +1,8 @@
 import { AlertTriangle, CheckCircle2, Clock3, ListRestart, LockKeyhole } from "lucide-react";
 import { cancelAutomationOutbox, retryAutomationOutbox } from "@/app/actions/automationPlatform";
 import { PageHeader } from "@/components/page-header";
-import { EmptyState, MetricCard, Surface } from "@/components/visual-system";
+import { EmptyState, MetricCard } from "@/components/visual-system";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { getActiveTenantId } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
@@ -41,7 +42,7 @@ export default async function AutomationOutboxPage() {
       {rows.length === 0 ? (
         <EmptyState icon={ListRestart} title="The action queue is empty" description="Document, signing and Xero actions appear here when a Journey requests them." />
       ) : (
-        <Surface className="overflow-x-auto p-0">
+        <ResponsiveEntityTable>
           <table className="table-base">
             <thead><tr><th>Action</th><th>Status</th><th>Attempts</th><th>Created</th><th>Result / error</th><th>Controls</th></tr></thead>
             <tbody>
@@ -50,12 +51,12 @@ export default async function AutomationOutboxPage() {
                 const result = payload.result && typeof payload.result === "object" && !Array.isArray(payload.result) ? payload.result as Record<string, unknown> : null;
                 return (
                   <tr key={row.id}>
-                    <td><p className="font-medium">{kindLabel[row.kind] ?? row.kind.replaceAll("_", " ")}</p><p className="text-xs text-muted-foreground">{row.entityType ?? "System"}{row.entityId ? ` · ${row.entityId}` : ""}</p></td>
-                    <td><span className={`badge ${row.status === "completed" ? "bg-emerald-500/15 text-emerald-300" : row.status === "failed" ? "bg-red-500/15 text-red-300" : row.status === "blocked" ? "bg-amber-500/15 text-amber-300" : "bg-blue-500/15 text-blue-300"}`}>{row.status}</span></td>
-                    <td>{row.attempts}</td>
-                    <td>{formatDateTime(row.createdAt)}</td>
-                    <td className="max-w-xl"><p className="whitespace-pre-wrap text-xs text-muted-foreground">{row.error ?? (result ? JSON.stringify(result) : row.status === "completed" ? "Completed" : "Waiting")}</p></td>
-                    <td className="min-w-64">
+                    <td data-primary data-label="Action"><p className="font-medium">{kindLabel[row.kind] ?? row.kind.replaceAll("_", " ")}</p><p className="text-xs text-muted-foreground">{row.entityType ?? "System"}{row.entityId ? ` · ${row.entityId}` : ""}</p></td>
+                    <td data-label="Status"><span className={`badge ${row.status === "completed" ? "bg-emerald-500/15 text-emerald-300" : row.status === "failed" ? "bg-red-500/15 text-red-300" : row.status === "blocked" ? "bg-amber-500/15 text-amber-300" : "bg-blue-500/15 text-blue-300"}`}>{row.status}</span></td>
+                    <td data-label="Attempts">{row.attempts}</td>
+                    <td data-label="Created">{formatDateTime(row.createdAt)}</td>
+                    <td data-label="Result / error" className="max-w-xl"><p className="whitespace-pre-wrap text-xs text-muted-foreground">{row.error ?? (result ? JSON.stringify(result) : row.status === "completed" ? "Completed" : "Waiting")}</p></td>
+                    <td data-actions className="min-w-64">
                       {new Set(["failed", "blocked"]).has(row.status) && (
                         <div className="space-y-2">
                           {row.kind !== "xero.draft_invoice" && <form action={retryAutomationOutbox.bind(null, row.id)}><button className="btn-secondary btn-sm w-full">Retry action</button></form>}
@@ -69,7 +70,7 @@ export default async function AutomationOutboxPage() {
               })}
             </tbody>
           </table>
-        </Surface>
+        </ResponsiveEntityTable>
       )}
     </div>
   );
