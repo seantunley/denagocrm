@@ -151,22 +151,27 @@ async function sendWithSendGrid(
 
 export async function sendEmail(input: EmailInput): Promise<EmailSendResult> {
   const sendGrid = await getSendGridConfig();
+  let sendGridError: string | undefined;
   if (sendGrid) {
     try {
       return await sendWithSendGrid(input, sendGrid);
     } catch (err) {
+      // A THROWN SendGrid error is transient (network/timeout), not a rejection of
+      // the message itself, so fall through to SMTP as a backup instead of hard
+      // failing. (A non-ok SendGrid *response* still returns above — a bad message
+      // should not be retried via SMTP.)
       const { logError } = await import("./errorLog");
       await logError("sendgrid", err, `to: ${input.to} — ${input.subject}`);
-      return {
-        ok: false,
-        provider: "sendgrid",
-        error: err instanceof Error ? err.message : "Failed to send email",
-      };
+      sendGridError = err instanceof Error ? err.message : "Failed to send email";
     }
   }
 
   const config = await getSmtpConfig();
-  if (!config) return { ok: false, error: "SMTP is not configured (see Settings → Email)." };
+  if (!config) {
+    return sendGridError
+      ? { ok: false, provider: "sendgrid", error: sendGridError }
+      : { ok: false, error: "SMTP is not configured (see Settings → Email)." };
+  }
   try {
     const transporter = nodemailer.createTransport({
       host: config.host,
