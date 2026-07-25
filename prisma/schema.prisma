@@ -492,7 +492,7 @@ model CampaignRecipient {
   contactId  String
   contact    Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
   token      String    @unique // tracking/unsubscribe token
-  status     String    @default("queued") // queued | sent | failed
+  status     String    @default("pending") // pending | queued | sending | sent | delivered | failed_temporary | failed_permanent | suppressed | cancelled
   sentAt     DateTime?
   openedAt   DateTime?
   openCount  Int       @default(0)
@@ -1445,7 +1445,7 @@ model Survey {
   intro       String? // shown at the top of the form / in the invite
   thankYou    String? // shown after submitting
   questions   Json // [{id,type,label,required,options?,scale?}]
-  active      Boolean   @default(true)
+  active      Boolean   @default(false)
   status      String    @default("draft") // draft | in_review | published | inactive | archived
   publishedVersion Int?
   trigger     String? // job_complete | delivery | won | null (manual send)
