@@ -67,6 +67,7 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
         id: f.id,
         label: f.label || f.kind,
         kind: f.kind,
+        required: f.required,
         answered: signers.filter((s) => byRecipient.has(s.id)).length,
         rows: signers.map((s) => ({ id: s.id, name: s.name, color: s.color, response: byRecipient.get(s.id) ?? null })),
       };
@@ -129,10 +130,17 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
             {sharedFields.map((f) => (
               <li key={f.id} className="rounded-lg border border-border/60 p-3">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium text-foreground">{f.label}</span>
-                  <span className={`text-[10px] font-semibold ${f.answered === f.rows.length ? "text-emerald-300" : "text-amber-300"}`}>
-                    {f.answered}/{f.rows.length} answered
+                  <span className="text-xs font-medium text-foreground">
+                    {f.label}
+                    {!f.required && <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">(optional)</span>}
                   </span>
+                  {f.required ? (
+                    <span className={`text-[10px] font-semibold ${f.answered === f.rows.length ? "text-emerald-300" : "text-amber-300"}`}>
+                      {f.answered}/{f.rows.length} answered
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-semibold text-muted-foreground">{f.answered}/{f.rows.length} responded</span>
+                  )}
                 </div>
                 <ul className="mt-2 space-y-1">
                   {f.rows.map((row) => (
@@ -144,8 +152,10 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
                           <span>· {describeResponse(f.kind, row.response.value)}</span>
                           <span className="text-muted-foreground/70">· {formatDateTime(row.response.filledAt)}</span>
                         </>
-                      ) : (
+                      ) : f.required ? (
                         <span className="text-amber-300/90">· Not answered</span>
+                      ) : (
+                        <span className="text-muted-foreground/70">· No response</span>
                       )}
                     </li>
                   ))}
