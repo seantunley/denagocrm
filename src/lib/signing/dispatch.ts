@@ -53,13 +53,14 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
   // recipient we can't reach must stay pending, not look "sent" with nothing out.
   if (!hasEmail && !hasWhatsApp) return { reachable: false, delivered: false };
 
-  // AT-MOST-ONCE first send: atomically claim pending→sent BEFORE sending, so two
-  // concurrent callers (e.g. two workflow advances) can't both read "pending" and
-  // both send the same signing link. count !== 1 → someone else already claimed
-  // it, so do nothing. A reminder deliberately re-sends an already-"sent"
-  // recipient, so it skips the claim.
+  // AT-MOST-ONCE first send: atomically claim pending→sending BEFORE sending, so
+  // two concurrent callers (e.g. two workflow advances) can't both read "pending"
+  // and both send the same signing link. count !== 1 → someone else already
+  // claimed it, so do nothing. A reminder deliberately re-sends an already-"sent"
+  // recipient, so it skips the claim. "sending" (not "sent") until we know a
+  // provider actually accepted the message — see the finalize step below.
   if (!opts?.reminder) {
-    const claimed = await prisma.signatureRecipient.updateMany({ where: { id: r.id, status: "pending" }, data: { status: "sent" } });
+    const claimed = await prisma.signatureRecipient.updateMany({ where: { id: r.id, status: "pending" }, data: { status: "sending" } });
     if (claimed.count !== 1) return { reachable: true, delivered: false };
   }
 
@@ -85,7 +86,15 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
     await logSignEvent(r.requestId, { type: evType, recipientId: r.id, actor: "system", channel: "whatsapp", metadata: { ok: res.ok, error: res.error } });
   }
 
-  if (opts?.reminder) await prisma.signatureRecipient.update({ where: { id: r.id }, data: { remindedAt: new Date() } });
+  if (opts?.reminder) {
+    await prisma.signatureRecipient.update({ where: { id: r.id }, data: { remindedAt: new Date() } });
+  } else {
+    // Finalize the "sending" claim: only "sent" once a provider actually accepted
+    // it. Total failure returns to "pending" so the normal at-most-once claim
+    // above will pick it up again on the next send/retry attempt instead of
+    // looking permanently (and falsely) sent with nothing delivered.
+    await prisma.signatureRecipient.update({ where: { id: r.id }, data: { status: delivered ? "sent" : "pending" } });
+  }
   return { reachable: true, delivered };
 }
 
@@ -108,16 +117,26 @@ export interface DispatchResult {
 export async function dispatchRequest(requestId: string, opts?: { reminder?: boolean }): Promise<DispatchResult> {
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: { orderBy: { order: "asc" } } } });
   if (!req) return { targeted: 0, notified: 0, unreachable: 0 };
-  // CONDITIONALLY claim the (re)send: only move a still-open request to "sent".
-  // A read-check + unconditional update was a TOCTOU — a concurrent void/decline
-  // could close the request between the two, and the unconditional update would
-  // force it back to "sent", resurrecting a dead signing link and re-notifying
-  // declined recipients. count !== 1 → it just closed; do nothing.
-  const claimed = await prisma.signatureRequest.updateMany({
-    where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
-    data: { status: "sent", sentAt: req.sentAt ?? new Date() },
-  });
-  if (claimed.count !== 1) return { targeted: 0, notified: 0, unreachable: 0 };
+
+  if (opts?.reminder) {
+    // A reminder targets a request that's already genuinely "sent" (a real first
+    // send already succeeded) — nothing to claim/finalize at the request level,
+    // just guard against a request that closed since the caller last checked.
+    if (isRequestClosed(req.status)) return { targeted: 0, notified: 0, unreachable: 0 };
+  } else {
+    // CONDITIONALLY claim the send: only move a still-open, not-yet-sent request
+    // to the transient "sending" state. A read-check + unconditional update was a
+    // TOCTOU — a concurrent void/decline could close the request between the two,
+    // and the unconditional update would force it back to "sent", resurrecting a
+    // dead signing link. count !== 1 → it just closed or another caller already
+    // claimed it; do nothing. "sending" (not "sent") until we know at least one
+    // recipient was actually notified — see the finalize step below.
+    const claimed = await prisma.signatureRequest.updateMany({
+      where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES, "sent", "viewed", "in_progress"] } },
+      data: { status: "sending" },
+    });
+    if (claimed.count !== 1) return { targeted: 0, notified: 0, unreachable: 0 };
+  }
 
   const signers = req.recipients.filter((r) => r.role !== "viewer" && r.status !== "signed");
   const targets = req.ordering === "sequential" ? signers.slice(0, 1) : signers;
@@ -131,6 +150,17 @@ export async function dispatchRequest(requestId: string, opts?: { reminder?: boo
   // NOTE: viewers are intentionally NOT notified here. notifyRecipient() returns
   // early for viewers (they never sign), so the previous per-viewer loop was dead
   // code. If viewer "for your records" copies are wanted, add a dedicated path.
+
+  if (!opts?.reminder) {
+    // Finalize the "sending" claim: only "sent" once at least one target was
+    // actually notified. Zero notified (all unreachable or all provider attempts
+    // failed) reverts to the pre-dispatch status so a normal resend isn't
+    // silently blocked by a request that looks "sent" with nothing delivered.
+    await prisma.signatureRequest.update({
+      where: { id: requestId },
+      data: notified > 0 ? { status: "sent", sentAt: req.sentAt ?? new Date() } : { status: req.status },
+    });
+  }
   return { targeted: targets.length, notified, unreachable };
 }
 

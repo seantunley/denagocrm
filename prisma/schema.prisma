@@ -1562,6 +1562,13 @@ model SignatureRequest {
   signedPdfRef   String? // storage ref of the sealed, completed PDF
   signedPdfHash  String? // sha-256 of the completed PDF
   signedDocId    String? // Document row of the filed, completed PDF
+  // Fingerprint of template + source record + resolved document (recipients,
+  // fields, content). A partial unique index over (contentFingerprint) WHERE
+  // deletedAt IS NULL AND status is open (see migration
+  // 20260725120000_signing_request_fingerprint) makes create-or-reuse atomic —
+  // Prisma can't declare a partial unique constraint, so it isn't modelled with
+  // @unique here; the DB is still the real arbiter.
+  contentFingerprint String?
 
   message     String? // note shown to recipients
   createdById String?

@@ -1,5 +1,5 @@
 import "server-only";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { formatDate } from "@/lib/format";
@@ -28,6 +28,9 @@ export async function createSignatureRequestFromDoc(opts: {
   // create the request + recipients + fields + event atomically (and under a
   // lock) — e.g. to guarantee at most one open request per quote/job card.
   client?: Prisma.TransactionClient;
+  // Stable fingerprint of template + source + resolved document (recipients,
+  // fields, content) — see createOrReuseSignatureRequestFromDoc below.
+  contentFingerprint?: string | null;
 }): Promise<{ id: string; recipients: number; fields: number }> {
   const { source } = opts;
   const db = opts.client ?? prisma;
@@ -50,6 +53,7 @@ export async function createSignatureRequestFromDoc(opts: {
       snapshotJson: frozenDoc as object,
       unsignedPdfRef: opts.unsignedPdfRef,
       createdById: opts.createdById ?? null,
+      contentFingerprint: opts.contentFingerprint ?? null,
     },
   });
 
@@ -114,4 +118,38 @@ export async function createSignatureRequestFromDoc(opts: {
     recipients: frozenDoc.recipients.length,
     fields: fieldsData.length,
   };
+}
+
+/**
+ * Atomic create-or-reuse by content fingerprint. A read-then-create (look up
+ * an existing open request, create if none found) is a TOCTOU: two concurrent
+ * calls can both see nothing and both create a request for the same document.
+ * `contentFingerprint` is enforced unique among open (non-closed, non-deleted)
+ * requests by a partial DB index (see migration
+ * 20260725120000_signing_request_fingerprint), so the database — not this
+ * read — is the single arbiter: the loser of the race gets a unique-constraint
+ * violation here instead of a duplicate row, and reuses whatever the winner
+ * created.
+ */
+export async function createOrReuseSignatureRequestFromDoc(
+  opts: Parameters<typeof createSignatureRequestFromDoc>[0] & { contentFingerprint: string },
+): Promise<{ id: string; recipients: number; fields: number; reused: boolean }> {
+  try {
+    const created = await createSignatureRequestFromDoc(opts);
+    return { ...created, reused: false };
+  } catch (error) {
+    const isFingerprintConflict =
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002" &&
+      (error.meta?.target as string[] | undefined)?.includes("contentFingerprint");
+    if (!isFingerprintConflict) throw error;
+
+    const winner = await prisma.signatureRequest.findFirst({
+      where: { contentFingerprint: opts.contentFingerprint, deletedAt: null },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, _count: { select: { recipients: true, fields: true } } },
+    });
+    if (!winner) throw error; // conflict resolved (e.g. voided) between our failed insert and this read — surface the original error
+    return { id: winner.id, recipients: winner._count.recipients, fields: winner._count.fields, reused: true };
+  }
 }

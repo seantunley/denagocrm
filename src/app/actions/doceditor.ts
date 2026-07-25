@@ -1,5 +1,6 @@
 "use server";
 
+import { createHash } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
@@ -14,7 +15,7 @@ import {
   recordMatchesTemplate,
   type BuilderRecordKind,
 } from "@/lib/docbuilder/recordBinding";
-import { createSignatureRequestFromDoc } from "@/lib/signing/service";
+import { createOrReuseSignatureRequestFromDoc } from "@/lib/signing/service";
 import { dispatchRequest } from "@/lib/signing/dispatch";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
 import { saveFile } from "@/lib/storage";
@@ -171,15 +172,26 @@ export async function sendDocForSigning(
     };
   }
 
-  // Idempotency: reuse an existing OPEN (non-closed, non-deleted) request for the
-  // same template + source rather than minting a duplicate on a retry — a lost
-  // response after the request was created must not create a second request and a
-  // second set of live signing links.
-  const existing = await prisma.signatureRequest.findFirst({
-    where: {
+  // Idempotency: a request is identified by an immutable fingerprint of
+  // template + source record + the exact resolved document (recipients,
+  // fields, content) it would produce — NOT just templateId+source, which
+  // would reuse a stale draft's recipients/fields after the template was
+  // edited. The DB enforces at most one OPEN request per fingerprint (see
+  // migration 20260725120000_signing_request_fingerprint); this lookup is a
+  // fast-path, not the source of truth — createOrReuseSignatureRequestFromDoc
+  // below is what actually arbitrates a concurrent create race.
+  const contentFingerprint = createHash("sha256")
+    .update(JSON.stringify({
       templateId,
       quoteId: binding.quoteId ?? null,
       jobCardId: binding.jobCardId ?? null,
+      document: documentModel,
+    }))
+    .digest("hex");
+
+  const existing = await prisma.signatureRequest.findFirst({
+    where: {
+      contentFingerprint,
       deletedAt: null,
       status: { notIn: [...CLOSED_REQUEST_STATUSES] },
     },
@@ -187,8 +199,9 @@ export async function sendDocForSigning(
     select: { id: true, title: true, status: true },
   });
 
-  // Already sent / in-progress for this document → a retry after a successful
-  // send. Return it; never re-create or re-dispatch (that would double-send links).
+  // Already sent / in-progress for this exact content → a retry after a
+  // successful send. Return it; never re-create or re-dispatch (that would
+  // double-send links).
   if (existing && existing.status !== "draft") {
     return {
       ok: true,
@@ -228,7 +241,7 @@ export async function sendDocForSigning(
         uploadedById: user.id,
       },
     });
-    const created = await createSignatureRequestFromDoc({
+    const created = await createOrReuseSignatureRequestFromDoc({
       doc: documentModel,
       title: result.title,
       unsignedPdfRef: storedName,
@@ -240,14 +253,17 @@ export async function sendDocForSigning(
         templateId,
       },
       createdById: user.id,
+      contentFingerprint,
     });
-    await logAudit({
-      action: "doceditor.sign",
-      summary: `Prepared “${result.title}” for signing`,
-      entityType: "SignatureRequest",
-      entityId: created.id,
-      user,
-    });
+    if (!created.reused) {
+      await logAudit({
+        action: "doceditor.sign",
+        summary: `Prepared “${result.title}” for signing`,
+        entityType: "SignatureRequest",
+        entityId: created.id,
+        user,
+      });
+    }
     requestId = created.id;
     title = result.title;
     prepared = { recipients: created.recipients, fields: created.fields };
