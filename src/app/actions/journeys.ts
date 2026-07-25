@@ -154,8 +154,11 @@ export async function runJourneyNow(journeyId: string) {
   return { scheduled, events, runs };
 }
 
-function definition(steps: Array<Record<string, unknown>>) {
-  return { startStepId: steps[0]?.id ?? null, steps: steps.map((step, index) => ({ ...step, nextStepId: index < steps.length - 1 ? steps[index + 1].id : null })) };
+function definition(steps: Array<{ id: string } & Record<string, unknown>>): Prisma.InputJsonValue {
+  return {
+    startStepId: steps[0]?.id ?? null,
+    steps: steps.map((step, index) => ({ ...step, nextStepId: index < steps.length - 1 ? steps[index + 1].id : null })),
+  } as Prisma.InputJsonValue;
 }
 
 export async function installJourneyTemplates() {
