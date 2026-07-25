@@ -52,12 +52,11 @@ export async function updateMarketingAudience(id: string, formData: FormData) {
 }
 
 export async function previewMarketingAudience(formData: FormData) {
-  await requireModuleEnabled("marketing");
-  await requirePermission("campaigns.manage_audiences");
+  const { tenantId } = await contentContext("campaigns.manage_audiences");
   const tree = validateAudienceTree(json<AudienceGroup>(formData.get("ruleTree")));
   const channel = String(formData.get("channel") ?? "any");
   if (!new Set(["any", "email", "sms"]).has(channel)) throw new Error("Unsupported preview channel");
-  const contacts = await evaluateAudience(tree, channel);
+  const contacts = await evaluateAudience(tree, channel, tenantId);
   return contacts.slice(0, 20).map((contact) => ({
     id: contact.id,
     name: `${contact.firstName} ${contact.lastName ?? ""}`.trim(),
