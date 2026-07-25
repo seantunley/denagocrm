@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { basePrisma, prisma } from "./db";
+import { basePrisma } from "./db";
 import { computeDue } from "./serviceDue";
 
 export type AudienceRule = { field: string; operator: string; value?: unknown; legacyCriteria?: Record<string, unknown> };
@@ -69,10 +69,12 @@ export function explainAudience(tree: AudienceGroup) {
   return explain(tree);
 }
 
-export async function evaluateAudience(tree: AudienceGroup, channel = "any") {
-  const contacts = await prisma.contact.findMany({
-    where: { deletedAt: null, marketingOptOut: false },
-    take: 5000,
+/** Evaluate only contacts belonging to the requested tenant. The explicit tenant
+ * predicate is required even while the global Prisma tenant guard is dormant. */
+export async function evaluateAudience(tree: AudienceGroup, channel = "any", tenantId: string | null) {
+  const contacts = await basePrisma.contact.findMany({
+    where: { tenantId, deletedAt: null, marketingOptOut: false },
+    orderBy: { id: "asc" },
     include: {
       tags: true,
       vehicles: { where: { deletedAt: null }, include: { serviceRecords: true, mileageLogs: true } },
@@ -84,11 +86,12 @@ export async function evaluateAudience(tree: AudienceGroup, channel = "any") {
 }
 
 export async function saveAudienceVersion(args: { segmentId: string; tenantId: string | null; tree: AudienceGroup; userId: string; userName: string }) {
-  const rows = await basePrisma.$queryRaw<Array<{ version: number }>>`SELECT COALESCE(MAX("version"), 0) + 1 AS version FROM "MarketingAudienceVersion" WHERE "segmentId" = ${args.segmentId}`;
+  const rows = await basePrisma.$queryRaw<Array<{ version: number }>>`SELECT COALESCE(MAX("version"), 0) + 1 AS version FROM "MarketingAudienceVersion" WHERE "segmentId" = ${args.segmentId} AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}`;
   const version = Number(rows[0]?.version ?? 1);
   const explanation = explainAudience(args.tree);
   await basePrisma.$executeRaw`INSERT INTO "MarketingAudienceVersion" ("id", "tenantId", "segmentId", "version", "ruleTree", "explanation", "createdById", "createdByName") VALUES (${`mav_${crypto.randomUUID()}`}, ${args.tenantId}, ${args.segmentId}, ${version}, ${JSON.stringify(args.tree)}::jsonb, ${explanation}, ${args.userId}, ${args.userName})`;
-  const count = (await evaluateAudience(args.tree)).length;
-  await basePrisma.$executeRaw`UPDATE "Segment" SET "ruleTree" = ${JSON.stringify(args.tree)}::jsonb, "criteria" = ${JSON.stringify(args.tree)}, "lastCalculatedCount" = ${count}, "lastCalculatedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${args.segmentId} AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}`;
+  const count = (await evaluateAudience(args.tree, "any", args.tenantId)).length;
+  const updated = await basePrisma.$executeRaw`UPDATE "Segment" SET "ruleTree" = ${JSON.stringify(args.tree)}::jsonb, "criteria" = ${JSON.stringify(args.tree)}, "lastCalculatedCount" = ${count}, "lastCalculatedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${args.segmentId} AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}`;
+  if (updated !== 1) throw new Error("Audience not found");
   return { version, count, explanation };
 }
