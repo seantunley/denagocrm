@@ -1657,6 +1657,10 @@ model SignatureRecipient {
   signerIp        String?
   signerUserAgent String?
   remindedAt      DateTime?
+  // Claim-lease timestamp: set when notifyRecipient claims pending→sending,
+  // read only to detect a claim that never reached its finalize update (crash
+  // or timeout mid-send) — see recoverStaleSigningClaims in signing/dispatch.ts.
+  sendingAt       DateTime?
 
   fields SignatureField[]
 

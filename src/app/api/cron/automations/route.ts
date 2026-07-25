@@ -4,6 +4,7 @@ export const maxDuration = 60; // IMAP + Graph sync can take a few seconds
 import { runIdleAutomations } from "@/lib/automations";
 import { runServiceReminders } from "@/lib/serviceReminders";
 import { runQuoteSigningReminders } from "@/lib/signingReminders";
+import { recoverStaleSigningClaims } from "@/lib/signing/dispatch";
 import { syncFacebookLeads } from "@/lib/metaLeadSync";
 import { syncGoogleReviews } from "@/lib/googleReviews";
 import { syncInboundEmail } from "@/lib/imapSync";
@@ -45,6 +46,7 @@ async function runOperationalQueues() {
     ? await runServiceReminders().catch((e) => { logError("service-reminders", e); return -1; })
     : null;
   const quoteReminders = await runQuoteSigningReminders().catch((e) => { logError("quote-reminders", e); return -1; });
+  const staleSigningClaims = await recoverStaleSigningClaims().catch((e) => { logError("stale-signing-claims", e); return null; });
   const fbLeads = on("marketing")
     ? await syncFacebookLeads().catch((e) => { logError("meta-lead-sync", e); return -1; })
     : null;
@@ -75,6 +77,7 @@ async function runOperationalQueues() {
     fired,
     remindersSent,
     quoteReminders,
+    staleSigningClaims,
     fbLeads,
     googleReviews,
     inboundEmail,
