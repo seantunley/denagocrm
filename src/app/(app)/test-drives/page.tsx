@@ -17,6 +17,7 @@ import ModalTrigger from "@/components/Modal";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { EmptyState, MetricCard, Surface } from "@/components/visual-system";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 
 export const dynamic = "force-dynamic";
 
@@ -206,32 +207,32 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
       {bookings.length === 0 ? (
         <EmptyState icon={CalendarDays} title="No test drives in this view" description="Book a customer drive or choose another status filter." />
       ) : (
-        <Surface className="overflow-x-auto p-0">
+        <ResponsiveEntityTable>
           <table className="table-base">
             <thead><tr><th>Booking</th><th>Customer</th><th>Vehicle</th><th>Schedule</th><th>Salesperson</th><th>Status</th></tr></thead>
             <tbody>
               {bookings.map((booking) => (
                 <tr key={booking.id}>
-                  <td>
+                  <td data-primary data-label="Booking">
                     <Link href={`/test-drives/${booking.id}`} className="font-medium text-primary hover:underline">{booking.reference}</Link>
                     {booking.leadId && <p className="max-w-56 truncate text-xs text-muted-foreground">{leadMap.get(booking.leadId) ?? "Linked lead"}</p>}
                   </td>
-                  <td>{contactMap.get(booking.contactId) ?? "Customer"}</td>
-                  <td>
+                  <td data-label="Customer">{contactMap.get(booking.contactId) ?? "Customer"}</td>
+                  <td data-label="Vehicle">
                     <p>{booking.demoVehicle?.name ?? (booking.productId ? productMap.get(booking.productId) : null) ?? "Not assigned"}</p>
                     <p className="text-xs text-muted-foreground">{booking.branch}</p>
                   </td>
-                  <td>
+                  <td data-label="Schedule">
                     <p>{formatDateTime(booking.scheduledStart)}</p>
                     <p className="text-xs text-muted-foreground">Return {format(booking.expectedReturnAt, "HH:mm")}</p>
                   </td>
-                  <td>{staffMap.get(booking.salespersonId) ?? "Unavailable user"}</td>
-                  <td><span className={`badge ${statusClass[booking.status] ?? "bg-muted text-muted-foreground"}`}>{testDriveStatusLabel(booking.status)}</span></td>
+                  <td data-label="Salesperson">{staffMap.get(booking.salespersonId) ?? "Unavailable user"}</td>
+                  <td data-label="Status"><span className={`badge ${statusClass[booking.status] ?? "bg-muted text-muted-foreground"}`}>{testDriveStatusLabel(booking.status)}</span></td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </Surface>
+        </ResponsiveEntityTable>
       )}
     </div>
   );
