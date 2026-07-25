@@ -1,6 +1,7 @@
-// CampaignVersion and CampaignEvent intentionally use loose campaign/contact IDs
-// in this first additive phase. The legacy Campaign model remains untouched until
-// the draft/editor PR starts reading the new columns through Prisma.
+// Governed marketing campaign versions and lifecycle events. Delivery-provider
+// events are a separate ledger (`CampaignEvent`) owned by the SendGrid delivery
+// integration; using a distinct model/table prevents schema collisions and keeps
+// workflow/audit events independent from provider webhook idempotency.
 
 model CampaignVersion {
   id            String   @id @default(cuid())
@@ -18,7 +19,7 @@ model CampaignVersion {
   @@index([tenantId])
 }
 
-model CampaignEvent {
+model MarketingCampaignEvent {
   id                  String   @id @default(cuid())
   tenantId            String?
   campaignId          String

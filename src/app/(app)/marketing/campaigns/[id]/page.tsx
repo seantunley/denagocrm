@@ -22,7 +22,7 @@ export default async function MarketingCampaignDetail({ params }: { params: Prom
   if (!campaign) notFound();
   const [versions, events, breakdown, failures] = await Promise.all([
     basePrisma.$queryRaw<VersionRow[]>`SELECT "id", "version", "reason", "createdByName", "createdAt" FROM "CampaignVersion" WHERE "campaignId" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId} ORDER BY "version" DESC`,
-    basePrisma.$queryRaw<EventRow[]>`SELECT "id", "type", "occurredAt", "contactId", "metadata" FROM "CampaignEvent" WHERE "campaignId" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId} ORDER BY "occurredAt" DESC LIMIT 100`,
+    basePrisma.$queryRaw<EventRow[]>`SELECT "id", "type", "occurredAt", "contactId", "metadata" FROM "MarketingCampaignEvent" WHERE "campaignId" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId} ORDER BY "occurredAt" DESC LIMIT 100`,
     basePrisma.$queryRaw<RecipientBreakdown[]>`SELECT "status", COUNT(*)::bigint AS count FROM "CampaignRecipient" WHERE "campaignId" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId} GROUP BY "status" ORDER BY "status"`,
     basePrisma.$queryRaw<Array<{ error: string | null; suppressionReason: string | null; count: bigint }>>`SELECT "error", "suppressionReason", COUNT(*)::bigint AS count FROM "CampaignRecipient" WHERE "campaignId" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId} AND ("error" IS NOT NULL OR "suppressionReason" IS NOT NULL) GROUP BY "error", "suppressionReason" ORDER BY count DESC LIMIT 20`,
   ]);

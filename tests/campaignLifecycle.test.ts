@@ -71,7 +71,10 @@ test("the migration preserves history and seeds the governed foundation", () => 
   assert.match(sql, /SET "status" = 'failed_permanent' WHERE "status" = 'failed'/);
   assert.match(sql, /ALTER COLUMN "status" SET DEFAULT 'pending'/);
   assert.match(sql, /CREATE TABLE IF NOT EXISTS "CampaignVersion"/);
-  assert.match(sql, /CREATE TABLE IF NOT EXISTS "CampaignEvent"/);
+  // Lifecycle events live in MarketingCampaignEvent — a distinct table from the
+  // SendGrid delivery integration's own CampaignEvent(recipientId) ledger, to
+  // avoid the two features colliding on one table name (see #202 commit 86fe16d).
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS "MarketingCampaignEvent"/);
   assert.match(sql, /'campaigns\.approve'/);
   assert.match(sql, /WHERE legacy\."permissionKey" = 'campaigns\.manage'/);
 });

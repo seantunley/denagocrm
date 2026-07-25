@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { getActiveTenantId } from "@/lib/auth";
 import { requirePermission, requireContactAccess } from "@/lib/permissions";
 import { sendEmail } from "@/lib/email";
 import { saveFile } from "@/lib/storage";
@@ -121,7 +122,14 @@ export async function saveSegment(formData: FormData) {
 
 export async function deleteSegment(id: string) {
   await requirePermission("campaigns.edit");
-  await prisma.segment.delete({ where: { id } });
+  // Tenant-qualified delete. The db.ts guard is dormant until enforcement is on,
+  // so a bare delete-by-id would let someone with a known cross-tenant segment id
+  // delete another tenant's segment. Resolve the active tenant and scope the
+  // delete to it explicitly; deleteMany + an affected-row check makes a
+  // non-matching id/tenant a no-op rather than a silent success.
+  const tenantId = await getActiveTenantId();
+  const { count } = await prisma.segment.deleteMany({ where: { id, tenantId } });
+  if (count === 0) throw new Error("Segment not found");
   revalidatePath("/campaigns");
   revalidatePath("/marketing/audiences");
 }

@@ -76,7 +76,9 @@ CREATE TABLE IF NOT EXISTS "CampaignVersion" (
   CONSTRAINT "CampaignVersion_pkey" PRIMARY KEY ("id")
 );
 
-CREATE TABLE IF NOT EXISTS "CampaignEvent" (
+-- Workflow/lifecycle events are deliberately separate from the provider webhook
+-- ledger (`CampaignEvent`) introduced by the SendGrid integration.
+CREATE TABLE IF NOT EXISTS "MarketingCampaignEvent" (
   "id" TEXT NOT NULL,
   "tenantId" TEXT,
   "campaignId" TEXT NOT NULL,
@@ -87,7 +89,7 @@ CREATE TABLE IF NOT EXISTS "CampaignEvent" (
   "providerMessageId" TEXT,
   "metadata" JSONB,
   "occurredAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT "CampaignEvent_pkey" PRIMARY KEY ("id")
+  CONSTRAINT "MarketingCampaignEvent_pkey" PRIMARY KEY ("id")
 );
 
 DO $$
@@ -104,11 +106,11 @@ BEGIN
 
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
-    WHERE conname = 'CampaignEvent_campaignId_fkey'
-      AND conrelid = '"CampaignEvent"'::regclass
+    WHERE conname = 'MarketingCampaignEvent_campaignId_fkey'
+      AND conrelid = '"MarketingCampaignEvent"'::regclass
   ) THEN
-    ALTER TABLE "CampaignEvent"
-      ADD CONSTRAINT "CampaignEvent_campaignId_fkey"
+    ALTER TABLE "MarketingCampaignEvent"
+      ADD CONSTRAINT "MarketingCampaignEvent_campaignId_fkey"
       FOREIGN KEY ("campaignId") REFERENCES "Campaign"("id") ON DELETE CASCADE ON UPDATE CASCADE;
   END IF;
 END $$;
@@ -118,13 +120,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS "CampaignVersion_campaignId_version_key"
 CREATE INDEX IF NOT EXISTS "CampaignVersion_campaign_created_idx"
   ON "CampaignVersion"("campaignId", "createdAt" DESC);
 CREATE INDEX IF NOT EXISTS "CampaignVersion_tenantId_idx" ON "CampaignVersion"("tenantId");
-CREATE INDEX IF NOT EXISTS "CampaignEvent_campaign_type_time_idx"
-  ON "CampaignEvent"("campaignId", "type", "occurredAt");
-CREATE INDEX IF NOT EXISTS "CampaignEvent_recipient_time_idx"
-  ON "CampaignEvent"("campaignRecipientId", "occurredAt");
-CREATE INDEX IF NOT EXISTS "CampaignEvent_contact_time_idx"
-  ON "CampaignEvent"("contactId", "occurredAt");
-CREATE INDEX IF NOT EXISTS "CampaignEvent_tenantId_idx" ON "CampaignEvent"("tenantId");
+CREATE INDEX IF NOT EXISTS "MarketingCampaignEvent_campaign_type_time_idx"
+  ON "MarketingCampaignEvent"("campaignId", "type", "occurredAt");
+CREATE INDEX IF NOT EXISTS "MarketingCampaignEvent_recipient_time_idx"
+  ON "MarketingCampaignEvent"("campaignRecipientId", "occurredAt");
+CREATE INDEX IF NOT EXISTS "MarketingCampaignEvent_contact_time_idx"
+  ON "MarketingCampaignEvent"("contactId", "occurredAt");
+CREATE INDEX IF NOT EXISTS "MarketingCampaignEvent_tenantId_idx" ON "MarketingCampaignEvent"("tenantId");
 CREATE INDEX IF NOT EXISTS "Campaign_status_scheduled_idx" ON "Campaign"("status", "scheduledFor");
 CREATE INDEX IF NOT EXISTS "Campaign_owner_status_idx" ON "Campaign"("ownerId", "status");
 CREATE INDEX IF NOT EXISTS "CampaignRecipient_campaign_status_idx"
