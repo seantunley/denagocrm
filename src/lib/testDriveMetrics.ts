@@ -48,7 +48,7 @@ export function calculateTestDriveMetrics(args: {
   const bookedLeads = new Set(
     bookings
       .map((booking) => booking.leadId)
-      .filter((leadId): leadId is string => Boolean(leadId) && eligibleLeadIds.has(leadId)),
+      .filter((leadId): leadId is string => leadId !== null && eligibleLeadIds.has(leadId)),
   ).size;
   const attendedRows = bookings.filter((booking) =>
     booking.actualStartAt !== null || booking.status === "checked_out" || booking.status === "completed"
