@@ -79,39 +79,64 @@ export async function retryCampaignFailures(id: string) {
   revalidatePath(`/marketing/campaigns/${id}`);
 }
 
+/** Campaign states a manual recipient retry may resurrect FROM. Anything else
+ *  (draft, in_review, approved, scheduled, queued, paused, cancelled, archived,
+ *  cleanly completed) must never be forced back to "queued" by selecting some
+ *  of its historically failed recipients. */
+const RETRYABLE_CAMPAIGN_STATUSES = ["sending", "failed", "completed_with_errors"];
+
 export async function retryCampaignRecipients(id: string, recipientIds: string[]) {
   const { user, tenantId } = await operationContext("campaigns.retry");
   const uniqueIds = [...new Set(recipientIds)];
   if (uniqueIds.length === 0 || uniqueIds.length > 100) throw new Error("Choose between 1 and 100 recipients");
   await campaignOrThrow(id, tenantId);
-  const rows = await basePrisma.$queryRaw<Array<{ id: string; status: string }>>`
-    SELECT "id", "status"
-    FROM "CampaignRecipient"
-    WHERE "tenantId" IS NOT DISTINCT FROM ${tenantId}
-      AND "campaignId" = ${id}
-      AND "id" = ANY(${uniqueIds}::text[])
-      AND "status" IN ('failed_temporary', 'failed_permanent')
-    FOR UPDATE
-  `;
-  if (rows.length === 0) throw new Error("No selected recipients are eligible for retry");
-  const permanent = rows.filter((row) => row.status === "failed_permanent").length;
-  const allowedIds = rows.map((row) => row.id);
-  await basePrisma.$transaction(async (tx) => {
+
+  const { allowedIds, permanent } = await basePrisma.$transaction(async (tx) => {
+    // Lock the campaign FIRST, inside the same transaction as every write below
+    // — the previous SELECT ... FOR UPDATE ran outside any transaction, so
+    // Postgres auto-committed it immediately and the "lock" was released
+    // before the writes even started. Verify it's actually in a retryable
+    // state here, guarded, or a cancelled/archived/draft campaign could be
+    // resurrected to "queued" just by selecting some failed recipients.
+    const campaignRows = await tx.$queryRaw<Array<{ status: string }>>`
+      SELECT "status" FROM "Campaign" WHERE "id" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId} FOR UPDATE
+    `;
+    const campaign = campaignRows[0];
+    if (!campaign) throw new Error("Campaign not found");
+    if (!RETRYABLE_CAMPAIGN_STATUSES.includes(campaign.status)) {
+      throw new Error(`Cannot retry recipients on a ${campaign.status} campaign`);
+    }
+
+    const rows = await tx.$queryRaw<Array<{ id: string; status: string }>>`
+      SELECT "id", "status"
+      FROM "CampaignRecipient"
+      WHERE "tenantId" IS NOT DISTINCT FROM ${tenantId}
+        AND "campaignId" = ${id}
+        AND "id" = ANY(${uniqueIds}::text[])
+        AND "status" IN ('failed_temporary', 'failed_permanent')
+      FOR UPDATE
+    `;
+    if (rows.length === 0) throw new Error("No selected recipients are eligible for retry");
+    const permanentCount = rows.filter((row) => row.status === "failed_permanent").length;
+    const allowed = rows.map((row) => row.id);
+
     await tx.$executeRaw`
       UPDATE "CampaignRecipient"
       SET "status" = 'queued', "error" = NULL, "nextAttemptAt" = CURRENT_TIMESTAMP, "providerStatus" = 'manual_retry'
       WHERE "tenantId" IS NOT DISTINCT FROM ${tenantId}
         AND "campaignId" = ${id}
-        AND "id" = ANY(${allowedIds}::text[])
+        AND "id" = ANY(${allowed}::text[])
         AND "status" IN ('failed_temporary', 'failed_permanent')
     `;
     await tx.$executeRaw`
       UPDATE "Campaign"
       SET "status" = 'queued', "completedAt" = NULL,
-        "failedCount" = GREATEST(0, "failedCount" - ${permanent}), "updatedAt" = CURRENT_TIMESTAMP
+        "failedCount" = GREATEST(0, "failedCount" - ${permanentCount}), "updatedAt" = CURRENT_TIMESTAMP
       WHERE "id" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
     `;
+    return { allowedIds: allowed, permanent: permanentCount };
   });
+
   await logAuditStrict({ action: "campaign.recipient_retried", summary: `Manually queued ${allowedIds.length} campaign recipients for retry`, entityType: "Campaign", entityId: id, user, after: { recipientIds: allowedIds, retried: allowedIds.length } });
   revalidatePath(`/marketing/campaigns/${id}`);
 }
