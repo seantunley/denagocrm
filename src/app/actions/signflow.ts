@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { blankWorkflow, parseGraph } from "@/lib/signflow/model";
 
@@ -11,7 +11,7 @@ const BASE = "/settings/signing-workflows";
 
 /** Create a workflow seeded with the default Denago→customer chain, then open it. */
 export async function createSignWorkflow(formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("signing.manage");
   const name = String(formData.get("name") ?? "").trim() || "New signing workflow";
   const created = await prisma.signWorkflow.create({
     data: { name, graphJson: blankWorkflow() as object, createdById: user.id },
@@ -23,7 +23,7 @@ export async function createSignWorkflow(formData: FormData) {
 
 /** Persist the workflow graph (validated) + its name. */
 export async function saveSignWorkflow(id: string, name: string, graphJson: string): Promise<{ ok: boolean; error?: string }> {
-  const user = await requireOwner();
+  const user = await requirePermission("signing.manage");
   let parsed: unknown;
   try { parsed = JSON.parse(graphJson); } catch { return { ok: false, error: "Invalid graph" }; }
   const graph = parseGraph(parsed);
@@ -39,7 +39,7 @@ export async function saveSignWorkflow(id: string, name: string, graphJson: stri
 }
 
 export async function deleteSignWorkflow(id: string) {
-  const user = await requireOwner();
+  const user = await requirePermission("signing.manage");
   await prisma.signWorkflow.update({ where: { id }, data: { deletedAt: new Date() } });
   await logAudit({ action: "signflow.delete", summary: "Deleted a signing workflow", entityType: "SignWorkflow", entityId: id, user });
   revalidatePath(BASE);
@@ -48,7 +48,7 @@ export async function deleteSignWorkflow(id: string) {
 
 /** Rename convenience (from the list). */
 export async function renameSignWorkflow(id: string, name: string): Promise<{ ok: boolean }> {
-  await requireOwner();
+  await requirePermission("signing.manage");
   await prisma.signWorkflow.update({ where: { id }, data: { name: name.trim() || "Untitled" } });
   revalidatePath(BASE);
   return { ok: true };
