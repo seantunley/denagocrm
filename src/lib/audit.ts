@@ -131,8 +131,16 @@ async function writeAudit(entry: AuditEntry) {
         tenantId,
       },
     });
+  });
 
-    await enqueueAutomationFromAudit(transaction, {
+  // Fan out automation triggers AFTER the audit has committed, and best-effort.
+  // Keeping this out of the audit transaction means a malformed payload or a
+  // failed enrichment query can never roll back the governance record (writeAudit
+  // is also the strict path, which re-throws), and its extra quote/jobCard reads
+  // no longer hold the audit transaction open. A lost trigger is recoverable; a
+  // lost audit is not.
+  try {
+    await enqueueAutomationFromAudit(basePrisma, {
       auditEventId,
       tenantId,
       action: entry.action,
@@ -145,7 +153,9 @@ async function writeAudit(entry: AuditEntry) {
       after: safeAfter,
       metadata: safeMetadata,
     });
-  });
+  } catch (error) {
+    console.error("automation bridge: enqueue from audit failed", error);
+  }
 }
 
 export async function logAudit(entry: AuditEntry): Promise<void> {

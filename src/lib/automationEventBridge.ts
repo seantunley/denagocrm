@@ -48,8 +48,11 @@ async function enrichedSource(
   if (trigger.startsWith("quote_") || trigger === "delivery_scheduled") {
     const numberMatch = event.summary.match(/Q-(\d+)/i);
     if (numberMatch) {
-      const quote = await transaction.quote.findUnique({
-        where: { number: Number(numberMatch[1]) },
+      // Scope by the audit event's tenant. `number` is globally unique today, but
+      // once quote numbering is per-tenant an unscoped lookup by number would
+      // enrich this tenant's automation payload with another tenant's quote.
+      const quote = await transaction.quote.findFirst({
+        where: { number: Number(numberMatch[1]), ...(event.tenantId ? { tenantId: event.tenantId } : {}) },
         select: { id: true, number: true, status: true, leadId: true, contactId: true, validUntil: true, deliveryScheduledFor: true },
       });
       if (quote) return {
@@ -70,8 +73,8 @@ async function enrichedSource(
   if (trigger.startsWith("job_")) {
     const numberMatch = event.summary.match(/#(\d+)/);
     if (numberMatch) {
-      const job = await transaction.jobCard.findUnique({
-        where: { number: Number(numberMatch[1]) },
+      const job = await transaction.jobCard.findFirst({
+        where: { number: Number(numberMatch[1]), ...(event.tenantId ? { tenantId: event.tenantId } : {}) },
         select: { id: true, number: true, status: true, vehicleId: true, contactId: true, technicianId: true },
       });
       if (job) return {

@@ -2,6 +2,8 @@ import "server-only";
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { currentTenantScope } from "@/lib/tenantScope";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 
 export const STOCK_STATUSES = [
   "incoming",
@@ -54,8 +56,17 @@ export async function addStockEvent(input: {
   costAfterCents?: number | null;
   actor: StockActor;
 }) {
+  // Stamp the owning tenant explicitly. While enforcement is dormant the db guard
+  // does NOT stamp it, so without this the row is tenantId=NULL; the
+  // enqueue_stock_automation_event trigger copies that NULL into the JourneyEvent,
+  // and processJourneyEvents then matches it only against tenantId=NULL journeys —
+  // but every Journey is backfilled to the founding tenant, so stock/PDI
+  // automations would silently never fire. Under enforcement the guard overwrites
+  // this with the acting tenant (same value), so this is dormant-only insurance.
+  const scope = currentTenantScope();
   await prisma.stockEvent.create({
     data: {
+      tenantId: scope && !scope.system ? scope.tenantId : DEFAULT_TENANT_ID,
       stockUnitId: input.stockUnitId ?? null,
       purchaseOrderId: input.purchaseOrderId ?? null,
       eventType: input.eventType,
