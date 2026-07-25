@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { basePrisma, prisma } from "./db";
+import { basePrisma } from "./db";
 import { computeDue } from "./serviceDue";
 
 export type AudienceRule = { field: string; operator: string; value?: unknown; legacyCriteria?: Record<string, unknown> };
@@ -125,11 +125,13 @@ export function explainAudience(tree: AudienceGroup) {
   return explain(tree);
 }
 
-export async function evaluateAudience(tree: AudienceGroup, channel = "any") {
+/** Explicit tenant predicate keeps previews and launches isolated even while the
+ * global Prisma tenant extension is dormant. No silent 5,000-contact truncation. */
+export async function evaluateAudience(tree: AudienceGroup, channel = "any", tenantId: string | null) {
   validateAudienceTree(tree);
-  const contacts = await prisma.contact.findMany({
-    where: { deletedAt: null, marketingOptOut: false },
-    take: 5000,
+  const contacts = await basePrisma.contact.findMany({
+    where: { tenantId, deletedAt: null, marketingOptOut: false },
+    orderBy: { id: "asc" },
     include: {
       tags: true,
       vehicles: { where: { deletedAt: null }, include: { serviceRecords: true, mileageLogs: true } },
@@ -151,7 +153,7 @@ export async function saveAudienceVersion(args: {
 }) {
   validateAudienceTree(args.tree);
   const explanation = explainAudience(args.tree);
-  const count = (await evaluateAudience(args.tree)).length;
+  const count = (await evaluateAudience(args.tree, "any", args.tenantId)).length;
   return basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`audience-version:${args.segmentId}`}))`;
     const segments = await tx.$queryRaw<Array<{ id: string; status: string }>>`
