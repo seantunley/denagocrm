@@ -281,7 +281,7 @@ export async function updateUserRoles(userId: string, formData: FormData) {
     await tx.$executeRaw`DELETE FROM "UserRole" WHERE "userId" = ${userId}`;
     for (const roleId of validRoleIds) {
       await tx.$executeRaw`
-        INSERT INTO "UserRole" ("userId", "roleId") VALUES (${userId}, ${roleId}) ON CONFLICT DO NOTHING
+        INSERT INTO "UserRole" ("id", "userId", "roleId") VALUES (gen_random_uuid()::text, ${userId}, ${roleId}) ON CONFLICT DO NOTHING
       `;
     }
     await tx.$executeRaw`

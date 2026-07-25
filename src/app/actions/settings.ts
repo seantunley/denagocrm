@@ -120,8 +120,8 @@ export async function createUser(
   // role must not block user+membership creation during a rolling deploy.
   try {
     await basePrisma.$executeRaw`
-      INSERT INTO "UserRole" ("userId", "roleId")
-      VALUES (${created.id}, 'role_sales_rep')
+      INSERT INTO "UserRole" ("id", "userId", "roleId")
+      VALUES (gen_random_uuid()::text, ${created.id}, 'role_sales_rep')
       ON CONFLICT DO NOTHING
     `;
   } catch {

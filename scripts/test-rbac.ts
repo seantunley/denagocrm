@@ -77,13 +77,13 @@ async function main() {
     // view_all, so this exercises own/team/outside scoping across every domain
     // without granting any production role extra privileges.
     await prisma.$executeRaw`
-      INSERT INTO "UserRole" ("userId", "roleId") VALUES
-        (${ids.salesUser}, 'role_sales_rep'),
-        (${ids.salesUser}, 'role_technician'),
-        (${ids.teammate}, 'role_sales_rep'),
-        (${ids.teammate}, 'role_technician'),
-        (${ids.outsider}, 'role_sales_rep'),
-        (${ids.outsider}, 'role_technician')
+      INSERT INTO "UserRole" ("id", "userId", "roleId") VALUES
+        (gen_random_uuid()::text, ${ids.salesUser}, 'role_sales_rep'),
+        (gen_random_uuid()::text, ${ids.salesUser}, 'role_technician'),
+        (gen_random_uuid()::text, ${ids.teammate}, 'role_sales_rep'),
+        (gen_random_uuid()::text, ${ids.teammate}, 'role_technician'),
+        (gen_random_uuid()::text, ${ids.outsider}, 'role_sales_rep'),
+        (gen_random_uuid()::text, ${ids.outsider}, 'role_technician')
     `;
     await prisma.$executeRaw`
       INSERT INTO "Team" ("id", "name", "active", "managerId")

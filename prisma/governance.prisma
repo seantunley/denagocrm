@@ -78,14 +78,21 @@ model RolePermission {
 }
 
 model UserRole {
+  // Surrogate PK. A role ASSIGNMENT is unique PER TENANT (a user may hold the same
+  // global role in more than one tenant), so identity must include tenantId. But
+  // tenantId is nullable (Phase B — additive/inert) and Prisma forbids nullable
+  // fields in @@id, so we can't use a composite PK. Instead: surrogate `id` PK +
+  // a tenant-aware @@unique. Role/Permission/RolePermission stay GLOBAL (one shared
+  // taxonomy); only the assignment of a role TO a user is tenant-scoped.
+  id        String   @id @default(cuid())
   userId    String
   roleId    String
-  tenantId  String? // Multi-tenancy (Phase B — additive/inert): owning tenant. Role/Permission/RolePermission stay global (one shared taxonomy); the assignment of a role TO a user is tenant-scoped.
+  tenantId  String? // Multi-tenancy (Phase B — additive/inert): owning tenant. See note above.
   createdAt DateTime @default(now())
 
   role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
-  @@id([userId, roleId])
+  @@unique([tenantId, userId, roleId])
   @@index([roleId])
   @@index([tenantId])
 }
