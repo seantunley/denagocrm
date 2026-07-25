@@ -34,6 +34,7 @@ type ClaimedInvite = {
   reminderCount: number;
   maxReminders: number;
   distributionChannel: string;
+  distributionStatus: string;
   purpose: string;
   snapshot: SurveySnapshot;
   email: string | null;
@@ -187,7 +188,7 @@ async function claimBatch(tid: string | null, limit: number): Promise<ClaimedInv
     )
     SELECT r."id", r."tenantId", r."distributionId", r."surveyId", r."surveyVersion",
       r."contactId", r."token", r."name", r."attemptCount", r."reminderCount",
-      d."maxReminders", d."channel" AS "distributionChannel", d."purpose", v."snapshot",
+      d."maxReminders", d."channel" AS "distributionChannel", d."status" AS "distributionStatus", d."purpose", v."snapshot",
       c."email", c."phone", c."whatsapp"
     FROM claimed r
     JOIN "SurveyDistribution" d ON d."id" = r."distributionId"
@@ -250,13 +251,12 @@ async function restoreClaimForClosedDistribution(invite: ClaimedInvite, state: s
 }
 
 async function deliver(invite: ClaimedInvite) {
-  const distributions = await basePrisma.$queryRaw<Array<{ status: string }>>`
-    SELECT "status" FROM "SurveyDistribution"
-    WHERE "id" = ${invite.distributionId}
-      AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
-    LIMIT 1
-  `;
-  const state = distributions[0]?.status;
+  // distributionStatus came back from the same atomic claim query in
+  // claimBatch — no separate per-invite lookup needed. It reflects the
+  // distribution's state AT CLAIM TIME; the counter updates below still
+  // re-guard with `AND d.status IN (...)` at commit time, so a distribution
+  // paused/cancelled in between doesn't corrupt its aggregate counts.
+  const state = invite.distributionStatus;
   if (!state || !new Set(["queued", "sending"]).has(state)) {
     await restoreClaimForClosedDistribution(invite, state);
     return;
@@ -341,11 +341,12 @@ const PERMANENT_REMINDER_BLOCKS = new Set([
 ]);
 
 async function closeReminderLease(invite: ClaimedInvite, status: string, consumeAll: boolean) {
+  // lastReminderAt is already stamped at claim time (sendDueReminders) — not
+  // repeated here so there's exactly one place the cadence timestamp is set.
   await basePrisma.$executeRaw`
     UPDATE "SurveyResponse"
     SET "providerStatus" = ${status},
-      "reminderCount" = CASE WHEN ${consumeAll} THEN ${invite.maxReminders} ELSE "reminderCount" END,
-      "lastReminderAt" = CURRENT_TIMESTAMP
+      "reminderCount" = CASE WHEN ${consumeAll} THEN ${invite.maxReminders} ELSE "reminderCount" END
     WHERE "id" = ${invite.id}
       AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
       AND "providerStatus" = 'reminder_sending'
@@ -371,8 +372,17 @@ async function sendDueReminders(tid: string | null, limit = 50) {
       FOR UPDATE OF r SKIP LOCKED
       LIMIT ${limit}
     ), claimed AS (
+      -- lastReminderAt is stamped HERE, at claim time, not after the send
+      -- completes: a crash between "provider accepted the message" and "we
+      -- recorded that" would otherwise leave lastReminderAt stale, and once
+      -- the stale-claim window (STALE_MINUTES) passes the row becomes
+      -- reclaimable and a customer-facing reminder could be sent twice for
+      -- one intended cycle. Claiming it up front means a crashed attempt is
+      -- retried no sooner than the next full reminderAfterHours window
+      -- (silence, not duplication) — the safer failure mode for outbound
+      -- customer messages.
       UPDATE "SurveyResponse" r
-      SET "providerStatus" = 'reminder_sending', "lastAttemptAt" = CURRENT_TIMESTAMP
+      SET "providerStatus" = 'reminder_sending', "lastAttemptAt" = CURRENT_TIMESTAMP, "lastReminderAt" = CURRENT_TIMESTAMP
       FROM candidates c WHERE r."id" = c."id"
       RETURNING r.*
     )
@@ -413,8 +423,7 @@ async function sendDueReminders(tid: string | null, limit = 50) {
     await basePrisma.$executeRaw`
       UPDATE "SurveyResponse"
       SET "providerStatus" = ${result.ok ? "reminder_sent" : "reminder_failed"},
-        "reminderCount" = "reminderCount" + CASE WHEN ${result.ok} THEN 1 ELSE 0 END,
-        "lastReminderAt" = CURRENT_TIMESTAMP
+        "reminderCount" = "reminderCount" + CASE WHEN ${result.ok} THEN 1 ELSE 0 END
       WHERE "id" = ${invite.id}
         AND "tenantId" IS NOT DISTINCT FROM ${invite.tenantId}
         AND "providerStatus" = 'reminder_sending'
