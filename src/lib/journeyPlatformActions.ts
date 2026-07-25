@@ -200,7 +200,7 @@ async function updateAllowedField(args: PlatformArgs) {
   const rendered = typeof configured === "string" ? renderTemplate(configured, args.vars) : configured;
   const ref = source(args.context);
 
-  if (field === "lead.source" && args.leadId) await prisma.lead.update({ where: { id: args.leadId }, data: { source: String(rendered ?? "") || null } });
+  if (field === "lead.source" && args.leadId) await prisma.lead.update({ where: { id: args.leadId }, data: { source: String(rendered ?? "") } });
   else if (field === "lead.valueCents" && args.leadId) await prisma.lead.update({ where: { id: args.leadId }, data: { valueCents: Math.max(0, Math.round(Number(rendered) || 0)) } });
   else if (field === "lead.quantity" && args.leadId) await prisma.lead.update({ where: { id: args.leadId }, data: { quantity: Math.max(1, Math.round(Number(rendered) || 1)) } });
   else if (field === "contact.source" && args.contactId) await prisma.contact.update({ where: { id: args.contactId }, data: { source: String(rendered ?? "") || null } });

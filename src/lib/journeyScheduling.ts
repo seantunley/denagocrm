@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { resolveContacts, type SegmentCriteria } from "./campaigns";
 import { computeDue } from "./serviceDue";
+import { computeWarranty } from "./warranty";
 import { emitJourneyEvent } from "./journeyEvents";
 import { getActiveVersion, jsonObject } from "./journeyEngineShared";
 
@@ -164,12 +165,14 @@ async function scheduleJourney(journey: SchedulableJourney) {
     const from = new Date(now.getFullYear(), now.getMonth(), now.getDate() + daysBefore);
     const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + 1);
     const vehicles = await prisma.vehicle.findMany({
-      where: { deletedAt: null, warrantyEndAt: { gte: from, lt: to } },
-      select: { id: true, model: true, serial: true, contactId: true, warrantyEndAt: true },
+      where: { deletedAt: null, purchaseDate: { not: null }, warrantyMonths: { not: null } },
+      select: { id: true, model: true, vin: true, contactId: true, purchaseDate: true, warrantyMonths: true },
       take: 2000,
     });
     for (const vehicle of vehicles) {
-      if (await emit({ journey, version: version.version, trigger: version.trigger, entityType: "contact", entityId: vehicle.contactId, cycle: day(vehicle.warrantyEndAt!), payload: { daysUntilExpiry: daysBefore, source: vehicle } })) created++;
+      const { expiryDate } = computeWarranty(vehicle, now);
+      if (!expiryDate || expiryDate < from || expiryDate >= to) continue;
+      if (await emit({ journey, version: version.version, trigger: version.trigger, entityType: "contact", entityId: vehicle.contactId, cycle: day(expiryDate), payload: { daysUntilExpiry: daysBefore, source: vehicle } })) created++;
     }
   }
 

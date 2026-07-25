@@ -17,7 +17,7 @@ const MAX_EVENT_ATTEMPTS = 3;
  * complete payload at the single event-ingress boundary rather than relying on
  * every trigger to serialise its own fields.
  */
-export function automationJsonValue(value: unknown, depth = 0): Prisma.InputJsonValue {
+export function automationJsonValue(value: unknown, depth = 0): Prisma.InputJsonValue | null {
   if (depth > 20) return "[TRUNCATED]";
   if (value === null) return null;
   if (value instanceof Date) return value.toISOString();
@@ -30,7 +30,7 @@ export function automationJsonValue(value: unknown, depth = 0): Prisma.InputJson
       .map((item) => automationJsonValue(item, depth + 1));
   }
   if (value && typeof value === "object") {
-    const output: Record<string, Prisma.InputJsonValue> = {};
+    const output: Record<string, Prisma.InputJsonValue | null> = {};
     for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
       if (nested === undefined || typeof nested === "function" || typeof nested === "symbol") continue;
       output[key] = automationJsonValue(nested, depth + 1);
