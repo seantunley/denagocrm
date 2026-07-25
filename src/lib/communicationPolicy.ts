@@ -25,6 +25,15 @@ export function isCommunicationQuietHour(now: Date, timeZone = "Africa/Johannesb
   return hour >= 20 || hour < 8;
 }
 
+export function nextCommunicationWindow(now: Date, timeZone = "Africa/Johannesburg") {
+  const candidate = new Date(now);
+  candidate.setSeconds(0, 0);
+  while (isCommunicationQuietHour(candidate, timeZone)) {
+    candidate.setMinutes(candidate.getMinutes() + 15);
+  }
+  return candidate;
+}
+
 export function classifyRetry(attemptCount: number, maxAttempts = 3) {
   return attemptCount < maxAttempts ? "failed_temporary" : "failed_permanent";
 }
@@ -39,6 +48,7 @@ export async function canContactPerson(args: {
   distributionId?: string;
   now?: Date;
 }): Promise<EligibilityResult> {
+  const now = args.now ?? new Date();
   const rows = await basePrisma.$queryRaw<ContactPolicyRow[]>`
     SELECT "id", "tenantId", "email", "phone", "whatsapp", "marketingOptOut", "deletedAt"
     FROM "Contact"
@@ -61,20 +71,35 @@ export async function canContactPerson(args: {
       select: { granted: true },
     });
     if (consent && !consent.granted) return { allowed: false, reason: "consent_withdrawn" };
-    if (isCommunicationQuietHour(args.now ?? new Date())) return { allowed: false, reason: "quiet_hours" };
+    if (isCommunicationQuietHour(now)) return { allowed: false, reason: "quiet_hours" };
   }
 
   if (args.campaignId) {
-    const duplicate = await basePrisma.campaignRecipient.count({
+    const deliveredDuplicate = await basePrisma.campaignRecipient.findFirst({
       where: {
         campaignId: args.campaignId,
         contactId: contact.id,
         tenantId: args.tenantId,
         ...(args.campaignRecipientId ? { id: { not: args.campaignRecipientId } } : {}),
-        status: { in: ["sending", "sent", "delivered"] },
+        status: { in: ["sent", "delivered"] },
       },
+      select: { id: true },
     });
-    if (duplicate > 0) return { allowed: false, reason: "duplicate_delivery" };
+    if (deliveredDuplicate) return { allowed: false, reason: "duplicate_delivery" };
+
+    if (args.campaignRecipientId) {
+      const winner = await basePrisma.campaignRecipient.findFirst({
+        where: {
+          campaignId: args.campaignId,
+          contactId: contact.id,
+          tenantId: args.tenantId,
+          status: "sending",
+        },
+        orderBy: { id: "asc" },
+        select: { id: true },
+      });
+      if (winner && winner.id !== args.campaignRecipientId) return { allowed: false, reason: "duplicate_delivery" };
+    }
   }
 
   const recent = await basePrisma.communication.count({
@@ -82,7 +107,7 @@ export async function canContactPerson(args: {
       contactId: contact.id,
       tenantId: args.tenantId,
       direction: "outbound",
-      createdAt: { gte: new Date((args.now ?? new Date()).getTime() - 24 * 60 * 60 * 1000) },
+      createdAt: { gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) },
       type: args.requestedChannel === "email" ? "email" : "sms",
     },
   });
