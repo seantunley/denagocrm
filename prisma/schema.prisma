@@ -431,10 +431,53 @@ model Campaign {
   openCount      Int       @default(0) // unique recipients who opened
   clickCount     Int       @default(0) // unique recipients who clicked
   status         String    @default("draft") // draft | queued | sending | sent
+  version        Int       @default(1)
   createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now()) @updatedAt
   sentAt         DateTime?
+  scheduledFor   DateTime?
+  timezone       String?   @default("Africa/Johannesburg")
   createdById    String?
   createdBy      User?     @relation("CampaignCreator", fields: [createdById], references: [id])
+  // Lifecycle / review workflow (migration-added; kept as plain scalars).
+  ownerId              String?
+  submittedById        String?
+  submittedForReviewAt DateTime?
+  reviewRequestedById  String?
+  reviewNote           String?
+  changesRequestedAt   DateTime?
+  approvedById         String?
+  approvedAt           DateTime?
+  pausedAt             DateTime?
+  cancelledAt          DateTime?
+  completedAt          DateTime?
+  archivedAt           DateTime?
+  // Content / brief.
+  preheader        String?
+  objective        String?
+  offer            String?
+  productId        String?
+  segmentId        String?
+  audienceSnapshot Json?
+  internalNotes    String?
+  landingPageUrl   String?
+  primaryCtaLabel  String?
+  primaryCtaUrl    String?
+  successMetric    String?
+  budgetCents      Int?
+  targetLeadCount  Int?
+  targetRevenueCents Int?
+  // Attribution / rollups.
+  attributionWindowDays Int @default(30)
+  conversionCount  Int @default(0)
+  revenueCents     Int @default(0)
+  suppressedCount  Int @default(0)
+  unsubscribeCount Int @default(0)
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  utmTerm     String?
+  utmContent  String?
   recipients     CampaignRecipient[]
 
   @@index([status])
@@ -456,6 +499,18 @@ model CampaignRecipient {
   clickedAt  DateTime?
   clickCount Int       @default(0)
   error      String?
+  // Delivery / retry / attribution (migration-added).
+  deliveredAt      DateTime?
+  bouncedAt        DateTime?
+  unsubscribedAt   DateTime?
+  convertedAt      DateTime?
+  conversionValueCents Int   @default(0)
+  attemptCount     Int       @default(0)
+  lastAttemptAt    DateTime?
+  nextAttemptAt    DateTime?
+  providerStatus   String?
+  providerMessageId String?
+  suppressionReason String?
 
   @@index([campaignId])
   @@index([status])
@@ -1391,8 +1446,18 @@ model Survey {
   thankYou    String? // shown after submitting
   questions   Json // [{id,type,label,required,options?,scale?}]
   active      Boolean   @default(true)
+  status      String    @default("draft") // draft | in_review | published | inactive | archived
+  publishedVersion Int?
   trigger     String? // job_complete | delivery | won | null (manual send)
   delayHours  Int       @default(0) // wait this many hours after the trigger before sending
+  ownerId     String?
+  submittedById        String?
+  submittedForReviewAt DateTime?
+  reviewNote           String?
+  changesRequestedAt   DateTime?
+  approvedById         String?
+  approvedAt           DateTime?
+  archivedAt           DateTime?
   createdById String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -1421,9 +1486,22 @@ model SurveyResponse {
   score        Int? // primary rating (1-5) or NPS (0-10), for rollups
   comment      String? // free-text highlight
   status       String    @default("sent") // scheduled | sent | completed | failed
+  surveyVersion Int? // pinned published version the respondent answered
+  distributionId String?
   scheduledFor DateTime? // set when a delay is configured; cron sends once due
   sentAt       DateTime  @default(now())
+  inviteSentAt DateTime?
+  openedAt     DateTime?
   completedAt  DateTime?
+  // Distribution queue / reminders / retry (migration-added).
+  attemptCount   Int      @default(0)
+  lastAttemptAt  DateTime?
+  nextAttemptAt  DateTime?
+  reminderCount  Int      @default(0)
+  lastReminderAt DateTime?
+  providerStatus String?
+  providerMessageId String?
+  suppressionReason String?
 
   @@index([surveyId, status])
   @@index([contactId])
