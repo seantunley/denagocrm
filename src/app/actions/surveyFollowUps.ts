@@ -105,6 +105,11 @@ export async function createCaseFromSurveyFollowUp(formData: FormData) {
   ].filter(Boolean).join("\n\n");
   const created = await basePrisma.customerCase.create({
     data: {
+      // Stamp the owning tenant explicitly — basePrisma bypasses the scoping guard,
+      // so without this the case and its message would be written tenantId=null and
+      // be invisible to the tenant that raised the feedback. Every sibling write
+      // here scopes on tenantId; this create was the gap.
+      tenantId,
       subject: `Survey recovery: ${followUp.surveyTitle}`,
       description,
       type: "support",
@@ -115,7 +120,7 @@ export async function createCaseFromSurveyFollowUp(formData: FormData) {
       assignedToId: user.id,
       lastReplyBy: "staff",
       lastReplyAt: new Date(),
-      messages: { create: { userId: user.id, direction: "staff", type: "note", body: description } },
+      messages: { create: { tenantId, userId: user.id, direction: "staff", type: "note", body: description } },
     },
     select: { id: true, number: true },
   });

@@ -84,31 +84,26 @@ BEGIN
         UPDATE "Campaign" SET "conversionCount" = "conversionCount" + 1 WHERE "id" = latest."campaignId";
       END IF;
     END IF;
-    RETURN NEW;
   END IF;
 
-  IF TG_OP = 'UPDATE' THEN
-    IF NEW."status" = 'won' AND OLD."status" IS DISTINCT FROM 'won' THEN
-      SELECT * INTO latest FROM denago_latest_campaign_touch(NEW."tenantId", NEW."contactId", NEW."updatedAt");
-      IF latest."campaignId" IS NOT NULL THEN
-        INSERT INTO "CampaignConversion" (
-          "id", "tenantId", "campaignId", "touchId", "contactId", "leadId", "conversionType", "valueCents", "eventKey", "occurredAt"
-        ) VALUES (
-          'cc_sale_' || md5(NEW."id"), NEW."tenantId", latest."campaignId", latest."touchId", NEW."contactId", NEW."id",
-          'sale_won', COALESCE(NEW."valueCents", 0), 'sale_won:' || NEW."id", NEW."updatedAt"
-        ) ON CONFLICT ("eventKey") DO NOTHING;
-        GET DIAGNOSTICS inserted_count = ROW_COUNT;
-        IF inserted_count = 1 THEN
-          UPDATE "Campaign"
-          SET "conversionCount" = "conversionCount" + 1,
-              "attributedRevenueCents" = "attributedRevenueCents" + COALESCE(NEW."valueCents", 0)
-          WHERE "id" = latest."campaignId";
-        END IF;
+  IF TG_OP = 'UPDATE' AND NEW."status" = 'won' AND OLD."status" IS DISTINCT FROM 'won' THEN
+    SELECT * INTO latest FROM denago_latest_campaign_touch(NEW."tenantId", NEW."contactId", NEW."updatedAt");
+    IF latest."campaignId" IS NOT NULL THEN
+      INSERT INTO "CampaignConversion" (
+        "id", "tenantId", "campaignId", "touchId", "contactId", "leadId", "conversionType", "valueCents", "eventKey", "occurredAt"
+      ) VALUES (
+        'cc_sale_' || md5(NEW."id"), NEW."tenantId", latest."campaignId", latest."touchId", NEW."contactId", NEW."id",
+        'sale_won', COALESCE(NEW."valueCents", 0), 'sale_won:' || NEW."id", NEW."updatedAt"
+      ) ON CONFLICT ("eventKey") DO NOTHING;
+      GET DIAGNOSTICS inserted_count = ROW_COUNT;
+      IF inserted_count = 1 THEN
+        UPDATE "Campaign"
+        SET "conversionCount" = "conversionCount" + 1,
+            "attributedRevenueCents" = "attributedRevenueCents" + COALESCE(NEW."valueCents", 0)
+        WHERE "id" = latest."campaignId";
       END IF;
     END IF;
-    RETURN NEW;
   END IF;
-
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

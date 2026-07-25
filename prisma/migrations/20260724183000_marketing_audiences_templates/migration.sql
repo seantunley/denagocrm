@@ -45,7 +45,7 @@ CREATE INDEX IF NOT EXISTS "MarketingTemplateVersion_template_created_idx" ON "M
 UPDATE "Segment"
 SET "ruleTree" = jsonb_build_object(
   'operator', 'AND',
-  'rules', CASE WHEN "criteria" IS NULL OR "criteria" = '' THEN '[]'::jsonb ELSE jsonb_build_array(jsonb_build_object('legacyCriteria', "criteria"::jsonb)) END,
+  'rules', CASE WHEN "criteria" IS NULL OR "criteria" = '' THEN '[]'::jsonb ELSE jsonb_build_array(jsonb_build_object('legacyCriteria', to_jsonb("criteria"))) END,
   'exclusions', '[]'::jsonb
 )
 WHERE "ruleTree" IS NULL;
