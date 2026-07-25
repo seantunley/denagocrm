@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS "DemoVehicle" (
   CONSTRAINT "DemoVehicle_battery_check" CHECK ("batteryLevelPct" IS NULL OR "batteryLevelPct" BETWEEN 0 AND 100)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS "DemoVehicle_stockUnitId_key" ON "DemoVehicle"("stockUnitId");
+CREATE UNIQUE INDEX IF NOT EXISTS "DemoVehicle_stockUnitId_key" ON "DemoVehicle"("stockUnitId") WHERE "deletedAt" IS NULL;
 CREATE INDEX IF NOT EXISTS "DemoVehicle_tenantId_idx" ON "DemoVehicle"("tenantId");
 CREATE INDEX IF NOT EXISTS "DemoVehicle_status_branch_idx" ON "DemoVehicle"("status", "branch");
 CREATE INDEX IF NOT EXISTS "DemoVehicle_productId_idx" ON "DemoVehicle"("productId");
