@@ -243,18 +243,26 @@ export async function startRecordSigning(
     }
   }
 
-  await logAudit({
-    action: "signing.send",
-    summary: `Sent “${envelope.title}” (${envelope.refLabel}) for signing`,
-    contactId: envelope.contactId,
-    leadId: sendLeadId,
-    entityType: "SignatureRequest",
-    entityId: requestId,
-    user,
-  });
+  // The workflow/cosign/signers branches below never call dispatchRequest (they
+  // hand off to an in-person/modal or a workflow-driven flow instead), so
+  // logging here is accurate for them. Only the final fallback actually
+  // attempts email/WhatsApp delivery — that path gates this same log on
+  // notified > 0 instead, so "Sent ... for signing" can't be recorded when
+  // nothing was actually delivered.
+  const logSentAudit = () =>
+    logAudit({
+      action: "signing.send",
+      summary: `Sent “${envelope.title}” (${envelope.refLabel}) for signing`,
+      contactId: envelope.contactId,
+      leadId: sendLeadId,
+      entityType: "SignatureRequest",
+      entityId: requestId,
+      user,
+    });
   revalidatePath(recordPath(kind, id));
 
   if (isWorkflow && envelope.frozen) {
+    await logSentAudit();
     // The graph + recipient node IDs were committed in the creation transaction;
     // advance the first node now. advanceWorkflow is idempotent, and a retry that
     // reuses an un-advanced request repairs it the same way (repairWorkflow).
@@ -287,6 +295,7 @@ export async function startRecordSigning(
   }
 
   if (envelope.signers) {
+    await logSentAudit();
     return {
       ok: true,
       requestId: requestId,
@@ -295,6 +304,7 @@ export async function startRecordSigning(
   }
 
   if (envelope.cosign) {
+    await logSentAudit();
     const dealer = await prisma.signatureRecipient.findFirst({
       where: { requestId: requestId, order: 0 },
     });
@@ -309,6 +319,7 @@ export async function startRecordSigning(
   }
 
   const { notified } = await dispatchRequest(requestId);
+  if (notified > 0) await logSentAudit();
   return { ok: true, requestId: requestId, notified };
 }
 
@@ -334,14 +345,19 @@ export async function resendRecordSigning(
   // A resend deliberately re-notifies already-"sent" recipients — pass reminder so
   // notifyRecipient's at-most-once first-send claim doesn't skip them.
   const { notified } = await dispatchRequest(state.requestId, { reminder: true });
-  await logAudit({
-    action: "signing.remind",
-    summary: `Resent “${state.title}” for signing`,
-    entityType: "SignatureRequest",
-    entityId: state.requestId,
-    user,
-  });
   revalidatePath(recordPath(kind, id));
+  // Truthful reporting: only log a resend once a provider actually accepted at
+  // least one message — a request whose recipients were all unreachable or
+  // whose sends all failed must not write a "Resent" audit entry.
+  if (notified > 0) {
+    await logAudit({
+      action: "signing.remind",
+      summary: `Resent “${state.title}” for signing`,
+      entityType: "SignatureRequest",
+      entityId: state.requestId,
+      user,
+    });
+  }
   return { ok: true, requestId: state.requestId, notified };
 }
 

@@ -32,10 +32,20 @@ export async function sendRequest(requestId: string): Promise<{ ok: boolean; not
   const reachable = req.recipients.filter((r) => r.role !== "viewer" && (r.email || r.phone));
   if (reachable.length === 0) return { ok: false, error: "Add an email or phone to at least one signer first." };
 
-  const { notified } = await dispatchRequest(requestId);
-  await logAudit({ action: "signing.send", summary: `Sent “${req.title}” for signing`, entityType: "SignatureRequest", entityId: requestId, user });
+  const { notified, unreachable } = await dispatchRequest(requestId);
   revalidatePath("/signatures");
   revalidatePath(`/signatures/${requestId}`);
+  // Truthful reporting: never log a successful send, or report ok, merely
+  // because recipients were targeted — only once a provider actually
+  // accepted at least one message (matches sendDocForSigning's rule).
+  if (notified === 0) {
+    return {
+      ok: false,
+      notified: 0,
+      error: unreachable > 0 ? "No recipient could be reached — check their contact details." : "Delivery failed for every recipient. Try again shortly.",
+    };
+  }
+  await logAudit({ action: "signing.send", summary: `Sent “${req.title}” for signing`, entityType: "SignatureRequest", entityId: requestId, user });
   return { ok: true, notified };
 }
 
@@ -43,9 +53,10 @@ export async function remindRecipient(recipientId: string): Promise<{ ok: boolea
   const user = await requireOwner();
   const r = await prisma.signatureRecipient.findUnique({ where: { id: recipientId } });
   if (!r) return { ok: false };
-  await notifyRecipient(recipientId, { reminder: true });
-  await logAudit({ action: "signing.remind", summary: `Reminded ${r.name}`, entityType: "SignatureRecipient", entityId: recipientId, user });
+  const outcome = await notifyRecipient(recipientId, { reminder: true });
   revalidatePath(`/signatures/${r.requestId}`);
+  if (!outcome.delivered) return { ok: false };
+  await logAudit({ action: "signing.remind", summary: `Reminded ${r.name}`, entityType: "SignatureRecipient", entityId: recipientId, user });
   return { ok: true };
 }
 
