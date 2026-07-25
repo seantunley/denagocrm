@@ -6,7 +6,7 @@ function migration(path: string) {
   return readFileSync(new URL(`../prisma/migrations/${path}/migration.sql`, import.meta.url), "utf8");
 }
 
-const campaign = migration("20260724150000_campaign_lifecycle");
+const campaign = migration("20260724173000_campaign_schema_state_machine");
 const content = migration("20260724183000_marketing_audiences_templates");
 const survey = migration("20260724190000_survey_lifecycle_versioning");
 const distribution = migration("20260724200000_survey_distributions_queue");

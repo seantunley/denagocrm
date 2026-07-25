@@ -42,10 +42,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS "MarketingTemplateVersion_template_version_key
 CREATE INDEX IF NOT EXISTS "MarketingTemplateVersion_tenantId_idx" ON "MarketingTemplateVersion"("tenantId");
 CREATE INDEX IF NOT EXISTS "MarketingTemplateVersion_template_created_idx" ON "MarketingTemplateVersion"("templateId", "createdAt" DESC);
 
+-- "criteria" is a free-form historical string column — some rows predate
+-- strict JSON and are not valid JSON at all. A bare "criteria"::jsonb cast
+-- throws on the first such row and aborts this entire migration (which also
+-- creates the MarketingAudienceVersion/MarketingTemplateVersion tables above,
+-- so a crash here blocks every later migration behind it too). This function
+-- never throws: valid JSON parses as before, anything else backfills to a
+-- distinct, explicitly-flagged marker instead of silently becoming a
+-- same-shaped-but-wrong rule (marketingAudiences.ts's matchesNode treats
+-- invalidHistoricalCriteria as "exclude until reviewed", not "match everyone").
+CREATE OR REPLACE FUNCTION denago_safe_jsonb(input text)
+RETURNS jsonb AS $$
+BEGIN
+  RETURN input::jsonb;
+EXCEPTION WHEN OTHERS THEN
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
 UPDATE "Segment"
 SET "ruleTree" = jsonb_build_object(
   'operator', 'AND',
-  'rules', CASE WHEN "criteria" IS NULL OR "criteria" = '' THEN '[]'::jsonb ELSE jsonb_build_array(jsonb_build_object('legacyCriteria', "criteria"::jsonb)) END,
+  'rules', CASE
+    WHEN "criteria" IS NULL OR "criteria" = '' THEN '[]'::jsonb
+    WHEN denago_safe_jsonb("criteria") IS NOT NULL THEN jsonb_build_array(jsonb_build_object('legacyCriteria', denago_safe_jsonb("criteria")))
+    ELSE jsonb_build_array(jsonb_build_object('legacyCriteria', jsonb_build_object('invalidHistoricalCriteria', true, 'raw', "criteria")))
+  END,
   'exclusions', '[]'::jsonb
 )
 WHERE "ruleTree" IS NULL;

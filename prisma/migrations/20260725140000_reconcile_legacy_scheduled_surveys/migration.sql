@@ -8,49 +8,66 @@
 --
 -- Every step is idempotent (deterministic ids + WHERE ... IS NULL guards), so
 -- re-running this migration is always safe.
-
--- One distribution per survey that has orphaned legacy rows AND a valid
--- published version to pin them to. Bucketed at the survey level because
--- SurveyDistribution is the unit of scheduling in the new model — there is no
--- per-recipient scheduledFor once a response is "queued", so the earliest of
--- the group's original scheduledFor times becomes the bucket's activation
--- gate. This can send an individually-later-scheduled legacy invite a bit
--- earlier than its original delay; that is preferable to the alternative
--- (never sending it at all).
+--
+-- Bucketed by survey + channel + purpose + calendar day, NOT collapsed to one
+-- distribution per survey: a single per-survey bucket would (a) send a
+-- recipient scheduled days later as soon as the earliest recipient in the
+-- whole survey became due, (b) force every legacy channel to 'any' even where
+-- a recipient's original invite was channel-pinned (email/sms), and (c)
+-- mislabel every legacy invite 'survey_transactional' even where the source
+-- survey (nps/adhoc) is governed as marketing — bypassing that policy's
+-- stricter consent/suppression rules. Bucketing by calendar day still caps
+-- the earliest-recipient skew at at most 24h (accepted as "safely bucketed",
+-- vs. attempting exact per-recipient distributions for a one-off historical
+-- reconciliation).
 INSERT INTO "SurveyDistribution" (
   "id", "tenantId", "surveyId", "surveyVersion", "name", "purpose", "channel", "status",
   "audienceSnapshot", "scheduledFor", "reminderAfterHours", "maxReminders", "totalCount",
   "createdById", "createdAt", "updatedAt"
 )
 SELECT
-  'sd_legacy_' || md5(s."id"),
-  s."tenantId",
-  s."id",
-  s."publishedVersion",
-  s."title" || ' · legacy scheduled reconciliation',
-  'survey_transactional',
-  'any',
-  CASE WHEN MIN(r."scheduledFor") <= CURRENT_TIMESTAMP THEN 'queued' ELSE 'scheduled' END,
+  'sd_legacy_' || md5(g."surveyId" || '|' || g."channel" || '|' || g."purpose" || '|' || g."dayBucket"::text),
+  g."tenantId",
+  g."surveyId",
+  g."publishedVersion",
+  g."title" || ' · legacy scheduled reconciliation (' || g."channel" || ', ' || to_char(g."dayBucket", 'YYYY-MM-DD') || ')',
+  g."purpose",
+  g."channel",
+  CASE WHEN MIN(g."scheduledFor") <= CURRENT_TIMESTAMP THEN 'queued' ELSE 'scheduled' END,
   jsonb_build_object('source', 'legacy_scheduled_reconciliation', 'reconciledCount', COUNT(*)),
-  MIN(r."scheduledFor"),
+  MIN(g."scheduledFor"),
   48,
   1,
   COUNT(*),
   NULL,
   CURRENT_TIMESTAMP,
   CURRENT_TIMESTAMP
-FROM "SurveyResponse" r
-JOIN "Survey" s ON s."id" = r."surveyId"
-WHERE r."status" = 'scheduled'
-  AND r."distributionId" IS NULL
-  AND s."status" = 'published'
-  AND s."publishedVersion" IS NOT NULL
-  AND s."deletedAt" IS NULL
-GROUP BY s."id", s."tenantId", s."publishedVersion", s."title"
+FROM (
+  SELECT
+    r."id",
+    r."scheduledFor",
+    s."id" AS "surveyId",
+    s."tenantId",
+    s."publishedVersion",
+    s."title",
+    COALESCE(r."channel", 'any') AS "channel",
+    -- Mirrors surveyDistributions.ts's createDistribution: nps/adhoc surveys
+    -- are governed as marketing, csat/sales as transactional.
+    CASE WHEN s."type" IN ('nps', 'adhoc') THEN 'survey_marketing' ELSE 'survey_transactional' END AS "purpose",
+    date_trunc('day', COALESCE(r."scheduledFor", CURRENT_TIMESTAMP)) AS "dayBucket"
+  FROM "SurveyResponse" r
+  JOIN "Survey" s ON s."id" = r."surveyId"
+  WHERE r."status" = 'scheduled'
+    AND r."distributionId" IS NULL
+    AND s."status" = 'published'
+    AND s."publishedVersion" IS NOT NULL
+    AND s."deletedAt" IS NULL
+) g
+GROUP BY g."surveyId", g."tenantId", g."publishedVersion", g."title", g."channel", g."purpose", g."dayBucket"
 ON CONFLICT DO NOTHING;
 
--- Point every migratable orphaned response at its new distribution,
--- preserving token, contact, channel and pinning it to the survey's current
+-- Point every migratable orphaned response at its bucket's new distribution,
+-- preserving contact, channel and pinning it to the survey's current
 -- published version so it renders the same questions it was originally sent
 -- against as closely as the historical record allows.
 UPDATE "SurveyResponse" r
@@ -59,7 +76,11 @@ SET "distributionId" = d."id",
     "status" = 'queued'
 FROM "Survey" s, "SurveyDistribution" d
 WHERE r."surveyId" = s."id"
-  AND d."id" = 'sd_legacy_' || md5(s."id")
+  AND d."id" = 'sd_legacy_' || md5(
+    s."id" || '|' || COALESCE(r."channel", 'any') || '|' ||
+    (CASE WHEN s."type" IN ('nps', 'adhoc') THEN 'survey_marketing' ELSE 'survey_transactional' END) || '|' ||
+    date_trunc('day', COALESCE(r."scheduledFor", CURRENT_TIMESTAMP))::text
+  )
   AND r."status" = 'scheduled'
   AND r."distributionId" IS NULL
   AND s."status" = 'published'
