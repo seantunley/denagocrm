@@ -16,7 +16,12 @@ export const PERMISSIONS = [
   "document_templates.manage",
   "cases.view_all", "cases.view_owned", "cases.reply", "cases.manage",
   "cases.assign", "cases.create",
-  "campaigns.view", "campaigns.manage", "surveys.view", "surveys.manage",
+  "campaigns.view", "campaigns.manage",
+  "campaigns.create", "campaigns.edit", "campaigns.review", "campaigns.approve",
+  "campaigns.schedule", "campaigns.send", "campaigns.pause", "campaigns.cancel",
+  "campaigns.retry", "campaigns.archive", "campaigns.manage_audiences",
+  "campaigns.manage_templates", "campaigns.view_analytics",
+  "surveys.view", "surveys.manage",
   "vehicles.view_all", "vehicles.view_owned", "vehicles.manage",
   "jobcards.view_all", "jobcards.view_owned", "jobcards.manage",
   "parts.view", "parts.manage", "warranty.view", "warranty.manage",
@@ -186,7 +191,7 @@ export async function getAccessibleContactIds(user: PermissionUser): Promise<str
         ...(leadIds === null
           ? [{ leads: { some: { deletedAt: null } } }]
           : leadIds.length
-            ? [{ leads: { some: { id: { in: leadIds } } } }]
+            ? [{ leads: { some: { id: { in: leadIds } } }]
             : []),
       ],
     },
