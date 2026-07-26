@@ -1,0 +1,31 @@
+model MarketingAudienceVersion {
+  id            String   @id @default(cuid())
+  tenantId      String?
+  segmentId     String
+  version       Int
+  ruleTree      Json
+  explanation   String?
+  createdById   String?
+  createdByName String?
+  createdAt     DateTime @default(now())
+
+  @@unique([segmentId, version])
+  @@index([tenantId])
+  @@index([segmentId, createdAt(sort: Desc)])
+}
+
+model MarketingTemplateVersion {
+  id            String   @id @default(cuid())
+  tenantId      String?
+  templateId    String
+  version       Int
+  snapshot      Json
+  reason        String?
+  createdById   String?
+  createdByName String?
+  createdAt     DateTime @default(now())
+
+  @@unique([templateId, version])
+  @@index([tenantId])
+  @@index([templateId, createdAt(sort: Desc)])
+}

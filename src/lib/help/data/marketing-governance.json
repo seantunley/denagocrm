@@ -1,0 +1,115 @@
+[
+  {
+    "slug": "campaigns-overview",
+    "title": "Campaigns: governed workflow and statuses",
+    "summary": "Create persistent drafts, pass review and approval, schedule safely, and understand every campaign status.",
+    "category": "marketing",
+    "audience": "everyone",
+    "keywords": ["campaign", "draft", "review", "approval", "schedule", "status"],
+    "body": [
+      {"type": "p", "text": "Campaigns are managed from **Marketing → Campaigns**. Creating a campaign immediately saves a draft; nothing is delivered until the campaign passes review, is approved, and is queued or scheduled."},
+      {"type": "table", "headers": ["Status", "Meaning"], "rows": [["Draft / changes requested", "Editable working content"], ["In review", "Locked while a reviewer checks content and audience"], ["Approved", "Ready to schedule or queue"], ["Scheduled", "Waiting for its launch time"], ["Queued / sending", "Recipients are being atomically claimed by the background worker"], ["Paused", "No new recipients are sent"], ["Completed / completed with errors", "Delivery is finished; issues remain visible"], ["Cancelled / archived", "No remaining delivery work"]]},
+      {"type": "callout", "tone": "warning", "text": "The legacy direct-send button is retired. It cannot bypass review, approval, delivery-time consent or the durable queue."}
+    ]
+  },
+  {
+    "slug": "campaigns-build-and-send",
+    "title": "Campaigns: create, review, approve and launch",
+    "summary": "Build a persisted campaign, run QA, approve it, and send now or schedule it without delivering inside the web request.",
+    "category": "marketing",
+    "audience": "managers",
+    "keywords": ["create campaign", "autosave", "test send", "approve", "schedule"],
+    "body": [
+      {"type": "steps", "items": ["Open Marketing → Campaigns and create a campaign. A safe draft record is created immediately.", "Complete the brief, objective, offer, audience, content, CTA, UTM and attribution settings. Draft changes autosave, and Save draft is also available.", "Use a test send for the current operator only; test delivery does not launch the audience.", "Submit for review. Server-side QA checks required content, URLs, merge variables and audience readiness.", "A different authorised reviewer approves the campaign or requests changes with a note.", "From the approved state, choose Send now or a future schedule. The exact content version and resolved audience are frozen before recipient rows are created."]},
+      {"type": "p", "text": "Send now changes the campaign to **queued**. Scheduling changes it to **scheduled**. Provider delivery happens later in bounded background batches, never inside the button request."}
+    ]
+  },
+  {
+    "slug": "campaigns-audiences-and-subscribers",
+    "title": "Campaigns: versioned audiences and consent",
+    "summary": "Build reusable AND/OR audiences with exclusions and understand delivery-time suppression.",
+    "category": "marketing",
+    "audience": "managers",
+    "keywords": ["audience", "segment", "and or", "exclusion", "consent", "suppression"],
+    "body": [
+      {"type": "p", "text": "Audiences support nested **AND / OR** groups and explicit exclusions. Rules can use source, province, tags, vehicle ownership/model, lead and quote status, product interest, service due and customer value."},
+      {"type": "list", "items": ["Preview the live count and explanation before saving.", "Each saved change creates an audience version.", "The campaign resolves the audience again at launch and stores the exact criteria snapshot.", "Recipient eligibility is checked again immediately before delivery."]},
+      {"type": "callout", "tone": "info", "text": "Opt-outs, withdrawn consent, deleted contacts, missing channel details, frequency caps and duplicate delivery are recorded as suppressions rather than provider failures."}
+    ]
+  },
+  {
+    "slug": "campaigns-tracking-and-analytics",
+    "title": "Campaigns: delivery, UTMs and attribution",
+    "summary": "Read delivery and engagement metrics, configure UTMs, and understand last-click lead, quote and sale attribution.",
+    "category": "marketing",
+    "audience": "everyone",
+    "keywords": ["open", "click", "utm", "attribution", "conversion", "roas", "cost per lead"],
+    "body": [
+      {"type": "p", "text": "Tracked links append configured UTM values without replacing parameters already present on the destination. Opens and clicks create tenant-scoped marketing touches."},
+      {"type": "p", "text": "Conversion attribution is explicit **last click** inside the campaign's configured lookback window. The ledger records lead creation, quote sent/accepted and won sales. Revenue is counted only when a real value exists."},
+      {"type": "list", "items": ["ROAS = attributed won-sale revenue ÷ entered campaign budget.", "Cost per lead = entered campaign budget ÷ attributed leads.", "Clicks are the conversion touch; opens are engagement only.", "Activity outside the attribution window remains unattributed."]},
+      {"type": "callout", "tone": "warning", "text": "Open tracking is approximate because mail clients may pre-load or block images. Use clicks and downstream conversions for stronger evidence."}
+    ]
+  },
+  {
+    "slug": "surveys-overview",
+    "title": "Surveys: lifecycle, versions and governance",
+    "summary": "Create inactive survey drafts, review and approve them, and publish immutable customer-facing versions.",
+    "category": "marketing",
+    "audience": "managers",
+    "keywords": ["survey", "draft", "review", "approve", "publish", "version"],
+    "body": [
+      {"type": "p", "text": "New surveys are always inactive drafts. The lifecycle is **draft → in review → approved → published**. Reviewers can request changes; published surveys can be deactivated or archived."},
+      {"type": "list", "items": ["The submitter cannot approve their own survey.", "Publishing creates an immutable SurveyVersion snapshot.", "A published form cannot be edited in place; create a revision draft instead.", "Only one active survey may own a given automatic trigger for a tenant.", "Replacing a trigger owner is explicit and transactional."]}
+    ]
+  },
+  {
+    "slug": "surveys-build-and-configure",
+    "title": "Surveys: build, validate and publish",
+    "summary": "Configure questions and messages, pass review validation, and publish a frozen version.",
+    "category": "marketing",
+    "audience": "managers",
+    "keywords": ["survey builder", "questions", "required", "publish", "trigger"],
+    "body": [
+      {"type": "steps", "items": ["Create an inactive draft from Marketing → Surveys.", "Edit the title, introduction, thank-you message, delay and supported questions.", "Submit for review. Required labels, unique IDs, supported question types and answer options are validated.", "A separate authorised operator approves the survey.", "Publish an immutable version and optionally assign an automatic trigger. Choose Replace existing only when intentionally moving a trigger from another active survey."]},
+      {"type": "callout", "tone": "info", "text": "Existing invitation links render and validate against the version frozen on that response, even after a later survey revision is published."}
+    ]
+  },
+  {
+    "slug": "surveys-send-and-responses",
+    "title": "Surveys: distributions, reminders and responses",
+    "summary": "Create a durable distribution, schedule delivery, manage reminders and review separate failure and suppression states.",
+    "category": "marketing",
+    "audience": "managers",
+    "keywords": ["survey distribution", "queue", "reminder", "pause", "retry", "response"],
+    "body": [
+      {"type": "steps", "items": ["Open Marketing → Surveys → Distributions.", "Choose an active published survey, audience, communication purpose and channel.", "Send immediately or schedule a future date, then choose the reminder delay and maximum reminders.", "Use the distribution detail page to pause, resume, cancel remaining work or manually retry permanent failures."]},
+      {"type": "p", "text": "The queue atomically claims recipients, rechecks contact policy at delivery time, recovers stale claims and separates **suppressed** recipients from temporary and permanent provider failures."},
+      {"type": "callout", "tone": "warning", "text": "The legacy bulk Send now action is retired. Only a single operator test invitation can still be sent directly."}
+    ]
+  },
+  {
+    "slug": "survey-insights-and-recovery",
+    "title": "Survey insights and closed-loop recovery",
+    "summary": "Interpret response rate, NPS and CSAT correctly and resolve negative feedback through an owned recovery queue.",
+    "category": "marketing",
+    "audience": "managers",
+    "keywords": ["nps", "csat", "response rate", "detractor", "follow-up", "support case"],
+    "body": [
+      {"type": "list", "items": ["Response rate uses only successfully sent or completed invitations as the denominator.", "NPS is promoter percentage minus detractor percentage.", "CSAT is the percentage of scored CSAT/post-sale responses rated 4 or 5.", "Average response time starts at actual invite delivery."]},
+      {"type": "p", "text": "Low NPS and CSAT responses automatically create one closed-loop follow-up. Assign it to an active team member, record the resolution, or escalate it into a support case containing the customer, score and comment context."}
+    ]
+  },
+  {
+    "slug": "marketing-overview-and-calendar",
+    "title": "Marketing overview and calendar",
+    "summary": "Use the unified overview, work queues and calendar to operate campaigns and survey distributions together.",
+    "category": "marketing",
+    "audience": "everyone",
+    "keywords": ["marketing overview", "calendar", "work queue", "roas", "survey health"],
+    "body": [
+      {"type": "p", "text": "Marketing → Overview combines campaign delivery, clicks, attributable leads/quotes/sales, revenue, budget efficiency, survey health and unresolved recovery work."},
+      {"type": "p", "text": "Marketing → Calendar shows scheduled campaign launches and survey distributions in one monthly view. Opening an event takes you to its governed detail record."}
+    ]
+  }
+]

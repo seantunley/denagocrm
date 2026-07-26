@@ -1,0 +1,38 @@
+// Governed marketing campaign versions and lifecycle events. Delivery-provider
+// events are a separate ledger (`CampaignEvent`) owned by the SendGrid delivery
+// integration; using a distinct model/table prevents schema collisions and keeps
+// workflow/audit events independent from provider webhook idempotency.
+
+model CampaignVersion {
+  id            String   @id @default(cuid())
+  tenantId      String?
+  campaignId    String
+  version       Int
+  snapshot      Json
+  reason        String?
+  createdById   String?
+  createdByName String?
+  createdAt     DateTime @default(now())
+
+  @@unique([campaignId, version])
+  @@index([campaignId, createdAt(sort: Desc)])
+  @@index([tenantId])
+}
+
+model MarketingCampaignEvent {
+  id                  String   @id @default(cuid())
+  tenantId            String?
+  campaignId          String
+  campaignRecipientId String?
+  contactId           String?
+  type                String
+  url                 String?
+  providerMessageId   String?
+  metadata            Json?
+  occurredAt          DateTime @default(now())
+
+  @@index([campaignId, type, occurredAt])
+  @@index([campaignRecipientId, occurredAt])
+  @@index([contactId, occurredAt])
+  @@index([tenantId])
+}
