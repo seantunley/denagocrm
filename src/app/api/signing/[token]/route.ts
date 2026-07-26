@@ -151,7 +151,17 @@ async function handleSign(token: string, req: Request): Promise<Response> {
       // Field values land in the same transaction, so they're visible exactly
       // when the recipient becomes "signed".
       for (const u of updates) {
-        await tx.signatureField.update({ where: { id: u.id }, data: { value: u.value, filledAt } });
+        const fieldRow = fillable.get(u.id);
+        if (fieldRow && fieldRow.recipientId === null) {
+          // Unassigned field: any recipient may fill it, but in parallel
+          // signing two recipients can race on the SAME field. First writer
+          // wins — claim it atomically (only if still unfilled) so a second,
+          // concurrent recipient can't silently overwrite the first one's
+          // value with their own.
+          await tx.signatureField.updateMany({ where: { id: u.id, filledAt: null }, data: { value: u.value, filledAt } });
+        } else {
+          await tx.signatureField.update({ where: { id: u.id }, data: { value: u.value, filledAt } });
+        }
       }
     });
   } catch (e) {
