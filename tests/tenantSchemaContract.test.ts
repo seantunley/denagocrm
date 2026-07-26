@@ -24,16 +24,15 @@ import { GLOBAL_MODELS } from "../src/lib/tenantGuard";
 // as the deliberately-visible escape hatch so the gap is TRACKED, not silent.
 // Each MUST be resolved before tenant enforcement is enabled, or its queries
 // fail closed on a missing column:
-//   - Journey* (journeys.prisma): PR #200 adds their `tenantId` slice — remove
-//     from PENDING once that merges.
-// governance.prisma's RBAC/forecast models are already resolved (not pending):
-// SalesPipeline/Team/TeamMember/UserRole/ForecastSnapshot/AuditEvent got a
-// tenantId slice (migration 20260725160000); Role/Permission/RolePermission
-// were decided GLOBAL — one shared permission taxonomy, not per-tenant — and
-// moved to GLOBAL_MODELS in tenantGuard.ts instead.
-const PENDING = new Set<string>([
-  "Journey", "JourneyVersion", "JourneyEvent", "JourneyRun", "JourneyStepLog",
-]);
+// governance.prisma's RBAC/forecast models are resolved: SalesPipeline/Team/
+// TeamMember/UserRole/ForecastSnapshot/AuditEvent got a tenantId slice (migration
+// 20260725160000); Role/Permission/RolePermission were decided GLOBAL — one shared
+// permission taxonomy, not per-tenant — and moved to GLOBAL_MODELS in tenantGuard.ts.
+// journeys.prisma's Journey* models got their tenantId slice (migration
+// 20260726200000_journey_tenant_isolation), so nothing remains PENDING — every
+// model is now explicitly global or tenant-scoped, the precondition for enabling
+// enforcement.
+const PENDING = new Set<string>([]);
 
 // Prisma is configured with `schema: "./prisma"` (folder mode), so it loads
 // EVERY `prisma/*.prisma` file — not just schema.prisma. Read them all, or a
