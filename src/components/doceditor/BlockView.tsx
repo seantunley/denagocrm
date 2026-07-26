@@ -2,6 +2,7 @@
 
 import type { DocumentBlock } from "@/lib/doceditor/model";
 import { computePricing } from "@/lib/doceditor/serialize";
+import { brandFooterContent, SOCIAL_ICON_PATHS, COMPANY_DEFAULTS } from "@/lib/companyBrand";
 import { ActiveRichText, ReadOnlyRichText } from "./RichText";
 
 function money(amount: number, currency: string): string {
@@ -150,12 +151,32 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
           {block.items.map((it, i) => <div key={i} style={{ fontSize: 11, color: "#64748b", marginBottom: 2 }}>• {it.text}</div>)}
         </div>
       );
-    case "footer":
+    case "footer": {
+      if (block.variant === "simple") {
+        return (
+          <div style={{ borderTop: `1.5px solid ${block.accent}`, paddingTop: 6, textAlign: "center" }}>
+            {block.lines.map((l, i) => <div key={i} style={{ fontSize: i === 0 ? 9 : 8, fontWeight: i === 0 ? 700 : 400, color: i === 0 ? "#334155" : "#64748b" }}>{l.text}</div>)}
+          </div>
+        );
+      }
+      // Editor preview uses the Company Profile defaults; the exported PDF resolves
+      // the live {{company.*}} tokens for whatever the tenant has saved.
+      const f = brandFooterContent((k) => COMPANY_DEFAULTS[k] ?? "");
       return (
-        <div style={{ borderTop: `1.5px solid ${block.accent}`, paddingTop: 6, textAlign: "center" }}>
-          {block.lines.map((l, i) => <div key={i} style={{ fontSize: i === 0 ? 9 : 8, fontWeight: i === 0 ? 700 : 400, color: i === 0 ? "#334155" : "#64748b" }}>{l.text}</div>)}
+        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 9, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 18 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#0f172a" }}>{f.title}</div>
+            {f.contact && <div style={{ fontSize: 8.5, color: "#64748b", marginTop: 2 }}>{f.contact}</div>}
+            {f.web && <div style={{ fontSize: 8.5, color: "#2563eb", marginTop: 1 }}>{f.web}</div>}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, whiteSpace: "nowrap" }}>
+            <svg width={13} height={13} viewBox="0 0 24 24" fill="#1877f2" style={{ display: "inline-block", verticalAlign: "middle" }}><path d={SOCIAL_ICON_PATHS.facebook} /></svg>
+            <svg width={13} height={13} viewBox="0 0 24 24" fill="#e4405f" style={{ display: "inline-block", verticalAlign: "middle" }}><path d={SOCIAL_ICON_PATHS.instagram} /></svg>
+            {f.instagram && <span style={{ fontSize: 8.5, color: "#0f172a", fontWeight: 600 }}>{f.instagram}</span>}
+          </div>
         </div>
       );
+    }
 
     case "conditional": {
       const badge = block.when?.trim() ? block.when : "always";
