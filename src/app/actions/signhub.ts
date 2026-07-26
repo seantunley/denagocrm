@@ -49,7 +49,7 @@ export async function sendRequest(requestId: string): Promise<{ ok: boolean; not
  * actually went out. Mirrors the already-correct resendRecordSigning.
  */
 export async function resendRequest(requestId: string): Promise<{ ok: boolean; notified?: number; error?: string }> {
-  const user = await requireOwner();
+  const user = await requirePermission("signing.manage");
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } });
   if (!req || req.deletedAt) return { ok: false, error: "Not found" };
   if (req.status === "draft") return { ok: false, error: "This request hasn't been sent yet." };
