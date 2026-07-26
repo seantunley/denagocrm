@@ -1,7 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/db";
-import { requirePermission } from "@/lib/permissions";
+import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 import { blockSchema } from "@/lib/doceditor/model";
@@ -14,7 +14,7 @@ const saveSchema = z.object({
 
 /** Save one or more blocks to the reusable content library. Payload is validated. */
 export async function saveLibraryItem(input: unknown): Promise<{ ok: boolean }> {
-  const user = await requirePermission("docbuilder.manage");
+  const user = await requireOwner();
   const parsed = saveSchema.safeParse(input);
   if (!parsed.success) return { ok: false };
   await prisma.reusableBlock.create({
@@ -30,7 +30,7 @@ export async function saveLibraryItem(input: unknown): Promise<{ ok: boolean }> 
 
 /** List doc-editor library items (newest first). */
 export async function listLibraryItems() {
-  await requirePermission("docbuilder.manage");
+  await requireOwner();
   try {
     const rows = await prisma.reusableBlock.findMany({
       where: { deletedAt: null },
@@ -46,7 +46,7 @@ export async function listLibraryItems() {
 }
 
 export async function deleteLibraryItem(id: string): Promise<{ ok: boolean }> {
-  const user = await requirePermission("docbuilder.manage");
+  const user = await requireOwner();
   await prisma.reusableBlock.update({ where: { id }, data: { deletedAt: new Date() } });
   await logAudit({ action: "doclibrary.delete", summary: "Deleted a content-library item", entityType: "ReusableBlock", entityId: id, user });
   return { ok: true };

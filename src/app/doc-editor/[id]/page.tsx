@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { requirePermission } from "@/lib/permissions";
+import { requireOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
@@ -15,7 +15,7 @@ export default async function DocEditorPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requirePermission("docbuilder.manage");
+  await requireOwner();
   const { id } = await params;
   const template = await getBuilderTemplate(id);
   if (!template) notFound();
