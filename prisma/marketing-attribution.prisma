@@ -1,0 +1,39 @@
+model MarketingTouch {
+  id                  String   @id @default(cuid())
+  tenantId            String?
+  campaignId          String
+  campaignRecipientId String?
+  contactId           String?
+  type                String
+  targetUrl           String?
+  utmSource           String?
+  utmMedium           String?
+  utmCampaign         String?
+  utmContent          String?
+  utmTerm             String?
+  eventKey            String   @unique
+  metadata            Json
+  occurredAt          DateTime @default(now())
+
+  @@index([tenantId, contactId, occurredAt(sort: Desc)])
+  @@index([campaignId, occurredAt(sort: Desc)])
+}
+
+model CampaignConversion {
+  id               String   @id @default(cuid())
+  tenantId         String?
+  campaignId       String
+  touchId          String?
+  contactId        String?
+  leadId           String?
+  quoteId          String?
+  conversionType   String
+  valueCents       Int      @default(0)
+  attributionModel String   @default("last_touch")
+  eventKey         String   @unique
+  occurredAt       DateTime @default(now())
+  metadata         Json
+
+  @@index([campaignId, conversionType, occurredAt(sort: Desc)])
+  @@index([tenantId, contactId, occurredAt(sort: Desc)])
+}

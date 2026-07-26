@@ -16,6 +16,21 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
   );
 }
 
+function campaignTone(status: string) {
+  if (status === "completed") return "success" as const;
+  if (["failed", "completed_with_errors"].includes(status)) return "danger" as const;
+  if (["sending", "paused", "changes_requested"].includes(status)) return "warning" as const;
+  if (["approved", "scheduled", "queued", "in_review"].includes(status)) return "info" as const;
+  return "neutral" as const;
+}
+
+function recipientTone(status: string) {
+  if (["sent", "delivered"].includes(status)) return "success" as const;
+  if (["failed_temporary", "failed_permanent"].includes(status)) return "danger" as const;
+  if (status === "suppressed") return "warning" as const;
+  return "neutral" as const;
+}
+
 export default async function CampaignDetailPage({ params }: { params: Promise<{ id: string }> }) {
   await requireUser();
   const { id } = await params;
@@ -35,7 +50,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
   const isEmail = campaign.channel === "email";
   const openRate = campaign.sentCount > 0 ? Math.round((campaign.openCount / campaign.sentCount) * 100) : 0;
   const clickRate = campaign.sentCount > 0 ? Math.round((campaign.clickCount / campaign.sentCount) * 100) : 0;
-  const queued = campaign.recipientCount - campaign.sentCount - campaign.failedCount;
+  const queued = Math.max(0, campaign.recipientCount - campaign.sentCount - campaign.failedCount);
 
   return (
     <EntityDetailShell
@@ -43,7 +58,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
       backLabel="Campaigns"
       eyebrow={`${campaign.channel} campaign`}
       title={campaign.name}
-      status={<StatusPill tone={campaign.status === "sent" ? "success" : campaign.status === "failed" ? "danger" : "info"}>{campaign.status}</StatusPill>}
+      status={<StatusPill tone={campaignTone(campaign.status)}>{campaign.status.replaceAll("_", " ")}</StatusPill>}
       description={campaign.subject || `${campaign.audience} audience`}
       meta={`Created ${formatDateTime(campaign.createdAt)}${campaign.createdBy ? ` by ${campaign.createdBy.name}` : ""}`}
       facts={[
@@ -99,10 +114,8 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
                   </Link>
                 </td>
                 <td>
-                  <StatusPill tone={r.status === "sent" ? "success" : r.status === "failed" ? "danger" : "neutral"}>
-                    {r.status}
-                  </StatusPill>
-                  {r.status === "failed" && r.error ? (
+                  <StatusPill tone={recipientTone(r.status)}>{r.status.replaceAll("_", " ")}</StatusPill>
+                  {["failed_temporary", "failed_permanent"].includes(r.status) && r.error ? (
                     <span className="text-xs text-muted-foreground ml-2">{r.error}</span>
                   ) : null}
                 </td>

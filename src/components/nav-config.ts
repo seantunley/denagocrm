@@ -44,7 +44,7 @@ export function buildNav(
   permissionList: string[] = [],
   enabledModules?: ReadonlySet<string>,
 ) {
-  const mods = new Set(modules.split(",").map((m) => m.trim()).filter(Boolean));
+  const mods = new Set(modules.split(",").map((module) => module.trim()).filter(Boolean));
   const permissions = new Set(permissionList);
   const hasModule = (id: string) => isAdmin || mods.has(id);
   const can = (...keys: string[]) => isAdmin || keys.some((key) => permissions.has(key));
@@ -54,9 +54,7 @@ export function buildNav(
     topLinks.push({ href: "/reports", label: "Reports", icon: ChartColumnIncreasing });
     topLinks.push({ href: "/targets", label: "Targets", icon: Target });
   }
-  if (can("forecast.view", "forecast.manage")) {
-    topLinks.push({ href: "/forecast", label: "Forecast", icon: TrendingUp });
-  }
+  if (can("forecast.view", "forecast.manage")) topLinks.push({ href: "/forecast", label: "Forecast", icon: TrendingUp });
 
   const groups: NavGroup[] = [];
 
@@ -86,8 +84,17 @@ export function buildNav(
   }
 
   const marketingLinks: NavLink[] = [];
-  if (can("campaigns.view", "campaigns.manage")) marketingLinks.push({ href: "/campaigns", label: "Campaigns", icon: Megaphone });
-  if (can("surveys.view", "surveys.manage")) marketingLinks.push({ href: "/surveys", label: "Surveys", icon: ClipboardList });
+  if (can("campaigns.view", "campaigns.manage")) {
+    marketingLinks.push({ href: "/marketing/overview", label: "Overview", icon: LayoutDashboard });
+    marketingLinks.push({ href: "/marketing/campaigns", label: "Campaigns", icon: Megaphone });
+    marketingLinks.push({ href: "/marketing/calendar", label: "Calendar", icon: CalendarDays });
+    marketingLinks.push({ href: "/marketing/audiences", label: "Audiences", icon: Users });
+    marketingLinks.push({ href: "/marketing/templates", label: "Templates", icon: Library });
+  }
+  if (can("surveys.view", "surveys.manage")) {
+    marketingLinks.push({ href: "/marketing/surveys", label: "Surveys", icon: ClipboardList });
+    marketingLinks.push({ href: "/marketing/surveys/insights", label: "Survey insights", icon: HeartPulse });
+  }
   if (can("contacts.view_all", "contacts.view_owned")) marketingLinks.push({ href: "/referrals", label: "Referrals", icon: Gift });
   if (marketingLinks.length) groups.push({ key: "marketing", label: "Marketing", links: marketingLinks });
 
@@ -127,13 +134,11 @@ export function buildNav(
   if (can("audit.view")) governanceLinks.push({ href: "/audit", label: "Audit log", icon: ScrollText });
   if (governanceLinks.length) groups.push({ key: "governance", label: "Governance", links: governanceLinks });
 
-  // Module gating: hide links belonging to a disabled pack. Omitting
-  // enabledModules (default) shows everything, so existing callers are unchanged.
   if (enabledModules) {
-    const visibleTop = topLinks.filter((l) => isPathEnabled(l.href, enabledModules));
+    const visibleTop = topLinks.filter((link) => isPathEnabled(link.href, enabledModules));
     const visibleGroups = groups
-      .map((g) => ({ ...g, links: g.links.filter((l) => isPathEnabled(l.href, enabledModules)) }))
-      .filter((g) => g.links.length > 0);
+      .map((group) => ({ ...group, links: group.links.filter((link) => isPathEnabled(link.href, enabledModules)) }))
+      .filter((group) => group.links.length > 0);
     return { topLinks: visibleTop, groups: visibleGroups };
   }
 
