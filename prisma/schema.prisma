@@ -1741,7 +1741,8 @@ model SignatureRecipient {
   // or timeout mid-send) — see recoverStaleSigningClaims in signing/dispatch.ts.
   sendingAt       DateTime?
 
-  fields SignatureField[]
+  fields    SignatureField[]
+  responses SignatureFieldResponse[]
 
   @@index([requestId, order])
   @@index([tenantId])
@@ -1765,10 +1766,39 @@ model SignatureField {
   required Boolean @default(true)
   label    String  @default("")
 
-  value    String? // captured text / signature ref / "true"
+  value    String? // captured text / signature ref / "true" — FIRST committed value (what the sealed PDF stamps)
   filledAt DateTime?
 
+  responses SignatureFieldResponse[]
+
   @@index([requestId])
+  @@index([tenantId])
+}
+
+/// One recipient's answer to a single signature field. `SignatureField.value`
+/// holds only the FIRST committed value — the field has a single placed position,
+/// so the sealed PDF can stamp exactly one value there. On a SHARED field
+/// (recipientId null, fillable by any recipient) every later signer's answer would
+/// otherwise be lost (overwritten, or dropped by the first-write-wins guard). This
+/// table records each recipient's response individually and durably — one row per
+/// (field, recipient) — so no signer's acknowledgement is ever silently discarded.
+model SignatureFieldResponse {
+  id        String @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
+
+  fieldId String
+  field   SignatureField @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  recipientId String
+  recipient   SignatureRecipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  value    String
+  filledAt DateTime @default(now())
+
+  // At most one response per recipient per field: a re-submission updates that
+  // recipient's own row, never forges a second acknowledgement.
+  @@unique([fieldId, recipientId])
+  @@index([recipientId])
   @@index([tenantId])
 }
 

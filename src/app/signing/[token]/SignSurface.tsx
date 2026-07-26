@@ -119,6 +119,9 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
 
   const placed = fields.filter((f) => (f.x > 0 || f.y > 0) && f.x < sheets.width && f.y < sheets.height && f.page < sheets.pages.length);
   const unplaced = fields.filter((f) => !placed.includes(f));
+  // isFieldValueComplete is the SAME kind-aware check the API uses
+  // (missingRequiredForRecipient) — a checkbox only counts once actually
+  // checked, so client and server can't drift on what "required" means.
   const isFilled = useCallback((f: Field) => isFieldValueComplete(f.kind, values[f.id]), [values]);
   const required = fields.filter((f) => f.required && f.kind !== "date");
   const doneCount = required.filter((f) => isFieldValueComplete(f.kind, values[f.id])).length;
