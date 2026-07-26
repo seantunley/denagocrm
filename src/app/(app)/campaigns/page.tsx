@@ -19,7 +19,6 @@ import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { resolveActingTenant } from "@/lib/tenantContext";
 import Tabs from "@/components/Tabs";
-import CampaignComposer from "@/components/CampaignComposer";
 import SegmentBuilder from "@/components/SegmentBuilder";
 import TemplateManager from "@/components/TemplateManager";
 import { isSmtpConfigured } from "@/lib/email";
@@ -45,10 +44,9 @@ import {
 import { WorkspaceHero } from "@/components/workspace-hero";
 import RecordContextMenu from "@/components/RecordContextMenu";
 
-// First send batch runs inside the send action — give it room.
-export const maxDuration = 60;
-
-const CAMPAIGN_TABS = ["overview", "new", "audiences", "subscribers", "templates"];
+// Read-only compatibility screen: campaign creation and launch now live under
+// the governed Marketing → Campaigns workspace, so no bulk send runs here.
+const CAMPAIGN_TABS = ["overview", "audiences", "subscribers", "templates"];
 
 function percentage(value: number, total: number) {
   return total > 0 ? Math.round((value / total) * 100) : 0;
@@ -179,7 +177,7 @@ export default async function CampaignsPage({
         title="No campaigns yet"
         description="Build your first campaign, choose an opted-in audience and start measuring engagement."
         action={
-          <Link href="/campaigns?tab=new" className="btn-primary">
+          <Link href="/marketing/campaigns/new" className="btn-primary">
             <Plus className="size-4" />
             Create campaign
           </Link>
@@ -479,25 +477,6 @@ export default async function CampaignsPage({
     </div>
   );
 
-  const newCampaign = (
-    <div className="space-y-4">
-      {configurationWarning}
-      <CampaignComposer
-        templates={templates.map((template) => ({
-          id: template.id,
-          subject: template.subject,
-          body: template.body,
-        }))}
-        segments={segments.map((segment) => ({
-          id: segment.id,
-          name: `${segment.name} (${segment.count})`,
-        }))}
-        smtpConfigured={smtpConfigured}
-        smsConfigured={smsConfigured}
-      />
-    </div>
-  );
-
   const audiences = (
     <div className="space-y-6">
       <SegmentBuilder tags={tags.map((tag) => ({ id: tag.id, name: tag.name }))} />
@@ -758,7 +737,7 @@ export default async function CampaignsPage({
               <Settings2 className="size-4" />
               Channels
             </Link>
-            <Link href="/campaigns?tab=new" className="btn-primary">
+            <Link href="/marketing/campaigns/new" className="btn-primary">
               <Plus className="size-4" />
               Create campaign
             </Link>
@@ -766,11 +745,19 @@ export default async function CampaignsPage({
         }
       />
 
+      <FeedbackBanner tone="info" title="Campaign creation has moved to Marketing → Campaigns">
+        This screen is now read-only reporting and subscriber consent. Campaigns are
+        drafted, reviewed, approved and queued in the governed{" "}
+        <Link href="/marketing/campaigns" className="font-medium underline">
+          Marketing workspace
+        </Link>
+        , which enforces consent and delivery-time policy on every send.
+      </FeedbackBanner>
+
       <Tabs
         initialKey={initialTab}
         tabs={[
           { key: "overview", label: "Overview", content: overview },
-          { key: "new", label: "Create campaign", content: newCampaign },
           { key: "audiences", label: "Audiences", count: segments.length, content: audiences },
           {
             key: "subscribers",

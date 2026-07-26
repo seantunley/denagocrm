@@ -31,8 +31,10 @@
 | Help and operations | Governed Help Centre, rollout/rollback and full test plan | final | help dataset and three marketing platform documents |
 | Cross-module validation | Source contracts for bypass retirement, queues, frozen versions, audiences and route gates | final | `marketingGovernanceIntegration.test.ts` and migration contracts |
 
+> **Consolidation note:** the ten stacked PRs have been merged into a single release PR — **#222 (`agent/marketing-consolidated`)**. The "Primary PR" column above is historical attribution for each scope; every row is delivered by #222. Do not merge or deploy the intermediate PRs (#202, #207–#213, #215, #216); close them once #222 is approved. See `marketing-platform-rollout.md`.
+
 ## Definition of complete
 
-The implementation scope is complete when all ten PRs are present, the final stacked branch contains every row above, migrations apply cleanly to empty and historical databases, and the required commands in `marketing-platform-test-plan.md` pass on working repository infrastructure.
+The implementation scope is complete when the consolidated branch (#222) contains every row above, migrations apply cleanly to empty and historical databases, and the required commands in `marketing-platform-test-plan.md` pass on working repository infrastructure.
 
-A red CI job with zero executed steps is an infrastructure failure, not an acceptance result. No PR should merge until the complete stack is validated on a functioning runner or equivalent local environment.
+A red CI job with zero executed steps is an infrastructure failure, not an acceptance result. #222 must not merge until the full stack is validated on a functioning runner — unit, governance, security, RBAC, IDOR and tenant-guard suites all executing and passing — or an equivalent local environment.

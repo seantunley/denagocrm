@@ -4,20 +4,29 @@ This document covers the complete stacked implementation that replaces direct ca
 
 ## Pull-request order
 
-Merge and deploy in this order:
+**The entire stack has been consolidated into a single release PR: #222 (`agent/marketing-consolidated`), based on current `main`. Merge and deploy only #222.**
 
-1. PR #202 — campaign schema and state machine
-2. PR #207 — persisted campaign drafts and editor
-3. PR #208 — campaign review, approval and scheduling
-4. PR #209 — campaign queue safety, consent and retries
-5. PR #210 — campaign UX, audiences and templates
-6. PR #211 — survey lifecycle and immutable versions
-7. PR #212 — survey distributions, queue, reminders and retries
-8. PR #213 — survey analytics and closed-loop feedback
-9. PR #215 — attribution, overview and calendar
-10. Final hardening PR — integration, bypass retirement, module/navigation/help and rollout controls
+The originally stacked PRs are **superseded** and must **not** be merged or deployed individually:
 
-Each PR is stacked on the previous branch. After its dependency merges, retarget the next PR to `main` before merging it.
+- #202, #207, #208, #209, #210, #211, #212, #213, #215 (stacked rungs)
+- #216 (final hardening — its content is folded into #222)
+
+Their PR numbers below are retained only as historical attribution for each scope. Close them once #222 is approved.
+
+| Scope | Historical PR |
+|---|---:|
+| Campaign schema and state machine | #202 |
+| Persisted campaign drafts and editor | #207 |
+| Campaign review, approval and scheduling | #208 |
+| Campaign queue safety, consent and retries | #209 |
+| Campaign UX, audiences and templates | #210 |
+| Survey lifecycle and immutable versions | #211 |
+| Survey distributions, queue, reminders and retries | #212 |
+| Survey analytics and closed-loop feedback | #213 |
+| Attribution, overview and calendar | #215 |
+| Integration, bypass retirement, module/navigation/help, rollout controls | #216 |
+
+Because #222 is a single branch off `main`, there is no per-rung retargeting: validate and merge #222 as one unit.
 
 ## Pre-deployment checks
 
