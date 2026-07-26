@@ -470,6 +470,7 @@ model Campaign {
   // Attribution / rollups.
   attributionWindowDays Int @default(30)
   conversionCount  Int @default(0)
+  attributedRevenueCents Int @default(0)
   revenueCents     Int @default(0)
   suppressedCount  Int @default(0)
   unsubscribeCount Int @default(0)
