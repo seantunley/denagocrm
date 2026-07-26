@@ -122,7 +122,7 @@ export const ALL_MODULE_IDS: ModuleId[] = MODULE_REGISTRY.map((module) => module
 export const OPTIONAL_MODULE_IDS: ModuleId[] = MODULE_REGISTRY.filter((module) => !module.mandatory).map((module) => module.id);
 export const MANDATORY_MODULE_IDS: ModuleId[] = MODULE_REGISTRY.filter((module) => module.mandatory).map((module) => module.id);
 
-const MODULE_BY_ID = new Map(MODULE_REGISTRY.map((module) => [module.id, module]));
+const MODULE_BY_ID = new Map(MODULE_REGISTRY.map((mod) => [mod.id, mod]));
 
 export function getModule(id: ModuleId): AppModule | undefined {
   return MODULE_BY_ID.get(id);
@@ -130,11 +130,11 @@ export function getModule(id: ModuleId): AppModule | undefined {
 
 export function moduleForPath(pathname: string): ModuleId {
   let best: { id: ModuleId; len: number } = { id: "core", len: -1 };
-  for (const module of MODULE_REGISTRY) {
-    for (const prefix of module.routePrefixes) {
+  for (const mod of MODULE_REGISTRY) {
+    for (const prefix of mod.routePrefixes) {
       if (prefix === "/") continue;
       if ((pathname === prefix || pathname.startsWith(prefix + "/")) && prefix.length > best.len) {
-        best = { id: module.id, len: prefix.length };
+        best = { id: mod.id, len: prefix.length };
       }
     }
   }

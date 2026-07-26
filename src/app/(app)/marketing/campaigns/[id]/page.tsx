@@ -8,7 +8,25 @@ import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { formatDateTime } from "@/lib/format";
 import { archiveCampaign, cancelCampaign, pauseCampaign, resumeCampaign, retryCampaignFailures } from "@/app/actions/marketingCampaignOperations";
 
-type CampaignDetail = Record<string, any>;
+type CampaignDetail = {
+  name: string;
+  status: string;
+  objective: string | null;
+  audience: string;
+  channel: string;
+  offer: string | null;
+  primaryCtaLabel: string | null;
+  subject: string | null;
+  body: string | null;
+  htmlBody: string | null;
+  scheduledFor: Date | null;
+  budgetCents: number | null;
+  recipientCount: number;
+  sentCount: number;
+  openCount: number;
+  clickCount: number;
+  conversionCount: number;
+};
 
 type VersionRow = { id: string; version: number; reason: string | null; createdByName: string | null; createdAt: Date };
 type EventRow = { id: string; type: string; occurredAt: Date; contactId: string | null; metadata: unknown };
