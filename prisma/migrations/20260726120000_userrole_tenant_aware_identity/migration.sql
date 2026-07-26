@@ -38,3 +38,13 @@ ALTER TABLE "UserRole" ADD CONSTRAINT "UserRole_pkey" PRIMARY KEY ("id");
 --    @@unique([tenantId, userId, roleId]) => "UserRole_tenantId_userId_roleId_key"
 --    so schema and database agree.
 CREATE UNIQUE INDEX IF NOT EXISTS "UserRole_tenantId_userId_roleId_key" ON "UserRole"("tenantId", "userId", "roleId");
+
+-- 6. Expand-phase bridge. The already-deployed app inserts UserRole via raw SQL
+--    with only (userId, roleId) — no id, no tenantId. Give both safe defaults so
+--    those inserts keep working during the window BEFORE the tenant-aware code
+--    deploys: id gets a generated value; tenantId lands in the founding tenant
+--    (matching the Phase-B backfill), which also lets the new
+--    (tenantId, userId, roleId) unique index dedupe exactly as the old composite
+--    PK did. Newer code that supplies id/tenantId simply overrides the defaults.
+ALTER TABLE "UserRole" ALTER COLUMN "id" SET DEFAULT gen_random_uuid()::text;
+ALTER TABLE "UserRole" ALTER COLUMN "tenantId" SET DEFAULT 'tenant_denago_cpt';
