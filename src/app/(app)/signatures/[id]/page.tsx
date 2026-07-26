@@ -29,17 +29,49 @@ function deliveryOf(e: { type: string; channel: string | null; metadata: unknown
   return { ok: m.ok === true, error };
 }
 
+/** Human-readable rendering of one field response value for the ack list. */
+function describeResponse(kind: string, value: string): string {
+  if (kind === "checkbox") return value === "true" ? "✓ checked" : "✗ unchecked";
+  if (kind === "signature" || kind === "initials" || kind === "stamp") return "signed";
+  return value.length > 80 ? `${value.slice(0, 80)}…` : value;
+}
+
 export default async function SignatureDetail({ params }: { params: Promise<{ id: string }> }) {
   await requireAnyPermission("signing.view", "signing.manage");
   const { id } = await params;
   const req = await prisma.signatureRequest.findUnique({
     where: { id },
-    include: { recipients: { orderBy: { order: "asc" } }, events: { orderBy: { createdAt: "asc" } }, fields: true },
+    include: {
+      recipients: { orderBy: { order: "asc" } },
+      events: { orderBy: { createdAt: "asc" } },
+      fields: { include: { responses: { orderBy: { filledAt: "asc" } } } },
+    },
   });
   if (!req || req.deletedAt) notFound();
 
   const card = "rounded-xl border border-border bg-card p-4 shadow-sm";
   const closed = req.status === "completed" || req.status === "voided";
+
+  // Shared fields (recipientId null, fillable by anyone) keep only the FIRST
+  // value on SignatureField — the one the sealed PDF stamps. Every signer's own
+  // answer lives in SignatureFieldResponse. Surface this as an AUDIT view: list
+  // every non-viewer recipient under each shared field, showing "Not answered"
+  // where no response exists, so a MISSING acknowledgement is visible rather than
+  // invisible (only rendering rows that exist would hide who never answered).
+  const signers = req.recipients.filter((r) => r.role !== "viewer");
+  const sharedFields = req.fields
+    .filter((f) => f.recipientId === null)
+    .map((f) => {
+      const byRecipient = new Map(f.responses.map((r) => [r.recipientId, r]));
+      return {
+        id: f.id,
+        label: f.label || f.kind,
+        kind: f.kind,
+        required: f.required,
+        answered: signers.filter((s) => byRecipient.has(s.id)).length,
+        rows: signers.map((s) => ({ id: s.id, name: s.name, color: s.color, response: byRecipient.get(s.id) ?? null })),
+      };
+    });
 
   return (
     <EntityDetailShell
@@ -89,6 +121,50 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
           ))}
         </ul>
       </div>
+
+      {sharedFields.length > 0 && (
+        <div className={card}>
+          <p className="mb-1 text-sm font-semibold text-foreground">Shared field acknowledgements</p>
+          <p className="mb-3 text-[11px] text-muted-foreground">Fields any signer can complete. Every signer is listed so a missing acknowledgement is visible (the sealed PDF stamps the first answer).</p>
+          <ul className="space-y-3">
+            {sharedFields.map((f) => (
+              <li key={f.id} className="rounded-lg border border-border/60 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-foreground">
+                    {f.label}
+                    {!f.required && <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">(optional)</span>}
+                  </span>
+                  {f.required ? (
+                    <span className={`text-[10px] font-semibold ${f.answered === f.rows.length ? "text-emerald-300" : "text-amber-300"}`}>
+                      {f.answered}/{f.rows.length} answered
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-semibold text-muted-foreground">{f.answered}/{f.rows.length} responded</span>
+                  )}
+                </div>
+                <ul className="mt-2 space-y-1">
+                  {f.rows.map((row) => (
+                    <li key={row.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+                      <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: row.color }} />
+                      <span className="font-medium text-foreground">{row.name}</span>
+                      {row.response ? (
+                        <>
+                          <span>· {describeResponse(f.kind, row.response.value)}</span>
+                          <span className="text-muted-foreground/70">· {formatDateTime(row.response.filledAt)}</span>
+                        </>
+                      ) : f.required ? (
+                        <span className="text-amber-300/90">· Not answered</span>
+                      ) : (
+                        <span className="text-muted-foreground/70">· No response</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className={card}>
         <p className="mb-3 text-sm font-semibold text-foreground">Audit trail</p>
