@@ -3,6 +3,7 @@ import { requirePermission } from "@/lib/permissions";
 import { getActiveTenantId } from "@/lib/auth";
 import { loadMarketingOverview } from "@/lib/marketingOverview";
 import { StatusPill } from "@/components/visual-system";
+import { PageHeader } from "@/components/page-header";
 
 function monthRange(raw?: string) {
   const match = raw?.match(/^(\d{4})-(\d{2})$/);
@@ -34,7 +35,7 @@ export default async function MarketingCalendarPage({ searchParams }: { searchPa
   const monthValue = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 
   return <div className="space-y-6">
-    <div className="flex flex-wrap items-end justify-between gap-4"><div><Link href="/marketing/overview" className="text-sm text-primary hover:underline">← Marketing overview</Link><h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em]">Marketing calendar</h1><p className="text-sm text-muted-foreground">One schedule for governed campaign launches and survey distributions.</p></div><div className="flex gap-2"><Link href={`/marketing/calendar?month=${monthValue(previous)}&kind=${kind}`} className="btn-secondary">Previous</Link><Link href={`/marketing/calendar?month=${monthValue(next)}&kind=${kind}`} className="btn-secondary">Next</Link></div></div>
+    <div><Link href="/marketing/overview" className="text-sm text-primary hover:underline">← Marketing overview</Link><PageHeader className="mt-2" title="Marketing calendar" description="One schedule for governed campaign launches and survey distributions."><Link href={`/marketing/calendar?month=${monthValue(previous)}&kind=${kind}`} className="btn-secondary">Previous</Link><Link href={`/marketing/calendar?month=${monthValue(next)}&kind=${kind}`} className="btn-secondary">Next</Link></PageHeader></div>
 
     <form className="card flex flex-wrap items-end gap-3 p-4"><label className="space-y-1"><span className="text-xs uppercase text-muted-foreground">Month</span><input type="month" name="month" defaultValue={value} className="input-base" /></label><label className="space-y-1"><span className="text-xs uppercase text-muted-foreground">Type</span><select name="kind" defaultValue={kind} className="input-base"><option value="all">Campaigns and surveys</option><option value="campaign">Campaigns</option><option value="survey">Surveys</option></select></label><button className="btn-primary">Apply</button></form>
 

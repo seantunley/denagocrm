@@ -11,6 +11,7 @@ import {
   submitCampaignForReview,
 } from "@/app/actions/marketingCampaignWorkflow";
 import { StatusPill } from "@/components/visual-system";
+import { PageHeader } from "@/components/page-header";
 
 export default async function ReviewCampaignPage({ params }: { params: Promise<{ id: string }> }) {
   await requirePermission("campaigns.view");
@@ -23,10 +24,9 @@ export default async function ReviewCampaignPage({ params }: { params: Promise<{
 
   return (
     <div className="mx-auto max-w-5xl space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div><p className="text-sm font-medium text-primary">Marketing / Campaign review</p><h1 className="text-2xl font-semibold tracking-[-0.03em]">{campaign.name}</h1><p className="text-sm text-muted-foreground">Review the frozen launch fields before approval and scheduling.</p></div>
+      <PageHeader title={campaign.name} description="Review the frozen launch fields before approval and scheduling.">
         <StatusPill tone={campaign.status === "approved" ? "success" : campaign.status === "changes_requested" ? "warning" : "info"}>{campaign.status.replaceAll("_", " ")}</StatusPill>
-      </div>
+      </PageHeader>
 
       <section className="card space-y-3">
         <h2 className="font-semibold">QA checklist</h2>

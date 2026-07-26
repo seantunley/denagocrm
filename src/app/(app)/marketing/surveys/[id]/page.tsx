@@ -4,6 +4,7 @@ import { basePrisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
 import { requirePermission } from "@/lib/permissions";
 import { StatusPill } from "@/components/visual-system";
+import { EntityDetailShell } from "@/components/entity-detail-shell";
 import {
   approveSurvey,
   archiveMarketingSurvey,
@@ -40,20 +41,16 @@ export default async function MarketingSurveyDetailPage({ params }: { params: Pr
   `;
 
   const editable = survey.status === "draft" || survey.status === "changes_requested";
-  return <div className="space-y-6">
-    <div className="flex flex-wrap items-start justify-between gap-4">
-      <div>
-        <Link href="/marketing/surveys" className="text-sm text-primary hover:underline">← Survey governance</Link>
-        <div className="mt-2 flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-[-0.03em]">{survey.title}</h1>
-          <StatusPill tone={survey.status === "published" ? "success" : survey.status === "changes_requested" ? "warning" : "neutral"}>{survey.status.replaceAll("_", " ")}</StatusPill>
-          {survey.publishedVersion && <span className="text-sm text-muted-foreground">Published v{survey.publishedVersion}</span>}
-        </div>
-        <p className="mt-1 text-sm text-muted-foreground">{survey.type.toUpperCase()} · {survey.questions.length} questions · {survey.delayHours} hour delay</p>
-      </div>
-      {editable && <Link href={`/surveys/${survey.id}`} className="btn-secondary">Edit questions</Link>}
-    </div>
-
+  return <EntityDetailShell
+    backHref="/marketing/surveys"
+    backLabel="Survey governance"
+    eyebrow="Customer feedback"
+    title={survey.title}
+    status={<StatusPill tone={survey.status === "published" ? "success" : survey.status === "changes_requested" ? "warning" : "neutral"}>{survey.status.replaceAll("_", " ")}</StatusPill>}
+    description={`${survey.type.toUpperCase()} · ${survey.questions.length} questions · ${survey.delayHours} hour delay`}
+    meta={survey.publishedVersion ? `Published v${survey.publishedVersion}` : undefined}
+    actions={editable ? <Link href={`/surveys/${survey.id}`} className="btn-secondary">Edit questions</Link> : undefined}
+  >
     {survey.reviewNote && <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900"><strong>Changes requested:</strong> {survey.reviewNote}</div>}
 
     <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
@@ -100,5 +97,5 @@ export default async function MarketingSurveyDetailPage({ params }: { params: Pr
         </section>
       </aside>
     </div>
-  </div>;
+  </EntityDetailShell>;
 }

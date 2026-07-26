@@ -5,6 +5,8 @@ import { getActiveTenantId } from "@/lib/auth";
 import { loadSurveyAnalytics } from "@/lib/surveyAnalytics";
 import { listTenantStaff } from "@/lib/tenantActor";
 import { StatusPill } from "@/components/visual-system";
+import { PageHeader } from "@/components/page-header";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { assignSurveyFollowUp, createCaseFromSurveyFollowUp, resolveSurveyFollowUp } from "@/app/actions/surveyFollowUps";
 
 function dateValue(value: string | string[] | undefined, fallback: Date) {
@@ -49,13 +51,11 @@ export default async function SurveyInsightsPage({ searchParams }: { searchParam
 
   const responseRows = rows.filter((row) => row.status === "completed").slice(0, 100);
   return <div className="space-y-6">
-    <div className="flex flex-wrap items-end justify-between gap-4">
-      <div>
-        <Link href="/marketing/surveys" className="text-sm text-primary hover:underline">← Survey governance</Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em]">Survey insights</h1>
-        <p className="text-sm text-muted-foreground">Response quality, NPS, CSAT, completion speed and unresolved customer recovery.</p>
-      </div>
-      <Link href="/marketing/surveys/distributions" className="btn-secondary">Distribution queue</Link>
+    <div>
+      <Link href="/marketing/surveys" className="text-sm text-primary hover:underline">← Survey governance</Link>
+      <PageHeader className="mt-2" title="Survey insights" description="Response quality, NPS, CSAT, completion speed and unresolved customer recovery.">
+        <Link href="/marketing/surveys/distributions" className="btn-secondary">Distribution queue</Link>
+      </PageHeader>
     </div>
 
     <form className="card grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-6">
@@ -77,10 +77,10 @@ export default async function SurveyInsightsPage({ searchParams }: { searchParam
     </div>
 
     <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-      <section className="card overflow-x-auto p-0">
+      <ResponsiveEntityTable>
         <div className="p-5"><h2 className="font-semibold">Daily response trend</h2><p className="text-sm text-muted-foreground">Delivered and completed use the same eligible denominator.</p></div>
-        <table className="table-base"><thead><tr><th>Date</th><th>Delivered</th><th>Completed</th><th>Response rate</th><th>Avg score</th></tr></thead><tbody>{trend.slice(-31).map((day) => <tr key={day.date}><td>{day.date}</td><td>{day.sent}</td><td>{day.completed}</td><td>{day.responseRate}%</td><td>{day.averageScore ?? "—"}</td></tr>)}{trend.length === 0 && <tr><td colSpan={5} className="py-10 text-center text-muted-foreground">No survey activity in this period.</td></tr>}</tbody></table>
-      </section>
+        <table className="table-base"><thead><tr><th>Date</th><th>Delivered</th><th>Completed</th><th>Response rate</th><th>Avg score</th></tr></thead><tbody>{trend.slice(-31).map((day) => <tr key={day.date}><td data-primary data-label="Date">{day.date}</td><td data-label="Delivered">{day.sent}</td><td data-label="Completed">{day.completed}</td><td data-label="Response rate">{day.responseRate}%</td><td data-label="Avg score">{day.averageScore ?? "—"}</td></tr>)}{trend.length === 0 && <tr><td data-empty colSpan={5} className="py-10 text-center text-muted-foreground">No survey activity in this period.</td></tr>}</tbody></table>
+      </ResponsiveEntityTable>
 
       <section className="card p-5">
         <h2 className="font-semibold">NPS composition</h2>
@@ -109,9 +109,9 @@ export default async function SurveyInsightsPage({ searchParams }: { searchParam
       </div>
     </section>
 
-    <section className="card overflow-x-auto p-0">
+    <ResponsiveEntityTable>
       <div className="p-5"><h2 className="font-semibold">Recent responses</h2></div>
-      <table className="table-base"><thead><tr><th>Survey</th><th>Distribution</th><th>Score</th><th>Comment</th><th>Completed</th></tr></thead><tbody>{responseRows.map((row) => <tr key={row.id}><td>{row.surveyTitle}</td><td>{row.distributionName || "Legacy/manual"}</td><td>{row.score ?? "—"}</td><td className="max-w-lg whitespace-normal">{row.comment || "—"}</td><td className="text-xs text-muted-foreground">{row.completedAt ? new Date(row.completedAt).toLocaleString("en-ZA") : "—"}</td></tr>)}{responseRows.length === 0 && <tr><td colSpan={5} className="py-10 text-center text-muted-foreground">No completed responses.</td></tr>}</tbody></table>
-    </section>
+      <table className="table-base"><thead><tr><th>Survey</th><th>Distribution</th><th>Score</th><th>Comment</th><th>Completed</th></tr></thead><tbody>{responseRows.map((row) => <tr key={row.id}><td data-primary data-label="Survey">{row.surveyTitle}</td><td data-label="Distribution">{row.distributionName || "Legacy/manual"}</td><td data-label="Score">{row.score ?? "—"}</td><td data-label="Comment" className="max-w-lg whitespace-normal">{row.comment || "—"}</td><td data-label="Completed" className="text-xs text-muted-foreground">{row.completedAt ? new Date(row.completedAt).toLocaleString("en-ZA") : "—"}</td></tr>)}{responseRows.length === 0 && <tr><td data-empty colSpan={5} className="py-10 text-center text-muted-foreground">No completed responses.</td></tr>}</tbody></table>
+    </ResponsiveEntityTable>
   </div>;
 }

@@ -3,6 +3,7 @@ import CampaignDraftEditor from "@/components/marketing/CampaignDraftEditor";
 import { getActiveTenantId } from "@/lib/auth";
 import { requirePermission } from "@/lib/permissions";
 import { readCampaignDraftRecord } from "@/lib/marketingCampaignDrafts";
+import { PageHeader } from "@/components/page-header";
 
 export default async function EditMarketingCampaignPage({ params }: { params: Promise<{ id: string }> }) {
   await requirePermission("campaigns.edit");
@@ -13,11 +14,7 @@ export default async function EditMarketingCampaignPage({ params }: { params: Pr
 
   return (
     <div className="mx-auto max-w-5xl space-y-5">
-      <div>
-        <p className="text-sm font-medium text-primary">Marketing / Campaigns</p>
-        <h1 className="text-2xl font-semibold tracking-[-0.03em]">{campaign.name}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Persisted draft · {campaign.status.replaceAll("_", " ")}</p>
-      </div>
+      <PageHeader title={campaign.name} description={`Persisted draft · ${campaign.status.replaceAll("_", " ")}`} />
       <CampaignDraftEditor initial={{
         id: campaign.id,
         name: campaign.name,

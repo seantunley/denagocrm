@@ -1,9 +1,10 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { basePrisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
 import { getActiveTenantId } from "@/lib/auth";
 import { StatusPill } from "@/components/visual-system";
+import { EntityDetailShell } from "@/components/entity-detail-shell";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { cancelDistribution, pauseDistribution, resumeDistribution, retryDistributionFailures } from "@/app/actions/surveyDistributions";
 
 export default async function SurveyDistributionDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -40,20 +41,20 @@ export default async function SurveyDistributionDetailPage({ params }: { params:
   `;
   const open = new Set(["scheduled", "queued", "sending", "paused"]);
 
-  return <div className="space-y-6">
-    <div className="flex flex-wrap items-start justify-between gap-4">
-      <div>
-        <Link href="/marketing/surveys/distributions" className="text-sm text-primary hover:underline">← Survey distributions</Link>
-        <div className="mt-2 flex flex-wrap items-center gap-3"><h1 className="text-2xl font-semibold tracking-[-0.03em]">{distribution.name}</h1><StatusPill tone={distribution.status === "completed" ? "success" : distribution.status === "completed_with_errors" ? "warning" : distribution.status === "cancelled" ? "danger" : "neutral"}>{distribution.status.replaceAll("_", " ")}</StatusPill></div>
-        <p className="text-sm text-muted-foreground">{distribution.surveyTitle} · version {distribution.surveyVersion} · {distribution.purpose.replaceAll("_", " ")} · {distribution.channel}</p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {new Set(["scheduled", "queued", "sending"]).has(distribution.status) && <form action={pauseDistribution}><input type="hidden" name="id" value={id} /><button className="btn-secondary">Pause</button></form>}
-        {distribution.status === "paused" && <form action={resumeDistribution}><input type="hidden" name="id" value={id} /><button className="btn-primary">Resume</button></form>}
-        {distribution.failedCount > 0 && <form action={retryDistributionFailures}><input type="hidden" name="id" value={id} /><button className="btn-secondary">Retry permanent failures</button></form>}
-        {open.has(distribution.status) && <form action={cancelDistribution}><input type="hidden" name="id" value={id} /><button className="btn-secondary">Cancel remaining</button></form>}
-      </div>
-    </div>
+  return <EntityDetailShell
+    backHref="/marketing/surveys/distributions"
+    backLabel="Survey distributions"
+    eyebrow="Survey distribution"
+    title={distribution.name}
+    status={<StatusPill tone={distribution.status === "completed" ? "success" : distribution.status === "completed_with_errors" ? "warning" : distribution.status === "cancelled" ? "danger" : "neutral"}>{distribution.status.replaceAll("_", " ")}</StatusPill>}
+    description={`${distribution.surveyTitle} · version ${distribution.surveyVersion} · ${distribution.purpose.replaceAll("_", " ")} · ${distribution.channel}`}
+    actions={<>
+      {new Set(["scheduled", "queued", "sending"]).has(distribution.status) && <form action={pauseDistribution}><input type="hidden" name="id" value={id} /><button className="btn-secondary">Pause</button></form>}
+      {distribution.status === "paused" && <form action={resumeDistribution}><input type="hidden" name="id" value={id} /><button className="btn-primary">Resume</button></form>}
+      {distribution.failedCount > 0 && <form action={retryDistributionFailures}><input type="hidden" name="id" value={id} /><button className="btn-secondary">Retry permanent failures</button></form>}
+      {open.has(distribution.status) && <form action={cancelDistribution}><input type="hidden" name="id" value={id} /><button className="btn-secondary">Cancel remaining</button></form>}
+    </>}
+  >
 
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
       <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Audience</p><p className="mt-1 text-2xl font-semibold">{distribution.totalCount}</p></div>
@@ -68,9 +69,9 @@ export default async function SurveyDistributionDetailPage({ params }: { params:
       <section className="card p-5"><h2 className="font-semibold">Delivery settings</h2><dl className="mt-3 grid grid-cols-2 gap-3 text-sm"><div><dt className="text-muted-foreground">Schedule</dt><dd>{distribution.scheduledFor ? new Date(distribution.scheduledFor).toLocaleString("en-ZA") : "Immediate"}</dd></div><div><dt className="text-muted-foreground">Reminder delay</dt><dd>{distribution.reminderAfterHours} hours</dd></div><div><dt className="text-muted-foreground">Maximum reminders</dt><dd>{distribution.maxReminders}</dd></div><div><dt className="text-muted-foreground">Created</dt><dd>{new Date(distribution.createdAt).toLocaleString("en-ZA")}</dd></div></dl></section>
     </div>
 
-    <section className="card overflow-x-auto p-0">
+    <ResponsiveEntityTable>
       <div className="p-5"><h2 className="font-semibold">Failures and suppressions</h2><p className="text-sm text-muted-foreground">Policy blocks are separated from provider failures.</p></div>
-      <table className="table-base"><thead><tr><th>Recipient</th><th>Status</th><th>Reason</th><th>Attempts</th></tr></thead><tbody>{issues.map((issue) => <tr key={issue.id}><td>{issue.name || "Unknown contact"}</td><td>{issue.status.replaceAll("_", " ")}</td><td>{issue.suppressionReason || issue.providerStatus || "Provider failure"}</td><td>{issue.attemptCount}</td></tr>)}{issues.length === 0 && <tr><td colSpan={4} className="py-10 text-center text-muted-foreground">No delivery issues.</td></tr>}</tbody></table>
-    </section>
-  </div>;
+      <table className="table-base"><thead><tr><th>Recipient</th><th>Status</th><th>Reason</th><th>Attempts</th></tr></thead><tbody>{issues.map((issue) => <tr key={issue.id}><td data-primary data-label="Recipient">{issue.name || "Unknown contact"}</td><td data-label="Status">{issue.status.replaceAll("_", " ")}</td><td data-label="Reason">{issue.suppressionReason || issue.providerStatus || "Provider failure"}</td><td data-label="Attempts">{issue.attemptCount}</td></tr>)}{issues.length === 0 && <tr><td data-empty colSpan={4} className="py-10 text-center text-muted-foreground">No delivery issues.</td></tr>}</tbody></table>
+    </ResponsiveEntityTable>
+  </EntityDetailShell>;
 }

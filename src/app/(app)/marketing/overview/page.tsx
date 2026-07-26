@@ -3,6 +3,8 @@ import { requirePermission } from "@/lib/permissions";
 import { getActiveTenantId } from "@/lib/auth";
 import { loadMarketingOverview } from "@/lib/marketingOverview";
 import { StatusPill } from "@/components/visual-system";
+import { PageHeader } from "@/components/page-header";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 
 function money(cents: number) {
   return new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", maximumFractionDigits: 0 }).format(cents / 100);
@@ -25,10 +27,9 @@ export default async function MarketingOverviewPage({ searchParams }: { searchPa
   const data = await loadMarketingOverview({ tenantId, from, to });
 
   return <div className="space-y-6">
-    <div className="flex flex-wrap items-end justify-between gap-4">
-      <div><p className="text-sm font-medium text-primary">Marketing</p><h1 className="text-2xl font-semibold tracking-[-0.03em]">Performance overview</h1><p className="text-sm text-muted-foreground">Campaign execution, attributable pipeline, survey health and the work that needs attention.</p></div>
-      <div className="flex flex-wrap gap-2"><Link href="/marketing/campaigns/new" className="btn-primary">Create campaign</Link><Link href="/marketing/calendar" className="btn-secondary">Marketing calendar</Link></div>
-    </div>
+    <PageHeader title="Performance overview" description="Campaign execution, attributable pipeline, survey health and the work that needs attention.">
+      <Link href="/marketing/campaigns/new" className="btn-primary">Create campaign</Link><Link href="/marketing/calendar" className="btn-secondary">Marketing calendar</Link>
+    </PageHeader>
 
     <form className="card flex flex-wrap items-end gap-3 p-4"><label className="space-y-1"><span className="text-xs uppercase text-muted-foreground">From</span><input type="date" name="from" defaultValue={from.toISOString().slice(0,10)} className="input-base" /></label><label className="space-y-1"><span className="text-xs uppercase text-muted-foreground">To</span><input type="date" name="to" defaultValue={toInput.toISOString().slice(0,10)} className="input-base" /></label><button className="btn-primary">Apply</button></form>
 
@@ -44,13 +45,13 @@ export default async function MarketingOverviewPage({ searchParams }: { searchPa
     </div>
 
     <div className="grid gap-4 lg:grid-cols-[1.35fr_1fr]">
-      <section className="card overflow-x-auto p-0">
+      <ResponsiveEntityTable>
         <div className="flex items-center justify-between p-5"><div><h2 className="font-semibold">Top attributable campaigns</h2><p className="text-sm text-muted-foreground">Last-click conversions inside each campaign’s configured window.</p></div><Link href="/marketing/campaigns" className="text-sm text-primary hover:underline">All campaigns</Link></div>
         <table className="table-base"><thead><tr><th>Campaign</th><th>Status</th><th>Clicks</th><th>Conversions</th><th>Revenue</th><th>ROAS</th></tr></thead><tbody>{data.topCampaigns.map((campaign) => {
           const roas = campaign.budgetCents && campaign.budgetCents > 0 ? Math.round((campaign.attributedRevenueCents / campaign.budgetCents) * 100) / 100 : null;
-          return <tr key={campaign.id}><td><Link href={`/marketing/campaigns/${campaign.id}`} className="font-medium text-primary hover:underline">{campaign.name}</Link><span className="ml-2 text-xs uppercase text-muted-foreground">{campaign.channel}</span></td><td><StatusPill tone={campaign.status === "completed" ? "success" : campaign.status === "completed_with_errors" ? "warning" : "neutral"}>{campaign.status.replaceAll("_", " ")}</StatusPill></td><td>{campaign.clickCount}</td><td>{campaign.conversionCount}</td><td>{money(campaign.attributedRevenueCents)}</td><td>{roas === null ? "—" : `${roas}×`}</td></tr>;
-        })}{data.topCampaigns.length === 0 && <tr><td colSpan={6} className="py-10 text-center text-muted-foreground">No campaigns in this period.</td></tr>}</tbody></table>
-      </section>
+          return <tr key={campaign.id}><td data-primary data-label="Campaign"><Link href={`/marketing/campaigns/${campaign.id}`} className="font-medium text-primary hover:underline">{campaign.name}</Link><span className="ml-2 text-xs uppercase text-muted-foreground">{campaign.channel}</span></td><td data-label="Status"><StatusPill tone={campaign.status === "completed" ? "success" : campaign.status === "completed_with_errors" ? "warning" : "neutral"}>{campaign.status.replaceAll("_", " ")}</StatusPill></td><td data-label="Clicks">{campaign.clickCount}</td><td data-label="Conversions">{campaign.conversionCount}</td><td data-label="Revenue">{money(campaign.attributedRevenueCents)}</td><td data-label="ROAS">{roas === null ? "—" : `${roas}×`}</td></tr>;
+        })}{data.topCampaigns.length === 0 && <tr><td data-empty colSpan={6} className="py-10 text-center text-muted-foreground">No campaigns in this period.</td></tr>}</tbody></table>
+      </ResponsiveEntityTable>
 
       <section className="card space-y-4 p-5">
         <div><h2 className="font-semibold">Work queues</h2><p className="text-sm text-muted-foreground">Governed items waiting for human attention.</p></div>

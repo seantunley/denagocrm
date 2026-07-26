@@ -3,6 +3,8 @@ import { basePrisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
 import { getActiveTenantId } from "@/lib/auth";
 import { StatusPill } from "@/components/visual-system";
+import { PageHeader } from "@/components/page-header";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { createDistribution } from "@/app/actions/surveyDistributions";
 
 export default async function SurveyDistributionsPage() {
@@ -33,8 +35,7 @@ export default async function SurveyDistributionsPage() {
   return <div className="space-y-6">
     <div>
       <Link href="/marketing/surveys" className="text-sm text-primary hover:underline">← Survey governance</Link>
-      <h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em]">Survey distributions</h1>
-      <p className="text-sm text-muted-foreground">Create bounded, consent-aware survey sends with reminders and operational controls.</p>
+      <PageHeader className="mt-2" title="Survey distributions" description="Create bounded, consent-aware survey sends with reminders and operational controls." />
     </div>
 
     <form action={createDistribution} className="card grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-4">
@@ -49,22 +50,22 @@ export default async function SurveyDistributionsPage() {
       <div className="md:col-span-2 xl:col-span-4"><button className="btn-primary" disabled={surveys.length === 0}>Create queued distribution</button>{surveys.length === 0 && <span className="ml-3 text-sm text-muted-foreground">Publish a survey first.</span>}</div>
     </form>
 
-    <div className="card overflow-x-auto p-0">
+    <ResponsiveEntityTable>
       <table className="table-base">
         <thead><tr><th>Distribution</th><th>Survey</th><th>Status</th><th>Sent</th><th>Completed</th><th>Issues</th><th>Schedule</th></tr></thead>
         <tbody>
           {distributions.map((item) => <tr key={item.id}>
-            <td><Link href={`/marketing/surveys/distributions/${item.id}`} className="font-medium text-primary hover:underline">{item.name}</Link></td>
-            <td>{item.surveyTitle} <span className="text-xs text-muted-foreground">v{item.surveyVersion}</span></td>
-            <td><StatusPill tone={item.status === "completed" ? "success" : item.status === "completed_with_errors" ? "warning" : item.status === "cancelled" ? "danger" : "neutral"}>{item.status.replaceAll("_", " ")}</StatusPill></td>
-            <td>{item.sentCount}/{item.totalCount}</td>
-            <td>{item.completedCount}</td>
-            <td>{item.failedCount + item.suppressedCount}</td>
-            <td className="text-xs text-muted-foreground">{item.scheduledFor ? new Date(item.scheduledFor).toLocaleString("en-ZA") : "Immediate"}</td>
+            <td data-primary data-label="Distribution"><Link href={`/marketing/surveys/distributions/${item.id}`} className="font-medium text-primary hover:underline">{item.name}</Link></td>
+            <td data-label="Survey">{item.surveyTitle} <span className="text-xs text-muted-foreground">v{item.surveyVersion}</span></td>
+            <td data-label="Status"><StatusPill tone={item.status === "completed" ? "success" : item.status === "completed_with_errors" ? "warning" : item.status === "cancelled" ? "danger" : "neutral"}>{item.status.replaceAll("_", " ")}</StatusPill></td>
+            <td data-label="Sent">{item.sentCount}/{item.totalCount}</td>
+            <td data-label="Completed">{item.completedCount}</td>
+            <td data-label="Issues">{item.failedCount + item.suppressedCount}</td>
+            <td data-label="Schedule" className="text-xs text-muted-foreground">{item.scheduledFor ? new Date(item.scheduledFor).toLocaleString("en-ZA") : "Immediate"}</td>
           </tr>)}
-          {distributions.length === 0 && <tr><td colSpan={7} className="py-12 text-center text-muted-foreground">No survey distributions yet.</td></tr>}
+          {distributions.length === 0 && <tr><td data-empty colSpan={7} className="py-12 text-center text-muted-foreground">No survey distributions yet.</td></tr>}
         </tbody>
       </table>
-    </div>
+    </ResponsiveEntityTable>
   </div>;
 }

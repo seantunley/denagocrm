@@ -4,6 +4,7 @@ import { basePrisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
 import { requirePermission } from "@/lib/permissions";
 import { StatusPill } from "@/components/visual-system";
+import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { formatDateTime } from "@/lib/format";
 import { archiveCampaign, cancelCampaign, pauseCampaign, resumeCampaign, retryCampaignFailures } from "@/app/actions/marketingCampaignOperations";
 
@@ -29,8 +30,15 @@ export default async function MarketingCampaignDetail({ params }: { params: Prom
   const rate = (value: number, base: number) => base ? Math.round((value / base) * 100) : 0;
   const editable = new Set(["draft", "changes_requested"]).has(campaign.status);
 
-  return <div className="space-y-5">
-    <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-sm font-medium text-primary">Marketing / Campaigns</p><h1 className="text-2xl font-semibold tracking-[-0.03em]">{campaign.name}</h1><p className="text-sm text-muted-foreground">{campaign.objective ?? campaign.audience}</p></div><div className="flex items-center gap-2"><StatusPill tone={campaign.status === "completed" ? "success" : campaign.status.includes("error") || campaign.status === "failed" ? "danger" : "info"}>{String(campaign.status).replaceAll("_", " ")}</StatusPill>{editable && <Link href={`/marketing/campaigns/${id}/edit`} className="btn-secondary">Edit</Link>}<Link href={`/marketing/campaigns/${id}/review`} className="btn-secondary">Review</Link></div></div>
+  return <EntityDetailShell
+    backHref="/marketing/campaigns"
+    backLabel="Campaigns"
+    eyebrow="Campaign"
+    title={campaign.name}
+    status={<StatusPill tone={campaign.status === "completed" ? "success" : campaign.status.includes("error") || campaign.status === "failed" ? "danger" : "info"}>{String(campaign.status).replaceAll("_", " ")}</StatusPill>}
+    description={campaign.objective ?? campaign.audience}
+    actions={<>{editable && <Link href={`/marketing/campaigns/${id}/edit`} className="btn-secondary">Edit</Link>}<Link href={`/marketing/campaigns/${id}/review`} className="btn-secondary">Review</Link></>}
+  >
     <div className="grid grid-cols-2 gap-3 md:grid-cols-6">{[
       ["Recipients", campaign.recipientCount], ["Sent", campaign.sentCount], ["Delivery", `${rate(campaign.sentCount, campaign.recipientCount)}%`], ["Open", `${rate(campaign.openCount, campaign.sentCount)}%`], ["Click", `${rate(campaign.clickCount, campaign.sentCount)}%`], ["Conversions", campaign.conversionCount]
     ].map(([label, value]) => <div className="card" key={String(label)}><p className="text-xs font-semibold uppercase text-muted-foreground">{String(label)}</p><p className="mt-1 text-2xl font-semibold">{String(value)}</p></div>)}</div>
@@ -42,5 +50,5 @@ export default async function MarketingCampaignDetail({ params }: { params: Prom
     <div className="grid gap-4 lg:grid-cols-2"><section className="card space-y-3"><h2 className="font-semibold">Version history</h2><ul className="space-y-2">{versions.map((version) => <li key={version.id} className="border-b border-border/50 pb-2 text-sm"><span className="font-medium">Version {version.version}</span> · {version.reason ?? "Snapshot"}<p className="text-xs text-muted-foreground">{formatDateTime(version.createdAt)}{version.createdByName ? ` by ${version.createdByName}` : ""}</p></li>)}</ul></section><section className="card space-y-3"><h2 className="font-semibold">Event timeline</h2><ul className="max-h-96 space-y-2 overflow-auto">{events.map((event) => <li key={event.id} className="border-b border-border/50 pb-2 text-sm"><span className="font-medium">{event.type.replaceAll("_", " ")}</span><p className="text-xs text-muted-foreground">{formatDateTime(event.occurredAt)}</p></li>)}</ul></section></div>
 
     <section className="card space-y-3"><h2 className="font-semibold">Campaign controls</h2><div className="flex flex-wrap gap-2">{new Set(["queued","sending"]).has(campaign.status) && <form action={pauseCampaign.bind(null, id)}><button className="btn-secondary">Pause</button></form>}{campaign.status === "paused" && <form action={resumeCampaign.bind(null, id)}><button className="btn-primary">Resume</button></form>}{new Set(["sending","completed_with_errors","failed"]).has(campaign.status) && <form action={retryCampaignFailures.bind(null, id)}><button className="btn-secondary">Retry temporary failures</button></form>}{new Set(["completed","completed_with_errors","failed","cancelled"]).has(campaign.status) && <form action={archiveCampaign.bind(null, id)}><button className="btn-secondary">Archive</button></form>}</div>{new Set(["scheduled","queued","sending","paused"]).has(campaign.status) && <form action={cancelCampaign.bind(null, id)} className="mt-3 flex gap-2"><input name="reason" className="input max-w-lg" placeholder="Cancellation reason" required /><button className="btn-danger">Cancel campaign</button></form>}</section>
-  </div>;
+  </EntityDetailShell>;
 }
