@@ -1,12 +1,13 @@
 import { addDays, addHours, addMinutes } from "date-fns";
 import { prisma } from "./db";
-import { resolveTenantActor } from "./tenantActor";
+import { resolveTenantActor, resolveTenantMemberUser } from "./tenantActor";
 import { sendEmail, renderTemplate } from "./email";
 import { sendSms } from "./sms";
 import { sendPushToAll } from "./push";
 import { logAudit } from "./audit";
 import { emitJourneyEvent } from "./journeyEvents";
-import { JourneyContext, journeyTemplateVars } from "./journeyContext";
+import { journeyTemplateVars, type JourneyContext } from "./journeyContext";
+import { executePlatformJourneyAction } from "./journeyPlatformActions";
 import {
   evaluateConditions,
   parseConditionGroup,
@@ -41,11 +42,18 @@ function ids(context: JourneyContext) {
 }
 
 async function fallbackUserId(context: JourneyContext, configured?: string | null) {
-  if (configured) return configured;
+  if (configured) {
+    const member = await resolveTenantMemberUser(configured);
+    if (!member) throw new Error("The configured Journey user is not an active member of this tenant");
+    return member.id;
+  }
   const lead = (context.lead ?? {}) as Record<string, unknown>;
   const contact = (context.contact ?? {}) as Record<string, unknown>;
   const owner = lead.assignedToId ?? contact.ownerId;
-  if (typeof owner === "string" && owner) return owner;
+  if (typeof owner === "string" && owner) {
+    const member = await resolveTenantMemberUser(owner);
+    if (member) return member.id;
+  }
   const first = await resolveTenantActor();
   if (!first) throw new Error("No CRM users exist");
   return first.id;
@@ -96,8 +104,9 @@ export async function executeJourneyStep(args: {
   category: string;
   journeyName: string;
   runId: string;
+  tenantId: string | null;
 }): Promise<StepResult> {
-  const { step, context, category, journeyName, runId } = args;
+  const { step, context, category, journeyName, runId, tenantId } = args;
   const vars = journeyTemplateVars(context);
   const { leadId, contactId } = ids(context);
 
@@ -142,7 +151,7 @@ export async function executeJourneyStep(args: {
       const templateId = stringConfig(step, "emailTemplateId");
       if (templateId) {
         const template = await prisma.emailTemplate.findUnique({ where: { id: templateId } });
-        if (!template) return { status: "skipped", note: "Email skipped: template was deleted" };
+        if (!template) return { status: "skipped", note: "Email skipped: template was deleted or is not available to this tenant" };
         subject = template.subject;
         text = template.body;
       }
@@ -177,7 +186,7 @@ export async function executeJourneyStep(args: {
       const userId = await fallbackUserId(context, stringConfig(step, "assignToId"));
       const dueDays = Math.max(0, numberConfig(step, "dueDays", 1));
       const summary = renderTemplate(stringConfig(step, "summary") ?? journeyName, vars);
-      await prisma.activity.create({
+      const activity = await prisma.activity.create({
         data: {
           type: stringConfig(step, "activityType") ?? "todo",
           summary,
@@ -189,7 +198,7 @@ export async function executeJourneyStep(args: {
           createdById: userId,
         },
       });
-      return { status: "completed", note: `Activity created for ${dueDays} day(s)` };
+      return { status: "completed", note: `Activity created for ${dueDays} day(s)`, output: { activityId: activity.id } };
     }
 
     case "send_push": {
@@ -206,26 +215,28 @@ export async function executeJourneyStep(args: {
       if (!leadId) return { status: "skipped", note: "Stage move skipped: no lead" };
       const stageId = stringConfig(step, "stageId");
       if (!stageId) return { status: "skipped", note: "Stage move skipped: no stage configured" };
+      const stage = await prisma.pipelineStage.findFirst({ where: { id: stageId }, select: { id: true } });
+      if (!stage) throw new Error("The configured pipeline stage is not available to this tenant");
       const max = await prisma.lead.aggregate({ where: { stageId }, _max: { position: true } });
-      await prisma.lead.update({
-        where: { id: leadId },
-        data: { stageId, position: (max._max.position ?? 0) + 1 },
-      });
+      await prisma.lead.update({ where: { id: leadId }, data: { stageId, position: (max._max.position ?? 0) + 1 } });
       await emitJourneyEvent({
         type: "stage_entered",
         entityType: "lead",
         entityId: leadId,
         payload: { stageId, sourceRunId: runId, sourceStepId: step.id },
         dedupeKey: `journey-stage:${runId}:${step.id}:${stageId}`,
+        tenantId,
       });
       return { status: "completed", note: "Lead moved to configured stage" };
     }
 
     case "assign_user": {
       if (!leadId) return { status: "skipped", note: "Assignment skipped: no lead" };
-      const userId = stringConfig(step, "userId");
-      if (!userId) return { status: "skipped", note: "Assignment skipped: no user configured" };
-      await prisma.lead.update({ where: { id: leadId }, data: { assignedToId: userId } });
+      const configured = stringConfig(step, "userId");
+      if (!configured) return { status: "skipped", note: "Assignment skipped: no user configured" };
+      const member = await resolveTenantMemberUser(configured);
+      if (!member) throw new Error("The configured assignee is not an active member of this tenant");
+      await prisma.lead.update({ where: { id: leadId }, data: { assignedToId: member.id } });
       return { status: "completed", note: "Lead assigned" };
     }
 
@@ -234,17 +245,27 @@ export async function executeJourneyStep(args: {
       if (!contactId) return { status: "skipped", note: "Tag step skipped: no contact" };
       const tagId = stringConfig(step, "tagId");
       if (!tagId) return { status: "skipped", note: "Tag step skipped: no tag configured" };
+      const tag = await prisma.tag.findFirst({ where: { id: tagId }, select: { id: true } });
+      if (!tag) throw new Error("The configured tag is not available to this tenant");
       await prisma.contact.update({
         where: { id: contactId },
-        data: {
-          tags: step.type === "add_tag"
-            ? { connect: { id: tagId } }
-            : { disconnect: { id: tagId } },
-        },
+        data: { tags: step.type === "add_tag" ? { connect: { id: tag.id } } : { disconnect: { id: tag.id } } },
       });
       return { status: "completed", note: step.type === "add_tag" ? "Tag added" : "Tag removed" };
     }
   }
+
+  const platform = await executePlatformJourneyAction({
+    step,
+    context,
+    journeyName,
+    runId,
+    tenantId,
+    vars,
+    leadId,
+    contactId,
+  });
+  if (platform) return platform;
 
   await logAudit({
     action: "journey.unknown_step",

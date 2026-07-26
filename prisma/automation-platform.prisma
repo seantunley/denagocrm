@@ -1,0 +1,74 @@
+/// Durable hand-off for actions whose destination is asynchronous or not yet connected.
+model AutomationOutbox {
+  id             String   @id @default(cuid())
+  tenantId       String?
+  kind           String // document.generate | xero.draft_invoice | integration.*
+  status         String   @default("pending") // pending | processing | completed | failed | blocked
+  entityType     String?
+  entityId       String?
+  journeyRunId   String?
+  journeyStepId  String?
+  payload        Json
+  idempotencyKey String   @unique
+  attempts       Int      @default(0)
+  availableAt    DateTime @default(now())
+  completedAt    DateTime?
+  error          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, status, availableAt])
+  @@index([kind, status])
+  @@index([journeyRunId])
+}
+
+/// Human approval requested by a journey step.
+model AutomationApprovalRequest {
+  id             String   @id @default(cuid())
+  tenantId       String?
+  status         String   @default("pending") // pending | approved | rejected | cancelled
+  title          String
+  description    String?
+  entityType     String?
+  entityId       String?
+  contactId      String?
+  leadId         String?
+  requestedById  String?
+  assignedToId   String?
+  journeyRunId   String?
+  journeyStepId  String?
+  metadata       Json?
+  decidedById    String?
+  decidedAt      DateTime?
+  decisionNote   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, status, assignedToId])
+  @@index([journeyRunId])
+  @@index([contactId])
+  @@index([leadId])
+}
+
+/// Operational request emitted by automation. Financial values intentionally stay out of CRM.
+model StockTransferRequest {
+  id             String   @id @default(cuid())
+  tenantId       String?
+  status         String   @default("requested") // requested | approved | in_transit | received | cancelled
+  stockUnitId    String
+  fromBranch     String?
+  toBranch       String
+  notes          String?
+  requestedById  String?
+  journeyRunId   String?
+  journeyStepId  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, status, toBranch])
+  @@index([stockUnitId, status])
+  @@index([journeyRunId])
+}

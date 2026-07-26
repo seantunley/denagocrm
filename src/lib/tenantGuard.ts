@@ -15,6 +15,15 @@
  * as tenant-scoped — an opt-OUT list fails safe (a forgotten table gets scoped,
  * not silently left open). `AppSetting` is deliberately absent: per the Phase C
  * decision it becomes tenant-scoped once its additive `tenantId` slice lands.
+ *
+ * `Team`/`TeamMember` (prisma/governance.prisma) predate multi-tenancy and have
+ * no `tenantId` column — under enforcement, scoping them would fail every query
+ * against a missing column. They're app-wide groupings today, not tenant-owned
+ * data; assignment actions that read them (e.g. the Journey "assign to team"
+ * action) validate the resolved user via resolveTenantMemberUser so a team
+ * member who isn't in the current tenant is never actually assigned. Revisit if
+ * teams become tenant-partitioned (would need an additive tenantId slice, same
+ * as AppSetting/ChannelIdentity).
  */
 export const GLOBAL_MODELS: ReadonlySet<string> = new Set([
   "User",
@@ -24,6 +33,8 @@ export const GLOBAL_MODELS: ReadonlySet<string> = new Set([
   "OtpChallenge",
   "Passkey",
   "PushSubscription",
+  "Team",
+  "TeamMember",
 ]);
 
 export function isTenantScopedModel(model: string): boolean {

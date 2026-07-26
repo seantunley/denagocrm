@@ -1,0 +1,54 @@
+[
+  {
+    "slug": "automation-cross-module-platform",
+    "title": "Cross-module automation platform",
+    "summary": "Build durable Journeys that respond to CRM, test-drive, stock, workshop, warranty, support, portal, document and Xero lifecycle events.",
+    "category": "automation",
+    "audience": "managers",
+    "keywords": ["automation", "journey", "trigger", "action", "test drive", "stock", "workshop", "support", "portal", "xero", "webhook"],
+    "body": [
+      {
+        "type": "p",
+        "text": "Journeys are the main cross-module automation engine. They are versioned, durable and tenant-scoped. Quick rules remain available for simple one-step lead actions, but new multi-step workflows should be built as Journeys."
+      },
+      {
+        "type": "h",
+        "text": "Event and scheduled triggers"
+      },
+      {
+        "type": "list",
+        "items": [
+          "Immediate events include test-drive booking/completion/no-show, quote sent/opened, stock receiving and inspection, PDI, delivery scheduling, job-card lifecycle, warranty and recalls, support cases, portal requests and document approval.",
+          "Time-based triggers include overdue activities, expiring quotes, delayed deliveries, service due, expiring warranties, overdue cases and stalled signature requests.",
+          "The Xero invoice-status trigger is exposed as an integration contract. It activates when the Xero connector records a changed status."
+        ]
+      },
+      {
+        "type": "h",
+        "text": "Actions"
+      },
+      {
+        "type": "list",
+        "items": [
+          "Messaging actions send email, SMS, WhatsApp, staff push notifications and portal notifications.",
+          "Operational actions create activities, support cases, job cards, workshop bookings, approval requests, stock-transfer requests and test-drive follow-ups.",
+          "Governance actions use a safe field whitelist, tenant staff validation and visible approval/queue records.",
+          "Integration actions include signed HTTPS webhooks, generated documents, signature requests and Xero draft-invoice requests."
+        ]
+      },
+      {
+        "type": "h",
+        "text": "Approvals and action queue"
+      },
+      {
+        "type": "p",
+        "text": "Open Automations → Approvals to make internal decisions. Open Automations → Action queue to inspect document, signing and integration work. Failed work can be retried; blocked Xero actions remain visible until the Xero integration is connected."
+      },
+      {
+        "type": "callout",
+        "tone": "info",
+        "text": "DenagoCRM never turns Xero actions into internal accounting. The CRM may request a draft invoice and receive its operational status, while Xero remains responsible for invoices, tax, payments and the ledger."
+      }
+    ]
+  }
+]

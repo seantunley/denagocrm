@@ -1,35 +1,15 @@
-export const JOURNEY_TRIGGERS = [
-  "lead_created",
-  "stage_entered",
-  "lead_won",
-  "lead_lost",
-  "quote_signed",
-  "quote_declined",
-  "delivered",
-  "referral_earned",
-  "lead_idle",
-  "contact_segment",
-  "purchase_anniversary",
-  "win_back",
-] as const;
+import {
+  AUTOMATION_ACTIONS,
+  AUTOMATION_TRIGGERS,
+  type AutomationAction,
+  type AutomationTrigger,
+} from "./automationCatalog";
 
-export type JourneyTrigger = (typeof JOURNEY_TRIGGERS)[number];
+export const JOURNEY_TRIGGERS = AUTOMATION_TRIGGERS.map((trigger) => trigger.value) as readonly AutomationTrigger[];
+export type JourneyTrigger = AutomationTrigger;
 
-export const JOURNEY_STEP_TYPES = [
-  "send_email",
-  "send_sms",
-  "create_activity",
-  "send_push",
-  "move_stage",
-  "assign_user",
-  "add_tag",
-  "remove_tag",
-  "wait",
-  "condition",
-  "stop",
-] as const;
-
-export type JourneyStepType = (typeof JOURNEY_STEP_TYPES)[number];
+export const JOURNEY_STEP_TYPES = AUTOMATION_ACTIONS.map((action) => action.value) as readonly AutomationAction[];
+export type JourneyStepType = AutomationAction;
 
 export const CONDITION_FIELDS = [
   "lead.source",
@@ -49,9 +29,19 @@ export const CONDITION_FIELDS = [
   "contact.hasVehicle",
   "contact.tags",
   "event.type",
+  "event.entityType",
+  "event.sourceId",
+  "event.status",
+  "event.priority",
+  "event.branch",
+  "event.daysUntilExpiry",
+  "event.hoursOverdue",
+  "event.stage",
+  "event.previousStage",
+  "event.outcome",
 ] as const;
 
-export type ConditionField = (typeof CONDITION_FIELDS)[number];
+export type ConditionField = (typeof CONDITION_FIELDS)[number] | `event.${string}` | `source.${string}`;
 export type ConditionOperator =
   | "equals"
   | "not_equals"
@@ -115,6 +105,11 @@ function cleanId(value: unknown): string | null {
   return /^[a-zA-Z0-9_-]{1,80}$/.test(clean) ? clean : null;
 }
 
+function supportedConditionField(field: string): field is ConditionField {
+  if (FIELDS.has(field)) return true;
+  return /^(event|source)\.[a-zA-Z0-9_.-]{1,120}$/.test(field);
+}
+
 export function parseConditionGroup(value: unknown): JourneyConditionGroup | null {
   if (value == null) return null;
   if (!isRecord(value)) throw new Error("Conditions must be an object");
@@ -131,10 +126,10 @@ export function parseConditionGroup(value: unknown): JourneyConditionGroup | nul
     }
     const field = String(condition.field ?? "");
     const operator = String(condition.operator ?? "");
-    if (!FIELDS.has(field)) throw new Error(`Unsupported condition field: ${field}`);
+    if (!supportedConditionField(field)) throw new Error(`Unsupported condition field: ${field}`);
     if (!OPERATORS.has(operator)) throw new Error(`Unsupported condition operator: ${operator}`);
     return {
-      field: field as ConditionField,
+      field,
       operator: operator as ConditionOperator,
       value: condition.value,
     };

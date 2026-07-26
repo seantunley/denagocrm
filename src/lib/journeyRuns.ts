@@ -9,6 +9,7 @@ const MAX_RUN_ATTEMPTS = 3;
 const MAX_STEPS_PER_TICK = 20;
 
 async function updateStepLog(args: {
+  tenantId: string | null;
   runId: string;
   stepId: string;
   stepType: string;
@@ -19,6 +20,7 @@ async function updateStepLog(args: {
   await prisma.journeyStepLog.upsert({
     where: { runId_stepId: { runId: args.runId, stepId: args.stepId } },
     create: {
+      tenantId: args.tenantId,
       runId: args.runId,
       stepId: args.stepId,
       stepType: args.stepType,
@@ -53,11 +55,7 @@ async function processOneRun(runId: string) {
 
   const claimed = await prisma.journeyRun.updateMany({
     where: { id: run.id, status: { in: ["queued", "waiting"] }, nextRunAt: { lte: new Date() } },
-    data: {
-      status: "running",
-      startedAt: run.startedAt ?? new Date(),
-      lastError: null,
-    },
+    data: { status: "running", startedAt: run.startedAt ?? new Date(), lastError: null },
   });
   if (claimed.count === 0) return false;
 
@@ -72,110 +70,60 @@ async function processOneRun(runId: string) {
       if (!step) {
         await prisma.journeyRun.update({
           where: { id: run.id },
-          data: {
-            status: "completed",
-            currentStepId: null,
-            completedAt: new Date(),
-            attempts: 0,
-            context: context as Prisma.InputJsonValue,
-          },
+          data: { status: "completed", currentStepId: null, completedAt: new Date(), attempts: 0, context: context as Prisma.InputJsonValue },
         });
-        await logAudit({
-          action: "journey.completed",
-          summary: `Journey “${run.journey.name}” completed`,
-          leadId: run.leadId,
-          contactId: run.contactId,
-          userName: "Journey engine",
-        });
+        await logAudit({ action: "journey.completed", summary: `Journey “${run.journey.name}” completed`, leadId: run.leadId, contactId: run.contactId, userName: "Journey engine" });
         return true;
       }
 
-      if (visited.has(step.id)) {
-        throw new Error(`Journey cycle detected at step ${step.id}`);
-      }
+      if (visited.has(step.id)) throw new Error(`Journey cycle detected at step ${step.id}`);
       visited.add(step.id);
 
-      await updateStepLog({
-        runId: run.id,
-        stepId: step.id,
-        stepType: step.type,
-        status: "running",
-      });
+      await updateStepLog({ tenantId: run.tenantId, runId: run.id, stepId: step.id, stepType: step.type, status: "running" });
       const result = await executeJourneyStep({
         step,
         context,
         category: run.journey.category,
         journeyName: run.journey.name,
         runId: run.id,
+        tenantId: run.tenantId,
       });
-      const nextStepId = result.nextStepId === undefined
-        ? step.nextStepId ?? null
-        : result.nextStepId;
+      const nextStepId = result.nextStepId === undefined ? step.nextStepId ?? null : result.nextStepId;
       await updateStepLog({
+        tenantId: run.tenantId,
         runId: run.id,
         stepId: step.id,
         stepType: step.type,
         status: result.status === "skipped" ? "skipped" : "completed",
         note: result.note,
-        output: {
-          ...result.output,
-          nextStepId,
-          nextRunAt: result.nextRunAt?.toISOString(),
-        },
+        output: { ...result.output, nextStepId, nextRunAt: result.nextRunAt?.toISOString() },
       });
 
       if (result.status === "waiting") {
         await prisma.journeyRun.update({
           where: { id: run.id },
-          data: {
-            status: "waiting",
-            currentStepId: nextStepId,
-            nextRunAt: result.nextRunAt ?? new Date(Date.now() + 60_000),
-            attempts: 0,
-            context: context as Prisma.InputJsonValue,
-          },
+          data: { status: "waiting", currentStepId: nextStepId, nextRunAt: result.nextRunAt ?? new Date(Date.now() + 60_000), attempts: 0, context: context as Prisma.InputJsonValue },
         });
         return true;
       }
 
       currentStepId = nextStepId;
-      const refreshed = await loadJourneyContext(
-        run.entityType as JourneyEntityType,
-        run.entityId,
-        (context.event ?? {}) as Record<string, unknown>
-      );
+      const refreshed = await loadJourneyContext(run.entityType as JourneyEntityType, run.entityId, (context.event ?? {}) as Record<string, unknown>);
       if (refreshed) context = refreshed;
-      await prisma.journeyRun.update({
-        where: { id: run.id },
-        data: { currentStepId, attempts: 0, context: context as Prisma.InputJsonValue },
-      });
+      await prisma.journeyRun.update({ where: { id: run.id }, data: { currentStepId, attempts: 0, context: context as Prisma.InputJsonValue } });
     }
-
     throw new Error(`Journey exceeded ${MAX_STEPS_PER_TICK} immediate steps without waiting`);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown journey run error";
     if (currentStepId) {
       const step = stepById(definition, currentStepId);
-      if (step) {
-        await updateStepLog({
-          runId: run.id,
-          stepId: step.id,
-          stepType: step.type,
-          status: "failed",
-          note: message.slice(0, 1000),
-        });
-      }
+      if (step) await updateStepLog({ tenantId: run.tenantId, runId: run.id, stepId: step.id, stepType: step.type, status: "failed", note: message.slice(0, 1000) });
     }
     const attempts = run.attempts + 1;
     const retry = attempts < MAX_RUN_ATTEMPTS;
     await prisma.journeyRun.update({
       where: { id: run.id },
-      data: {
-        status: retry ? "queued" : "failed",
-        attempts,
-        nextRunAt: retry ? new Date(Date.now() + 5 * 60_000) : run.nextRunAt,
-        lastError: message.slice(0, 1000),
-      },
+      data: { status: retry ? "queued" : "failed", attempts, nextRunAt: retry ? new Date(Date.now() + 5 * 60_000) : run.nextRunAt, lastError: message.slice(0, 1000) },
     });
     return false;
   }
@@ -183,10 +131,7 @@ async function processOneRun(runId: string) {
 
 export async function processJourneyRuns(limit = 40) {
   const runs = await prisma.journeyRun.findMany({
-    where: {
-      status: { in: ["queued", "waiting"] },
-      nextRunAt: { lte: new Date() },
-    },
+    where: { status: { in: ["queued", "waiting"] }, nextRunAt: { lte: new Date() } },
     orderBy: { nextRunAt: "asc" },
     take: limit,
     select: { id: true },
