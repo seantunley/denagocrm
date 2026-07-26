@@ -7,6 +7,7 @@ import crm from "./data/crm.json";
 import sales from "./data/sales.json";
 import stock from "./data/stock.json";
 import workshop from "./data/workshop.json";
+import testDrives from "./data/test-drives.json";
 import documents from "./data/documents.json";
 import marketing from "./data/marketing.json";
 import commsAutomation from "./data/comms-automation.json";
@@ -21,6 +22,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...(sales as HelpArticle[]),
   ...(stock as HelpArticle[]),
   ...(workshop as HelpArticle[]),
+  ...(testDrives as HelpArticle[]),
   ...(documents as HelpArticle[]),
   ...(marketing as HelpArticle[]),
   ...(commsAutomation as HelpArticle[]),

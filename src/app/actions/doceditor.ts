@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { documentSchema, parseDocument } from "@/lib/doceditor/model";
 import { blankDocument, standardQuoteTemplate } from "@/lib/doceditor/factory";
@@ -57,7 +57,7 @@ async function validatedBinding(
 
 /** Create a new doc-editor template seeded with a blank A4 proposal, then open it. */
 export async function createDocEditorTemplate(formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("docbuilder.manage");
   const name =
     String(formData.get("name") ?? "").trim() || "Untitled proposal";
   const key = String(formData.get("key") ?? "proposal").trim() || "proposal";
@@ -82,7 +82,7 @@ export async function createDocEditorTemplate(formData: FormData) {
 
 /** Generate and file a builder document bound to at most one compatible record. */
 export async function generateDocEditorDocument(formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("docbuilder.manage");
   const templateId = String(formData.get("templateId") ?? "").trim();
   if (!templateId) return;
 
@@ -135,7 +135,7 @@ export async function sendDocForSigning(
   quoteId?: string | null,
   jobCardId?: string | null,
 ): Promise<SignPrepResult> {
-  const user = await requireOwner();
+  const user = await requirePermission("docbuilder.manage");
   if (quoteId && jobCardId) {
     return { ok: false, message: "Choose either a quote or a job card." };
   }
@@ -219,7 +219,7 @@ export async function sendDocForSigning(
 
 /** Create a template pre-built as the branded standard quotation. */
 export async function createStandardQuoteTemplate() {
-  const user = await requireOwner();
+  const user = await requirePermission("docbuilder.manage");
   const doc = standardQuoteTemplate();
   const created = await prisma.docBuilderTemplate.create({
     data: {
@@ -245,7 +245,7 @@ export async function saveDocEditor(
   id: string,
   doc: unknown,
 ): Promise<{ ok: boolean; error?: string }> {
-  const user = await requireOwner();
+  const user = await requirePermission("docbuilder.manage");
   const parsed = documentSchema.safeParse(doc);
   if (!parsed.success) {
     return { ok: false, error: "Invalid document structure" };

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { sendRequest, voidRequest, remindRecipient, updateRecipientContact } from "@/app/actions/signhub";
+import { sendRequest, resendRequest, voidRequest, remindRecipient, updateRecipientContact } from "@/app/actions/signhub";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 export function SendVoidBar({ requestId, status }: { requestId: string; status: string }) {
@@ -11,13 +11,18 @@ export function SendVoidBar({ requestId, status }: { requestId: string; status: 
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
   const closed = status === "completed" || status === "voided";
+  const isDraft = status === "draft";
 
   return (
     <div className="flex flex-wrap items-center gap-2">
       {!closed && (
         <button type="button" disabled={pending} className="btn-primary btn-sm"
-          onClick={() => start(async () => { const r = await sendRequest(requestId); setMsg(r.ok ? `Sent to ${r.notified} recipient(s).` : r.error ?? "Failed"); router.refresh(); })}>
-          {status === "draft" ? "Send for signing" : "Resend"}
+          onClick={() => start(async () => {
+            const r = isDraft ? await sendRequest(requestId) : await resendRequest(requestId);
+            setMsg(r.ok ? `Sent to ${r.notified} recipient(s).` : r.error ?? "Failed");
+            router.refresh();
+          })}>
+          {isDraft ? "Send for signing" : "Resend"}
         </button>
       )}
       {!closed && (

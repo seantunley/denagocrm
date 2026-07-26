@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireOwner } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { renderRequestSigningSheets, signedFieldStamps } from "@/lib/signing/render";
 import { recordView } from "@/lib/signing/events";
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 
 /** In-person signing: staff opens this on a device and hands it to the recipient. */
 export default async function InPersonSign({ params }: { params: Promise<{ id: string; recipientId: string }> }) {
-  await requireOwner();
+  await requirePermission("signing.manage");
   const { id, recipientId } = await params;
   const recipient = await prisma.signatureRecipient.findUnique({
     where: { id: recipientId },

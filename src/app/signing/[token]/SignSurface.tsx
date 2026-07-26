@@ -3,6 +3,7 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import type { StampField } from "@/lib/doceditor/serialize";
 import { TextPromptDialog } from "@/components/TextPromptDialog";
+import { isFieldValueComplete } from "@/lib/signing/fieldValidation";
 
 type Field = { id: string; kind: string; label: string; required: boolean; page: number; x: number; y: number; width: number; height: number };
 type Sheets = { width: number; height: number; margin: number; css: string; pages: string[] };
@@ -118,9 +119,12 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
 
   const placed = fields.filter((f) => (f.x > 0 || f.y > 0) && f.x < sheets.width && f.y < sheets.height && f.page < sheets.pages.length);
   const unplaced = fields.filter((f) => !placed.includes(f));
-  const isFilled = useCallback((f: Field) => f.kind === "checkbox" ? true : Boolean(values[f.id]), [values]);
-  const required = fields.filter((f) => f.required && f.kind !== "checkbox" && f.kind !== "date");
-  const doneCount = required.filter((f) => Boolean(values[f.id])).length;
+  // isFieldValueComplete is the SAME kind-aware check the API uses
+  // (missingRequiredForRecipient) — a checkbox only counts once actually
+  // checked, so client and server can't drift on what "required" means.
+  const isFilled = useCallback((f: Field) => isFieldValueComplete(f.kind, values[f.id]), [values]);
+  const required = fields.filter((f) => f.required && f.kind !== "date");
+  const doneCount = required.filter((f) => isFieldValueComplete(f.kind, values[f.id])).length;
 
   const submit = async () => {
     setErr(null);
@@ -129,7 +133,8 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
     const vals = { ...values };
     for (const f of fields) if (f.kind === "date" && !vals[f.id]) vals[f.id] = todayISO();
     for (const f of fields) {
-      if (f.required && f.kind !== "checkbox" && !vals[f.id]) {
+      if (f.kind === "checkbox" && !vals[f.id]) vals[f.id] = "false";
+      if (f.required && !isFieldValueComplete(f.kind, vals[f.id])) {
         setErr(`Please complete: ${f.label || f.kind}`);
         return;
       }
@@ -175,7 +180,7 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
               <div className="sg-sheet" style={{ position: "absolute", inset: 0 }} dangerouslySetInnerHTML={{ __html: pageHtml }} />
               {stamps.filter((s) => s.page === i).map((s, si) => <StampView key={`s${si}`} s={s} />)}
               {placed.filter((f) => f.page === i).map((f) => (
-                <FieldWidget key={f.id} f={f} value={values[f.id] ?? ""} filled={isFilled(f) && (f.kind === "checkbox" ? values[f.id] === "true" : Boolean(values[f.id]))}
+                <FieldWidget key={f.id} f={f} value={values[f.id] ?? ""} filled={isFilled(f)}
                   onSign={() => setSigningId(f.id)} onSet={(v) => set(f.id, v)} />
               ))}
             </div>

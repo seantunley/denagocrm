@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requirePermission, requireAnyPermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { starterTemplate } from "@/lib/docbuilder/blocks";
 import { listBuilderVersions } from "@/lib/docbuilder/store";
@@ -11,7 +11,7 @@ import { listBuilderVersions } from "@/lib/docbuilder/store";
 const BASE = "/settings/documents/builder";
 
 export async function createBuilderTemplate(formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("docbuilder.manage");
   const name = String(formData.get("name") ?? "").trim();
   const key = String(formData.get("key") ?? "custom").trim() || "custom";
   if (!name) return;
@@ -31,7 +31,7 @@ export async function createBuilderTemplate(formData: FormData) {
 
 /** Persist the Puck document tree from the editor. */
 export async function saveBuilderData(id: string, data: unknown): Promise<{ ok: boolean }> {
-  const user = await requireOwner();
+  const user = await requirePermission("docbuilder.manage");
   const existing = await prisma.docBuilderTemplate.findUnique({ where: { id } });
   if (!existing || existing.deletedAt) return { ok: false };
   await prisma.docBuilderTemplate.update({ where: { id }, data: { data: data as object } });
@@ -47,7 +47,7 @@ export async function saveBuilderData(id: string, data: unknown): Promise<{ ok: 
 }
 
 export async function renameBuilderTemplate(id: string, formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("docbuilder.manage");
   const name = String(formData.get("name") ?? "").trim();
   if (!name) return;
   await prisma.docBuilderTemplate.update({ where: { id }, data: { name } });
@@ -56,7 +56,7 @@ export async function renameBuilderTemplate(id: string, formData: FormData) {
 }
 
 export async function setDefaultBuilderTemplate(id: string) {
-  const user = await requireOwner();
+  const user = await requirePermission("docbuilder.manage");
   const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
   if (!tpl || tpl.deletedAt) return;
   await prisma.$transaction([
@@ -69,7 +69,7 @@ export async function setDefaultBuilderTemplate(id: string) {
 
 /** Snapshot the current draft as an immutable, restorable version and mark it published. */
 export async function publishBuilderVersion(id: string, label?: string): Promise<{ ok: boolean; version?: number }> {
-  const user = await requireOwner();
+  const user = await requirePermission("docbuilder.manage");
   const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
   if (!tpl || tpl.deletedAt) return { ok: false };
   const last = await prisma.docBuilderVersion.findFirst({
@@ -94,7 +94,7 @@ export async function publishBuilderVersion(id: string, label?: string): Promise
 
 /** Restore a prior version's JSON back onto the working draft. */
 export async function restoreBuilderVersion(id: string, versionId: string): Promise<{ ok: boolean }> {
-  const user = await requireOwner();
+  const user = await requirePermission("docbuilder.manage");
   const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
   if (!tpl || tpl.deletedAt) return { ok: false };
   const ver = await prisma.docBuilderVersion.findUnique({ where: { id: versionId } });
@@ -112,7 +112,7 @@ export async function restoreBuilderVersion(id: string, versionId: string): Prom
 
 /** Version history for the editor's history panel (metadata only). */
 export async function listBuilderVersionsAction(id: string) {
-  await requireOwner();
+  await requireAnyPermission("docbuilder.view", "docbuilder.manage");
   const rows = await listBuilderVersions(id);
   return rows.map((r) => ({
     id: r.id,
@@ -124,7 +124,7 @@ export async function listBuilderVersionsAction(id: string) {
 }
 
 export async function deleteBuilderTemplate(id: string) {
-  const user = await requireOwner();
+  const user = await requirePermission("docbuilder.manage");
   const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
   if (!tpl || tpl.deletedAt) return;
   await prisma.docBuilderTemplate.update({ where: { id }, data: { deletedAt: new Date() } });
