@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireOwner, requireCrmOrWorkshop } from "@/lib/auth";
+import { requireCrmOrWorkshop } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { dispatchRequest, notifyRecipient } from "@/lib/signing/dispatch";
 import { logSignEvent } from "@/lib/signing/events";
@@ -25,7 +26,7 @@ export async function decideApproval(stepId: string, decision: "approve" | "reje
 }
 
 export async function sendRequest(requestId: string): Promise<{ ok: boolean; notified?: number; error?: string }> {
-  const user = await requireOwner();
+  const user = await requirePermission("signing.manage");
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } });
   if (!req || req.deletedAt) return { ok: false, error: "Not found" };
   if (isRequestClosed(req.status)) return { ok: false, error: "This request is closed." };
@@ -48,7 +49,7 @@ export async function sendRequest(requestId: string): Promise<{ ok: boolean; not
  * actually went out. Mirrors the already-correct resendRecordSigning.
  */
 export async function resendRequest(requestId: string): Promise<{ ok: boolean; notified?: number; error?: string }> {
-  const user = await requireOwner();
+  const user = await requirePermission("signing.manage");
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } });
   if (!req || req.deletedAt) return { ok: false, error: "Not found" };
   if (req.status === "draft") return { ok: false, error: "This request hasn't been sent yet." };
@@ -64,7 +65,7 @@ export async function resendRequest(requestId: string): Promise<{ ok: boolean; n
 }
 
 export async function remindRecipient(recipientId: string): Promise<{ ok: boolean }> {
-  const user = await requireOwner();
+  const user = await requirePermission("signing.manage");
   const r = await prisma.signatureRecipient.findUnique({ where: { id: recipientId } });
   if (!r) return { ok: false };
   await notifyRecipient(recipientId, { reminder: true });
@@ -74,7 +75,7 @@ export async function remindRecipient(recipientId: string): Promise<{ ok: boolea
 }
 
 export async function voidRequest(requestId: string, reason?: string): Promise<{ ok: boolean }> {
-  const user = await requireOwner();
+  const user = await requirePermission("signing.manage");
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId } });
   if (!req) return { ok: false };
   // CONDITIONAL void — only an OPEN request. An unconditional update would
@@ -94,7 +95,7 @@ export async function voidRequest(requestId: string, reason?: string): Promise<{
 
 /** Update recipient contact details before sending (from the dashboard). */
 export async function updateRecipientContact(recipientId: string, patch: { email?: string; phone?: string }): Promise<{ ok: boolean }> {
-  await requireOwner();
+  await requirePermission("signing.manage");
   const r = await prisma.signatureRecipient.findUnique({ where: { id: recipientId }, include: { request: { select: { status: true, deletedAt: true } } } });
   if (!r) return { ok: false };
   // Don't edit recipients on a closed/trashed request.
