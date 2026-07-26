@@ -72,7 +72,7 @@ export function buildNav(
   if (can("activities.view", "activities.manage")) crmLinks.push({ href: "/test-drives", label: "Test Drives", icon: Route });
   if (can("leads.view_all", "leads.view_owned")) crmLinks.push({ href: "/leads", label: "Leads", icon: SquareKanban });
   if (can("quotes.view_all", "quotes.view_owned")) crmLinks.push({ href: "/quotes", label: "Quotes", icon: FileText });
-  if (isAdmin) crmLinks.push({ href: "/signatures", label: "Signatures", icon: PenLine });
+  if (can("signing.view", "signing.manage")) crmLinks.push({ href: "/signatures", label: "Signatures", icon: PenLine });
   if (can("deliveries.view", "deliveries.manage")) crmLinks.push({ href: "/deliveries", label: "Deliveries", icon: Truck });
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/contacts", label: "Contacts", icon: Users });
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/fleets", label: "Fleets", icon: Building2 });

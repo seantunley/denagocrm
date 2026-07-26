@@ -1,4 +1,5 @@
-import { requireApiOwner, apiAuthErrorResponse } from "@/lib/auth";
+import { getCurrentUser } from "@/lib/auth";
+import { hasAnyPermission } from "@/lib/permissions";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import {
   bindingParams,
@@ -15,12 +16,10 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  try {
-    await requireApiOwner();
-  } catch (error) {
-    const response = apiAuthErrorResponse(error);
-    if (response) return response;
-    throw error;
+  const user = await getCurrentUser();
+  if (!user) return new Response("Unauthorized", { status: 401 });
+  if (!(await hasAnyPermission(user, "docbuilder.view", "docbuilder.manage"))) {
+    return new Response("Forbidden", { status: 403 });
   }
 
   const { id } = await context.params;
