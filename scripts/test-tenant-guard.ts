@@ -360,9 +360,9 @@ async function main() {
     const soleRes = await resolveActingTenant(uStaff);
     check("staff: sole active membership resolves to that tenant", "tenantId" in soleRes && soleRes.tenantId === t1);
 
-    check("staff: sole tenant + matching tid → ok", (await establishStaffTenantScope(uStaff, t1)).ok === true);
-    check("staff: mismatched tid → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, "other")).ok === false);
-    check("staff: tid-less session → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, null)).ok === false);
+    check("staff: sole tenant + matching tid → ok", (await establishStaffTenantScope(uStaff, t1, false)).ok === true);
+    check("staff: mismatched tid → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, "other", false)).ok === false);
+    check("staff: tid-less session → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, null, false)).ok === false);
 
     // New-session write under enforcement lands in the resolved tenant scope and is
     // stamped with that tenant — the login-bootstrap DB path (createSessionCookie).
@@ -374,17 +374,17 @@ async function main() {
 
     // Tenant SUSPENDED → session becomes unusable immediately.
     await basePrisma.tenant.update({ where: { id: t1 }, data: { active: false } });
-    check("staff: suspended tenant → NOT ok (unusable immediately)", (await establishStaffTenantScope(uStaff, t1)).ok === false);
+    check("staff: suspended tenant → NOT ok (unusable immediately)", (await establishStaffTenantScope(uStaff, t1, false)).ok === false);
     await basePrisma.tenant.update({ where: { id: t1 }, data: { active: true } });
 
     // Membership REMOVED → session becomes unusable immediately.
     await basePrisma.tenantMember.deleteMany({ where: { userId: uStaff, tenantId: t1 } });
-    check("staff: membership removed → NOT ok (unusable immediately)", (await establishStaffTenantScope(uStaff, t1)).ok === false);
+    check("staff: membership removed → NOT ok (unusable immediately)", (await establishStaffTenantScope(uStaff, t1, false)).ok === false);
 
     // Newly AMBIGUOUS (re-add t1 + add a second active membership) → unusable.
     await basePrisma.tenantMember.create({ data: { tenantId: t1, userId: uStaff } });
     await basePrisma.tenantMember.create({ data: { tenantId: t2, userId: uStaff } });
-    check("staff: ambiguous (2 active memberships) → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, t1)).ok === false);
+    check("staff: ambiguous (2 active memberships) → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, t1, false)).ok === false);
 
     // ── no-user token surfaces (Phase C 2b-C1): tenant is DERIVED from the token's
     //    row via a narrow trusted lookup, then the guarded re-read runs INSIDE that

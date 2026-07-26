@@ -128,5 +128,14 @@ export async function activateTenant(prisma: PrismaClient, tenantId: string): Pr
  * refuse suspending the founding tenant (see tenantAdmin.canSuspendTenant).
  */
 export async function suspendTenant(prisma: PrismaClient, tenantId: string): Promise<void> {
+  // Defence-in-depth at the SOURCE OF TRUTH — deliberately NOT gated on enforcement.
+  // The founding tenant underpins every existing user + session, so suspending it
+  // (active:false) would fail-closed lock the whole business out. The console action
+  // already refuses this via tenantAdmin.canSuspendTenant; enforcing it here too means
+  // suspending the founding tenant is impossible no matter which caller reaches this
+  // function, enforcement on or off.
+  if (tenantId === DEFAULT_TENANT_ID) {
+    throw new Error("The founding tenant cannot be suspended.");
+  }
   await prisma.tenant.update({ where: { id: tenantId }, data: { active: false } });
 }

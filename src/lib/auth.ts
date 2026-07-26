@@ -3,13 +3,14 @@ import { cookies, headers } from "next/headers";
 import crypto from "crypto";
 import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
-import { prisma } from "./db";
+import { prisma, basePrisma } from "./db";
 import { getSetting } from "./settings";
 import { hasModule, type ModuleId } from "./access";
 import { getUserSecurityState, getUserSecurityStateFresh } from "./userSecurity";
 import { resolveActingTenant } from "./tenantContext";
 import { tenantObserving, tenantEnforcing, mayRetryTenantlessSession } from "./tenantEnforcement";
-import { honoredTenantClaim } from "./tenant";
+import { honoredTenantClaim, resolveLoginTenant } from "./tenant";
+import { ensureFoundingMembership } from "./provisioning";
 import { establishStaffTenantScope, validateInSystemScope } from "./tenantScopeEntry";
 import { withTenant, withSystemScope } from "./tenantScope";
 import {
@@ -72,7 +73,11 @@ export const getCurrentUser = cache(async () => {
   // stale/tenant-less/ambiguous session must not pass requireUser/role/owner checks
   // or reach global models. Resolves inline (no getCurrentUser re-entry); runs once
   // per request (getCurrentUser is cache()d).
-  const established = await establishStaffTenantScope(validated.user.id, validated.tid);
+  const established = await establishStaffTenantScope(
+    validated.user.id,
+    validated.tid,
+    validated.user.role === "owner",
+  );
   if (!established.ok) return null;
   return validated.user;
 });
@@ -161,9 +166,22 @@ export async function createSessionCookie(
   // ambiguity/none, tenantId stays null and login proceeds exactly as before.
   let tenantId: string | null = null;
   try {
+    // Owner lockout-proofing (DORMANT off): under enforcement, guarantee the global
+    // owner is a member of the always-active founding tenant BEFORE resolving, so the
+    // resolveLoginTenant owner fallback below lands on a REAL, active membership.
+    // Idempotent (upsert). Uses basePrisma deliberately: no tenant scope is
+    // established at this point in login and TenantMember is a tenant-scoped model, so
+    // the guarded client would fail closed here — basePrisma is the bootstrap path
+    // every other provisioning caller uses. Skipped entirely when not enforcing.
+    if (tenantEnforcing() && user.role === "owner") {
+      await ensureFoundingMembership(basePrisma, user.id);
+    }
     const ctx = await resolveActingTenant(user.id);
-    if ("tenantId" in ctx) tenantId = ctx.tenantId;
-    else if (tenantObserving()) {
+    // Pure, unit-tested decision: the resolved tenant, or — under enforcement — the
+    // owner's founding-tenant fallback, or null. When NOT enforcing this is null on
+    // the error branch for every role, so login is byte-for-byte the pre-tenancy path.
+    tenantId = resolveLoginTenant(ctx, user.role, tenantEnforcing());
+    if (!tenantId && "error" in ctx && tenantObserving()) {
       // MONITOR: surface logins that couldn't resolve a single active tenant —
       // exactly the ones that would be affected once enforcement is turned on.
       // These are EXPECTED observations, not system errors, so they go to the
