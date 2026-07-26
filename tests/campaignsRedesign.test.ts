@@ -5,39 +5,31 @@ import { join } from "node:path";
 
 const read = (...parts: string[]) => readFileSync(join(process.cwd(), ...parts), "utf8");
 const pageSource = read("src", "app", "(app)", "campaigns", "page.tsx");
-const composerSource = read("src", "components", "CampaignComposer.tsx");
 const campaignActionsSource = read("src", "app", "actions", "campaigns.ts");
 const campaignLibSource = read("src", "lib", "campaigns.ts");
 const emailActionsSource = read("src", "app", "actions", "emails.ts");
 
-test("campaigns presents a metrics-led workspace with direct create navigation", () => {
+test("campaigns presents a metrics-led workspace with governed create navigation", () => {
   assert.match(pageSource, /WorkspaceHero/);
   assert.match(pageSource, /title="Campaign centre"/);
   assert.match(pageSource, /key: "overview"/);
-  assert.match(pageSource, /href="\/campaigns\?tab=new"/);
+  // Campaign creation is now governed: create navigation points at /marketing.
+  assert.match(pageSource, /href="\/marketing\/campaigns\/new"/);
   assert.match(pageSource, /initialKey=\{initialTab\}/);
   assert.match(pageSource, /recipientCount: true/);
   assert.match(pageSource, /failedCount: true/);
 });
 
-test("campaign workflows remain connected across the redesigned tabs", () => {
-  assert.match(pageSource, /<CampaignComposer/);
+test("legacy campaigns screen is read-only and defers launch to /marketing", () => {
+  // The direct-launch composer has been retired; the screen keeps reporting,
+  // audiences and subscriber-consent management and links out to the governed flow.
+  assert.doesNotMatch(pageSource, /<CampaignComposer/);
+  assert.match(pageSource, /href="\/marketing\/campaigns"/);
   assert.match(pageSource, /<SegmentBuilder/);
   assert.match(pageSource, /<TemplateManager/);
   assert.match(pageSource, /RecordContextMenu/);
   assert.match(pageSource, /setMarketingOptOut/);
   assert.match(pageSource, /deleteSegment/);
-});
-
-test("composer uses icon-led channel choices and preserves campaign actions", () => {
-  assert.match(composerSource, /icon=\{Mail\}/);
-  assert.match(composerSource, /icon=\{MessageSquareText\}/);
-  assert.doesNotMatch(composerSource, /✉️|💬/u);
-  assert.match(composerSource, /useActionState\(sendCampaign/);
-  assert.match(composerSource, /previewAudience\(formData\)/);
-  assert.match(composerSource, /sendCampaignTest\(undefined, formData\)/);
-  assert.match(composerSource, /uploadCampaignImage/);
-  assert.match(composerSource, /Opted-out customers are always excluded/);
 });
 
 test("campaign workspace reads only the active tenant", () => {
@@ -53,7 +45,6 @@ test("campaign workspace reads only the active tenant", () => {
 test("campaign mutations stamp and constrain tenant ownership", () => {
   assert.match(campaignActionsSource, /resolveActingTenant\(userId\)/);
   assert.match(campaignActionsSource, /findFirst\(\{ where: \{ id: segmentId, tenantId \} \}\)/);
-  assert.match(campaignActionsSource, /tenantId,[\s\S]*?campaignId: created\.id/);
   assert.match(campaignActionsSource, /deleteMany\(\{ where: \{ id, tenantId \} \}\)/);
   assert.match(campaignActionsSource, /updateMany\(\{[\s\S]*?where: \{ id: contactId, tenantId \}/);
   assert.match(campaignLibSource, /const where: any = \{ tenantId, deletedAt: null, marketingOptOut: false \}/);
@@ -61,4 +52,10 @@ test("campaign mutations stamp and constrain tenant ownership", () => {
   assert.match(emailActionsSource, /emailTemplate\.create\(\{ data: \{ tenantId, name, subject, body \} \}\)/);
   assert.match(emailActionsSource, /emailTemplate\.updateMany\(\{[\s\S]*?where: \{ id, tenantId \}/);
   assert.match(emailActionsSource, /emailTemplate\.deleteMany\(\{ where: \{ id, tenantId \} \}\)/);
+});
+
+test("direct campaign launch is retired in the legacy actions", () => {
+  // Mirror of marketingGovernanceIntegration: no direct provider send from here.
+  assert.doesNotMatch(campaignActionsSource, /sendCampaignBatch\(/);
+  assert.match(campaignActionsSource, /Direct campaign launch has been retired/);
 });

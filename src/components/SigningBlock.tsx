@@ -83,7 +83,7 @@ export default function SigningBlock({
   const active = state && state.status !== "completed" && state.status !== "declined" && state.status !== "voided";
   const declined = state?.recipients.find((r) => r.declinedAt);
 
-  async function run(label: string, fn: () => Promise<{ ok: boolean; error?: string; notified?: number; signFirstUrl?: string; modal?: boolean }>) {
+  async function run(label: string, fn: () => Promise<{ ok: boolean; error?: string; notified?: number; unreachable?: number; signFirstUrl?: string; modal?: boolean }>) {
     setBusy(label); setErr(null); setNote(null);
     try {
       const res = await fn();
@@ -92,7 +92,17 @@ export default function SigningBlock({
       if (res.signFirstUrl && res.modal) { setModalUrl(res.signFirstUrl); return; }
       // Otherwise go to sign / the hub.
       if (res.signFirstUrl) { router.push(res.signFirstUrl); return; }
-      if (typeof res.notified === "number") setNote(res.notified > 0 ? `Sent to ${res.notified} recipient(s).` : "Request ready — add a contact to notify.");
+      if (typeof res.notified === "number") {
+        // Truthful: distinguish delivered, no-contact-channel, and
+        // had-a-channel-but-delivery-failed rather than claiming a send.
+        setNote(
+          res.notified > 0
+            ? `Sent to ${res.notified} recipient(s).`
+            : res.unreachable && res.unreachable > 0
+              ? "Request ready — add a contact to notify."
+              : "Request ready, but the notification could not be delivered — retry from the Signatures hub.",
+        );
+      }
       router.refresh();
     } catch { setErr("Something went wrong. Please try again."); }
     finally { setBusy(null); }

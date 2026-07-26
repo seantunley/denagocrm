@@ -5,7 +5,7 @@ import { isValidSignToken } from "@/lib/signing/tokens";
 import { logSignEvent, reqMeta } from "@/lib/signing/events";
 import { advanceAfterSignature } from "@/lib/signing/workflow";
 import { isRequestClosed } from "@/lib/signing/status";
-import { isFieldValueComplete } from "@/lib/signing/fieldValidation";
+import { missingRequiredForRecipient } from "@/lib/signing/fieldValidation";
 import { logAudit } from "@/lib/audit";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
@@ -76,17 +76,23 @@ async function handleSign(token: string, req: Request): Promise<Response> {
   const requestFields = await prisma.signatureField.findMany({ where: { requestId: request.id } });
   const fillable = new Map(requestFields.filter((f) => f.recipientId === recipient.id || f.recipientId === null).map((f) => [f.id, f]));
 
-  // Required-field validation: every required field this recipient must fill has
-  // to arrive with a value (or already be filled). The page enforced this
-  // client-side; the API must too — isFieldValueComplete is the SAME check the
-  // signer UI uses, so a checkbox's `=== "true"` requirement can't drift
-  // between client and server.
-  const submitted = new Map(fields.map((f) => [f.id, f.value]));
-  const missingRequired = [...fillable.values()].some((f) => {
-    if (!f.required || f.filledAt) return false;
-    return !isFieldValueComplete(f.kind, submitted.get(f.id));
-  });
-  if (missingRequired) {
+  // Required-field validation PER RECIPIENT. Every required fillable field must
+  // arrive with a complete, kind-aware value in THIS submission (checkbox = must
+  // be "true", not the string "false"), or already have this recipient's own
+  // durable response. We must NOT accept a globally-filled SignatureField as
+  // satisfied: on a SHARED field the first signer's value cannot let a later
+  // signer skip their own acknowledgement — that's the point of one response per
+  // recipient. The page enforces this client-side; the API repeats it.
+  const submittedValue = new Map(fields.map((f) => [f.id, f.value]));
+  const priorResponseFieldIds = new Set(
+    (
+      await prisma.signatureFieldResponse.findMany({
+        where: { recipientId: recipient.id, field: { requestId: request.id } },
+        select: { fieldId: true },
+      })
+    ).map((r) => r.fieldId),
+  );
+  if (missingRequiredForRecipient([...fillable.values()], submittedValue, priorResponseFieldIds)) {
     return new Response("Please complete all required fields before signing.", { status: 400 });
   }
 
@@ -150,14 +156,27 @@ async function handleSign(token: string, req: Request): Promise<Response> {
       if (claimed.count === 0) throw new SignAbort(409, "Already signed");
       // Field values land in the same transaction, so they're visible exactly
       // when the recipient becomes "signed".
+      //
+      // Each recipient's answer is recorded individually in SignatureFieldResponse
+      // (one durable row per recipient). SignatureField.value is claimed
+      // first-write-wins — it holds the single value the sealed PDF stamps at the
+      // field's one placed position. On a SHARED field (recipientId null) this
+      // means a later signer's answer no longer overwrites (or, under the old
+      // guard, silently vanishes): the stamped value stays the first signer's,
+      // while every signer's response is preserved as its own row.
       for (const u of updates) {
+        // Each recipient's own durable answer — one row per (field, recipient).
+        await tx.signatureFieldResponse.upsert({
+          where: { fieldId_recipientId: { fieldId: u.id, recipientId: recipient.id } },
+          create: { fieldId: u.id, recipientId: recipient.id, value: u.value, filledAt, tenantId: recipient.tenantId },
+          update: { value: u.value, filledAt },
+        });
+        // The single SignatureField.value the sealed PDF stamps at the field's one
+        // placed position. On a shared (unassigned) field two recipients can race,
+        // so claim it first-write-wins; an assigned field has one filler, so write
+        // it directly (allowing a re-submit to update it).
         const fieldRow = fillable.get(u.id);
         if (fieldRow && fieldRow.recipientId === null) {
-          // Unassigned field: any recipient may fill it, but in parallel
-          // signing two recipients can race on the SAME field. First writer
-          // wins — claim it atomically (only if still unfilled) so a second,
-          // concurrent recipient can't silently overwrite the first one's
-          // value with their own.
           await tx.signatureField.updateMany({ where: { id: u.id, filledAt: null }, data: { value: u.value, filledAt } });
         } else {
           await tx.signatureField.update({ where: { id: u.id }, data: { value: u.value, filledAt } });

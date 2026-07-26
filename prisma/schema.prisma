@@ -431,10 +431,54 @@ model Campaign {
   openCount      Int       @default(0) // unique recipients who opened
   clickCount     Int       @default(0) // unique recipients who clicked
   status         String    @default("draft") // draft | queued | sending | sent
+  version        Int       @default(1)
   createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now()) @updatedAt
   sentAt         DateTime?
+  scheduledFor   DateTime?
+  timezone       String?   @default("Africa/Johannesburg")
   createdById    String?
   createdBy      User?     @relation("CampaignCreator", fields: [createdById], references: [id])
+  // Lifecycle / review workflow (migration-added; kept as plain scalars).
+  ownerId              String?
+  submittedById        String?
+  submittedForReviewAt DateTime?
+  reviewRequestedById  String?
+  reviewNote           String?
+  changesRequestedAt   DateTime?
+  approvedById         String?
+  approvedAt           DateTime?
+  pausedAt             DateTime?
+  cancelledAt          DateTime?
+  completedAt          DateTime?
+  archivedAt           DateTime?
+  // Content / brief.
+  preheader        String?
+  objective        String?
+  offer            String?
+  productId        String?
+  segmentId        String?
+  audienceSnapshot Json?
+  internalNotes    String?
+  landingPageUrl   String?
+  primaryCtaLabel  String?
+  primaryCtaUrl    String?
+  successMetric    String?
+  budgetCents      Int?
+  targetLeadCount  Int?
+  targetRevenueCents Int?
+  // Attribution / rollups.
+  attributionWindowDays Int @default(30)
+  conversionCount  Int @default(0)
+  attributedRevenueCents Int @default(0)
+  revenueCents     Int @default(0)
+  suppressedCount  Int @default(0)
+  unsubscribeCount Int @default(0)
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  utmTerm     String?
+  utmContent  String?
   recipients     CampaignRecipient[]
 
   @@index([status])
@@ -449,13 +493,25 @@ model CampaignRecipient {
   contactId  String
   contact    Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
   token      String    @unique // tracking/unsubscribe token
-  status     String    @default("queued") // queued | sent | failed
+  status     String    @default("pending") // pending | queued | sending | sent | delivered | failed_temporary | failed_permanent | suppressed | cancelled
   sentAt     DateTime?
   openedAt   DateTime?
   openCount  Int       @default(0)
   clickedAt  DateTime?
   clickCount Int       @default(0)
   error      String?
+  // Delivery / retry / attribution (migration-added).
+  deliveredAt      DateTime?
+  bouncedAt        DateTime?
+  unsubscribedAt   DateTime?
+  convertedAt      DateTime?
+  conversionValueCents Int   @default(0)
+  attemptCount     Int       @default(0)
+  lastAttemptAt    DateTime?
+  nextAttemptAt    DateTime?
+  providerStatus   String?
+  providerMessageId String?
+  suppressionReason String?
 
   @@index([campaignId])
   @@index([status])
@@ -1390,9 +1446,19 @@ model Survey {
   intro       String? // shown at the top of the form / in the invite
   thankYou    String? // shown after submitting
   questions   Json // [{id,type,label,required,options?,scale?}]
-  active      Boolean   @default(true)
+  active      Boolean   @default(false)
+  status      String    @default("draft") // draft | in_review | published | inactive | archived
+  publishedVersion Int?
   trigger     String? // job_complete | delivery | won | null (manual send)
   delayHours  Int       @default(0) // wait this many hours after the trigger before sending
+  ownerId     String?
+  submittedById        String?
+  submittedForReviewAt DateTime?
+  reviewNote           String?
+  changesRequestedAt   DateTime?
+  approvedById         String?
+  approvedAt           DateTime?
+  archivedAt           DateTime?
   createdById String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -1421,9 +1487,22 @@ model SurveyResponse {
   score        Int? // primary rating (1-5) or NPS (0-10), for rollups
   comment      String? // free-text highlight
   status       String    @default("sent") // scheduled | sent | completed | failed
+  surveyVersion Int? // pinned published version the respondent answered
+  distributionId String?
   scheduledFor DateTime? // set when a delay is configured; cron sends once due
   sentAt       DateTime  @default(now())
+  inviteSentAt DateTime?
+  openedAt     DateTime?
   completedAt  DateTime?
+  // Distribution queue / reminders / retry (migration-added).
+  attemptCount   Int      @default(0)
+  lastAttemptAt  DateTime?
+  nextAttemptAt  DateTime?
+  reminderCount  Int      @default(0)
+  lastReminderAt DateTime?
+  providerStatus String?
+  providerMessageId String?
+  suppressionReason String?
 
   @@index([surveyId, status])
   @@index([contactId])
@@ -1562,6 +1641,13 @@ model SignatureRequest {
   signedPdfRef   String? // storage ref of the sealed, completed PDF
   signedPdfHash  String? // sha-256 of the completed PDF
   signedDocId    String? // Document row of the filed, completed PDF
+  // Fingerprint of template + source record + resolved document (recipients,
+  // fields, content). A partial unique index over (contentFingerprint) WHERE
+  // deletedAt IS NULL AND status is open (see migration
+  // 20260725120000_signing_request_fingerprint) makes create-or-reuse atomic —
+  // Prisma can't declare a partial unique constraint, so it isn't modelled with
+  // @unique here; the DB is still the real arbiter.
+  contentFingerprint String?
 
   message     String? // note shown to recipients
   createdById String?
@@ -1650,8 +1736,13 @@ model SignatureRecipient {
   signerIp        String?
   signerUserAgent String?
   remindedAt      DateTime?
+  // Claim-lease timestamp: set when notifyRecipient claims pending→sending,
+  // read only to detect a claim that never reached its finalize update (crash
+  // or timeout mid-send) — see recoverStaleSigningClaims in signing/dispatch.ts.
+  sendingAt       DateTime?
 
-  fields SignatureField[]
+  fields    SignatureField[]
+  responses SignatureFieldResponse[]
 
   @@index([requestId, order])
   @@index([tenantId])
@@ -1675,10 +1766,39 @@ model SignatureField {
   required Boolean @default(true)
   label    String  @default("")
 
-  value    String? // captured text / signature ref / "true"
+  value    String? // captured text / signature ref / "true" — FIRST committed value (what the sealed PDF stamps)
   filledAt DateTime?
 
+  responses SignatureFieldResponse[]
+
   @@index([requestId])
+  @@index([tenantId])
+}
+
+/// One recipient's answer to a single signature field. `SignatureField.value`
+/// holds only the FIRST committed value — the field has a single placed position,
+/// so the sealed PDF can stamp exactly one value there. On a SHARED field
+/// (recipientId null, fillable by any recipient) every later signer's answer would
+/// otherwise be lost (overwritten, or dropped by the first-write-wins guard). This
+/// table records each recipient's response individually and durably — one row per
+/// (field, recipient) — so no signer's acknowledgement is ever silently discarded.
+model SignatureFieldResponse {
+  id        String @id @default(cuid())
+  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
+
+  fieldId String
+  field   SignatureField @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  recipientId String
+  recipient   SignatureRecipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  value    String
+  filledAt DateTime @default(now())
+
+  // At most one response per recipient per field: a re-submission updates that
+  // recipient's own row, never forges a second acknowledgement.
+  @@unique([fieldId, recipientId])
+  @@index([recipientId])
   @@index([tenantId])
 }
 

@@ -1,0 +1,65 @@
+model SurveyVersion {
+  id            String   @id @default(cuid())
+  tenantId      String?
+  surveyId      String
+  version       Int
+  snapshot      Json
+  publishedAt   DateTime @default(now())
+  publishedById String?
+  label         String?
+
+  @@unique([surveyId, version])
+  @@index([tenantId])
+  @@index([surveyId, publishedAt(sort: Desc)])
+}
+
+model SurveyDistribution {
+  id                 String   @id @default(cuid())
+  tenantId           String?
+  surveyId           String
+  surveyVersion      Int
+  name               String
+  purpose            String   @default("survey_transactional")
+  channel            String   @default("any")
+  status             String   @default("draft")
+  audienceSnapshot   Json
+  scheduledFor       DateTime?
+  startedAt          DateTime?
+  pausedAt           DateTime?
+  cancelledAt        DateTime?
+  completedAt        DateTime?
+  reminderAfterHours Int      @default(48)
+  maxReminders       Int      @default(1)
+  totalCount         Int      @default(0)
+  sentCount          Int      @default(0)
+  completedCount     Int      @default(0)
+  failedCount        Int      @default(0)
+  suppressedCount    Int      @default(0)
+  createdById        String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([tenantId, status, scheduledFor])
+  @@index([surveyId, surveyVersion])
+}
+
+model SurveyFollowUp {
+  id               String   @id @default(cuid())
+  tenantId         String?
+  surveyResponseId String   @unique
+  distributionId   String?
+  contactId        String?
+  severity         String   @default("medium")
+  status           String   @default("open")
+  ownerId          String?
+  dueAt             DateTime?
+  caseId            String?
+  note              String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  resolvedAt        DateTime?
+  resolvedById      String?
+
+  @@index([tenantId, status, dueAt])
+  @@index([contactId, createdAt(sort: Desc)])
+}

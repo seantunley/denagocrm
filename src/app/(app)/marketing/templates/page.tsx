@@ -1,0 +1,18 @@
+import { basePrisma } from "@/lib/db";
+import { getActiveTenantId } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
+import { archiveMarketingTemplate, publishMarketingTemplate, saveMarketingTemplate } from "@/app/actions/marketingContent";
+import { PageHeader } from "@/components/page-header";
+
+type TemplateRow = { id: string; name: string; subject: string; body: string; plainTextBody: string | null; category: string; status: string; version: number };
+const CATEGORIES = ["marketing_email", "marketing_sms", "transactional_email", "transactional_sms", "service_reminder", "survey_invite_email", "survey_invite_sms", "internal_notification"];
+
+export default async function MarketingTemplatesPage() {
+  await requirePermission("campaigns.view");
+  const tenantId = await getActiveTenantId();
+  const templates = await basePrisma.$queryRaw<TemplateRow[]>`SELECT "id", "name", "subject", "body", "plainTextBody", "category", "status", "version" FROM "EmailTemplate" WHERE "tenantId" IS NOT DISTINCT FROM ${tenantId} ORDER BY "status", "name"`;
+  return <div className="space-y-5"><PageHeader title="Templates" description="Purpose-separated, versioned content templates." />
+    <form action={saveMarketingTemplate} className="card grid gap-3 md:grid-cols-2"><h2 className="font-semibold md:col-span-2">Create template</h2><input name="name" className="input" placeholder="Template name" required /><select name="category" className="input">{CATEGORIES.map((category) => <option key={category}>{category}</option>)}</select><input name="subject" className="input md:col-span-2" placeholder="Subject (email templates)" /><textarea name="body" className="input min-h-56 md:col-span-2" placeholder="Rich HTML or SMS body" required /><textarea name="plainTextBody" className="input min-h-32 md:col-span-2" placeholder="Plain-text fallback" /><button className="btn-primary md:col-span-2">Save draft template</button></form>
+    <div className="grid gap-4 lg:grid-cols-2">{templates.map((template) => <section key={template.id} className="card space-y-3"><div className="flex justify-between"><div><h2 className="font-semibold">{template.name}</h2><p className="text-xs text-muted-foreground">{template.category.replaceAll("_", " ")} · version {template.version}</p></div><span className="badge">{template.status}</span></div><form action={saveMarketingTemplate} className="space-y-2"><input type="hidden" name="id" value={template.id} /><input name="name" className="input" defaultValue={template.name} required /><select name="category" className="input" defaultValue={template.category}>{CATEGORIES.map((category) => <option key={category}>{category}</option>)}</select><input name="subject" className="input" defaultValue={template.subject} /><textarea name="body" className="input min-h-40" defaultValue={template.body} required /><textarea name="plainTextBody" className="input min-h-24" defaultValue={template.plainTextBody ?? ""} /><button className="btn-secondary">Save new version</button></form><div className="flex gap-2">{template.status === "draft" && <form action={publishMarketingTemplate.bind(null, template.id)}><button className="btn-primary btn-sm">Publish</button></form>}{template.status !== "archived" && <form action={archiveMarketingTemplate.bind(null, template.id)}><button className="btn-danger btn-sm">Archive</button></form>}</div></section>)}</div>
+  </div>;
+}
