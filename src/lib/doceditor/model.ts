@@ -145,6 +145,9 @@ export const termsBlockSchema = z.object({
 });
 export const footerBlockSchema = z.object({
   ...base, type: z.literal("footer"),
+  // "brand" renders the two-column company footer (name/tagline, contact, socials)
+  // from the Company Profile; "simple" renders the free-text `lines` below.
+  variant: z.enum(["brand", "simple"]).default("brand"),
   accent: z.string().default("#ea580c"),
   lines: z.array(z.object({ text: z.string() })).default([]),
 });

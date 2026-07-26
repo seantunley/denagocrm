@@ -14,6 +14,8 @@ export const PERMISSIONS = [
   "quotes.change_status", "quotes.delete",
   "documents.view_all", "documents.view_owned", "documents.upload", "documents.manage",
   "document_templates.manage",
+  "signing.view", "signing.manage",
+  "docbuilder.view", "docbuilder.manage",
   "cases.view_all", "cases.view_owned", "cases.reply", "cases.manage",
   "cases.assign", "cases.create",
   "campaigns.view", "campaigns.manage", "surveys.view", "surveys.manage",

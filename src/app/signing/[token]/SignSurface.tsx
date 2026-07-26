@@ -133,6 +133,7 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
     const vals = { ...values };
     for (const f of fields) if (f.kind === "date" && !vals[f.id]) vals[f.id] = todayISO();
     for (const f of fields) {
+      if (f.kind === "checkbox" && !vals[f.id]) vals[f.id] = "false";
       if (f.required && !isFieldValueComplete(f.kind, vals[f.id])) {
         setErr(`Please complete: ${f.label || f.kind}`);
         return;
@@ -179,7 +180,7 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
               <div className="sg-sheet" style={{ position: "absolute", inset: 0 }} dangerouslySetInnerHTML={{ __html: pageHtml }} />
               {stamps.filter((s) => s.page === i).map((s, si) => <StampView key={`s${si}`} s={s} />)}
               {placed.filter((f) => f.page === i).map((f) => (
-                <FieldWidget key={f.id} f={f} value={values[f.id] ?? ""} filled={isFilled(f) && (f.kind === "checkbox" ? values[f.id] === "true" : Boolean(values[f.id]))}
+                <FieldWidget key={f.id} f={f} value={values[f.id] ?? ""} filled={isFilled(f)}
                   onSign={() => setSigningId(f.id)} onSet={(v) => set(f.id, v)} />
               ))}
             </div>

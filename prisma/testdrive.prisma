@@ -1,0 +1,111 @@
+/// A dealership-owned vehicle available for demonstrations and customer test drives.
+/// External entity IDs deliberately remain scalar fields so this module can be deployed
+/// additively without changing the legacy monolithic Prisma models.
+model DemoVehicle {
+  id              String   @id @default(cuid())
+  tenantId        String?
+  name            String
+  productId       String?
+  stockUnitId     String?  @unique
+  vin             String?
+  regNumber       String?
+  color           String?
+  branch          String?
+  status          String   @default("active") // active | maintenance | unavailable | retired
+  odometerKm      Int      @default(0)
+  batteryLevelPct Int?
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  bookings TestDriveBooking[]
+
+  @@index([tenantId])
+  @@index([status, branch])
+  @@index([productId])
+}
+
+/// Operational source of truth for a test drive. A linked Activity keeps the booking
+/// visible in the existing calendar while this record owns driver, handover and return data.
+model TestDriveBooking {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  reference String   @unique
+  status    String   @default("booked") // booked | confirmed | checked_out | completed | cancelled | no_show
+
+  leadId       String?
+  contactId    String
+  branch       String
+  demoVehicleId String?
+  demoVehicle   DemoVehicle? @relation(fields: [demoVehicleId], references: [id], onDelete: SetNull)
+  productId     String?
+  salespersonId String
+  accompanyingSalespersonId String?
+  activityId    String? @unique
+
+  scheduledStart  DateTime
+  expectedReturnAt DateTime
+  actualStartAt    DateTime?
+  actualReturnAt   DateTime?
+  cancellationReason String?
+  noShowReason       String?
+
+  driverLicenceNumber String?
+  driverLicenceExpiry DateTime?
+  identityVerifiedAt  DateTime?
+  identityVerifiedById String?
+  indemnityStatus     String @default("pending") // pending | signed | waived | not_required
+  emergencyContactName  String?
+  emergencyContactPhone String?
+
+  startOdometerKm  Int?
+  startBatteryPct  Int?
+  existingDamage   String?
+  accessoriesSupplied String?
+  intendedRoute    String?
+
+  returnOdometerKm Int?
+  returnBatteryPct Int?
+  returnCondition  String?
+  newDamage        String?
+  incidentReport   String?
+  cleaningRequired Boolean @default(false)
+  chargingRequired Boolean @default(false)
+  customerFeedback String?
+  salesOutcome     String? // follow_up | quote_created | sale_won | no_interest | undecided
+  convertedQuoteId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  assets TestDriveAsset[]
+
+  @@index([tenantId])
+  @@index([scheduledStart, status])
+  @@index([demoVehicleId, scheduledStart])
+  @@index([leadId])
+  @@index([contactId])
+  @@index([salespersonId])
+  @@index([convertedQuoteId])
+}
+
+/// Secure supporting evidence: licence image, condition photos and incident files.
+model TestDriveAsset {
+  id         String   @id @default(cuid())
+  tenantId   String?
+  bookingId  String
+  booking    TestDriveBooking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  kind       String // driver_licence | start_condition | return_condition | incident | other
+  fileName   String
+  storedName String   @unique
+  mimeType   String
+  sizeBytes  Int
+  note       String?
+  uploadedById String
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([bookingId, kind])
+}
