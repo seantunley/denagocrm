@@ -1,18 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { basePrisma, prisma } from "@/lib/db";
+import { prisma } from "@/lib/db";
 import { requirePermission, requireContactAccess } from "@/lib/permissions";
-import { sendEmail, isSmtpConfigured } from "@/lib/email";
-import { isSmsConfigured } from "@/lib/sms";
+import { sendEmail } from "@/lib/email";
 import { saveFile } from "@/lib/storage";
-import { logAudit } from "@/lib/audit";
 import { resolveActingTenant } from "@/lib/tenantContext";
 import {
   resolveContacts,
-  sendCampaignBatch,
   buildTrackedEmail,
-  newToken,
   htmlToText,
   type SegmentCriteria,
 } from "@/lib/campaigns";
@@ -116,72 +112,22 @@ export async function sendCampaignTest(
   return res.ok ? { ok: `Test SMS sent to ${to}.` } : { error: res.error ?? "Send failed." };
 }
 
+/**
+ * Compatibility action retained for the legacy Campaigns screen.
+ *
+ * Direct launch from a web request is deliberately retired: creating recipients
+ * and calling a provider straight from this action would bypass the governed
+ * campaign state machine, consent checks and atomic queue introduced under
+ * /marketing. Campaigns are now drafted, approved and queued there instead.
+ */
 export async function sendCampaign(
   _prev: CampaignState | undefined,
-  formData: FormData,
+  _formData: FormData,
 ): Promise<CampaignState> {
-  const user = await requirePermission("campaigns.manage");
-  const tenantId = await tenantIdFor(user.id);
-  if (!tenantId) return { error: "No active tenant is available." };
-  const name = str(formData.get("name"));
-  const channel = str(formData.get("channel")) || "email";
-  const subject = str(formData.get("subject"));
-  const htmlBody = str(formData.get("htmlBody"));
-  const smsBody = str(formData.get("body"));
-  if (!name) return { error: "Give the campaign a name." };
-  if (channel === "email" && !subject) return { error: "Email needs a subject." };
-  if (channel === "email" && !htmlBody) return { error: "Write the email." };
-  if (channel === "sms" && !smsBody) return { error: "Write the message." };
-  if (channel === "email" && !(await isSmtpConfigured()))
-    return { error: "Email isn't configured (Settings → Email)." };
-  if (channel === "sms" && !(await isSmsConfigured()))
-    return { error: "SMS isn't configured (Settings → Integrations)." };
-
-  let criteriaAndLabel: { criteria: SegmentCriteria; label: string };
-  try {
-    criteriaAndLabel = await criteriaFor(formData, tenantId);
-  } catch {
-    return { error: "That audience is not available in this tenant." };
-  }
-  const { criteria, label } = criteriaAndLabel;
-  const contacts = await resolveContacts(tenantId, criteria, channel);
-  if (contacts.length === 0) return { error: "No opted-in recipients match that audience." };
-
-  const campaign = await basePrisma.$transaction(async (tx) => {
-    const created = await tx.campaign.create({
-      data: {
-        tenantId,
-        name,
-        channel,
-        subject: channel === "email" ? subject : null,
-        body: channel === "email" ? htmlToText(htmlBody) : smsBody,
-        htmlBody: channel === "email" ? htmlBody : null,
-        audience: label,
-        recipientCount: contacts.length,
-        status: "queued",
-        createdById: user.id,
-      },
-    });
-    await tx.campaignRecipient.createMany({
-      data: contacts.map((contact) => ({
-        tenantId,
-        campaignId: created.id,
-        contactId: contact.id,
-        token: newToken(),
-      })),
-    });
-    return created;
-  });
-
-  await sendCampaignBatch(campaign.id, tenantId, 60);
-  await logAudit({
-    action: "campaign.started",
-    summary: `Campaign "${name}" (${channel}) started — ${contacts.length} recipients`,
-    user,
-  });
-  revalidatePath("/campaigns");
+  await requirePermission("campaigns.manage");
   return {
-    ok: `Campaign started — sending to ${contacts.length} recipient${contacts.length === 1 ? "" : "s"}. Progress shows below.`,
+    error:
+      "Direct campaign launch has been retired. Create a governed draft in Marketing → Campaigns, submit it for review, approve it, then schedule or queue it.",
   };
 }
 
