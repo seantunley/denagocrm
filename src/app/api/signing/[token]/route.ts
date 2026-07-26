@@ -165,12 +165,22 @@ async function handleSign(token: string, req: Request): Promise<Response> {
       // guard, silently vanishes): the stamped value stays the first signer's,
       // while every signer's response is preserved as its own row.
       for (const u of updates) {
+        // Each recipient's own durable answer — one row per (field, recipient).
         await tx.signatureFieldResponse.upsert({
           where: { fieldId_recipientId: { fieldId: u.id, recipientId: recipient.id } },
           create: { fieldId: u.id, recipientId: recipient.id, value: u.value, filledAt, tenantId: recipient.tenantId },
           update: { value: u.value, filledAt },
         });
-        await tx.signatureField.updateMany({ where: { id: u.id, filledAt: null }, data: { value: u.value, filledAt } });
+        // The single SignatureField.value the sealed PDF stamps at the field's one
+        // placed position. On a shared (unassigned) field two recipients can race,
+        // so claim it first-write-wins; an assigned field has one filler, so write
+        // it directly (allowing a re-submit to update it).
+        const fieldRow = fillable.get(u.id);
+        if (fieldRow && fieldRow.recipientId === null) {
+          await tx.signatureField.updateMany({ where: { id: u.id, filledAt: null }, data: { value: u.value, filledAt } });
+        } else {
+          await tx.signatureField.update({ where: { id: u.id }, data: { value: u.value, filledAt } });
+        }
       }
     });
   } catch (e) {

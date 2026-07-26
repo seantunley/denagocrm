@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { requireOwner } from "@/lib/auth";
+import { requireAnyPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
 import { SendVoidBar, RecipientControls } from "./SigningClient";
@@ -37,7 +37,7 @@ function describeResponse(kind: string, value: string): string {
 }
 
 export default async function SignatureDetail({ params }: { params: Promise<{ id: string }> }) {
-  await requireOwner();
+  await requireAnyPermission("signing.view", "signing.manage");
   const { id } = await params;
   const req = await prisma.signatureRequest.findUnique({
     where: { id },

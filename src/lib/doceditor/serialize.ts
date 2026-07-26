@@ -13,6 +13,7 @@ import type {
 import { PAGE_SIZES } from "./model";
 import { plateToHtmlBody } from "@/lib/docbuilder/plateSerialize";
 import { evaluateCondition } from "@/lib/docbuilder/expr";
+import { brandFooterContent, SOCIAL_ICON_PATHS } from "@/lib/companyBrand";
 
 export type RenderCtx = {
   tokens: Record<string, string>;
@@ -179,8 +180,23 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       return `<div style="display:flex;justify-content:flex-end;margin:6px 0"><div style="background:${block.color};color:#fff;border-radius:6px;padding:10px 20px;display:flex;gap:16px;align-items:center"><span style="font-size:9pt;font-weight:700;letter-spacing:1px">${esc(block.label)}</span><span style="font-size:16pt;font-weight:800">${esc(tok(block.amount, ctx))}</span></div></div>`;
     case "terms":
       return `<div style="background:#f8fafc;border-radius:6px;padding:12px 14px;margin:4px 0">${block.title ? `<div style="font-size:8pt;font-weight:700;letter-spacing:1px;color:#64748b;margin-bottom:6px">${esc(block.title)}</div>` : ""}${block.items.map((it) => `<div style="font-size:9pt;color:#64748b;margin-bottom:3px">• ${esc(it.text)}</div>`).join("")}</div>`;
-    case "footer":
-      return `<div style="border-top:1.5px solid ${block.accent};padding-top:8px;margin:6px 0;text-align:center">${block.lines.map((l, i) => `<div style="font-size:${i === 0 ? 9 : 8}pt;font-weight:${i === 0 ? 700 : 400};color:${i === 0 ? "#334155" : "#64748b"}">${esc(tok(l.text, ctx))}</div>`).join("")}</div>`;
+    case "footer": {
+      if (block.variant === "simple") {
+        return `<div style="border-top:1.5px solid ${block.accent};padding-top:8px;margin:6px 0;text-align:center">${block.lines.map((l, i) => `<div style="font-size:${i === 0 ? 9 : 8}pt;font-weight:${i === 0 ? 700 : 400};color:${i === 0 ? "#334155" : "#64748b"}">${esc(tok(l.text, ctx))}</div>`).join("")}</div>`;
+      }
+      const f = brandFooterContent((k) => ctx?.tokens?.[`company.${k}`] ?? "");
+      const icon = (net: "facebook" | "instagram", color: string) =>
+        `<svg width="13" height="13" viewBox="0 0 24 24" fill="${color}" style="display:inline-block;vertical-align:middle"><path d="${SOCIAL_ICON_PATHS[net]}"/></svg>`;
+      const socials = `<div style="display:flex;align-items:center;gap:7px;white-space:nowrap">${icon("facebook", "#1877f2")}${icon("instagram", "#e4405f")}${f.instagram ? `<span style="font-size:8.5pt;color:#0f172a;font-weight:600">${esc(f.instagram)}</span>` : ""}</div>`;
+      return `<div style="border-top:1px solid #e2e8f0;padding-top:9px;margin:8px 0;display:flex;justify-content:space-between;align-items:center;gap:18px">
+        <div style="min-width:0">
+          <div style="font-size:10pt;font-weight:700;color:#0f172a">${esc(f.title)}</div>
+          ${f.contact ? `<div style="font-size:8.5pt;color:#64748b;margin-top:2px">${esc(f.contact)}</div>` : ""}
+          ${f.web ? `<div style="font-size:8.5pt;color:#2563eb;margin-top:1px">${esc(f.web)}</div>` : ""}
+        </div>
+        ${socials}
+      </div>`;
+    }
 
     case "conditional": {
       // Only prune when bound to a record; an unbound preview renders all branches.

@@ -86,7 +86,9 @@ export async function dispatchRequest(requestId: string, opts?: { reminder?: boo
   });
   if (claimed.count !== 1) return { notified: 0 };
 
-  const signers = req.recipients.filter((r) => r.role !== "viewer" && r.status !== "signed");
+  // Exclude declined recipients: notifyRecipient no-ops them, so counting them in
+  // `notified` would over-report "Sent to N" by the number of declined signers.
+  const signers = req.recipients.filter((r) => r.role !== "viewer" && r.status !== "signed" && r.status !== "declined");
   const targets = req.ordering === "sequential" ? signers.slice(0, 1) : signers;
   for (const r of targets) await notifyRecipient(r.id, { reminder: opts?.reminder });
   // NOTE: viewers are intentionally NOT notified here. notifyRecipient() returns
