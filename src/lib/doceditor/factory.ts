@@ -70,12 +70,13 @@ export function newBlock(type: BlockType): DocumentBlock {
     case "terms":
       return { id: uid(), type, ...emptyLayout, title: "TERMS", items: [{ text: "Prices include 15% VAT." }] };
     case "footer":
-      // Dynamic brand footer — resolves from the editable Company Profile at
-      // render time, so it stays correct when company details change.
-      return { id: uid(), type, ...emptyLayout, accent: "#ea580c", lines: [
+      // Brand footer — resolves name, contact details and socials from the
+      // editable Company Profile at render time, so it stays correct when the
+      // company details change. `lines` is the fallback for the "simple" variant.
+      return { id: uid(), type, ...emptyLayout, variant: "brand", accent: "#ea580c", lines: [
         { text: "{{company.name}} — {{company.tagline}}" },
-        { text: "{{company.address}}" },
-        { text: "{{company.phone}} · {{company.email}} · {{company.website}}" },
+        { text: "{{company.address}} · {{company.phone}}" },
+        { text: "{{company.email}} · {{company.website}}" },
       ] };
     case "conditional":
       return { id: uid(), type, ...emptyLayout, when: "", blocks: [] };
