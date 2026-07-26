@@ -22,6 +22,10 @@ type Result = {
   requestId?: string;
   error?: string;
   notified?: number;
+  // Targets left "pending" with no usable contact channel (distinct from a
+  // provider send that was attempted and failed) — lets the UI tell "add a
+  // contact" apart from "delivery failed, retry".
+  unreachable?: number;
   signFirstUrl?: string;
   modal?: boolean;
 };
@@ -243,18 +247,26 @@ export async function startRecordSigning(
     }
   }
 
-  await logAudit({
-    action: "signing.send",
-    summary: `Sent “${envelope.title}” (${envelope.refLabel}) for signing`,
-    contactId: envelope.contactId,
-    leadId: sendLeadId,
-    entityType: "SignatureRequest",
-    entityId: requestId,
-    user,
-  });
+  // The workflow/cosign/signers branches below never call dispatchRequest (they
+  // hand off to an IN-PERSON/modal or a workflow-driven flow instead) — nothing
+  // is emailed/messaged, so they log "Started ... for signing", not "Sent".
+  // Only the final fallback actually attempts email/WhatsApp delivery; it logs
+  // "Sent" and gates that on notified > 0, so a send that reached nobody is
+  // never recorded as sent.
+  const logStartAudit = (verb: "Sent" | "Started") =>
+    logAudit({
+      action: "signing.send",
+      summary: `${verb} “${envelope.title}” (${envelope.refLabel}) for signing`,
+      contactId: envelope.contactId,
+      leadId: sendLeadId,
+      entityType: "SignatureRequest",
+      entityId: requestId,
+      user,
+    });
   revalidatePath(recordPath(kind, id));
 
   if (isWorkflow && envelope.frozen) {
+    await logStartAudit("Started");
     // The graph + recipient node IDs were committed in the creation transaction;
     // advance the first node now. advanceWorkflow is idempotent, and a retry that
     // reuses an un-advanced request repairs it the same way (repairWorkflow).
@@ -287,6 +299,7 @@ export async function startRecordSigning(
   }
 
   if (envelope.signers) {
+    await logStartAudit("Started");
     return {
       ok: true,
       requestId: requestId,
@@ -295,6 +308,7 @@ export async function startRecordSigning(
   }
 
   if (envelope.cosign) {
+    await logStartAudit("Started");
     const dealer = await prisma.signatureRecipient.findFirst({
       where: { requestId: requestId, order: 0 },
     });
@@ -308,8 +322,9 @@ export async function startRecordSigning(
     };
   }
 
-  const { notified } = await dispatchRequest(requestId);
-  return { ok: true, requestId: requestId, notified };
+  const { notified, unreachable } = await dispatchRequest(requestId);
+  if (notified > 0) await logStartAudit("Sent");
+  return { ok: true, requestId: requestId, notified, unreachable };
 }
 
 export async function resendRecordSigning(
@@ -333,16 +348,33 @@ export async function resendRecordSigning(
   }
   // A resend deliberately re-notifies already-"sent" recipients — pass reminder so
   // notifyRecipient's at-most-once first-send claim doesn't skip them.
-  const { notified } = await dispatchRequest(state.requestId, { reminder: true });
-  await logAudit({
-    action: "signing.remind",
-    summary: `Resent “${state.title}” for signing`,
-    entityType: "SignatureRequest",
-    entityId: state.requestId,
-    user,
-  });
+  const { notified, unreachable } = await dispatchRequest(state.requestId, { reminder: true });
   revalidatePath(recordPath(kind, id));
-  return { ok: true, requestId: state.requestId, notified };
+  // Truthful reporting: only log a resend once a provider actually accepted at
+  // least one message — a request whose recipients were all unreachable or
+  // whose sends all failed must not write a "Resent" audit entry.
+  if (notified > 0) {
+    await logAudit({
+      action: "signing.remind",
+      summary: `Resent “${state.title}” for signing`,
+      entityType: "SignatureRequest",
+      entityId: state.requestId,
+      user,
+    });
+    return { ok: true, requestId: state.requestId, notified, unreachable };
+  }
+  // Nothing delivered — a resend the user explicitly asked for that reached
+  // nobody is a failure, not a silent success: surface it so they can fix the
+  // contact details or channel and try again.
+  return {
+    ok: false,
+    requestId: state.requestId,
+    notified,
+    unreachable,
+    error: unreachable > 0
+      ? "No recipient has a usable contact channel — add an email or phone, then resend."
+      : "The reminder could not be delivered — please try again.",
+  };
 }
 
 export async function voidRecordSigning(

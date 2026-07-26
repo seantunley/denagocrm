@@ -11,6 +11,7 @@ import { Palette } from "./Palette";
 import { Canvas } from "./Canvas";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { VersionHistory } from "./VersionHistory";
+import { SignSendWizard } from "./SignSendWizard";
 import { toast } from "sonner";
 import {
   Eye,
@@ -58,6 +59,8 @@ export function DocEditor({
   const [record, setRecord] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [signWizardOpen, setSignWizardOpen] = useState(false);
+  const [signing, setSigning] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveChain = useRef<Promise<void>>(Promise.resolve());
 
@@ -156,6 +159,36 @@ export function DocEditor({
   const buttonClass =
     "inline-flex h-8 items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.035] px-2.5 text-xs text-slate-300 transition hover:bg-white/[0.08] hover:text-white";
 
+  const confirmSend = async (dispatch: boolean) => {
+    const current = useEditor.getState().doc;
+    if (!current) return;
+    setSigning(true);
+    try {
+      await saveDocEditor(id, current);
+      markSaved();
+      const parsed = parseBuilderRecord(record);
+      const result = await sendDocForSigning(
+        id,
+        parsed?.kind === "quote" ? parsed.id : null,
+        parsed?.kind === "jobcard" ? parsed.id : null,
+        { dispatch },
+      );
+      if (result.ok) {
+        toast.success(result.message);
+        setSignWizardOpen(false);
+      } else {
+        toast.error(`Couldn’t prepare for signing: ${result.message}`);
+      }
+    } catch {
+      // A thrown/timed-out server action must not leave an unhandled rejection.
+      // The action reuses an existing open request for this document on retry, so
+      // trying again won't mint a duplicate — surface a retry prompt instead.
+      toast.error("Preparing for signing failed — please try again. If you’d already started, check the Signatures hub before retrying.");
+    } finally {
+      setSigning(false);
+    }
+  };
+
   return (
     <BuilderWorkspaceShell className="h-screen min-h-0 rounded-none border-0">
       <BuilderWorkspaceBar
@@ -253,21 +286,8 @@ export function DocEditor({
         <button
           type="button"
           className={buttonClass}
-          onClick={async () => {
-            const current = useEditor.getState().doc;
-            if (!current) return;
-            await saveDocEditor(id, current);
-            markSaved();
-            const parsed = parseBuilderRecord(record);
-            const result = await sendDocForSigning(
-              id,
-              parsed?.kind === "quote" ? parsed.id : null,
-              parsed?.kind === "jobcard" ? parsed.id : null,
-            );
-            if (result.ok) toast.success(result.message);
-            else toast.error(`Couldn’t prepare for signing: ${result.message}`);
-          }}
-          title="Seal and file the PDF, then open the Signatures hub to send it to recipients"
+          onClick={() => setSignWizardOpen(true)}
+          title="Review recipients, then send now or save a draft"
         >
           <FileSignature className="size-4" />
           Prepare for signing
@@ -368,6 +388,15 @@ export function DocEditor({
                 : "Saved"}
         </span>
       </div>
+
+      <SignSendWizard
+        open={signWizardOpen}
+        onClose={() => !signing && setSignWizardOpen(false)}
+        recipients={(doc?.recipients ?? []).map((r) => ({ id: r.id, name: r.name, email: r.email, role: r.role }))}
+        fields={(doc?.pages ?? []).flatMap((p) => p.overlayFields).map((f) => ({ recipientId: f.recipientId, required: f.required }))}
+        busy={signing}
+        onConfirm={confirmSend}
+      />
     </BuilderWorkspaceShell>
   );
 }
