@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireOwner } from "@/lib/auth";
+import { requireAnyPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { ApprovalActions } from "./ApprovalActions";
@@ -59,7 +59,7 @@ function requestTone(status: string): "neutral" | "info" | "warning" | "success"
 }
 
 export default async function SignaturesPage() {
-  await requireOwner();
+  await requireAnyPermission("signing.view", "signing.manage");
   const requests = await prisma.signatureRequest.findMany({
     where: { deletedAt: null },
     orderBy: { updatedAt: "desc" },

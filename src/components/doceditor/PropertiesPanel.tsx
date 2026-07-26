@@ -292,18 +292,34 @@ function TermsProps({ block }: { block: TermsBlock }) {
 function FooterProps({ block }: { block: FooterBlock }) {
   const updateBlock = useEditor((s) => s.updateBlock);
   const set = (lines: FooterBlock["lines"]) => updateBlock(block.id, { lines });
+  const brand = block.variant !== "simple";
   return (
     <Section title="Footer">
-      <div className={row}><label className={lbl}>Rule colour</label><input type="color" value={block.accent} onChange={(e) => updateBlock(block.id, { accent: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
-      <div className="space-y-1">
-        {block.lines.map((l, i) => (
-          <div key={i} className="flex gap-1">
-            <input className={inp} value={l.text} onChange={(e) => set(block.lines.map((x, j) => (j === i ? { text: e.target.value } : x)))} />
-            <button type="button" className="px-1 text-red-500" onClick={() => set(block.lines.filter((_, j) => j !== i))}>✕</button>
-          </div>
-        ))}
-        <button type="button" className="w-full rounded-md border border-dashed border-slate-300 py-1 text-xs text-slate-500 hover:border-orange-300 hover:text-orange-600" onClick={() => set([...block.lines, { text: "New line" }])}>＋ Add line</button>
+      <div className={row}>
+        <label className={lbl}>Style</label>
+        <select className={inp} value={brand ? "brand" : "simple"} onChange={(e) => updateBlock(block.id, { variant: e.target.value as "brand" | "simple" })}>
+          <option value="brand">Brand (Company Profile)</option>
+          <option value="simple">Simple lines</option>
+        </select>
       </div>
+      {brand ? (
+        <p className="text-[11px] leading-4 text-slate-500">
+          Shows your company name, contact details and social handles, pulled from the Company Profile (Settings → Company). Edit it there to update every document footer at once.
+        </p>
+      ) : (
+        <>
+          <div className={row}><label className={lbl}>Rule colour</label><input type="color" value={block.accent} onChange={(e) => updateBlock(block.id, { accent: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
+          <div className="space-y-1">
+            {block.lines.map((l, i) => (
+              <div key={i} className="flex gap-1">
+                <input className={inp} value={l.text} onChange={(e) => set(block.lines.map((x, j) => (j === i ? { text: e.target.value } : x)))} />
+                <button type="button" className="px-1 text-red-500" onClick={() => set(block.lines.filter((_, j) => j !== i))}>✕</button>
+              </div>
+            ))}
+            <button type="button" className="w-full rounded-md border border-dashed border-slate-300 py-1 text-xs text-slate-500 hover:border-orange-300 hover:text-orange-600" onClick={() => set([...block.lines, { text: "New line" }])}>＋ Add line</button>
+          </div>
+        </>
+      )}
     </Section>
   );
 }

@@ -1,0 +1,98 @@
+[
+  {
+    "slug": "test-drives-booking-and-statuses",
+    "title": "Booking and managing a test drive",
+    "summary": "Create a dedicated test-drive booking, assign the customer, salesperson and demo vehicle, and manage confirmation, cancellation and no-shows.",
+    "category": "workshop",
+    "audience": "everyone",
+    "keywords": ["test drive", "booking", "demo vehicle", "confirmation", "no-show", "salesperson"],
+    "body": [
+      {"type": "p", "text": "The **Test drives** workspace is the source of truth for customer drives. Each booking is also linked to the existing activity calendar, so it remains visible alongside calls, meetings and follow-ups."},
+      {"type": "h", "text": "Create a booking"},
+      {"type": "steps", "items": [
+        "Choose **Book test drive**.",
+        "Select the customer and, where applicable, their open lead.",
+        "Set the branch or handover location, the requested model and the salesperson.",
+        "Assign an available demo vehicle now, or leave it unassigned until the vehicle is confirmed.",
+        "Set the start and expected-return times, then create the booking."
+      ]},
+      {"type": "h", "text": "Booking statuses"},
+      {"type": "table", "headers": ["Status", "Meaning"], "rows": [
+        ["Booked", "The appointment exists but has not yet been confirmed."],
+        ["Confirmed", "The customer has confirmed the appointment."],
+        ["Out on drive", "The customer and vehicle passed the handover controls and the vehicle is checked out."],
+        ["Completed", "The vehicle returned and the outcome was recorded."],
+        ["Cancelled", "The appointment was cancelled with a reason."],
+        ["No-show", "The customer did not attend; an optional reason or note is retained."]
+      ]},
+      {"type": "callout", "tone": "warning", "text": "The same demo vehicle cannot be booked for overlapping times. This is enforced both in the application and in the database, so simultaneous booking attempts cannot double-book it."}
+    ]
+  },
+  {
+    "slug": "test-drives-driver-handover-return",
+    "title": "Driver checks, vehicle handover and return",
+    "summary": "Complete the safety gate, record the vehicle's condition and evidence, then capture the return, incidents and sales outcome.",
+    "category": "workshop",
+    "audience": "everyone",
+    "keywords": ["driver licence", "indemnity", "identity", "condition photos", "odometer", "battery", "incident", "return"],
+    "body": [
+      {"type": "p", "text": "A vehicle cannot be checked out until every readiness item is complete. The checklist on the booking shows exactly what is still missing."},
+      {"type": "h", "text": "Readiness gate"},
+      {"type": "list", "items": [
+        "An available demo vehicle is assigned",
+        "The driver's licence number and a current expiry date are captured",
+        "A licence or ID image/PDF is uploaded",
+        "Identity is marked verified",
+        "The indemnity is signed, waived or marked not required",
+        "An emergency contact name and phone number are captured",
+        "At least one start-condition photo is uploaded"
+      ]},
+      {"type": "h", "text": "Check the vehicle out"},
+      {"type": "steps", "items": [
+        "Record the start odometer and battery percentage.",
+        "Describe any existing damage and list the accessories supplied.",
+        "Capture the intended route or destination.",
+        "Choose **Check vehicle out**. The booking becomes Out on drive and the demo vehicle's latest odometer and battery state are updated."
+      ]},
+      {"type": "h", "text": "Complete the return"},
+      {"type": "steps", "items": [
+        "Record the return odometer and battery percentage.",
+        "Describe the return condition and any new damage.",
+        "Record an incident report where necessary and upload supporting evidence.",
+        "Flag cleaning or charging work required.",
+        "Capture the customer's feedback and the sales outcome, linking the resulting quote where applicable.",
+        "Complete the return. The linked calendar activity is completed automatically."
+      ]},
+      {"type": "callout", "tone": "info", "text": "Licence, identity and emergency-contact values are protected by record-level access controls. Licence and emergency-contact values are also redacted from audit JSON snapshots."}
+    ]
+  },
+  {
+    "slug": "test-drives-demo-fleet-and-analytics",
+    "title": "Demo-fleet availability and test-drive analytics",
+    "summary": "Maintain dealership demo vehicles and interpret booking, attendance, conversion, utilisation and incident metrics.",
+    "category": "workshop",
+    "audience": "managers",
+    "keywords": ["demo fleet", "utilisation", "booking rate", "attendance", "conversion", "incident rate", "analytics"],
+    "body": [
+      {"type": "h", "text": "Demo fleet"},
+      {"type": "p", "text": "The **Demo fleet** page records each dealership vehicle's model, stock-unit link, branch, registration, VIN, odometer, battery state and availability."},
+      {"type": "table", "headers": ["Vehicle status", "Use"], "rows": [
+        ["Active", "Available to assign to new bookings."],
+        ["Maintenance", "Temporarily unavailable while work is performed."],
+        ["Unavailable", "Not bookable for another operational reason."],
+        ["Retired", "No longer part of the active demo fleet."]
+      ]},
+      {"type": "callout", "tone": "warning", "text": "A vehicle that is currently out on a drive cannot be moved to maintenance, unavailable or retired until it returns."},
+      {"type": "h", "text": "Analytics definitions"},
+      {"type": "table", "headers": ["Metric", "Calculation"], "rows": [
+        ["Booking rate", "Unique new leads with a non-cancelled test-drive booking divided by accessible new leads in the period."],
+        ["Attendance rate", "Drives that started divided by non-cancelled bookings."],
+        ["No-show rate", "No-shows divided by non-cancelled bookings."],
+        ["Quote conversion", "Attended drives linked to a quote or marked quote/sale outcome divided by attended drives."],
+        ["Sale conversion", "Attended drives marked Sale won divided by attended drives."],
+        ["Demo utilisation", "Scheduled drive hours divided by available active-demo operating hours."],
+        ["Incident rate", "Attended drives with new damage or an incident report divided by attended drives."]
+      ]}
+    ]
+  }
+]
