@@ -3,6 +3,7 @@
 import crypto from "crypto";
 import { revalidatePath } from "next/cache";
 import { basePrisma } from "@/lib/db";
+import { getActiveTenantId } from "@/lib/auth";
 import { PERMISSIONS, requirePermission } from "@/lib/permissions";
 import { logAuditStrict } from "@/lib/audit";
 import { bumpUserSessionVersion } from "@/lib/userSecurity";
@@ -67,15 +68,18 @@ export async function createTeam(formData: FormData) {
   const id = crypto.randomUUID();
   const managerId = await validUserId(value(formData, "managerId") || null);
   const description = value(formData, "description") || null;
+  // Additive tenant labelling (raw inserts bypass the db.ts stamping extension) —
+  // see the note in updateUserRoles. Reads stay tenant-agnostic until enforcement.
+  const activeTenantId = await getActiveTenantId();
   await basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`
-      INSERT INTO "Team" ("id", "name", "description", "managerId")
-      VALUES (${id}, ${name}, ${description}, ${managerId})
+      INSERT INTO "Team" ("id", "name", "description", "managerId", "tenantId")
+      VALUES (${id}, ${name}, ${description}, ${managerId}, ${activeTenantId})
     `;
     if (managerId) {
       await tx.$executeRaw`
-        INSERT INTO "TeamMember" ("id", "teamId", "userId", "isManager")
-        VALUES (${crypto.randomUUID()}, ${id}, ${managerId}, true)
+        INSERT INTO "TeamMember" ("id", "teamId", "userId", "isManager", "tenantId")
+        VALUES (${crypto.randomUUID()}, ${id}, ${managerId}, true, ${activeTenantId})
         ON CONFLICT ("teamId", "userId") DO UPDATE SET "isManager" = true
       `;
     }
@@ -102,6 +106,7 @@ export async function updateTeam(id: string, formData: FormData) {
   const managerId = await validUserId(value(formData, "managerId") || null);
   const description = value(formData, "description") || null;
   const active = formData.get("active") === "on";
+  const activeTenantId = await getActiveTenantId();
   await basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`
       UPDATE "Team"
@@ -112,8 +117,8 @@ export async function updateTeam(id: string, formData: FormData) {
     await tx.$executeRaw`UPDATE "TeamMember" SET "isManager" = false WHERE "teamId" = ${id}`;
     if (managerId) {
       await tx.$executeRaw`
-        INSERT INTO "TeamMember" ("id", "teamId", "userId", "isManager")
-        VALUES (${crypto.randomUUID()}, ${id}, ${managerId}, true)
+        INSERT INTO "TeamMember" ("id", "teamId", "userId", "isManager", "tenantId")
+        VALUES (${crypto.randomUUID()}, ${id}, ${managerId}, true, ${activeTenantId})
         ON CONFLICT ("teamId", "userId") DO UPDATE SET "isManager" = true
       `;
     }
@@ -138,9 +143,10 @@ export async function addTeamMember(teamId: string, formData: FormData) {
     SELECT "id" FROM "Team" WHERE "id" = ${teamId} AND "deletedAt" IS NULL LIMIT 1
   `;
   if (!team[0]) throw new Error("Team not found");
+  const activeTenantId = await getActiveTenantId();
   await basePrisma.$executeRaw`
-    INSERT INTO "TeamMember" ("id", "teamId", "userId", "isManager")
-    VALUES (${crypto.randomUUID()}, ${teamId}, ${userId}, false)
+    INSERT INTO "TeamMember" ("id", "teamId", "userId", "isManager", "tenantId")
+    VALUES (${crypto.randomUUID()}, ${teamId}, ${userId}, false, ${activeTenantId})
     ON CONFLICT DO NOTHING
   `;
   await logAuditStrict({
@@ -277,11 +283,22 @@ export async function updateUserRoles(userId: string, formData: FormData) {
     if (remaining < 1) throw new Error("This change would remove the last governance administrator");
   }
 
+  // Stamp the assignment's owning tenant on every write. A raw insert bypasses the
+  // db.ts tenant-stamping extension, so without this new UserRole rows would be
+  // NULL-tenant while migration-backfilled rows carry a tenantId — and a NULL tenant
+  // defeats the (tenantId,userId,roleId) unique index's dedup. NOTE (deliberate,
+  // deferred): the DELETE below is still tenant-agnostic and getUserPermissions()
+  // still reads a user's roles across all tenants. Scoping those by the active
+  // tenant is the RBAC enforcement flip — a behaviour change that must land
+  // atomically with the rest of the tenant-enforcement rollout (and its lockout
+  // proofing), not piecemeal here. This change is purely additive: it labels the
+  // data correctly now so the later flip is a no-op on already-stamped rows.
+  const activeTenantId = await getActiveTenantId();
   await basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`DELETE FROM "UserRole" WHERE "userId" = ${userId}`;
     for (const roleId of validRoleIds) {
       await tx.$executeRaw`
-        INSERT INTO "UserRole" ("id", "userId", "roleId") VALUES (gen_random_uuid()::text, ${userId}, ${roleId}) ON CONFLICT DO NOTHING
+        INSERT INTO "UserRole" ("id", "userId", "roleId", "tenantId") VALUES (gen_random_uuid()::text, ${userId}, ${roleId}, ${activeTenantId}) ON CONFLICT DO NOTHING
       `;
     }
     await tx.$executeRaw`

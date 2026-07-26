@@ -117,11 +117,18 @@ export async function createUser(
   }
   const created = result.user;
   // Initial RBAC role — best-effort, OUTSIDE the tenant tx (see PR notes): a missing
-  // role must not block user+membership creation during a rolling deploy.
+  // role must not block user+membership creation during a rolling deploy. Stamp the
+  // tenant the membership was just created in (result.tenantId, non-null): a raw
+  // insert bypasses the db.ts tenant-stamping extension, so this is the only place
+  // the assignment gets labelled — without it, new rows would be NULL-tenant while
+  // migration-backfilled rows carry a tenantId (and a NULL tenant defeats the
+  // (tenantId,userId,roleId) unique index's dedup). Reads stay tenant-agnostic for
+  // now: scoping getUserPermissions by the active tenant is the enforcement flip,
+  // deferred to the staged tenant rollout (see below / accessControl.ts).
   try {
     await basePrisma.$executeRaw`
-      INSERT INTO "UserRole" ("id", "userId", "roleId")
-      VALUES (gen_random_uuid()::text, ${created.id}, 'role_sales_rep')
+      INSERT INTO "UserRole" ("id", "userId", "roleId", "tenantId")
+      VALUES (gen_random_uuid()::text, ${created.id}, 'role_sales_rep', ${result.tenantId})
       ON CONFLICT DO NOTHING
     `;
   } catch {
