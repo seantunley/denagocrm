@@ -5,6 +5,7 @@ import { isValidSignToken } from "@/lib/signing/tokens";
 import { logSignEvent, reqMeta } from "@/lib/signing/events";
 import { advanceAfterSignature } from "@/lib/signing/workflow";
 import { isRequestClosed } from "@/lib/signing/status";
+import { isFieldValueComplete } from "@/lib/signing/fieldValidation";
 import { logAudit } from "@/lib/audit";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
@@ -77,9 +78,14 @@ async function handleSign(token: string, req: Request): Promise<Response> {
 
   // Required-field validation: every required field this recipient must fill has
   // to arrive with a value (or already be filled). The page enforced this
-  // client-side; the API must too.
-  const submitted = new Map(fields.filter((f) => f.value && f.value.trim() !== "").map((f) => [f.id, f.value]));
-  const missingRequired = [...fillable.values()].some((f) => f.required && !f.filledAt && !submitted.has(f.id));
+  // client-side; the API must too — isFieldValueComplete is the SAME check the
+  // signer UI uses, so a checkbox's `=== "true"` requirement can't drift
+  // between client and server.
+  const submitted = new Map(fields.map((f) => [f.id, f.value]));
+  const missingRequired = [...fillable.values()].some((f) => {
+    if (!f.required || f.filledAt) return false;
+    return !isFieldValueComplete(f.kind, submitted.get(f.id));
+  });
   if (missingRequired) {
     return new Response("Please complete all required fields before signing.", { status: 400 });
   }
@@ -145,7 +151,17 @@ async function handleSign(token: string, req: Request): Promise<Response> {
       // Field values land in the same transaction, so they're visible exactly
       // when the recipient becomes "signed".
       for (const u of updates) {
-        await tx.signatureField.update({ where: { id: u.id }, data: { value: u.value, filledAt } });
+        const fieldRow = fillable.get(u.id);
+        if (fieldRow && fieldRow.recipientId === null) {
+          // Unassigned field: any recipient may fill it, but in parallel
+          // signing two recipients can race on the SAME field. First writer
+          // wins — claim it atomically (only if still unfilled) so a second,
+          // concurrent recipient can't silently overwrite the first one's
+          // value with their own.
+          await tx.signatureField.updateMany({ where: { id: u.id, filledAt: null }, data: { value: u.value, filledAt } });
+        } else {
+          await tx.signatureField.update({ where: { id: u.id }, data: { value: u.value, filledAt } });
+        }
       }
     });
   } catch (e) {

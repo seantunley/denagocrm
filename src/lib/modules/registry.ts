@@ -65,9 +65,9 @@ export const MODULE_REGISTRY: AppModule[] = [
   {
     id: "automotive",
     label: "Automotive / Workshop",
-    description: "Vehicles, fleets, job cards, warranty, service and deliveries.",
+    description: "Vehicles, fleets, test drives, job cards, warranty, service and deliveries.",
     routePrefixes: [
-      "/vehicles", "/fleets", "/jobcards", "/warranty",
+      "/vehicles", "/fleets", "/test-drives", "/jobcards", "/warranty",
       "/service-due", "/workshop-calendar", "/parts", "/deliveries",
     ],
   },

@@ -31,6 +31,7 @@ import {
   Gift,
   PenLine,
   Radar,
+  Route,
   type LucideIcon,
 } from "lucide-react";
 import { isPathEnabled } from "@/lib/modules/registry";
@@ -66,6 +67,7 @@ export function buildNav(
 
   const crmLinks: NavLink[] = [];
   if (can("activities.view", "activities.manage")) crmLinks.push({ href: "/calendar", label: "Calendar", icon: CalendarDays });
+  if (can("activities.view", "activities.manage")) crmLinks.push({ href: "/test-drives", label: "Test Drives", icon: Route });
   if (can("leads.view_all", "leads.view_owned")) crmLinks.push({ href: "/leads", label: "Leads", icon: SquareKanban });
   if (can("quotes.view_all", "quotes.view_owned")) crmLinks.push({ href: "/quotes", label: "Quotes", icon: FileText });
   if (isAdmin) crmLinks.push({ href: "/signatures", label: "Signatures", icon: PenLine });

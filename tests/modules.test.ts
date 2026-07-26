@@ -66,6 +66,8 @@ function hrefs(enabled?: Set<string>) {
 test("moduleForPath maps routes to the owning pack (unknown → core)", () => {
   assert.equal(moduleForPath("/vehicles"), "automotive");
   assert.equal(moduleForPath("/vehicles/abc123"), "automotive");
+  assert.equal(moduleForPath("/test-drives"), "automotive");
+  assert.equal(moduleForPath("/test-drives/demo-fleet"), "automotive");
   assert.equal(moduleForPath("/jobcards"), "automotive");
   assert.equal(moduleForPath("/stock"), "commerce");
   assert.equal(moduleForPath("/inbox"), "inbox");
@@ -98,6 +100,7 @@ test("core paths are always enabled, even outside the enabled set", () => {
   const none = new Set<string>(); // nothing enabled
   assert.equal(isPathEnabled("/leads", none), true); // core
   assert.equal(isPathEnabled("/vehicles", none), false); // automotive off
+  assert.equal(isPathEnabled("/test-drives", none), false); // automotive off
 });
 
 test("buildNav with all modules enabled matches unfiltered", () => {
@@ -128,6 +131,7 @@ test("disabling a pack hides its nav but keeps core", () => {
   const noAuto = new Set(ALL_MODULE_IDS.filter((id) => id !== "automotive"));
   const links = hrefs(noAuto);
   assert.ok(!links.includes("/vehicles"), "automotive link should be hidden");
+  assert.ok(!links.includes("/test-drives"), "test-drive link should be hidden");
   assert.ok(!links.includes("/jobcards"), "automotive link should be hidden");
   assert.ok(links.includes("/"), "core dashboard stays");
   assert.ok(links.includes("/leads"), "core CRM stays");
