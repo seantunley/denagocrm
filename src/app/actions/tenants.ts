@@ -70,7 +70,7 @@ export async function createTenantAction(formData: FormData): Promise<void> {
   // Friendly pre-checks for the common collisions; the createTenant transaction
   // is still the authoritative uniqueness boundary (race-safe catch below).
   const slugTaken = await basePrisma.tenant.findUnique({ where: { slug }, select: { id: true } });
-  if (slugTaken) throw new Error(`A tenant with the slug “${slug}” already exists.`);
+  if (slugTaken) throw new Error(`A tenant with the slug "${slug}" already exists.`);
   const emailTaken = await basePrisma.user.findUnique({ where: { email: ownerEmail }, select: { id: true } });
   if (emailTaken) throw new Error("A user with that email already exists.");
 
@@ -85,18 +85,18 @@ export async function createTenantAction(formData: FormData): Promise<void> {
     });
   } catch (error) {
     if (isUniqueViolation(error)) {
-      throw new Error("That slug or owner email was just taken — choose another.");
+      throw new Error("That slug or owner email was just taken -- choose another.");
     }
     throw error;
   }
 
   await logAuditStrict({
     action: "tenant.created",
-    summary: `Created inert tenant “${name}” (${slug})`,
+    summary: `Created inert tenant "${name}" (${slug})`,
     entityType: "Tenant",
     entityId: created.tenantId,
     user: actor,
-    // No password fields here — the owner's credentials never enter the audit trail.
+    // No password fields here -- the owner's credentials never enter the audit trail.
     after: { name, slug, active: false, ownerId: created.ownerId, ownerEmail, inert: true },
   });
   revalidatePath(CONSOLE_PATH);
@@ -115,21 +115,21 @@ export async function activateTenantAction(tenantId: string): Promise<void> {
   });
   if (!tenant) throw new Error("Tenant not found.");
 
-  // The provisioned owner is the earliest TenantMember — the one createTenant
+  // The provisioned owner is the earliest TenantMember -- the one createTenant
   // disabled. Every member added after creation is an existing active user whose
   // global disabledAt must not be touched by activation.
   const firstMemberRows = await basePrisma.$queryRaw<Array<{ userId: string }>>`
-    SELECT “userId” FROM “TenantMember” WHERE “tenantId” = ${tenantId}
-    ORDER BY “createdAt” ASC LIMIT 1
+    SELECT "userId" FROM "TenantMember" WHERE "tenantId" = ${tenantId}
+    ORDER BY "createdAt" ASC LIMIT 1
   `;
   const ownerId = firstMemberRows[0]?.userId;
-  if (!ownerId) throw new Error(“Tenant has no members — cannot activate.”);
+  if (!ownerId) throw new Error("Tenant has no members -- cannot activate.");
 
   await activateTenant(basePrisma, tenantId, ownerId);
 
   await logAuditStrict({
-    action: “tenant.activated”,
-    summary: `Activated tenant “${tenant.name}” and re-enabled the provisioned owner`,
+    action: "tenant.activated",
+    summary: `Activated tenant "${tenant.name}" and re-enabled the provisioned owner`,
     entityType: "Tenant",
     entityId: tenantId,
     user: actor,
@@ -142,7 +142,7 @@ export async function activateTenantAction(tenantId: string): Promise<void> {
 export async function suspendTenantAction(tenantId: string): Promise<void> {
   const actor = await requirePlatformOwner();
 
-  // Never suspend the founding tenant — it underpins the whole existing business.
+  // Never suspend the founding tenant -- it underpins the whole existing business.
   const gate = canSuspendTenant(tenantId);
   if (!gate.ok) throw new Error(gate.error);
 
@@ -156,7 +156,7 @@ export async function suspendTenantAction(tenantId: string): Promise<void> {
 
   await logAuditStrict({
     action: "tenant.suspended",
-    summary: `Suspended tenant “${tenant.name}”`,
+    summary: `Suspended tenant "${tenant.name}"`,
     entityType: "Tenant",
     entityId: tenantId,
     user: actor,
@@ -183,7 +183,7 @@ export async function addTenantMemberAction(tenantId: string, formData: FormData
 
   await logAuditStrict({
     action: "tenant.member_added",
-    summary: `Added ${user.name} to tenant “${tenant.name}”`,
+    summary: `Added ${user.name} to tenant "${tenant.name}"`,
     entityType: "Tenant",
     entityId: tenantId,
     user: actor,
@@ -212,7 +212,7 @@ export async function removeTenantMemberAction(tenantId: string, userId: string)
 
   await logAuditStrict({
     action: "tenant.member_removed",
-    summary: `Removed a member from tenant “${tenant.name}”`,
+    summary: `Removed a member from tenant "${tenant.name}"`,
     entityType: "Tenant",
     entityId: tenantId,
     user: actor,
