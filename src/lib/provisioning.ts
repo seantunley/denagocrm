@@ -2,6 +2,22 @@ import type { PrismaClient, Prisma } from "@prisma/client";
 import { DEFAULT_TENANT_ID } from "./tenant";
 
 /**
+ * IDs of the 7 system roles seeded in migration 52_pipelines_forecasting_rbac_audit
+ * and moved to DEFAULT_TENANT_ID in migration 20260727170000_full_tenant_scope.
+ * Every newly provisioned tenant gets its own copies of these roles so RLS can
+ * isolate them by tenantId.
+ */
+const SYSTEM_ROLE_IDS = [
+  "role_crm_admin",
+  "role_sales_manager",
+  "role_sales_rep",
+  "role_marketing",
+  "role_workshop_manager",
+  "role_technician",
+  "role_auditor",
+] as const;
+
+/**
  * Shared tenant-provisioning service. ONE place that turns "a user exists" into "a
  * user belongs to a tenant", so every creation path — initial seed, admin
  * createUser, the SQLite→Postgres data import, and future invitation/signup flows
@@ -52,6 +68,49 @@ export async function ensureFoundingMembership(client: Client, userId: string): 
     where: { id: userId },
     data: { tenantId: DEFAULT_TENANT_ID },
   });
+}
+
+/**
+ * Copy the 7 system roles (and all their permissions) from the founding tenant
+ * into a newly provisioned tenant. System roles live in DEFAULT_TENANT_ID after
+ * migration 20260727170000; new tenants need per-tenant copies so tenant-scoped
+ * RLS can isolate them.
+ *
+ * Uses deterministic per-tenant role IDs (`${sourceId}:${tenantId}`) so the
+ * call is idempotent — safe to use as a repair script on an incomplete tenant.
+ * Must be called via a basePrisma client (or its tx) so bypass_rls is active
+ * and the source roles in DEFAULT_TENANT_ID are visible.
+ */
+export async function seedTenantDefaultRoles(client: Client, tenantId: string): Promise<void> {
+  const sourceRoles = await client.role.findMany({
+    where: { id: { in: [...SYSTEM_ROLE_IDS] } },
+    include: { permissions: { select: { permissionKey: true } } },
+  });
+
+  for (const source of sourceRoles) {
+    const id = `${source.id}:${tenantId}`;
+    await client.role.upsert({
+      where: { id },
+      update: {},
+      create: {
+        id,
+        name: source.name,
+        description: source.description,
+        system: true,
+        tenantId,
+      },
+    });
+    if (source.permissions.length > 0) {
+      await client.rolePermission.createMany({
+        data: source.permissions.map((p) => ({
+          roleId: id,
+          permissionKey: p.permissionKey,
+          tenantId,
+        })),
+        skipDuplicates: true,
+      });
+    }
+  }
 }
 
 export type CreateTenantInput = {
@@ -108,6 +167,7 @@ export async function createTenant(
     // a deliberate activation flow exists.
     await tx.$executeRaw`UPDATE "User" SET "disabledAt" = NOW() WHERE "id" = ${owner.id}`;
     await addTenantMembership(tx, tenant.id, owner.id);
+    await seedTenantDefaultRoles(tx, tenant.id);
     return { tenantId: tenant.id, ownerId: owner.id };
   });
 }
