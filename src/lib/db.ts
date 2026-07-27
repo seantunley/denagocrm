@@ -97,6 +97,25 @@ async function filteredUnique(
 type ScopeKind = "where" | "create" | "mutation" | "upsert";
 
 /**
+ * Map a Prisma operation name to the scopeArgs kind. Called in Layer 2
+ * (before the RLS $transaction) so AsyncLocalStorage is still reachable.
+ */
+function applyScopeArgs(model: string, operation: string, args: any): any {
+  if (operation === "create" || operation === "createMany" || operation === "createManyAndReturn") {
+    return scopeArgs(model, "create", args);
+  }
+  if (
+    operation === "update" || operation === "updateMany" || operation === "updateManyAndReturn" ||
+    operation === "delete" || operation === "deleteMany"
+  ) {
+    return scopeArgs(model, "mutation", args);
+  }
+  if (operation === "upsert") return scopeArgs(model, "upsert", args);
+  // findMany/findFirst/findUnique/count/aggregate/groupBy/… → where
+  return scopeArgs(model, "where", args);
+}
+
+/**
  * DORMANT request-scoped tenant guard (Phase C). When `tenantEnforcing()` is
  * false — always, today — this returns `args` untouched, so the extension
  * behaves exactly as it did pre-tenancy. When enforcement is flipped on (per
@@ -201,55 +220,55 @@ function buildClient(raw: PrismaClient) {
     query: {
       $allModels: {
         async findMany({ model, args, query }: any) {
-          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
+          return query(addAliveFilter(model, args));
         },
         async findFirst({ model, args, query }: any) {
-          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
+          return query(addAliveFilter(model, args));
         },
         async findFirstOrThrow({ model, args, query }: any) {
-          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
+          return query(addAliveFilter(model, args));
         },
         async findUnique({ model, args, query }: any) {
-          return filteredUnique(model, scopeArgs(model, "where", args), query, false);
+          return filteredUnique(model, args, query, false);
         },
         async findUniqueOrThrow({ model, args, query }: any) {
-          return filteredUnique(model, scopeArgs(model, "where", args), query, true);
+          return filteredUnique(model, args, query, true);
         },
-        async create({ model, args, query }: any) {
-          return query(scopeArgs(model, "create", args));
+        async create({ args, query }: any) {
+          return query(args);
         },
-        async createMany({ model, args, query }: any) {
-          return query(scopeArgs(model, "create", args));
+        async createMany({ args, query }: any) {
+          return query(args);
         },
-        async createManyAndReturn({ model, args, query }: any) {
-          return query(scopeArgs(model, "create", args));
+        async createManyAndReturn({ args, query }: any) {
+          return query(args);
         },
         async update({ model, args, query }: any) {
-          return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
+          return query(addAliveMutationFilter(model, args));
         },
         async updateMany({ model, args, query }: any) {
-          return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
+          return query(addAliveMutationFilter(model, args));
         },
         async updateManyAndReturn({ model, args, query }: any) {
-          return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
+          return query(addAliveMutationFilter(model, args));
         },
         async delete({ model, args, query }: any) {
-          return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
+          return query(addAliveMutationFilter(model, args));
         },
         async deleteMany({ model, args, query }: any) {
-          return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
+          return query(addAliveMutationFilter(model, args));
         },
-        async upsert({ model, args, query }: any) {
-          return query(scopeArgs(model, "upsert", args));
+        async upsert({ args, query }: any) {
+          return query(args);
         },
         async count({ model, args, query }: any) {
-          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
+          return query(addAliveFilter(model, args));
         },
         async aggregate({ model, args, query }: any) {
-          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
+          return query(addAliveFilter(model, args));
         },
         async groupBy({ model, args, query }: any) {
-          return query(addAliveFilter(model, scopeArgs(model, "where", args)));
+          return query(addAliveFilter(model, args));
         },
       },
       communication: {
@@ -289,8 +308,12 @@ function buildClient(raw: PrismaClient) {
   const scoped = guarded.$extends({
     query: {
       $allModels: {
-        async $allOperations({ args, query }: any) {
-          return withRlsScope(ref.c, () => query(args));
+        async $allOperations({ model, operation, args, query }: any) {
+          // Apply tenant scoping HERE (Layer 2), before withRlsScope's $transaction.
+          // Prisma's array $transaction loses AsyncLocalStorage context inside its
+          // execution callbacks, so currentTenantScope() is unreachable in Layer 1.
+          const scopedArgs = applyScopeArgs(model, operation, args);
+          return withRlsScope(ref.c, () => query(scopedArgs));
         },
       },
     },
