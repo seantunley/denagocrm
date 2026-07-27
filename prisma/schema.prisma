@@ -2308,14 +2308,13 @@ model Tenant {
 model TenantMember {
   id        String   @id @default(cuid())
   tenantId  String
-  userId    String
+  userId    String   @unique
   createdAt DateTime @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, userId])
-  @@index([userId])
 }
 
 // Phase C step 2b (C2) — per-tenant PUBLIC API keys, replacing the single global

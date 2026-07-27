@@ -12,12 +12,22 @@ import { DEFAULT_TENANT_ID } from "./tenant";
  */
 type Client = PrismaClient | Prisma.TransactionClient;
 
-/** Idempotently add a user to an EXISTING tenant. */
+/** Idempotently add a user to an EXISTING tenant.
+ *  Throws if the user already belongs to a different tenant (one-user-one-tenant policy). */
 export async function addTenantMembership(
   client: Client,
   tenantId: string,
   userId: string,
 ): Promise<void> {
+  const conflict = await client.tenantMember.findFirst({
+    where: { userId, NOT: { tenantId } },
+    select: { tenantId: true },
+  });
+  if (conflict) {
+    throw new Error(
+      `This user already belongs to tenant "${conflict.tenantId}". A user may only be a member of one tenant.`,
+    );
+  }
   await client.tenantMember.upsert({
     where: { tenantId_userId: { tenantId, userId } },
     update: {},
