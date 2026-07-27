@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { basePrisma } from "@/lib/db";
-import { requireOwner, getActiveTenantId } from "@/lib/auth";
+import { requireTenantOwner, getActiveTenantId } from "@/lib/auth";
 import { putTenantCredential } from "@/lib/settings";
 import { isKnownTenantCredentialKey } from "@/lib/tenantCredentialFields";
 import { logAuditStrict } from "@/lib/audit";
@@ -17,7 +17,7 @@ const OVERRIDES_PATH = "/settings/integration-overrides";
  * an owner can only ever set an override for their own active tenant.
  */
 export async function saveTenantCredentialOverride(formData: FormData): Promise<void> {
-  const user = await requireOwner();
+  const user = await requireTenantOwner();
   const key = String(formData.get("key") ?? "");
   if (!isKnownTenantCredentialKey(key)) throw new Error("Unknown integration credential key.");
 
@@ -55,7 +55,7 @@ export async function saveTenantCredentialOverride(formData: FormData): Promise<
  * a harmless no-op instead of a P2025 "record not found" error.
  */
 export async function clearTenantCredentialOverride(key: string): Promise<void> {
-  const user = await requireOwner();
+  const user = await requireTenantOwner();
   if (!isKnownTenantCredentialKey(key)) throw new Error("Unknown integration credential key.");
 
   const tenantId = await getActiveTenantId();

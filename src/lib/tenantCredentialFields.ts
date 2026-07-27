@@ -12,6 +12,13 @@ export type TenantCredentialField = {
   label: string;
   /** Shown when no override is set yet (mirrors the global settings page's per-field hints). */
   placeholder: string;
+  /**
+   * Whether this field must be present for the integration bundle to be
+   * considered complete. Defaults to true. Optional fields (e.g. SMTP_SECURE)
+   * may remain at the platform default even when the rest of the bundle is
+   * tenant-overridden without making the bundle "incomplete".
+   */
+  required?: boolean;
 };
 
 export type TenantCredentialIntegration = {
@@ -58,7 +65,7 @@ export const TENANT_CREDENTIAL_INTEGRATIONS: readonly TenantCredentialIntegratio
     fields: [
       { key: "SMTP_HOST", label: "Host", placeholder: "mail.example.com" },
       { key: "SMTP_PORT", label: "Port", placeholder: "587" },
-      { key: "SMTP_SECURE", label: "Encryption", placeholder: "" },
+      { key: "SMTP_SECURE", label: "Encryption", placeholder: "", required: false },
       { key: "SMTP_USER", label: "Username", placeholder: "user@example.com" },
       { key: "SMTP_PASS", label: "Password", placeholder: "Shown once when created" },
       { key: "SMTP_FROM", label: "From address", placeholder: "noreply@example.com" },
@@ -72,7 +79,7 @@ export const TENANT_CREDENTIAL_INTEGRATIONS: readonly TenantCredentialIntegratio
     fields: [
       { key: "IMAP_HOST", label: "Host", placeholder: "mail.example.com" },
       { key: "IMAP_PORT", label: "Port", placeholder: "993" },
-      { key: "IMAP_SECURE", label: "Encryption", placeholder: "" },
+      { key: "IMAP_SECURE", label: "Encryption", placeholder: "", required: false },
       { key: "IMAP_USER", label: "Username", placeholder: "user@example.com" },
       { key: "IMAP_PASS", label: "Password", placeholder: "Shown once when created" },
     ],
@@ -105,6 +112,26 @@ export const TENANT_CREDENTIAL_KEYS: ReadonlySet<string> = new Set(
 
 export function isKnownTenantCredentialKey(key: string): boolean {
   return TENANT_CREDENTIAL_KEYS.has(key);
+}
+
+/**
+ * Returns the bundle status for an integration given a per-key override map.
+ *  - "active"     — every required field has a tenant override
+ *  - "incomplete" — at least one field has an override but at least one
+ *                   required field does not; the bundle will partially mix
+ *                   tenant and platform credentials at runtime
+ *  - "default"    — no field has an override
+ */
+export function integrationOverrideStatus(
+  integration: TenantCredentialIntegration,
+  hasOverride: Record<string, boolean>,
+): "active" | "incomplete" | "default" {
+  const anyOverride = integration.fields.some((f) => hasOverride[f.key]);
+  if (!anyOverride) return "default";
+  const allRequiredOverridden = integration.fields
+    .filter((f) => f.required !== false)
+    .every((f) => hasOverride[f.key]);
+  return allRequiredOverridden ? "active" : "incomplete";
 }
 
 /**

@@ -1,4 +1,4 @@
-import { requireOwner, getActiveTenantId } from "@/lib/auth";
+import { requireTenantOwner, getActiveTenantId } from "@/lib/auth";
 import { hasTenantCredentialOverride, isSecretSettingKey } from "@/lib/settings";
 import {
   saveTenantCredentialOverride,
@@ -7,6 +7,7 @@ import {
 import {
   TENANT_CREDENTIAL_INTEGRATIONS,
   isBooleanTenantCredentialField,
+  integrationOverrideStatus,
 } from "@/lib/tenantCredentialFields";
 import { SettingsWorkspace, SettingsIntegrationRow } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
@@ -22,9 +23,10 @@ export const dynamic = "force-dynamic";
  * which this page never reads or writes.
  */
 export default async function IntegrationOverridesPage() {
-  // Entirely sensitive (credential management) — gate the whole page, same as
-  // src/app/(app)/settings/security/page.tsx, rather than a partial banner.
-  await requireOwner();
+  // Entirely sensitive (credential management) — gate the whole page.
+  // Uses requireTenantOwner so a tenant's own provisioned owner can manage
+  // their credentials without needing the global platform owner role.
+  await requireTenantOwner();
   const tenantId = await getActiveTenantId();
 
   const allKeys = TENANT_CREDENTIAL_INTEGRATIONS.flatMap((integration) =>
@@ -63,14 +65,16 @@ export default async function IntegrationOverridesPage() {
       ) : (
         <section className="card p-0 divide-y divide-border/50">
           {TENANT_CREDENTIAL_INTEGRATIONS.map((integration) => {
-            const anyOverride = integration.fields.some((field) => hasOverride[field.key]);
+            const status = integrationOverrideStatus(integration, hasOverride);
             return (
               <SettingsIntegrationRow
                 key={integration.id}
                 title={integration.label}
                 status={
-                  anyOverride ? (
+                  status === "active" ? (
                     <span className="badge bg-emerald-500/15 text-emerald-300">Override active</span>
+                  ) : status === "incomplete" ? (
+                    <span className="badge bg-amber-500/15 text-amber-300">Incomplete override</span>
                   ) : (
                     <span className="badge bg-muted text-muted-foreground">Platform default</span>
                   )

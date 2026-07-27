@@ -127,6 +127,28 @@ export async function requireOwner() {
   return user;
 }
 
+/**
+ * Require that the caller is either the global platform owner OR the
+ * provisioned owner of their active tenant (the earliest-joined TenantMember,
+ * which is always the account createTenant() set up and then disabled until
+ * activation). Use this in pages and actions that are tenant-specific but not
+ * platform-global — a tenant owner must be able to manage their own integration
+ * credentials without needing the global owner role.
+ */
+export async function requireTenantOwner() {
+  const user = await requireUser();
+  if (user.role === "owner") return user;
+  const tenantId = await getActiveTenantId();
+  if (!tenantId) redirect("/");
+  const firstMember = await basePrisma.$queryRaw<Array<{ userId: string }>>`
+    SELECT "userId" FROM "TenantMember"
+    WHERE "tenantId" = ${tenantId}
+    ORDER BY "createdAt" ASC LIMIT 1
+  `;
+  if (firstMember[0]?.userId !== user.id) redirect("/");
+  return user;
+}
+
 export async function requireAnyModule(...mods: ModuleId[]) {
   const user = await requireUser();
   if (user.role === "owner") return user;
