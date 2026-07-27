@@ -181,17 +181,23 @@ async function withRlsScope(raw: PrismaClient, query: () => Promise<any>): Promi
   // Under enforcement, use the current async scope to choose the GUC.
   // Off/monitor (or enforce with system scope): fall through to bypass below.
   const scope = tenantEnforcing() ? currentTenantScope() : null;
+  // The GUC write goes through the callback's `tx` client so it is GUARANTEED to run
+  // on the interactive transaction's pinned connection (not a pooled one). The guarded
+  // `query()` runs inside the same callback and rides the async transaction context
+  // onto that same connection, so it sees the SET LOCAL GUC — this is precisely what
+  // the restricted-role (NOSUPERUSER NOBYPASSRLS) proof in test-rls-restricted.ts
+  // exercises against FORCE ROW LEVEL SECURITY.
   if (scope?.tenantId) {
     const tid = scope.tenantId;
-    return raw.$transaction(async () => {
-      await raw.$executeRaw`SELECT set_config('app.current_tenant', ${tid}, TRUE)`;
+    return raw.$transaction(async (tx: any) => {
+      await tx.$executeRaw`SELECT set_config('app.current_tenant', ${tid}, TRUE)`;
       return query();
     });
   }
   // off/monitor, system scope, or enforce+no-scope (Layer 1 scopeArgs already
   // threw TenantScopeError for any tenant-scoped model before we reach here).
-  return raw.$transaction(async () => {
-    await raw.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+  return raw.$transaction(async (tx: any) => {
+    await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
     return query();
   });
 }
@@ -313,8 +319,11 @@ const _basePrismaExtended = _rawPrisma.$extends({
         // always live in the DB once the migration is applied, so we must set
         // bypass_rls=on regardless of tenantEnforcing() (off/monitor/rollback
         // included — otherwise queries silently return zero rows).
-        return _rawPrisma.$transaction(async () => {
-          await _rawPrisma.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+        // GUC write goes through the callback's `tx` so it runs on the interactive
+        // transaction's pinned connection; the model op (query) rides the same async
+        // transaction context onto that connection and sees the bypass GUC.
+        return _rawPrisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
           return query(args);
         });
       },

@@ -22,6 +22,7 @@ import { TenantScopeError } from "../src/lib/tenantGuard";
 import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 import { resolvePortalTenant } from "../src/lib/portal";
 import { resolveActingTenant } from "../src/lib/tenantContext";
+import { addTenantMembership } from "../src/lib/provisioning";
 import {
   resolveSignRecipientTenant,
   resolveApprovalStepTenant,
@@ -384,10 +385,31 @@ async function main() {
     await basePrisma.tenantMember.deleteMany({ where: { userId: uStaff, tenantId: t1 } });
     check("staff: membership removed → NOT ok (unusable immediately)", (await establishStaffTenantScope(uStaff, t1, false)).ok === false);
 
-    // Newly AMBIGUOUS (re-add t1 + add a second active membership) → unusable.
+    // ONE-USER-ONE-TENANT is enforced at write time (TenantMember.userId @unique):
+    // a user can never reach the "2 active memberships" ambiguous state. Restore the
+    // sole membership, then prove a second membership through the provisioning
+    // service is REJECTED and leaves NO partial state — the original membership and
+    // session stay usable (a suspended/other membership can't be silently replaced).
     await basePrisma.tenantMember.create({ data: { tenantId: t1, userId: uStaff } });
-    await basePrisma.tenantMember.create({ data: { tenantId: t2, userId: uStaff } });
-    check("staff: ambiguous (2 active memberships) → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, t1, false)).ok === false);
+    let secondMembershipRejected = false;
+    try {
+      await addTenantMembership(basePrisma, t2, uStaff);
+    } catch {
+      secondMembershipRejected = true;
+    }
+    check("staff: second-tenant membership is REJECTED (one-user-one-tenant)", secondMembershipRejected);
+    const staffMemberships = await basePrisma.tenantMember.findMany({
+      where: { userId: uStaff },
+      select: { tenantId: true },
+    });
+    check(
+      "staff: rejected second membership leaves NO partial state (still exactly t1)",
+      staffMemberships.length === 1 && staffMemberships[0].tenantId === t1,
+    );
+    check(
+      "staff: original membership + session remain usable after the rejected add",
+      (await establishStaffTenantScope(uStaff, t1, false)).ok === true,
+    );
 
     // ── no-user token surfaces (Phase C 2b-C1): tenant is DERIVED from the token's
     //    row via a narrow trusted lookup, then the guarded re-read runs INSIDE that

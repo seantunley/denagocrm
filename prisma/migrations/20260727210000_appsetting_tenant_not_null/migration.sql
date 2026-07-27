@@ -23,13 +23,13 @@ DELETE FROM "AppSetting" a
 -- 2. Adopt every remaining NULL-tenant (legacy global) row into the founding tenant.
 UPDATE "AppSetting" SET "tenantId" = 'tenant_denago_cpt' WHERE "tenantId" IS NULL;
 
--- 3. Lock the column. Guard so a re-run (already NOT NULL) is a harmless no-op.
-DO $$ BEGIN
-  ALTER TABLE "AppSetting" ALTER COLUMN "tenantId" SET NOT NULL;
-EXCEPTION WHEN others THEN
-  -- already NOT NULL, or a concurrent run set it — nothing to do.
-  NULL;
-END $$;
+-- 3. Lock the column. SET NOT NULL is idempotent — running it on a column that is
+--    already NOT NULL is a harmless no-op in PostgreSQL — so a replay is safe WITHOUT
+--    swallowing errors. A genuine failure (leftover NULLs after the backfill above,
+--    a lock/statement timeout, or insufficient privilege) MUST abort the deploy
+--    rather than be hidden by a broad EXCEPTION handler that could report success
+--    while the column stays nullable.
+ALTER TABLE "AppSetting" ALTER COLUMN "tenantId" SET NOT NULL;
 
 -- 4. Re-create the RLS policy without the `tenantId IS NULL = global` escape hatch
 --    (migration 20260727130000 added it; there are no NULLs left to admit). A
