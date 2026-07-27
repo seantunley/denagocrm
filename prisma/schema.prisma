@@ -578,6 +578,7 @@ model PipelineStage {
   leads Lead[]
 
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model Lead {
@@ -1613,6 +1614,7 @@ model SignWorkflow {
 
   templates DocBuilderTemplate[] @relation("TemplateDefaultWorkflow")
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 // Immutable snapshot of a builder template's JSON at publish time. Restore copies
