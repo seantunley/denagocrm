@@ -323,12 +323,32 @@ const _basePrismaExtended = _rawPrisma.$extends({
   },
 });
 
+// Patch $executeRaw / $queryRaw to set bypass_rls before executing.
+// query.$allModels.$allOperations only covers Prisma model operations; standalone
+// $executeRaw / $queryRaw calls bypass the extension and would be silently blocked
+// by FORCE RLS without this. Inside basePrisma.$transaction, preceding model ops
+// already set bypass_rls='on' via SET LOCAL (persists through SAVEPOINT release
+// to the outer tx), so those in-transaction raw calls are unaffected.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const _basePrismaFull = _basePrismaExtended as any;
+_basePrismaFull.$executeRaw = (sql: any, ...values: any[]) =>
+  _rawPrisma.$transaction(async (tx: any) => {
+    await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+    return tx.$executeRaw(sql, ...values);
+  });
+_basePrismaFull.$queryRaw = (sql: any, ...values: any[]) =>
+  _rawPrisma.$transaction(async (tx: any) => {
+    await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+    return tx.$queryRaw(sql, ...values);
+  });
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
 export const basePrisma =
   (globalForPrisma.basePrisma as PrismaClient | undefined) ??
   // Type assertion: the extended client has the same runtime API as PrismaClient;
   // the $extends wrapper only adds extension metadata to the type. Callers that
   // accept PrismaClient (provisioning.ts, etc.) work correctly at runtime.
-  (_basePrismaExtended as unknown as PrismaClient);
+  (_basePrismaFull as unknown as PrismaClient);
 
 /** Default client: soft-deleted records are hidden; tenant scope is enforced when
  *  TENANT_ENFORCEMENT=enforce; DB-layer RLS is injected via SET LOCAL. */
