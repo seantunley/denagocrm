@@ -159,16 +159,17 @@ function refuseNestedRelationWrite(model: string, data: unknown): void {
  * SET LOCAL sets either `app.current_tenant` (tenant scope) or `app.bypass_rls`
  * (system scope, off-mode, and rollback).
  *
- * Connection-binding guarantee: Prisma's interactive transaction pins a single
- * DB connection for the duration of the `$transaction` callback and propagates
- * that connection through AsyncLocalStorage. Both `raw.$executeRaw` and
- * `query()` called inside the same callback execute on that pinned connection —
- * even though the code uses `raw` rather than the implicit `tx` argument —
- * because AsyncLocalStorage routes all Prisma operations in the same async
- * context to the pinned connection. This is exactly what Prisma's transaction
- * isolation model relies on. With pgbouncer in transaction mode, the connection
- * is held for the lifetime of the BEGIN…COMMIT block, so SET LOCAL and the
- * business query are always on the same physical connection.
+ * Connection-binding guarantee: this uses Prisma's BATCH (array) transaction —
+ * `client.$transaction([ setGuc, op ])` — which is the documented Prisma pattern
+ * for RLS in a query extension. Both promises are created from the SAME `client`,
+ * and Prisma runs an array transaction as one BEGIN…COMMIT on a single pinned
+ * connection, executing the elements IN ORDER: the `SET LOCAL` GUC runs first,
+ * then the guarded operation sees it. This does NOT rely on AsyncLocalStorage
+ * propagating a connection from an interactive-callback `tx` to an operation
+ * invoked on a different client handle — the failure mode where the business
+ * query could land on another pooled connection with no GUC set. With pgbouncer
+ * in transaction mode the connection is held for the BEGIN…COMMIT block, so
+ * SET LOCAL and the business query are always on the same physical connection.
  *
  * `basePrisma` always sets `app.bypass_rls = 'on'` — trusted system path.
  *
@@ -177,29 +178,21 @@ function refuseNestedRelationWrite(model: string, data: unknown): void {
  * query, otherwise no rows are returned. bypass_rls='on' is the safe default
  * for any non-tenant context (off, monitor, system scope, rollback).
  */
-async function withRlsScope(raw: PrismaClient, query: () => Promise<any>): Promise<any> {
-  // Under enforcement, use the current async scope to choose the GUC.
-  // Off/monitor (or enforce with system scope): fall through to bypass below.
+async function withRlsScope(client: any, query: () => any): Promise<any> {
+  // Under enforcement with a tenant scope, pin app.current_tenant; otherwise
+  // (off/monitor, system scope, or enforce+no-scope — Layer 1 scopeArgs already
+  // threw TenantScopeError for any tenant-scoped model before we reach here) bypass.
   const scope = tenantEnforcing() ? currentTenantScope() : null;
-  // The GUC write goes through the callback's `tx` client so it is GUARANTEED to run
-  // on the interactive transaction's pinned connection (not a pooled one). The guarded
-  // `query()` runs inside the same callback and rides the async transaction context
-  // onto that same connection, so it sees the SET LOCAL GUC — this is precisely what
-  // the restricted-role (NOSUPERUSER NOBYPASSRLS) proof in test-rls-restricted.ts
-  // exercises against FORCE ROW LEVEL SECURITY.
-  if (scope?.tenantId) {
-    const tid = scope.tenantId;
-    return raw.$transaction(async (tx: any) => {
-      await tx.$executeRaw`SELECT set_config('app.current_tenant', ${tid}, TRUE)`;
-      return query();
-    });
-  }
-  // off/monitor, system scope, or enforce+no-scope (Layer 1 scopeArgs already
-  // threw TenantScopeError for any tenant-scoped model before we reach here).
-  return raw.$transaction(async (tx: any) => {
-    await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
-    return query();
-  });
+  // Batch the GUC write and the operation in ONE array transaction on the SAME
+  // `client` — the documented Prisma RLS-extension pattern. `client.$executeRaw`
+  // (not a model op, so it does not re-enter this extension) sets the GUC first,
+  // then the guarded op runs on the same pinned connection and sees it. The
+  // restricted-role (NOSUPERUSER NOBYPASSRLS) proof exercises this under FORCE RLS.
+  const setGuc = scope?.tenantId
+    ? client.$executeRaw`SELECT set_config('app.current_tenant', ${scope.tenantId}, TRUE)`
+    : client.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+  const [, result] = await client.$transaction([setGuc, query()]);
+  return result;
 }
 
 function buildClient(raw: PrismaClient) {
@@ -284,18 +277,26 @@ function buildClient(raw: PrismaClient) {
     },
   });
 
-  // Layer 2: RLS session-variable injection (wraps Layer 1 in a transaction
-  // that sets SET LOCAL app.current_tenant before the guarded query runs).
-  // Only active when tenantEnforcing() returns true.
-  return guarded.$extends({
+  // Layer 2: RLS session-variable injection. Batches SET LOCAL (app.current_tenant
+  // or app.bypass_rls) + the guarded op in one array transaction on the SCOPED
+  // client itself (forward-referenced) — so both run on the same pinned connection
+  // without relying on AsyncLocalStorage. Only active when tenantEnforcing() is true.
+  // Holder breaks the type cycle: the extension closure references `ref.c` (typed
+  // via the holder) rather than `scoped` directly, so TS still infers `scoped`'s
+  // real client type (referencing it in its own initializer would collapse it to
+  // `any` and cascade through `prisma`). `ref.c` is populated before any query runs.
+  const ref: { c: any } = { c: null };
+  const scoped = guarded.$extends({
     query: {
       $allModels: {
         async $allOperations({ args, query }: any) {
-          return withRlsScope(raw, () => query(args));
+          return withRlsScope(ref.c, () => query(args));
         },
       },
     },
   });
+  ref.c = scoped;
+  return scoped;
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
@@ -421,17 +422,27 @@ export function __buildScopedClientForTests(raw: PrismaClient): PrismaClient {
  * restricted role sees every tenant's rows once bypass is set, and none without.
  */
 export function __buildBypassClientForTests(raw: PrismaClient): PrismaClient {
-  return raw.$extends({
+  // Same batch pattern as withRlsScope: SET LOCAL bypass + the op in one array
+  // transaction on the SAME (forward-referenced) extended client, so both run on
+  // one pinned connection without relying on AsyncLocalStorage propagation.
+  // Holder breaks the self-reference type cycle (see buildClient). Populated before
+  // any query runs; the closure batches SET LOCAL + the op on the same client.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ref: { c: any } = { c: null };
+  const ext = raw.$extends({
     query: {
       $allModels: {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         async $allOperations({ args, query }: any) {
-          return raw.$transaction(async () => {
-            await raw.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
-            return query(args);
-          });
+          const [, result] = await ref.c.$transaction([
+            ref.c.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`,
+            query(args),
+          ]);
+          return result;
         },
       },
     },
-  }) as unknown as PrismaClient;
+  });
+  ref.c = ext;
+  return ext as unknown as PrismaClient;
 }
