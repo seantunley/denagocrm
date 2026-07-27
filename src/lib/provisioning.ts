@@ -18,6 +18,13 @@ const SYSTEM_ROLE_IDS = [
 ] as const;
 
 /**
+ * Modules a freshly-activated tenant owner gets by default — mirrors the
+ * User.modules schema default. Granted by {@link activateTenant} only when the
+ * owner has none yet (createTenant provisions them with an empty set).
+ */
+const DEFAULT_OWNER_MODULES = "crm,workshop,reports,inbox";
+
+/**
  * Shared tenant-provisioning service. ONE place that turns "a user exists" into "a
  * user belongs to a tenant", so every creation path — initial seed, admin
  * createUser, the SQLite→Postgres data import, and future invitation/signup flows
@@ -207,6 +214,26 @@ export async function activateTenant(
       UPDATE "User" SET "disabledAt" = NULL
       WHERE "id" = ${ownerId} AND "disabledAt" IS NOT NULL
     `;
+    // Give the owner a WORKING workspace. Enabling the account is not enough — a
+    // bare owner has the non-privileged "member" global role, no tenant-admin
+    // permissions, and (from createTenant) no modules. So:
+    //   1. ensure the tenant's own role copies exist (idempotent), then
+    //   2. assign the tenant-local CRM-admin role (tenant administration), and
+    //   3. grant the default module set if the owner has none yet (never clobber
+    //      a set customized after a prior activation).
+    await seedTenantDefaultRoles(tx, tenantId);
+    const adminRoleId = `role_crm_admin:${tenantId}`;
+    await tx.$executeRaw`
+      INSERT INTO "UserRole" ("id", "userId", "roleId", "tenantId")
+      VALUES (gen_random_uuid()::text, ${ownerId}, ${adminRoleId}, ${tenantId})
+      ON CONFLICT DO NOTHING
+    `;
+    await tx.$executeRaw`
+      UPDATE "User" SET "modules" = ${DEFAULT_OWNER_MODULES}
+      WHERE "id" = ${ownerId} AND ("modules" IS NULL OR "modules" = '')
+    `;
+    // Bump session version so any pre-existing session re-reads the new role/modules.
+    await tx.$executeRaw`UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1 WHERE "id" = ${ownerId}`;
   });
 }
 

@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { prisma, basePrisma } from "../src/lib/db";
 import { resolveActingTenant, createUserInOwnerTenant } from "../src/lib/tenantContext";
-import { ensureFoundingMembership, createTenant } from "../src/lib/provisioning";
+import { ensureFoundingMembership, createTenant, addTenantMembership, activateTenant } from "../src/lib/provisioning";
 
 // DB-backed verification of the security/integrity fixes (audit Groups 1-3).
 // Runs in CI against the ephemeral seeded database — NOT locally (a local run
@@ -244,12 +244,35 @@ async function main() {
       ],
     });
     assert.deepEqual(await resolveActingTenant(ctxUser), { error: "no_tenant" }, "no membership → no_tenant");
-    await basePrisma.tenantMember.create({ data: { tenantId: tInactive, userId: ctxUser } });
+    // One-user-one-tenant (TenantMember.userId is @unique): a user has AT MOST one
+    // membership, so "ambiguous" is structurally impossible — the invariant is
+    // enforced at write time instead. addTenantMembership creates the first one.
+    await addTenantMembership(basePrisma, tInactive, ctxUser);
     assert.deepEqual(await resolveActingTenant(ctxUser), { error: "no_tenant" }, "only a SUSPENDED-tenant membership still → no_tenant");
-    await basePrisma.tenantMember.create({ data: { tenantId: tActive1, userId: ctxUser } });
+    // A suspended membership can NOT be silently replaced by adding another — the
+    // add is refused, so switching tenants must be a deliberate remove-then-add.
+    await assert.rejects(
+      () => addTenantMembership(basePrisma, tActive1, ctxUser),
+      /only be a member of one tenant/,
+      "cannot silently replace a suspended membership with another tenant's",
+    );
+    assert.equal(
+      await basePrisma.tenantMember.count({ where: { userId: ctxUser } }),
+      1,
+      "the refused add left exactly the original (suspended) membership — no partial second row",
+    );
+    // Deliberately move ctxUser to an active tenant (remove-then-add).
+    await basePrisma.tenantMember.deleteMany({ where: { userId: ctxUser } });
+    await addTenantMembership(basePrisma, tActive1, ctxUser);
     assert.deepEqual(await resolveActingTenant(ctxUser), { tenantId: tActive1 }, "exactly one active membership → that tenant");
-    await basePrisma.tenantMember.create({ data: { tenantId: tActive2, userId: ctxUser } });
-    assert.deepEqual(await resolveActingTenant(ctxUser), { error: "ambiguous_tenant" }, "two active memberships → ambiguous (never silently pick one)");
+    // A SECOND active membership is likewise refused, and resolution is unchanged.
+    await assert.rejects(
+      () => addTenantMembership(basePrisma, tActive2, ctxUser),
+      /only be a member of one tenant/,
+      "adding a second (active) tenant membership is refused",
+    );
+    assert.equal(await basePrisma.tenantMember.count({ where: { userId: ctxUser } }), 1, "still exactly one membership");
+    assert.deepEqual(await resolveActingTenant(ctxUser), { tenantId: tActive1 }, "resolution still points at the original tenant");
 
     // Shared provisioning service (seed + data import path) creates a founding membership.
     await basePrisma.user.create({ data: { id: importUser, name: "Imp", email: `${importUser}@example.invalid`, passwordHash: "x" } });
@@ -293,13 +316,25 @@ async function main() {
     assert.deepEqual(await createUserInOwnerTenant(provOwner0, { name: "X", email: noneEmail, passwordHash: "x" }), { error: "no_tenant" }, "owner with no active tenant is refused");
     assert.equal(await basePrisma.user.count({ where: { email: noneEmail } }), 0, "no user created when refused");
 
-    // refuse — ambiguous (owner in two active tenants) → ambiguous_tenant, no user
+    // one-user-one-tenant: the owner already belongs to provTenant, so it can NEVER
+    // gain a second membership — addTenantMembership is refused, no row is added,
+    // and the owner still resolves to its single tenant (provisioning keeps working).
     await basePrisma.tenant.create({ data: { id: provTenant2, name: "ProvT2", slug: provTenant2, active: true } });
-    await basePrisma.tenantMember.create({ data: { tenantId: provTenant2, userId: provOwner } });
-    const ambigEmail = `${id("provAmbig")}@example.invalid`;
-    const ambigRes = await createUserInOwnerTenant(provOwner, { name: "A", email: ambigEmail, passwordHash: "x" });
-    assert.ok("error" in ambigRes && ambigRes.error === "ambiguous_tenant", "ambiguous owner is refused");
-    assert.equal(await basePrisma.user.count({ where: { email: ambigEmail } }), 0, "no user created when ambiguous");
+    await assert.rejects(
+      () => addTenantMembership(basePrisma, provTenant2, provOwner),
+      /only be a member of one tenant/,
+      "a provisioning owner cannot gain a second tenant membership",
+    );
+    assert.equal(
+      await basePrisma.tenantMember.count({ where: { userId: provOwner } }),
+      1,
+      "the refused add left exactly the original membership (no partial second row)",
+    );
+    const stillEmail = `${id("provStill")}@example.invalid`;
+    const stillRes = await createUserInOwnerTenant(provOwner, { name: "Still", email: stillEmail, passwordHash: "x" });
+    assert.ok("tenantId" in stillRes && stillRes.tenantId === provTenant, "owner still provisions into its single tenant");
+    const stillUser = await basePrisma.user.findUnique({ where: { email: stillEmail }, select: { id: true } });
+    assert.ok(stillUser, "the new user was created in the single tenant");
 
     // import atomicity — user + founding membership roll back together on failure,
     // so an import failure can't leave a tenantless user.
@@ -317,8 +352,8 @@ async function main() {
     assert.ok(importRolledBack, "the simulated failure propagates");
     assert.equal(await basePrisma.user.count({ where: { id: importFailUser } }), 0, "import user rolled back — no tenantless user left");
 
-    await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [provOwner, provOwner0, newUser!.id] } } });
-    await basePrisma.user.deleteMany({ where: { id: { in: [provOwner, provOwner0, newUser!.id] } } });
+    await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [provOwner, provOwner0, newUser!.id, stillUser!.id] } } });
+    await basePrisma.user.deleteMany({ where: { id: { in: [provOwner, provOwner0, newUser!.id, stillUser!.id] } } });
     await basePrisma.tenant.deleteMany({ where: { id: { in: [provTenant, provTenant2] } } });
 
     // createTenant — provisions a brand-new tenant + its first owner + membership
@@ -344,10 +379,26 @@ async function main() {
     const ctMember = await basePrisma.tenantMember.findUnique({ where: { tenantId_userId: { tenantId: ct.tenantId, userId: ct.ownerId } } });
     assert.ok(ctMember, "createTenant makes the owner a member of the new tenant");
     assert.deepEqual(await resolveActingTenant(ct.ownerId), { error: "no_tenant" }, "a suspended tenant is fail-closed — its owner resolves to no tenant");
-    // Sanity: resolution only opens up once the tenant is activated (a deliberate
-    // post-isolation step; the owner would also need enabling to actually sign in).
-    await basePrisma.tenant.update({ where: { id: ct.tenantId }, data: { active: true } });
+    // Activation via the real activateTenant path (not a bare active=true flip):
+    // it must give the owner a WORKING workspace — enabled account + tenant-local
+    // crm_admin role (tenant administration) + default modules — otherwise an
+    // activated owner could sign in but manage nothing.
+    await activateTenant(basePrisma, ct.tenantId, ct.ownerId);
     assert.deepEqual(await resolveActingTenant(ct.ownerId), { tenantId: ct.tenantId }, "after activation the owner resolves to exactly the created tenant");
+    const activated = await basePrisma.$queryRaw<Array<{ disabledAt: Date | null; modules: string }>>`
+      SELECT "disabledAt", "modules" FROM "User" WHERE "id" = ${ct.ownerId} LIMIT 1`;
+    assert.equal(activated[0]?.disabledAt, null, "activation clears the owner's disabledAt (can sign in)");
+    assert.ok((activated[0]?.modules ?? "").length > 0, "activation grants the owner a non-empty module set (has a CRM workspace)");
+    const adminGrant = await basePrisma.$queryRaw<Array<{ n: bigint }>>`
+      SELECT COUNT(*)::bigint AS n FROM "UserRole"
+      WHERE "userId" = ${ct.ownerId} AND "roleId" = ${`role_crm_admin:${ct.tenantId}`} AND "tenantId" = ${ct.tenantId}`;
+    assert.equal(Number(adminGrant[0]?.n ?? 0), 1, "activation assigns the tenant-local crm_admin role (can administer their tenant)");
+    // The assigned role actually carries governance-admin permissions (e.g. roles.manage).
+    const adminPerms = await basePrisma.$queryRaw<Array<{ n: bigint }>>`
+      SELECT COUNT(*)::bigint AS n FROM "RolePermission"
+      WHERE "roleId" = ${`role_crm_admin:${ct.tenantId}`} AND "permissionKey" = 'roles.manage'`;
+    assert.equal(Number(adminPerms[0]?.n ?? 0), 1, "the tenant-local crm_admin role includes tenant administration (roles.manage)");
+    await basePrisma.userRole.deleteMany({ where: { userId: ct.ownerId } });
     await basePrisma.role.deleteMany({ where: { tenantId: ct.tenantId } });
     await basePrisma.tenantMember.deleteMany({ where: { userId: ct.ownerId } });
     await basePrisma.user.deleteMany({ where: { id: ct.ownerId } });
