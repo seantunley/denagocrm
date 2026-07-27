@@ -1,3 +1,5 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "../src/lib/db";
 import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
@@ -27,6 +29,41 @@ async function countTable(table: string, whereClause: string): Promise<number> {
     `SELECT COUNT(*)::bigint AS count FROM "${table}" WHERE ${whereClause}`,
   );
   return Number(rows[0]?.count ?? 0);
+}
+
+type CompositeFk = { child: string; childCol: string; parent: string };
+
+/**
+ * Parse every composite tenant FK from the migration SQL — the EXACT definitions
+ * Postgres validates: `FOREIGN KEY ("tenantId", <col>) REFERENCES <Parent>("tenantId","id")`.
+ * Table/column identifiers come only from our own migration files (not user input),
+ * so they are safe to interpolate. De-duped by child.col→parent (constraints are
+ * re-declared across the supplement migrations under duplicate_object guards).
+ */
+function readCompositeTenantFks(): CompositeFk[] {
+  const dir = join(process.cwd(), "prisma", "migrations");
+  const re =
+    /ALTER TABLE "(\w+)" ADD CONSTRAINT "[^"]+"\s+FOREIGN KEY \("tenantId",\s*"(\w+)"\)\s+REFERENCES "(\w+)"\s*\(\s*"tenantId",\s*"id"\s*\)/g;
+  const seen = new Set<string>();
+  const out: CompositeFk[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    let sql: string;
+    try {
+      sql = readFileSync(join(dir, entry.name, "migration.sql"), "utf8");
+    } catch {
+      continue;
+    }
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(sql)) !== null) {
+      const [, child, childCol, parent] = m;
+      const key = `${child}.${childCol}->${parent}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ child, childCol, parent });
+    }
+  }
+  return out;
 }
 
 async function main() {
@@ -186,6 +223,42 @@ async function main() {
   );
   if (usersWithoutTenantId > 0) {
     failures.push(`${usersWithoutTenantId} active user(s) have User.tenantId IS NULL (invisible under enforcement)`);
+  }
+
+  // ── 8. Composite tenant FK integrity (HARD failure) ────────────────────────
+  //    The composite FKs (tenantId, childId) → Parent(tenantId, id) are added
+  //    NOT VALID and validated in a SEPARATE migration (…180000). If that validation
+  //    was ever skipped, cross-tenant / dangling child references sit undetected and
+  //    silently break isolation. Re-derive every FK from the migration SQL (the exact
+  //    definitions Postgres validates) and prove ZERO violating rows — independent of
+  //    the DB's own constraint state. Matches Postgres MATCH SIMPLE: a row is skipped
+  //    when EITHER FK column is NULL, so a null-tenant child is not double-flagged
+  //    (section 5 already reports those).
+  const fkDefs = readCompositeTenantFks();
+  console.log(`Checking ${fkDefs.length} composite tenant FK(s) for cross-tenant / dangling refs…`);
+  if (fkDefs.length < 120) {
+    // The parser expects 130 composite FKs (verified against the migrations). A
+    // shortfall means the regex missed definitions and would silently under-check —
+    // surface it instead of passing a partial sweep.
+    failures.push(
+      `Composite-FK diagnostic parsed only ${fkDefs.length} FKs (expected 130) — parser/coverage is broken, not a clean bill of health`,
+    );
+  }
+  for (const fk of fkDefs) {
+    const rows = await basePrisma.$queryRawUnsafe<CountRow[]>(
+      `SELECT COUNT(*)::bigint AS count FROM "${fk.child}" c
+         WHERE c."${fk.childCol}" IS NOT NULL AND c."tenantId" IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM "${fk.parent}" p
+             WHERE p."tenantId" = c."tenantId" AND p."id" = c."${fk.childCol}"
+           )`,
+    );
+    const n = Number(rows[0]?.count ?? 0);
+    if (n > 0) {
+      failures.push(
+        `${n} ${fk.child}.${fk.childCol} row(s) reference a ${fk.parent} in another tenant or none (would FAIL the composite-FK VALIDATE)`,
+      );
+    }
   }
 
   // ── Report ─────────────────────────────────────────────────────────────────

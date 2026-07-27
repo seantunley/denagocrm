@@ -56,6 +56,26 @@ separate step afterwards, and the preflight must run against the NEW schema.
 
 ## Rollback
 
-Enforcement is a single env flag. `TENANT_ENFORCEMENT=off` makes every path use
-`bypass_rls='on'` again; FORCE RLS stays installed but admits every row via the
-bypass GUC. No migration rollback is required to disable enforcement.
+Rollback has TWO independent layers — do not conflate them.
+
+**1. Enforcement (instant, reversible).** `TENANT_ENFORCEMENT=off` makes every path
+use `bypass_rls='on'` again; FORCE RLS stays installed but admits every row via the
+bypass GUC. No migration rollback is required to disable enforcement, and full data
+visibility is restored immediately. This is the ONLY rollback you need for an
+isolation/visibility problem discovered at step 10.
+
+**2. Schema (forward-only — NOT reverted by the flag).** Turning enforcement off does
+NOT undo the migrations: the `AppSetting` surrogate-PK + `(tenantId, key)` unique,
+the `AppSetting`/`User` `tenantId NOT NULL`, the 130 composite tenant FKs, and the
+RLS policies all remain. These are deliberately additive/compatibility-preserving so
+the running app keeps working with enforcement off, but there are intentionally no
+down-migrations. If you must revert the SCHEMA (not just enforcement), the supported
+path is a point-in-time restore / backup, not `migrate` — plan a backup checkpoint
+immediately before step 4.
+
+**Application/schema compatibility (the drain requirement).** The pre-migration
+build is NOT forward-compatible with the new schema: e.g. it writes `AppSetting`
+without a `tenantId` (now NOT NULL) and by the old `key` PK (now a surrogate id). So
+between step 4 (migrate) and step 5 (deploy matching code) the old code MUST be fully
+drained/stopped — otherwise a stray old-code write fails or is rejected. This is why
+step 3's maintenance window spans the migrate→deploy interval, not just the migrate.
