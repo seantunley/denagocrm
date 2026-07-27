@@ -534,6 +534,7 @@ model Segment {
   criteria  String // JSON: { source?, tagId?, hasVehicle?, serviceDue?, province?, wonOnly? }
   createdAt DateTime @default(now())
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 /** A saved chatbot conversation flow (one can be marked active/live). */
@@ -690,6 +691,7 @@ model EmailTemplate {
   body      String
   createdAt DateTime @default(now())
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model AutomationRule {
@@ -717,6 +719,7 @@ model AutomationRule {
 
   createdAt DateTime @default(now())
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model Quote {
@@ -992,6 +995,7 @@ model Document {
   uploadedBy   User     @relation(fields: [uploadedById], references: [id])
 
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model Vehicle {
