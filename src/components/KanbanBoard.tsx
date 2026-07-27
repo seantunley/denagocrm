@@ -36,6 +36,7 @@ import {
   PenLine,
   Search,
   Trophy,
+  UserPlus,
   UserRound,
   XCircle,
   Zap,
@@ -43,7 +44,7 @@ import {
 import { toast } from "sonner";
 import LocationAutocomplete from "@/components/LocationAutocomplete";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { assignLead, markLost, markWon, moveLead, moveLeadToTestDrive } from "@/app/actions/leads";
+import { assignLead, convertLeadToContact, markLost, markWon, moveLead, moveLeadToTestDrive } from "@/app/actions/leads";
 import { formatZAR } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -84,6 +85,7 @@ export type KanbanLead = {
   id: string;
   title: string;
   name: string;
+  contactId?: string | null;
   valueCents: number;
   quantity?: number;
   source: string;
@@ -321,6 +323,7 @@ type LeadActionHandlers = {
   won: () => void;
   lost: () => void;
   copyLink: () => void;
+  addToContacts: () => void;
 };
 
 type BoardPermissions = {
@@ -364,6 +367,11 @@ function LeadMenuItems({
       <Item disabled={!permissions.canManageActivities} onSelect={actions.schedule}>
         <CalendarPlus /> Schedule activity
       </Item>
+      {!lead.contactId && (
+        <Item onSelect={actions.addToContacts}>
+          <UserPlus /> Add to contacts
+        </Item>
+      )}
       <Separator />
       <Sub>
         <SubTrigger disabled={!permissions.canChangeStage}>
@@ -797,6 +805,27 @@ export default function KanbanBoard({
           .writeText(`${window.location.origin}/leads/${lead.id}`)
           .then(() => toast.success("Lead link copied"))
           .catch(() => toast.error("Couldn't copy the lead link"));
+      },
+      addToContacts: () => {
+        startTransition(async () => {
+          const result = await convertLeadToContact(lead.id).catch(() => ({
+            ok: false as const,
+            error: "Something went wrong",
+          }));
+          if (result.ok) {
+            setStages((previous) =>
+              previous.map((stage) => ({
+                ...stage,
+                leads: stage.leads.map((item) =>
+                  item.id === lead.id ? { ...item, contactId: result.contactId } : item,
+                ),
+              })),
+            );
+            toast.success(`${lead.name} added to contacts`);
+          } else {
+            toast.error(result.error ?? "Couldn't add to contacts");
+          }
+        });
       },
     };
   }

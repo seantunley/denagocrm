@@ -18,6 +18,8 @@ import {
   StickyActionArea,
 } from "@/components/responsive-patterns";
 import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
+import AddToContactsButton from "@/components/AddToContactsButton";
+import { contactName } from "@/lib/format";
 
 export const metadata = { title: "Lead list — DenagoCRM" };
 
@@ -154,6 +156,11 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
                     <MobileDataField label="Source"><span className="capitalize">{lead.source}</span></MobileDataField>
                     <MobileDataField label="Assigned">{lead.assignedTo?.name ?? "Unassigned"}</MobileDataField>
                     <MobileDataField label="Created">{formatDate(lead.createdAt)}</MobileDataField>
+                    <MobileDataField label="Contact">
+                      {lead.contact
+                        ? <Link href={`/contacts/${lead.contact.id}`} className="text-primary hover:underline">{contactName(lead.contact)}</Link>
+                        : <AddToContactsButton leadId={lead.id} />}
+                    </MobileDataField>
                   </MobileDataFields>
                 </MobileDataCard>
                 </RecordContextMenu>
@@ -166,7 +173,7 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
           desktop={
             <div className="card overflow-x-auto p-0">
               <table className="table-base">
-                <thead><tr><th>Lead</th><th>Stage</th><th>Source</th><th className="text-right">Value</th><th>Created</th><th>Assigned</th></tr></thead>
+                <thead><tr><th>Lead</th><th>Stage</th><th>Source</th><th className="text-right">Value</th><th>Created</th><th>Assigned</th><th>Contact</th></tr></thead>
                 <tbody>
                   {leads.map((lead) => (
                     <RecordContextMenu
@@ -182,6 +189,11 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
                       <td className="text-right font-medium">{lead.valueCents > 0 ? formatZAR(lead.valueCents) : "—"}</td>
                       <td className="text-sm text-muted-foreground">{formatDate(lead.createdAt)}</td>
                       <td className="text-sm text-muted-foreground">{lead.assignedTo?.name ?? "—"}</td>
+                      <td>
+                        {lead.contact
+                          ? <Link href={`/contacts/${lead.contact.id}`} className="text-sm text-primary hover:underline">{contactName(lead.contact)}</Link>
+                          : <AddToContactsButton leadId={lead.id} />}
+                      </td>
                     </tr>
                     </RecordContextMenu>
                   ))}

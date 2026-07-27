@@ -500,6 +500,65 @@ export async function linkLeadToContact(leadId: string, formData: FormData) {
   revalidatePath("/leads");
 }
 
+export async function convertLeadToContact(leadId: string): Promise<{ ok: boolean; error?: string; contactId?: string }> {
+  const user = await requireLeadAccess(leadId, "leads.link_contact");
+  const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+
+  if (lead.contactId) return { ok: false, error: "Already linked to a contact" };
+
+  const matchers = [
+    ...(lead.email ? [{ email: lead.email }] : []),
+    ...(lead.phone ? [{ phone: lead.phone }] : []),
+  ];
+  const existing = matchers.length > 0
+    ? await prisma.contact.findFirst({ where: { OR: matchers } })
+    : null;
+
+  let contactId: string;
+  if (existing) {
+    contactId = existing.id;
+  } else {
+    const [firstName, ...rest] = lead.name.split(/\s+/);
+    const contact = await prisma.contact.create({
+      data: {
+        firstName: firstName || lead.name,
+        lastName: rest.join(" ") || null,
+        email: lead.email,
+        phone: lead.phone,
+        source: lead.source,
+        createdById: user.id,
+        ownerId: lead.assignedToId ?? user.id,
+      },
+    });
+    contactId = contact.id;
+    await logAudit({
+      action: "contact.created",
+      summary: `Created contact ${lead.name} from lead`,
+      contactId,
+      leadId,
+      user,
+      after: contact,
+    });
+  }
+
+  await prisma.lead.update({ where: { id: leadId }, data: { contactId } });
+  await logAuditStrict({
+    action: "lead.contact_linked",
+    summary: `Linked lead "${lead.title}" to contact`,
+    leadId,
+    contactId,
+    user,
+    before: { contactId: lead.contactId },
+    after: { contactId },
+  });
+
+  revalidatePath("/leads");
+  revalidatePath("/contacts");
+  revalidatePath(`/leads/${leadId}`);
+
+  return { ok: true, contactId };
+}
+
 export async function deleteLead(leadId: string, formData: FormData) {
   const user = await requireLeadAccess(leadId, "leads.delete");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";

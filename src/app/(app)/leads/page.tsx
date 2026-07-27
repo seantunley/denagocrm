@@ -152,6 +152,7 @@ export default async function LeadsPage() {
         id: lead.id,
         title: lead.title,
         name: lead.name,
+        contactId: lead.contactId,
         valueCents: lead.valueCents,
         quantity: lead.quantity,
         source: lead.source,
