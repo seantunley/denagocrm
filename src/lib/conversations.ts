@@ -1,5 +1,23 @@
 import "server-only";
 import { basePrisma } from "./db";
+import { currentTenantScope } from "./tenantScope";
+import { tenantEnforcing } from "./tenantEnforcement";
+
+/**
+ * The tenantId the top-level guard (db.ts `scopeArgs`) will stamp on the Communication
+ * for the current scope. Conversation bookkeeping runs through `basePrisma` (to avoid
+ * recursing back through the Communication create extension), which BYPASSES that
+ * guard — so it must stamp the SAME owner itself. Otherwise the composite FK
+ * `Communication(tenantId, conversationId) → Conversation(tenantId, id)` is violated,
+ * and the conversation is an orphaned null-tenant row invisible under FORCE RLS.
+ * Mirrors `scopeArgs` exactly: only enforcing + a non-system tenant scope stamps.
+ */
+function scopedConversationTenantId(): string | null {
+  if (!tenantEnforcing()) return null;
+  const scope = currentTenantScope();
+  if (!scope || scope.system) return null;
+  return scope.tenantId ?? null;
+}
 
 /** Map a Communication.type to a conversation channel. */
 const CHANNEL_OF: Record<string, string> = {
@@ -33,9 +51,11 @@ type MessageData = {
 export async function resolveConversationId(data: MessageData): Promise<string | null> {
   if (!data.contactId && !data.leadId) return null;
   const channel = channelForType(data.type);
-  const scope = data.contactId ? { contactId: data.contactId } : { leadId: data.leadId };
+  const tenantId = scopedConversationTenantId();
+  const subjectScope = data.contactId ? { contactId: data.contactId } : { leadId: data.leadId };
   const existing = await basePrisma.conversation.findFirst({
-    where: { channel, status: { not: "closed" }, ...scope },
+    // Reuse only the acting tenant's own open conversation when a tenant is in scope.
+    where: { channel, status: { not: "closed" }, ...(tenantId ? { tenantId } : {}), ...subjectScope },
     orderBy: { lastMessageAt: "desc" },
     select: { id: true },
   });
@@ -46,6 +66,7 @@ export async function resolveConversationId(data: MessageData): Promise<string |
       subject: data.subject ?? null,
       contactId: data.contactId ?? null,
       leadId: data.leadId ?? null,
+      tenantId,
     },
     select: { id: true },
   });
