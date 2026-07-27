@@ -161,6 +161,8 @@ export async function createTenant(
   input: CreateTenantInput,
 ): Promise<{ tenantId: string; ownerId: string }> {
   return prisma.$transaction(async (tx) => {
+    // NB: basePrisma.$transaction sets app.bypass_rls for the whole callback, so the
+    // raw `tx.$executeRaw` UPDATE (disabledAt) below is not filtered by FORCE RLS.
     const tenant = await tx.tenant.create({
       data: { name: input.name, slug: input.slug, active: false },
     });
@@ -207,6 +209,8 @@ export async function activateTenant(
   ownerId: string,
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
+    // basePrisma.$transaction sets app.bypass_rls for the whole callback, so the raw
+    // UPDATE/INSERT below (User, UserRole — both FORCE-RLS) are not filtered away.
     await tx.tenant.update({ where: { id: tenantId }, data: { active: true } });
     // Re-enable ONLY the provisioned owner. Members added after creation are
     // existing, already-active users whose disabledAt is not ours to clear.

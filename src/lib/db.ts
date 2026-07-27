@@ -329,8 +329,8 @@ const _basePrismaExtended = _rawPrisma.$extends({
 // unpatched is a real hole: trusted code (seed's PipelineStage insert, the
 // integrity suite) calls basePrisma.$executeRawUnsafe, which under a non-bypass
 // production role would run with no app.bypass_rls set. Inside basePrisma.$transaction,
-// preceding model ops already set bypass_rls='on' via SET LOCAL (persists through
-// SAVEPOINT release to the outer tx), so in-transaction raw calls are unaffected.
+// standalone raw calls are patched individually below; raw calls made INSIDE an
+// interactive basePrisma.$transaction are covered by the $transaction wrapper.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const _basePrismaFull = _basePrismaExtended as any;
 const patchRaw = (method: "$executeRaw" | "$queryRaw" | "$executeRawUnsafe" | "$queryRawUnsafe") => {
@@ -344,6 +344,25 @@ patchRaw("$executeRaw");
 patchRaw("$queryRaw");
 patchRaw("$executeRawUnsafe");
 patchRaw("$queryRawUnsafe");
+
+// Interactive-transaction bypass. basePrisma is the trusted bypass client, so its
+// $transaction callback must run with bypass for its ENTIRE body. Model ops inside
+// get bypass via the extension's per-op wrapping, but standalone `tx.$executeRaw` /
+// `tx.$queryRaw` do NOT — and they run on the transaction's pinned connection, so a
+// raw WRITE to a FORCE-RLS table is silently filtered to zero rows and a raw
+// `FOR UPDATE` lock becomes a no-op. Setting the GUC once at the top of the callback
+// (same pinned connection, transaction-local) covers every raw call in the body. The
+// array form takes only already-wrapped model-op promises, so it passes through.
+const _origTransaction = _basePrismaExtended.$transaction.bind(_basePrismaExtended);
+_basePrismaFull.$transaction = (arg: any, opts: any) => {
+  if (typeof arg === "function") {
+    return _origTransaction(async (tx: any) => {
+      await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+      return arg(tx);
+    }, opts);
+  }
+  return _origTransaction(arg, opts);
+};
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 export const basePrisma =
