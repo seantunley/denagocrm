@@ -103,31 +103,34 @@ export default async function PortalHome() {
   // portal can deep-link to the real signing surface at /signing/[token]. Scoped
   // `prisma` keeps this within the portal's tenant.
   const quoteIds = quotes.map((quote) => quote.id);
-  const openRequests = quoteIds.length
+  const contactEmail = contact.email?.trim() || null;
+  const openRequests = quoteIds.length > 0 && contactEmail
     ? await prisma.signatureRequest.findMany({
         where: {
           quoteId: { in: quoteIds },
           deletedAt: null,
           status: { notIn: [...CLOSED_REQUEST_STATUSES] },
         },
+        orderBy: { createdAt: "desc" },
         select: {
           quoteId: true,
           recipients: {
-            where: { role: "signer", status: { notIn: ["signed", "declined"] } },
-            select: { token: true, email: true },
+            where: {
+              role: "signer",
+              status: { notIn: ["signed", "declined"] },
+              email: { equals: contactEmail, mode: "insensitive" },
+            },
+            orderBy: { order: "asc" },
+            take: 1,
+            select: { token: true },
           },
         },
       })
     : [];
-  const contactEmail = contact.email?.toLowerCase() ?? null;
   const signTokenByQuote = new Map<string, string>();
   for (const request of openRequests) {
-    if (!request.quoteId || request.recipients.length === 0) continue;
-    // Prefer the recipient whose email matches this customer; else the first
-    // outstanding signer on the request.
-    const recipient =
-      request.recipients.find((r) => r.email && r.email.toLowerCase() === contactEmail) ??
-      request.recipients[0];
+    if (!request.quoteId || signTokenByQuote.has(request.quoteId)) continue;
+    const recipient = request.recipients[0];
     if (recipient) signTokenByQuote.set(request.quoteId, recipient.token);
   }
 
