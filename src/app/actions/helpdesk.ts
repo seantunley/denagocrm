@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma, basePrisma } from "@/lib/db";
 import { writeTenantId } from "@/lib/tenantWrite";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { logAudit } from "@/lib/audit";
 import {
   requirePermission,
@@ -224,10 +225,14 @@ export async function addTicketTag(caseId: string, formData: FormData): Promise<
   const name = str(formData, "name");
   if (name.length < 1) return;
   const slug = slugify(name);
+  // slug is unique PER TENANT now (@@unique([tenantId, slug])). Stamp the owning
+  // tenant explicitly so this is correct with enforcement OFF too (the scoped
+  // guard is dormant then and would leave tenantId NULL, violating NOT NULL).
+  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
   const tag = await prisma.supportTag.upsert({
-    where: { slug },
+    where: { tenantId_slug: { tenantId, slug } },
     update: {},
-    create: { name, slug },
+    create: { name, slug, tenantId },
   });
   await prisma.customerCaseTag.upsert({
     where: { caseId_tagId: { caseId, tagId: tag.id } },
@@ -269,7 +274,10 @@ export async function saveMailbox(formData: FormData): Promise<void> {
   if (id) {
     await prisma.supportMailbox.update({ where: { id }, data });
   } else {
-    await prisma.supportMailbox.create({ data: { ...data, slug: slugify(name) } });
+    // Stamp the owning tenant explicitly — tenantId is NOT NULL and the scoped
+    // guard is dormant with enforcement off. slug is unique per tenant.
+    const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+    await prisma.supportMailbox.create({ data: { ...data, slug: slugify(name), tenantId } });
   }
   await logAudit({ action: "helpdesk.mailbox_saved", summary: `Saved mailbox ${name}`, user });
   revalidatePath("/settings/helpdesk");

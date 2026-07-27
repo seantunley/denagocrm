@@ -430,10 +430,11 @@ model ConsentRecord {
 
 model Tag {
   id       String    @id @default(cuid())
-  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
-  name     String    @unique
+  tenantId String // Multi-tenancy: owning tenant (NOT NULL — 20260727220000).
+  name     String
   color    String    @default("#64748b")
   contacts Contact[]
+  @@unique([tenantId, name])
   @@index([tenantId])
 }
 
@@ -2105,9 +2106,9 @@ model PortalUpload {
 
 model SupportMailbox {
   id               String   @id @default(cuid())
-  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
+  tenantId String // Multi-tenancy: owning tenant (NOT NULL — 20260727220000).
   name             String
-  slug             String   @unique
+  slug             String
   color            String   @default("#ea580c")
   email            String?
   signature        String?
@@ -2122,18 +2123,20 @@ model SupportMailbox {
   cannedReplies CannedReply[]
   @@index([tenantId])
   @@unique([tenantId, id])
+  @@unique([tenantId, slug])
 }
 
 model SupportTag {
   id        String            @id @default(cuid())
-  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
+  tenantId String // Multi-tenancy: owning tenant (NOT NULL — 20260727220000).
   name      String
-  slug      String            @unique
+  slug      String
   color     String            @default("#64748b")
   createdAt DateTime          @default(now())
   cases     CustomerCaseTag[]
   @@index([tenantId])
   @@unique([tenantId, id])
+  @@unique([tenantId, slug])
 }
 
 model CustomerCaseTag {
