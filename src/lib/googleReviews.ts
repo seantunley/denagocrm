@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { basePrisma } from "./db";
-import { getSetting } from "./settings";
+import { getSetting, resolveTenantCredential } from "./settings";
+import { currentTenantScope } from "./tenantScope";
 import { sendPushToAll } from "./push";
 
 /**
@@ -11,9 +12,13 @@ import { sendPushToAll } from "./push";
  * approved.
  */
 export async function syncGoogleReviews(): Promise<number> {
+  // Ambient tenant read for the credential lookup only — the tenantId used to
+  // STAMP GOOGLE_REVIEWS_LAST_SYNC / GoogleReview rows below is a separate
+  // concern owned elsewhere in this function; not touched here.
+  const credentialTenantId = currentTenantScope()?.tenantId ?? null;
   const [apiKey, placeId] = await Promise.all([
-    getSetting("GOOGLE_PLACES_API_KEY"),
-    getSetting("GOOGLE_PLACE_ID"),
+    resolveTenantCredential(credentialTenantId, "GOOGLE_PLACES_API_KEY"),
+    resolveTenantCredential(credentialTenantId, "GOOGLE_PLACE_ID"),
   ]);
   if (!apiKey || !placeId) return 0;
 
@@ -22,10 +27,20 @@ export async function syncGoogleReviews(): Promise<number> {
   // even though the cron fires every 15 minutes.
   const last = await getSetting("GOOGLE_REVIEWS_LAST_SYNC");
   if (last && Date.now() - new Date(last).getTime() < 6 * 60 * 60 * 1000) return 0;
+  // Multi-tenancy readiness: label the owning tenant. Called from inside
+  // runCronPerTenant's per-tenant slice (see api/cron/automations/route.ts),
+  // which sets the ambient tenant scope via runInTenantScope BEFORE invoking the
+  // slice — so this ambient read picks up the correct tenant without threading
+  // it through runOperationalQueues' signature. Resolves to null when not
+  // enforcing (today, every environment — no scope is entered at all), matching
+  // the previous unstamped-row behaviour exactly. AppSetting.key stays the sole
+  // @id until the per-tenant uniqueness batch, so this is a label, not a
+  // per-tenant split.
+  const tenantId = currentTenantScope()?.tenantId ?? null;
   await basePrisma.appSetting.upsert({
     where: { key: "GOOGLE_REVIEWS_LAST_SYNC" },
-    update: { value: new Date().toISOString() },
-    create: { key: "GOOGLE_REVIEWS_LAST_SYNC", value: new Date().toISOString() },
+    update: { value: new Date().toISOString(), tenantId },
+    create: { key: "GOOGLE_REVIEWS_LAST_SYNC", value: new Date().toISOString(), tenantId },
   });
 
   const res = await fetch(
@@ -56,6 +71,7 @@ export async function syncGoogleReviews(): Promise<number> {
     const review = await basePrisma.googleReview.create({
       data: {
         externalKey,
+        tenantId,
         author,
         rating: Math.round(r.rating ?? 0),
         text: r.text?.text ?? r.originalText?.text ?? null,

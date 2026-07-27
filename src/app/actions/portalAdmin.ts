@@ -4,6 +4,8 @@ import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
+import { getActiveTenantId } from "@/lib/auth";
+import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 
@@ -21,17 +23,21 @@ export async function grantPortalAccess(formData: FormData) {
   if (!["viewer", "manager", "owner"].includes(role)) throw new Error("Invalid portal role");
 
   const id = crypto.randomUUID();
+  // Multi-tenancy readiness: stamp the owning tenant, same idiom as
+  // accessControl.ts's createTeam (staff-side action, getActiveTenantId()).
+  // Purely additive — nothing currently filters PortalAccessGrant by tenantId.
+  const activeTenantId = await getActiveTenantId();
   if (targetType === "contact") {
     await basePrisma.$executeRaw`
-      INSERT INTO "PortalAccessGrant" ("id", "viewerContactId", "grantedContactId", "role", "createdById")
-      VALUES (${id}, ${viewerContactId}, ${targetId}, ${role}, ${user.id})
+      INSERT INTO "PortalAccessGrant" ("id", "tenantId", "viewerContactId", "grantedContactId", "role", "createdById")
+      VALUES (${id}, ${activeTenantId}, ${viewerContactId}, ${targetId}, ${role}, ${user.id})
       ON CONFLICT ("viewerContactId", "grantedContactId") WHERE "grantedContactId" IS NOT NULL
       DO UPDATE SET "active" = true, "role" = EXCLUDED."role", "createdById" = EXCLUDED."createdById"
     `;
   } else {
     await basePrisma.$executeRaw`
-      INSERT INTO "PortalAccessGrant" ("id", "viewerContactId", "fleetId", "role", "createdById")
-      VALUES (${id}, ${viewerContactId}, ${targetId}, ${role}, ${user.id})
+      INSERT INTO "PortalAccessGrant" ("id", "tenantId", "viewerContactId", "fleetId", "role", "createdById")
+      VALUES (${id}, ${activeTenantId}, ${viewerContactId}, ${targetId}, ${role}, ${user.id})
       ON CONFLICT ("viewerContactId", "fleetId") WHERE "fleetId" IS NOT NULL
       DO UPDATE SET "active" = true, "role" = EXCLUDED."role", "createdById" = EXCLUDED."createdById"
     `;
@@ -50,14 +56,26 @@ export async function grantPortalAccess(formData: FormData) {
 export async function revokePortalAccess(id: string, formData: FormData) {
   void formData;
   const user = await requirePermission("portal_access.manage");
-  const rows = await basePrisma.$queryRaw<Array<{ viewerContactId: string }>>`
-    SELECT "viewerContactId" FROM "PortalAccessGrant" WHERE "id" = ${id} LIMIT 1
+  const rows = await basePrisma.$queryRaw<Array<{ viewerContactId: string; tenantId: string | null }>>`
+    SELECT "viewerContactId", "tenantId" FROM "PortalAccessGrant" WHERE "id" = ${id} LIMIT 1
   `;
+  const grant = rows[0];
+  if (!grant) throw new Error("Portal access grant not found");
+  // Multi-tenancy readiness: confirm the grant belongs to the caller's tenant
+  // before flipping it off. Gated on tenantEnforcing() — PortalAccessGrant rows
+  // written before this change may still be NULL-tenant, so comparing
+  // unconditionally against a real activeTenantId could wrongly 404 a legitimate
+  // revoke today; this keeps today's behaviour unchanged and only asserts the
+  // boundary once enforcement (and the tenant stamping it depends on) is on.
+  if (tenantEnforcing()) {
+    const activeTenantId = await getActiveTenantId();
+    if (grant.tenantId !== activeTenantId) throw new Error("Portal access grant not found");
+  }
   await basePrisma.$executeRaw`UPDATE "PortalAccessGrant" SET "active" = false WHERE "id" = ${id}`;
   await logAudit({
     action: "portal.access_revoked",
     summary: "Revoked portal access grant",
-    contactId: rows[0]?.viewerContactId ?? null,
+    contactId: grant.viewerContactId,
     user,
     entityType: "PortalAccessGrant",
     entityId: id,

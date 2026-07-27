@@ -5,6 +5,7 @@ import crypto from "crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
+import { currentTenantScope } from "@/lib/tenantScope";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
 import { getPortalContact, setPortalCookie, clearPortalCookie } from "@/lib/portal";
@@ -35,9 +36,13 @@ async function firstStaffUser() {
 }
 
 async function createPortalNotification(contactId: string, title: string, body: string, href?: string, kind = "info") {
+  // Every caller resolves getPortalContact()/requirePortalScope() first, which —
+  // under enforcement — enters the contact's tenant scope; ambient here matches
+  // audit.ts's actingTenantId non-user branch. Null when not enforcing (today).
+  const tenantId = currentTenantScope()?.tenantId ?? null;
   await basePrisma.$executeRaw`
-    INSERT INTO "PortalNotification" ("id", "contactId", "title", "body", "href", "kind")
-    VALUES (${crypto.randomUUID()}, ${contactId}, ${title}, ${body}, ${href ?? null}, ${kind})
+    INSERT INTO "PortalNotification" ("id", "tenantId", "contactId", "title", "body", "href", "kind")
+    VALUES (${crypto.randomUUID()}, ${tenantId}, ${contactId}, ${title}, ${body}, ${href ?? null}, ${kind})
   `;
 }
 
@@ -225,9 +230,10 @@ export async function submitPortalCase(formData: FormData) {
   if (vehicleId && !(await portalCanAccessVehicle(vehicleId))) throw new Error("Vehicle access denied");
 
   const id = crypto.randomUUID();
+  const tenantId = currentTenantScope()?.tenantId ?? null;
   await basePrisma.$executeRaw`
-    INSERT INTO "CustomerCase" ("id", "subject", "description", "type", "contactId", "vehicleId")
-    VALUES (${id}, ${subject}, ${description}, ${type}, ${scope.viewerContactId}, ${vehicleId})
+    INSERT INTO "CustomerCase" ("id", "tenantId", "subject", "description", "type", "contactId", "vehicleId")
+    VALUES (${id}, ${tenantId}, ${subject}, ${description}, ${type}, ${scope.viewerContactId}, ${vehicleId})
   `;
   await createPortalNotification(scope.viewerContactId, "Support request created", subject, "/portal#cases", "case");
   await logAudit({ action: "portal.case_created", summary: `Portal case created: ${subject}`, contactId: scope.viewerContactId, entityType: "CustomerCase", entityId: id, userName: "Customer portal" });
@@ -248,9 +254,10 @@ export async function submitPortalWarrantyClaim(formData: FormData) {
     data: { vehicleId, contactId: scope.viewerContactId, description, createdById: null },
   });
   const caseId = crypto.randomUUID();
+  const tenantId = currentTenantScope()?.tenantId ?? null;
   await basePrisma.$executeRaw`
-    INSERT INTO "CustomerCase" ("id", "subject", "description", "type", "priority", "contactId", "vehicleId", "warrantyClaimId")
-    VALUES (${caseId}, ${"Warranty claim"}, ${description}, ${"warranty"}, ${"high"}, ${scope.viewerContactId}, ${vehicleId}, ${claim.id})
+    INSERT INTO "CustomerCase" ("id", "tenantId", "subject", "description", "type", "priority", "contactId", "vehicleId", "warrantyClaimId")
+    VALUES (${caseId}, ${tenantId}, ${"Warranty claim"}, ${description}, ${"warranty"}, ${"high"}, ${scope.viewerContactId}, ${vehicleId}, ${claim.id})
   `;
   await createPortalNotification(scope.viewerContactId, "Warranty claim submitted", "Your warranty request has been sent to our team.", "/portal#cases", "warranty");
   await logAudit({ action: "portal.warranty_claim_created", summary: "Warranty claim submitted through portal", contactId: scope.viewerContactId, entityType: "WarrantyClaim", entityId: claim.id, userName: "Customer portal" });
@@ -271,9 +278,10 @@ export async function requestPortalProfileChange(formData: FormData) {
   };
   const note = str(formData.get("note")) || null;
   const id = crypto.randomUUID();
+  const tenantId = currentTenantScope()?.tenantId ?? null;
   await basePrisma.$executeRaw`
-    INSERT INTO "PortalProfileChangeRequest" ("id", "contactId", "changes", "note")
-    VALUES (${id}, ${scope.viewerContactId}, ${JSON.stringify(changes)}::jsonb, ${note})
+    INSERT INTO "PortalProfileChangeRequest" ("id", "tenantId", "contactId", "changes", "note")
+    VALUES (${id}, ${tenantId}, ${scope.viewerContactId}, ${JSON.stringify(changes)}::jsonb, ${note})
   `;
   await createPortalNotification(scope.viewerContactId, "Profile update requested", "We received your profile and address changes.", "/portal#profile", "profile");
   await logAudit({ action: "portal.profile_change_requested", summary: "Customer requested profile changes", contactId: scope.viewerContactId, entityType: "PortalProfileChangeRequest", entityId: id, after: changes, userName: "Customer portal" });
@@ -286,10 +294,11 @@ export async function updatePortalPreferences(formData: FormData) {
   const smsServiceUpdates = formData.get("smsServiceUpdates") === "on";
   const emailMarketing = formData.get("emailMarketing") === "on";
 
+  const tenantId = currentTenantScope()?.tenantId ?? null;
   await basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`
-      INSERT INTO "PortalPreference" ("contactId", "emailServiceUpdates", "smsServiceUpdates", "emailMarketing", "updatedAt")
-      VALUES (${scope.viewerContactId}, ${emailServiceUpdates}, ${smsServiceUpdates}, ${emailMarketing}, CURRENT_TIMESTAMP)
+      INSERT INTO "PortalPreference" ("contactId", "tenantId", "emailServiceUpdates", "smsServiceUpdates", "emailMarketing", "updatedAt")
+      VALUES (${scope.viewerContactId}, ${tenantId}, ${emailServiceUpdates}, ${smsServiceUpdates}, ${emailMarketing}, CURRENT_TIMESTAMP)
       ON CONFLICT ("contactId") DO UPDATE SET
         "emailServiceUpdates" = EXCLUDED."emailServiceUpdates",
         "smsServiceUpdates" = EXCLUDED."smsServiceUpdates",

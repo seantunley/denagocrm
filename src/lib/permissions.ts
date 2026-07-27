@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { basePrisma } from "./db";
 import { requireUser } from "./auth";
 import { requireModuleEnabled } from "./modules/enabled";
+import { tenantEnforcing } from "./tenantEnforcement";
+import { currentTenantScope } from "./tenantScope";
 
 export const PERMISSIONS = [
   "pipelines.view", "pipelines.manage", "forecast.view", "forecast.manage",
@@ -49,17 +51,42 @@ export type PermissionUser = {
 const RBAC_UNAVAILABLE = "__rbac_unavailable__";
 const RBAC_INITIALIZED = "__rbac_initialized__";
 
+/**
+ * THE RBAC enforcement flip (see the deferred-scoping notes in settings.ts's
+ * createUser and accessControl.ts's updateUserRoles): every UserRole write already
+ * stamps its owning tenant, but reads stayed tenant-agnostic on purpose, so this one
+ * change had to land atomically with the rest of the tenant-enforcement rollout (and
+ * its lockout-proofing) — not piecemeal. It has now landed alongside that rollout.
+ *
+ * DORMANT off: identical query to before (every role assignment the user holds, in
+ * any tenant) — today's single-tenant behaviour, byte-for-byte.
+ * ENFORCING: scoped to the active tenant's assignments only, so a user who belongs
+ * to two tenants no longer receives the UNION of both tenants' privileges — only the
+ * one they're currently acting in.
+ */
 export async function getUserPermissions(userId: string): Promise<Set<string>> {
   try {
-    const rows = await basePrisma.$queryRaw<Array<{ key: string }>>`
-      SELECT DISTINCT rp."permissionKey" AS key
-      FROM "UserRole" ur
-      JOIN "RolePermission" rp ON rp."roleId" = ur."roleId"
-      WHERE ur."userId" = ${userId}
-      UNION
-      SELECT ${RBAC_INITIALIZED} AS key
-      WHERE EXISTS (SELECT 1 FROM "Role" LIMIT 1)
-    `;
+    const enforcing = tenantEnforcing();
+    const rows = enforcing
+      ? await basePrisma.$queryRaw<Array<{ key: string }>>`
+          SELECT DISTINCT rp."permissionKey" AS key
+          FROM "UserRole" ur
+          JOIN "RolePermission" rp ON rp."roleId" = ur."roleId"
+          WHERE ur."userId" = ${userId}
+            AND ur."tenantId" IS NOT DISTINCT FROM ${currentTenantScope()?.tenantId ?? null}
+          UNION
+          SELECT ${RBAC_INITIALIZED} AS key
+          WHERE EXISTS (SELECT 1 FROM "Role" LIMIT 1)
+        `
+      : await basePrisma.$queryRaw<Array<{ key: string }>>`
+          SELECT DISTINCT rp."permissionKey" AS key
+          FROM "UserRole" ur
+          JOIN "RolePermission" rp ON rp."roleId" = ur."roleId"
+          WHERE ur."userId" = ${userId}
+          UNION
+          SELECT ${RBAC_INITIALIZED} AS key
+          WHERE EXISTS (SELECT 1 FROM "Role" LIMIT 1)
+        `;
     return new Set(rows.map((row) => row.key));
   } catch {
     return new Set([RBAC_UNAVAILABLE]);
