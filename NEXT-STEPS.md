@@ -16,11 +16,11 @@ Multi-tenancy is **built and PR'd but not merged**: every table is classified, t
 |---|---|---|---|
 | **#227** | `fix/tenant-governance-auditevent-backfill` | `main` | ✅ Ready. The main bundle — see contents below. 394/394 tests, `tsc` clean. |
 | **#228** | `feat/rls-scaffolding` | `#227`'s branch (stacked) | ✅ Ready. RLS scaffolding, dormant (see its own section below). |
+| **#230** | `feat/tenant-credential-overrides-ui` | `#227`'s branch (stacked) | ✅ Ready. Tenant-facing settings UI for the per-tenant credential overrides added in #227. 402/402 tests, `tsc` clean, reviewed. |
 | **#221** | `fix/tenant-contract-glob` | `main` | ⚠️ **Superseded by #227** (which branched from and extended it). Do not merge separately — **close this once #227 merges**, or the same commits will conflict. |
 | **#226** | `feat/tenant-admin-ui` | `main` | ⚠️ **Superseded by #227** (which merged this branch in). Do not merge separately — **close this once #227 merges**. |
-| *(pending)* | `feat/tenant-credential-overrides-ui` | `#227`'s branch (stacked) | Being built as a follow-up (see below) — check if a PR exists yet; if not, open one the same way #228 was opened (`gh pr create --base fix/tenant-governance-auditevent-backfill --head feat/tenant-credential-overrides-ui`). |
 
-**Recommended merge order:** `#227` first (into `main` — this is a real prod deploy; its migrations are additive/idempotent and the governance ones were already reconciled directly against prod earlier, so it should be a no-op there, but treat it like any other prod deploy: merge, then watch the Vercel build to green before doing anything else). Then `#228` (rebase onto `main` after #227 lands, or GitHub will do it automatically once #227 merges since #228 is stacked). Then the credential-overrides-ui PR the same way. Then close `#221` and `#226`.
+**Recommended merge order:** `#227` first (into `main` — this is a real prod deploy; its migrations are additive/idempotent and the governance ones were already reconciled directly against prod earlier, so it should be a no-op there, but treat it like any other prod deploy: merge, then watch the Vercel build to green before doing anything else). Then `#228` and `#230` (both rebase onto `main` automatically once #227 merges, since both are stacked on its branch — merge them in either order, each is independent of the other). Then close `#221` and `#226`.
 
 **Standing rule, unchanged:** never merge to `main` without Sean's explicit go — merging to `main` deploys to prod (`crm.denagocpt.co.za`, live business data). If picking this up mid-session and unsure whether Sean already gave that go, ask again rather than assume a prior "continue" covers a specific merge.
 
@@ -65,9 +65,9 @@ Enables Postgres Row-Level Security on all 120 tenant-scoped tables (generated p
 
 ---
 
-## Per-tenant credential settings UI (separate PR, in progress as of this writing)
+## Per-tenant credential settings UI — done, PR #230
 
-Branch `feat/tenant-credential-overrides-ui`, stacked on `#227`. A subagent was mid-build when this doc was written: a new dedicated settings page (`/settings/integration-overrides`, NOT the existing 1412-line global settings monolith) letting a tenant's own owner set/clear their own override for each of the 7 integration credentials, using their own active tenant (no tenant-picker needed — it's always "my tenant"). If picking this up and unsure of its state: `cd` into the worktree (or re-clone the branch), run `git log`, `npx tsc --noEmit`, and the test suite to see where it landed; open a PR the same way `#228` was opened if one doesn't exist yet.
+A new dedicated settings page (`/settings/integration-overrides`, NOT the existing 1412-line global settings monolith — confirmed zero diff on that file) letting a tenant's own owner set/clear their own override for each of the 7 integration credentials, using their own active tenant (no tenant-picker needed — it's always "my tenant", resolved server-side via `getActiveTenantId()`). Owner-gated at both the page and both server actions (actions are POST-reachable directly). Never renders a decrypted secret back to the browser — only an "override set / using platform default" boolean. 402/402 tests, `tsc` clean, reviewed line-by-line before pushing.
 
 ---
 
