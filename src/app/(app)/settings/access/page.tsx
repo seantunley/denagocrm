@@ -1,5 +1,7 @@
 import { Plus } from "lucide-react";
 import { basePrisma } from "@/lib/db";
+import { getActiveTenantId } from "@/lib/auth";
+import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import {
   createRole,
@@ -45,6 +47,13 @@ export default async function AccessSettingsPage() {
   ]);
   const canManageSecurity = currentUser.role === "owner";
 
+  // Multi-tenancy readiness: Team/TeamMember already carry tenantId (stamped on
+  // create), but these reads only ever filtered by id/deletedAt. The
+  // `NOT enforcing OR ...` clause keeps this dormant (byte-for-byte today's
+  // query) until tenantEnforcing() flips on.
+  const enforcing = tenantEnforcing();
+  const activeTenantId = await getActiveTenantId();
+
   const users = await basePrisma.$queryRaw<UserRow[]>`
     SELECT "id", "name", "email", "role", "disabledAt", "lastLoginAt", "failedLoginCount"
     FROM "User"
@@ -53,19 +62,32 @@ export default async function AccessSettingsPage() {
   const teams = canViewTeams
     ? await basePrisma.$queryRaw<TeamRow[]>`
         SELECT "id", "name", "description", "active", "managerId"
-        FROM "Team" WHERE "deletedAt" IS NULL ORDER BY "name"
+        FROM "Team"
+        WHERE "deletedAt" IS NULL
+          AND (NOT ${enforcing}::boolean OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
+        ORDER BY "name"
       `
     : [];
   const members = canViewTeams
     ? await basePrisma.$queryRaw<TeamMemberRow[]>`
         SELECT tm."teamId", tm."userId", u."name" AS "userName", tm."isManager"
         FROM "TeamMember" tm JOIN "User" u ON u."id" = tm."userId"
+        WHERE (NOT ${enforcing}::boolean OR tm."tenantId" IS NOT DISTINCT FROM ${activeTenantId})
         ORDER BY u."name"
       `
     : [];
+  // Multi-tenancy readiness: Role/RolePermission now carry tenantId (NULL =
+  // system/global, non-null = one tenant's own custom role); UserRole already
+  // did. Under enforcement, only system-global rows or the viewer's own
+  // tenant's rows should be visible. The `NOT enforcing OR ...` clause keeps
+  // this dormant (byte-for-byte today's query) until tenantEnforcing() flips
+  // on. Permission (the fixed capability catalog) has no tenantId and is
+  // unaffected.
   const roles = canViewRoles
     ? await basePrisma.$queryRaw<RoleRow[]>`
-        SELECT "id", "name", "description", "system" FROM "Role" ORDER BY "system" DESC, "name"
+        SELECT "id", "name", "description", "system" FROM "Role"
+        WHERE (NOT ${enforcing}::boolean OR "tenantId" IS NULL OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
+        ORDER BY "system" DESC, "name"
       `
     : [];
   const permissions = canViewRoles
@@ -74,10 +96,16 @@ export default async function AccessSettingsPage() {
       `
     : [];
   const rolePermissions = canViewRoles
-    ? await basePrisma.$queryRaw<RolePermissionRow[]>`SELECT "roleId", "permissionKey" FROM "RolePermission"`
+    ? await basePrisma.$queryRaw<RolePermissionRow[]>`
+        SELECT "roleId", "permissionKey" FROM "RolePermission"
+        WHERE (NOT ${enforcing}::boolean OR "tenantId" IS NULL OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
+      `
     : [];
   const userRoles = canViewRoles
-    ? await basePrisma.$queryRaw<UserRoleRow[]>`SELECT "userId", "roleId" FROM "UserRole"`
+    ? await basePrisma.$queryRaw<UserRoleRow[]>`
+        SELECT "userId", "roleId" FROM "UserRole"
+        WHERE (NOT ${enforcing}::boolean OR "tenantId" IS NULL OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
+      `
     : [];
 
   const membersFor = (teamId: string) => members.filter((member) => member.teamId === teamId);
@@ -266,7 +294,11 @@ export default async function AccessSettingsPage() {
                   <summary className="flex items-center justify-between gap-4 px-5 py-4 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
                     <span className="text-sm font-medium flex items-center gap-2 flex-wrap">
                       {role.name}
-                      {role.system && <span className="badge bg-muted text-muted-foreground">System</span>}
+                      {role.system ? (
+                        <span className="badge bg-muted text-muted-foreground">System</span>
+                      ) : (
+                        <span className="badge bg-muted text-muted-foreground">Custom</span>
+                      )}
                       <span className="text-xs font-normal text-muted-foreground">
                         {count} permission{count === 1 ? "" : "s"}{role.description ? ` · ${role.description}` : ""}
                       </span>

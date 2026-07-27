@@ -10,6 +10,7 @@ import {
   scopeMutation,
   scopeUpsert,
   hasNestedRelationWrite,
+  canEditRole,
 } from "../src/lib/tenantGuard";
 import {
   runInTenantScope,
@@ -252,6 +253,35 @@ test("enterTenantScope stays isolated across concurrent contexts (the chokepoint
     }),
   ]);
   assert.deepEqual([...seen].sort(), ["A", "B"]);
+});
+
+// ── canEditRole: the custom-role cross-tenant edit guard ────────────────────
+// (updateRolePermissions in accessControl.ts; Role.tenantId: NULL = system/
+// global role, non-null = one tenant's own custom role.)
+
+test("canEditRole: NOT enforcing → true for every combination (DORMANT off)", () => {
+  assert.equal(canEditRole(false, null, null), true);
+  assert.equal(canEditRole(false, null, "tenant_A"), true);
+  assert.equal(canEditRole(false, "tenant_A", "tenant_A"), true);
+  assert.equal(canEditRole(false, "tenant_A", "tenant_B"), true, "mismatched tenants still true while dormant");
+  assert.equal(canEditRole(false, "tenant_A", null), true);
+});
+
+test("canEditRole: enforcing + system role (tenantId null) → always true", () => {
+  assert.equal(canEditRole(true, null, "tenant_A"), true);
+  assert.equal(canEditRole(true, null, null), true);
+});
+
+test("canEditRole: enforcing + same tenant → true", () => {
+  assert.equal(canEditRole(true, "tenant_A", "tenant_A"), true);
+});
+
+test("canEditRole: enforcing + a different tenant's role → false", () => {
+  assert.equal(canEditRole(true, "tenant_A", "tenant_B"), false);
+});
+
+test("canEditRole: enforcing + tenant-owned role + caller has no active tenant → false (fail closed)", () => {
+  assert.equal(canEditRole(true, "tenant_A", null), false);
 });
 
 test("a confined scope returning null leaves NO scope behind (portal reject path)", async () => {

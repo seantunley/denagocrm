@@ -26,8 +26,13 @@ import { GLOBAL_MODELS } from "../src/lib/tenantGuard";
 // fail closed on a missing column:
 // governance.prisma's RBAC/forecast models are resolved: SalesPipeline/Team/
 // TeamMember/UserRole/ForecastSnapshot/AuditEvent got a tenantId slice (migration
-// 20260725160000); Role/Permission/RolePermission were decided GLOBAL — one shared
-// permission taxonomy, not per-tenant — and moved to GLOBAL_MODELS in tenantGuard.ts.
+// 20260725160000); Permission (the fixed, code-defined capability catalog) was
+// decided GLOBAL and lives in GLOBAL_MODELS in tenantGuard.ts. Role/RolePermission
+// were ALSO originally GLOBAL under that same decision, but custom (non-system)
+// roles are tenant-authored (createRole() in accessControl.ts), so they were
+// reclassified: both got a tenantId slice instead (migration
+// 20260727100000_role_tenant_scoping) — NULL means system/global, non-null means
+// one tenant's own role — and were removed from GLOBAL_MODELS.
 // journeys.prisma's Journey* models got their tenantId slice (migration
 // 20260726200000_journey_tenant_isolation), so nothing remains PENDING — every
 // model is now explicitly global or tenant-scoped, the precondition for enabling

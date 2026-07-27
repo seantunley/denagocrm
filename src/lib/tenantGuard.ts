@@ -24,16 +24,42 @@ export const GLOBAL_MODELS: ReadonlySet<string> = new Set([
   "OtpChallenge",
   "Passkey",
   "PushSubscription",
-  // RBAC design decision: the permission taxonomy is shared across every
-  // tenant (one catalog, not per-dealer). Only the ASSIGNMENT of a role to a
-  // user (UserRole) is tenant-scoped — see governance.prisma.
-  "Role",
+  // RBAC design decision: the PERMISSION CATALOG (the fixed, code-defined list
+  // of capability keys like `roles.manage`) is shared across every tenant —
+  // one taxonomy, not per-dealer. Role and RolePermission are NOT here: a
+  // tenant admin can author their own custom roles (createRole() in
+  // accessControl.ts), so those are tenant-owned via a nullable tenantId
+  // (NULL = system/seeded role, shared globally; non-null = one tenant's own
+  // role) — see governance.prisma and migration 20260727100000_role_tenant_scoping.
   "Permission",
-  "RolePermission",
 ]);
 
 export function isTenantScopedModel(model: string): boolean {
   return !GLOBAL_MODELS.has(model);
+}
+
+/**
+ * Can this Role be edited (permissions changed) by the caller currently
+ * scoped to `activeTenantId`? Pure decision extracted out of
+ * updateRolePermissions() (accessControl.ts) so it's unit-testable without a
+ * DB or a "use server" import.
+ *
+ * - A SYSTEM/global role (`roleTenantId === null`) is always editable — it is
+ *   shared by every tenant, unaffected by this change, exactly as before.
+ * - A tenant-owned role (`roleTenantId !== null`) is editable only by ITS OWN
+ *   tenant.
+ * - DORMANT while `enforcing` is false: always returns true regardless of
+ *   tenant mismatch, so today's (every real environment) behaviour — any
+ *   admin with roles.manage can edit any role — is unchanged byte-for-byte.
+ */
+export function canEditRole(
+  enforcing: boolean,
+  roleTenantId: string | null,
+  activeTenantId: string | null,
+): boolean {
+  if (!enforcing) return true;
+  if (roleTenantId === null) return true;
+  return roleTenantId === activeTenantId;
 }
 
 /** Prisma nested-write operation keywords (relation fields inside `data`). */
