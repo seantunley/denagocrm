@@ -187,3 +187,19 @@ export async function putTenantCredential(tenantId: string, key: string, value: 
     create: { tenantId, key, value: stored },
   });
 }
+
+/**
+ * Existence-only check for a tenant's own override — powers the tenant-facing
+ * "Override active" / "Using platform default" status in the per-tenant
+ * credential overrides UI. Deliberately never touches or returns the stored
+ * (encrypted) value, let alone a decrypted one — callers only ever learn
+ * whether a row exists, same explicit `(tenantId, key)` filter via `basePrisma`
+ * as {@link putTenantCredential}/the internal override lookup.
+ */
+export async function hasTenantCredentialOverride(tenantId: string, key: string): Promise<boolean> {
+  const row = await basePrisma.tenantIntegrationCredential.findUnique({
+    where: { tenantId_key: { tenantId, key } },
+    select: { id: true },
+  });
+  return row !== null;
+}
