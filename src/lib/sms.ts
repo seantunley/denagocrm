@@ -1,4 +1,4 @@
-import { resolveTenantCredential } from "@/lib/settings";
+import { resolveIntegrationBundle } from "@/lib/settings";
 import { currentTenantScope } from "@/lib/tenantScope";
 
 /**
@@ -7,10 +7,9 @@ import { currentTenantScope } from "@/lib/tenantScope";
  */
 async function bulkSmsCredentials(): Promise<[string | null, string | null]> {
   const tenantId = currentTenantScope()?.tenantId ?? null;
-  return Promise.all([
-    resolveTenantCredential(tenantId, "BULKSMS_TOKEN_ID"),
-    resolveTenantCredential(tenantId, "BULKSMS_TOKEN_SECRET"),
-  ]);
+  const bundle = await resolveIntegrationBundle(tenantId, "sms");
+  if (!bundle) return [null, null];
+  return [bundle.BULKSMS_TOKEN_ID, bundle.BULKSMS_TOKEN_SECRET];
 }
 
 export async function isSmsConfigured(): Promise<boolean> {

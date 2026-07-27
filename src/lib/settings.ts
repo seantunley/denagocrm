@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { prisma, basePrisma } from "./db";
 import { DEFAULT_TENANT_ID } from "./tenant";
+import { TENANT_CREDENTIAL_INTEGRATIONS } from "./tenantCredentialFields";
 
 /**
  * Settings that hold credentials are encrypted at rest with AES-256-GCM
@@ -206,4 +207,62 @@ export async function hasTenantCredentialOverride(tenantId: string, key: string)
     select: { id: true },
   });
   return row !== null;
+}
+
+async function getTenantCredentialOverrides(tenantId: string, keys: readonly string[]): Promise<Map<string, string>> {
+  const rows = await basePrisma.tenantIntegrationCredential.findMany({
+    where: { tenantId, key: { in: [...keys] } },
+    select: { key: true, value: true },
+  });
+  const result = new Map<string, string>();
+  for (const row of rows) {
+    if (!row.value) continue;
+    try { result.set(row.key, decryptValue(row.value)); } catch { /* skip corrupted rows */ }
+  }
+  return result;
+}
+
+/**
+ * Bundle-level resolver: returns the complete key→value map for an integration
+ * or null when the integration is unavailable.
+ *
+ * - Non-founding tenant, all required fields overridden → use tenant values.
+ * - Non-founding tenant, incomplete/no overrides → null (unavailable).
+ * - Founding tenant or no tenant, bundle active → use tenant overrides;
+ *   optional un-overridden fields fall back to global AppSetting.
+ * - Founding tenant or no tenant, incomplete/no overrides → use ALL global
+ *   settings (never mix one override with platform values for another key).
+ */
+export async function resolveIntegrationBundle(
+  tenantId: string | null,
+  integrationId: string,
+): Promise<Record<string, string | null> | null> {
+  const integration = TENANT_CREDENTIAL_INTEGRATIONS.find((i) => i.id === integrationId);
+  if (!integration) return null;
+
+  const keys = integration.fields.map((f) => f.key);
+  const requiredKeys = integration.fields.filter((f) => f.required !== false).map((f) => f.key);
+  const isFoundingOrNoTenant = !tenantId || tenantId === DEFAULT_TENANT_ID;
+
+  const overrides = tenantId
+    ? await getTenantCredentialOverrides(tenantId, keys)
+    : new Map<string, string>();
+
+  const allRequiredOverridden = requiredKeys.every((k) => overrides.has(k));
+
+  if (!allRequiredOverridden) {
+    if (!isFoundingOrNoTenant) return null;
+    const globalValues = await Promise.all(keys.map((k) => getSetting(k)));
+    return Object.fromEntries(keys.map((k, i) => [k, globalValues[i]]));
+  }
+
+  if (isFoundingOrNoTenant) {
+    const unset = keys.filter((k) => !overrides.has(k));
+    const fallbacks = await Promise.all(unset.map((k) => getSetting(k)));
+    const result: Record<string, string | null> = Object.fromEntries(keys.map((k) => [k, overrides.get(k) ?? null]));
+    unset.forEach((k, i) => { result[k] = fallbacks[i]; });
+    return result;
+  }
+
+  return Object.fromEntries(keys.map((k) => [k, overrides.get(k) ?? null]));
 }

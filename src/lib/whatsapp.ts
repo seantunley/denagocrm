@@ -1,5 +1,5 @@
 import { prisma } from "./db";
-import { resolveTenantCredential } from "./settings";
+import { resolveIntegrationBundle, resolveTenantCredential } from "./settings";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
 import { topPosition } from "./leadPos";
@@ -16,10 +16,9 @@ function ambientTenantId(): string | null {
 /** Resolves the phone-number id + access token, honouring a tenant override. */
 async function waCredentials(): Promise<[string | null, string | null]> {
   const tenantId = ambientTenantId();
-  return Promise.all([
-    resolveTenantCredential(tenantId, "WA_PHONE_NUMBER_ID"),
-    resolveTenantCredential(tenantId, "WA_ACCESS_TOKEN"),
-  ]);
+  const bundle = await resolveIntegrationBundle(tenantId, "whatsapp");
+  if (!bundle) return [null, null];
+  return [bundle.WA_PHONE_NUMBER_ID, bundle.WA_ACCESS_TOKEN];
 }
 
 /** Normalises a phone number to WhatsApp digits (27…). */

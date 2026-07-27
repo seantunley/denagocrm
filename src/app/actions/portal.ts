@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
 import { currentTenantScope } from "@/lib/tenantScope";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
 import { getPortalContact, setPortalCookie, clearPortalCookie } from "@/lib/portal";
@@ -66,7 +67,7 @@ export async function requestPortalOtp(
   if (!accountLimit.allowed || !ipLimit.allowed) return generic;
 
   const contact = await prisma.contact.findFirst({
-    where: { email: { equals: email, mode: "insensitive" }, deletedAt: null },
+    where: { email: { equals: email, mode: "insensitive" }, deletedAt: null, tenantId: DEFAULT_TENANT_ID },
   });
   if (!contact) return generic;
 
@@ -138,7 +139,7 @@ export async function verifyPortalOtp(
   }
 
   const contact = await prisma.contact.findFirst({
-    where: { email: { equals: email, mode: "insensitive" }, deletedAt: null },
+    where: { email: { equals: email, mode: "insensitive" }, deletedAt: null, tenantId: DEFAULT_TENANT_ID },
   });
   if (!contact) return { error: "We couldn't find your account." };
 

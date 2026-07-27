@@ -5,7 +5,7 @@ import crypto from "crypto";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
-import { prisma } from "@/lib/db";
+import { prisma, basePrisma } from "@/lib/db";
 import { createSessionCookie, destroySessionCookie } from "@/lib/auth";
 import { verifySession, SESSION_COOKIE } from "@/lib/session";
 import { verifyTotp } from "@/lib/totp";
@@ -236,7 +236,7 @@ export async function logout() {
     const token = store.get(SESSION_COOKIE)?.value;
     const session = token ? await verifySession(token) : null;
     if (session?.jti) {
-      await prisma.userSession.updateMany({
+      await basePrisma.userSession.updateMany({
         where: { jti: session.jti },
         data: { revokedAt: new Date() },
       });

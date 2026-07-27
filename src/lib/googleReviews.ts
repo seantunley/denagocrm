@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { basePrisma } from "./db";
-import { getSetting, resolveTenantCredential } from "./settings";
+import { getSetting, resolveIntegrationBundle } from "./settings";
 import { currentTenantScope } from "./tenantScope";
 import { sendPushToAll } from "./push";
 
@@ -16,10 +16,9 @@ export async function syncGoogleReviews(): Promise<number> {
   // STAMP GOOGLE_REVIEWS_LAST_SYNC / GoogleReview rows below is a separate
   // concern owned elsewhere in this function; not touched here.
   const credentialTenantId = currentTenantScope()?.tenantId ?? null;
-  const [apiKey, placeId] = await Promise.all([
-    resolveTenantCredential(credentialTenantId, "GOOGLE_PLACES_API_KEY"),
-    resolveTenantCredential(credentialTenantId, "GOOGLE_PLACE_ID"),
-  ]);
+  const bundle = await resolveIntegrationBundle(credentialTenantId, "google-reviews");
+  if (!bundle) return 0;
+  const { GOOGLE_PLACES_API_KEY: apiKey, GOOGLE_PLACE_ID: placeId } = bundle;
   if (!apiKey || !placeId) return 0;
 
   // Reviews change slowly and this Places call bills at the expensive tier —

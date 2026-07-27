@@ -2,6 +2,7 @@
 
 import { prisma } from "@/lib/db";
 import { resolveTenantMemberUser } from "@/lib/tenantActor";
+import { currentTenantScope } from "@/lib/tenantScope";
 import { createLead } from "@/app/actions/leads";
 import { createContact } from "@/app/actions/contacts";
 import { scheduleActivity } from "@/app/actions/activities";
@@ -26,12 +27,14 @@ async function requireTenantRecord(
 ) {
   const id = formId(formData, key);
   if (!id) return;
+  const tenantId = currentTenantScope()?.tenantId;
+  const where = tenantId ? { id, tenantId } : { id };
   const record =
     model === "contact"
-      ? await prisma.contact.findUnique({ where: { id }, select: { id: true } })
+      ? await prisma.contact.findUnique({ where, select: { id: true } })
       : model === "product"
-        ? await prisma.product.findUnique({ where: { id }, select: { id: true } })
-        : await prisma.pipelineStage.findUnique({ where: { id }, select: { id: true } });
+        ? await prisma.product.findUnique({ where, select: { id: true } })
+        : await prisma.pipelineStage.findUnique({ where, select: { id: true } });
   if (!record) throw new Error("That selection is not available in this workspace");
 }
 

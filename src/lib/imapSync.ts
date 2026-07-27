@@ -3,7 +3,7 @@ import { simpleParser, type ParsedMail } from "mailparser";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { resolveTenantActor } from "./tenantActor";
-import { getSetting, putSetting, resolveTenantCredential } from "./settings";
+import { getSetting, putSetting, resolveIntegrationBundle } from "./settings";
 import { currentTenantScope } from "./tenantScope";
 import { sendPushToAll } from "./push";
 import { sendEmail } from "./email";
@@ -350,13 +350,9 @@ export async function syncInboundEmail(): Promise<number> {
   // (today's only mailbox). The "poll once globally vs per tenant" cron
   // structure is unchanged — only the credential resolution below is new.
   const tenantId = currentTenantScope()?.tenantId ?? null;
-  const [host, portRaw, secureRaw, user, pass] = await Promise.all([
-    resolveTenantCredential(tenantId, "IMAP_HOST"),
-    resolveTenantCredential(tenantId, "IMAP_PORT"),
-    resolveTenantCredential(tenantId, "IMAP_SECURE"),
-    resolveTenantCredential(tenantId, "IMAP_USER"),
-    resolveTenantCredential(tenantId, "IMAP_PASS"),
-  ]);
+  const bundle = await resolveIntegrationBundle(tenantId, "imap");
+  if (!bundle) return 0;
+  const { IMAP_HOST: host, IMAP_PORT: portRaw, IMAP_SECURE: secureRaw, IMAP_USER: user, IMAP_PASS: pass } = bundle;
   if (!host || !user || !pass) return 0;
   if (!(await acquireSyncLock())) return 0; // another run is in progress
 
