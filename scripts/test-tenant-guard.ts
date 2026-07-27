@@ -189,7 +189,16 @@ async function main() {
   // is seeded into AppSetting for the dormant back-compat test.
   await basePrisma.$executeRaw`INSERT INTO "TenantApiKey" ("id","tenantId","label","hashedKey","prefix","scopes","createdAt") VALUES (${apiKeyIdA}, ${TENANT_A}, ${"Key A"}, ${hashApiKey(apiKeyRawA)}, ${apiKeyRawA.slice(0, 8)}, ${"intake,bookings"}, CURRENT_TIMESTAMP)`;
   await basePrisma.$executeRaw`INSERT INTO "TenantApiKey" ("id","tenantId","label","hashedKey","prefix","scopes","createdAt","revokedAt") VALUES (${apiKeyIdR}, ${TENANT_A}, ${"Key R"}, ${hashApiKey(apiKeyRawRevoked)}, ${apiKeyRawRevoked.slice(0, 8)}, ${"intake,bookings,service-lookup"}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
-  await basePrisma.$executeRaw`INSERT INTO "AppSetting" ("key","value") VALUES ('INTAKE_API_KEY', ${apiKeyRawGlobal}) ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value"`;
+  // AppSetting is now (tenantId, key)-unique with a NOT NULL tenantId (migrations
+  // 20260727190000 / 210000); the founding tenant owns platform-default settings, and
+  // off-mode getSetting() reads under DEFAULT_TENANT_ID — so seed the legacy global
+  // there (not the removed key-only PK). authenticateIntakeKey still returns a null
+  // tenantId for a legacy global match; that is actor semantics, not this row's owner.
+  await basePrisma.appSetting.upsert({
+    where: { tenantId_key: { tenantId: DEFAULT_TENANT_ID, key: "INTAKE_API_KEY" } },
+    update: { value: apiKeyRawGlobal },
+    create: { tenantId: DEFAULT_TENANT_ID, key: "INTAKE_API_KEY", value: apiKeyRawGlobal },
+  });
   // A key for a SUSPENDED tenant (active=false) and a DANGLING key (tenantId with no
   // Tenant row) — both must fail to authenticate.
   await basePrisma.tenant.create({ data: { id: TENANT_SUS, name: "Suspended", slug: `sus_${SFX}`, active: false } });
