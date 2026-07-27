@@ -99,23 +99,31 @@ export async function createTenant(
 /**
  * ACTIVATE a tenant created inert by {@link createTenant} — the controlled inverse
  * of that function's deliberate inert setup: flip `Tenant.active` to true AND clear
- * `disabledAt` on the tenant's members (raw SQL — `disabledAt` is the security
- * column managed outside the Prisma model), so the owner can finally sign in.
+ * `disabledAt` on the provisioned owner so they can finally sign in.
+ *
+ * `ownerId` MUST be the userId returned by {@link createTenant}. Only that specific
+ * account is re-enabled: other TenantMembers are existing platform users whose
+ * global `disabledAt` state is unrelated to this tenant's inert setup and must not
+ * be touched — a security suspension on a shared account must survive a second
+ * tenant's activation.
  *
  * This module is the SINGLE source of truth for the state change, but it stays
  * enforcement-agnostic: activating before data isolation is enforced would expose
  * existing data, so the CALLER MUST gate on `tenantEnforcing()` (see
  * tenantAdmin.canActivateTenant). Requires a full client (opens its own tx).
  */
-export async function activateTenant(prisma: PrismaClient, tenantId: string): Promise<void> {
+export async function activateTenant(
+  prisma: PrismaClient,
+  tenantId: string,
+  ownerId: string,
+): Promise<void> {
   await prisma.$transaction(async (tx) => {
     await tx.tenant.update({ where: { id: tenantId }, data: { active: true } });
-    // Re-enable the tenant's members. Only the owner is disabled at creation
-    // (members added later are existing, already-active users), so this mirrors
-    // createTenant's owner-disable in reverse without touching unrelated accounts.
+    // Re-enable ONLY the provisioned owner. Members added after creation are
+    // existing, already-active users whose disabledAt is not ours to clear.
     await tx.$executeRaw`
       UPDATE "User" SET "disabledAt" = NULL
-      WHERE "id" IN (SELECT "userId" FROM "TenantMember" WHERE "tenantId" = ${tenantId})
+      WHERE "id" = ${ownerId} AND "disabledAt" IS NOT NULL
     `;
   });
 }

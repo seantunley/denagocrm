@@ -54,11 +54,21 @@ export default async function AccessSettingsPage() {
   const enforcing = tenantEnforcing();
   const activeTenantId = await getActiveTenantId();
 
-  const users = await basePrisma.$queryRaw<UserRow[]>`
-    SELECT "id", "name", "email", "role", "disabledAt", "lastLoginAt", "failedLoginCount"
-    FROM "User"
-    ORDER BY "disabledAt" NULLS FIRST, "name"
-  `;
+  // Under enforcement, only expose users who belong to the active tenant.
+  // Without scoping, the page leaks names, emails and security metadata for
+  // every platform user to anyone with teams.view or roles.view.
+  const users = enforcing
+    ? await basePrisma.$queryRaw<UserRow[]>`
+        SELECT u."id", u."name", u."email", u."role", u."disabledAt", u."lastLoginAt", u."failedLoginCount"
+        FROM "User" u
+        JOIN "TenantMember" tm ON tm."userId" = u."id" AND tm."tenantId" = ${activeTenantId}
+        ORDER BY u."disabledAt" NULLS FIRST, u."name"
+      `
+    : await basePrisma.$queryRaw<UserRow[]>`
+        SELECT "id", "name", "email", "role", "disabledAt", "lastLoginAt", "failedLoginCount"
+        FROM "User"
+        ORDER BY "disabledAt" NULLS FIRST, "name"
+      `;
   const teams = canViewTeams
     ? await basePrisma.$queryRaw<TeamRow[]>`
         SELECT "id", "name", "description", "active", "managerId"
