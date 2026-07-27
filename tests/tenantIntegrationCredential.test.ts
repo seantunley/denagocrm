@@ -31,12 +31,22 @@ test("resolveTenantCredential: null tenantId never touches the override lookup, 
   assert.equal(result, "global-token");
 });
 
-test("resolveTenantCredential: a real tenantId with NO override row (zero-rows-today invariant) falls back to the global value", async () => {
-  const result = await resolveTenantCredential("tenant_A", "SMTP_HOST", {
-    lookupOverride: async () => null, // simulates: no TenantIntegrationCredential row exists
+test("resolveTenantCredential: the FOUNDING tenant with NO override row falls back to the global value", async () => {
+  const result = await resolveTenantCredential("tenant_denago_cpt", "SMTP_HOST", {
+    lookupOverride: async () => null,
     getGlobal: async (key) => (key === "SMTP_HOST" ? "smtp.example.com" : null),
   });
-  assert.equal(result, "smtp.example.com", "no override row → identical to today's getSetting(key) result");
+  assert.equal(result, "smtp.example.com", "founding tenant: no override row → falls back to the platform default");
+});
+
+test("resolveTenantCredential: a NON-FOUNDING tenant with NO override row returns null (no platform credential leakage)", async () => {
+  let globalCalls = 0;
+  const result = await resolveTenantCredential("tenant_A", "SMTP_HOST", {
+    lookupOverride: async () => null,
+    getGlobal: async () => { globalCalls++; return "smtp.example.com"; },
+  });
+  assert.equal(result, null, "second tenants must configure their own credentials -- never inherit the platform's");
+  assert.equal(globalCalls, 0, "global fallback must never be queried for non-founding tenants");
 });
 
 test("resolveTenantCredential: a tenantId WITH a saved override wins over the global value", async () => {
