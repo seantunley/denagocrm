@@ -155,25 +155,32 @@ function refuseNestedRelationWrite(model: string, data: unknown): void {
 /**
  * Inject the Postgres RLS session variable for this query.
  *
- * Under enforcement, EVERY query via `prisma` (the scoped client) must run
- * inside a transaction where `SET LOCAL app.current_tenant` is set first.
- * Prisma propagates the transaction context through AsyncLocalStorage, so
- * `query(args)` called inside `raw.$transaction(async () => {...})` uses the
- * same DB connection as the SET LOCAL — making RLS see the correct tenant.
+ * EVERY query via `prisma` (the scoped client) runs inside a transaction where
+ * SET LOCAL sets either `app.current_tenant` (tenant scope) or `app.bypass_rls`
+ * (system scope, off-mode, and rollback).
  *
- * `basePrisma` uses `app.bypass_rls = 'on'` instead (trusted system path).
+ * Connection-binding guarantee: Prisma's interactive transaction pins a single
+ * DB connection for the duration of the `$transaction` callback and propagates
+ * that connection through AsyncLocalStorage. Both `raw.$executeRaw` and
+ * `query()` called inside the same callback execute on that pinned connection —
+ * even though the code uses `raw` rather than the implicit `tx` argument —
+ * because AsyncLocalStorage routes all Prisma operations in the same async
+ * context to the pinned connection. This is exactly what Prisma's transaction
+ * isolation model relies on. With pgbouncer in transaction mode, the connection
+ * is held for the lifetime of the BEGIN…COMMIT block, so SET LOCAL and the
+ * business query are always on the same physical connection.
  *
- * With enforcement off (default), this is a no-op.
+ * `basePrisma` always sets `app.bypass_rls = 'on'` — trusted system path.
+ *
+ * CRITICAL: FORCE RLS is always live in the DB once the migration is applied.
+ * Even in off/monitor mode the app must set one of the two GUCs before every
+ * query, otherwise no rows are returned. bypass_rls='on' is the safe default
+ * for any non-tenant context (off, monitor, system scope, rollback).
  */
 async function withRlsScope(raw: PrismaClient, query: () => Promise<any>): Promise<any> {
-  if (!tenantEnforcing()) return query();
-  const scope = currentTenantScope();
-  if (scope?.system) {
-    return raw.$transaction(async () => {
-      await raw.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
-      return query();
-    });
-  }
+  // Under enforcement, use the current async scope to choose the GUC.
+  // Off/monitor (or enforce with system scope): fall through to bypass below.
+  const scope = tenantEnforcing() ? currentTenantScope() : null;
   if (scope?.tenantId) {
     const tid = scope.tenantId;
     return raw.$transaction(async () => {
@@ -181,8 +188,12 @@ async function withRlsScope(raw: PrismaClient, query: () => Promise<any>): Promi
       return query();
     });
   }
-  // No scope: scopeArgs (Layer 1) will throw TenantScopeError before we reach DB
-  return query();
+  // off/monitor, system scope, or enforce+no-scope (Layer 1 scopeArgs already
+  // threw TenantScopeError for any tenant-scoped model before we reach here).
+  return raw.$transaction(async () => {
+    await raw.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+    return query();
+  });
 }
 
 function buildClient(raw: PrismaClient) {
@@ -299,7 +310,10 @@ const _basePrismaExtended = _rawPrisma.$extends({
     $allModels: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       async $allOperations({ args, query }: any) {
-        if (!tenantEnforcing()) return query(args);
+        // Always bypass — basePrisma is the trusted system path. FORCE RLS is
+        // always live in the DB once the migration is applied, so we must set
+        // bypass_rls=on regardless of tenantEnforcing() (off/monitor/rollback
+        // included — otherwise queries silently return zero rows).
         return _rawPrisma.$transaction(async () => {
           await _rawPrisma.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
           return query(args);

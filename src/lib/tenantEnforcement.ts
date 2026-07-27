@@ -69,10 +69,10 @@ export function __setTenantEnforcingForTests(value: boolean | null): void {
  * Both RLS (migration 20260727130000) and composite FKs (20260727140000) must be
  * live in the target database before flipping this on.
  *
- * Rollback: set TENANT_ENFORCEMENT back to "monitor" or "off" — the app guard
- * and RLS injection disable; FORCE RLS policies still exist in Postgres but the
- * app will set bypass_rls='on' (via basePrisma) or current_tenant (via prisma)
- * before queries, so no data is hidden.
+ * Rollback: set TENANT_ENFORCEMENT back to "monitor" or "off" — the app-layer
+ * tenant guard disables (scopeArgs stops injecting tenantId). FORCE RLS remains
+ * in Postgres but both clients unconditionally set bypass_rls='on' whenever no
+ * tenant scope is active, so all queries continue to work normally.
  */
 export function tenantEnforcing(): boolean {
   if (enforceOverrideForTests !== null) return enforceOverrideForTests;
