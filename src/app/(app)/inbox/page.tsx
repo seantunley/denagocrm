@@ -6,6 +6,7 @@ import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
 import { buildInboxThreads } from "@/lib/inboxThreads";
+import { getSetting } from "@/lib/settings";
 import { formatDateTime } from "@/lib/format";
 import { EmptyState, SectionHeading, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
@@ -30,7 +31,7 @@ export default async function InboxPage() {
       include: { contact: true, lead: true },
     }),
     basePrisma.googleReview.findMany({ orderBy: { publishedAt: "desc" }, take: 10 }),
-    prisma.appSetting.findUnique({ where: { key: "GOOGLE_PLACE_ID" } }),
+    getSetting("GOOGLE_PLACE_ID"),
   ]);
 
   const threadList = buildInboxThreads(activeComms);
@@ -46,7 +47,7 @@ export default async function InboxPage() {
         <EmptyState
           icon={Star}
           title="No reviews yet"
-          description={placeId?.value
+          description={placeId
             ? "New reviews appear here within six hours and trigger a push notification."
             : "Connect your Places API key and Place ID in Settings → Integrations to pull reviews in."}
           className="mt-4 py-8"
@@ -65,8 +66,8 @@ export default async function InboxPage() {
           ))}
         </ul>
       )}
-      {placeId?.value ? (
-        <a href={`https://search.google.com/local/reviews?placeid=${encodeURIComponent(placeId.value)}`} target="_blank" className="btn-secondary btn-sm mt-4 inline-flex">
+      {placeId ? (
+        <a href={`https://search.google.com/local/reviews?placeid=${encodeURIComponent(placeId)}`} target="_blank" className="btn-secondary btn-sm mt-4 inline-flex">
           Reply on Google <ExternalLink className="size-3.5" />
         </a>
       ) : null}

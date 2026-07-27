@@ -1,9 +1,10 @@
-import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
+import { basePrisma } from "../src/lib/db";
+import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 import { ensureFoundingMembership } from "../src/lib/provisioning";
 
-const prisma = new PrismaClient();
+const prisma = basePrisma;
 
 async function main() {
   // Initial owner — credentials come from the environment, never hardcoded.
@@ -89,10 +90,12 @@ async function main() {
     INTAKE_API_KEY: crypto.randomBytes(24).toString("hex"),
   };
   for (const [key, value] of Object.entries(settings)) {
+    // AppSetting.key is unique only per-tenant. Founding-tenant-owned platform
+    // defaults, addressed via the compound (tenantId, key) unique.
     await prisma.appSetting.upsert({
-      where: { key },
+      where: { tenantId_key: { tenantId: DEFAULT_TENANT_ID, key } },
       update: {},
-      create: { key, value },
+      create: { tenantId: DEFAULT_TENANT_ID, key, value },
     });
   }
 

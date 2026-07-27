@@ -7,7 +7,7 @@ import {
   type PortableBackup,
   verifyPortableBackup,
 } from "@/lib/backup";
-import { basePrisma } from "@/lib/db";
+import { putSetting } from "@/lib/settings";
 import { withSystemScope } from "@/lib/tenantScopeEntry";
 import { purgeTrash } from "@/lib/trash";
 import { readFile, putManagedBlob, listActiveBackupBlobs, deleteFile, activeBlobWriteTokenPresent } from "@/lib/storage";
@@ -98,11 +98,9 @@ async function snapshotAssets(refs: AssetReference[]): Promise<AssetSnapshot[]> 
 }
 
 async function recordResult(result: Record<string, unknown>) {
-  await basePrisma.appSetting.upsert({
-    where: { key: "BACKUP_LAST_RESULT" },
-    update: { value: JSON.stringify(result) },
-    create: { key: "BACKUP_LAST_RESULT", value: JSON.stringify(result) },
-  });
+  // Runs inside withSystemScope → putSetting resolves to the founding tenant
+  // (the platform-default settings owner).
+  await putSetting("BACKUP_LAST_RESULT", JSON.stringify(result));
 }
 
 /**

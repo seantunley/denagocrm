@@ -1,6 +1,6 @@
 import "server-only";
 import { cache } from "react";
-import { prisma } from "@/lib/db";
+import { getSetting, putSetting } from "@/lib/settings";
 import {
   ALL_MODULE_IDS,
   OPTIONAL_MODULE_IDS,
@@ -16,10 +16,10 @@ const SETTING_KEY = "DISABLED_MODULES";
 
 /** Enabled module ids for this install. Core is always included; new modules default on. */
 export const getEnabledModuleIds = cache(async (): Promise<Set<ModuleId>> => {
-  const row = await prisma.appSetting.findUnique({ where: { key: SETTING_KEY } }).catch(() => null);
+  const value = await getSetting(SETTING_KEY).catch(() => null);
   const set = new Set<ModuleId>(ALL_MODULE_IDS);
-  if (!row?.value) return set;
-  const disabled = row.value.split(",").map((s) => s.trim()).filter(Boolean);
+  if (!value) return set;
+  const disabled = value.split(",").map((s) => s.trim()).filter(Boolean);
   for (const id of OPTIONAL_MODULE_IDS) if (disabled.includes(id)) set.delete(id);
   return set;
 });
@@ -45,10 +45,5 @@ export async function requireModuleEnabled(id: ModuleId): Promise<void> {
 /** Persist module choices as the disabled set (mandatory core can never be disabled). */
 export async function setEnabledModuleIds(enabledIds: string[]): Promise<void> {
   const disabled = OPTIONAL_MODULE_IDS.filter((id) => !enabledIds.includes(id));
-  const value = disabled.join(",");
-  await prisma.appSetting.upsert({
-    where: { key: SETTING_KEY },
-    update: { value },
-    create: { key: SETTING_KEY, value },
-  });
+  await putSetting(SETTING_KEY, disabled.join(","));
 }

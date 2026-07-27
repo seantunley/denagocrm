@@ -186,8 +186,8 @@ export async function saveQuoteDefaults(formData: FormData) {
   await requireOwner();
   const days = String(formData.get("validDays") ?? "").trim();
   const terms = String(formData.get("terms") ?? "").trim();
-  await prisma.appSetting.upsert({ where: { key: "QUOTE_VALID_DAYS" }, update: { value: days || "7" }, create: { key: "QUOTE_VALID_DAYS", value: days || "7" } });
-  await prisma.appSetting.upsert({ where: { key: "QUOTE_TERMS" }, update: { value: terms }, create: { key: "QUOTE_TERMS", value: terms } });
+  await putSetting("QUOTE_VALID_DAYS", days || "7");
+  await putSetting("QUOTE_TERMS", terms);
   revalidatePath("/settings");
 }
 
@@ -201,7 +201,7 @@ export async function saveWorkshopSettings(formData: FormData) {
     BOOKING_HORIZON_DAYS: String(formData.get("horizon") ?? "30").trim() || "30",
   };
   for (const [key, value] of Object.entries(entries)) {
-    await prisma.appSetting.upsert({ where: { key }, update: { value }, create: { key, value } });
+    await putSetting(key, value);
   }
   revalidatePath("/settings");
 }

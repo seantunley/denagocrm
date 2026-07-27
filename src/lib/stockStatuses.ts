@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/db";
+import { getSetting, putSetting } from "@/lib/settings";
 
 /**
  * Stock statuses. The four built-ins are load-bearing — the receiving, reserve and
@@ -38,10 +38,10 @@ export function slugifyStatus(label: string): string {
 }
 
 export async function getCustomStockStatuses(): Promise<StockStatusOption[]> {
-  const row = await prisma.appSetting.findUnique({ where: { key: SETTING_KEY } });
-  if (!row) return [];
+  const value = await getSetting(SETTING_KEY);
+  if (value === null) return [];
   try {
-    const parsed: unknown = JSON.parse(row.value);
+    const parsed: unknown = JSON.parse(value);
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter(
@@ -71,9 +71,5 @@ export async function saveCustomStockStatuses(list: StockStatusOption[]): Promis
   const clean = list
     .filter((s) => !SYSTEM_SLUGS.has(s.slug))
     .map((s) => ({ slug: s.slug, label: s.label, color: s.color }));
-  await prisma.appSetting.upsert({
-    where: { key: SETTING_KEY },
-    create: { key: SETTING_KEY, value: JSON.stringify(clean) },
-    update: { value: JSON.stringify(clean) },
-  });
+  await putSetting(SETTING_KEY, JSON.stringify(clean));
 }

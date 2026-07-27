@@ -1,9 +1,10 @@
 import crypto from "crypto";
-import { prisma, basePrisma } from "./db";
+import { basePrisma } from "./db";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { TENANT_CREDENTIAL_INTEGRATIONS } from "./tenantCredentialFields";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { currentTenantScope } from "./tenantScope";
+import { TenantScopeError } from "./tenantGuard";
 
 /**
  * Settings that hold credentials are encrypted at rest with AES-256-GCM
@@ -101,10 +102,41 @@ export function isSecretSettingKey(key: string): boolean {
   return SECRET_KEYS.has(key);
 }
 
+/**
+ * Resolve which tenant owns the AppSetting row for the current context.
+ * AppSetting.key is unique only per-tenant (@@unique([tenantId, key])), so every
+ * read/write MUST be qualified by an explicit tenantId — an unqualified
+ * `findFirst({ where: { key } })` could return an arbitrary tenant's value once
+ * the same key exists in two tenants (exactly the leak this replaces).
+ *
+ *   - off-mode                    → the founding tenant (platform-default owner)
+ *   - enforcing + system scope    → the founding tenant (validateInSystemScope,
+ *                                    webhook pre-scope config, cron/backup)
+ *   - enforcing + real tenant     → that tenant
+ *   - enforcing + no scope / null → FAIL CLOSED (throw), same security property
+ *                                    the scoped `prisma` client gives every other
+ *                                    tenant-scoped read. A bare AppSetting read
+ *                                    with no resolved tenant must never silently
+ *                                    fall back to platform data — callers that
+ *                                    legitimately read pre-scope config wrap it in
+ *                                    validateInSystemScope/withSystemScope.
+ */
+function settingsOwnerTenantId(): string {
+  if (!tenantEnforcing()) return DEFAULT_TENANT_ID;
+  const scope = currentTenantScope();
+  if (!scope) throw new TenantScopeError("No tenant scope established for AppSetting");
+  if (scope.system) return DEFAULT_TENANT_ID;
+  if (!scope.tenantId) throw new TenantScopeError("No tenant in scope for AppSetting");
+  return scope.tenantId;
+}
+
 export async function getSetting(key: string): Promise<string | null> {
-  // findFirst: guard adds tenantId to where under enforcement (tenant scope),
-  // passes through in system scope / off-mode (finds any row with this key).
-  const row = await prisma.appSetting.findFirst({ where: { key } });
+  const tenantId = settingsOwnerTenantId();
+  // basePrisma + explicit compound key: deterministic and RLS-safe (bypass is set,
+  // and we've already pinned the exact tenantId — never an ambient/unqualified read).
+  const row = await basePrisma.appSetting.findUnique({
+    where: { tenantId_key: { tenantId, key } },
+  });
   if (!row?.value) return null;
   try {
     return decryptValue(row.value);
@@ -116,27 +148,12 @@ export async function getSetting(key: string): Promise<string | null> {
 /** Writes a setting, encrypting credential-class keys when a key is configured. */
 export async function putSetting(key: string, value: string): Promise<void> {
   const stored = value && isSecretSettingKey(key) ? encryptValue(value) : value;
-  const scope = tenantEnforcing() ? currentTenantScope() : null;
-  if (scope && !scope.system && scope.tenantId) {
-    // Tenant-scoped write: must address the compound unique key explicitly
-    // (guard.scopeWhere only injects tenantId at top level, not into the
-    // compound accessor that Prisma needs for upsert's WHERE lookup).
-    await prisma.appSetting.upsert({
-      where: { tenantId_key: { tenantId: scope.tenantId, key } },
-      update: { value: stored },
-      create: { key, value: stored },
-    });
-    return;
-  }
-  // Off-enforcement / system scope: locate existing row by key regardless of
-  // tenant (preserves the row's current tenantId on update; creates with NULL
-  // tenantId when no row exists).
-  const existing = await basePrisma.appSetting.findFirst({ where: { key } });
-  if (existing) {
-    await basePrisma.appSetting.update({ where: { id: existing.id }, data: { value: stored } });
-  } else {
-    await basePrisma.appSetting.create({ data: { key, value: stored } });
-  }
+  const tenantId = settingsOwnerTenantId();
+  await basePrisma.appSetting.upsert({
+    where: { tenantId_key: { tenantId, key } },
+    update: { value: stored },
+    create: { tenantId, key, value: stored },
+  });
 }
 
 /**

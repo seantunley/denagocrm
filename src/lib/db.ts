@@ -304,7 +304,6 @@ const _rawPrisma = globalForPrisma._rawPrisma ?? new PrismaClient();
  * business transaction that needs explicit row locks or cross-tenant access.
  * NOT for user-facing reads — use `prisma` instead.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const _basePrismaExtended = _rawPrisma.$extends({
   query: {
     $allModels: {
@@ -323,24 +322,28 @@ const _basePrismaExtended = _rawPrisma.$extends({
   },
 });
 
-// Patch $executeRaw / $queryRaw to set bypass_rls before executing.
+// Patch the FOUR standalone raw methods to set bypass_rls before executing.
 // query.$allModels.$allOperations only covers Prisma model operations; standalone
-// $executeRaw / $queryRaw calls bypass the extension and would be silently blocked
-// by FORCE RLS without this. Inside basePrisma.$transaction, preceding model ops
-// already set bypass_rls='on' via SET LOCAL (persists through SAVEPOINT release
-// to the outer tx), so those in-transaction raw calls are unaffected.
+// $executeRaw(Unsafe) / $queryRaw(Unsafe) calls bypass the extension and would be
+// silently blocked by FORCE RLS without this. Leaving the *Unsafe variants
+// unpatched is a real hole: trusted code (seed's PipelineStage insert, the
+// integrity suite) calls basePrisma.$executeRawUnsafe, which under a non-bypass
+// production role would run with no app.bypass_rls set. Inside basePrisma.$transaction,
+// preceding model ops already set bypass_rls='on' via SET LOCAL (persists through
+// SAVEPOINT release to the outer tx), so in-transaction raw calls are unaffected.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const _basePrismaFull = _basePrismaExtended as any;
-_basePrismaFull.$executeRaw = (sql: any, ...values: any[]) =>
-  _rawPrisma.$transaction(async (tx: any) => {
-    await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
-    return tx.$executeRaw(sql, ...values);
-  });
-_basePrismaFull.$queryRaw = (sql: any, ...values: any[]) =>
-  _rawPrisma.$transaction(async (tx: any) => {
-    await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
-    return tx.$queryRaw(sql, ...values);
-  });
+const patchRaw = (method: "$executeRaw" | "$queryRaw" | "$executeRawUnsafe" | "$queryRawUnsafe") => {
+  _basePrismaFull[method] = (sql: any, ...values: any[]) =>
+    _rawPrisma.$transaction(async (tx: any) => {
+      await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+      return (tx as any)[method](sql, ...values);
+    });
+};
+patchRaw("$executeRaw");
+patchRaw("$queryRaw");
+patchRaw("$executeRawUnsafe");
+patchRaw("$queryRawUnsafe");
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 export const basePrisma =

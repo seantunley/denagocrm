@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { basePrisma } from "./db";
-import { getSetting, resolveIntegrationBundle } from "./settings";
+import { getSetting, putSetting, resolveIntegrationBundle } from "./settings";
 import { currentTenantScope } from "./tenantScope";
 import { sendPushToAll } from "./push";
 
@@ -26,21 +26,16 @@ export async function syncGoogleReviews(): Promise<number> {
   // even though the cron fires every 15 minutes.
   const last = await getSetting("GOOGLE_REVIEWS_LAST_SYNC");
   if (last && Date.now() - new Date(last).getTime() < 6 * 60 * 60 * 1000) return 0;
-  // Multi-tenancy readiness: label the owning tenant. Called from inside
+  // Multi-tenancy: putSetting stamps the owning tenant. Called from inside
   // runCronPerTenant's per-tenant slice (see api/cron/automations/route.ts),
   // which sets the ambient tenant scope via runInTenantScope BEFORE invoking the
-  // slice — so this ambient read picks up the correct tenant without threading
-  // it through runOperationalQueues' signature. Resolves to null when not
-  // enforcing (today, every environment — no scope is entered at all), matching
-  // the previous unstamped-row behaviour exactly. AppSetting.key stays the sole
-  // @id until the per-tenant uniqueness batch, so this is a label, not a
-  // per-tenant split.
+  // slice — so putSetting picks up the correct tenant. In off-mode / no scope it
+  // resolves to the founding tenant (the platform-default settings owner).
+  await putSetting("GOOGLE_REVIEWS_LAST_SYNC", new Date().toISOString());
+
+  // Stamp the owning tenant on each stored review (GoogleReview.tenantId is a
+  // nullable Phase-B column; null in off-mode / no scope, as before).
   const tenantId = currentTenantScope()?.tenantId ?? null;
-  await basePrisma.appSetting.upsert({
-    where: { key: "GOOGLE_REVIEWS_LAST_SYNC" },
-    update: { value: new Date().toISOString(), tenantId },
-    create: { key: "GOOGLE_REVIEWS_LAST_SYNC", value: new Date().toISOString(), tenantId },
-  });
 
   const res = await fetch(
     `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}?fields=reviews&key=${encodeURIComponent(apiKey)}`,

@@ -79,10 +79,15 @@ model TimelinePin {
 }
 
 model AppSetting {
-  id       String  @id @default(dbgenerated("gen_random_uuid()::text"))
+  id       String @id @default(dbgenerated("gen_random_uuid()::text"))
   key      String
   value    String
-  tenantId String?
+  // Non-null: the founding tenant (DEFAULT_TENANT_ID) owns platform-default
+  // settings. A null tenantId would become invisible under FORCE RLS once
+  // enforcement is on (the policy requires a matching tenant), so every row is
+  // owned by exactly one tenant. Backfilled + set NOT NULL in migration
+  // 20260727210000_appsetting_tenant_not_null.
+  tenantId String
 
   @@unique([tenantId, key])
   @@index([tenantId])
@@ -2400,24 +2405,5 @@ model ChannelIdentity {
   disabledAt DateTime?
 
   @@unique([channel, externalId]) // one endpoint belongs to exactly one tenant
-  @@index([tenantId])
-}
-
-// Per-tenant override credentials for outbound integrations (WhatsApp, Meta, Telegram,
-// SMTP, IMAP, SMS, Google Reviews). A row means THIS tenant has its own credential for
-// this key, overriding the global AppSetting fallback. Non-founding tenants must have
-// overrides for all required keys of an integration — they never fall back to the
-// platform owner's account. Values encrypted at rest with the same AES-256-GCM envelope
-// as AppSetting. All reads/writes use basePrisma (bypass_rls) because the lookup path
-// (resolveTenantCredential) runs from cron/webhook contexts before any ambient scope.
-model TenantIntegrationCredential {
-  id        String   @id @default(cuid())
-  tenantId  String
-  key       String
-  value     String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([tenantId, key])
   @@index([tenantId])
 }
