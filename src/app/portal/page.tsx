@@ -9,7 +9,6 @@ import { markPortalNotificationRead, portalLogout } from "@/app/actions/portal";
 import ServiceRequestForm from "@/components/ServiceRequestForm";
 import { computeDue, dueLabels, dueColors } from "@/lib/serviceDue";
 import { computeWarranty, warrantyLabels, warrantyColors } from "@/lib/warranty";
-import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Eyebrow, MetricCard } from "@/components/visual-system";
@@ -109,7 +108,7 @@ export default async function PortalHome() {
         where: {
           quoteId: { in: quoteIds },
           deletedAt: null,
-          status: { notIn: [...CLOSED_REQUEST_STATUSES] },
+          status: { in: ["sent", "viewed", "in_progress"] },
         },
         orderBy: { createdAt: "desc" },
         select: {
