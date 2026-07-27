@@ -79,10 +79,12 @@ model TimelinePin {
 }
 
 model AppSetting {
-  key      String  @id
+  id       String  @id @default(dbgenerated("gen_random_uuid()::text"))
+  key      String
   value    String
-  tenantId String? // Multi-tenancy (Phase C — additive/inert): owning tenant. `key` stays the @id (one row per key) until the per-tenant uniqueness batch; the db.ts guard scopes reads by tenantId once enforcement is on, so install-global reads use a system-scope bypass.
+  tenantId String?
 
+  @@unique([tenantId, key])
   @@index([tenantId])
 }
 

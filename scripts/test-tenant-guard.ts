@@ -798,12 +798,12 @@ async function main() {
     // and are discarded when the disposable CI database is torn down.
     await basePrisma.auditLog.deleteMany({ where: { summary: { in: [auditSummary, sysAuditSummary] } } });
 
-    // ── AppSetting.tenantId slice: AppSetting is now tenant-scoped (its additive
-    //    tenantId column landed), so getSetting/putSetting resolve per the request
+    // ── AppSetting per-tenant PK slice: AppSetting now has a surrogate id PK and
+    //    @@unique([tenantId, key]), so getSetting/putSetting resolve per the request
     //    tenant via the guard — a concrete-scope read no longer 500s on a missing
     //    column, install-global reads use a system-scope bypass, and one tenant's
-    //    setting is invisible to another. `key` stays the @id (one row per key), so
-    //    A and B use DISTINCT keys here. ─────────────────────────────────────────────
+    //    setting is invisible to another. A and B use distinct keys for test clarity;
+    //    the constraint now allows the same key in multiple tenants. ─────────────────
     await basePrisma.$executeRaw`INSERT INTO "AppSetting" ("key","value","tenantId") VALUES (${cfgSetA}, 'valA', ${TENANT_A}), (${cfgSetB}, 'valB', ${TENANT_B})`;
     const aReadsA = await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => await getSetting(cfgSetA));
     check("appsetting: scope A reads A's setting (guard no longer 500s on the column)", aReadsA === "valA");

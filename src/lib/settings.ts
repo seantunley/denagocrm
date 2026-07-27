@@ -2,6 +2,8 @@ import crypto from "crypto";
 import { prisma, basePrisma } from "./db";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { TENANT_CREDENTIAL_INTEGRATIONS } from "./tenantCredentialFields";
+import { tenantEnforcing } from "./tenantEnforcement";
+import { currentTenantScope } from "./tenantScope";
 
 /**
  * Settings that hold credentials are encrypted at rest with AES-256-GCM
@@ -100,7 +102,9 @@ export function isSecretSettingKey(key: string): boolean {
 }
 
 export async function getSetting(key: string): Promise<string | null> {
-  const row = await prisma.appSetting.findUnique({ where: { key } });
+  // findFirst: guard adds tenantId to where under enforcement (tenant scope),
+  // passes through in system scope / off-mode (finds any row with this key).
+  const row = await prisma.appSetting.findFirst({ where: { key } });
   if (!row?.value) return null;
   try {
     return decryptValue(row.value);
@@ -112,11 +116,27 @@ export async function getSetting(key: string): Promise<string | null> {
 /** Writes a setting, encrypting credential-class keys when a key is configured. */
 export async function putSetting(key: string, value: string): Promise<void> {
   const stored = value && isSecretSettingKey(key) ? encryptValue(value) : value;
-  await prisma.appSetting.upsert({
-    where: { key },
-    update: { value: stored },
-    create: { key, value: stored },
-  });
+  const scope = tenantEnforcing() ? currentTenantScope() : null;
+  if (scope && !scope.system && scope.tenantId) {
+    // Tenant-scoped write: must address the compound unique key explicitly
+    // (guard.scopeWhere only injects tenantId at top level, not into the
+    // compound accessor that Prisma needs for upsert's WHERE lookup).
+    await prisma.appSetting.upsert({
+      where: { tenantId_key: { tenantId: scope.tenantId, key } },
+      update: { value: stored },
+      create: { key, value: stored },
+    });
+    return;
+  }
+  // Off-enforcement / system scope: locate existing row by key regardless of
+  // tenant (preserves the row's current tenantId on update; creates with NULL
+  // tenantId when no row exists).
+  const existing = await basePrisma.appSetting.findFirst({ where: { key } });
+  if (existing) {
+    await basePrisma.appSetting.update({ where: { id: existing.id }, data: { value: stored } });
+  } else {
+    await basePrisma.appSetting.create({ data: { key, value: stored } });
+  }
 }
 
 /**
