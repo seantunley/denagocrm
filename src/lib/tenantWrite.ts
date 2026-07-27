@@ -1,4 +1,6 @@
 import "server-only";
+import { basePrisma } from "./db";
+import { DEFAULT_TENANT_ID } from "./tenant";
 import { currentTenantScope } from "./tenantScope";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { TenantScopeError } from "./tenantGuard";
@@ -50,4 +52,30 @@ export function writeTenantId(): string | null {
     throw new TenantScopeError("No tenant scope established for a tenant-owned write");
   }
   return s.mode === "tenant" ? s.tenantId : null;
+}
+
+/**
+ * Run `fn` as ONE atomic transaction on the trusted bypass client (`basePrisma`),
+ * handing it the transaction client and the owning tenantId. Use this to keep a
+ * multi-write aggregate — a parent plus children the top-level guard would refuse
+ * as a NESTED relation write — all-or-nothing: any throw rolls the whole thing back.
+ *
+ * The resolved tenantId is:
+ *   - the current tenant under enforcement (see {@link writeTenantId});
+ *   - `DEFAULT_TENANT_ID` when GLOBAL (enforcement off, or a trusted system scope),
+ *     so a row is NEVER written tenantless during the pre-enforcement rollout window
+ *     (a NULL-tenant row is invisible once enforcement flips on and fails the
+ *     preflight). Throws (fail closed) when enforcing with no usable scope.
+ *
+ * Every write inside MUST stamp `tenantId` explicitly — bypass means the db.ts guard
+ * will not do it for you, and the children share the parent's tenant so the
+ * composite `(tenantId, parentId)` FKs hold.
+ */
+export async function withTenantWrite<T>(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  fn: (tx: any, tenantId: string) => Promise<T>,
+): Promise<T> {
+  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (basePrisma as any).$transaction((tx: any) => fn(tx, tenantId));
 }

@@ -151,6 +151,24 @@ async function main() {
       concA.length === 1 && concA[0].id === cA && concB.length === 1 && concB[0].id === cB,
     );
 
+    // (8) The bypass client's STANDALONE RAW path (the patched $queryRawUnsafe) must
+    //     also set bypass — under the restricted role a raw read with no GUC returns
+    //     zero (assertion 1), so seeing BOTH proves the raw-method patch works. This
+    //     is the SAME buildBypassClient the exported `basePrisma` is built from.
+    const bypassRaw = await bypass.$queryRawUnsafe<{ count: bigint }[]>(
+      `SELECT COUNT(*)::bigint AS count FROM "Contact" WHERE "id" IN ('${cA}', '${cB}')`,
+    );
+    check("bypass client raw call over restricted role → sees BOTH (raw-method patch)", Number(bypassRaw[0]?.count ?? -1) === 2);
+
+    // (9) The bypass client's INTERACTIVE TRANSACTION path — a model op inside
+    //     bypass.$transaction(async tx => …) must see every tenant's rows, proving the
+    //     $transaction wrapper sets bypass for the whole body on the pinned connection.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const bypassTx = await (bypass as any).$transaction(async (tx: any) =>
+      tx.contact.findMany({ where: { id: { in: [cA, cB] } }, select: { id: true } }),
+    );
+    check("bypass client interactive tx over restricted role → sees BOTH ($transaction wrapper)", bypassTx.length === 2);
+
     console.log(`\nRLS restricted-role proof: ${passed} passed, ${failed} failed.`);
     if (failed > 0) process.exit(1);
   } finally {

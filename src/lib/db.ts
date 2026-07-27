@@ -303,94 +303,76 @@ function buildClient(raw: PrismaClient) {
 const _rawPrisma = globalForPrisma._rawPrisma ?? new PrismaClient();
 
 /**
- * Trusted system client — bypasses soft-delete filter and tenant scope guard.
- * Under RLS enforcement, every operation is wrapped in a transaction that sets
- * `app.bypass_rls = 'on'` so the DB-layer FORCE RLS policy permits it.
+ * Build the trusted BYPASS client over `raw` — the `basePrisma` factory. Every
+ * model op, standalone raw call and interactive transaction runs with
+ * `app.bypass_rls='on'` so the DB-layer FORCE RLS policy permits it (backups,
+ * trash, restore, purge, sessions, audit, and business transactions needing row
+ * locks or cross-tenant access). NOT for user-facing reads — use `prisma`.
  *
- * Use for: backups, trash, restore, purge, session management, audit, and any
- * business transaction that needs explicit row locks or cross-tenant access.
- * NOT for user-facing reads — use `prisma` instead.
+ * ONE implementation, shared by the exported `basePrisma` AND the restricted-role
+ * proof (`__buildBypassClientForTests`), so the NOSUPERUSER NOBYPASSRLS test drives
+ * the EXACT production path, not a stand-in.
+ *
+ * Model ops use the BATCH (array) transaction — `$transaction([setGuc, op])` on the
+ * same client — the only form that guarantees the SET LOCAL and the op share one
+ * pinned connection. An interactive `$transaction(async tx => { SET; query(args) })`
+ * runs `query(args)` on a DIFFERENT pooled connection than `tx`, so the bypass GUC
+ * never reaches it — under a non-superuser role the op then silently filters to zero
+ * rows / locks nothing. That was the defect this replaces.
  */
-const _basePrismaExtended = _rawPrisma.$extends({
-  query: {
-    $allModels: {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      async $allOperations({ args, query }: any) {
-        // Always bypass — basePrisma is the trusted system path. FORCE RLS is
-        // always live in the DB once the migration is applied, so we must set
-        // bypass_rls=on regardless of tenantEnforcing() (off/monitor/rollback
-        // included — otherwise queries silently return zero rows).
-        // GUC write goes through the callback's `tx` so it runs on the interactive
-        // transaction's pinned connection; the model op (query) rides the same async
-        // transaction context onto that connection and sees the bypass GUC.
-        return _rawPrisma.$transaction(async (tx) => {
-          await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
-          return query(args);
-        });
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function buildBypassClient(raw: PrismaClient): PrismaClient {
+  // Holder breaks the self-reference cycle; populated before any query runs. It
+  // captures the NATIVE $transaction/$executeRaw so the model-op batch never
+  // re-enters the patched (own-transaction-opening) versions defined below —
+  // which would break the array batch.
+  const nat: { tx: any; execRaw: any } = { tx: null, execRaw: null };
+  const ext = raw.$extends({
+    query: {
+      $allModels: {
+        async $allOperations({ args, query }: any) {
+          const [, result] = await nat.tx([
+            nat.execRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`,
+            query(args),
+          ]);
+          return result;
+        },
       },
     },
-  },
-});
+  });
+  nat.tx = ext.$transaction.bind(ext);
+  nat.execRaw = ext.$executeRaw.bind(ext);
 
-// Patch the FOUR standalone raw methods to set bypass_rls before executing.
-// query.$allModels.$allOperations only covers Prisma model operations; standalone
-// $executeRaw(Unsafe) / $queryRaw(Unsafe) calls bypass the extension and would be
-// silently blocked by FORCE RLS without this. Leaving the *Unsafe variants
-// unpatched is a real hole: trusted code (seed's PipelineStage insert, the
-// integrity suite) calls basePrisma.$executeRawUnsafe, which under a non-bypass
-// production role would run with no app.bypass_rls set. Inside basePrisma.$transaction,
-// standalone raw calls are patched individually below; raw calls made INSIDE an
-// interactive basePrisma.$transaction are covered by the $transaction wrapper.
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const _basePrismaFull = _basePrismaExtended as any;
-const patchRaw = (method: "$executeRaw" | "$queryRaw" | "$executeRawUnsafe" | "$queryRawUnsafe") => {
-  _basePrismaFull[method] = (sql: any, ...values: any[]) =>
-    _rawPrisma.$transaction(async (tx: any) => {
-      await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
-      return (tx as any)[method](sql, ...values);
-    });
-};
-patchRaw("$executeRaw");
-patchRaw("$queryRaw");
-patchRaw("$executeRawUnsafe");
-patchRaw("$queryRawUnsafe");
-
-// Interactive-transaction bypass. basePrisma is the trusted bypass client, so its
-// $transaction callback must run with bypass for its ENTIRE body.
-//
-// CRITICAL: the callback runs on the UN-extended `_rawPrisma`, not the extended
-// client. The extension (above) wraps EVERY model op in its own nested
-// `_rawPrisma.$transaction(...)` to self-set bypass. Nesting those per-op
-// transactions inside an interactive transaction disturbs the pinned connection's
-// transaction-local GUC state, so a single `set_config(..., TRUE)` set once at the
-// top would be gone by the time a later standalone `tx.$executeRaw` / `tx.$queryRaw`
-// runs — a raw WRITE to a FORCE-RLS table then silently filters to zero rows and a
-// raw `FOR UPDATE` lock becomes a no-op (createTenant's owner-disable UPDATE hit
-// exactly this). Running the callback on the raw client means `tx` is a plain
-// interactive client with NO per-op nesting, so the one top-of-body `set_config`
-// persists for the whole transaction and covers every model AND raw statement. The
-// base extension only adds bypass (no client/result methods), so a raw `tx` is
-// behaviourally identical for callers. The array form takes already-wrapped
-// extended model-op promises (each self-bypasses), so it keeps the extended path.
-const _rawTransaction = _rawPrisma.$transaction.bind(_rawPrisma);
-const _origTransaction = _basePrismaExtended.$transaction.bind(_basePrismaExtended);
-_basePrismaFull.$transaction = (arg: any, opts: any) => {
-  if (typeof arg === "function") {
-    return _rawTransaction(async (tx: any) => {
-      await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
-      return arg(tx);
-    }, opts);
+  const full = ext as any;
+  // Standalone raw methods don't hit $allModels, so patch each to set bypass in its
+  // own transaction (covers seed's PipelineStage insert, the integrity suite, etc.).
+  for (const method of ["$executeRaw", "$queryRaw", "$executeRawUnsafe", "$queryRawUnsafe"] as const) {
+    full[method] = (sql: any, ...values: any[]) =>
+      raw.$transaction(async (tx: any) => {
+        await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+        return (tx as any)[method](sql, ...values);
+      });
   }
-  return _origTransaction(arg, opts);
-};
+  // Interactive $transaction: run the whole callback on the raw `tx` with bypass set
+  // once at the top (no per-op nesting to disturb the transaction-local GUC), so a
+  // later raw WRITE / FOR UPDATE inside the body keeps bypass. Array form keeps the
+  // native extended path (its elements each self-bypass).
+  full.$transaction = (arg: any, opts: any) => {
+    if (typeof arg === "function") {
+      return raw.$transaction(async (tx: any) => {
+        await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+        return arg(tx);
+      }, opts);
+    }
+    return nat.tx(arg, opts);
+  };
+  return full as PrismaClient;
+}
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 export const basePrisma =
   (globalForPrisma.basePrisma as PrismaClient | undefined) ??
-  // Type assertion: the extended client has the same runtime API as PrismaClient;
-  // the $extends wrapper only adds extension metadata to the type. Callers that
-  // accept PrismaClient (provisioning.ts, etc.) work correctly at runtime.
-  (_basePrismaFull as unknown as PrismaClient);
+  buildBypassClient(_rawPrisma);
 
 /** Default client: soft-deleted records are hidden; tenant scope is enforced when
  *  TENANT_ENFORCEMENT=enforce; DB-layer RLS is injected via SET LOCAL. */
@@ -422,27 +404,7 @@ export function __buildScopedClientForTests(raw: PrismaClient): PrismaClient {
  * restricted role sees every tenant's rows once bypass is set, and none without.
  */
 export function __buildBypassClientForTests(raw: PrismaClient): PrismaClient {
-  // Same batch pattern as withRlsScope: SET LOCAL bypass + the op in one array
-  // transaction on the SAME (forward-referenced) extended client, so both run on
-  // one pinned connection without relying on AsyncLocalStorage propagation.
-  // Holder breaks the self-reference type cycle (see buildClient). Populated before
-  // any query runs; the closure batches SET LOCAL + the op on the same client.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ref: { c: any } = { c: null };
-  const ext = raw.$extends({
-    query: {
-      $allModels: {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        async $allOperations({ args, query }: any) {
-          const [, result] = await ref.c.$transaction([
-            ref.c.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`,
-            query(args),
-          ]);
-          return result;
-        },
-      },
-    },
-  });
-  ref.c = ext;
-  return ext as unknown as PrismaClient;
+  // Same builder the exported `basePrisma` uses, so the restricted-role proof
+  // exercises the EXACT production bypass path (not a parallel stand-in).
+  return buildBypassClient(raw);
 }

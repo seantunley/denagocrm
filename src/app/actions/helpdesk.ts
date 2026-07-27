@@ -5,7 +5,7 @@ import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma, basePrisma } from "@/lib/db";
-import { writeTenantId } from "@/lib/tenantWrite";
+import { writeTenantId, withTenantWrite } from "@/lib/tenantWrite";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { logAudit } from "@/lib/audit";
 import {
@@ -37,7 +37,8 @@ async function loadCase(caseId: string) {
 
 /** Insert a PortalNotification so the customer sees the update in their portal. */
 async function notifyCustomer(contactId: string, title: string, body: string, href: string) {
-  const tenantId = writeTenantId();
+  // Founding tenant when enforcement is off, so this never lands tenantless.
+  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
   await basePrisma.$executeRaw`
     INSERT INTO "PortalNotification" ("id","contactId","title","body","href","kind","tenantId")
     VALUES (${randomUUID()}, ${contactId}, ${title}, ${body}, ${href}, 'case', ${tenantId})`;
@@ -46,7 +47,7 @@ async function notifyCustomer(contactId: string, title: string, body: string, hr
 /** Append a system "event" line item to the ticket timeline. */
 async function logEvent(caseId: string, userId: string, body: string, meta: Prisma.InputJsonObject) {
   await prisma.customerCaseMessage.create({
-    data: { caseId, userId, direction: "staff", type: "event", body, meta },
+    data: { caseId, userId, direction: "staff", type: "event", body, meta, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
   });
 }
 
@@ -65,25 +66,30 @@ export async function createTicket(formData: FormData): Promise<void> {
   const vehicleId = str(formData, "vehicleId") || null;
   const assignToMe = formData.get("assignToMe") === "on";
 
-  const created = await prisma.customerCase.create({
-    data: {
-      subject,
-      description,
-      type,
-      priority,
-      status: "open",
-      source: "staff",
-      contactId,
-      vehicleId,
-      mailboxId,
-      assignedToId: assignToMe ? user.id : null,
-      lastReplyBy: "staff",
-      lastReplyAt: new Date(),
-    },
-    select: { id: true, number: true },
-  });
-  await prisma.customerCaseMessage.create({
-    data: { caseId: created.id, userId: user.id, direction: "staff", type: "staff", body: description },
+  // Atomic: the case + its opening message in ONE transaction, tenant-stamped.
+  const created = await withTenantWrite(async (tx, tenantId) => {
+    const c = await tx.customerCase.create({
+      data: {
+        subject,
+        description,
+        type,
+        priority,
+        status: "open",
+        source: "staff",
+        contactId,
+        vehicleId,
+        mailboxId,
+        assignedToId: assignToMe ? user.id : null,
+        lastReplyBy: "staff",
+        lastReplyAt: new Date(),
+        tenantId,
+      },
+      select: { id: true, number: true },
+    });
+    await tx.customerCaseMessage.create({
+      data: { caseId: c.id, userId: user.id, direction: "staff", type: "staff", body: description, tenantId },
+    });
+    return c;
   });
 
   await logAudit({
@@ -110,11 +116,14 @@ export async function replyToTicket(caseId: string, formData: FormData): Promise
   if (!item) redirect("/cases");
   const now = new Date();
 
-  await prisma.$transaction([
-    prisma.customerCaseMessage.create({
-      data: { caseId, userId: user.id, direction: "staff", type: "staff", body },
-    }),
-    prisma.customerCase.update({
+  // Atomic: append the reply + advance the case in ONE transaction (the case was
+  // authorised by requireCaseAccess above). Uses the proven bypass transaction path
+  // rather than a scoped array transaction, whose GUC interaction is the fragile area.
+  await withTenantWrite(async (tx, tenantId) => {
+    await tx.customerCaseMessage.create({
+      data: { caseId, userId: user.id, direction: "staff", type: "staff", body, tenantId },
+    });
+    await tx.customerCase.update({
       where: { id: caseId },
       data: {
         status: nextStatus,
@@ -124,8 +133,8 @@ export async function replyToTicket(caseId: string, formData: FormData): Promise
         resolvedAt: nextStatus === "resolved" ? now : undefined,
         closedAt: nextStatus === "closed" ? now : undefined,
       },
-    }),
-  ]);
+    });
+  });
 
   await notifyCustomer(
     item.contactId,
@@ -152,7 +161,7 @@ export async function addNote(caseId: string, formData: FormData): Promise<void>
   const body = str(formData, "body");
   if (body.length < 1) throw new Error("Write a note before saving.");
   await prisma.customerCaseMessage.create({
-    data: { caseId, userId: user.id, direction: "staff", type: "note", body },
+    data: { caseId, userId: user.id, direction: "staff", type: "note", body, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
   });
   await logAudit({ action: "case.note_added", summary: "Added an internal note", user, entityType: "CustomerCase", entityId: caseId });
   revalidatePath(`/cases/${caseId}`);
@@ -237,7 +246,7 @@ export async function addTicketTag(caseId: string, formData: FormData): Promise<
   await prisma.customerCaseTag.upsert({
     where: { caseId_tagId: { caseId, tagId: tag.id } },
     update: {},
-    create: { caseId, tagId: tag.id },
+    create: { caseId, tagId: tag.id, tenantId },
   });
   await logEvent(caseId, user.id, `Tagged "${tag.name}"`, { event: "tag_added", tag: tag.name });
   revalidatePath(`/cases/${caseId}`);
@@ -294,7 +303,7 @@ export async function saveCannedReply(formData: FormData): Promise<void> {
   if (id) {
     await prisma.cannedReply.update({ where: { id }, data: { title, body, mailboxId } });
   } else {
-    await prisma.cannedReply.create({ data: { title, body, mailboxId, createdById: user.id } });
+    await prisma.cannedReply.create({ data: { title, body, mailboxId, createdById: user.id, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID } });
   }
   await logAudit({ action: "helpdesk.canned_saved", summary: `Saved reply ${title}`, user });
   revalidatePath("/settings/helpdesk");

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { withTenantWrite } from "@/lib/tenantWrite";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
@@ -25,21 +26,24 @@ export async function registerLibraryDocuments(
     const name = files.length === 1 && nameOverride
       ? nameOverride
       : file.fileName.replace(/\.[^.]+$/, "");
-    // Flat writes (no nested `versions.create`): the tenant guard refuses nested
-    // relation writes under enforcement because it can't stamp the nested row. Two
-    // scoped creates each get their own tenantId stamp; the composite (tenantId,
-    // documentId) FK ties the version to the doc.
-    const doc = await prisma.libraryDocument.create({ data: { name, category } });
-    await prisma.libraryVersion.create({
-      data: {
-        documentId: doc.id,
-        version: 1,
-        fileName: file.fileName,
-        storedName: file.url,
-        mimeType: file.mimeType || "application/octet-stream",
-        sizeBytes: file.sizeBytes,
-        uploadedById: user.id,
-      },
+    // Atomic: document + its first version in ONE transaction, each stamped with the
+    // owning tenant (the guard refuses a nested `versions.create`; the composite
+    // (tenantId, documentId) FK ties the version to the doc). A failure creating the
+    // version rolls back the orphan document.
+    await withTenantWrite(async (tx, tenantId) => {
+      const doc = await tx.libraryDocument.create({ data: { name, category, tenantId } });
+      await tx.libraryVersion.create({
+        data: {
+          documentId: doc.id,
+          version: 1,
+          fileName: file.fileName,
+          storedName: file.url,
+          mimeType: file.mimeType || "application/octet-stream",
+          sizeBytes: file.sizeBytes,
+          uploadedById: user.id,
+          tenantId,
+        },
+      });
     });
     added.push(name);
   }
@@ -64,19 +68,24 @@ export async function registerLibraryVersion(
     include: { versions: { orderBy: { version: "desc" }, take: 1 } },
   });
   const nextVersion = (document.versions[0]?.version ?? 0) + 1;
-  await prisma.libraryVersion.create({
-    data: {
-      documentId,
-      version: nextVersion,
-      fileName: file.fileName,
-      storedName: file.url,
-      mimeType: file.mimeType || "application/octet-stream",
-      sizeBytes: file.sizeBytes,
-      note,
-      uploadedById: user.id,
-    },
+  // Atomic: new version + the document's updatedAt bump in ONE transaction. The doc
+  // was already authorised via the scoped findUniqueOrThrow above.
+  await withTenantWrite(async (tx, tenantId) => {
+    await tx.libraryVersion.create({
+      data: {
+        documentId,
+        version: nextVersion,
+        fileName: file.fileName,
+        storedName: file.url,
+        mimeType: file.mimeType || "application/octet-stream",
+        sizeBytes: file.sizeBytes,
+        note,
+        uploadedById: user.id,
+        tenantId,
+      },
+    });
+    await tx.libraryDocument.update({ where: { id: documentId }, data: { updatedAt: new Date() } });
   });
-  await prisma.libraryDocument.update({ where: { id: documentId }, data: { updatedAt: new Date() } });
   await logAudit({
     action: "document.uploaded",
     summary: `Uploaded v${nextVersion} of “${document.name}”${note ? ` — ${note}` : ""}`,
