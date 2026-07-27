@@ -40,8 +40,13 @@ function restrictedUrl(): string {
 
 /** Run `fn` as tenant `t` through the real scoped client (enforcement on). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function asTenant<T>(scoped: any, t: string, fn: () => Promise<T>): Promise<T> {
-  return runInTenantScope({ tenantId: t, system: false }, fn);
+function asTenant<T>(_scoped: any, t: string, fn: () => Promise<T>): Promise<T> {
+  // MUST use `async () => fn()`, not `fn` directly. With a non-async fn, storage.run()
+  // returns the PrismaPromise immediately and the outer `await` calls .then() outside the
+  // storage context, so currentTenantScope() returns undefined inside the extension hook.
+  // With an async wrapper, the async machinery calls prismaPromise.then() from within
+  // the async function's execution context (which inherited the storage scope).
+  return runInTenantScope({ tenantId: t, system: false }, async () => fn());
 }
 
 async function main() {
