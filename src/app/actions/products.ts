@@ -31,9 +31,10 @@ export async function createProduct(formData: FormData) {
     .split(",")
     .map((c) => c.trim())
     .filter(Boolean);
-  const product = await prisma.product.create({
-    data: { ...data, colors: { create: colors.map((name) => ({ name })) } },
-  });
+  const product = await prisma.product.create({ data });
+  if (colors.length > 0) {
+    await prisma.productColor.createMany({ data: colors.map((name) => ({ productId: product.id, name })) });
+  }
   revalidatePath("/products");
   redirect(`/products/${product.id}`);
 }

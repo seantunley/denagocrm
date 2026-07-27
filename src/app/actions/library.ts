@@ -25,20 +25,20 @@ export async function registerLibraryDocuments(
     const name = files.length === 1 && nameOverride
       ? nameOverride
       : file.fileName.replace(/\.[^.]+$/, "");
-    await prisma.libraryDocument.create({
+    // Flat writes (no nested `versions.create`): the tenant guard refuses nested
+    // relation writes under enforcement because it can't stamp the nested row. Two
+    // scoped creates each get their own tenantId stamp; the composite (tenantId,
+    // documentId) FK ties the version to the doc.
+    const doc = await prisma.libraryDocument.create({ data: { name, category } });
+    await prisma.libraryVersion.create({
       data: {
-        name,
-        category,
-        versions: {
-          create: {
-            version: 1,
-            fileName: file.fileName,
-            storedName: file.url,
-            mimeType: file.mimeType || "application/octet-stream",
-            sizeBytes: file.sizeBytes,
-            uploadedById: user.id,
-          },
-        },
+        documentId: doc.id,
+        version: 1,
+        fileName: file.fileName,
+        storedName: file.url,
+        mimeType: file.mimeType || "application/octet-stream",
+        sizeBytes: file.sizeBytes,
+        uploadedById: user.id,
       },
     });
     added.push(name);

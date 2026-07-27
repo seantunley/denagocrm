@@ -234,14 +234,11 @@ export async function executeJourneyStep(args: {
       if (!contactId) return { status: "skipped", note: "Tag step skipped: no contact" };
       const tagId = stringConfig(step, "tagId");
       if (!tagId) return { status: "skipped", note: "Tag step skipped: no tag configured" };
-      await prisma.contact.update({
-        where: { id: contactId },
-        data: {
-          tags: step.type === "add_tag"
-            ? { connect: { id: tagId } }
-            : { disconnect: { id: tagId } },
-        },
-      });
+      if (step.type === "add_tag") {
+        await prisma.$executeRaw`INSERT INTO "_ContactToTag" ("A", "B") VALUES (${contactId}, ${tagId}) ON CONFLICT DO NOTHING`;
+      } else {
+        await prisma.$executeRaw`DELETE FROM "_ContactToTag" WHERE "A" = ${contactId} AND "B" = ${tagId}`;
+      }
       return { status: "completed", note: step.type === "add_tag" ? "Tag added" : "Tag removed" };
     }
   }

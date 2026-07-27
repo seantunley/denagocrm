@@ -67,17 +67,18 @@ export async function createJourney(formData: FormData) {
       description: data.description,
       category: data.category,
       createdById: user.id,
-      versions: {
-        create: {
-          version: 1,
-          state: "draft",
-          trigger: data.trigger,
-          triggerConfig: data.triggerConfig ?? Prisma.JsonNull,
-          entryConditions: data.entryConditions ?? Prisma.JsonNull,
-          definition: data.definition,
-          createdById: user.id,
-        },
-      },
+    },
+  });
+  await prisma.journeyVersion.create({
+    data: {
+      journeyId: journey.id,
+      version: 1,
+      state: "draft",
+      trigger: data.trigger,
+      triggerConfig: data.triggerConfig ?? Prisma.JsonNull,
+      entryConditions: data.entryConditions ?? Prisma.JsonNull,
+      definition: data.definition,
+      createdById: user.id,
     },
   });
   await logAudit({
@@ -276,23 +277,24 @@ export async function installJourneyTemplates() {
   for (const item of templates) {
     const exists = await prisma.journey.findFirst({ where: { name: item.name, status: { not: "archived" } } });
     if (exists) continue;
-    await prisma.journey.create({
+    const tpl = await prisma.journey.create({
       data: {
         name: item.name,
         description: item.description,
         category: item.category,
         createdById: user.id,
-        versions: {
-          create: {
-            version: 1,
-            state: "draft",
-            trigger: item.trigger,
-            triggerConfig: item.triggerConfig,
-            entryConditions: item.entryConditions,
-            definition: item.definition,
-            createdById: user.id,
-          },
-        },
+      },
+    });
+    await prisma.journeyVersion.create({
+      data: {
+        journeyId: tpl.id,
+        version: 1,
+        state: "draft",
+        trigger: item.trigger,
+        triggerConfig: item.triggerConfig,
+        entryConditions: item.entryConditions,
+        definition: item.definition,
+        createdById: user.id,
       },
     });
   }

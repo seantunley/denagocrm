@@ -164,7 +164,7 @@ async function fileSupportEmail(mailbox: Mailbox, parsed: ParsedMail, fromEmail:
       }
 
       const existing = await findThreadCase(tx, mailbox, contact.id, parsed, norm);
-      const message = { contactId: contact.id, direction: "customer", type: "message", body, sourceMessageId: idemKey };
+      const messageBase = { contactId: contact.id, direction: "customer" as const, type: "message" as const, body, sourceMessageId: idemKey };
       if (existing) {
         await tx.customerCase.update({
           where: { id: existing.id },
@@ -172,9 +172,9 @@ async function fileSupportEmail(mailbox: Mailbox, parsed: ParsedMail, fromEmail:
             status: existing.status === "resolved" ? "open" : existing.status,
             lastReplyAt: when,
             lastReplyBy: "customer",
-            messages: { create: message },
           },
         });
+        await tx.customerCaseMessage.create({ data: { ...messageBase, caseId: existing.id } });
         return { isNew: false, caseId: existing.id, caseNumber: existing.number, contactLabel: contactName(contact) };
       }
       const created = await tx.customerCase.create({
@@ -188,10 +188,10 @@ async function fileSupportEmail(mailbox: Mailbox, parsed: ParsedMail, fromEmail:
           mailboxId: mailbox.id,
           lastReplyAt: when,
           lastReplyBy: "customer",
-          messages: { create: message },
         },
         select: { id: true, number: true },
       });
+      await tx.customerCaseMessage.create({ data: { ...messageBase, caseId: created.id } });
       return { isNew: true, caseId: created.id, caseNumber: created.number, contactLabel: contactName(contact) };
     });
   } catch (e) {

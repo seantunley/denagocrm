@@ -2,7 +2,9 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/db";
+import { prisma, basePrisma } from "@/lib/db";
+import { writeTenantId } from "@/lib/tenantWrite";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { contactName } from "@/lib/format";
@@ -55,23 +57,30 @@ function parseTags(formData: FormData) {
   ];
 }
 
+async function upsertContactTag(name: string): Promise<string> {
+  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+  const existing = await basePrisma.tag.findFirst({ where: { name, tenantId } });
+  if (existing) return existing.id;
+  const created = await basePrisma.tag.create({ data: { name, color: tagColor(name), tenantId } });
+  return created.id;
+}
+
+async function syncContactTags(contactId: string, tagNames: string[]): Promise<void> {
+  for (const name of tagNames) {
+    const tagId = await upsertContactTag(name);
+    await prisma.$executeRaw`INSERT INTO "_ContactToTag" ("A","B") VALUES (${contactId},${tagId}) ON CONFLICT DO NOTHING`;
+  }
+}
+
 export async function createContact(formData: FormData) {
   const user = await requirePermission("contacts.create");
   const data = contactData(formData);
   if (!data.firstName) throw new Error("Name is required");
   const tags = parseTags(formData);
   const contact = await prisma.contact.create({
-    data: {
-      ...data,
-      createdById: user.id,
-      tags: {
-        connectOrCreate: tags.map((name) => ({
-          where: { name },
-          create: { name, color: tagColor(name) },
-        })),
-      },
-    },
+    data: { ...data, createdById: user.id },
   });
+  await syncContactTags(contact.id, tags);
   await logAudit({
     action: "contact.created",
     summary: `Created contact ${contactName(contact)}`,
@@ -87,19 +96,9 @@ export async function updateContact(id: string, formData: FormData) {
   const data = contactData(formData);
   if (!data.firstName) throw new Error("Name is required");
   const tags = parseTags(formData);
-  const contact = await prisma.contact.update({
-    where: { id },
-    data: {
-      ...data,
-      tags: {
-        set: [],
-        connectOrCreate: tags.map((name) => ({
-          where: { name },
-          create: { name, color: tagColor(name) },
-        })),
-      },
-    },
-  });
+  const contact = await prisma.contact.update({ where: { id }, data });
+  await prisma.$executeRaw`DELETE FROM "_ContactToTag" WHERE "A" = ${id}`;
+  await syncContactTags(id, tags);
   await logAudit({
     action: "contact.updated",
     summary: `Updated details for ${contactName(contact)}`,

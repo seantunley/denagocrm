@@ -95,13 +95,15 @@ export async function bumpConversation(
   } else if (conv?.lastInboundAt && !conv.firstResponseAt) {
     data.firstResponseAt = when;
   }
-  await basePrisma.conversation.update({ where: { id: conversationId }, data });
+  const tenantId = scopedConversationTenantId();
+  await basePrisma.conversation.update({ where: { id: conversationId, ...(tenantId ? { tenantId } : {}) }, data });
 }
 
 /** Mark a conversation read (a staff member opened it). */
 export async function markConversationRead(conversationId: string): Promise<void> {
+  const tenantId = scopedConversationTenantId();
   await basePrisma.conversation.update({
-    where: { id: conversationId },
+    where: { id: conversationId, ...(tenantId ? { tenantId } : {}) },
     data: { unread: false },
   });
 }
