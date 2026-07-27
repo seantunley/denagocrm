@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 export const maxDuration = 60;
 import { runIdleAutomations } from "@/lib/automations";
 import { runServiceReminders } from "@/lib/serviceReminders";
+import { runSignatureRequestReminders } from "@/lib/signingReminders";
 import { recoverStaleSigningClaims } from "@/lib/signing/dispatch";
 import { syncFacebookLeads } from "@/lib/metaLeadSync";
 import { syncGoogleReviews } from "@/lib/googleReviews";
@@ -31,9 +32,10 @@ async function runOperationalQueues() {
   const remindersSent = on("automotive")
     ? await runServiceReminders().catch((e) => { logError("service-reminders", e); return -1; })
     : null;
-  // Quote signing reminders now ride the SignatureRequest dispatch path
-  // (notifyRecipient/dispatchRequest with reminder:true) — the legacy signToken
-  // reminder that emailed a dead /sign/quote/[token] link has been removed.
+  const signingReminders = await runSignatureRequestReminders().catch((e) => {
+    logError("signature-request-reminders", e);
+    return -1;
+  });
   const staleSigningClaims = await recoverStaleSigningClaims().catch((e) => { logError("stale-signing-claims", e); return null; });
   const fbLeads = on("marketing")
     ? await syncFacebookLeads().catch((e) => { logError("meta-lead-sync", e); return -1; })
@@ -64,6 +66,7 @@ async function runOperationalQueues() {
   return {
     fired,
     remindersSent,
+    signingReminders,
     staleSigningClaims,
     fbLeads,
     googleReviews,
