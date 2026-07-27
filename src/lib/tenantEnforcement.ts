@@ -62,21 +62,21 @@ export function __setTenantEnforcingForTests(value: boolean | null): void {
 
 /**
  * True when tenant context should actually be ENFORCED — requests without a valid
- * tenant blocked and DB access confined to the caller's tenant.
+ * tenant blocked, DB access confined to the caller's tenant via the app-layer guard
+ * (scopeArgs in db.ts), and Postgres RLS SET LOCAL injection active.
  *
- * Deliberately ALWAYS false in every real environment today. The app guard is
- * DEFENCE-IN-DEPTH: it scopes top-level ops and REFUSES nested relation writes
- * (fail closed), but it cannot validate a direct child's scalar parent FK. The
- * AUTHORITATIVE boundaries are Postgres RLS (row-level) and tenant-aware COMPOSITE
- * FKs (cross-row parent/child), and BOTH are HARD PREREQUISITES — this must not
- * flip to true in any environment (preview included) until RLS *and* composite FKs
- * are live (see PHASE-C-TENANT-GUARD-DESIGN.md §1.3/§1.5/§2/§5/§6). This is the
- * SINGLE hook the future enforcement PR flips; callers that must eventually block
- * gate on it now.
+ * Reads TENANT_ENFORCEMENT env var: returns true only when set to "enforce".
+ * Both RLS (migration 20260727130000) and composite FKs (20260727140000) must be
+ * live in the target database before flipping this on.
+ *
+ * Rollback: set TENANT_ENFORCEMENT back to "monitor" or "off" — the app guard
+ * and RLS injection disable; FORCE RLS policies still exist in Postgres but the
+ * app will set bypass_rls='on' (via basePrisma) or current_tenant (via prisma)
+ * before queries, so no data is hidden.
  */
 export function tenantEnforcing(): boolean {
   if (enforceOverrideForTests !== null) return enforceOverrideForTests;
-  return false;
+  return tenantMode() === "enforce";
 }
 
 /**

@@ -95,6 +95,7 @@ model LibraryDocument {
 
   versions LibraryVersion[]
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model LibraryVersion {
@@ -139,6 +140,7 @@ model Product {
   quoteItems         QuoteItem[]
   purchaseOrderLines PurchaseOrderLine[]
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model PurchaseOrder {
@@ -158,6 +160,7 @@ model PurchaseOrder {
   goodsReceipts GoodsReceipt[]
   stockEvents   StockEvent[]
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model StockUnit {
@@ -215,6 +218,7 @@ model StockUnit {
   @@index([arrivedAt], map: "StockUnit_arrivedAt_idx")
   @@index([purchaseOrderLineId], map: "StockUnit_po_line_idx")
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model StockReservation {
@@ -288,6 +292,7 @@ model PurchaseOrderLine {
 
   @@index([purchaseOrderId], map: "PurchaseOrderLine_po_idx")
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model GoodsReceipt {
@@ -305,6 +310,7 @@ model GoodsReceipt {
 
   @@index([purchaseOrderId, receivedAt(sort: Desc)], map: "GoodsReceipt_po_idx")
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model GoodsReceiptLine {
@@ -387,6 +393,7 @@ model Contact {
   consentRecords    ConsentRecord[]
 
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 // POPIA consent ledger — an append-only history of consent given/withdrawn,
@@ -484,6 +491,7 @@ model Campaign {
 
   @@index([status])
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model CampaignRecipient {
@@ -625,6 +633,7 @@ model Lead {
   referral  Referral?
 
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model ResearchNote {
@@ -778,6 +787,7 @@ model Quote {
   stockReservations StockReservation[]
 
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model QuoteItem {
@@ -943,6 +953,7 @@ model Conversation {
   @@index([contactId])
   @@index([leadId])
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model Document {
@@ -1016,6 +1027,7 @@ model Vehicle {
 
   @@index([fleetId])
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 // A fleet / B2B account — an estate, golf course, resort or business that
@@ -1033,6 +1045,7 @@ model Fleet {
 
   vehicles Vehicle[]
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 // A warranty claim against a cart. Lightweight workflow: open → approved/
@@ -1198,6 +1211,7 @@ model JobCard {
   @@index([bayId])
   @@index([comebackOfId])
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model PartReservation {
@@ -1227,6 +1241,7 @@ model ServicePackage {
 
   items ServicePackageItem[]
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model ServicePackageItem {
@@ -1293,6 +1308,7 @@ model WorkshopBay {
 
   jobCards JobCard[]
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model JobCardTimeEntry {
@@ -1346,6 +1362,7 @@ model Part {
   jobCardItems JobCardItem[]
   reservations PartReservation[]
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 // One-time codes for verifying vehicle owners on the public booking form.
@@ -1469,6 +1486,7 @@ model Survey {
 
   @@index([type, active])
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 // One invite/answer per recipient. contactId/leadId/jobCardId are loose
@@ -1576,6 +1594,7 @@ model DocBuilderTemplate {
 
   @@index([key, isDefault])
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 /// A visual signing workflow: an ordered/branching graph of signer + condition
@@ -1670,6 +1689,7 @@ model SignatureRequest {
   @@index([jobCardId])
   @@index([contactId])
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 /// An internal approval gate materialised from a workflow's approval node. A CRM
@@ -1747,6 +1767,7 @@ model SignatureRecipient {
 
   @@index([requestId, order])
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model SignatureField {
@@ -1774,6 +1795,7 @@ model SignatureField {
 
   @@index([requestId])
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 /// One recipient's answer to a single signature field. `SignatureField.value`
@@ -1838,6 +1860,7 @@ model CustomDocTemplate {
   versions  CustomDocVersion[]
   instances DocInstance[]
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model CustomDocVersion {
@@ -1975,6 +1998,7 @@ model CustomerCase {
   @@index([mailboxId, status, updatedAt])
   @@index([assignedToId, status])
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model CustomerCaseMessage {
@@ -2078,6 +2102,7 @@ model SupportMailbox {
   cases        CustomerCase[]
   cannedReplies CannedReply[]
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model SupportTag {
@@ -2089,6 +2114,7 @@ model SupportTag {
   createdAt DateTime          @default(now())
   cases     CustomerCaseTag[]
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model CustomerCaseTag {
@@ -2147,6 +2173,7 @@ model Competitor {
 
   @@index([status, name])
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model CompetitorSource {
@@ -2173,6 +2200,7 @@ model CompetitorSource {
   @@index([competitorId])
   @@index([active, lastCheckedAt])
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model CompetitorSnapshot {
@@ -2265,6 +2293,7 @@ model CustomFieldDef {
   @@unique([entity, key])
   @@index([entity, active, order])
   @@index([tenantId])
+  @@unique([tenantId, id])
 }
 
 model CustomFieldValue {

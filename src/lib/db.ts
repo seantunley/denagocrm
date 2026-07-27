@@ -12,7 +12,10 @@ import {
   TenantScopeError,
 } from "./tenantGuard";
 
+// One raw PrismaClient shared by both exported clients so they use the same
+// connection pool. Never exported — callers use `basePrisma` or `prisma`.
 const globalForPrisma = globalThis as unknown as {
+  _rawPrisma?: PrismaClient;
   basePrisma?: PrismaClient;
   prisma?: ReturnType<typeof buildClient>;
 };
@@ -74,10 +77,6 @@ async function filteredUnique(
 ) {
   if (!SOFT_DELETE_MODELS.has(model)) return query(args);
   const hasSelect = args?.select && typeof args.select === "object";
-  // Inject deletedAt whenever the caller's select doesn't already ASK for it
-  // (=== true). Testing only for the key's presence let `deletedAt: false` slip
-  // through: the key exists, so nothing was injected, and the result then had no
-  // deletedAt to test — a trashed row would resolve as if alive.
   const injectDeletedAt = hasSelect && args.select.deletedAt !== true;
   const runArgs = injectDeletedAt
     ? { ...args, select: { ...args.select, deletedAt: true } }
@@ -145,12 +144,6 @@ function scopeArgs(model: string, kind: ScopeKind, args: any): any {
   }
 }
 
-/**
- * Nested relation writes can't be tenant-stamped/validated by a query extension
- * (it only sees top-level args), so under enforcement they fail closed rather than
- * silently linking/creating cross-tenant rows. Lifted once composite FKs make
- * parent/child consistency DB-enforced.
- */
 function refuseNestedRelationWrite(model: string, data: unknown): void {
   if (hasNestedRelationWrite(data)) {
     throw new TenantScopeError(
@@ -159,13 +152,43 @@ function refuseNestedRelationWrite(model: string, data: unknown): void {
   }
 }
 
-function buildClient(base: PrismaClient) {
-  return base.$extends({
+/**
+ * Inject the Postgres RLS session variable for this query.
+ *
+ * Under enforcement, EVERY query via `prisma` (the scoped client) must run
+ * inside a transaction where `SET LOCAL app.current_tenant` is set first.
+ * Prisma propagates the transaction context through AsyncLocalStorage, so
+ * `query(args)` called inside `raw.$transaction(async () => {...})` uses the
+ * same DB connection as the SET LOCAL — making RLS see the correct tenant.
+ *
+ * `basePrisma` uses `app.bypass_rls = 'on'` instead (trusted system path).
+ *
+ * With enforcement off (default), this is a no-op.
+ */
+async function withRlsScope(raw: PrismaClient, query: () => Promise<any>): Promise<any> {
+  if (!tenantEnforcing()) return query();
+  const scope = currentTenantScope();
+  if (scope?.system) {
+    return raw.$transaction(async () => {
+      await raw.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+      return query();
+    });
+  }
+  if (scope?.tenantId) {
+    const tid = scope.tenantId;
+    return raw.$transaction(async () => {
+      await raw.$executeRaw`SELECT set_config('app.current_tenant', ${tid}, TRUE)`;
+      return query();
+    });
+  }
+  // No scope: scopeArgs (Layer 1) will throw TenantScopeError before we reach DB
+  return query();
+}
+
+function buildClient(raw: PrismaClient) {
+  // Layer 1: soft-delete filter + tenant scope arg manipulation (app-layer guard)
+  const guarded = raw.$extends({
     query: {
-      // Each hook composes two independent concerns on `args`: the tenant guard
-      // (`scopeArgs`, DORMANT until `tenantEnforcing()`) and the soft-delete
-      // filter (`addAlive*`). With enforcement off, `scopeArgs` is the identity,
-      // so this block behaves exactly as the soft-delete-only version did.
       $allModels: {
         async findMany({ model, args, query }: any) {
           return query(addAliveFilter(model, scopeArgs(model, "where", args)));
@@ -176,17 +199,12 @@ function buildClient(base: PrismaClient) {
         async findFirstOrThrow({ model, args, query }: any) {
           return query(addAliveFilter(model, scopeArgs(model, "where", args)));
         },
-        // Tenant scoping is injected into the `where` (DB-level, extendedWhereUnique)
-        // so a cross-tenant row is never fetched; filteredUnique then applies only
-        // the soft-delete result check.
         async findUnique({ model, args, query }: any) {
           return filteredUnique(model, scopeArgs(model, "where", args), query, false);
         },
         async findUniqueOrThrow({ model, args, query }: any) {
           return filteredUnique(model, scopeArgs(model, "where", args), query, true);
         },
-        // Writes are stamped with the owning tenant from trusted context,
-        // overwriting any client-supplied `tenantId` (the anti-forgery rule).
         async create({ model, args, query }: any) {
           return query(scopeArgs(model, "create", args));
         },
@@ -196,11 +214,6 @@ function buildClient(base: PrismaClient) {
         async createManyAndReturn({ model, args, query }: any) {
           return query(scopeArgs(model, "create", args));
         },
-        // Mutations are guarded too, not just reads: a trashed row must not be
-        // updatable/deletable through the filtered client (Trash/restore/purge
-        // use basePrisma). update/delete throw on a trashed row; the *Many forms
-        // skip it. The tenant guard additionally scopes the `where` to the caller's
-        // tenant so you can only touch your own rows.
         async update({ model, args, query }: any) {
           return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
         },
@@ -216,11 +229,6 @@ function buildClient(base: PrismaClient) {
         async deleteMany({ model, args, query }: any) {
           return query(addAliveMutationFilter(model, scopeArgs(model, "mutation", args)));
         },
-        // upsert is NOT soft-delete-guarded (injecting `deletedAt` into its unique
-        // where would force a spurious create on a trashed row). The tenant guard
-        // DOES scope its where (Prisma 6 extendedWhereUnique) + stamp create +
-        // guard update, so a cross-tenant upsert misses and takes the (stamped)
-        // create branch instead of updating another tenant's row. See scopeUpsert.
         async upsert({ model, args, query }: any) {
           return query(scopeArgs(model, "upsert", args));
         },
@@ -234,9 +242,6 @@ function buildClient(base: PrismaClient) {
           return query(addAliveFilter(model, scopeArgs(model, "where", args)));
         },
       },
-      // Shared inbox: attach every new message to a conversation and roll its
-      // counters/unread forward. Best-effort — conversation bookkeeping must
-      // never fail a Communication write. Uses basePrisma internally (no recursion).
       communication: {
         async create({ args, query }: any) {
           let conversationId: string | null = null;
@@ -261,21 +266,62 @@ function buildClient(base: PrismaClient) {
       },
     },
   });
+
+  // Layer 2: RLS session-variable injection (wraps Layer 1 in a transaction
+  // that sets SET LOCAL app.current_tenant before the guarded query runs).
+  // Only active when tenantEnforcing() returns true.
+  return guarded.$extends({
+    query: {
+      $allModels: {
+        async $allOperations({ args, query }: any) {
+          return withRlsScope(raw, () => query(args));
+        },
+      },
+    },
+  });
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-/**
- * Raw client WITHOUT the soft-delete filter — for backups, trash, restore, purge,
- * and for business transactions that need row locks / raw SQL. Because it is
- * unfiltered, any business use MUST add its own `deletedAt: null` predicate to
- * avoid reading or mutating trashed rows (see quoteLock, claimPartStock, merge).
- */
-export const basePrisma = globalForPrisma.basePrisma ?? new PrismaClient();
+const _rawPrisma = globalForPrisma._rawPrisma ?? new PrismaClient();
 
-/** Default client: soft-deleted records are hidden from list/count queries. */
-export const prisma = globalForPrisma.prisma ?? buildClient(basePrisma);
+/**
+ * Trusted system client — bypasses soft-delete filter and tenant scope guard.
+ * Under RLS enforcement, every operation is wrapped in a transaction that sets
+ * `app.bypass_rls = 'on'` so the DB-layer FORCE RLS policy permits it.
+ *
+ * Use for: backups, trash, restore, purge, session management, audit, and any
+ * business transaction that needs explicit row locks or cross-tenant access.
+ * NOT for user-facing reads — use `prisma` instead.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const _basePrismaExtended = _rawPrisma.$extends({
+  query: {
+    $allModels: {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async $allOperations({ args, query }: any) {
+        if (!tenantEnforcing()) return query(args);
+        return _rawPrisma.$transaction(async () => {
+          await _rawPrisma.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+          return query(args);
+        });
+      },
+    },
+  },
+});
+
+export const basePrisma =
+  (globalForPrisma.basePrisma as PrismaClient | undefined) ??
+  // Type assertion: the extended client has the same runtime API as PrismaClient;
+  // the $extends wrapper only adds extension metadata to the type. Callers that
+  // accept PrismaClient (provisioning.ts, etc.) work correctly at runtime.
+  (_basePrismaExtended as unknown as PrismaClient);
+
+/** Default client: soft-deleted records are hidden; tenant scope is enforced when
+ *  TENANT_ENFORCEMENT=enforce; DB-layer RLS is injected via SET LOCAL. */
+export const prisma = globalForPrisma.prisma ?? buildClient(_rawPrisma);
 
 if (process.env.NODE_ENV !== "production") {
+  globalForPrisma._rawPrisma = _rawPrisma;
   globalForPrisma.basePrisma = basePrisma;
   globalForPrisma.prisma = prisma;
 }
