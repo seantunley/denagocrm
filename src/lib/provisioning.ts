@@ -48,6 +48,10 @@ export async function ensureFoundingMembership(client: Client, userId: string): 
     create: { id: DEFAULT_TENANT_ID, name: "Denago Cape Town", slug: "denago-cape-town", active: true },
   });
   await addTenantMembership(client, DEFAULT_TENANT_ID, userId);
+  await client.user.update({
+    where: { id: userId },
+    data: { tenantId: DEFAULT_TENANT_ID },
+  });
 }
 
 export type CreateTenantInput = {
@@ -85,6 +89,9 @@ export async function createTenant(
   input: CreateTenantInput,
 ): Promise<{ tenantId: string; ownerId: string }> {
   return prisma.$transaction(async (tx) => {
+    const tenant = await tx.tenant.create({
+      data: { name: input.name, slug: input.slug, active: false },
+    });
     const owner = await tx.user.create({
       data: {
         name: input.owner.name,
@@ -92,11 +99,10 @@ export async function createTenant(
         passwordHash: input.owner.passwordHash,
         role: "member",
         modules: "",
+        tenantId: tenant.id,
       },
     });
-    const tenant = await tx.tenant.create({
-      data: { name: input.name, slug: input.slug, active: false, ownerUserId: owner.id },
-    });
+    await tx.tenant.update({ where: { id: tenant.id }, data: { ownerUserId: owner.id } });
     // disabledAt is a security column managed outside the Prisma model (raw SQL).
     // Disable the owner so the credentials can't log into the unscoped CRM until
     // a deliberate activation flow exists.

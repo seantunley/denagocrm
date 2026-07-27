@@ -52,6 +52,12 @@ model User {
   timelinePins       TimelinePin[]
   memberships        TenantMember[]
   ownedTenants       Tenant[]       @relation("TenantOwner")
+
+  // Multi-tenancy: owning tenant. Backfilled from TenantMember (one-user-one-tenant).
+  // Auth paths use basePrisma (bypass_rls='on') so login still works without a scope.
+  tenantId String?
+
+  @@index([tenantId])
 }
 
 // User-pinned timeline entries (communications / activities) that float to the
