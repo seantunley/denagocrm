@@ -9,6 +9,7 @@ import { markPortalNotificationRead, portalLogout } from "@/app/actions/portal";
 import ServiceRequestForm from "@/components/ServiceRequestForm";
 import { computeDue, dueLabels, dueColors } from "@/lib/serviceDue";
 import { computeWarranty, warrantyLabels, warrantyColors } from "@/lib/warranty";
+import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Eyebrow, MetricCard } from "@/components/visual-system";
@@ -96,7 +97,41 @@ export default async function PortalHome() {
     `,
   ]);
 
-  const unsignedQuotes = quotes.filter((quote) => quote.signToken && !quote.signedAt && quote.status !== "declined");
+  // Signing is driven by the SignatureRequest system (the legacy quote.signToken +
+  // /sign/quote/[token] route are gone). For each of the customer's quotes with a
+  // live (non-closed) request, resolve the outstanding SIGNER recipient token so the
+  // portal can deep-link to the real signing surface at /signing/[token]. Scoped
+  // `prisma` keeps this within the portal's tenant.
+  const quoteIds = quotes.map((quote) => quote.id);
+  const openRequests = quoteIds.length
+    ? await prisma.signatureRequest.findMany({
+        where: {
+          quoteId: { in: quoteIds },
+          deletedAt: null,
+          status: { notIn: [...CLOSED_REQUEST_STATUSES] },
+        },
+        select: {
+          quoteId: true,
+          recipients: {
+            where: { role: "signer", status: { notIn: ["signed", "declined"] } },
+            select: { token: true, email: true },
+          },
+        },
+      })
+    : [];
+  const contactEmail = contact.email?.toLowerCase() ?? null;
+  const signTokenByQuote = new Map<string, string>();
+  for (const request of openRequests) {
+    if (!request.quoteId || request.recipients.length === 0) continue;
+    // Prefer the recipient whose email matches this customer; else the first
+    // outstanding signer on the request.
+    const recipient =
+      request.recipients.find((r) => r.email && r.email.toLowerCase() === contactEmail) ??
+      request.recipients[0];
+    if (recipient) signTokenByQuote.set(request.quoteId, recipient.token);
+  }
+
+  const unsignedQuotes = quotes.filter((quote) => signTokenByQuote.has(quote.id) && !quote.signedAt);
   const unreadNotifications = notifications.filter((notification) => !notification.readAt).length;
 
   return (
@@ -225,11 +260,11 @@ export default async function PortalHome() {
           <div className="card p-0 divide-y divide-border">
             {quotes.map((quote) => {
               const total = quote.items.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
-              const canSign = quote.signToken && !quote.signedAt && quote.status !== "declined";
+              const signToken = signTokenByQuote.get(quote.id);
               return (
                 <div key={quote.id} className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
                   <div><p className="text-sm font-medium">Quote Q-{quote.number}</p><p className="text-xs text-slate-400">{formatZAR(Math.round(total))} · {deliveryLabel(quote)}</p></div>
-                  {canSign && <a href={`/sign/quote/${quote.signToken}`} className="btn-primary btn-sm">Review & sign</a>}
+                  {signToken && <a href={`/signing/${signToken}`} className="btn-primary btn-sm">Review & sign</a>}
                 </div>
               );
             })}
