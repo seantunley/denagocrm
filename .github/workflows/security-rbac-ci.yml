@@ -138,3 +138,11 @@ jobs:
         # system-scope bypass. Exercises the real Prisma extension, not just the
         # pure helpers.
         run: npm run test:tenant-guard
+
+      - name: Run RLS proof under a restricted (NOSUPERUSER NOBYPASSRLS) role
+        # The steps above connect as the container's bootstrap account, which is a
+        # SUPERUSER and bypasses RLS entirely — so those isolation checks really
+        # prove the app-layer guard. This step creates a NOSUPERUSER NOBYPASSRLS
+        # role (what production uses), connects as it, and drives the REAL scoped
+        # client so FORCE ROW LEVEL SECURITY itself is exercised.
+        run: npm run test:rls-restricted

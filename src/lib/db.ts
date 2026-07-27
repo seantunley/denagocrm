@@ -362,3 +362,38 @@ if (process.env.NODE_ENV !== "production") {
   globalForPrisma.basePrisma = basePrisma;
   globalForPrisma.prisma = prisma;
 }
+
+/**
+ * TEST ONLY. Wrap an arbitrary raw PrismaClient with the SAME scoped-client
+ * pipeline the exported `prisma` uses — the real `buildClient` → `withRlsScope`
+ * (SET LOCAL app.current_tenant/app.bypass_rls) + tenant-guard `scopeArgs`. The
+ * RLS proof (scripts/test-rls-restricted.ts) uses this to drive the REAL
+ * implementation over a connection opened as a NOSUPERUSER NOBYPASSRLS role, so
+ * FORCE ROW LEVEL SECURITY is actually exercised (the default CI/superuser role
+ * bypasses RLS entirely, which would make an isolation assertion meaningless).
+ * Not for application code — use `prisma`.
+ */
+export function __buildScopedClientForTests(raw: PrismaClient): PrismaClient {
+  return buildClient(raw) as unknown as PrismaClient;
+}
+
+/**
+ * TEST ONLY. A bypass wrapper (always sets app.bypass_rls='on') over an arbitrary
+ * raw client — the `basePrisma` equivalent — so the proof can show the SAME
+ * restricted role sees every tenant's rows once bypass is set, and none without.
+ */
+export function __buildBypassClientForTests(raw: PrismaClient): PrismaClient {
+  return raw.$extends({
+    query: {
+      $allModels: {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        async $allOperations({ args, query }: any) {
+          return raw.$transaction(async () => {
+            await raw.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+            return query(args);
+          });
+        },
+      },
+    },
+  }) as unknown as PrismaClient;
+}
