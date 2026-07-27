@@ -2416,6 +2416,7 @@ model TenantIntegrationCredential {
   key       String
   value     String
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([tenantId, key])
   @@index([tenantId])
