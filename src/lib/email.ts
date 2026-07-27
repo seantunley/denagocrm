@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
-import { getSetting } from "./settings";
+import { resolveTenantCredential } from "./settings";
+import { currentTenantScope } from "./tenantScope";
 import { formatZAR } from "./format";
 
 export type SmtpConfig = {
@@ -12,13 +13,14 @@ export type SmtpConfig = {
 };
 
 export async function getSmtpConfig(): Promise<SmtpConfig | null> {
+  const tenantId = currentTenantScope()?.tenantId ?? null;
   const [host, port, secure, user, pass, from] = await Promise.all([
-    getSetting("SMTP_HOST"),
-    getSetting("SMTP_PORT"),
-    getSetting("SMTP_SECURE"),
-    getSetting("SMTP_USER"),
-    getSetting("SMTP_PASS"),
-    getSetting("SMTP_FROM"),
+    resolveTenantCredential(tenantId, "SMTP_HOST"),
+    resolveTenantCredential(tenantId, "SMTP_PORT"),
+    resolveTenantCredential(tenantId, "SMTP_SECURE"),
+    resolveTenantCredential(tenantId, "SMTP_USER"),
+    resolveTenantCredential(tenantId, "SMTP_PASS"),
+    resolveTenantCredential(tenantId, "SMTP_FROM"),
   ]);
   if (!host || !from) return null;
   return {

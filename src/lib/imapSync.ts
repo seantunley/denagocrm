@@ -3,7 +3,8 @@ import { simpleParser, type ParsedMail } from "mailparser";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { resolveTenantActor } from "./tenantActor";
-import { getSetting, putSetting } from "./settings";
+import { getSetting, putSetting, resolveTenantCredential } from "./settings";
+import { currentTenantScope } from "./tenantScope";
 import { sendPushToAll } from "./push";
 import { sendEmail } from "./email";
 import { contactName } from "./format";
@@ -343,12 +344,18 @@ async function clearStuck(): Promise<void> {
  * row (nor a duplicate/orphan contact).
  */
 export async function syncInboundEmail(): Promise<number> {
+  // Runs inside runCronPerTenant's per-tenant slice — currentTenantScope() is
+  // that tenant's scope when enforcing, else undefined (dormant): a tenant
+  // with no IMAP override correctly falls back to the one global mailbox
+  // (today's only mailbox). The "poll once globally vs per tenant" cron
+  // structure is unchanged — only the credential resolution below is new.
+  const tenantId = currentTenantScope()?.tenantId ?? null;
   const [host, portRaw, secureRaw, user, pass] = await Promise.all([
-    getSetting("IMAP_HOST"),
-    getSetting("IMAP_PORT"),
-    getSetting("IMAP_SECURE"),
-    getSetting("IMAP_USER"),
-    getSetting("IMAP_PASS"),
+    resolveTenantCredential(tenantId, "IMAP_HOST"),
+    resolveTenantCredential(tenantId, "IMAP_PORT"),
+    resolveTenantCredential(tenantId, "IMAP_SECURE"),
+    resolveTenantCredential(tenantId, "IMAP_USER"),
+    resolveTenantCredential(tenantId, "IMAP_PASS"),
   ]);
   if (!host || !user || !pass) return 0;
   if (!(await acquireSyncLock())) return 0; // another run is in progress

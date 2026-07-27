@@ -1,11 +1,26 @@
 import { prisma } from "./db";
-import { getSetting } from "./settings";
+import { resolveTenantCredential } from "./settings";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
 import { topPosition } from "./leadPos";
 import { resolveTenantActor } from "./tenantActor";
+import { currentTenantScope } from "./tenantScope";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
+
+/** The tenant a WhatsApp credential lookup should prefer, or null (global). */
+function ambientTenantId(): string | null {
+  return currentTenantScope()?.tenantId ?? null;
+}
+
+/** Resolves the phone-number id + access token, honouring a tenant override. */
+async function waCredentials(): Promise<[string | null, string | null]> {
+  const tenantId = ambientTenantId();
+  return Promise.all([
+    resolveTenantCredential(tenantId, "WA_PHONE_NUMBER_ID"),
+    resolveTenantCredential(tenantId, "WA_ACCESS_TOKEN"),
+  ]);
+}
 
 /** Normalises a phone number to WhatsApp digits (27…). */
 export function waDigits(phone: string): string {
@@ -15,10 +30,7 @@ export function waDigits(phone: string): string {
 }
 
 export async function isWhatsAppConfigured(): Promise<boolean> {
-  const [id, token] = await Promise.all([
-    getSetting("WA_PHONE_NUMBER_ID"),
-    getSetting("WA_ACCESS_TOKEN"),
-  ]);
+  const [id, token] = await waCredentials();
   return Boolean(id && token);
 }
 
@@ -49,10 +61,7 @@ export async function sendWhatsAppText(
   toDigits: string,
   text: string
 ): Promise<{ ok: boolean; error?: string }> {
-  const [phoneNumberId, token] = await Promise.all([
-    getSetting("WA_PHONE_NUMBER_ID"),
-    getSetting("WA_ACCESS_TOKEN"),
-  ]);
+  const [phoneNumberId, token] = await waCredentials();
   if (!phoneNumberId || !token) {
     return { ok: false, error: "WhatsApp is not configured (Settings → Integrations)." };
   }
@@ -79,7 +88,7 @@ export async function sendWhatsAppText(
 
 /** Sends an image by URL (e.g. a brochure) on WhatsApp. */
 export async function sendWhatsAppImage(toDigits: string, url: string, caption?: string): Promise<{ ok: boolean; error?: string }> {
-  const [phoneNumberId, token] = await Promise.all([getSetting("WA_PHONE_NUMBER_ID"), getSetting("WA_ACCESS_TOKEN")]);
+  const [phoneNumberId, token] = await waCredentials();
   if (!phoneNumberId || !token) return { ok: false, error: "WhatsApp is not configured." };
   const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
     method: "POST",
@@ -103,7 +112,7 @@ export async function uploadWhatsAppMedia(
   contentType: string,
   filename: string,
 ): Promise<{ id: string } | { error: string }> {
-  const [phoneNumberId, token] = await Promise.all([getSetting("WA_PHONE_NUMBER_ID"), getSetting("WA_ACCESS_TOKEN")]);
+  const [phoneNumberId, token] = await waCredentials();
   if (!phoneNumberId || !token) return { error: "WhatsApp is not configured." };
   const form = new FormData();
   form.append("messaging_product", "whatsapp");
@@ -124,7 +133,7 @@ export async function uploadWhatsAppMedia(
 
 /** Sends an audio message (e.g. a synthesised voice-note reply) by uploaded media ID. */
 export async function sendWhatsAppAudioId(toDigits: string, mediaId: string): Promise<{ ok: boolean; error?: string }> {
-  const [phoneNumberId, token] = await Promise.all([getSetting("WA_PHONE_NUMBER_ID"), getSetting("WA_ACCESS_TOKEN")]);
+  const [phoneNumberId, token] = await waCredentials();
   if (!phoneNumberId || !token) return { ok: false, error: "WhatsApp is not configured." };
   const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
     method: "POST",
@@ -139,10 +148,7 @@ export async function sendWhatsAppAudioId(toDigits: string, mediaId: string): Pr
 }
 
 async function sendInteractive(toDigits: string, interactive: unknown): Promise<{ ok: boolean; error?: string }> {
-  const [phoneNumberId, token] = await Promise.all([
-    getSetting("WA_PHONE_NUMBER_ID"),
-    getSetting("WA_ACCESS_TOKEN"),
-  ]);
+  const [phoneNumberId, token] = await waCredentials();
   if (!phoneNumberId || !token) return { ok: false, error: "WhatsApp is not configured." };
   const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
     method: "POST",
@@ -203,7 +209,7 @@ export async function sendWhatsAppList(
 export async function fetchWhatsAppMedia(
   mediaId: string
 ): Promise<{ buffer: Buffer; contentType: string } | null> {
-  const token = await getSetting("WA_ACCESS_TOKEN");
+  const token = await resolveTenantCredential(ambientTenantId(), "WA_ACCESS_TOKEN");
   if (!token) return null;
   try {
     const metaRes = await fetch(`${GRAPH}/${mediaId}`, {

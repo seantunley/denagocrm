@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { prisma } from "./db";
+import { prisma, basePrisma } from "./db";
 
 /**
  * Settings that hold credentials are encrypted at rest with AES-256-GCM
@@ -114,5 +114,76 @@ export async function putSetting(key: string, value: string): Promise<void> {
     where: { key },
     update: { value: stored },
     create: { key, value: stored },
+  });
+}
+
+/**
+ * Raw per-tenant override lookup (`TenantIntegrationCredential`), decrypted with
+ * the SAME helper `getSetting`/`putSetting` use for the global `AppSetting` row.
+ * Explicit `(tenantId, key)` filter via `basePrisma` — never ambient scope —
+ * because callers of {@link resolveTenantCredential} include cron/webhook
+ * contexts that may have no request-scoped ALS tenant at all.
+ */
+async function getTenantCredentialOverride(tenantId: string, key: string): Promise<string | null> {
+  const row = await basePrisma.tenantIntegrationCredential.findUnique({
+    where: { tenantId_key: { tenantId, key } },
+  });
+  if (!row?.value) return null;
+  try {
+    return decryptValue(row.value);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolves an outbound-integration credential (WhatsApp, Meta, Telegram, SMTP,
+ * IMAP, SMS, Google Reviews), preferring a TENANT-specific override over the
+ * install-global `AppSetting` row for the same `key`.
+ *
+ * `tenantId` is supplied EXPLICITLY by the caller (never read from ambient
+ * scope in here) — resolve it however that call site already does (a cron
+ * slice's tenant, `currentTenantScope()?.tenantId`, a resolved channel scope,
+ * etc.) and pass it in, or pass `null` where no tenant is known.
+ *
+ * THE CRITICAL INVARIANT: with zero `TenantIntegrationCredential` rows (true
+ * today — nothing writes this table yet), every call falls through to
+ * `getGlobal(key)` regardless of `tenantId` — byte-for-byte today's
+ * `getSetting(key)` result. A tenant only ever gets a different answer once it
+ * has saved its OWN override row for that exact key.
+ *
+ * `lookupOverride`/`getGlobal` are overridable purely so the fallback logic is
+ * unit-testable without a database (see tests/tenantIntegrationCredential.test.ts);
+ * every real call site relies on the defaults.
+ */
+export async function resolveTenantCredential(
+  tenantId: string | null,
+  key: string,
+  deps: {
+    lookupOverride?: (tenantId: string, key: string) => Promise<string | null>;
+    getGlobal?: (key: string) => Promise<string | null>;
+  } = {},
+): Promise<string | null> {
+  const lookupOverride = deps.lookupOverride ?? getTenantCredentialOverride;
+  const getGlobal = deps.getGlobal ?? getSetting;
+  if (tenantId) {
+    const override = await lookupOverride(tenantId, key);
+    if (override !== null) return override;
+  }
+  return getGlobal(key);
+}
+
+/**
+ * Write-side counterpart for a future settings UI: upserts a tenant's OWN
+ * override credential for `key`, encrypting credential-class keys exactly like
+ * `putSetting` does for the global row. Never touches the global `AppSetting`
+ * row — a tenant override lives entirely in `TenantIntegrationCredential`.
+ */
+export async function putTenantCredential(tenantId: string, key: string, value: string): Promise<void> {
+  const stored = value && isSecretSettingKey(key) ? encryptValue(value) : value;
+  await basePrisma.tenantIntegrationCredential.upsert({
+    where: { tenantId_key: { tenantId, key } },
+    update: { value: stored },
+    create: { tenantId, key, value: stored },
   });
 }
