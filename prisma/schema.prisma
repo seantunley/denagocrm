@@ -2402,3 +2402,21 @@ model ChannelIdentity {
   @@unique([channel, externalId]) // one endpoint belongs to exactly one tenant
   @@index([tenantId])
 }
+
+// Per-tenant override credentials for outbound integrations (WhatsApp, Meta, Telegram,
+// SMTP, IMAP, SMS, Google Reviews). A row means THIS tenant has its own credential for
+// this key, overriding the global AppSetting fallback. Non-founding tenants must have
+// overrides for all required keys of an integration — they never fall back to the
+// platform owner's account. Values encrypted at rest with the same AES-256-GCM envelope
+// as AppSetting. All reads/writes use basePrisma (bypass_rls) because the lookup path
+// (resolveTenantCredential) runs from cron/webhook contexts before any ambient scope.
+model TenantIntegrationCredential {
+  id        String   @id @default(cuid())
+  tenantId  String
+  key       String
+  value     String
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+}
