@@ -346,17 +346,27 @@ patchRaw("$executeRawUnsafe");
 patchRaw("$queryRawUnsafe");
 
 // Interactive-transaction bypass. basePrisma is the trusted bypass client, so its
-// $transaction callback must run with bypass for its ENTIRE body. Model ops inside
-// get bypass via the extension's per-op wrapping, but standalone `tx.$executeRaw` /
-// `tx.$queryRaw` do NOT — and they run on the transaction's pinned connection, so a
-// raw WRITE to a FORCE-RLS table is silently filtered to zero rows and a raw
-// `FOR UPDATE` lock becomes a no-op. Setting the GUC once at the top of the callback
-// (same pinned connection, transaction-local) covers every raw call in the body. The
-// array form takes only already-wrapped model-op promises, so it passes through.
+// $transaction callback must run with bypass for its ENTIRE body.
+//
+// CRITICAL: the callback runs on the UN-extended `_rawPrisma`, not the extended
+// client. The extension (above) wraps EVERY model op in its own nested
+// `_rawPrisma.$transaction(...)` to self-set bypass. Nesting those per-op
+// transactions inside an interactive transaction disturbs the pinned connection's
+// transaction-local GUC state, so a single `set_config(..., TRUE)` set once at the
+// top would be gone by the time a later standalone `tx.$executeRaw` / `tx.$queryRaw`
+// runs — a raw WRITE to a FORCE-RLS table then silently filters to zero rows and a
+// raw `FOR UPDATE` lock becomes a no-op (createTenant's owner-disable UPDATE hit
+// exactly this). Running the callback on the raw client means `tx` is a plain
+// interactive client with NO per-op nesting, so the one top-of-body `set_config`
+// persists for the whole transaction and covers every model AND raw statement. The
+// base extension only adds bypass (no client/result methods), so a raw `tx` is
+// behaviourally identical for callers. The array form takes already-wrapped
+// extended model-op promises (each self-bypasses), so it keeps the extended path.
+const _rawTransaction = _rawPrisma.$transaction.bind(_rawPrisma);
 const _origTransaction = _basePrismaExtended.$transaction.bind(_basePrismaExtended);
 _basePrismaFull.$transaction = (arg: any, opts: any) => {
   if (typeof arg === "function") {
-    return _origTransaction(async (tx: any) => {
+    return _rawTransaction(async (tx: any) => {
       await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
       return arg(tx);
     }, opts);
