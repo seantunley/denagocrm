@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "../src/lib/db";
 import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
-import { GLOBAL_MODELS } from "../src/lib/tenantGuard";
+import { GLOBAL_MODELS, TENANT_SHARED_NULLABLE_MODELS } from "../src/lib/tenantGuard";
 
 // Read-only production preflight: verifies invariants that MUST hold before
 // TENANT_ENFORCEMENT=enforce is flipped on. Exits 1 if any hard failure is found.
@@ -176,21 +176,32 @@ async function main() {
   //    The list is derived from the SAME classification the guard uses
   //    (GLOBAL_MODELS opt-out) via the Prisma DMMF, so a newly-added tenant table
   //    is covered automatically instead of being silently skipped.
+  //    SHARED-nullable models (Role/RolePermission) are EXCLUDED from the hard
+  //    fail: their RLS policy admits `tenantId IS NULL` for the seeded system rows
+  //    shared across all tenants, so a NULL there is correct, not a lockout risk.
+  //    Their null counts are still reported as an informational note.
   const scopedTables = Prisma.dmmf.datamodel.models
     .filter((m) => !GLOBAL_MODELS.has(m.name))
     .filter((m) => m.fields.some((f) => f.name === "tenantId"))
     .map((m) => ({
       table: m.dbName ?? m.name,
       hasDeletedAt: m.fields.some((f) => f.name === "deletedAt"),
+      sharedNullable: TENANT_SHARED_NULLABLE_MODELS.has(m.name),
     }));
 
   console.log(`Checking ${scopedTables.length} tenant-scoped tables for NULL tenantId…`);
-  for (const { table, hasDeletedAt } of scopedTables) {
+  for (const { table, hasDeletedAt, sharedNullable } of scopedTables) {
     // Live rows only where the table supports soft-delete — a trashed row that is
     // about to be purged shouldn't block the rollout.
     const where = hasDeletedAt ? `"tenantId" IS NULL AND "deletedAt" IS NULL` : `"tenantId" IS NULL`;
     const n = await countTable(table, where);
-    if (n > 0) failures.push(`${n} ${hasDeletedAt ? "live " : ""}${table} row(s) have tenantId IS NULL`);
+    if (n === 0) continue;
+    if (sharedNullable) {
+      // Legitimate shared/system rows — informational, never a failure.
+      warnings.push(`${n} ${table} row(s) have tenantId IS NULL (shared/system rows — expected)`);
+    } else {
+      failures.push(`${n} ${hasDeletedAt ? "live " : ""}${table} row(s) have tenantId IS NULL`);
+    }
   }
 
   // ── 6. System roles: 7 roles present in the founding tenant ───────────────

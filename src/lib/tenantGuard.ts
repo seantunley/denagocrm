@@ -34,6 +34,25 @@ export const GLOBAL_MODELS: ReadonlySet<string> = new Set([
   "Permission",
 ]);
 
+/**
+ * Tenant-scoped models that ALSO legitimately hold shared rows with `tenantId IS
+ * NULL` — their RLS policy explicitly admits null (a NULL row is visible to every
+ * tenant). Today that is the RBAC pair: `Role`/`RolePermission` use NULL for the
+ * seeded SYSTEM roles shared across all tenants (non-null = one tenant's own custom
+ * role). These are tenant-scoped (a tenant CAN own rows) but must NOT be locked to
+ * `tenantId NOT NULL`, and a NULL tenantId on them is NOT a preflight failure.
+ *
+ * Authoritative source: the set of tables whose RLS policy USING/CHECK clause
+ * contains `current_setting('app.bypass_rls',true)='on' OR tenantId IS NULL OR
+ * tenantId = current_setting('app.current_tenant',true)`. AppSetting USED to be
+ * here but its null escape hatch was removed (migration 20260727210000), so it is
+ * now strictly owned.
+ */
+export const TENANT_SHARED_NULLABLE_MODELS: ReadonlySet<string> = new Set([
+  "Role",
+  "RolePermission",
+]);
+
 export function isTenantScopedModel(model: string): boolean {
   return !GLOBAL_MODELS.has(model);
 }
