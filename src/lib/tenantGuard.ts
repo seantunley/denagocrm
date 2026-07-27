@@ -44,8 +44,9 @@ export function isTenantScopedModel(model: string): boolean {
  * updateRolePermissions() (accessControl.ts) so it's unit-testable without a
  * DB or a "use server" import.
  *
- * - A SYSTEM/global role (`roleTenantId === null`) is always editable — it is
- *   shared by every tenant, unaffected by this change, exactly as before.
+ * - A SYSTEM/global role (`roleTenantId === null`) is editable only by the
+ *   global platform admin (`isGlobalAdmin === true`). A tenant admin editing a
+ *   system role would affect every tenant's shared permission set — disallowed.
  * - A tenant-owned role (`roleTenantId !== null`) is editable only by ITS OWN
  *   tenant.
  * - DORMANT while `enforcing` is false: always returns true regardless of
@@ -56,9 +57,10 @@ export function canEditRole(
   enforcing: boolean,
   roleTenantId: string | null,
   activeTenantId: string | null,
+  isGlobalAdmin: boolean = false,
 ): boolean {
   if (!enforcing) return true;
-  if (roleTenantId === null) return true;
+  if (roleTenantId === null) return isGlobalAdmin;
   return roleTenantId === activeTenantId;
 }
 

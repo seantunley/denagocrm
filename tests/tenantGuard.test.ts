@@ -267,9 +267,14 @@ test("canEditRole: NOT enforcing → true for every combination (DORMANT off)", 
   assert.equal(canEditRole(false, "tenant_A", null), true);
 });
 
-test("canEditRole: enforcing + system role (tenantId null) → always true", () => {
-  assert.equal(canEditRole(true, null, "tenant_A"), true);
-  assert.equal(canEditRole(true, null, null), true);
+test("canEditRole: enforcing + system role (tenantId null) + global admin → true", () => {
+  assert.equal(canEditRole(true, null, "tenant_A", true), true);
+  assert.equal(canEditRole(true, null, null, true), true);
+});
+
+test("canEditRole: enforcing + system role (tenantId null) + tenant admin (not global) → false", () => {
+  assert.equal(canEditRole(true, null, "tenant_A", false), false);
+  assert.equal(canEditRole(true, null, "tenant_A"), false, "defaults to non-global-admin");
 });
 
 test("canEditRole: enforcing + same tenant → true", () => {

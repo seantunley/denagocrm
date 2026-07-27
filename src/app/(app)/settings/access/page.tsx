@@ -55,9 +55,13 @@ export default async function AccessSettingsPage() {
   const activeTenantId = await getActiveTenantId();
 
   const users = await basePrisma.$queryRaw<UserRow[]>`
-    SELECT "id", "name", "email", "role", "disabledAt", "lastLoginAt", "failedLoginCount"
-    FROM "User"
-    ORDER BY "disabledAt" NULLS FIRST, "name"
+    SELECT u."id", u."name", u."email", u."role", u."disabledAt", u."lastLoginAt", u."failedLoginCount"
+    FROM "User" u
+    WHERE (NOT ${enforcing}::boolean OR EXISTS (
+      SELECT 1 FROM "TenantMember" tm
+      WHERE tm."userId" = u."id" AND tm."tenantId" = ${activeTenantId}
+    ))
+    ORDER BY u."disabledAt" NULLS FIRST, u."name"
   `;
   const teams = canViewTeams
     ? await basePrisma.$queryRaw<TeamRow[]>`

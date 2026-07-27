@@ -27,23 +27,50 @@ async function validUserId(userId: string | null) {
     SELECT "id" FROM "User" WHERE "id" = ${userId} LIMIT 1
   `;
   if (!rows[0]) throw new Error("Selected user does not exist");
+  // Under enforcement verify the target user is a member of the caller's tenant.
+  // Without this check a roles.manage holder can target accounts from other tenants.
+  if (tenantEnforcing()) {
+    const activeTenantId = await getActiveTenantId();
+    if (activeTenantId) {
+      const membership = await basePrisma.$queryRaw<Array<{ userId: string }>>`
+        SELECT "userId" FROM "TenantMember"
+        WHERE "tenantId" = ${activeTenantId} AND "userId" = ${userId}
+        LIMIT 1
+      `;
+      if (!membership[0]) throw new Error("Selected user is not a member of this workspace");
+    }
+  }
   return userId;
 }
 
-async function otherGovernanceAdminCount(excludedUserId?: string, excludedRoleId?: string): Promise<number> {
+async function otherGovernanceAdminCount(activeTenantId: string | null, excludedUserId?: string, excludedRoleId?: string): Promise<number> {
+  // When tenantId is known, count only admins belonging to THAT tenant — the
+  // global platform owner counts only if they are also a member of that tenant,
+  // and role-based admins only via assignments scoped to that tenant. Otherwise
+  // (no tenantId, pre-enforcement) count globally as before.
   const rows = await basePrisma.$queryRaw<Array<{ count: bigint }>>`
     SELECT COUNT(DISTINCT u."id")::bigint AS count
     FROM "User" u
     WHERE u."disabledAt" IS NULL
       AND (${excludedUserId ?? null}::text IS NULL OR u."id" <> ${excludedUserId ?? null})
       AND (
-        u."role" = 'owner'
+        (
+          u."role" = 'owner'
+          AND (
+            ${activeTenantId ?? null}::text IS NULL
+            OR EXISTS (
+              SELECT 1 FROM "TenantMember" tm
+              WHERE tm."userId" = u."id" AND tm."tenantId" = ${activeTenantId ?? null}
+            )
+          )
+        )
         OR EXISTS (
           SELECT 1
           FROM "UserRole" ur
           JOIN "RolePermission" rp ON rp."roleId" = ur."roleId"
           WHERE ur."userId" = u."id"
             AND rp."permissionKey" = 'roles.manage'
+            AND (${activeTenantId ?? null}::text IS NULL OR ur."tenantId" IS NOT DISTINCT FROM ${activeTenantId ?? null})
             AND (${excludedRoleId ?? null}::text IS NULL OR ur."roleId" <> ${excludedRoleId ?? null})
         )
       )
@@ -70,9 +97,12 @@ export async function createTeam(formData: FormData) {
   const id = crypto.randomUUID();
   const managerId = await validUserId(value(formData, "managerId") || null);
   const description = value(formData, "description") || null;
-  // Additive tenant labelling (raw inserts bypass the db.ts stamping extension) —
-  // see the note in updateUserRoles. Reads stay tenant-agnostic until enforcement.
+  // A team created with tenantId IS NULL enters no tenant's namespace and is
+  // inaccessible once enforcement is active. Require an active tenant
+  // unconditionally — not just under enforcement — so data is always labelled
+  // correctly from the start.
   const activeTenantId = await getActiveTenantId();
+  if (!activeTenantId) throw new Error("No active tenant");
   await basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`
       INSERT INTO "Team" ("id", "name", "description", "managerId", "tenantId")
@@ -220,15 +250,11 @@ export async function createRole(formData: FormData) {
   if (!name) throw new Error("Role name is required");
   const id = crypto.randomUUID();
   const description = value(formData, "description") || null;
-  // Stamp the caller's active tenant onto every newly-created role (unconditional
-  // — matches createTeam's tenantId stamp; nothing reads/filters on Role.tenantId
-  // yet since tenantEnforcing() is false everywhere). This is what makes a role
-  // created from here on tenant-owned instead of the old shared-global default.
-  // getActiveTenantId() may resolve null here (a session with no tenant claim) —
-  // harmless today in a single-tenant, enforcement-off world; it just means the
-  // new role behaves exactly like a system role (tenantId IS NULL) until real
-  // multi-tenant sessions exist.
+  // A role created with tenantId IS NULL enters the system-global namespace and
+  // affects every tenant under enforcement. Require an active tenant
+  // unconditionally so newly-created roles are always tenant-owned.
   const tenantId = await getActiveTenantId();
+  if (!tenantId) throw new Error("No active tenant");
   await basePrisma.$executeRaw`
     INSERT INTO "Role" ("id", "name", "description", "tenantId") VALUES (${id}, ${name}, ${description}, ${tenantId})
   `;
@@ -259,7 +285,8 @@ export async function updateRolePermissions(roleId: string, formData: FormData) 
   // does. See tenantGuard.ts / tenantGuard.test.ts for the pure decision + tests.
   const enforcing = tenantEnforcing();
   const activeTenantId = await getActiveTenantId();
-  if (!canEditRole(enforcing, role.tenantId, activeTenantId)) {
+  const isGlobalAdmin = user.role === "owner";
+  if (!canEditRole(enforcing, role.tenantId, activeTenantId, isGlobalAdmin)) {
     throw new Error("Role not found");
   }
   const before = await basePrisma.$queryRaw<Array<{ permissionKey: string }>>`
@@ -274,7 +301,7 @@ export async function updateRolePermissions(roleId: string, formData: FormData) 
     if (missing.length) throw new Error(`CRM administrator must retain: ${missing.join(", ")}`);
   }
   if (beforeKeys.includes("roles.manage") && !permissions.includes("roles.manage")) {
-    const remaining = await otherGovernanceAdminCount(undefined, roleId);
+    const remaining = await otherGovernanceAdminCount(activeTenantId, undefined, roleId);
     if (remaining < 1) throw new Error("This change would remove the last governance administrator");
   }
 
@@ -317,21 +344,38 @@ export async function updateUserRoles(userId: string, formData: FormData) {
   const actor = await requirePermission("roles.manage");
   await validUserId(userId);
   const requested = [...new Set(formData.getAll("roles").map(String))];
-  // Multi-tenancy readiness: Role now carries tenantId (NULL = system/global,
-  // non-null = one tenant's own custom role). Under enforcement a user may only
-  // be assigned a system role or one belonging to their own tenant. Gated on
-  // tenantEnforcing() so today's (every environment) behaviour — every Role id
-  // is assignable — is unchanged byte-for-byte.
   const enforcing = tenantEnforcing();
   const activeTenantId = await getActiveTenantId();
+
+  // Under enforcement: the target user must belong to the caller's active tenant.
+  // Without this check a roles.manage holder can wipe role assignments for accounts
+  // from other tenants by supplying a foreign userId directly.
+  if (enforcing) {
+    if (!activeTenantId) throw new Error("No active tenant");
+    const membership = await basePrisma.$queryRaw<Array<{ userId: string }>>`
+      SELECT "userId" FROM "TenantMember"
+      WHERE "tenantId" = ${activeTenantId} AND "userId" = ${userId}
+      LIMIT 1
+    `;
+    if (!membership[0]) throw new Error("User not found");
+  }
+
+  // Under enforcement a user may only be assigned a system role or one belonging
+  // to their own tenant.
   const allRoles = await basePrisma.$queryRaw<Array<{ id: string }>>`
     SELECT "id" FROM "Role"
     WHERE (NOT ${enforcing}::boolean OR "tenantId" IS NULL OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
   `;
   const validRoleSet = new Set(allRoles.map((role) => role.id));
   const validRoleIds = requested.filter((roleId) => validRoleSet.has(roleId));
+
+  // Under enforcement, read only this tenant's assignments for the "before" snapshot
+  // so the audit log is accurate and other tenants' role assignments survive.
   const before = await basePrisma.$queryRaw<Array<{ roleId: string }>>`
-    SELECT "roleId" FROM "UserRole" WHERE "userId" = ${userId} ORDER BY "roleId"
+    SELECT "roleId" FROM "UserRole"
+    WHERE "userId" = ${userId}
+      AND (NOT ${enforcing}::boolean OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
+    ORDER BY "roleId"
   `;
   const targetRows = await basePrisma.$queryRaw<Array<{ role: string; disabledAt: Date | null }>>`
     SELECT "role", "disabledAt" FROM "User" WHERE "id" = ${userId} LIMIT 1
@@ -342,23 +386,18 @@ export async function updateUserRoles(userId: string, formData: FormData) {
   const hadAdmin = target.role === "owner" || await roleIdsGrantAdmin(before.map((item) => item.roleId));
   const keepsAdmin = target.role === "owner" || await roleIdsGrantAdmin(validRoleIds);
   if (hadAdmin && !keepsAdmin && !target.disabledAt) {
-    const remaining = await otherGovernanceAdminCount(userId);
+    const remaining = await otherGovernanceAdminCount(activeTenantId, userId);
     if (remaining < 1) throw new Error("This change would remove the last governance administrator");
   }
 
-  // Stamp the assignment's owning tenant on every write. A raw insert bypasses the
-  // db.ts tenant-stamping extension, so without this new UserRole rows would be
-  // NULL-tenant while migration-backfilled rows carry a tenantId — and a NULL tenant
-  // defeats the (tenantId,userId,roleId) unique index's dedup. NOTE (deliberate,
-  // deferred): the DELETE below is still tenant-agnostic and getUserPermissions()
-  // still reads a user's roles across all tenants. Scoping those by the active
-  // tenant is the RBAC enforcement flip — a behaviour change that must land
-  // atomically with the rest of the tenant-enforcement rollout (and its lockout
-  // proofing), not piecemeal here. This change is purely additive: it labels the
-  // data correctly now so the later flip is a no-op on already-stamped rows.
-  // (activeTenantId already fetched above, for the validRoleSet gate.)
+  // Under enforcement scope the DELETE to the active tenant so another tenant's
+  // role assignments for the same user are left untouched.
   await basePrisma.$transaction(async (tx) => {
-    await tx.$executeRaw`DELETE FROM "UserRole" WHERE "userId" = ${userId}`;
+    await tx.$executeRaw`
+      DELETE FROM "UserRole"
+      WHERE "userId" = ${userId}
+        AND (NOT ${enforcing}::boolean OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
+    `;
     for (const roleId of validRoleIds) {
       await tx.$executeRaw`
         INSERT INTO "UserRole" ("id", "userId", "roleId", "tenantId") VALUES (gen_random_uuid()::text, ${userId}, ${roleId}, ${activeTenantId}) ON CONFLICT DO NOTHING

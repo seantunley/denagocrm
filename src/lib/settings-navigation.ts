@@ -69,6 +69,10 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
         key: "integration-overrides",
         label: "Integration overrides",
         href: "/settings/integration-overrides",
+        // Visible to all signed-in users so tenant owners (who are not global
+        // owners) can discover and navigate to this page. The page enforces
+        // requireTenantOwner() — regular members who navigate here are redirected.
+        everyone: true,
         keywords: ["whatsapp", "email", "smtp", "imap", "telegram", "sms", "bulksms", "google reviews", "per-tenant", "credentials", "override"],
       },
     ],

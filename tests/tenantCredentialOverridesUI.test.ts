@@ -120,8 +120,8 @@ test("hasTenantCredentialOverride is an existence-only check — selects only `i
   );
 });
 
-test("saveTenantCredentialOverride: owner-gated, validates the key, resolves tenantId from the session (never the form), and never audits the raw value", () => {
-  assert.match(actionsSrc, /export async function saveTenantCredentialOverride[\s\S]*?requireOwner\(\)/);
+test("saveTenantCredentialOverride: tenant-owner-gated, validates the key, resolves tenantId from the session (never the form), and never audits the raw value", () => {
+  assert.match(actionsSrc, /export async function saveTenantCredentialOverride[\s\S]*?requireTenantOwner\(\)/);
   assert.match(actionsSrc, /isKnownTenantCredentialKey\(key\)/);
   assert.match(actionsSrc, /getActiveTenantId\(\)/);
   assert.match(actionsSrc, /putTenantCredential\(tenantId, key, value\)/);
@@ -131,8 +131,8 @@ test("saveTenantCredentialOverride: owner-gated, validates the key, resolves ten
   assert.doesNotMatch(auditCallMatch![0], /\bvalue\b/, "the audit entry must never reference the raw submitted value");
 });
 
-test("clearTenantCredentialOverride: owner-gated, validates the key, deletes by (tenantId, key) via deleteMany (idempotent, no P2025)", () => {
-  assert.match(actionsSrc, /export async function clearTenantCredentialOverride[\s\S]*?requireOwner\(\)/);
+test("clearTenantCredentialOverride: tenant-owner-gated, validates the key, deletes by (tenantId, key) via deleteMany (idempotent, no P2025)", () => {
+  assert.match(actionsSrc, /export async function clearTenantCredentialOverride[\s\S]*?requireTenantOwner\(\)/);
   assert.match(actionsSrc, /isKnownTenantCredentialKey\(key\)/);
   assert.match(
     actionsSrc,

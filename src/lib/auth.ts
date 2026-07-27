@@ -140,12 +140,11 @@ export async function requireTenantOwner() {
   if (user.role === "owner") return user;
   const tenantId = await getActiveTenantId();
   if (!tenantId) redirect("/");
-  const firstMember = await basePrisma.$queryRaw<Array<{ userId: string }>>`
-    SELECT "userId" FROM "TenantMember"
-    WHERE "tenantId" = ${tenantId}
-    ORDER BY "createdAt" ASC LIMIT 1
-  `;
-  if (firstMember[0]?.userId !== user.id) redirect("/");
+  const tenant = await basePrisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { ownerUserId: true },
+  });
+  if (tenant?.ownerUserId !== user.id) redirect("/");
   return user;
 }
 

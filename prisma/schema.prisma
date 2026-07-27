@@ -51,6 +51,7 @@ model User {
   goodsReceipts      GoodsReceipt[]
   timelinePins       TimelinePin[]
   memberships        TenantMember[]
+  ownedTenants       Tenant[]       @relation("TenantOwner")
 }
 
 // User-pinned timeline entries (communications / activities) that float to the
@@ -2289,16 +2290,19 @@ model CustomFieldValue {
 // all come in later PRs (see MULTITENANCY-SCOPING.md).
 
 model Tenant {
-  id        String   @id @default(cuid())
-  name      String
-  slug      String   @unique
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  active      Boolean  @default(true)
+  ownerUserId String?
+  createdAt   DateTime @default(now())
 
   members  TenantMember[]
   sessions UserSession[]
+  owner    User?          @relation("TenantOwner", fields: [ownerUserId], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
   @@index([active])
+  @@index([ownerUserId])
 }
 
 model TenantMember {

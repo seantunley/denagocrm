@@ -111,15 +111,17 @@ export async function activateTenantAction(tenantId: string): Promise<void> {
 
   const tenant = await basePrisma.tenant.findUnique({
     where: { id: tenantId },
-    select: { id: true, name: true, slug: true, active: true },
+    select: { id: true, name: true, slug: true, active: true, ownerUserId: true },
   });
-  if (!tenant) throw new Error("Tenant not found.");
+  if (!tenant) throw new Error(“Tenant not found.”);
+  const ownerId = tenant.ownerUserId;
+  if (!ownerId) throw new Error(“Tenant has no provisioned owner — cannot activate.”);
 
-  await activateTenant(basePrisma, tenantId);
+  await activateTenant(basePrisma, tenantId, ownerId);
 
   await logAuditStrict({
-    action: "tenant.activated",
-    summary: `Activated tenant “${tenant.name}” and re-enabled its members`,
+    action: “tenant.activated”,
+    summary: `Activated tenant “${tenant.name}” and re-enabled the provisioned owner`,
     entityType: "Tenant",
     entityId: tenantId,
     user: actor,
@@ -187,16 +189,24 @@ export async function removeTenantMemberAction(tenantId: string, userId: string)
 
   const tenant = await basePrisma.tenant.findUnique({
     where: { id: tenantId },
-    select: { id: true, name: true },
+    select: { id: true, name: true, ownerUserId: true },
   });
   if (!tenant) throw new Error("Tenant not found.");
+  if (tenant.ownerUserId === userId) {
+    throw new Error("Cannot remove the tenant owner. Transfer ownership before removing this member.");
+  }
 
-  // Never remove the last member of a tenant (count BEFORE the delete).
-  const memberCount = await basePrisma.tenantMember.count({ where: { tenantId } });
-  const gate = canRemoveTenantMember(memberCount);
-  if (!gate.ok) throw new Error(gate.error);
-
-  await basePrisma.tenantMember.deleteMany({ where: { tenantId, userId } });
+  // FOR UPDATE on the tenant row serializes concurrent removes so two simultaneous
+  // requests cannot both pass the member-count guard and both delete, leaving zero
+  // members. Plain transaction isolation is not enough — MVCC lets both readers see
+  // the pre-delete count.
+  await basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT "id" FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`;
+    const memberCount = await tx.tenantMember.count({ where: { tenantId } });
+    const gate = canRemoveTenantMember(memberCount);
+    if (!gate.ok) throw new Error(gate.error);
+    await tx.tenantMember.deleteMany({ where: { tenantId, userId } });
+  });
 
   await logAuditStrict({
     action: "tenant.member_removed",
