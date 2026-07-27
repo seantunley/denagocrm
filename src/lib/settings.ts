@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { prisma, basePrisma } from "./db";
+import { DEFAULT_TENANT_ID } from "./tenant";
 
 /**
  * Settings that hold credentials are encrypted at rest with AES-256-GCM
@@ -138,23 +139,24 @@ async function getTenantCredentialOverride(tenantId: string, key: string): Promi
 
 /**
  * Resolves an outbound-integration credential (WhatsApp, Meta, Telegram, SMTP,
- * IMAP, SMS, Google Reviews), preferring a TENANT-specific override over the
- * install-global `AppSetting` row for the same `key`.
+ * IMAP, SMS, Google Reviews) for a tenant.
  *
- * `tenantId` is supplied EXPLICITLY by the caller (never read from ambient
- * scope in here) — resolve it however that call site already does (a cron
- * slice's tenant, `currentTenantScope()?.tenantId`, a resolved channel scope,
- * etc.) and pass it in, or pass `null` where no tenant is known.
+ * Resolution rules:
+ *  - If the tenant has its OWN override row → return it (all tenants).
+ *  - If the tenant has NO override AND is the FOUNDING tenant → fall back to
+ *    the global AppSetting row (the founding tenant IS the platform; its
+ *    platform credentials are its own).
+ *  - If the tenant has NO override AND is a SECOND tenant → return null.
+ *    Second tenants must configure their own credentials; they never silently
+ *    ride the platform owner's accounts, API tokens or sending limits.
+ *  - If tenantId is null (no tenant resolved) → fall back to global (pre-
+ *    enforcement / system-context callers, unchanged behaviour).
  *
- * THE CRITICAL INVARIANT: with zero `TenantIntegrationCredential` rows (true
- * today — nothing writes this table yet), every call falls through to
- * `getGlobal(key)` regardless of `tenantId` — byte-for-byte today's
- * `getSetting(key)` result. A tenant only ever gets a different answer once it
- * has saved its OWN override row for that exact key.
+ * `tenantId` is supplied EXPLICITLY by the caller — never read from ambient
+ * scope in here — so cron/webhook contexts work correctly.
  *
- * `lookupOverride`/`getGlobal` are overridable purely so the fallback logic is
- * unit-testable without a database (see tests/tenantIntegrationCredential.test.ts);
- * every real call site relies on the defaults.
+ * `lookupOverride`/`getGlobal` are injectable for unit tests only
+ * (see tests/tenantIntegrationCredential.test.ts); all real callers use defaults.
  */
 export async function resolveTenantCredential(
   tenantId: string | null,
@@ -169,6 +171,8 @@ export async function resolveTenantCredential(
   if (tenantId) {
     const override = await lookupOverride(tenantId, key);
     if (override !== null) return override;
+    // Second tenants: no fallback to platform credentials.
+    if (tenantId !== DEFAULT_TENANT_ID) return null;
   }
   return getGlobal(key);
 }

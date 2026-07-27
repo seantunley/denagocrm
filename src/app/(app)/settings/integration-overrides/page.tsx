@@ -11,6 +11,8 @@ import {
 } from "@/lib/tenantCredentialFields";
 import { SettingsWorkspace, SettingsIntegrationRow } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
+import { tenantEnforcing } from "@/lib/tenantEnforcement";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +30,9 @@ export default async function IntegrationOverridesPage() {
   // their credentials without needing the global platform owner role.
   await requireTenantOwner();
   const tenantId = await getActiveTenantId();
+  // Founding tenant falls back to platform credentials when no override is set.
+  // Every other tenant gets null — they must configure their own credentials.
+  const usesPlatformFallback = !tenantEnforcing() || tenantId === DEFAULT_TENANT_ID;
 
   const allKeys = TENANT_CREDENTIAL_INTEGRATIONS.flatMap((integration) =>
     integration.fields.map((field) => field.key)
@@ -47,13 +52,23 @@ export default async function IntegrationOverridesPage() {
       groups={SETTINGS_NAV_GROUPS}
     >
       <section className="card p-5 text-sm text-muted-foreground">
-        <p>
-          Every integration below already works today using the platform&apos;s shared account —
-          setting anything here is entirely <b>optional</b>. Save an override and this tenant&apos;s
-          outbound (and, where applicable, inbound) traffic for that integration switches to its own
-          account; clear it and this tenant goes back to the platform default. Nobody — including
-          you — can view a saved value again here, only whether an override is currently set.
-        </p>
+        {usesPlatformFallback ? (
+          <p>
+            Every integration below already works using the platform&apos;s shared account.
+            Setting credentials here is optional — save an override and this tenant&apos;s traffic
+            for that integration switches to its own account; clear it and it reverts to the
+            platform default. Saved values cannot be viewed again here, only whether an override
+            is currently active.
+          </p>
+        ) : (
+          <p>
+            Each integration below requires its own credentials — this tenant does <b>not</b>{" "}
+            use the platform&apos;s shared accounts. Integrations shown as{" "}
+            <span className="text-red-400 font-medium">Not configured</span> are unavailable
+            until you save credentials for them. Saved values cannot be viewed again here, only
+            whether credentials are currently set.
+          </p>
+        )}
       </section>
 
       {!tenantId ? (
@@ -72,11 +87,13 @@ export default async function IntegrationOverridesPage() {
                 title={integration.label}
                 status={
                   status === "active" ? (
-                    <span className="badge bg-emerald-500/15 text-emerald-300">Override active</span>
+                    <span className="badge bg-emerald-500/15 text-emerald-300">Active</span>
                   ) : status === "incomplete" ? (
-                    <span className="badge bg-amber-500/15 text-amber-300">Incomplete override</span>
-                  ) : (
+                    <span className="badge bg-amber-500/15 text-amber-300">Incomplete</span>
+                  ) : usesPlatformFallback ? (
                     <span className="badge bg-muted text-muted-foreground">Platform default</span>
+                  ) : (
+                    <span className="badge bg-red-500/15 text-red-400">Not configured</span>
                   )
                 }
               >
