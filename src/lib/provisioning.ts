@@ -87,6 +87,12 @@ export async function seedTenantDefaultRoles(client: Client, tenantId: string): 
     include: { permissions: { select: { permissionKey: true } } },
   });
 
+  if (sourceRoles.length !== SYSTEM_ROLE_IDS.length) {
+    const found = sourceRoles.map((r) => r.id);
+    const missing = SYSTEM_ROLE_IDS.filter((id) => !found.includes(id));
+    throw new Error(`Default tenant roles missing from founding tenant: ${missing.join(", ")}`);
+  }
+
   for (const source of sourceRoles) {
     const id = `${source.id}:${tenantId}`;
     await client.role.upsert({

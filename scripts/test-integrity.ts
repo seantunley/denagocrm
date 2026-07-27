@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { PrismaClient } from "@prisma/client";
 import { prisma, basePrisma } from "../src/lib/db";
 import { resolveActingTenant, createUserInOwnerTenant } from "../src/lib/tenantContext";
 import { ensureFoundingMembership, createTenant } from "../src/lib/provisioning";
@@ -127,6 +128,29 @@ async function main() {
     // must not resolve a trashed row (the guard injects deletedAt regardless).
     const viaFalseSelect = await prisma.contact.findUnique({ where: { id: trashContact }, select: { id: true, deletedAt: false } });
     assert.equal(viaFalseSelect, null, "filtered findUnique hides a trashed row even with deletedAt:false in select");
+
+    // Connection binding — proves SET LOCAL and the business query execute on the
+    // same physical DB connection via Prisma's interactive transaction + ALS.
+    // FORCE RLS is always live in the DB. Without bypass_rls='on' on the QUERY
+    // connection, a contact with no tenantId is invisible. Setting bypass_rls via
+    // SET LOCAL in the same $transaction makes the row visible — if they were on
+    // different connections the row would remain hidden and the assertion fails.
+    const rawBind = new PrismaClient();
+    const bindId = id("bind");
+    try {
+      await basePrisma.contact.create({ data: { id: bindId, firstName: "Bind" } });
+      const bound = await rawBind.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+        return tx.contact.findUnique({ where: { id: bindId } });
+      });
+      assert.ok(bound, "connection binding: SET LOCAL bypass_rls is visible to SELECT in the same transaction");
+    } finally {
+      await rawBind.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+        await tx.contact.deleteMany({ where: { id: bindId } });
+      });
+      await rawBind.$disconnect();
+    }
 
     // #14 Contact merge — a unique channel identity (messengerPsid) stays index-
     // occupied even on a SOFT-DELETED row, so the merge must null it on the loser
@@ -324,6 +348,7 @@ async function main() {
     // post-isolation step; the owner would also need enabling to actually sign in).
     await basePrisma.tenant.update({ where: { id: ct.tenantId }, data: { active: true } });
     assert.deepEqual(await resolveActingTenant(ct.ownerId), { tenantId: ct.tenantId }, "after activation the owner resolves to exactly the created tenant");
+    await basePrisma.role.deleteMany({ where: { tenantId: ct.tenantId } });
     await basePrisma.tenantMember.deleteMany({ where: { userId: ct.ownerId } });
     await basePrisma.user.deleteMany({ where: { id: ct.ownerId } });
     await basePrisma.tenant.deleteMany({ where: { id: ct.tenantId } });
