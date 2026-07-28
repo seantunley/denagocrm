@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
-import { prisma } from "@/lib/db";
+import { basePrisma } from "@/lib/db";
 import { getSetting, resolveTenantCredential } from "@/lib/settings";
 import { currentTenantScope } from "@/lib/tenantScope";
 import { createIntakeLead } from "@/lib/leadIntake";
@@ -125,8 +125,17 @@ export async function POST(req: NextRequest) {
       const pageId = String(change.value?.page_id ?? "");
 
       await withChannelTenantScope("messenger", pageId, async () => {
-      // Dedupe: Meta retries deliveries
-      const existing = await prisma.lead.findUnique({ where: { externalId: leadgenId } });
+      // Dedupe: Meta retries deliveries.
+      //
+      // basePrisma, NOT prisma — the same reason as metaLeadSync. `externalId` is
+      // unique in the DATABASE regardless of deletedAt, but the soft-delete
+      // extension hides deleted rows from the guarded client, so a lead someone
+      // deleted looks absent here and the re-create then violates the unique index.
+      // A deleted lead is a decision, not a gap: treat it as already handled.
+      const existing = await basePrisma.lead.findUnique({
+        where: { externalId: leadgenId },
+        select: { id: true },
+      });
       if (existing) return;
 
       // Inside withChannelTenantScope: currentTenantScope() is this event's

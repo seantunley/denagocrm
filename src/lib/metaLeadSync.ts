@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/db";
+import { basePrisma } from "@/lib/db";
 import { resolveTenantCredential } from "@/lib/settings";
 import { currentTenantScope } from "@/lib/tenantScope";
 import { createIntakeLead } from "@/lib/leadIntake";
@@ -51,7 +51,22 @@ export async function syncFacebookLeads(): Promise<number> {
       } = await leadsRes.json();
 
       for (const ld of leads.data ?? []) {
-        const existing = await prisma.lead.findUnique({ where: { externalId: ld.id } });
+        // basePrisma, NOT prisma: the dedupe must see SOFT-DELETED leads too.
+        //
+        // `externalId` is unique at the DATABASE level regardless of deletedAt, but
+        // the soft-delete extension hides deleted rows from the guarded client. So
+        // once someone deleted a Meta lead, this lookup returned null, the sync
+        // tried to re-create it, and the unique index rejected the insert — every
+        // 15 minutes, for ever. On production that was 692 logged failures from
+        // four deleted leads, drowning the error log in noise that looked like a
+        // Meta problem and was really "a user deleted a lead".
+        //
+        // Deleting a lead means "I do not want this", so the right behaviour is to
+        // treat it as already synced and skip it — never to resurrect it.
+        const existing = await basePrisma.lead.findUnique({
+          where: { externalId: ld.id },
+          select: { id: true },
+        });
         if (existing) continue;
         const parsed = parseLeadFields(ld.field_data ?? []);
         await createIntakeLead({

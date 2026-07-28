@@ -1,5 +1,6 @@
 import "server-only";
 import { basePrisma } from "./db";
+import { DEFAULT_TENANT_ID } from "./tenant";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { runInTenantScope } from "./tenantScope";
 
@@ -93,7 +94,27 @@ export async function runCronPerTenant<T>(
   const now = options.now ?? Date.now;
   if (!tenantEnforcing()) {
     const startedAt = now();
-    const result = await slice(null, sliceContext(null, null, now));
+    // Bind the FOUNDING tenant's scope even while enforcement is dormant.
+    //
+    // This path used to run the slice with no scope established at all, which
+    // silently broke every queue that asks which tenant it is working for. The
+    // survey distribution queue does exactly that and threw
+    // "Survey distribution queue requires a tenant scope" on every run — 15
+    // minutes apart, for days — so surveys were never distributed. The error was
+    // caught and logged rather than surfaced, so it read as noise instead of a
+    // dead feature.
+    //
+    // Binding a scope here is safe: the db.ts guard only READS the scope inside
+    // its enforcement branch, so with enforcement off this changes no query. What
+    // it does change is that dormant mode now looks like the single-tenant case of
+    // the enforcing path, which is what these queues are written against — so a
+    // queue cannot work in one mode and be broken in the other.
+    //
+    // `tenantId` in the returned CronRun stays null: it reports the ENFORCEMENT
+    // shape (one unscoped sweep), and callers key their "dormant" branch off it.
+    const result = await runInTenantScope({ tenantId: DEFAULT_TENANT_ID, system: false }, () =>
+      slice(null, sliceContext(null, null, now)),
+    );
     return [{ tenantId: null, status: "ok", result, durationMs: Math.max(0, now() - startedAt) }];
   }
 
