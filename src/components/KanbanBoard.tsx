@@ -58,7 +58,7 @@ import {
 } from "@/components/ui/dialog";
 import TestDriveWeather from "@/components/TestDriveWeather";
 import ResearchPopup from "@/components/ResearchPopup";
-import NotesPopup, { type LinkedNotes } from "@/components/NotesPopup";
+import NotesPopup, { type PinnedNote } from "@/components/NotesPopup";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -99,7 +99,8 @@ export type KanbanLead = {
   signing?: { label: string } | null;
   research?: string | null;
   /** Note text from the lead and/or its linked contact, for the card's note icon. */
-  notes?: LinkedNotes | null;
+  /** Notes that are PINNED on this lead or its contact. Empty/absent = no icon. */
+  notes?: PinnedNote[] | null;
   isNew?: boolean;
   noNextStep?: boolean;
   ageDays?: number;
@@ -204,7 +205,7 @@ function LeadCard({ lead, dragging, actions }: { lead: KanbanLead; dragging?: bo
               New
             </span>
           )}
-          {lead.notes && <NotesPopup notes={lead.notes} name={lead.name} />}
+          {lead.notes?.length ? <NotesPopup notes={lead.notes} name={lead.name} /> : null}
           {lead.research && <ResearchPopup summary={lead.research} name={lead.name} />}
           <span title={`Source: ${lead.source}`}>
             <SourceIcon source={lead.source} />
