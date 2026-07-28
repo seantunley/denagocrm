@@ -1,21 +1,54 @@
-import { getTenantStorage, getTenantActivity, formatBytes } from "@/lib/tenantUsage";
+"use client";
+
+import { useEffect, useState } from "react";
+import { loadTenantUsage, type TenantUsage } from "@/app/actions/platformUsage";
+import { formatBytes } from "@/lib/tenantUsageFormat";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 
 /**
- * The Usage tab, split out as its own async component so the profile page can
- * render inside a <Suspense> boundary without waiting for it.
+ * The Usage tab.
  *
- * This is the expensive part of the page: the storage estimate runs one COUNT per
- * sampled table. Previously it ran on EVERY profile visit, blocking the whole
- * page even for someone who only wanted the Errors tab. Now the rest of the
- * profile paints immediately and this streams in, backed by a short-lived cache
- * (see lib/tenantUsage.ts) so repeat visits do not re-scan at all.
+ * A CLIENT component that fetches on mount, rather than a server component
+ * rendered with the rest of the profile. The distinction matters: the tab strip
+ * keeps every panel mounted so in-progress form input survives a switch, which
+ * means a server-rendered panel is rendered whether or not anybody looks at it.
+ * A Suspense boundary made that non-blocking but not optional — the storage
+ * estimate (one COUNT per sampled table, the most expensive query in the
+ * console) still ran on every profile visit.
+ *
+ * Paired with `lazy` on the tab, this component is not mounted until the tab is
+ * first opened, so the scan happens only when someone asks for it. After that it
+ * stays mounted, and a short-lived server-side cache (see lib/tenantUsage.ts)
+ * keeps repeat visits from re-scanning.
  */
-export default async function UsageTab({ tenantId }: { tenantId: string }) {
-  const [storage, activity] = await Promise.all([
-    getTenantStorage(tenantId),
-    getTenantActivity(tenantId),
-  ]);
+export default function UsageTab({ tenantId }: { tenantId: string }) {
+  const [usage, setUsage] = useState<TenantUsage | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    setError(null);
+    loadTenantUsage(tenantId)
+      .then((result) => {
+        if (live) setUsage(result);
+      })
+      .catch(() => {
+        if (live) setError("Could not work out this tenant's usage.");
+      });
+    return () => {
+      live = false;
+    };
+  }, [tenantId]);
+
+  if (error) {
+    return <p className="card p-5 text-sm text-muted-foreground">{error}</p>;
+  }
+
+  if (!usage) {
+    return <p className="card p-5 text-sm text-muted-foreground">Estimating storage…</p>;
+  }
+
+  const { storage, activity } = usage;
 
   return (
     <div className="space-y-4">

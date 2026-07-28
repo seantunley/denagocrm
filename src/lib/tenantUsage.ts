@@ -169,9 +169,6 @@ export async function getTenantActivity(tenantId: string): Promise<TenantActivit
   };
 }
 
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
+// formatBytes lives in lib/tenantUsageFormat.ts: this module is server-only, and
+// the Usage tab that renders these figures is a client component.
+export { formatBytes } from "./tenantUsageFormat";

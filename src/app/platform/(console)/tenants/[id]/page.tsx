@@ -1,4 +1,3 @@
-import { Suspense } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
@@ -151,10 +150,10 @@ export default async function TenantProfilePage({
       basePrisma.errorLog.count({ where: { tenantId: id, createdAt: { gte: since7d } } }),
     ]);
 
-  // Storage is NOT fetched here. It costs one COUNT per sampled table — the most
-  // expensive thing the console does — and used to run on every profile visit even
-  // for someone opening the Errors tab. It now lives in <UsageTab>, streamed inside
-  // a Suspense boundary and backed by a short-lived cache.
+  // Storage is NOT fetched here, and is not rendered on the server at all. It costs
+  // one COUNT per sampled table — the most expensive thing the console does — and
+  // used to run on every profile visit even for someone opening the Errors tab.
+  // <UsageTab> now fetches it from the client when its tab is first opened.
 
   const granted = parseModuleCsv(tenant.modules);
   const isFounding = tenant.id === DEFAULT_TENANT_ID;
@@ -293,17 +292,14 @@ export default async function TenantProfilePage({
           {
             key: "usage",
             label: "Usage",
-            // Streamed: the storage estimate costs one COUNT per sampled table, so it
-            // must not block the rest of the profile for someone who opened another tab.
-            content: (
-              <Suspense
-                fallback={
-                  <p className="card p-5 text-sm text-muted-foreground">Estimating storage…</p>
-                }
-              >
-                <UsageTab tenantId={id} />
-              </Suspense>
-            ),
+            // LAZY. The storage estimate costs one COUNT per sampled table — the most
+            // expensive query in the console. Streaming it inside Suspense stopped it
+            // blocking the page but still ran it on every profile visit, because the
+            // tab strip mounts every panel. <UsageTab> is a client component that
+            // fetches through an action, and `lazy` holds it back until this tab is
+            // opened, so the scan happens only when somebody asks for it.
+            lazy: true,
+            content: <UsageTab tenantId={id} />,
           },
           {
             key: "errors",
