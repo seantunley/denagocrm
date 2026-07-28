@@ -29,6 +29,7 @@ import {
   type IntegrationStatus,
 } from "@/lib/integrationHealth";
 import Tabs from "@/components/Tabs";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import UsageTab from "@/components/platform/UsageTab";
 
 import ModalTrigger from "@/components/Modal";
@@ -205,16 +206,28 @@ export default async function TenantProfilePage({
           <div className="flex shrink-0 items-center gap-2">
             {tenant.active ? (
               !isFounding && (
-                <form action={suspendTenantAction.bind(null, tenant.id)}>
-                  <button className="btn-secondary btn-sm">Suspend</button>
-                </form>
+                <SaveForm
+                  action={suspendTenantAction.bind(null, tenant.id)}
+                  success={`${tenant.name} suspended`}
+                >
+                  <SaveButton pendingLabel="Suspending…" className="btn-secondary btn-sm">
+                    Suspend
+                  </SaveButton>
+                </SaveForm>
               )
             ) : (
-              <form action={activateTenantAction.bind(null, tenant.id)}>
-                <button className="btn-primary btn-sm" disabled={!tenantEnforcing()}>
+              <SaveForm
+                action={activateTenantAction.bind(null, tenant.id)}
+                success={`${tenant.name} activated`}
+              >
+                <SaveButton
+                  pendingLabel="Activating…"
+                  className="btn-primary btn-sm"
+                  disabled={!tenantEnforcing()}
+                >
                   Activate
-                </button>
-              </form>
+                </SaveButton>
+              </SaveForm>
             )}
           </div>
         </div>
@@ -349,7 +362,11 @@ export default async function TenantProfilePage({
             label: "Modules",
             count: granted.size,
             content: (
-              <form action={setTenantModulesAction.bind(null, tenant.id)} className="card p-5">
+              <SaveForm
+                action={setTenantModulesAction.bind(null, tenant.id)}
+                success="Modules updated"
+                className="card p-5"
+              >
                 <p className="text-sm text-muted-foreground">
                   What this tenant may use. Their own admin can switch a granted pack off,
                   but can never switch on one that is not granted. CRM core is always on.
@@ -374,8 +391,8 @@ export default async function TenantProfilePage({
                     </li>
                   ))}
                 </ul>
-                <button className="btn-primary btn-sm mt-4">Save modules</button>
-              </form>
+                <SaveButton className="btn-primary btn-sm mt-4">Save modules</SaveButton>
+              </SaveForm>
             ),
           },
           {
@@ -394,11 +411,17 @@ export default async function TenantProfilePage({
                         </span>
                       </span>
                       {members.length > 1 ? (
-                        <form action={removeTenantMemberAction.bind(null, tenant.id, member.userId)}>
-                          <button className="text-xs text-red-400 transition-colors hover:text-red-300">
+                        <SaveForm
+                          action={removeTenantMemberAction.bind(null, tenant.id, member.userId)}
+                          success={`${member.user.name} removed`}
+                        >
+                          <SaveButton
+                            pendingLabel="Removing…"
+                            className="text-xs text-red-400 transition-colors hover:text-red-300"
+                          >
                             Remove
-                          </button>
-                        </form>
+                          </SaveButton>
+                        </SaveForm>
                       ) : (
                         <span
                           className="text-xs text-muted-foreground"
@@ -411,7 +434,11 @@ export default async function TenantProfilePage({
                   ))}
                 </ul>
 
-                <form action={addTenantMemberAction.bind(null, tenant.id)} className="mt-4 flex gap-2">
+                <SaveForm
+                  action={addTenantMemberAction.bind(null, tenant.id)}
+                  success="Member added"
+                  className="mt-4 flex gap-2"
+                >
                   <select name="userId" className="input flex-1" required defaultValue="">
                     <option value="" disabled>
                       Add a member…
@@ -422,10 +449,14 @@ export default async function TenantProfilePage({
                       </option>
                     ))}
                   </select>
-                  <button className="btn-secondary btn-sm" disabled={addableUsers.length === 0}>
+                  <SaveButton
+                    pendingLabel="Adding…"
+                    className="btn-secondary btn-sm"
+                    disabled={addableUsers.length === 0}
+                  >
                     Add
-                  </button>
-                </form>
+                  </SaveButton>
+                </SaveForm>
                 <p className="mt-2 text-[11px] text-muted-foreground/80">
                   Only users with no tenant are listed: sign-in requires exactly one tenant, so a
                   second membership would lock that user out entirely.
@@ -448,11 +479,17 @@ export default async function TenantProfilePage({
               : "Suspending a tenant immediately makes its members unable to sign in. It is reversible."}
           </p>
           {!isFounding && tenant.active && (
-            <form action={suspendTenantAction.bind(null, tenant.id)}>
-              <button className="btn-primary w-full bg-red-600 hover:bg-red-500">
+            <SaveForm
+              action={suspendTenantAction.bind(null, tenant.id)}
+              success={`${tenant.name} suspended`}
+            >
+              <SaveButton
+                pendingLabel="Suspending…"
+                className="btn-primary w-full bg-red-600 hover:bg-red-500"
+              >
                 Suspend this tenant
-              </button>
-            </form>
+              </SaveButton>
+            </SaveForm>
           )}
         </div>
       </ModalTrigger>

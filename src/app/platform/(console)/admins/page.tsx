@@ -3,6 +3,7 @@ import { basePrisma } from "@/lib/db";
 import { requirePlatformAdmin } from "@/lib/platformAuth";
 import { formatDateTime } from "@/lib/format";
 import ModalTrigger from "@/components/Modal";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import {
   createPlatformAdminAction,
   setPlatformAdminDisabledAction,
@@ -50,7 +51,7 @@ export default async function PlatformAdminsPage() {
           title="Add platform admin"
           buttonClass="btn-primary btn-sm inline-flex items-center gap-1.5"
         >
-          <form action={createPlatformAdminAction} className="space-y-4">
+          <SaveForm action={createPlatformAdminAction} success="Platform admin created" className="space-y-4">
             <div>
               <label className="label">Name</label>
               <input name="name" className="input" required autoFocus placeholder="Full name" />
@@ -69,8 +70,10 @@ export default async function PlatformAdminsPage() {
                 At least 12 characters, including letters and numbers.
               </p>
             </div>
-            <button className="btn-primary w-full">Create admin</button>
-          </form>
+            <SaveButton pendingLabel="Creating…" className="btn-primary w-full">
+              Create admin
+            </SaveButton>
+          </SaveForm>
         </ModalTrigger>
       </div>
 
@@ -138,15 +141,19 @@ export default async function PlatformAdminsPage() {
 
                 <div className="flex flex-wrap items-center gap-2">
                   {admin._count.sessions > 0 && (
-                    <form action={revokePlatformAdminSessionsAction.bind(null, admin.id)}>
-                      <button
+                    <SaveForm
+                      action={revokePlatformAdminSessionsAction.bind(null, admin.id)}
+                      success={`Signed ${admin.name} out everywhere`}
+                    >
+                      <SaveButton
+                        pendingLabel="Revoking…"
                         className="btn-secondary btn-sm inline-flex items-center gap-1.5"
                         title="Sign this admin out of every device"
                       >
                         <LogOut className="size-3.5" />
                         Revoke sessions
-                      </button>
-                    </form>
+                      </SaveButton>
+                    </SaveForm>
                   )}
 
                   {!isMe && (
@@ -155,8 +162,9 @@ export default async function PlatformAdminsPage() {
                       title={`Reset password for ${admin.name}`}
                       buttonClass="btn-secondary btn-sm inline-flex items-center gap-1.5"
                     >
-                      <form
+                      <SaveForm
                         action={resetPlatformAdminPasswordAction.bind(null, admin.id)}
+                        success={`Password reset for ${admin.name}`}
                         className="space-y-4"
                       >
                         <div>
@@ -167,17 +175,25 @@ export default async function PlatformAdminsPage() {
                             them out everywhere; tell them the new password yourself.
                           </p>
                         </div>
-                        <button className="btn-primary w-full">Reset password</button>
-                      </form>
+                        <SaveButton pendingLabel="Resetting…" className="btn-primary w-full">
+                          Reset password
+                        </SaveButton>
+                      </SaveForm>
                     </ModalTrigger>
                   )}
 
                   {!isMe && (
-                    <form action={setPlatformAdminDisabledAction.bind(null, admin.id, !disabled)}>
-                      <button className="btn-secondary btn-sm">
+                    <SaveForm
+                      action={setPlatformAdminDisabledAction.bind(null, admin.id, !disabled)}
+                      success={disabled ? `${admin.name} re-enabled` : `${admin.name} disabled`}
+                    >
+                      <SaveButton
+                        pendingLabel={disabled ? "Re-enabling…" : "Disabling…"}
+                        className="btn-secondary btn-sm"
+                      >
                         {disabled ? "Re-enable" : "Disable"}
-                      </button>
-                    </form>
+                      </SaveButton>
+                    </SaveForm>
                   )}
 
                   {!isMe && (
@@ -186,15 +202,22 @@ export default async function PlatformAdminsPage() {
                       title={`Delete ${admin.name}?`}
                       buttonClass="btn-secondary btn-sm text-red-300"
                     >
-                      <form action={deletePlatformAdminAction.bind(null, admin.id)} className="space-y-4">
+                      <SaveForm
+                        action={deletePlatformAdminAction.bind(null, admin.id)}
+                        success={`${admin.name} deleted`}
+                        className="space-y-4"
+                      >
                         <p className="text-sm text-muted-foreground">
                           This is permanent and takes their sessions with it. Disabling is
                           reversible and usually the better choice.
                         </p>
-                        <button className="btn-primary w-full bg-red-600 hover:bg-red-500">
+                        <SaveButton
+                          pendingLabel="Deleting…"
+                          className="btn-primary w-full bg-red-600 hover:bg-red-500"
+                        >
                           Delete permanently
-                        </button>
-                      </form>
+                        </SaveButton>
+                      </SaveForm>
                     </ModalTrigger>
                   )}
                 </div>

@@ -8,6 +8,7 @@ import { formatDateTime } from "@/lib/format";
 import { parseModuleCsv } from "@/lib/modules/entitlement";
 import { getPlatformHealth, type BackupHealth } from "@/lib/platformHealth";
 import ModalTrigger from "@/components/Modal";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { createTenantAction } from "@/app/actions/tenants";
 
@@ -75,7 +76,7 @@ export default async function PlatformTenantsPage() {
           title="Create tenant"
           buttonClass="btn-primary btn-sm inline-flex items-center gap-1.5"
         >
-          <form action={createTenantAction} className="space-y-4">
+          <SaveForm action={createTenantAction} success="Tenant created (inert)" className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <label className="label">Tenant name</label>
@@ -108,8 +109,10 @@ export default async function PlatformTenantsPage() {
             <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-200/90">
               New tenants are created <strong>inert</strong>: suspended, with the owner disabled and no modules. They cannot sign in until you activate them — which is blocked until tenant isolation enforcement is on.
             </div>
-            <button className="btn-primary w-full">Create tenant</button>
-          </form>
+            <SaveButton pendingLabel="Creating…" className="btn-primary w-full">
+              Create tenant
+            </SaveButton>
+          </SaveForm>
         </ModalTrigger>
       </div>
 

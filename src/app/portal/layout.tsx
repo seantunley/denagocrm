@@ -2,6 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import PortalNav from "@/components/PortalNav";
+import { Toaster } from "@/components/ui/sonner";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 
 export default async function PortalLayout({ children }: { children: React.ReactNode }) {
@@ -29,6 +30,9 @@ export default async function PortalLayout({ children }: { children: React.React
       </header>
       <PortalNav mode="mobile" />
       <main className="portal-main relative mx-auto max-w-6xl px-4 py-8 pb-28 sm:px-6 sm:py-12">{children}</main>
+      {/* Customers get the same save feedback staff do; the portal is outside
+          AppShell, so it needs its own Toaster. */}
+      <Toaster />
     </div>
   );
 }
