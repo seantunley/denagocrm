@@ -44,3 +44,59 @@ test("non-user audit entries inherit only an explicit normal tenant scope", () =
   assert.match(code, /scope\s*&&\s*!scope\.system\s*&&\s*scope\.tenantId/, "system or missing scopes must remain global");
   assert.match(code, /if\s*\(!entry\.user\)/, "scope attribution must apply to cron, portal, webhook and public-token actors");
 });
+
+// ── Dormant mode must still establish a tenant scope ────────────────────────
+
+// The dormant path used to run its slice with NO scope bound at all, so any queue
+// that asks which tenant it is working for threw. The survey distribution queue
+// does exactly that, and failed on every run for days — surveys were never sent,
+// and because the error was caught and logged it read as noise rather than a dead
+// feature. Dormant mode must look like the single-tenant case of the enforcing
+// path, or a queue can work in one mode and be silently broken in the other.
+test("dormant cron still binds the founding tenant's scope", () => {
+  const code = src("src/lib/tenantCron.ts");
+  const dormantAt = code.indexOf("if (!tenantEnforcing())");
+  assert.ok(dormantAt > 0, "the dormant branch must exist");
+  // The branch ends at its own return; slicing on the next `const startedAt`
+  // would cut the branch in half, since it declares one itself.
+  const dormantEnd = code.indexOf('return [{ tenantId: null', dormantAt);
+  assert.ok(dormantEnd > dormantAt, "the dormant branch must return a single unscoped run");
+  const dormantBranch = code.slice(dormantAt, dormantEnd);
+  assert.match(
+    dormantBranch,
+    /runInTenantScope\(\s*\{\s*tenantId:\s*DEFAULT_TENANT_ID/,
+    "the dormant slice must run inside the founding tenant's scope",
+  );
+});
+
+test("survey distribution queue still requires a scope (the guard is not weakened)", () => {
+  const code = src("src/lib/surveyDistributionQueue.ts");
+  assert.match(
+    code,
+    /requires a tenant scope/,
+    "the queue must keep failing closed rather than guessing a tenant",
+  );
+});
+
+// ── Meta lead dedupe must see soft-deleted leads ────────────────────────────
+
+// `externalId` is unique in the DATABASE regardless of deletedAt, but the
+// soft-delete extension hides deleted rows from the guarded client. Deduping
+// through `prisma` therefore missed leads a user had deleted, re-created them, and
+// violated the unique index on every run — 692 logged failures on production from
+// four deleted leads. Both entry points must dedupe through basePrisma.
+for (const file of ["src/lib/metaLeadSync.ts", "src/app/api/webhooks/meta/route.ts"]) {
+  test(`${file}: Meta lead dedupe sees soft-deleted leads`, () => {
+    const code = src(file);
+    assert.match(
+      code,
+      /basePrisma\.lead\.findUnique\(\s*\{\s*\n?\s*where:\s*\{\s*externalId/,
+      "the externalId dedupe must use basePrisma so deleted leads are not resurrected",
+    );
+    assert.doesNotMatch(
+      code,
+      /[^e]prisma\.lead\.findUnique\(\s*\{\s*where:\s*\{\s*externalId/,
+      "the guarded client hides soft-deleted rows and must not be used for this dedupe",
+    );
+  });
+}
