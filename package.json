@@ -20,7 +20,8 @@
     "test:rbac": "tsx --tsconfig tsconfig.scripts.json scripts/test-rbac.ts",
     "test:integrity": "tsx --tsconfig tsconfig.scripts.json scripts/test-integrity.ts",
     "test:tenant-guard": "tsx --tsconfig tsconfig.scripts.json scripts/test-tenant-guard.ts",
-    "validate:security": "npm run prisma:validate && npm run prisma:generate && npm run typecheck && npm run lint && npm run build && npm run verify:governance && npm run test:security && npm run test:rbac && npm run test:integrity && npm run test:tenant-guard"
+    "validate:security": "npm run prisma:validate && npm run prisma:generate && npm run typecheck && npm run lint && npm run build && npm run verify:governance && npm run test:security && npm run test:rbac && npm run test:integrity && npm run test:tenant-guard",
+    "platform:create-admin": "tsx --tsconfig tsconfig.scripts.json scripts/create-platform-admin.ts"
   },
   "dependencies": {
     "@blocknote/core": "^0.51.4",

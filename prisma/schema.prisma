@@ -2314,6 +2314,57 @@ model TenantMember {
   @@index([userId])
 }
 
+// Platform-admin identity — DELIBERATELY OUTSIDE the tenant model, and listed in
+// GLOBAL_MODELS so the tenant guard never tries to scope it.
+//
+// These tables make the /platform console independent of any tenant, the founding
+// Denago Cape Town tenant included. A PlatformAdmin is NOT a `User`, holds NO
+// `TenantMember` row, and authenticates through its own login (/platform/login)
+// with its own cookie. Consequences: suspending any tenant cannot lock the
+// platform operator out, and a compromised CRM session grants no console access.
+//
+// They intentionally have NO tenantId: a cross-tenant administrator that belonged
+// to a tenant would be a contradiction.
+
+/// A platform super-administrator. Created only by the `create-platform-admin`
+/// CLI — there is intentionally no self-service signup, since a "create the first
+/// admin" page is a takeover vector the moment it misfires.
+model PlatformAdmin {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  name              String
+  passwordHash      String
+  totpSecret        String? // encrypted TOTP secret; null until enrolled
+  totpEnabledAt     DateTime?
+  disabledAt        DateTime? // locks the account out without deleting it
+  sessionVersion    Int       @default(0) // bump to revoke every existing session
+  lastLoginAt       DateTime?
+  passwordChangedAt DateTime?
+  createdAt         DateTime  @default(now())
+
+  sessions PlatformAdminSession[]
+
+  @@index([disabledAt])
+}
+
+/// Session registry for platform admins — the server-side half of the cookie, so
+/// a session can be revoked remotely rather than merely expiring.
+model PlatformAdminSession {
+  id           String    @id @default(cuid())
+  jti          String    @unique // matches the jti claim inside the platform JWT
+  ip           String?
+  userAgent    String?
+  createdAt    DateTime  @default(now())
+  lastActiveAt DateTime  @default(now())
+  revokedAt    DateTime?
+
+  adminId String
+  admin   PlatformAdmin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@index([revokedAt])
+}
+
 // Phase C step 2b (C2) — per-tenant PUBLIC API keys, replacing the single global
 // INTAKE_API_KEY for intake / bookings / service-lookup. Keys are HASHED at rest
 // (sha256 of the raw key; the raw key is shown once at creation). Scalar tenantId

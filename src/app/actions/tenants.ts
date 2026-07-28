@@ -2,9 +2,8 @@
 
 import bcrypt from "bcryptjs";
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { basePrisma } from "@/lib/db";
-import { getCurrentUser } from "@/lib/auth";
+import { requirePlatformAdminAction } from "@/lib/platformAuth";
 import { logAuditStrict } from "@/lib/audit";
 import {
   createTenant,
@@ -13,7 +12,6 @@ import {
   addTenantMembership,
 } from "@/lib/provisioning";
 import {
-  isPlatformAdmin,
   canActivateTenant,
   canSuspendTenant,
   canRemoveTenantMember,
@@ -36,16 +34,17 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 /**
- * Platform super-admin guard at the top of EVERY action. Server Actions are
- * reachable by direct POST, not just via this console's UI, so authorisation is
- * re-checked here regardless of what the page rendered. Unauthenticated callers go
- * to login; authenticated non-owners are refused hard.
+ * Platform-admin guard at the top of EVERY action. Server Actions are reachable by
+ * direct POST, not just via this console's UI, so authorisation is re-checked here
+ * regardless of what the page rendered.
+ *
+ * This resolves a `PlatformAdmin` — NOT a CRM `User`. A tenant's owner, including
+ * the founding tenant's, has no access here unless they separately hold a platform
+ * identity. Throws rather than redirecting, so a direct POST fails loudly instead
+ * of being bounced to a login page it never requested.
  */
-async function requirePlatformOwner(): Promise<{ id: string; name: string; role: string }> {
-  const user = await getCurrentUser();
-  if (!user) redirect("/login");
-  if (!isPlatformAdmin(user.role)) throw new Error("Not authorized: platform owner access required.");
-  return user;
+async function requirePlatformOwner(): Promise<{ id: string; name: string; email: string }> {
+  return requirePlatformAdminAction();
 }
 
 export async function createTenantAction(formData: FormData): Promise<void> {
@@ -96,6 +95,9 @@ export async function createTenantAction(formData: FormData): Promise<void> {
     entityType: "Tenant",
     entityId: created.tenantId,
     user: actor,
+    // The actor is a PlatformAdmin, not a CRM User — say so, or the trail records
+    // an actorUserId that resolves to nothing in the User table.
+    actorType: "platform_admin",
     // No password fields here — the owner's credentials never enter the audit trail.
     after: { name, slug, active: false, ownerId: created.ownerId, ownerEmail, inert: true },
   });
@@ -133,6 +135,9 @@ export async function activateTenantAction(tenantId: string): Promise<void> {
     entityType: "Tenant",
     entityId: tenantId,
     user: actor,
+    // The actor is a PlatformAdmin, not a CRM User — say so, or the trail records
+    // an actorUserId that resolves to nothing in the User table.
+    actorType: "platform_admin",
     before: { active: tenant.active },
     after: { active: true },
   });
@@ -160,6 +165,9 @@ export async function suspendTenantAction(tenantId: string): Promise<void> {
     entityType: "Tenant",
     entityId: tenantId,
     user: actor,
+    // The actor is a PlatformAdmin, not a CRM User — say so, or the trail records
+    // an actorUserId that resolves to nothing in the User table.
+    actorType: "platform_admin",
     before: { active: tenant.active },
     after: { active: false },
   });
@@ -187,6 +195,9 @@ export async function addTenantMemberAction(tenantId: string, formData: FormData
     entityType: "Tenant",
     entityId: tenantId,
     user: actor,
+    // The actor is a PlatformAdmin, not a CRM User — say so, or the trail records
+    // an actorUserId that resolves to nothing in the User table.
+    actorType: "platform_admin",
     after: { userId },
   });
   revalidatePath(CONSOLE_PATH);
@@ -216,6 +227,9 @@ export async function removeTenantMemberAction(tenantId: string, userId: string)
     entityType: "Tenant",
     entityId: tenantId,
     user: actor,
+    // The actor is a PlatformAdmin, not a CRM User — say so, or the trail records
+    // an actorUserId that resolves to nothing in the User table.
+    actorType: "platform_admin",
     before: { userId },
   });
   revalidatePath(CONSOLE_PATH);
