@@ -122,143 +122,56 @@ export default async function PlatformTenantsPage() {
         </ModalTrigger>
       </div>
 
-      {/* Prominent safety banner: the inert-until-isolation-on model. */}
-      <section className={`card p-4 border-l-4 ${enforcing ? "border-l-emerald-500" : "border-l-amber-500"}`}>
-        <div className="flex items-start gap-3">
-          <span className={`mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg ${enforcing ? "bg-emerald-500/10 text-emerald-300" : "bg-amber-500/10 text-amber-300"}`}>
-            <Lock className="size-4" />
+      {/* ONE compact status strip. These were three stacked full-width panels that
+          pushed the tenant list — the actual point of this page — below the fold.
+          Standing facts belong in a glanceable row, not a wall of prose. */}
+      <section className="flex flex-wrap items-center gap-2 text-xs">
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 font-medium ${
+            enforcing
+              ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200"
+              : "border-amber-500/25 bg-amber-500/10 text-amber-200"
+          }`}
+          title={
+            enforcing
+              ? "Tenant isolation is enforced. Tenants can be activated."
+              : "No cross-tenant data isolation yet. New tenants are created inert and cannot be activated — activating one now would expose existing data to it."
+          }
+        >
+          <Lock className="size-3.5" />
+          Isolation {enforcing ? "ON" : "OFF"}
+        </span>
+
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 font-medium ${BACKUP_TONE[health.backup.status]}`}
+          title={
+            health.backup.lastRunAt
+              ? `Last run ${formatDateTime(health.backup.lastRunAt)}`
+              : "No backup run has been recorded yet"
+          }
+        >
+          <Activity className="size-3.5" />
+          Backups: {BACKUP_LABEL[health.backup.status]}
+        </span>
+
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 font-medium ${
+            health.errors.total24h > 0
+              ? "border-red-500/25 bg-red-500/10 text-red-200"
+              : "border-border text-muted-foreground"
+          }`}
+        >
+          <AlertTriangle className="size-3.5" />
+          {health.errors.total24h} error{health.errors.total24h === 1 ? "" : "s"} in 24h
+        </span>
+
+        {!enforcing && (
+          <span className="text-muted-foreground">
+            New tenants are created inert and cannot be activated until isolation is on.
           </span>
-          <div className="text-sm">
-            <p className="font-semibold">
-              Isolation enforcement is {enforcing ? "ON" : "OFF"}.
-            </p>
-            <p className="mt-1 text-muted-foreground">
-              There is no cross-tenant data isolation until enforcement is enabled. New tenants are therefore created
-              <strong className="text-foreground"> inert</strong> (suspended, owner disabled, no modules) so their credentials
-              cannot reach the currently-unscoped CRM. {enforcing
-                ? "Enforcement is on, so tenants can now be activated."
-                : "Activation is disabled until enforcement is turned on — activating now would expose existing data to a new tenant."}
-            </p>
-          </div>
-        </div>
+        )}
       </section>
 
-      {/* Errors first, and only when there ARE any. A count buried behind a click
-          cannot tell you something is wrong; this shows the actual failures, newest
-          first, with the tenant that owns them. Silent when everything is healthy so
-          it stays meaningful rather than becoming furniture. */}
-      {health.errors.total24h > 0 && (
-        <section className="card border-l-4 border-l-red-500 p-5">
-          <div className="flex items-start gap-3">
-            <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-red-500/10 text-red-300">
-              <AlertTriangle className="size-4" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <h2 className="font-semibold text-red-200">
-                {health.errors.total24h} error{health.errors.total24h === 1 ? "" : "s"} in the last 24 hours
-              </h2>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Most recent first. Full detail lives in each tenant&apos;s Settings → System Log.
-              </p>
-
-              <ul className="mt-3 divide-y divide-border/50">
-                {health.errors.recent.map((error) => (
-                  <li key={error.id} className="py-2 first:pt-0">
-                    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                      <span className="rounded bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                        {error.scope}
-                      </span>
-                      <span className="text-xs font-medium">
-                        {error.tenantId
-                          ? tenantName(error.tenantId)
-                          : <span className="text-muted-foreground">unattributed</span>}
-                      </span>
-                      <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
-                        {formatDateTime(error.createdAt)}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 break-words text-xs text-foreground/80 [overflow-wrap:anywhere]">
-                      {error.message}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* Platform health. Backups are PLATFORM-WIDE facts, not per-tenant ones, and
-          are shown as such rather than repeated under each tenant as if they were
-          scoped. Per-tenant size/activity lives on the tenant rows below. */}
-      <section className="card p-5">
-        <div className="mb-4 flex items-center gap-2">
-          <Activity className="size-4 text-muted-foreground" />
-          <h2 className="font-semibold">Platform health</h2>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className={`rounded-lg border p-3 ${BACKUP_TONE[health.backup.status]}`}>
-            <p className="text-[10px] font-semibold uppercase tracking-wide opacity-80">Backups</p>
-            <p className="mt-1 text-sm font-semibold">{BACKUP_LABEL[health.backup.status]}</p>
-            <p className="mt-1 text-xs opacity-90">
-              {health.backup.lastRunAt
-                ? <>Last run {formatDateTime(health.backup.lastRunAt)}</>
-                : <>No run has been recorded yet.</>}
-              {health.backup.lastSuccessAt && health.backup.lastRunAt
-                && health.backup.lastSuccessAt.getTime() !== health.backup.lastRunAt.getTime() && (
-                <> · last success {formatDateTime(health.backup.lastSuccessAt)}</>
-              )}
-            </p>
-            {health.backup.sizeBytes != null && (
-              <p className="mt-0.5 text-xs opacity-75">
-                {(health.backup.sizeBytes / 1024 / 1024).toFixed(1)} MB
-                {health.backup.durationMs != null && <> · took {Math.round(health.backup.durationMs / 1000)}s</>}
-              </p>
-            )}
-            {health.backup.recentFailures > 1 && (
-              <p className="mt-1 text-xs font-medium">
-                {health.backup.recentFailures} consecutive failures since the last success.
-              </p>
-            )}
-            {health.backup.error && (
-              <p className="mt-1 break-words text-xs opacity-90">{health.backup.error}</p>
-            )}
-            <p className="mt-2 text-[11px] opacity-70">
-              Backups are platform-wide — one dump of the whole database, not per tenant.
-            </p>
-          </div>
-
-          <div className="rounded-lg border border-border p-3">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-              Unattributed errors
-            </p>
-            <p className="mt-1 text-sm font-semibold">
-              {health.errors.unattributed24h} in 24h · {health.errors.unattributed7d} in 7d
-            </p>
-            {health.errors.topScopes.length > 0 ? (
-              <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
-                {health.errors.topScopes.map((s) => (
-                  <li key={s.scope}>{s.scope} · {s.count}</li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-1 text-xs text-muted-foreground">
-                No unattributed errors in the last 7 days.
-              </p>
-            )}
-            <p className="mt-2 text-[11px] text-muted-foreground/80">
-              Errors with no tenant: webhooks, cron, pre-auth failures, and rows logged
-              before attribution existed. Tenant-attributed errors appear on each tenant below.
-            </p>
-          </div>
-        </div>
-
-        <p className="mt-3 text-[11px] text-muted-foreground/80">
-          Per-tenant integration health is not shown: per-tenant integration credentials
-          do not exist in this schema yet, so there is nothing to report.
-        </p>
-      </section>
 
       <section className="card p-0">
         <div className="flex items-center justify-between border-b border-border/50 px-5 py-3">
@@ -275,7 +188,6 @@ export default async function PlatformTenantsPage() {
                 <tr className="border-b border-border/50 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                   <th className="px-5 py-2 font-semibold">Tenant</th>
                   <th className="px-3 py-2 font-semibold">Status</th>
-                  <th className="px-3 py-2 text-right font-semibold">Leads</th>
                   <th className="px-3 py-2 text-right font-semibold">Members</th>
                   <th className="px-3 py-2 text-right font-semibold">Modules</th>
                   <th className="px-3 py-2 text-right font-semibold">Errors 24h</th>
@@ -288,21 +200,37 @@ export default async function PlatformTenantsPage() {
                   const granted = parseModuleCsv(tenant.modules);
                   const isFounding = tenant.id === DEFAULT_TENANT_ID;
                   const errors = stats?.errors24h ?? 0;
+                  // An unhealthy tenant should be obvious from the row itself, not
+                  // only from a number in one column: a left accent plus a tinted
+                  // background, kept subtle so a busy day does not look like an
+                  // emergency.
                   return (
-                    <tr key={tenant.id} className="transition-colors hover:bg-white/[0.02]">
+                    <tr
+                      key={tenant.id}
+                      className={`transition-colors ${
+                        errors > 0
+                          ? "border-l-2 border-l-red-500/70 bg-red-500/[0.04] hover:bg-red-500/[0.07]"
+                          : "hover:bg-white/[0.02]"
+                      }`}
+                    >
                       <td className="px-5 py-3">
                         <Link href={`/platform/tenants/${tenant.id}`} className="font-medium transition-colors hover:text-primary">
                           {tenant.name}
                         </Link>
                         <span className="ml-2 text-xs text-muted-foreground">/{tenant.slug}</span>
                         {isFounding && <span className="badge ml-2 bg-primary/15 text-primary">Founding</span>}
+                        {errors > 0 && (
+                          <span className="badge ml-2 inline-flex items-center gap-1 bg-red-500/15 text-red-300">
+                            <AlertTriangle className="size-3" />
+                            {errors} error{errors === 1 ? "" : "s"}
+                          </span>
+                        )}
                       </td>
                       <td className="px-3 py-3">
                         <span className={`badge ${tenant.active ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300"}`}>
                           {tenant.active ? "Active" : "Suspended"}
                         </span>
                       </td>
-                      <td className="px-3 py-3 text-right tabular-nums">{stats?.leads ?? 0}</td>
                       <td className="px-3 py-3 text-right tabular-nums">{stats?.users ?? 0}</td>
                       <td className="px-3 py-3 text-right tabular-nums">{granted.size === 0 ? <span className="text-muted-foreground">core</span> : granted.size}</td>
                       <td className="px-3 py-3 text-right tabular-nums">
@@ -326,6 +254,54 @@ export default async function PlatformTenantsPage() {
           </div>
         )}
       </section>
+
+      {/* Errors AFTER the tenant list. The strip above already says how many there
+          are; this is the detail you scroll to, not the thing that displaces the
+          page's purpose. Messages are clamped — an unhandled Prisma error can be a
+          multi-thousand-character invocation dump, which as raw text buried the
+          whole page. */}
+      {health.errors.recent.length > 0 && (
+        <section className="card p-0">
+          <div className="flex items-center justify-between border-b border-border/50 px-5 py-3">
+            <h2 className="flex items-center gap-2 font-semibold">
+              <AlertTriangle className="size-4 text-red-300" />
+              Recent errors
+            </h2>
+            <span className="text-xs text-muted-foreground">
+              {health.errors.total24h} in 24h · last 7 days shown
+            </span>
+          </div>
+
+          <ul className="divide-y divide-border/50">
+            {health.errors.recent.map((error) => (
+              <li key={error.id} className="px-5 py-3">
+                <div className="flex flex-wrap items-baseline gap-2">
+                  <span className="rounded bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                    {error.scope}
+                  </span>
+                  {error.tenantId ? (
+                    <Link
+                      href={`/platform/tenants/${error.tenantId}`}
+                      className="text-xs font-medium transition-colors hover:text-primary"
+                    >
+                      {tenantName(error.tenantId)}
+                    </Link>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">unattributed</span>
+                  )}
+                  <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+                    {formatDateTime(error.createdAt)}
+                  </span>
+                </div>
+                <p className="mt-1 line-clamp-2 break-words text-xs text-foreground/80 [overflow-wrap:anywhere]">
+                  {error.message}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
     </div>
   );
 }

@@ -8,6 +8,12 @@ import {
   Mail,
   MessageSquare,
   Smartphone,
+  MessagesSquare,
+  Camera,
+  Star,
+  Send,
+  Sparkles,
+  Mic,
 } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { requirePlatformAdmin } from "@/lib/platformAuth";
@@ -45,6 +51,12 @@ const INTEGRATION_ICON: Record<IntegrationId, typeof Mail> = {
   email: Mail,
   whatsapp: MessageSquare,
   sms: Smartphone,
+  messenger: MessagesSquare,
+  instagram: Camera,
+  google_reviews: Star,
+  telegram: Send,
+  ai: Sparkles,
+  voice: Mic,
 };
 
 function IntegrationCard({ status }: { status: IntegrationStatus }) {
@@ -108,7 +120,7 @@ export default async function TenantProfilePage({
   const since24h = new Date(Date.now() - 24 * 3600_000);
   const since7d = new Date(Date.now() - 7 * 24 * 3600_000);
 
-  const [members, addableUsers, leads, contacts, lastSession, errors, integrations] =
+  const [members, addableUsers, contacts, lastSession, errors, integrations] =
     await Promise.all([
       basePrisma.tenantMember.findMany({
         where: { tenantId: id },
@@ -121,7 +133,6 @@ export default async function TenantProfilePage({
         select: { id: true, name: true, email: true },
         orderBy: { name: "asc" },
       }),
-      basePrisma.lead.count({ where: { tenantId: id, deletedAt: null } }),
       basePrisma.contact.count({ where: { tenantId: id, deletedAt: null } }),
       basePrisma.userSession.findFirst({
         where: { tenantId: id },
@@ -172,6 +183,20 @@ export default async function TenantProfilePage({
                 {tenant.active ? "Active" : "Suspended"}
               </span>
               {isFounding && <span className="badge bg-primary/15 text-primary">Founding</span>}
+              {/* Same signal as the list row, so a tenant that looked unhealthy there
+                  still looks unhealthy once you open it. */}
+              {errors24h > 0 && (
+                <span className="badge inline-flex items-center gap-1 bg-red-500/15 text-red-300">
+                  <AlertTriangle className="size-3" />
+                  {errors24h} error{errors24h === 1 ? "" : "s"} 24h
+                </span>
+              )}
+              {failingIntegrations > 0 && (
+                <span className="badge inline-flex items-center gap-1 bg-red-500/15 text-red-300">
+                  <AlertTriangle className="size-3" />
+                  {failingIntegrations} integration{failingIntegrations === 1 ? "" : "s"} failing
+                </span>
+              )}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
               /{tenant.slug} · created {formatDateTime(tenant.createdAt)}
@@ -206,10 +231,12 @@ export default async function TenantProfilePage({
       {/* At-a-glance figures, visible on every tab rather than hidden inside one. */}
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         {[
-          { label: "Leads", value: leads },
+          // Lead count is a sales metric, not a platform one — it tells an operator
+          // nothing about whether this tenant is healthy or how much it costs to run.
           { label: "Contacts", value: contacts },
           { label: "Members", value: members.length },
           { label: "Modules", value: granted.size },
+          { label: "Storage", value: formatBytes(storage.estimatedBytes) },
         ].map((stat) => (
           <div key={stat.label} className="card p-3">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
