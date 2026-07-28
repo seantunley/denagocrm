@@ -47,6 +47,7 @@ export default async function LeadsPage() {
           include: {
             product: true,
             assignedTo: true,
+            contact: { select: { notes: true } },
             _count: { select: { activities: { where: { status: "planned" } } } },
           },
         },
@@ -162,6 +163,10 @@ export default async function LeadsPage() {
         assignedToId: lead.assignedToId,
         assignee: lead.assignedTo?.name ?? null,
         research: lead.research,
+        notes:
+          lead.notes?.trim() || lead.contact?.notes?.trim()
+            ? { lead: lead.notes, contact: lead.contact?.notes ?? null }
+            : null,
         isNew: !lead.viewedAt && lead.createdAt.getTime() > now.getTime() - 3 * 24 * 60 * 60 * 1000,
         noNextStep: lead._count.activities === 0,
         ageDays: Math.floor((now.getTime() - lead.stageEnteredAt.getTime()) / 86400000),
