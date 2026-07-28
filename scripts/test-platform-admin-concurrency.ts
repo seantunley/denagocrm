@@ -63,13 +63,25 @@ async function main() {
       data: { name: `Admin ${tag}`, email: `${tag}-${SFX}@proof.invalid`, passwordHash: hash },
     });
 
-  // Isolate from any pre-existing admins: this database is a throwaway, but the
-  // count guard is global, so leftovers would change the arithmetic.
-  const preexisting = await basePrisma.platformAdmin.count({ where: { disabledAt: null } });
-  if (preexisting > 0) {
-    console.log(`  note: ${preexisting} pre-existing active admin(s); disabling for the proof`);
+  // Isolate from any pre-existing admins: the count guard is global, so leftovers
+  // would change the arithmetic.
+  //
+  // The exact rows are captured, not just how many. Cleanup used to re-enable
+  // every non-fixture admin it could find, which does not restore the database —
+  // it enables admins that were disabled deliberately before the run, and a
+  // suspended account silently coming back is precisely the state this guard
+  // exists to prevent. Only rows this script suspended are restored, and since it
+  // only ever touches rows whose disabledAt was already null, restoring to null
+  // returns each one to its own original value.
+  const suspended = await basePrisma.platformAdmin.findMany({
+    where: { disabledAt: null },
+    select: { id: true },
+  });
+  const suspendedIds = suspended.map((admin) => admin.id);
+  if (suspendedIds.length > 0) {
+    console.log(`  note: ${suspendedIds.length} pre-existing active admin(s); suspending for the proof`);
     await basePrisma.platformAdmin.updateMany({
-      where: { disabledAt: null },
+      where: { id: { in: suspendedIds } },
       data: { disabledAt: new Date() },
     });
   }
@@ -104,10 +116,10 @@ async function main() {
 
     await basePrisma.platformAdmin.deleteMany({ where: { id: { in: [a.id, b.id] } } });
   } finally {
-    await basePrisma.platformAdmin.deleteMany({ where: { email: { contains: `-${SFX}@proof.invalid` } } });
-    if (preexisting > 0) {
+    await basePrisma.platformAdmin.deleteMany({ where: { email: { endsWith: `-${SFX}@proof.invalid` } } });
+    if (suspendedIds.length > 0) {
       await basePrisma.platformAdmin.updateMany({
-        where: { email: { not: { contains: "@proof.invalid" } } },
+        where: { id: { in: suspendedIds } },
         data: { disabledAt: null },
       });
     }
