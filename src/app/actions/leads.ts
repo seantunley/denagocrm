@@ -190,6 +190,20 @@ export async function updateLead(id: string, formData: FormData) {
 
   const generatedTitle = await buildTitle(data);
   const title = String(formData.get("title") ?? "").trim() || generatedTitle;
+
+  if (data.contactId && data.contactId !== before.contactId && before.tenantId) {
+    const targetContact = await prisma.contact.findUnique({
+      where: { id: data.contactId },
+      select: { tenantId: true },
+    });
+    if (targetContact?.tenantId === null) {
+      await prisma.contact.update({
+        where: { id: data.contactId },
+        data: { tenantId: before.tenantId },
+      });
+    }
+  }
+
   const lead = await prisma.lead.update({
     where: { id },
     data: { ...data, title, ...(before.stageId !== data.stageId ? { stageEnteredAt: new Date() } : {}) },
