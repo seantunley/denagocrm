@@ -6,6 +6,7 @@ import {
   canActivateTenant,
   canSuspendTenant,
   canRemoveTenantMember,
+  canAddTenantMember,
 } from "../src/lib/tenantAdmin";
 import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 
@@ -71,4 +72,32 @@ test("canRemoveTenantMember: an empty/impossible count is also refused (fail clo
 test("canRemoveTenantMember: allowed when more than one member remains", () => {
   assert.deepEqual(canRemoveTenantMember(2), { ok: true });
   assert.deepEqual(canRemoveTenantMember(5), { ok: true });
+});
+
+// canAddTenantMember — the LOCKOUT guard. Sign-in resolves the acting tenant with
+// soleActiveTenant, which needs exactly one active membership; a second one yields
+// `ambiguous_tenant` and, under enforcement, no session at all.
+
+test("canAddTenantMember: allowed when the user has no active membership", () => {
+  assert.deepEqual(canAddTenantMember([], "tenant_b"), { ok: true });
+});
+
+test("canAddTenantMember: allowed when re-adding to the SAME tenant (idempotent)", () => {
+  assert.deepEqual(canAddTenantMember(["tenant_b"], "tenant_b"), { ok: true });
+});
+
+test("canAddTenantMember: REFUSED when the user already belongs to another active tenant", () => {
+  const result = canAddTenantMember([DEFAULT_TENANT_ID], "tenant_b");
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.error, /lock them out/i);
+});
+
+test("canAddTenantMember: refused even if the target is among several existing memberships", () => {
+  // Already ambiguous; adding more must not be waved through.
+  const result = canAddTenantMember([DEFAULT_TENANT_ID, "tenant_c"], "tenant_c");
+  assert.equal(result.ok, false);
+});
+
+test("canAddTenantMember: duplicate ids of the same tenant do not count as 'another'", () => {
+  assert.deepEqual(canAddTenantMember(["tenant_b", "tenant_b"], "tenant_b"), { ok: true });
 });

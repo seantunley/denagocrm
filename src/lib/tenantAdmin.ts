@@ -68,3 +68,31 @@ export function canRemoveTenantMember(currentMemberCount: number): GuardResult {
     ? { ok: false, error: "A tenant must keep at least one member." }
     : OK;
 }
+
+/**
+ * LOCKOUT GUARD. Authentication resolves a user's acting tenant with
+ * `soleActiveTenant`, which requires EXACTLY ONE active membership: zero gives
+ * `no_tenant`, two or more give `ambiguous_tenant`. Both resolve to no honoured
+ * tenant claim, and under enforcement that makes `getCurrentUser` return null —
+ * the user cannot sign in at all.
+ *
+ * So granting a second ACTIVE membership does not "add access", it DESTROYS the
+ * user's access. Refuse it until an explicit tenant-switching model exists.
+ *
+ * `activeTenantIdsForUser` is the user's current memberships in ACTIVE tenants.
+ * Re-adding them to a tenant they already belong to is allowed (idempotent), and a
+ * user with no active membership can be added to anything.
+ */
+export function canAddTenantMember(
+  activeTenantIdsForUser: readonly string[],
+  targetTenantId: string,
+): GuardResult {
+  const others = [...new Set(activeTenantIdsForUser)].filter((id) => id !== targetTenantId);
+  return others.length === 0
+    ? OK
+    : {
+        ok: false,
+        error:
+          "That user already belongs to another active tenant. Sign-in requires exactly one active tenant, so adding a second membership would lock them out entirely.",
+      };
+}

@@ -14,6 +14,7 @@ import {
 import {
   canActivateTenant,
   canSuspendTenant,
+  canAddTenantMember,
   canRemoveTenantMember,
 } from "@/lib/tenantAdmin";
 import { serialiseModuleGrant } from "@/lib/modules/entitlement";
@@ -188,6 +189,20 @@ export async function addTenantMemberAction(tenantId: string, formData: FormData
   if (!tenant) throw new Error("Tenant not found.");
   if (!user) throw new Error("Selected user does not exist.");
 
+  // LOCKOUT GUARD — see tenantAdmin.canAddTenantMember. Sign-in resolves the acting
+  // tenant with soleActiveTenant, which needs EXACTLY ONE active membership; a
+  // second one yields `ambiguous_tenant` and, under enforcement, no session at all.
+  // Granting it would remove this user's access rather than widen it.
+  const activeMemberships = await basePrisma.tenantMember.findMany({
+    where: { userId, tenant: { active: true } },
+    select: { tenantId: true },
+  });
+  const addGate = canAddTenantMember(
+    activeMemberships.map((membership) => membership.tenantId),
+    tenantId,
+  );
+  if (!addGate.ok) throw new Error(addGate.error);
+
   await addTenantMembership(basePrisma, tenantId, userId);
 
   await logAuditStrict({
@@ -213,9 +228,14 @@ export async function removeTenantMemberAction(tenantId: string, userId: string)
   });
   if (!tenant) throw new Error("Tenant not found.");
 
-  // Count and delete in one transaction to eliminate the TOCTOU race where two
-  // concurrent requests both see count=2 and both proceed to remove their member.
+  // A transaction ALONE does not close the last-member race: PostgreSQL's default
+  // READ COMMITTED isolation lets two concurrent removals both read count=2 and
+  // then delete DIFFERENT memberships, leaving zero. Serialise them on the parent
+  // TENANT row — every removal for this tenant takes the same lock, so the second
+  // waits and re-counts after the first commits, seeing count=1 and being refused.
   await basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT "id" FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`;
+
     const memberCount = await tx.tenantMember.count({ where: { tenantId } });
     const gate = canRemoveTenantMember(memberCount);
     if (!gate.ok) throw new Error(gate.error);

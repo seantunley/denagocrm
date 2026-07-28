@@ -41,16 +41,23 @@ export const getEnabledModuleIds = cache(async (): Promise<Set<ModuleId>> => {
   const tenantId = await resolveTenantIdQuietly();
   if (!tenantId) return installWideModuleIds(disabled);
 
+  // Once a tenant id EXISTS, this must FAIL CLOSED. Falling back to the
+  // install-wide set here would turn a tenant-resolution or database failure into
+  // BROADER access than the tenant was granted — the opposite of what a failure
+  // should do. A missing row yields the empty grant (core only).
+  //
+  // Errors are deliberately NOT caught: a transient database failure should
+  // surface as an error, not silently downgrade the UI to core-only and look like
+  // a configuration change.
+  //
   // basePrisma: Tenant is a GLOBAL model, and this runs during rendering where a
   // tenant scope may not be established yet.
-  const tenant = await basePrisma.tenant
-    .findUnique({ where: { id: tenantId }, select: { modules: true } })
-    .catch(() => null);
-  // A tenant id that no longer resolves is treated as no tenant rather than as an
-  // empty grant, so a transient lookup failure cannot black out the whole UI.
-  if (!tenant) return installWideModuleIds(disabled);
+  const tenant = await basePrisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { modules: true },
+  });
 
-  return effectiveModuleIds(tenant.modules, disabled);
+  return effectiveModuleIds(tenant?.modules ?? "", disabled);
 });
 
 /**

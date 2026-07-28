@@ -40,9 +40,16 @@ BEGIN
     RETURN;
   END IF;
 
+  -- Scope the read to the FOUNDING tenant explicitly. AppSetting carries a
+  -- tenantId column, and once per-tenant settings land there can be several rows
+  -- for this key — an unscoped "LIMIT 1" would then pick an arbitrary tenant's
+  -- preferences and backfill Denago CPT with them. NULL tenantId is accepted too,
+  -- since pre-backfill rows predate the column being populated.
   SELECT "value" INTO disabled_csv
   FROM "AppSetting"
   WHERE "key" = 'DISABLED_MODULES'
+    AND ("tenantId" = 'tenant_denago_cpt' OR "tenantId" IS NULL)
+  ORDER BY ("tenantId" IS NULL)  -- prefer the tenant-scoped row when both exist
   LIMIT 1;
 
   IF disabled_csv IS NULL OR btrim(disabled_csv) = '' THEN

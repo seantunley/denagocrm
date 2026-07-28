@@ -86,8 +86,12 @@ export async function platformLogout(): Promise<void> {
 }
 
 /**
- * A real bcrypt hash of a value nobody can supply, used only to equalise timing
- * on the unknown-account path. Cost matches the app's hashing cost so the work
- * is comparable.
+ * A real bcrypt hash of a value nobody can supply, used only to equalise timing on
+ * the unknown-account path.
+ *
+ * The COST MUST MATCH the cost real platform passwords are hashed at (12, see
+ * scripts/create-platform-admin.ts). A cheaper dummy defeats the whole point: a
+ * cost-10 compare returns roughly four times faster than a cost-12 one, so
+ * response timing would still separate "no such admin" from "wrong password".
  */
-const DUMMY_HASH = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
+const DUMMY_HASH = "$2b$12$SlH72I15J7MY7idR9GgLVOSKEVoACg5NXIqsb7mBiB5e4LRQD3zEa";

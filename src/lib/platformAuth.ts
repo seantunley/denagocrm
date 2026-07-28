@@ -105,6 +105,10 @@ export async function requirePlatformAdmin(): Promise<PlatformAdminPrincipal> {
 export async function requirePlatformAdminAction(): Promise<PlatformAdminPrincipal> {
   const admin = await getCurrentPlatformAdmin();
   if (!admin) throw new Error("Not authorized: platform admin access required.");
+  // Slide the idle window here rather than in the layout: a Server Action MAY set
+  // cookies, a Server Component may not. Best-effort — never fail an action that
+  // has already passed authorisation just because the refresh could not be written.
+  await touchPlatformSession().catch(() => {});
   return admin;
 }
 
@@ -160,9 +164,12 @@ export async function destroyPlatformSessionCookie(): Promise<void> {
 }
 
 /**
- * Slide the idle window for an active admin. Called from the console layout so a
- * working session isn't cut off at the idle timeout mid-task. Best-effort: a
- * failure here must never break the page render.
+ * Slide the idle window for an active admin.
+ *
+ * MUST only be called from a Server Action or Route Handler. Next.js forbids
+ * cookie mutation during Server Component rendering, so calling this from a layout
+ * or page throws — the console layout deliberately does not. `requirePlatformAdminAction`
+ * calls it instead, which covers every console mutation.
  */
 export async function touchPlatformSession(): Promise<void> {
   const store = await cookies();

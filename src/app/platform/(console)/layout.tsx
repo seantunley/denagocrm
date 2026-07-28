@@ -1,5 +1,5 @@
 import { Building2, LogOut } from "lucide-react";
-import { requirePlatformAdmin, touchPlatformSession } from "@/lib/platformAuth";
+import { requirePlatformAdmin } from "@/lib/platformAuth";
 import { platformLogout } from "@/app/platform/login/actions";
 
 /**
@@ -17,9 +17,13 @@ export default async function PlatformConsoleLayout({
 }: {
   children: React.ReactNode;
 }) {
+  // NOTE: this deliberately does NOT refresh the session cookie. Next.js only
+  // permits cookie mutation in Server Functions and Route Handlers; writing one
+  // during Server Component rendering throws. The idle window is instead slid by
+  // `requirePlatformAdminAction`, which every console server action calls — so an
+  // admin who is actually working stays signed in, while one who merely leaves the
+  // page open expires on schedule (which is the intent for a cross-tenant session).
   const admin = await requirePlatformAdmin();
-  // Slide the idle window so a working session isn't cut off mid-task.
-  await touchPlatformSession();
 
   return (
     <>
