@@ -1,4 +1,4 @@
-import { Plus, Lock } from "lucide-react";
+import { Plus, Lock, Activity } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { requirePlatformAdmin } from "@/lib/platformAuth";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
@@ -6,6 +6,7 @@ import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { formatDateTime } from "@/lib/format";
 import { MODULE_REGISTRY } from "@/lib/modules/registry";
 import { parseModuleCsv } from "@/lib/modules/entitlement";
+import { getPlatformHealth, type BackupHealth } from "@/lib/platformHealth";
 import ModalTrigger from "@/components/Modal";
 import {
   createTenantAction,
@@ -32,12 +33,32 @@ type UserRow = { id: string; name: string; email: string; disabledAt: Date | nul
 /** Optional packs only — `core` is mandatory and never part of a grant. */
 const OPTIONAL_MODULES = MODULE_REGISTRY.filter((module) => !module.mandatory);
 
+const BACKUP_LABEL: Record<BackupHealth["status"], string> = {
+  never: "No runs recorded",
+  ok: "Healthy",
+  degraded: "Succeeded with warnings",
+  failed: "Last run FAILED",
+  stuck: "A run started and never finished",
+  overdue: "Overdue — no recent success",
+};
+
+const BACKUP_TONE: Record<BackupHealth["status"], string> = {
+  never: "border-border text-muted-foreground",
+  ok: "border-emerald-500/25 bg-emerald-500/10 text-emerald-200",
+  degraded: "border-amber-500/25 bg-amber-500/10 text-amber-200",
+  failed: "border-red-500/25 bg-red-500/10 text-red-200",
+  stuck: "border-red-500/25 bg-red-500/10 text-red-200",
+  overdue: "border-amber-500/25 bg-amber-500/10 text-amber-200",
+};
+
 export default async function PlatformTenantsPage() {
   // Defence-in-depth: the (console) layout already gates this route group, but
   // re-check here so the queries below can never run without a platform session.
   await requirePlatformAdmin();
 
   const enforcing = tenantEnforcing();
+
+  const health = await getPlatformHealth();
 
   const [tenants, memberRows, users] = await Promise.all([
     basePrisma.$queryRaw<TenantRow[]>`
@@ -128,6 +149,73 @@ export default async function PlatformTenantsPage() {
         </div>
       </section>
 
+      {/* Platform health. Backups and errors are PLATFORM-WIDE facts, not per-tenant
+          ones, and are shown as such rather than repeated under each tenant as if
+          they were scoped. Per-tenant size/activity lives on the tenant rows below. */}
+      <section className="card p-5">
+        <div className="mb-4 flex items-center gap-2">
+          <Activity className="size-4 text-muted-foreground" />
+          <h2 className="font-semibold">Platform health</h2>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className={`rounded-lg border p-3 ${BACKUP_TONE[health.backup.status]}`}>
+            <p className="text-[10px] font-semibold uppercase tracking-wide opacity-80">Backups</p>
+            <p className="mt-1 text-sm font-semibold">{BACKUP_LABEL[health.backup.status]}</p>
+            <p className="mt-1 text-xs opacity-90">
+              {health.backup.lastRunAt
+                ? <>Last run {formatDateTime(health.backup.lastRunAt)}</>
+                : <>No run has been recorded yet.</>}
+              {health.backup.lastSuccessAt && health.backup.lastRunAt
+                && health.backup.lastSuccessAt.getTime() !== health.backup.lastRunAt.getTime() && (
+                <> · last success {formatDateTime(health.backup.lastSuccessAt)}</>
+              )}
+            </p>
+            {health.backup.sizeBytes != null && (
+              <p className="mt-0.5 text-xs opacity-75">
+                {(health.backup.sizeBytes / 1024 / 1024).toFixed(1)} MB
+                {health.backup.durationMs != null && <> · took {Math.round(health.backup.durationMs / 1000)}s</>}
+              </p>
+            )}
+            {health.backup.recentFailures > 1 && (
+              <p className="mt-1 text-xs font-medium">
+                {health.backup.recentFailures} consecutive failures since the last success.
+              </p>
+            )}
+            {health.backup.error && (
+              <p className="mt-1 break-words text-xs opacity-90">{health.backup.error}</p>
+            )}
+            <p className="mt-2 text-[11px] opacity-70">
+              Backups are platform-wide — one dump of the whole database, not per tenant.
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-border p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Errors</p>
+            <p className="mt-1 text-sm font-semibold">
+              {health.errors.last24h} in 24h · {health.errors.last7d} in 7d
+            </p>
+            {health.errors.topScopes.length > 0 ? (
+              <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                {health.errors.topScopes.map((s) => (
+                  <li key={s.scope}>{s.scope} · {s.count}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-1 text-xs text-muted-foreground">No errors logged in the last 7 days.</p>
+            )}
+            <p className="mt-2 text-[11px] text-muted-foreground/80">
+              Platform-wide: ErrorLog has no tenant column, so these cannot be attributed to a tenant.
+            </p>
+          </div>
+        </div>
+
+        <p className="mt-3 text-[11px] text-muted-foreground/80">
+          Per-tenant integration health is not shown: per-tenant integration credentials
+          do not exist in this schema yet, so there is nothing to report.
+        </p>
+      </section>
+
       <section className="card p-0 divide-y divide-border/50">
         <div className="flex items-center justify-between px-5 py-3">
           <h2 className="font-semibold">All tenants</h2>
@@ -144,6 +232,7 @@ export default async function PlatformTenantsPage() {
             // parseModuleCsv drops unknown ids, so a stale grant naming a removed
             // module never renders a phantom checkbox.
             const granted = parseModuleCsv(tenant.modules);
+            const stats = health.tenants.get(tenant.id);
             return (
               <details key={tenant.id}>
                 <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 select-none [&::-webkit-details-marker]:hidden">
@@ -227,6 +316,25 @@ export default async function PlatformTenantsPage() {
                       </select>
                       <button className="btn-secondary btn-sm" disabled={addable.length === 0}>Add</button>
                     </form>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Activity
+                    </p>
+                    <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+                      <dt className="text-muted-foreground">Leads</dt>
+                      <dd className="text-right tabular-nums">{stats?.leads ?? 0}</dd>
+                      <dt className="text-muted-foreground">Contacts</dt>
+                      <dd className="text-right tabular-nums">{stats?.contacts ?? 0}</dd>
+                      <dt className="text-muted-foreground">Members</dt>
+                      <dd className="text-right tabular-nums">{stats?.users ?? members.length}</dd>
+                    </dl>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {stats?.lastActiveAt
+                        ? <>Last staff activity {formatDateTime(stats.lastActiveAt)}</>
+                        : <>No staff session recorded — this tenant has never been used.</>}
+                    </p>
                   </div>
 
                   <div>

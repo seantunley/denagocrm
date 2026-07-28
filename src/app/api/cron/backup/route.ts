@@ -106,6 +106,52 @@ async function recordResult(result: Record<string, unknown>) {
 }
 
 /**
+ * Open a BackupRun row so the platform console can see a run that STARTED.
+ *
+ * Deliberately best-effort: if the ledger write fails we still take the backup —
+ * losing a health record is far cheaper than skipping a backup. Returns null when
+ * it could not be recorded, and every later update tolerates that.
+ */
+async function openBackupRun(startedAt: Date): Promise<string | null> {
+  return basePrisma.backupRun
+    .create({ data: { startedAt, status: "running" } })
+    .then((row) => row.id)
+    .catch(() => null);
+}
+
+/** Close a BackupRun row. Best-effort for the same reason as opening it. */
+async function closeBackupRun(
+  id: string | null,
+  data: {
+    status: "success" | "failed";
+    startedAt: Date;
+    sizeBytes?: number | null;
+    blobPath?: string | null;
+    error?: string | null;
+    degraded?: boolean;
+  },
+): Promise<void> {
+  if (!id) return;
+  const finishedAt = new Date();
+  await basePrisma.backupRun
+    .update({
+      where: { id },
+      data: {
+        status: data.status,
+        finishedAt,
+        durationMs: finishedAt.getTime() - data.startedAt.getTime(),
+        sizeBytes: data.sizeBytes ?? null,
+        blobPath: data.blobPath ?? null,
+        // Truncated: a stack trace in a health column is noise, and the full error
+        // already goes to the HTTP response and the logs.
+        error: data.error ? data.error.slice(0, 500) : null,
+        degraded: data.degraded ?? false,
+      },
+    })
+    .catch(() => {});
+}
+
+/**
  * Neon/Vercel backup layers:
  * 1. Neon restore/PITR is the primary database recovery mechanism.
  * 2. This route creates a complete encrypted portable data export.
@@ -135,6 +181,11 @@ export async function GET(req: NextRequest) {
   if (!process.env.SETTINGS_ENCRYPTION_KEY) {
     return NextResponse.json({ error: "Backup encryption key not configured" }, { status: 500 });
   }
+
+  // Opened BEFORE the work so a run that dies mid-flight leaves a row stuck in
+  // "running" — the console reads that as a dead run. Recording only on completion
+  // would make a crash indistinguishable from a backup that never started.
+  const runId = await openBackupRun(startedAt);
 
   try {
     // Whole-DB export + trash purge is a platform-global sweep across EVERY
@@ -202,17 +253,28 @@ export async function GET(req: NextRequest) {
       purgedTrash,
     };
     await recordResult(result);
+    // Degraded (some assets missed) is still a SUCCESSFUL database backup — the
+    // flag records the caveat without misreporting the run as failed.
+    await closeBackupRun(runId, {
+      status: "success",
+      startedAt,
+      sizeBytes: Buffer.byteLength(packagePayload),
+      blobPath: blob.pathname,
+      degraded: degradedAssets.length > 0,
+    });
 
     return NextResponse.json(result, { status: degradedAssets.length ? 207 : 200 });
     });
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown backup error";
     const result = {
       ok: false,
       completedAt: new Date().toISOString(),
       durationMs: Date.now() - startedAt.getTime(),
-      error: error instanceof Error ? error.message : "Unknown backup error",
+      error: message,
     };
     await recordResult(result).catch(() => {});
+    await closeBackupRun(runId, { status: "failed", startedAt, error: message });
     return NextResponse.json(result, { status: 500 });
   }
 }

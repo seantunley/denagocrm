@@ -2339,6 +2339,40 @@ model TenantMember {
   @@unique([userId])
 }
 
+/// Ledger of backup runs, for the platform console's health view.
+///
+/// Previously the only trace of a backup was the newest blob in storage plus a
+/// single BACKUP_LAST_RESULT setting holding the last outcome. Neither records
+/// HISTORY, and neither can distinguish "ran and failed" from "never started" —
+/// a crashed run looked identical to a quiet one.
+///
+/// A row is created when a run STARTS (status "running") and updated when it
+/// finishes. A row left in "running" long after its startedAt is therefore itself
+/// the signal that a run died, which silence could never tell you.
+///
+/// `tenantId` is nullable and today always NULL: backups are platform-wide (one
+/// dump of the whole database), not per-tenant. The column exists so per-tenant
+/// backups can populate it without a schema change; the console is explicit that
+/// the current status is platform-wide rather than pretending otherwise.
+model BackupRun {
+  id         String    @id @default(cuid())
+  tenantId   String? // null = platform-wide backup (always, for now)
+  status     String    @default("running") // running | success | failed
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  durationMs Int?
+  sizeBytes  Int?
+  blobPath   String?
+  /// Failure message, truncated. Null on success.
+  error      String?
+  /// Non-fatal problems (e.g. assets that could not be snapshotted).
+  degraded   Boolean   @default(false)
+
+  @@index([startedAt])
+  @@index([status, startedAt])
+  @@index([tenantId, startedAt])
+}
+
 // Platform-admin identity — DELIBERATELY OUTSIDE the tenant model, and listed in
 // GLOBAL_MODELS so the tenant guard never tries to scope it.
 //
