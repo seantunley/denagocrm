@@ -1,6 +1,6 @@
 "use server";
 
-import { asActionResult } from "@/lib/actionResult";
+import { asActionResult, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { requireQuoteAccess } from "@/lib/permissions";
 import { withEditableQuote } from "@/lib/quoteLock";
@@ -16,7 +16,7 @@ export async function addQuoteFee(quoteId: string, formData: FormData) {
   return asActionResult(async () => {
     await requireQuoteAccess(quoteId, "quotes.edit");
     const label = String(formData.get("label") ?? "").trim();
-    if (!label) return;
+    if (!label) refuse("Give the fee a label.");
     const kind = String(formData.get("kind") ?? "fee") === "delivery" ? "delivery" : "fee";
     const amountCents = parseRands(String(formData.get("amount") ?? ""));
     const taxRatePct = Number.parseFloat(String(formData.get("taxRatePct") ?? "15"));

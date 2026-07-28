@@ -1,6 +1,6 @@
 "use server";
 
-import { asActionResult, ActionRefusal } from "@/lib/actionResult";
+import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
@@ -508,7 +508,7 @@ export async function linkLeadToContact(leadId: string, formData: FormData) {
   return asActionResult(async () => {
     const user = await requireLeadAccess(leadId, "leads.link_contact");
     const contactId = String(formData.get("contactId") ?? "");
-    if (!contactId) return;
+    if (!contactId) refuse("Choose a contact to link.");
     const contact = await prisma.contact.findUnique({ where: { id: contactId }, select: { id: true, tenantId: true } });
     if (!contact) throw new ActionRefusal("Contact not found");
     const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });

@@ -1,6 +1,6 @@
 "use server";
 
-import { asActionResult, ActionRefusal } from "@/lib/actionResult";
+import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addDays } from "date-fns";
@@ -485,7 +485,7 @@ export async function createQuoteRevision(quoteId: string) {
       return { id: created.id, number: created.number, originalNumber: original.number, leadId: original.leadId, contactId: original.contactId };
     });
 
-    if (!revision) return;
+    if (!revision) refuse("Could not create the revision — reload and try again.");
     if ("blocked" in revision) {
       throw new ActionRefusal("Void the open signing request before creating a revision.");
     }
@@ -506,7 +506,7 @@ export async function addQuoteItem(quoteId: string, formData: FormData) {
   return asActionResult(async () => {
     await requireQuoteAccess(quoteId, "quotes.edit");
     const description = String(formData.get("description") ?? "").trim();
-    if (!description) return;
+    if (!description) refuse("Give the line item a description.");
     const qty = parseFloat(String(formData.get("qty") ?? "1")) || 1;
     const unitPriceCents = parseRands(String(formData.get("unitPrice") ?? ""));
     // Lock the quote FOR UPDATE and re-check editability inside the transaction —

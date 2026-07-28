@@ -53,14 +53,13 @@ const GENERIC_FAILURE = "Something went wrong. Please try again.";
  * anything that reaches this function is by definition unexpected: it gets one
  * generic sentence, and the real detail stays in the server logs where it belongs.
  */
-function isNextControlFlow(error: unknown): boolean {
-  // redirect() and notFound() throw by design and are SUCCESSFUL outcomes.
+function nextControlFlow(error: unknown): "redirect" | "not-found" | null {
   const raw = error instanceof Error ? error.message : String(error);
   const digest = (error as { digest?: unknown })?.digest;
-  return (
-    /NEXT_REDIRECT|NEXT_NOT_FOUND/.test(raw) ||
-    (typeof digest === "string" && /NEXT_REDIRECT|NEXT_NOT_FOUND/.test(digest))
-  );
+  const text = `${raw} ${typeof digest === "string" ? digest : ""}`;
+  if (/NEXT_REDIRECT/.test(text)) return "redirect";
+  if (/NEXT_NOT_FOUND/.test(text)) return "not-found";
+  return null;
 }
 
 /** A result object an action may return instead of throwing. */
@@ -141,8 +140,23 @@ export function SaveForm({
           if (closeModalOnSuccess) closeModal();
           onSaved?.();
         } catch (error) {
-          // redirect()/notFound() throw by design on success — let Next navigate.
-          if (isNextControlFlow(error)) throw error;
+          const control = nextControlFlow(error);
+          if (control === "redirect") {
+            // A redirect IS the success path — createLead, updateLead, markWon and
+            // the contacts equivalents all end by navigating to the saved record.
+            // redirect() throws, so it lands here BEFORE the success toast above
+            // would have run, and those saves would confirm nothing at all.
+            //
+            // Toast first, then rethrow so Next performs the navigation. The
+            // Toaster is mounted in the layout, which survives a client-side
+            // navigation, so the confirmation is still on screen when the
+            // destination renders.
+            toast.success(success);
+            throw error;
+          }
+          // notFound() is control flow too, but it is NOT a success — never
+          // congratulate someone for landing on a 404.
+          if (control === "not-found") throw error;
           toast.error(GENERIC_FAILURE);
         } finally {
           setPending(false);

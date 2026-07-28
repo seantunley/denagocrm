@@ -44,10 +44,30 @@ test("SaveForm: unknown throws produce a GENERIC message, never a raw one", () =
   );
 });
 
-test("SaveForm: redirect()/notFound() are rethrown, not reported as failures", () => {
+// redirect() and notFound() both throw, but they are NOT the same outcome. A
+// redirect is the success path for every action that navigates to the saved
+// record (createLead, updateLead, markWon…) — it throws before the success toast
+// would run, so those saves confirmed nothing until it was handled explicitly.
+// notFound() must never be congratulated.
+test("SaveForm: a redirect toasts success before navigating; notFound does not", () => {
   const code = src("src/components/SaveForm.tsx");
-  assert.match(code, /isNextControlFlow\(error\)\)\s*throw error/, "control-flow throws are successful outcomes");
-  assert.match(code, /NEXT_REDIRECT\|NEXT_NOT_FOUND/, "both control-flow signals must be recognised");
+  assert.match(code, /NEXT_REDIRECT/, "the redirect signal must be recognised");
+  assert.match(code, /NEXT_NOT_FOUND/, "the not-found signal must be recognised");
+
+  const redirectBranch = code.slice(
+    code.indexOf('if (control === "redirect")'),
+    code.indexOf('if (control === "not-found")'),
+  );
+  assert.ok(redirectBranch.length > 0, "the redirect branch must exist");
+  assert.match(redirectBranch, /toast\.success\(success\)/, "a redirect is a successful save");
+  assert.match(redirectBranch, /throw error/, "and must still rethrow so Next navigates");
+
+  const notFoundBranch = code.slice(code.indexOf('if (control === "not-found")'));
+  assert.doesNotMatch(
+    notFoundBranch.slice(0, 200),
+    /toast\.success/,
+    "landing on a 404 is not a success",
+  );
 });
 
 // The form element is nulled once the handler returns, so a reference taken after

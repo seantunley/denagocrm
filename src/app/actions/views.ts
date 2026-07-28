@@ -1,6 +1,6 @@
 "use server";
 
-import { asActionResult } from "@/lib/actionResult";
+import { asActionResult, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireCrm } from "@/lib/auth";
@@ -11,7 +11,7 @@ export async function saveView(formData: FormData) {
     const name = String(formData.get("name") ?? "").trim();
     const page = String(formData.get("page") ?? "").trim();
     const query = String(formData.get("query") ?? "").trim();
-    if (!name || !page) return;
+    if (!name || !page) refuse("Give the view a name.");
     await prisma.savedView.create({ data: { name, page, query } });
     revalidatePath(`/${page}/list`);
   });

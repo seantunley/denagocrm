@@ -1,6 +1,6 @@
 "use server";
 
-import { asActionResult, ActionRefusal } from "@/lib/actionResult";
+import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma, basePrisma } from "@/lib/db";
 import { requireContactAccess } from "@/lib/permissions";
@@ -13,7 +13,7 @@ export async function recordConsent(contactId: string, formData: FormData) {
     const user = await requireContactAccess(contactId, "contacts.edit");
     const type = String(formData.get("type") ?? "");
     const granted = String(formData.get("granted") ?? "") === "granted";
-    if (!CONSENT_TYPES.some((item) => item.id === type)) return;
+    if (!CONSENT_TYPES.some((item) => item.id === type)) refuse("Choose a consent type.");
 
     await prisma.consentRecord.create({
       data: {
@@ -50,7 +50,7 @@ export async function anonymizeContact(contactId: string) {
     // de-escalation is explicitly signed off (flagged in review of PR #12).
     if (user.role !== "owner") throw new ActionRefusal("Only an owner can anonymise a contact (POPIA erasure).");
     const contact = await prisma.contact.findUnique({ where: { id: contactId } });
-    if (!contact) return;
+    if (!contact) refuse("That contact no longer exists.");
 
     // Erasure runs in ONE interactive transaction and is all-or-nothing. Two things
     // matter for completeness:
