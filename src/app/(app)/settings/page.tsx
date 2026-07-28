@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { getActiveTenantId, requireUser } from "@/lib/auth";
 import {
   createStage,
@@ -180,17 +181,17 @@ export default async function SettingsPage({
           <ul className="space-y-2 mb-4">
             {stages.map((s, i) => (
               <li key={s.id} className="flex items-center gap-2">
-                <form action={renameStage.bind(null, s.id)} className="flex items-center gap-2 flex-1">
+                <SaveForm success="Stage updated" resetOnSuccess={false} action={renameStage.bind(null, s.id)} className="flex items-center gap-2 flex-1">
                   <input type="color" name="color" defaultValue={s.color} className="h-8 w-10 rounded cursor-pointer border border-border" />
                   <input name="name" defaultValue={s.name} className="input flex-1" />
-                  <button className="btn-secondary btn-sm">Save</button>
-                </form>
-                <form action={moveStage.bind(null, s.id, "up")}>
-                  <button className="btn-secondary btn-sm" disabled={i === 0}>↑</button>
-                </form>
-                <form action={moveStage.bind(null, s.id, "down")}>
-                  <button className="btn-secondary btn-sm" disabled={i === stages.length - 1}>↓</button>
-                </form>
+                  <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+                </SaveForm>
+                <SaveForm success="Stage reordered" resetOnSuccess={false} action={moveStage.bind(null, s.id, "up")}>
+                  <SaveButton className="btn-secondary btn-sm" disabled={i === 0}>↑</SaveButton>
+                </SaveForm>
+                <SaveForm success="Stage reordered" resetOnSuccess={false} action={moveStage.bind(null, s.id, "down")}>
+                  <SaveButton className="btn-secondary btn-sm" disabled={i === stages.length - 1}>↓</SaveButton>
+                </SaveForm>
                 {s._count.leads > 0 ? (
                   <button className="btn-danger btn-sm" disabled title="Stage still has leads">
                     ✕
@@ -207,11 +208,11 @@ export default async function SettingsPage({
               </li>
             ))}
           </ul>
-          <form action={createStage} className="flex gap-2">
+          <SaveForm success="Stage added" action={createStage} className="flex gap-2">
             <input type="color" name="color" defaultValue="#64748b" className="h-9 w-10 rounded cursor-pointer border border-border" />
             <input name="name" className="input flex-1" placeholder="New stage name…" required />
-            <button className="btn-primary">Add stage</button>
-          </form>
+            <SaveButton className="btn-primary">Add stage</SaveButton>
+          </SaveForm>
         </div>
       )}
 
@@ -312,7 +313,7 @@ export default async function SettingsPage({
                   className="rounded-lg bg-white p-4 overflow-x-auto"
                   dangerouslySetInnerHTML={{ __html: buildSignature(currentUser) }}
                 />
-                <form action={saveMyProfile} className="space-y-3 max-w-md">
+                <SaveForm success="Profile saved" resetOnSuccess={false} action={saveMyProfile} className="space-y-3 max-w-md">
                   <div>
                     <label className="label">Custom signature HTML (optional)</label>
                     <textarea
@@ -323,8 +324,8 @@ export default async function SettingsPage({
                       placeholder="Leave blank to use the branded signature (recommended)."
                     />
                   </div>
-                  <button className="btn-primary btn-sm">Save</button>
-                </form>
+                  <SaveButton className="btn-primary btn-sm">Save</SaveButton>
+                </SaveForm>
               </div>
             </details>
           </div>
@@ -404,8 +405,10 @@ export default async function SettingsPage({
                 </div>
               </details>
 
-              <form
+              <SaveForm
                 action={saveSessionPolicy}
+                success="Sign-out policy saved"
+                resetOnSuccess={false}
                 className="flex items-center justify-between gap-4 px-5 py-4 flex-wrap"
               >
                 <div>
@@ -428,9 +431,9 @@ export default async function SettingsPage({
                     <option value="480">8 hours</option>
                     <option value="1440">24 hours</option>
                   </select>
-                  <button className="btn-primary btn-sm">Save</button>
+                  <SaveButton className="btn-primary btn-sm">Save</SaveButton>
                 </div>
-              </form>
+              </SaveForm>
             </div>
           )}
         </div>
@@ -453,7 +456,7 @@ export default async function SettingsPage({
               </div>
             </details>
 
-            <form action={saveNotificationPrefs} className="px-5 py-4">
+            <SaveForm success="Notification preferences saved" resetOnSuccess={false} action={saveNotificationPrefs} className="px-5 py-4">
               <p className="text-sm font-medium">What sends a notification</p>
               <p className="text-xs text-muted-foreground mb-3">
                 Applies to the whole team&apos;s devices. Untick to silence a type everywhere.
@@ -475,8 +478,8 @@ export default async function SettingsPage({
                   </label>
                 ))}
               </div>
-              <button className="btn-primary btn-sm mt-4">Save</button>
-            </form>
+              <SaveButton className="btn-primary btn-sm mt-4">Save</SaveButton>
+            </SaveForm>
           </div>
         </div>
       )}
@@ -490,9 +493,9 @@ export default async function SettingsPage({
               fires on the first error in any 30-minute window.
             </p>
             {errorLogs.length > 0 && (
-              <form action={clearErrorLog}>
-                <button className="btn-secondary btn-sm">Clear log</button>
-              </form>
+              <SaveForm success="System log cleared" resetOnSuccess={false} action={clearErrorLog}>
+                <SaveButton className="btn-secondary btn-sm">Clear log</SaveButton>
+              </SaveForm>
             )}
           </div>
 
@@ -598,7 +601,7 @@ export default async function SettingsPage({
                 Used for all outgoing email. Works with any SMTP provider (your denagocpt.co.za
                 mailbox, Google Workspace, Resend, SendGrid).
               </p>
-              <form action={saveSmtpSettings} className="grid md:grid-cols-2 gap-3 mb-3">
+              <SaveForm success="Outgoing mail settings saved" resetOnSuccess={false} action={saveSmtpSettings} className="grid md:grid-cols-2 gap-3 mb-3">
                 <div>
                   <label className="label">SMTP host</label>
                   <input name="host" className="input" defaultValue={setting("SMTP_HOST")} placeholder="mail.denagocpt.co.za" />
@@ -643,9 +646,9 @@ export default async function SettingsPage({
                   />
                 </div>
                 <div className="md:col-span-2">
-                  <button className="btn-primary">Save email settings</button>
+                  <SaveButton className="btn-primary">Save email settings</SaveButton>
                 </div>
-              </form>
+              </SaveForm>
               <TestEmailButton />
             </Row>
 
@@ -664,7 +667,7 @@ export default async function SettingsPage({
                 read-only — nothing is moved or marked in the mailbox). Unknown senders are left
                 alone. Usually the same details as SMTP with port 993.
               </p>
-              <form action={saveImapSettings} className="grid md:grid-cols-2 gap-3">
+              <SaveForm success="Incoming mail settings saved" resetOnSuccess={false} action={saveImapSettings} className="grid md:grid-cols-2 gap-3">
                 <div>
                   <label className="label">IMAP host</label>
                   <input name="host" className="input" defaultValue={setting("IMAP_HOST")} placeholder="mail.denagocpt.co.za" />
@@ -698,9 +701,9 @@ export default async function SettingsPage({
                   </div>
                 </div>
                 <div className="md:col-span-2">
-                  <button className="btn-primary">Save incoming email</button>
+                  <SaveButton className="btn-primary">Save incoming email</SaveButton>
                 </div>
-              </form>
+              </SaveForm>
             </Row>
 
             {automotiveOn && (
@@ -720,7 +723,7 @@ export default async function SettingsPage({
                 <code>{"{{model}}"}</code>, <code>{"{{due_date}}"}</code>,{" "}
                 <code>{"{{due_km}}"}</code>, <code>{"{{current_km}}"}</code>.
               </p>
-              <form action={saveServiceReminderSettings} className="flex items-end gap-3 flex-wrap">
+              <SaveForm success="Service reminder settings saved" resetOnSuccess={false} action={saveServiceReminderSettings} className="flex items-end gap-3 flex-wrap">
                 <div className="flex items-center gap-2 pb-2">
                   <input
                     type="checkbox"
@@ -748,8 +751,8 @@ export default async function SettingsPage({
                     ))}
                   </select>
                 </div>
-                <button className="btn-primary">Save</button>
-              </form>
+                <SaveButton className="btn-primary">Save</SaveButton>
+              </SaveForm>
             </Row>
             )}
 
@@ -770,7 +773,7 @@ export default async function SettingsPage({
                 purchase date each year; win-back reaches owners who haven&apos;t serviced or been in
                 touch for over a year. Requires SMTP.
               </p>
-              <form action={saveLifecycleSettings} className="flex items-center gap-6 flex-wrap">
+              <SaveForm success="Lifecycle settings saved" resetOnSuccess={false} action={saveLifecycleSettings} className="flex items-center gap-6 flex-wrap">
                 <label className="flex items-center gap-2 text-sm text-muted-foreground">
                   <input
                     type="checkbox"
@@ -789,8 +792,8 @@ export default async function SettingsPage({
                   />
                   Win-back lapsed owners
                 </label>
-                <button className="btn-primary">Save</button>
-              </form>
+                <SaveButton className="btn-primary">Save</SaveButton>
+              </SaveForm>
             </Row>
             )}
 
@@ -813,12 +816,12 @@ export default async function SettingsPage({
                       {t.name}
                     </summary>
                     <div className="p-4 pt-1 space-y-2">
-                      <form action={updateTemplate.bind(null, t.id)} className="space-y-2">
+                      <SaveForm resetOnSuccess={false} action={updateTemplate.bind(null, t.id)} className="space-y-2">
                         <input name="name" className="input" defaultValue={t.name} required />
                         <input name="subject" className="input" defaultValue={t.subject} required />
                         <textarea name="body" className="input" rows={5} defaultValue={t.body} required />
-                        <button className="btn-primary btn-sm">Save template</button>
-                      </form>
+                        <SaveButton className="btn-primary btn-sm">Save template</SaveButton>
+                      </SaveForm>
                       <ConfirmDelete
                         action={deleteTemplate.bind(null, t.id)}
                         title={`Delete template “${t.name}”?`}
@@ -834,7 +837,7 @@ export default async function SettingsPage({
                 <summary className="px-4 py-2.5 cursor-pointer text-sm font-medium">
                   + New template
                 </summary>
-                <form action={createTemplate} className="p-4 pt-1 space-y-2">
+                <SaveForm resetOnSuccess={false} action={createTemplate} className="p-4 pt-1 space-y-2">
                   <input name="name" className="input" placeholder="Template name (e.g. New lead welcome)" required />
                   <input name="subject" className="input" placeholder="Subject — e.g. Your {{model}} enquiry" required />
                   <textarea
@@ -844,8 +847,8 @@ export default async function SettingsPage({
                     required
                     placeholder={"Hi {{first_name}},\n\nThanks for your interest in the {{model}}…\n\n{{user_name}}\nDenago Cape Town · 073 789 3438"}
                   />
-                  <button className="btn-primary btn-sm">Create template</button>
-                </form>
+                  <SaveButton className="btn-primary btn-sm">Create template</SaveButton>
+                </SaveForm>
               </details>
             </Row>
           </div>
@@ -883,7 +886,7 @@ export default async function SettingsPage({
               <p className="text-xs text-muted-foreground mb-4">
                 Applied to new quotes; each quote can still be adjusted individually.
               </p>
-              <form action={saveQuoteDefaults} className="space-y-4 max-w-xl">
+              <SaveForm success="Quote defaults saved" resetOnSuccess={false} action={saveQuoteDefaults} className="space-y-4 max-w-xl">
                 <div>
                   <label className="label">Valid for (days)</label>
                   <input
@@ -909,8 +912,8 @@ export default async function SettingsPage({
                     Each line becomes its own bullet point on the printed quote.
                   </p>
                 </div>
-                <button className="btn-primary">Save quote defaults</button>
-              </form>
+                <SaveButton className="btn-primary">Save quote defaults</SaveButton>
+              </SaveForm>
             </Row>
           </div>
         </div>
@@ -933,7 +936,7 @@ export default async function SettingsPage({
                 Customers booking a service on denagocpt.co.za can only pick these slots. A slot
                 disappears from the website the moment it&apos;s taken.
               </p>
-              <form action={saveWorkshopSettings} className="space-y-4 max-w-xl">
+              <SaveForm success="Workshop settings saved" resetOnSuccess={false} action={saveWorkshopSettings} className="space-y-4 max-w-xl">
                 <div>
                   <label className="label">Slot start times (comma-separated, 24h)</label>
                   <input
@@ -984,8 +987,8 @@ export default async function SettingsPage({
                     />
                   </div>
                 </div>
-                <button className="btn-primary">Save workshop settings</button>
-              </form>
+                <SaveButton className="btn-primary">Save workshop settings</SaveButton>
+              </SaveForm>
             </Row>
           </div>
         </div>
@@ -1008,15 +1011,15 @@ export default async function SettingsPage({
                 {stockLabels.map((l) => (
                   <li key={l.slug} className="flex items-center gap-2 py-2">
                     <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: `${l.color}22`, color: l.color }}>{l.label}</span>
-                    <form action={removeStockLabel.bind(null, l.slug)} className="ml-auto">
-                      <button className="btn-danger btn-sm">Remove</button>
-                    </form>
+                    <SaveForm success="Label removed" resetOnSuccess={false} action={removeStockLabel.bind(null, l.slug)} className="ml-auto">
+                      <SaveButton className="btn-danger btn-sm">Remove</SaveButton>
+                    </SaveForm>
                   </li>
                 ))}
               </ul>
             )}
           </div>
-          <form action={addStockLabel} className="card space-y-3">
+          <SaveForm success="Label added" action={addStockLabel} className="card space-y-3">
             <h2 className="font-semibold">Add a label</h2>
             <div className="grid grid-cols-[1fr_auto] items-end gap-3">
               <div>
@@ -1028,8 +1031,8 @@ export default async function SettingsPage({
                 <input name="color" type="color" defaultValue="#8b5cf6" className="input h-10 w-16 p-1" />
               </div>
             </div>
-            <button className="btn-primary">Add label</button>
-          </form>
+            <SaveButton className="btn-primary">Add label</SaveButton>
+          </SaveForm>
         </div>
       )}
 
@@ -1062,12 +1065,12 @@ export default async function SettingsPage({
                   <label className="label">Verify token</label>
                   <div className="flex gap-2">
                     <SecretReveal settingKey="META_VERIFY_TOKEN" isSet={Boolean(setting("META_VERIFY_TOKEN"))} />
-                    <form action={regenerateSetting.bind(null, "META_VERIFY_TOKEN")}>
-                      <button className="btn-secondary">Regenerate</button>
-                    </form>
+                    <SaveForm success="New value generated" resetOnSuccess={false} action={regenerateSetting.bind(null, "META_VERIFY_TOKEN")}>
+                      <SaveButton className="btn-secondary">Regenerate</SaveButton>
+                    </SaveForm>
                   </div>
                 </div>
-                <form action={saveSetting} className="flex gap-2 items-end">
+                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="META_PAGE_ACCESS_TOKEN" />
                   <input type="hidden" name="keepIfBlank" value="1" />
                   <div className="flex-1">
@@ -1080,10 +1083,10 @@ export default async function SettingsPage({
                       placeholder={setting("META_PAGE_ACCESS_TOKEN") ? "•••••••• saved — leave blank to keep" : "EAAG…"}
                     />
                   </div>
-                  <button className="btn-primary">Save</button>
+                  <SaveButton className="btn-primary">Save</SaveButton>
                   {setting("META_PAGE_ACCESS_TOKEN") ? <ClearSecret settingKey="META_PAGE_ACCESS_TOKEN" label="Meta page access token" /> : null}
-                </form>
-                <form action={saveSetting} className="flex gap-2 items-end">
+                </SaveForm>
+                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="META_APP_SECRET" />
                   <input type="hidden" name="keepIfBlank" value="1" />
                   <div className="flex-1">
@@ -1096,9 +1099,9 @@ export default async function SettingsPage({
                       placeholder={setting("META_APP_SECRET") ? "•••••••• saved — leave blank to keep" : "From Meta app → Settings → Basic"}
                     />
                   </div>
-                  <button className="btn-primary">Save</button>
+                  <SaveButton className="btn-primary">Save</SaveButton>
                   {setting("META_APP_SECRET") ? <ClearSecret settingKey="META_APP_SECRET" label="Meta app secret" /> : null}
-                </form>
+                </SaveForm>
               </div>
             </Row>
 
@@ -1124,7 +1127,7 @@ export default async function SettingsPage({
                     https://crm.denagocpt.co.za/api/webhooks/whatsapp
                   </code>
                 </div>
-                <form action={saveSetting} className="flex gap-2 items-end">
+                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="WA_PHONE_NUMBER_ID" />
                   <div className="flex-1">
                     <label className="label">Phone number ID</label>
@@ -1135,9 +1138,9 @@ export default async function SettingsPage({
                       placeholder="From WhatsApp → API Setup"
                     />
                   </div>
-                  <button className="btn-primary">Save</button>
-                </form>
-                <form action={saveSetting} className="flex gap-2 items-end">
+                  <SaveButton className="btn-primary">Save</SaveButton>
+                </SaveForm>
+                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="WA_ACCESS_TOKEN" />
                   <input type="hidden" name="keepIfBlank" value="1" />
                   <div className="flex-1">
@@ -1150,9 +1153,9 @@ export default async function SettingsPage({
                       placeholder={setting("WA_ACCESS_TOKEN") ? "•••••••• saved — leave blank to keep" : "EAAG…"}
                     />
                   </div>
-                  <button className="btn-primary">Save</button>
+                  <SaveButton className="btn-primary">Save</SaveButton>
                   {setting("WA_ACCESS_TOKEN") ? <ClearSecret settingKey="WA_ACCESS_TOKEN" label="WhatsApp access token" /> : null}
-                </form>
+                </SaveForm>
               </div>
             </Row>
 
@@ -1171,7 +1174,7 @@ export default async function SettingsPage({
                 Cloud API key with the <b>Places API (New)</b> enabled, plus your Place ID.
               </p>
               <div className="space-y-3">
-                <form action={saveSetting} className="flex gap-2 items-end">
+                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="GOOGLE_PLACES_API_KEY" />
                   <input type="hidden" name="keepIfBlank" value="1" />
                   <div className="flex-1">
@@ -1184,10 +1187,10 @@ export default async function SettingsPage({
                       placeholder={setting("GOOGLE_PLACES_API_KEY") ? "•••••••• saved — leave blank to keep" : "AIza…"}
                     />
                   </div>
-                  <button className="btn-primary">Save</button>
+                  <SaveButton className="btn-primary">Save</SaveButton>
                   {setting("GOOGLE_PLACES_API_KEY") ? <ClearSecret settingKey="GOOGLE_PLACES_API_KEY" label="Google Places API key" /> : null}
-                </form>
-                <form action={saveSetting} className="flex gap-2 items-end">
+                </SaveForm>
+                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="GOOGLE_PLACE_ID" />
                   <div className="flex-1">
                     <label className="label">Place ID</label>
@@ -1198,8 +1201,8 @@ export default async function SettingsPage({
                       placeholder="ChIJ…"
                     />
                   </div>
-                  <button className="btn-primary">Save</button>
-                </form>
+                  <SaveButton className="btn-primary">Save</SaveButton>
+                </SaveForm>
               </div>
             </Row>
 
@@ -1219,7 +1222,7 @@ export default async function SettingsPage({
                 <b> Places API (New)</b> enabled, restricted to this CRM&apos;s website referrers. If
                 unset or unavailable, location fields remain normal text inputs.
               </p>
-              <form action={saveSetting} className="flex gap-2 items-end">
+              <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
                 <input type="hidden" name="key" value="GOOGLE_MAPS_BROWSER_API_KEY" />
                 <div className="flex-1">
                   <label className="label">Maps JavaScript browser API key</label>
@@ -1232,8 +1235,8 @@ export default async function SettingsPage({
                     autoComplete="off"
                   />
                 </div>
-                <button className="btn-primary">Save</button>
-              </form>
+                <SaveButton className="btn-primary">Save</SaveButton>
+              </SaveForm>
             </Row>
 
             <Row
@@ -1252,7 +1255,7 @@ export default async function SettingsPage({
                 Without this, codes fall back to the customer&apos;s registered email.
               </p>
               <div className="space-y-3">
-                <form action={saveSetting} className="flex gap-2 items-end">
+                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="BULKSMS_TOKEN_ID" />
                   <div className="flex-1">
                     <label className="label">Token ID</label>
@@ -1263,9 +1266,9 @@ export default async function SettingsPage({
                       placeholder="From BulkSMS → API Tokens"
                     />
                   </div>
-                  <button className="btn-primary">Save</button>
-                </form>
-                <form action={saveSetting} className="flex gap-2 items-end">
+                  <SaveButton className="btn-primary">Save</SaveButton>
+                </SaveForm>
+                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="BULKSMS_TOKEN_SECRET" />
                   <input type="hidden" name="keepIfBlank" value="1" />
                   <div className="flex-1">
@@ -1278,9 +1281,9 @@ export default async function SettingsPage({
                       placeholder={setting("BULKSMS_TOKEN_SECRET") ? "•••••••• saved — leave blank to keep" : "Shown once when the token is created"}
                     />
                   </div>
-                  <button className="btn-primary">Save</button>
+                  <SaveButton className="btn-primary">Save</SaveButton>
                   {setting("BULKSMS_TOKEN_SECRET") ? <ClearSecret settingKey="BULKSMS_TOKEN_SECRET" label="BulkSMS token secret" /> : null}
-                </form>
+                </SaveForm>
               </div>
             </Row>
 
@@ -1300,7 +1303,7 @@ export default async function SettingsPage({
                 console.anthropic.com.
               </p>
               <div className="space-y-3">
-                <form action={saveSetting} className="flex gap-2 items-end">
+                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="ANTHROPIC_API_KEY" />
                   <input type="hidden" name="keepIfBlank" value="1" />
                   <div className="flex-1">
@@ -1313,10 +1316,10 @@ export default async function SettingsPage({
                       placeholder={setting("ANTHROPIC_API_KEY") ? "•••••••• saved — leave blank to keep" : "sk-ant-…"}
                     />
                   </div>
-                  <button className="btn-primary">Save</button>
+                  <SaveButton className="btn-primary">Save</SaveButton>
                   {setting("ANTHROPIC_API_KEY") ? <ClearSecret settingKey="ANTHROPIC_API_KEY" label="Anthropic API key" /> : null}
-                </form>
-                <form action={saveSetting} className="flex items-center gap-2">
+                </SaveForm>
+                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex items-center gap-2">
                   <input type="hidden" name="key" value="AI_AUTO_RESEARCH" />
                   <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
                     <input
@@ -1328,8 +1331,8 @@ export default async function SettingsPage({
                     />
                     Automatically research every new lead (files a note within ~15 min)
                   </label>
-                  <button className="btn-secondary btn-sm">Save</button>
-                </form>
+                  <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+                </SaveForm>
               </div>
             </Row>
 
@@ -1349,7 +1352,7 @@ export default async function SettingsPage({
                 mirroring the customer. Get a key and copy a Voice ID at elevenlabs.io.
               </p>
               <div className="space-y-3">
-                <form action={saveSetting} className="flex gap-2 items-end">
+                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="ELEVENLABS_API_KEY" />
                   <input type="hidden" name="keepIfBlank" value="1" />
                   <div className="flex-1">
@@ -1357,25 +1360,25 @@ export default async function SettingsPage({
                     {/* Never echo the stored secret into the DOM — blank field, keep-if-blank on save. */}
                     <input name="value" type="password" autoComplete="new-password" className="input" placeholder={setting("ELEVENLABS_API_KEY") ? "•••••••• saved — leave blank to keep" : "Your ElevenLabs API key"} />
                   </div>
-                  <button className="btn-primary">Save</button>
+                  <SaveButton className="btn-primary">Save</SaveButton>
                   {setting("ELEVENLABS_API_KEY") ? <ClearSecret settingKey="ELEVENLABS_API_KEY" label="ElevenLabs API key" /> : null}
-                </form>
-                <form action={saveSetting} className="flex gap-2 items-end">
+                </SaveForm>
+                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
                   <input type="hidden" name="key" value="ELEVENLABS_VOICE_ID" />
                   <div className="flex-1">
                     <label className="label">Voice ID</label>
                     <input name="value" className="input" defaultValue={setting("ELEVENLABS_VOICE_ID")} placeholder="e.g. 21m00Tcm4TlvDq8ikWAM" />
                   </div>
-                  <button className="btn-primary">Save</button>
-                </form>
-                <form action={saveSetting} className="flex items-center gap-2">
+                  <SaveButton className="btn-primary">Save</SaveButton>
+                </SaveForm>
+                <SaveForm resetOnSuccess={false} action={saveSetting} className="flex items-center gap-2">
                   <input type="hidden" name="key" value="WHATSAPP_VOICE_REPLIES" />
                   <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
                     <input type="checkbox" name="value" value="true" defaultChecked={setting("WHATSAPP_VOICE_REPLIES") === "true"} className="h-4 w-4" />
                     Reply to voice notes with a voice note (mirror the customer)
                   </label>
-                  <button className="btn-secondary btn-sm">Save</button>
-                </form>
+                  <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+                </SaveForm>
               </div>
             </Row>
 
@@ -1393,9 +1396,9 @@ export default async function SettingsPage({
                   <label className="label">API key</label>
                   <div className="flex gap-2">
                     <SecretReveal settingKey="INTAKE_API_KEY" isSet={Boolean(setting("INTAKE_API_KEY"))} />
-                    <form action={regenerateSetting.bind(null, "INTAKE_API_KEY")}>
-                      <button className="btn-secondary">Regenerate</button>
-                    </form>
+                    <SaveForm success="New value generated" resetOnSuccess={false} action={regenerateSetting.bind(null, "INTAKE_API_KEY")}>
+                      <SaveButton className="btn-secondary">Regenerate</SaveButton>
+                    </SaveForm>
                   </div>
                 </div>
               </div>
