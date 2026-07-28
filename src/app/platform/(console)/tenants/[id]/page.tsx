@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
@@ -28,13 +29,9 @@ import {
   type IntegrationId,
   type IntegrationStatus,
 } from "@/lib/integrationHealth";
-import {
-  getTenantStorage,
-  getTenantActivity,
-  formatBytes,
-} from "@/lib/tenantUsage";
 import Tabs from "@/components/Tabs";
-import { ResponsiveEntityTable } from "@/components/responsive-patterns";
+import UsageTab from "@/components/platform/UsageTab";
+
 import ModalTrigger from "@/components/Modal";
 import {
   activateTenantAction,
@@ -121,7 +118,7 @@ export default async function TenantProfilePage({
   const since24h = new Date(Date.now() - 24 * 3600_000);
   const since7d = new Date(Date.now() - 7 * 24 * 3600_000);
 
-  const [members, addableUsers, lastSession, errors, integrations] =
+  const [members, addableUsers, lastSession, errors, integrations, errors24h, errors7d] =
     await Promise.all([
       basePrisma.tenantMember.findMany({
         where: { tenantId: id },
@@ -139,6 +136,9 @@ export default async function TenantProfilePage({
         orderBy: { lastActiveAt: "desc" },
         select: { lastActiveAt: true },
       }),
+      // DISPLAY ONLY — capped. Counts must never be derived from this list: during
+      // an error storm the cap truncates it and any total computed from it silently
+      // under-reports.
       basePrisma.errorLog.findMany({
         where: { tenantId: id, createdAt: { gte: since7d } },
         orderBy: { createdAt: "desc" },
@@ -146,17 +146,17 @@ export default async function TenantProfilePage({
         select: { id: true, scope: true, message: true, context: true, createdAt: true },
       }),
       getTenantIntegrationHealth(id),
+      // TOTALS — counted in the database, so they stay correct past the cap.
+      basePrisma.errorLog.count({ where: { tenantId: id, createdAt: { gte: since24h } } }),
+      basePrisma.errorLog.count({ where: { tenantId: id, createdAt: { gte: since7d } } }),
     ]);
 
-  // Sequential and after the rest: the storage estimate runs a count per sampled
-  // table, so it is the most expensive thing on this page.
-  const [storage, activity] = await Promise.all([
-    getTenantStorage(id),
-    getTenantActivity(id),
-  ]);
+  // Storage is NOT fetched here. It costs one COUNT per sampled table — the most
+  // expensive thing the console does — and used to run on every profile visit even
+  // for someone opening the Errors tab. It now lives in <UsageTab>, streamed inside
+  // a Suspense boundary and backed by a short-lived cache.
 
   const granted = parseModuleCsv(tenant.modules);
-  const errors24h = errors.filter((error) => error.createdAt >= since24h).length;
   const isFounding = tenant.id === DEFAULT_TENANT_ID;
   const failingIntegrations = integrations.filter(
     (status) => integrationVerdict(status) === "failing",
@@ -237,7 +237,10 @@ export default async function TenantProfilePage({
           // room they take, and whether anything is broken.
           { label: "Members", value: members.length },
           { label: "Modules", value: granted.size },
-          { label: "Storage", value: formatBytes(storage.estimatedBytes) },
+          // Storage deliberately is NOT here: showing it would drag the expensive
+          // per-table scan back onto the critical path for every visit. It lives in
+          // the Usage tab, which streams.
+          { label: "Errors 7d", value: errors7d },
         ].map((stat) => (
           <div key={stat.label} className="card p-3">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -290,90 +293,23 @@ export default async function TenantProfilePage({
           {
             key: "usage",
             label: "Usage",
+            // Streamed: the storage estimate costs one COUNT per sampled table, so it
+            // must not block the rest of the profile for someone who opened another tab.
             content: (
-              <div className="space-y-4">
-                <div className="card p-5">
-                  <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <h3 className="font-semibold">Estimated database storage</h3>
-                    <p className="text-2xl font-semibold tabular-nums">
-                      {formatBytes(storage.estimatedBytes)}
-                    </p>
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    An <strong>estimate</strong>, not a measurement. Postgres reports size per
-                    table, never per tenant, so each table&apos;s real on-disk size is
-                    apportioned by this tenant&apos;s share of its rows. A tenant whose records
-                    carry large text (long notes, attachments metadata) will use more than its
-                    row share suggests; index and dead-tuple overhead is included.
-                  </p>
-
-                  {storage.breakdown.length > 0 && (
-                    <div className="mt-4 overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b border-border/50 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                            <th className="py-2 font-semibold">Table</th>
-                            <th className="py-2 text-right font-semibold">Rows</th>
-                            <th className="py-2 text-right font-semibold">Share</th>
-                            <th className="py-2 text-right font-semibold">Est. size</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border/50">
-                          {storage.breakdown.map((row) => (
-                            <tr key={row.table}>
-                              <td data-primary data-label="Table" className="py-2 font-mono text-xs">{row.table}</td>
-                              <td data-label="Rows" className="py-2 text-right tabular-nums">{row.rows}</td>
-                              <td data-label="Share" className="py-2 text-right tabular-nums text-muted-foreground">
-                                {row.sharePct}%
-                              </td>
-                              <td data-label="Est. size" className="py-2 text-right tabular-nums">{formatBytes(row.bytes)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-
-                  {storage.tablesOmitted > 0 && (
-                    <p className="mt-2 text-[11px] text-muted-foreground/80">
-                      {storage.tablesOmitted} smaller tenant-scoped table
-                      {storage.tablesOmitted === 1 ? " was" : "s were"} not sampled — the tail
-                      contributes little and would cost a query each.
-                    </p>
-                  )}
-                </div>
-
-                <div className="card p-5">
-                  <h3 className="font-semibold">Activity, last 30 days</h3>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    <strong>Request traffic and bandwidth are not recorded anywhere in this
-                    application</strong>, so they cannot be estimated from the database —
-                    inventing a figure would be worse than saying so. These are business
-                    activity counts, which is usually the underlying question.
-                  </p>
-                  <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
-                    {[
-                      { label: "Messages", value: activity.communications30d },
-                      { label: "Leads created", value: activity.leadsCreated30d },
-                      { label: "Contacts created", value: activity.contactsCreated30d },
-                      { label: "Activities", value: activity.activities30d },
-                      { label: "Audited changes", value: activity.auditEvents30d },
-                      { label: "Sign-ins", value: activity.sessions30d },
-                    ].map((row) => (
-                      <div key={row.label} className="flex items-baseline justify-between gap-2">
-                        <dt className="text-muted-foreground">{row.label}</dt>
-                        <dd className="tabular-nums">{row.value}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                </div>
-              </div>
+              <Suspense
+                fallback={
+                  <p className="card p-5 text-sm text-muted-foreground">Estimating storage…</p>
+                }
+              >
+                <UsageTab tenantId={id} />
+              </Suspense>
             ),
           },
           {
             key: "errors",
             label: "Errors",
-            count: errors.length,
+            // The real 7-day total, not the length of the capped display list.
+            count: errors7d,
             content:
               errors.length === 0 ? (
                 <p className="card p-5 text-sm text-muted-foreground">
@@ -401,6 +337,14 @@ export default async function TenantProfilePage({
                       )}
                     </li>
                   ))}
+                  {/* Say so when the list is truncated, rather than letting the page
+                      imply these are all of them. */}
+                  {errors7d > errors.length && (
+                    <li className="px-4 py-2 text-xs text-muted-foreground">
+                      Showing the {errors.length} most recent of {errors7d}. Full detail is in
+                      this tenant&apos;s Settings → System Log.
+                    </li>
+                  )}
                 </ul>
               ),
           },

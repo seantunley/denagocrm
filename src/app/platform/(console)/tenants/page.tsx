@@ -21,8 +21,6 @@ type TenantRow = {
   modules: string;
   createdAt: Date;
 };
-type MemberRow = { tenantId: string; userId: string; userName: string; userEmail: string; disabledAt: Date | null };
-type UserRow = { id: string; name: string; email: string; disabledAt: Date | null };
 
 const BACKUP_LABEL: Record<BackupHealth["status"], string> = {
   never: "No runs recorded",
@@ -51,21 +49,13 @@ export default async function PlatformTenantsPage() {
 
   const health = await getPlatformHealth();
 
-  const [tenants, memberRows, users] = await Promise.all([
-    basePrisma.$queryRaw<TenantRow[]>`
-      SELECT "id", "name", "slug", "active", "modules", "createdAt" FROM "Tenant" ORDER BY "createdAt"
-    `,
-    basePrisma.$queryRaw<MemberRow[]>`
-      SELECT tm."tenantId", tm."userId", u."name" AS "userName", u."email" AS "userEmail", u."disabledAt"
-      FROM "TenantMember" tm JOIN "User" u ON u."id" = tm."userId"
-      ORDER BY u."name"
-    `,
-    basePrisma.$queryRaw<UserRow[]>`
-      SELECT "id", "name", "email", "disabledAt" FROM "User" ORDER BY "name"
-    `,
-  ]);
+  // Member DETAIL belongs to the tenant profile now; this list only shows counts,
+  // which the health aggregation already provides. Dropping the join keeps the
+  // list page O(1) in queries rather than fetching every membership in the system.
+  const tenants = await basePrisma.$queryRaw<TenantRow[]>`
+    SELECT "id", "name", "slug", "active", "modules", "createdAt" FROM "Tenant" ORDER BY "createdAt"
+  `;
 
-  const membersFor = (tenantId: string) => memberRows.filter((row) => row.tenantId === tenantId);
   // A tenant id in the error list may name a tenant that has since been deleted;
   // fall back to the raw id rather than rendering a blank.
   const tenantName = (tenantId: string) =>

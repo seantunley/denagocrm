@@ -145,24 +145,38 @@ export async function getTenantIntegrationHealth(
   );
 
   const since = new Date(Date.now() - 7 * 24 * 3600_000);
-  const errors = await basePrisma.errorLog.findMany({
-    where: { tenantId, createdAt: { gte: since } },
-    orderBy: { createdAt: "desc" },
-    select: { scope: true, message: true, createdAt: true },
-    take: 500,
-  });
 
-  return DEFS.map((def, index) => {
-    const mine = errors.filter((error) => def.scopes.includes(error.scope.toLowerCase()));
-    return {
-      id: def.id,
-      label: def.label,
-      note: def.note,
-      configured: configured[index],
-      errors7d: mine.length,
-      lastError: mine[0] ? { message: mine[0].message, createdAt: mine[0].createdAt } : null,
-    };
+  // COUNTS come from a grouped query, never from a capped list. A single shared
+  // `take` across all integrations is worse than inaccurate: during a storm in one
+  // integration the cap fills with its rows and a DIFFERENT integration's failures
+  // disappear from the page entirely, reporting it healthy.
+  const grouped = await basePrisma.errorLog.groupBy({
+    by: ["scope"],
+    _count: { _all: true },
+    where: { tenantId, createdAt: { gte: since } },
   });
+  const countByScope = new Map(grouped.map((row) => [row.scope.toLowerCase(), row._count._all]));
+
+  // The single most recent failure PER INTEGRATION, fetched per integration so one
+  // noisy integration cannot crowd out another's example.
+  const latest = await Promise.all(
+    DEFS.map((def) =>
+      basePrisma.errorLog.findFirst({
+        where: { tenantId, createdAt: { gte: since }, scope: { in: def.scopes } },
+        orderBy: { createdAt: "desc" },
+        select: { message: true, createdAt: true },
+      }),
+    ),
+  );
+
+  return DEFS.map((def, index) => ({
+    id: def.id,
+    label: def.label,
+    note: def.note,
+    configured: configured[index],
+    errors7d: def.scopes.reduce((total, scope) => total + (countByScope.get(scope) ?? 0), 0),
+    lastError: latest[index],
+  }));
 }
 
 /** Overall verdict, for badge colouring and sorting. */

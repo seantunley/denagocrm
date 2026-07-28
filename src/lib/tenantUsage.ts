@@ -76,7 +76,29 @@ async function largestTenantTables(): Promise<TableSize[]> {
   `;
 }
 
+/**
+ * Cached storage estimates. The estimate costs one COUNT per sampled table, which
+ * is the most expensive thing the console does and grows with the database — far
+ * too costly to repeat on every page view when the answer barely moves.
+ *
+ * A short TTL rather than permanent memoisation: storage genuinely changes, just
+ * not by the minute. Process-local, so each serverless instance warms its own —
+ * acceptable for an estimate that is explicitly approximate, and it avoids adding
+ * a cache table for a number nobody bills on.
+ */
+const STORAGE_TTL_MS = 10 * 60 * 1000;
+const storageCache = new Map<string, { at: number; value: TenantStorage }>();
+
 export async function getTenantStorage(tenantId: string): Promise<TenantStorage> {
+  const hit = storageCache.get(tenantId);
+  if (hit && Date.now() - hit.at < STORAGE_TTL_MS) return hit.value;
+
+  const value = await computeTenantStorage(tenantId);
+  storageCache.set(tenantId, { at: Date.now(), value });
+  return value;
+}
+
+async function computeTenantStorage(tenantId: string): Promise<TenantStorage> {
   const all = await largestTenantTables();
   const scoped = all.filter((t) => t.has_tenant);
   const sampled = scoped.slice(0, SAMPLED_TABLES);

@@ -23,12 +23,27 @@ async function tenantForError(): Promise<string | null> {
 
   // No scope. This is the NORMAL case while tenant enforcement is dormant: the
   // scope helpers deliberately no-op when `tenantEnforcing()` is false, so without
-  // this fallback EVERY error would be unattributed until enforcement ships, and
+  // a fallback EVERY error would be unattributed until enforcement ships, and
   // per-tenant error health would be permanently empty.
   //
-  // Fall back to the acting staff session's tenant. Errors raised outside a request
-  // (cron, webhooks, build) have no cookies to read, which throws — that is exactly
-  // the unattributed case, so it resolves to null.
+  // But the fallback must NOT fire on a PLATFORM request. The CRM session cookie is
+  // scoped to "/", so it is sent to /platform too — meaning a platform admin who
+  // also happens to be signed into the CRM would have platform-global failures
+  // blamed on whichever tenant their CRM account belongs to. That is a wrong
+  // attribution, not a missing one, which is worse: it makes a healthy tenant look
+  // broken. A platform request is identified by its own cookie, which the CRM never
+  // sets.
+  try {
+    const { cookies } = await import("next/headers");
+    const { PLATFORM_SESSION_COOKIE } = await import("./platformSession");
+    const store = await cookies();
+    if (store.get(PLATFORM_SESSION_COOKIE)) return null;
+  } catch {
+    // No request context at all (cron, build) — nothing to attribute to anyway.
+    return null;
+  }
+
+  // A genuine CRM request: attribute to the acting staff session's tenant.
   try {
     const { getActiveTenantId } = await import("./auth");
     return await getActiveTenantId();
