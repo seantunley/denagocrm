@@ -34,6 +34,7 @@ import {
   formatBytes,
 } from "@/lib/tenantUsage";
 import Tabs from "@/components/Tabs";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import ModalTrigger from "@/components/Modal";
 import {
   activateTenantAction,
@@ -320,12 +321,12 @@ export default async function TenantProfilePage({
                         <tbody className="divide-y divide-border/50">
                           {storage.breakdown.map((row) => (
                             <tr key={row.table}>
-                              <td className="py-2 font-mono text-xs">{row.table}</td>
-                              <td className="py-2 text-right tabular-nums">{row.rows}</td>
-                              <td className="py-2 text-right tabular-nums text-muted-foreground">
+                              <td data-primary data-label="Table" className="py-2 font-mono text-xs">{row.table}</td>
+                              <td data-label="Rows" className="py-2 text-right tabular-nums">{row.rows}</td>
+                              <td data-label="Share" className="py-2 text-right tabular-nums text-muted-foreground">
                                 {row.sharePct}%
                               </td>
-                              <td className="py-2 text-right tabular-nums">{formatBytes(row.bytes)}</td>
+                              <td data-label="Est. size" className="py-2 text-right tabular-nums">{formatBytes(row.bytes)}</td>
                             </tr>
                           ))}
                         </tbody>

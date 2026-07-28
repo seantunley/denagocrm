@@ -8,6 +8,7 @@ import { formatDateTime } from "@/lib/format";
 import { parseModuleCsv } from "@/lib/modules/entitlement";
 import { getPlatformHealth, type BackupHealth } from "@/lib/platformHealth";
 import ModalTrigger from "@/components/Modal";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { createTenantAction } from "@/app/actions/tenants";
 
 export const dynamic = "force-dynamic";
@@ -182,7 +183,10 @@ export default async function PlatformTenantsPage() {
         {tenants.length === 0 ? (
           <p className="p-5 text-sm text-muted-foreground">No tenants yet — create one above.</p>
         ) : (
-          <div className="overflow-x-auto">
+          // ResponsiveEntityTable, not a bare overflow-x-auto: on phones this becomes
+          // a labelled record list rather than a table you drag sideways. Cells declare
+          // their mobile role with data-label / data-primary.
+          <ResponsiveEntityTable className="rounded-none border-0 bg-transparent">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border/50 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
@@ -213,7 +217,7 @@ export default async function PlatformTenantsPage() {
                           : "hover:bg-white/[0.02]"
                       }`}
                     >
-                      <td className="px-5 py-3">
+                      <td data-primary data-label="Tenant" className="px-5 py-3">
                         <Link href={`/platform/tenants/${tenant.id}`} className="font-medium transition-colors hover:text-primary">
                           {tenant.name}
                         </Link>
@@ -226,14 +230,14 @@ export default async function PlatformTenantsPage() {
                           </span>
                         )}
                       </td>
-                      <td className="px-3 py-3">
+                      <td data-label="Status" className="px-3 py-3">
                         <span className={`badge ${tenant.active ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300"}`}>
                           {tenant.active ? "Active" : "Suspended"}
                         </span>
                       </td>
-                      <td className="px-3 py-3 text-right tabular-nums">{stats?.users ?? 0}</td>
-                      <td className="px-3 py-3 text-right tabular-nums">{granted.size === 0 ? <span className="text-muted-foreground">core</span> : granted.size}</td>
-                      <td className="px-3 py-3 text-right tabular-nums">
+                      <td data-label="Members" className="px-3 py-3 text-right tabular-nums">{stats?.users ?? 0}</td>
+                      <td data-label="Modules" className="px-3 py-3 text-right tabular-nums">{granted.size === 0 ? <span className="text-muted-foreground">core</span> : granted.size}</td>
+                      <td data-label="Errors 24h" className="px-3 py-3 text-right tabular-nums">
                         {errors > 0 ? (
                           <span className="inline-flex items-center gap-1 font-semibold text-red-300">
                             <AlertTriangle className="size-3" />
@@ -243,7 +247,7 @@ export default async function PlatformTenantsPage() {
                           <span className="text-muted-foreground">0</span>
                         )}
                       </td>
-                      <td className="px-5 py-3 text-xs text-muted-foreground">
+                      <td data-label="Last activity" className="px-5 py-3 text-xs text-muted-foreground">
                         {stats?.lastActiveAt ? formatDateTime(stats.lastActiveAt) : "never"}
                       </td>
                     </tr>
@@ -251,7 +255,7 @@ export default async function PlatformTenantsPage() {
                 })}
               </tbody>
             </table>
-          </div>
+          </ResponsiveEntityTable>
         )}
       </section>
 
