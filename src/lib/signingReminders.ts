@@ -1,66 +1,101 @@
-import { subDays } from "date-fns";
-import { prisma, basePrisma } from "@/lib/db";
-import { resolveTenantActor } from "@/lib/tenantActor";
-import { sendEmail } from "@/lib/email";
-import { quoteExpired } from "@/lib/quoteExpiry";
-import { formatDate } from "@/lib/format";
+import "server-only";
 
-const BASE = "https://crm.denagocpt.co.za";
-const REMIND_AFTER_DAYS = 3;
+import { prisma } from "@/lib/db";
+import { logError } from "@/lib/errorLog";
+import { notifyRecipient } from "@/lib/signing/dispatch";
+
+const REMINDER_DELAY_MS = 3 * 24 * 60 * 60 * 1000;
+const MAX_CANDIDATES_PER_RUN = 100;
+const MAX_REMINDERS_PER_RUN = 25;
+const LIVE_REQUEST_STATUSES = ["sent", "viewed", "in_progress"] as const;
+const REMINDABLE_RECIPIENT_STATUSES = ["sent", "viewed"] as const;
 
 /**
- * One polite nudge per quote: signing link sent 3+ days ago, not signed,
- * not declined, not expired, reminder not yet sent. Runs from the cron.
+ * Send one automatic reminder to signer recipients whose own latest delivery
+ * happened at least three days ago. Recipient delivery events are used instead
+ * of SignatureRequest.sentAt so sequential signers get a full reminder window
+ * after their turn actually starts.
  */
-export async function runQuoteSigningReminders(): Promise<number> {
-  const quotes = await prisma.quote.findMany({
+export async function runSignatureRequestReminders(): Promise<number> {
+  const cutoff = new Date(Date.now() - REMINDER_DELAY_MS);
+  const candidates = await prisma.signatureRecipient.findMany({
     where: {
-      signToken: { not: null },
-      signedAt: null,
-      declinedAt: null,
-      reminderSentAt: null,
-      signLinkCreatedAt: { lt: subDays(new Date(), REMIND_AFTER_DAYS) },
-    },
-    include: { contact: true, lead: true },
-    take: 25,
-  });
-  if (quotes.length === 0) return 0;
-
-  const firstUser = await resolveTenantActor();
-  let sent = 0;
-  for (const q of quotes) {
-    if (quoteExpired(q.validUntil)) continue;
-    const to = q.contact?.email ?? q.lead?.email;
-    if (!to) continue;
-    const firstName =
-      q.contact?.firstName ?? q.lead?.name.split(/\s+/)[0] ?? "there";
-    const link = `${BASE}/sign/quote/${q.signToken}`;
-    const res = await sendEmail({
-      to,
-      subject: `Friendly reminder: your Denago Cape Town quote Q-${q.number}`,
-      text: `Hi ${firstName},\n\nJust a friendly nudge — your quotation Q-${q.number} is still waiting for you. You can review and accept it online here:\n\n${link}\n\n${
-        q.validUntil ? `It's valid until ${formatDate(q.validUntil)}.\n\n` : ""
-      }Any questions at all, reply to this email or call us on 073 789 3438.\n\nWarm regards,\nDenago Cape Town`,
-    });
-    if (!res.ok) continue;
-    await basePrisma.quote.update({
-      where: { id: q.id },
-      data: { reminderSentAt: new Date() },
-    });
-    if (firstUser) {
-      await prisma.communication.create({
-        data: {
-          type: "email",
-          direction: "outbound",
-          subject: `Quote Q-${q.number} — automatic signing reminder`,
-          body: `Automatic reminder sent: quote Q-${q.number} unsigned ${REMIND_AFTER_DAYS} days after the signing link was sent.`,
-          contactId: q.contactId,
-          leadId: q.leadId,
-          userId: firstUser.id,
+      role: "signer",
+      status: { in: [...REMINDABLE_RECIPIENT_STATUSES] },
+      remindedAt: null,
+      request: {
+        is: {
+          deletedAt: null,
+          status: { in: [...LIVE_REQUEST_STATUSES] },
         },
-      });
+      },
+    },
+    select: { id: true },
+    take: MAX_CANDIDATES_PER_RUN,
+  });
+
+  if (candidates.length === 0) return 0;
+
+  const latestDeliveries = await prisma.signatureEvent.groupBy({
+    by: ["recipientId"],
+    where: {
+      recipientId: { in: candidates.map((recipient) => recipient.id) },
+      type: { in: ["sent", "delivered"] },
+    },
+    _max: { createdAt: true },
+  });
+  const latestDeliveryByRecipient = new Map(
+    latestDeliveries.map((event) => [event.recipientId, event._max.createdAt]),
+  );
+
+  const due = candidates
+    .filter((recipient) => {
+      const deliveredAt = latestDeliveryByRecipient.get(recipient.id);
+      return deliveredAt != null && deliveredAt <= cutoff;
+    })
+    .slice(0, MAX_REMINDERS_PER_RUN);
+
+  let sent = 0;
+  for (const recipient of due) {
+    const claimedAt = new Date();
+    const claimed = await prisma.signatureRecipient.updateMany({
+      where: {
+        id: recipient.id,
+        remindedAt: null,
+        status: { in: [...REMINDABLE_RECIPIENT_STATUSES] },
+      },
+      data: { remindedAt: claimedAt },
+    });
+    if (claimed.count !== 1) continue;
+
+    try {
+      const result = await notifyRecipient(recipient.id, { reminder: true });
+      if (result.delivered) {
+        sent += 1;
+      } else {
+        await prisma.signatureRecipient.updateMany({
+          where: {
+            id: recipient.id,
+            remindedAt: claimedAt,
+            status: { in: [...REMINDABLE_RECIPIENT_STATUSES] },
+          },
+          data: { remindedAt: null },
+        });
+      }
+    } catch (error) {
+      await prisma.signatureRecipient
+        .updateMany({
+          where: {
+            id: recipient.id,
+            remindedAt: claimedAt,
+            status: { in: [...REMINDABLE_RECIPIENT_STATUSES] },
+          },
+          data: { remindedAt: null },
+        })
+        .catch(() => {});
+      logError("signature-request-reminder", error);
     }
-    sent++;
   }
+
   return sent;
 }

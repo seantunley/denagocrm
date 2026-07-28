@@ -96,7 +96,44 @@ export default async function PortalHome() {
     `,
   ]);
 
-  const unsignedQuotes = quotes.filter((quote) => quote.signToken && !quote.signedAt && quote.status !== "declined");
+  // Signing is driven by the SignatureRequest system (the legacy quote.signToken +
+  // /sign/quote/[token] route are gone). For each of the customer's quotes with a
+  // live (non-closed) request, resolve the outstanding SIGNER recipient token so the
+  // portal can deep-link to the real signing surface at /signing/[token]. Scoped
+  // `prisma` keeps this within the portal's tenant.
+  const quoteIds = quotes.map((quote) => quote.id);
+  const contactEmail = contact.email?.trim() || null;
+  const openRequests = quoteIds.length > 0 && contactEmail
+    ? await prisma.signatureRequest.findMany({
+        where: {
+          quoteId: { in: quoteIds },
+          deletedAt: null,
+          status: { in: ["sent", "viewed", "in_progress"] },
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+          quoteId: true,
+          recipients: {
+            where: {
+              role: "signer",
+              status: { notIn: ["signed", "declined"] },
+              email: { equals: contactEmail, mode: "insensitive" },
+            },
+            orderBy: { order: "asc" },
+            take: 1,
+            select: { token: true },
+          },
+        },
+      })
+    : [];
+  const signTokenByQuote = new Map<string, string>();
+  for (const request of openRequests) {
+    if (!request.quoteId || signTokenByQuote.has(request.quoteId)) continue;
+    const recipient = request.recipients[0];
+    if (recipient) signTokenByQuote.set(request.quoteId, recipient.token);
+  }
+
+  const unsignedQuotes = quotes.filter((quote) => signTokenByQuote.has(quote.id) && !quote.signedAt);
   const unreadNotifications = notifications.filter((notification) => !notification.readAt).length;
 
   return (
@@ -225,11 +262,11 @@ export default async function PortalHome() {
           <div className="card p-0 divide-y divide-border">
             {quotes.map((quote) => {
               const total = quote.items.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
-              const canSign = quote.signToken && !quote.signedAt && quote.status !== "declined";
+              const signToken = signTokenByQuote.get(quote.id);
               return (
                 <div key={quote.id} className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
                   <div><p className="text-sm font-medium">Quote Q-{quote.number}</p><p className="text-xs text-slate-400">{formatZAR(Math.round(total))} · {deliveryLabel(quote)}</p></div>
-                  {canSign && <a href={`/sign/quote/${quote.signToken}`} className="btn-primary btn-sm">Review & sign</a>}
+                  {signToken && <a href={`/signing/${signToken}`} className="btn-primary btn-sm">Review & sign</a>}
                 </div>
               );
             })}

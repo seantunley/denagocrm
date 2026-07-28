@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 export const maxDuration = 60;
 import { runIdleAutomations } from "@/lib/automations";
 import { runServiceReminders } from "@/lib/serviceReminders";
-import { runQuoteSigningReminders } from "@/lib/signingReminders";
+import { runSignatureRequestReminders } from "@/lib/signingReminders";
 import { recoverStaleSigningClaims } from "@/lib/signing/dispatch";
 import { syncFacebookLeads } from "@/lib/metaLeadSync";
 import { syncGoogleReviews } from "@/lib/googleReviews";
@@ -32,7 +32,10 @@ async function runOperationalQueues() {
   const remindersSent = on("automotive")
     ? await runServiceReminders().catch((e) => { logError("service-reminders", e); return -1; })
     : null;
-  const quoteReminders = await runQuoteSigningReminders().catch((e) => { logError("quote-reminders", e); return -1; });
+  const signingReminders = await runSignatureRequestReminders().catch((e) => {
+    logError("signature-request-reminders", e);
+    return -1;
+  });
   const staleSigningClaims = await recoverStaleSigningClaims().catch((e) => { logError("stale-signing-claims", e); return null; });
   const fbLeads = on("marketing")
     ? await syncFacebookLeads().catch((e) => { logError("meta-lead-sync", e); return -1; })
@@ -63,7 +66,7 @@ async function runOperationalQueues() {
   return {
     fired,
     remindersSent,
-    quoteReminders,
+    signingReminders,
     staleSigningClaims,
     fbLeads,
     googleReviews,

@@ -325,7 +325,6 @@ const C4_ACTOR_SITES = [
   "src/lib/lifecycleJourneys.ts",
   "src/lib/serviceReminders.ts",
   "src/lib/reviewRequests.ts",
-  "src/lib/signingReminders.ts",
   "src/lib/imapSync.ts",
   "src/lib/surveys.ts",
   "src/app/actions/warranty.ts",
