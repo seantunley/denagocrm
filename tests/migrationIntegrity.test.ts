@@ -7,6 +7,7 @@ import {
   buildChildEnv,
   applyOne,
   assertSchemaObjectsPresent,
+  previewMayMigrate,
 } from "../scripts/apply-migrations.mjs";
 
 // ── classifyDiffScript: the block-vs-warn rule ──────────────────────────────
@@ -120,4 +121,44 @@ test("assertSchemaObjectsPresent: probe failure → throws (fail-closed, no sile
     throw new Error("connect ECONNREFUSED");
   };
   assert.throws(() => assertSchemaObjectsPresent({}, runDiff), /could not verify the schema/i);
+});
+
+// ── previewMayMigrate: previews must not write schema to a shared database ───
+
+// The failure this prevents: Vercel runs the migration runner in the build
+// command for EVERY deployment. With previews pointed at the production
+// database, each open pull request migrated production ahead of the code that
+// was actually deployed — which is how AppSetting's primary key changed under a
+// running app and broke every settings save with 42P10.
+test("previewMayMigrate: a preview with no isolated database does NOT migrate", () => {
+  const warnings = [];
+  const may = previewMayMigrate({ VERCEL_ENV: "preview" }, (m) => warnings.push(m));
+  assert.equal(may, false);
+  assert.equal(warnings.length, 1, "skipping must be announced, never silent");
+});
+
+test("previewMayMigrate: a preview that declares an isolated database may migrate", () => {
+  assert.equal(
+    previewMayMigrate({ VERCEL_ENV: "preview", PREVIEW_DB_ISOLATED: "1" }, () => {}),
+    true,
+  );
+});
+
+// Only the literal "1" counts. A stray "true"/"yes"/"0" must not be read as
+// consent to write schema to whatever database this preview happens to hold.
+test("previewMayMigrate: only PREVIEW_DB_ISOLATED=1 counts as isolation", () => {
+  for (const value of ["true", "yes", "0", "", "01"]) {
+    assert.equal(
+      previewMayMigrate({ VERCEL_ENV: "preview", PREVIEW_DB_ISOLATED: value }, () => {}),
+      false,
+      `PREVIEW_DB_ISOLATED=${JSON.stringify(value)} must not enable migrations`,
+    );
+  }
+});
+
+// Production deploys and local/CI runs are unaffected — the guard is preview-only.
+test("previewMayMigrate: production and non-Vercel runs always migrate", () => {
+  assert.equal(previewMayMigrate({ VERCEL_ENV: "production" }, () => {}), true);
+  assert.equal(previewMayMigrate({ VERCEL_ENV: "development" }, () => {}), true);
+  assert.equal(previewMayMigrate({}, () => {}), true);
 });
