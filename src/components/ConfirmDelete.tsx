@@ -35,7 +35,17 @@ export default function ConfirmDelete({ action, title, description, trigger = "D
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description ?? "This item moves to Trash and is permanently removed after 60 days."}</DialogDescription>
         </DialogHeader>
-        <SaveForm action={action} success={success} onSaved={() => setOpen(false)} className="space-y-4">
+        {/* closeModalOnSuccess={false}: this component owns its OWN dialog and closes
+            it via onSaved. Leaving the default on would also close an enclosing
+            ModalTrigger when one is nested outside — dismissing two dialogs from a
+            single confirmed delete. */}
+        <SaveForm
+          action={action}
+          success={success}
+          closeModalOnSuccess={false}
+          onSaved={() => setOpen(false)}
+          className="space-y-4"
+        >
           <div><label className="label" htmlFor="delete-reason">Reason for deleting</label><textarea id="delete-reason" name="reason" className="input" rows={3} required placeholder="Duplicate entry or created by mistake" /></div>
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><DialogClose asChild><button type="button" className="btn-secondary">Cancel</button></DialogClose><SaveButton pendingLabel="Deleting…" className="btn-danger">{confirmLabel}</SaveButton></div>
         </SaveForm>

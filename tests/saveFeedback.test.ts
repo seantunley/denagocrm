@@ -75,3 +75,59 @@ test("the module grant grid opts out of reset (it edits rather than creates)", (
   const code = src("src/app/platform/(console)/tenants/[id]/page.tsx");
   assert.match(code, /resetOnSuccess=\{false\}/, "the modules form must not reset after saving");
 });
+
+// ── Secrets must not survive a save in the DOM ──────────────────────────────
+
+// Settings forms EDIT, so they set resetOnSuccess={false} to keep showing what
+// was saved — which left a just-typed SMTP/IMAP password or API token sitting in
+// the input afterwards. Those fields are write-only (they render a
+// "•••••••• saved" placeholder, never the stored value), so clearing them
+// restores exactly what the page renders with.
+test("SaveForm: password inputs are cleared on success even without a reset", () => {
+  const code = src("src/components/SaveForm.tsx");
+  const clear = code.indexOf('input[type="password"]');
+  assert.ok(clear > 0, "password inputs must be cleared explicitly");
+  const resetGuard = code.indexOf("if (resetOnSuccess) form.reset()");
+  assert.ok(
+    clear > resetGuard,
+    "clearing must happen OUTSIDE the resetOnSuccess guard, or forms that keep their values keep the secret too",
+  );
+});
+
+// ── A no-op must never be reported as a success ────────────────────────────
+
+// asActionResult resolves any normal return as success, so a silent early return
+// produced a confident lie — "Deleted" for a stage that still holds leads being
+// the worst of them.
+for (const file of [
+  "src/app/actions/settings.ts",
+  "src/app/actions/pipelines.ts",
+  "src/app/actions/emails.ts",
+  "src/app/actions/ai.ts",
+]) {
+  test(`${file}: converted actions have no silent early returns`, () => {
+    const code = src(file);
+    const inWrapped = code.split("return asActionResult(async () => {").slice(1);
+    for (const block of inWrapped) {
+      const body = block.split("\n  });")[0];
+      assert.doesNotMatch(
+        body,
+        /^\s+(if \(.*\) )?return;\s*$/m,
+        "a bare `return` inside a wrapped action resolves as success; refuse() or return { success } instead",
+      );
+    }
+  });
+}
+
+test("deleteStage refuses rather than silently doing nothing when leads remain", () => {
+  const code = src("src/app/actions/settings.ts");
+  assert.match(code, /if \(count > 0\) refuse\(/, "a stage still holding leads must say so, not report success");
+});
+
+// ── Nested dialogs ─────────────────────────────────────────────────────────
+
+test("ConfirmDelete owns its dialog and does not close an enclosing modal too", () => {
+  const code = src("src/components/ConfirmDelete.tsx");
+  assert.match(code, /closeModalOnSuccess=\{false\}/, "it closes its own dialog via onSaved");
+  assert.match(code, /onSaved=\{\(\) => setOpen\(false\)\}/, "and must still close itself");
+});

@@ -1,6 +1,6 @@
 "use server";
 
-import { asActionResult, ActionRefusal } from "@/lib/actionResult";
+import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import {
@@ -178,9 +178,9 @@ export async function moveStage(pipelineId: string, stageId: string, direction: 
     const user = await requirePermission("pipelines.manage");
     const stages = await listPipelineStages(pipelineId);
     const idx = stages.findIndex((s) => s.id === stageId);
-    if (idx < 0) return;
+    if (idx < 0) refuse("That stage no longer exists — reload the page.");
     const swapWith = direction === "up" ? idx - 1 : idx + 1;
-    if (swapWith < 0 || swapWith >= stages.length) return;
+    if (swapWith < 0 || swapWith >= stages.length) refuse("That stage is already at the end.");
 
     const ids = stages.map((s) => s.id);
     [ids[idx], ids[swapWith]] = [ids[swapWith], ids[idx]];

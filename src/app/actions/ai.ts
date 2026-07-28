@@ -1,6 +1,6 @@
 "use server";
 
-import { asActionResult } from "@/lib/actionResult";
+import { asActionResult, refuse } from "@/lib/actionResult";
 import { prisma } from "@/lib/db";
 import { getActiveTenantId, requireOperational, requireOwner } from "@/lib/auth";
 import { requireLeadAccess, requireContactAccess, canAccessContact, hasPermission } from "@/lib/permissions";
@@ -99,7 +99,7 @@ export async function clearErrorLog() {
   return asActionResult(async () => {
     await requireOwner();
     const tenantId = await getActiveTenantId();
-    if (!tenantId) return;
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     await basePrisma.errorLog.deleteMany({ where: { tenantId } });
     // Without this the Settings → System tab keeps rendering the cached (now
     // deleted) rows, so the button looked like it did nothing.

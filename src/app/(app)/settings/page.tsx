@@ -837,7 +837,9 @@ export default async function SettingsPage({
                 <summary className="px-4 py-2.5 cursor-pointer text-sm font-medium">
                   + New template
                 </summary>
-                <SaveForm resetOnSuccess={false} action={createTemplate} className="p-4 pt-1 space-y-2">
+                {/* A CREATE form: it must clear, or the finished template sits there
+                    ready to be submitted again by an extra click. */}
+                <SaveForm success="Template created" action={createTemplate} className="p-4 pt-1 space-y-2">
                   <input name="name" className="input" placeholder="Template name (e.g. New lead welcome)" required />
                   <input name="subject" className="input" placeholder="Subject — e.g. Your {{model}} enquiry" required />
                   <textarea
