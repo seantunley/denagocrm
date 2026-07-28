@@ -1431,9 +1431,18 @@ model ErrorLog {
   message   String
   stack     String?
   context   String?
+  /// Owning tenant, stamped best-effort from the request's tenant scope so errors
+  /// can be attributed and filtered. NULLABLE and ErrorLog stays in GLOBAL_MODELS
+  /// ON PURPOSE: errors happen on paths with no tenant (pre-auth failures,
+  /// webhooks, cron, and tenant resolution itself failing). If this model were
+  /// tenant-scoped, an unscoped write would fail closed under enforcement and the
+  /// error log would disappear exactly when things are breaking. Logging must
+  /// never throw, so attribution is a bonus, never a precondition.
+  tenantId  String?
   createdAt DateTime @default(now())
 
   @@index([createdAt])
+  @@index([tenantId, createdAt])
 }
 
 // Customer feedback surveys — CSAT after a service, NPS, post-sale, or ad-hoc.

@@ -13,10 +13,11 @@ import { basePrisma } from "@/lib/db";
  *   - SIZE / ACTIVITY is genuinely per-tenant: Lead and Contact carry `tenantId`,
  *     membership gives the user count, and UserSession carries both `tenantId` and
  *     `lastActiveAt`.
- *   - ERRORS are PLATFORM-WIDE ONLY. `ErrorLog` has no `tenantId` (it is in
- *     GLOBAL_MODELS), so failures cannot be attributed to a tenant. Showing a
- *     global count under a tenant's name would be a lie, so it is reported
- *     separately.
+ *   - ERRORS are per-tenant WHERE THEY CAN BE. `logError` stamps the acting
+ *     tenant, so attributed errors are reported on that tenant. Some genuinely
+ *     have no tenant — pre-auth failures, webhooks, cron, and rows predating the
+ *     column — and those are reported separately as "unattributed" rather than
+ *     being folded into a tenant that did not cause them.
  *   - INTEGRATION health is NOT AVAILABLE. Per-tenant integration credentials live
  *     in the credential-isolation work that has not landed; there is nothing to
  *     read. Omitted rather than faked.
@@ -47,11 +48,19 @@ export type TenantHealth = {
   contacts: number;
   /** Most recent staff session activity for this tenant, or null if never. */
   lastActiveAt: Date | null;
+  /** Errors attributed to this tenant. */
+  errors24h: number;
+  errors7d: number;
 };
 
+/**
+ * Errors that could NOT be attributed to a tenant — pre-auth failures, webhooks,
+ * cron sweeps, and rows predating the tenantId column. Reported separately rather
+ * than folded into a tenant, which would be a lie.
+ */
 export type PlatformErrorHealth = {
-  last24h: number;
-  last7d: number;
+  unattributed24h: number;
+  unattributed7d: number;
   topScopes: { scope: string; count: number }[];
 };
 
@@ -132,7 +141,7 @@ async function backupHealth(): Promise<BackupHealth> {
 async function tenantHealth(): Promise<Map<string, TenantHealth>> {
   // One grouped query per signal rather than N queries per tenant, so the console
   // stays O(1) in database round-trips as tenants are added.
-  const [members, leads, contacts, sessions] = await Promise.all([
+  const [members, leads, contacts, sessions, errors24h, errors7d] = await Promise.all([
     basePrisma.tenantMember.groupBy({ by: ["tenantId"], _count: { _all: true } }),
     basePrisma.lead.groupBy({
       by: ["tenantId"],
@@ -148,13 +157,31 @@ async function tenantHealth(): Promise<Map<string, TenantHealth>> {
       by: ["tenantId"],
       _max: { lastActiveAt: true },
     }),
+    basePrisma.errorLog.groupBy({
+      by: ["tenantId"],
+      _count: { _all: true },
+      where: { createdAt: { gte: hoursAgo(24) }, tenantId: { not: null } },
+    }),
+    basePrisma.errorLog.groupBy({
+      by: ["tenantId"],
+      _count: { _all: true },
+      where: { createdAt: { gte: hoursAgo(24 * 7) }, tenantId: { not: null } },
+    }),
   ]);
 
   const out = new Map<string, TenantHealth>();
   const ensure = (tenantId: string): TenantHealth => {
     let row = out.get(tenantId);
     if (!row) {
-      row = { tenantId, users: 0, leads: 0, contacts: 0, lastActiveAt: null };
+      row = {
+        tenantId,
+        users: 0,
+        leads: 0,
+        contacts: 0,
+        lastActiveAt: null,
+        errors24h: 0,
+        errors7d: 0,
+      };
       out.set(tenantId, row);
     }
     return row;
@@ -166,26 +193,35 @@ async function tenantHealth(): Promise<Map<string, TenantHealth>> {
   for (const s of sessions) {
     if (s.tenantId) ensure(s.tenantId).lastActiveAt = s._max.lastActiveAt ?? null;
   }
+  for (const e of errors24h) if (e.tenantId) ensure(e.tenantId).errors24h = e._count._all;
+  for (const e of errors7d) if (e.tenantId) ensure(e.tenantId).errors7d = e._count._all;
 
   return out;
 }
 
 async function errorHealth(): Promise<PlatformErrorHealth> {
-  const [last24h, last7d, scopes] = await Promise.all([
-    basePrisma.errorLog.count({ where: { createdAt: { gte: hoursAgo(24) } } }),
-    basePrisma.errorLog.count({ where: { createdAt: { gte: hoursAgo(24 * 7) } } }),
+  // Only the UNATTRIBUTED ones: anything with a tenant is reported on that tenant's
+  // row instead. Counting everything here would double-count and reproduce the
+  // original problem — a single number nobody can act on.
+  const [unattributed24h, unattributed7d, scopes] = await Promise.all([
+    basePrisma.errorLog.count({
+      where: { createdAt: { gte: hoursAgo(24) }, tenantId: null },
+    }),
+    basePrisma.errorLog.count({
+      where: { createdAt: { gte: hoursAgo(24 * 7) }, tenantId: null },
+    }),
     basePrisma.errorLog.groupBy({
       by: ["scope"],
       _count: { _all: true },
-      where: { createdAt: { gte: hoursAgo(24 * 7) } },
+      where: { createdAt: { gte: hoursAgo(24 * 7) }, tenantId: null },
       orderBy: { _count: { scope: "desc" } },
       take: 5,
     }),
   ]);
 
   return {
-    last24h,
-    last7d,
+    unattributed24h,
+    unattributed7d,
     topScopes: scopes.map((s) => ({ scope: s.scope, count: s._count._all })),
   };
 }

@@ -191,9 +191,11 @@ export default async function PlatformTenantsPage() {
           </div>
 
           <div className="rounded-lg border border-border p-3">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Errors</p>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Unattributed errors
+            </p>
             <p className="mt-1 text-sm font-semibold">
-              {health.errors.last24h} in 24h · {health.errors.last7d} in 7d
+              {health.errors.unattributed24h} in 24h · {health.errors.unattributed7d} in 7d
             </p>
             {health.errors.topScopes.length > 0 ? (
               <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
@@ -202,10 +204,13 @@ export default async function PlatformTenantsPage() {
                 ))}
               </ul>
             ) : (
-              <p className="mt-1 text-xs text-muted-foreground">No errors logged in the last 7 days.</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                No unattributed errors in the last 7 days.
+              </p>
             )}
             <p className="mt-2 text-[11px] text-muted-foreground/80">
-              Platform-wide: ErrorLog has no tenant column, so these cannot be attributed to a tenant.
+              Errors with no tenant: webhooks, cron, pre-auth failures, and rows logged
+              before attribution existed. Tenant-attributed errors appear on each tenant below.
             </p>
           </div>
         </div>
@@ -329,6 +334,14 @@ export default async function PlatformTenantsPage() {
                       <dd className="text-right tabular-nums">{stats?.contacts ?? 0}</dd>
                       <dt className="text-muted-foreground">Members</dt>
                       <dd className="text-right tabular-nums">{stats?.users ?? members.length}</dd>
+                      <dt className={(stats?.errors24h ?? 0) > 0 ? "text-red-300" : "text-muted-foreground"}>
+                        Errors (24h)
+                      </dt>
+                      <dd className={`text-right tabular-nums ${(stats?.errors24h ?? 0) > 0 ? "font-semibold text-red-300" : ""}`}>
+                        {stats?.errors24h ?? 0}
+                      </dd>
+                      <dt className="text-muted-foreground">Errors (7d)</dt>
+                      <dd className="text-right tabular-nums">{stats?.errors7d ?? 0}</dd>
                     </dl>
                     <p className="mt-2 text-xs text-muted-foreground">
                       {stats?.lastActiveAt
