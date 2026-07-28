@@ -1,6 +1,6 @@
 "use server";
 
-import { asActionResult } from "@/lib/actionResult";
+import { asActionResult, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { putSetting } from "@/lib/settings";
@@ -183,11 +183,11 @@ export async function createTemplate(formData: FormData) {
   return asActionResult(async () => {
     const user = await requireOwner();
     const tenantId = await tenantIdFor(user.id);
-    if (!tenantId) return;
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     const name = String(formData.get("name") ?? "").trim();
     const subject = String(formData.get("subject") ?? "").trim();
     const body = String(formData.get("body") ?? "").trim();
-    if (!name || !subject || !body) return;
+    if (!name || !subject || !body) refuse("Name, subject and body are all required.");
     await prisma.emailTemplate.create({ data: { tenantId, name, subject, body } });
     revalidatePath("/settings");
     revalidatePath("/campaigns");
@@ -198,11 +198,11 @@ export async function updateTemplate(id: string, formData: FormData) {
   return asActionResult(async () => {
     const user = await requireOwner();
     const tenantId = await tenantIdFor(user.id);
-    if (!tenantId) return;
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     const name = String(formData.get("name") ?? "").trim();
     const subject = String(formData.get("subject") ?? "").trim();
     const body = String(formData.get("body") ?? "").trim();
-    if (!name || !subject || !body) return;
+    if (!name || !subject || !body) refuse("Name, subject and body are all required.");
     await prisma.emailTemplate.updateMany({
       where: { id, tenantId },
       data: { name, subject, body },
@@ -216,7 +216,7 @@ export async function deleteTemplate(id: string, formData: FormData) {
   return asActionResult(async () => {
     const user = await requireOwner();
     const tenantId = await tenantIdFor(user.id);
-    if (!tenantId) return;
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     void formData;
     await prisma.emailTemplate.deleteMany({ where: { id, tenantId } });
     revalidatePath("/settings");

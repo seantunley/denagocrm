@@ -1,6 +1,6 @@
 "use server";
 
-import { asActionResult, ActionRefusal, type ActionResult } from "@/lib/actionResult";
+import { asActionResult, ActionRefusal, refuse, type ActionResult } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
@@ -27,7 +27,7 @@ export async function createStage(formData: FormData) {
   return asActionResult(async () => {
     await requireOwner();
     const name = String(formData.get("name") ?? "").trim();
-    if (!name) return;
+    if (!name) refuse("Give the stage a name.");
     const max = await prisma.pipelineStage.aggregate({ _max: { order: true } });
     await prisma.pipelineStage.create({
       data: {
@@ -45,7 +45,7 @@ export async function renameStage(id: string, formData: FormData) {
   return asActionResult(async () => {
     await requireOwner();
     const name = String(formData.get("name") ?? "").trim();
-    if (!name) return;
+    if (!name) refuse("Give the stage a name.");
     await prisma.pipelineStage.update({
       where: { id },
       data: { name, color: String(formData.get("color") ?? "#64748b") },
@@ -61,7 +61,8 @@ export async function moveStage(id: string, direction: "up" | "down") {
     const stages = await prisma.pipelineStage.findMany({ orderBy: { order: "asc" } });
     const index = stages.findIndex((stage) => stage.id === id);
     const swapWith = direction === "up" ? index - 1 : index + 1;
-    if (index < 0 || swapWith < 0 || swapWith >= stages.length) return;
+    if (index < 0) refuse("That stage no longer exists — reload the page.");
+    if (swapWith < 0 || swapWith >= stages.length) refuse("That stage is already at the end.");
     await prisma.$transaction([
       prisma.pipelineStage.update({ where: { id: stages[index].id }, data: { order: stages[swapWith].order } }),
       prisma.pipelineStage.update({ where: { id: stages[swapWith].id }, data: { order: stages[index].order } }),
@@ -76,7 +77,8 @@ export async function deleteStage(id: string, formData: FormData): Promise<Actio
     await requireOwner();
     void formData;
     const count = await prisma.lead.count({ where: { stageId: id } });
-    if (count > 0) return;
+    // Silently returning here reported "Deleted" for a stage that is still in use.
+    if (count > 0) refuse(`That stage still holds ${count} lead${count === 1 ? "" : "s"} — move them first.`);
     await prisma.pipelineStage.delete({ where: { id } });
     revalidatePath("/settings");
     revalidatePath("/leads");
@@ -397,11 +399,15 @@ export async function saveSetting(formData: FormData) {
     await requireOwner();
     const key = String(formData.get("key") ?? "");
     const value = String(formData.get("value") ?? "").trim();
-    if (!key) return;
+    if (!key) refuse("Nothing to save — the setting key was missing.");
     // Secret fields render blank (never echo the stored value into the DOM) and
     // pass keepIfBlank — a blank submit then means "leave the saved value alone"
     // rather than wiping it. Clearing is a separate, explicit owner action.
-    if (keepBlankSubmit(value, Boolean(formData.get("keepIfBlank")))) return;
+    // A deliberate no-op: blank means "keep the saved secret". Say that rather
+    // than claim a save.
+    if (keepBlankSubmit(value, Boolean(formData.get("keepIfBlank")))) {
+      return { success: "Left blank — the saved value is unchanged" };
+    }
     await putSetting(key, value);
     revalidatePath("/settings");
   });

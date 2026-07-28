@@ -52,11 +52,13 @@ export function refuse(message: string): never {
  * successful outcomes and must keep propagating for the navigation to happen.
  */
 export async function asActionResult(
-  body: () => Promise<void>,
+  body: () => Promise<void | ActionResult>,
 ): Promise<ActionResult> {
   try {
-    await body();
-    return {};
+    // A body may return `{ success }` to describe what actually happened — for an
+    // idempotent no-op like "left blank, kept the saved value", reporting the
+    // form's generic "Saved" would claim a change that never occurred.
+    return (await body()) ?? {};
   } catch (error) {
     if (error instanceof ActionRefusal) return { error: error.message };
     throw error;

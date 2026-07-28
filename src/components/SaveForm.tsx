@@ -124,6 +124,20 @@ export function SaveForm({
             (result && typeof result === "object" && "success" in result && result.success) || success;
           toast.success(String(message));
           if (resetOnSuccess) form.reset();
+          // SECRETS ARE CLEARED EVEN WHEN THE FORM IS NOT RESET.
+          //
+          // Settings forms EDIT, so they set resetOnSuccess={false} to keep showing
+          // what was saved — but that left a just-typed SMTP password, IMAP
+          // password or API token sitting in the input and in the DOM after the
+          // save. Those fields are write-only by design (they render as
+          // "•••••••• saved — leave blank to keep", never the stored value), so
+          // clearing them restores exactly the state the page renders with.
+          //
+          // Done here rather than per form: a call site that forgets this leaks a
+          // credential, and there is no reason any caller would want the opposite.
+          for (const input of form.querySelectorAll<HTMLInputElement>('input[type="password"]')) {
+            input.value = "";
+          }
           if (closeModalOnSuccess) closeModal();
           onSaved?.();
         } catch (error) {

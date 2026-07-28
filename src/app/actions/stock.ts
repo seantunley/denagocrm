@@ -1,6 +1,6 @@
 "use server";
 
-import { asActionResult, ActionRefusal } from "@/lib/actionResult";
+import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { Prisma } from "@prisma/client";
@@ -567,11 +567,11 @@ export async function addStockLabel(formData: FormData) {
     const user = await requirePermission("stock.manage");
     const label = str(formData.get("label"));
     const color = str(formData.get("color")) || "#64748b";
-    if (!label) return;
+    if (!label) refuse("Give the label a name.");
     const slug = slugifyLabel(label);
     if (!slug) throw new ActionRefusal("Give the label a name");
     const labels = await getStockLabels();
-    if (labels.some((l) => l.slug === slug)) return; // already exists
+    if (labels.some((l) => l.slug === slug)) refuse("A label with that name already exists.");
     await saveStockLabels([...labels, { slug, label, color }]);
     await logAudit({ action: "stock.label_added", summary: `Added stock label “${label}”`, user });
     revalidatePath("/stock");
