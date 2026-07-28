@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { basePrisma } from "@/lib/db";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, getActiveTenantId } from "@/lib/auth";
 import { canAccessCase, canAccessContact } from "@/lib/permissions";
 import { readFile } from "@/lib/storage";
+import { tenantEnforcing } from "@/lib/tenantEnforcement";
 
 type UploadRow = {
   id: string;
@@ -38,6 +39,29 @@ export async function GET(
     ? await canAccessCase(user, upload.caseId)
     : await canAccessContact(user, upload.contactId);
   if (!authorized) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  // Multi-tenancy readiness: canAccessCase/canAccessContact grant "view_all"
+  // holders access regardless of tenant, so re-assert the upload's owning
+  // case/contact belongs to the REQUESTER's tenant before streaming the file —
+  // mirroring the contactId-in-scope check the portal-facing sibling route
+  // (api/portal/uploads/[id]) already does. DORMANT while tenantEnforcing() is
+  // false (today, every environment): CustomerCase/Contact rows are largely
+  // NULL-tenant today (writes aren't stamped yet), so this only activates once
+  // enforcement — and the tenant stamping it depends on — is actually on.
+  if (tenantEnforcing()) {
+    const activeTenantId = await getActiveTenantId();
+    const ownerRows = upload.caseId
+      ? await basePrisma.$queryRaw<Array<{ tenantId: string | null }>>`
+          SELECT "tenantId" FROM "CustomerCase" WHERE "id" = ${upload.caseId} LIMIT 1
+        `
+      : await basePrisma.$queryRaw<Array<{ tenantId: string | null }>>`
+          SELECT "tenantId" FROM "Contact" WHERE "id" = ${upload.contactId} LIMIT 1
+        `;
+    const ownerTenantId = ownerRows[0]?.tenantId ?? null;
+    if (ownerTenantId !== activeTenantId) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+  }
 
   try {
     const bytes = await readFile(upload.storedName);

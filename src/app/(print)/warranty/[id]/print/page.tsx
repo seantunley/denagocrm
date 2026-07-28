@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
+import { requireUser } from "@/lib/auth";
 import { requireVehicleReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { InfoBlock } from "@/components/print/PrintDocShell";
@@ -16,6 +17,7 @@ export default async function WarrantyClaimPrintPage({
 }) {
   const { id } = await params;
   const { tpl: tplId } = await searchParams;
+  await requireUser();
   const claim = await prisma.warrantyClaim.findUnique({
     where: { id },
     include: { vehicle: { include: { contact: true } } },

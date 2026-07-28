@@ -1,6 +1,6 @@
 import "server-only";
 import { resolveActingTenant } from "./tenantContext";
-import { honoredTenantClaim } from "./tenant";
+import { honoredTenantClaim, decideStaffTenantScope } from "./tenant";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { enterTenantScope, runInTenantScope } from "./tenantScope";
 import { resolveChannelTenant, type ChannelKind } from "./channelTenant";
@@ -50,27 +50,41 @@ export function validateInSystemScope<T>(fn: () => Promise<T>): Promise<T> {
 
 /**
  * Staff/app surface. Called from `getCurrentUser()` with the already-resolved user
- * id and the session's `tid` claim — resolves the user's sole active tenant and
- * honours the claim exactly as `getActiveTenantId()` does, but WITHOUT re-entering
- * `getCurrentUser` (which would recurse).
+ * id, the session's `tid` claim, and whether the principal is the GLOBAL `owner` —
+ * resolves the user's sole active tenant and honours the claim exactly as
+ * `getActiveTenantId()` does, but WITHOUT re-entering `getCurrentUser` (which would
+ * recurse).
  *
- * Returns `{ ok }`. Under enforcement, `ok` is FALSE whenever no valid acting
- * tenant resolves (tid absent/mismatched, membership removed, tenant suspended, or
- * a second active membership made it ambiguous) — the caller MUST then fail the
- * whole authentication, not just leave a null scope, so a stale/ambiguous session
- * can't still pass `requireUser`/role/owner checks or trigger global side effects.
- * When enforcement is off it always returns `{ ok: true }` (dormant, no rejection).
+ * Returns `{ ok }`. Under enforcement:
+ *   - a valid acting tenant resolves → enter that tenant's scope, `ok:true`;
+ *   - none resolves (tid absent/mismatched, membership removed, tenant suspended, or
+ *     a second active membership made it ambiguous):
+ *       · NON-OWNER → `ok:false` — the caller MUST fail the whole authentication, not
+ *         just leave a null scope, so a stale/ambiguous session can't still pass
+ *         `requireUser`/role/owner checks or trigger global side effects (unchanged);
+ *       · OWNER → `ok:true` with NO scope established AT ALL (the OWNER ESCAPE HATCH —
+ *         never a `system` scope). The global owner proceeds so the platform console
+ *         (basePrisma reads) works, while every tenant-scoped CRM query still fails
+ *         closed at the db guard for lack of a scope. The (app) layout redirects such
+ *         an owner to the console to fix their tenancy.
+ * When enforcement is off it always returns `{ ok: true }` (dormant — no rejection,
+ * no scope, no DB read).
  */
 export async function establishStaffTenantScope(
   userId: string,
   tid: string | null,
+  isOwner: boolean,
 ): Promise<{ ok: boolean }> {
   if (!tenantEnforcing()) return { ok: true };
   const sole = await resolveActingTenant(userId);
   const tenantId = honoredTenantClaim(tid, sole);
-  if (!tenantId) return { ok: false }; // fail closed at the chokepoint
-  enterTenantScope({ tenantId, system: false });
-  return { ok: true };
+  const decision = decideStaffTenantScope(true, tenantId, isOwner);
+  // enterTenantId === null means enter NO scope — either the owner escape hatch or a
+  // fail-closed miss; we NEVER enter a `system` scope for a user-facing request.
+  if (decision.ok && decision.enterTenantId !== null) {
+    enterTenantScope({ tenantId: decision.enterTenantId, system: false });
+  }
+  return { ok: decision.ok };
 }
 
 /**

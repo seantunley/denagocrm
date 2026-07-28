@@ -254,9 +254,19 @@ export async function removeTenantMemberAction(tenantId: string, userId: string)
 
   const tenant = await basePrisma.tenant.findUnique({
     where: { id: tenantId },
-    select: { id: true, name: true },
+    select: { id: true, name: true, ownerUserId: true },
   });
   if (!tenant) throw new Error("Tenant not found.");
+
+  // The provisioned owner cannot be removed. The last-member guard below only
+  // stops a tenant reaching ZERO members — it would happily remove the OWNER while
+  // other members remain, leaving a tenant nobody is accountable for and whose
+  // activation path (which re-enables the owner) has no owner to re-enable.
+  // Skipped when ownerUserId is null: tenants provisioned before the column
+  // existed have no recorded owner, and inventing one here would be a guess.
+  if (tenant.ownerUserId && tenant.ownerUserId === userId) {
+    throw new Error("Cannot remove the tenant owner. Transfer ownership before removing this member.");
+  }
 
   // A transaction ALONE does not close the last-member race: PostgreSQL's default
   // READ COMMITTED isolation lets two concurrent removals both read count=2 and

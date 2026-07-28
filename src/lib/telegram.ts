@@ -1,4 +1,5 @@
-import { getSetting } from "./settings";
+import { getSetting, resolveTenantCredential } from "./settings";
+import { currentTenantScope } from "./tenantScope";
 import { generateBotReply } from "./botAi";
 import { priceList, coloursList } from "./botAnswers";
 import { sendPushToAll } from "./push";
@@ -7,8 +8,11 @@ import { crmActions } from "./flowActions";
 
 const api = (token: string, method: string) => `https://api.telegram.org/bot${token}/${method}`;
 
+// Telegram has no ChannelIdentity mapping (no per-bot → tenant routing) yet, so
+// this is whatever tenant is ambiently in scope (null/global today) — NOT full
+// multi-tenant Telegram routing, which is a separate, bigger piece of work.
 async function token(): Promise<string | null> {
-  return getSetting("TELEGRAM_BOT_TOKEN");
+  return resolveTenantCredential(currentTenantScope()?.tenantId ?? null, "TELEGRAM_BOT_TOKEN");
 }
 
 /** Send a Telegram message, optionally with inline-keyboard buttons (menu). */

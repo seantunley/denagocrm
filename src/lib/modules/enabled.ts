@@ -1,6 +1,7 @@
 import "server-only";
 import { cache } from "react";
-import { basePrisma, prisma } from "@/lib/db";
+import { basePrisma } from "@/lib/db";
+import { getSetting, putSetting } from "@/lib/settings";
 import { currentTenantScope } from "@/lib/tenantScope";
 import { OPTIONAL_MODULE_IDS, type ModuleId } from "./registry";
 import { effectiveModuleIds, installWideModuleIds } from "./entitlement";
@@ -12,13 +13,20 @@ import { effectiveModuleIds, installWideModuleIds } from "./entitlement";
 // it existed. Unset = nothing disabled = every module on.
 const SETTING_KEY = "DISABLED_MODULES";
 
-/** The tenant's own "switched off" list — unchanged, pre-existing semantics. */
+/**
+ * The tenant's own "switched off" list.
+ *
+ * Read through `getSetting` rather than touching AppSetting directly. `key` is no
+ * longer unique on its own — the table is keyed `(tenantId, key)` — so a bare
+ * `findUnique({ where: { key } })` no longer compiles, and the equivalent upsert
+ * emitted `ON CONFLICT (key)` against a constraint that does not exist (42P10).
+ * `getSetting` resolves the owning tenant and uses the compound key, which is also
+ * what makes this list genuinely per-tenant under enforcement.
+ */
 async function locallyDisabledIds(): Promise<string[]> {
-  const row = await prisma.appSetting
-    .findUnique({ where: { key: SETTING_KEY } })
-    .catch(() => null);
-  if (!row?.value) return [];
-  return row.value.split(",").map((s) => s.trim()).filter(Boolean);
+  const value = await getSetting(SETTING_KEY).catch(() => null);
+  if (!value) return [];
+  return value.split(",").map((s) => s.trim()).filter(Boolean);
 }
 
 /**
@@ -155,10 +163,8 @@ export async function requireModuleEnabled(id: ModuleId): Promise<void> {
 /** Persist module choices as the disabled set (mandatory core can never be disabled). */
 export async function setEnabledModuleIds(enabledIds: string[]): Promise<void> {
   const disabled = OPTIONAL_MODULE_IDS.filter((id) => !enabledIds.includes(id));
-  const value = disabled.join(",");
-  await prisma.appSetting.upsert({
-    where: { key: SETTING_KEY },
-    update: { value },
-    create: { key: SETTING_KEY, value },
-  });
+  // Via putSetting for the same reason as the read: AppSetting is keyed
+  // (tenantId, key), so a direct upsert on `key` alone emits ON CONFLICT (key) and
+  // fails with 42P10 — which is exactly how saving module choices broke.
+  await putSetting(SETTING_KEY, disabled.join(","));
 }

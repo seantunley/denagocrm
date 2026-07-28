@@ -132,11 +132,11 @@ async function writeAudit(entry: AuditEntry, tx?: AuditTx) {
   const write = async (transaction: AuditTx) => {
     await transaction.$executeRaw`
       INSERT INTO "AuditEvent" (
-        "id", "actorUserId", "actorName", "actorType", "eventType", "entityType", "entityId",
+        "id", "tenantId", "actorUserId", "actorName", "actorType", "eventType", "entityType", "entityId",
         "summary", "beforeJson", "afterJson", "changedFieldsJson", "source", "ipAddress",
         "userAgent", "correlationId", "metadata"
       ) VALUES (
-        ${crypto.randomUUID()}, ${entry.user?.id ?? null}, ${actorName}, ${actorType(entry, actorName)},
+        ${crypto.randomUUID()}, ${tenantId}, ${entry.user?.id ?? null}, ${actorName}, ${actorType(entry, actorName)},
         ${entry.action}, ${entityType}, ${entityId}, ${entry.summary},
         ${safeBefore == null ? null : JSON.stringify(safeBefore)}::jsonb,
         ${safeAfter == null ? null : JSON.stringify(safeAfter)}::jsonb,

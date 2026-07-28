@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { withTenantWrite } from "@/lib/tenantWrite";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { contactName } from "@/lib/format";
@@ -55,22 +56,36 @@ function parseTags(formData: FormData) {
   ];
 }
 
+// Tag upsert + join-row insert INSIDE the caller's tenant transaction (tx). Tags
+// are per-tenant unique on (tenantId, name); both the Tag and the _ContactToTag row
+// are created/linked with the same owning tenant the contact gets, so no
+// cross-tenant tag can be attached.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function upsertContactTagTx(tx: any, tenantId: string, name: string): Promise<string> {
+  const existing = await tx.tag.findFirst({ where: { name, tenantId } });
+  if (existing) return existing.id;
+  const created = await tx.tag.create({ data: { name, color: tagColor(name), tenantId } });
+  return created.id;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function syncContactTagsTx(tx: any, tenantId: string, contactId: string, tagNames: string[]): Promise<void> {
+  for (const name of tagNames) {
+    const tagId = await upsertContactTagTx(tx, tenantId, name);
+    await tx.$executeRaw`INSERT INTO "_ContactToTag" ("A","B") VALUES (${contactId},${tagId}) ON CONFLICT DO NOTHING`;
+  }
+}
+
 export async function createContact(formData: FormData) {
   const user = await requirePermission("contacts.create");
   const data = contactData(formData);
   if (!data.firstName) throw new Error("Name is required");
   const tags = parseTags(formData);
-  const contact = await prisma.contact.create({
-    data: {
-      ...data,
-      createdById: user.id,
-      tags: {
-        connectOrCreate: tags.map((name) => ({
-          where: { name },
-          create: { name, color: tagColor(name) },
-        })),
-      },
-    },
+  // Atomic: contact + all its tag links in ONE transaction, tenant-stamped.
+  const contact = await withTenantWrite(async (tx, tenantId) => {
+    const c = await tx.contact.create({ data: { ...data, createdById: user.id, tenantId } });
+    await syncContactTagsTx(tx, tenantId, c.id, tags);
+    return c;
   });
   await logAudit({
     action: "contact.created",
@@ -87,18 +102,14 @@ export async function updateContact(id: string, formData: FormData) {
   const data = contactData(formData);
   if (!data.firstName) throw new Error("Name is required");
   const tags = parseTags(formData);
-  const contact = await prisma.contact.update({
-    where: { id },
-    data: {
-      ...data,
-      tags: {
-        set: [],
-        connectOrCreate: tags.map((name) => ({
-          where: { name },
-          create: { name, color: tagColor(name) },
-        })),
-      },
-    },
+  // Contact fields via the scoped client (RLS scopes the row to the tenant, and
+  // matches legacy rows regardless of tenantId when enforcement is off). Tag
+  // replacement is atomic: clear + re-add in ONE transaction, so a mid-way failure
+  // can never leave the contact stripped of its tags.
+  const contact = await prisma.contact.update({ where: { id }, data });
+  await withTenantWrite(async (tx, tenantId) => {
+    await tx.$executeRaw`DELETE FROM "_ContactToTag" WHERE "A" = ${id}`;
+    await syncContactTagsTx(tx, tenantId, id, tags);
   });
   await logAudit({
     action: "contact.updated",

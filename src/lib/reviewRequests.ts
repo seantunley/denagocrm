@@ -1,6 +1,7 @@
 import { prisma } from "./db";
 import { resolveTenantActor } from "./tenantActor";
-import { getSetting } from "./settings";
+import { resolveTenantCredential } from "./settings";
+import { currentTenantScope } from "./tenantScope";
 import { sendEmail } from "./email";
 import { logAudit } from "./audit";
 
@@ -16,7 +17,7 @@ export async function sendReviewRequest(
   occasion: "delivery" | "service",
   refText: string
 ): Promise<boolean> {
-  const placeId = await getSetting("GOOGLE_PLACE_ID");
+  const placeId = await resolveTenantCredential(currentTenantScope()?.tenantId ?? null, "GOOGLE_PLACE_ID");
   if (!placeId) return false;
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact?.email) return false;

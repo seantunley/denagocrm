@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { GLOBAL_MODELS } from "../src/lib/tenantGuard";
 
 /**
@@ -17,17 +18,37 @@ import { GLOBAL_MODELS } from "../src/lib/tenantGuard";
  * KNOWN PENDING: models intentionally not yet resolved. Each MUST be cleared
  * (given a tenantId, or moved to GLOBAL_MODELS) before enforcement is enabled.
  */
-// Empty: AppSetting — the last pending model — got its additive `tenantId` slice
-// (migration 20260723120000). Every Prisma model is now either global or
-// tenant-scoped, so the guard can be activated without a model failing closed on a
-// missing column. New models must ship a tenantId or join GLOBAL_MODELS (adding
-// back to PENDING is only a temporary, deliberately-visible escape hatch).
+// Until this test read EVERY prisma/*.prisma file (it previously read only
+// schema.prisma), the models below sat in side-files (journeys.prisma,
+// governance.prisma) and escaped the contract unnoticed. They are listed here
+// as the deliberately-visible escape hatch so the gap is TRACKED, not silent.
+// Each MUST be resolved before tenant enforcement is enabled, or its queries
+// fail closed on a missing column:
+// governance.prisma's RBAC/forecast models are resolved: SalesPipeline/Team/
+// TeamMember/UserRole/ForecastSnapshot/AuditEvent got a tenantId slice (migration
+// 20260725160000); Permission (the fixed, code-defined capability catalog) was
+// decided GLOBAL and lives in GLOBAL_MODELS in tenantGuard.ts. Role/RolePermission
+// were ALSO originally GLOBAL under that same decision, but custom (non-system)
+// roles are tenant-authored (createRole() in accessControl.ts), so they were
+// reclassified: both got a tenantId slice instead (migration
+// 20260727100000_role_tenant_scoping) — NULL means system/global, non-null means
+// one tenant's own role — and were removed from GLOBAL_MODELS.
+// journeys.prisma's Journey* models got their tenantId slice (migration
+// 20260726200000_journey_tenant_isolation), so nothing remains PENDING — every
+// model is now explicitly global or tenant-scoped, the precondition for enabling
+// enforcement.
 const PENDING = new Set<string>([]);
 
-const schema = readFileSync(
-  fileURLToPath(new URL("../prisma/schema.prisma", import.meta.url)),
-  "utf8",
-);
+// Prisma is configured with `schema: "./prisma"` (folder mode), so it loads
+// EVERY `prisma/*.prisma` file — not just schema.prisma. Read them all, or a
+// model added to a side-file (journeys/governance/marketing/etc.) would escape
+// this contract entirely and silently break the guard at enforcement time.
+const prismaDir = fileURLToPath(new URL("../prisma", import.meta.url));
+const schema = readdirSync(prismaDir)
+  .filter((f) => f.endsWith(".prisma"))
+  .sort()
+  .map((f) => readFileSync(join(prismaDir, f), "utf8"))
+  .join("\n");
 
 /** Parse `model X { ... }` blocks (Prisma model bodies have no nested braces). */
 function parseModels(src: string): Map<string, string> {

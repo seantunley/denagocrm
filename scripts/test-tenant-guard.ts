@@ -20,8 +20,10 @@ import { logAudit } from "../src/lib/audit";
 import { getSetting, putSetting } from "../src/lib/settings";
 import { OPTIONAL_MODULE_IDS } from "../src/lib/modules/registry";
 import { TenantScopeError } from "../src/lib/tenantGuard";
+import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 import { resolvePortalTenant } from "../src/lib/portal";
 import { resolveActingTenant } from "../src/lib/tenantContext";
+import { addTenantMembership } from "../src/lib/provisioning";
 import {
   resolveSignRecipientTenant,
   resolveApprovalStepTenant,
@@ -114,10 +116,11 @@ const chIdB = `chB_${SFX}`;
 const chIdDis = `chDis_${SFX}`;
 const chIdSus = `chSus_${SFX}`;
 const chIdGhost = `chGhost_${SFX}`;
-const cfgKey = `TESTCFG_${SFX}`; // a tenant-scoped AppSetting (review blocker 1 fixture)
+const cfgKey = `TESTCFG_${SFX}`; // founding-tenant AppSetting read via validateInSystemScope
 const cfgSetA = `APPSETA_${SFX}`; // AppSetting.tenantId slice: A's setting
 const cfgSetB = `APPSETB_${SFX}`; // AppSetting.tenantId slice: B's setting
 const cfgSetW = `APPSETW_${SFX}`; // AppSetting.tenantId slice: putSetting stamping
+const cfgShared = `APPSHARED_${SFX}`; // SAME key in two tenants (isolation + founding-owner proof)
 
 let passed = 0;
 let failed = 0;
@@ -193,7 +196,16 @@ async function main() {
   // is seeded into AppSetting for the dormant back-compat test.
   await basePrisma.$executeRaw`INSERT INTO "TenantApiKey" ("id","tenantId","label","hashedKey","prefix","scopes","createdAt") VALUES (${apiKeyIdA}, ${TENANT_A}, ${"Key A"}, ${hashApiKey(apiKeyRawA)}, ${apiKeyRawA.slice(0, 8)}, ${"intake,bookings"}, CURRENT_TIMESTAMP)`;
   await basePrisma.$executeRaw`INSERT INTO "TenantApiKey" ("id","tenantId","label","hashedKey","prefix","scopes","createdAt","revokedAt") VALUES (${apiKeyIdR}, ${TENANT_A}, ${"Key R"}, ${hashApiKey(apiKeyRawRevoked)}, ${apiKeyRawRevoked.slice(0, 8)}, ${"intake,bookings,service-lookup"}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
-  await basePrisma.$executeRaw`INSERT INTO "AppSetting" ("key","value") VALUES ('INTAKE_API_KEY', ${apiKeyRawGlobal}) ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value"`;
+  // AppSetting is now (tenantId, key)-unique with a NOT NULL tenantId (migrations
+  // 20260727190000 / 210000); the founding tenant owns platform-default settings, and
+  // off-mode getSetting() reads under DEFAULT_TENANT_ID — so seed the legacy global
+  // there (not the removed key-only PK). authenticateIntakeKey still returns a null
+  // tenantId for a legacy global match; that is actor semantics, not this row's owner.
+  await basePrisma.appSetting.upsert({
+    where: { tenantId_key: { tenantId: DEFAULT_TENANT_ID, key: "INTAKE_API_KEY" } },
+    update: { value: apiKeyRawGlobal },
+    create: { tenantId: DEFAULT_TENANT_ID, key: "INTAKE_API_KEY", value: apiKeyRawGlobal },
+  });
   // A key for a SUSPENDED tenant (active=false) and a DANGLING key (tenantId with no
   // Tenant row) — both must fail to authenticate.
   await basePrisma.tenant.create({ data: { id: TENANT_SUS, name: "Suspended", slug: `sus_${SFX}`, active: false } });
@@ -219,9 +231,10 @@ async function main() {
   await basePrisma.$executeRaw`INSERT INTO "ChannelIdentity" ("id","tenantId","channel","externalId","createdAt","disabledAt") VALUES (${chIdDis}, ${TENANT_A}, 'whatsapp', ${waDisabled}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
   await basePrisma.$executeRaw`INSERT INTO "ChannelIdentity" ("id","tenantId","channel","externalId","createdAt") VALUES (${chIdSus}, ${chTenantSus}, 'whatsapp', ${waSus}, CURRENT_TIMESTAMP)`;
   await basePrisma.$executeRaw`INSERT INTO "ChannelIdentity" ("id","tenantId","channel","externalId","createdAt") VALUES (${chIdGhost}, ${chGhostTenant}, 'whatsapp', ${waGhost}, CURRENT_TIMESTAMP)`;
-  // A tenant-scoped AppSetting (blocker 1): a bare read fails closed under enforcement,
-  // but the webhook's validateInSystemScope wrapper reads it via the system bypass.
-  await basePrisma.appSetting.create({ data: { key: cfgKey, value: "sig-secret" } });
+  // Founding-tenant AppSetting: a bare read fails closed under enforcement, but the
+  // webhook's validateInSystemScope wrapper reads it via the system bypass, which
+  // resolves to the founding tenant (the platform-default settings owner).
+  await basePrisma.appSetting.create({ data: { key: cfgKey, value: "sig-secret", tenantId: DEFAULT_TENANT_ID } });
 
   __setTenantEnforcingForTests(true);
   try {
@@ -367,9 +380,9 @@ async function main() {
     const soleRes = await resolveActingTenant(uStaff);
     check("staff: sole active membership resolves to that tenant", "tenantId" in soleRes && soleRes.tenantId === t1);
 
-    check("staff: sole tenant + matching tid → ok", (await establishStaffTenantScope(uStaff, t1)).ok === true);
-    check("staff: mismatched tid → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, "other")).ok === false);
-    check("staff: tid-less session → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, null)).ok === false);
+    check("staff: sole tenant + matching tid → ok", (await establishStaffTenantScope(uStaff, t1, false)).ok === true);
+    check("staff: mismatched tid → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, "other", false)).ok === false);
+    check("staff: tid-less session → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, null, false)).ok === false);
 
     // New-session write under enforcement lands in the resolved tenant scope and is
     // stamped with that tenant — the login-bootstrap DB path (createSessionCookie).
@@ -381,17 +394,38 @@ async function main() {
 
     // Tenant SUSPENDED → session becomes unusable immediately.
     await basePrisma.tenant.update({ where: { id: t1 }, data: { active: false } });
-    check("staff: suspended tenant → NOT ok (unusable immediately)", (await establishStaffTenantScope(uStaff, t1)).ok === false);
+    check("staff: suspended tenant → NOT ok (unusable immediately)", (await establishStaffTenantScope(uStaff, t1, false)).ok === false);
     await basePrisma.tenant.update({ where: { id: t1 }, data: { active: true } });
 
     // Membership REMOVED → session becomes unusable immediately.
     await basePrisma.tenantMember.deleteMany({ where: { userId: uStaff, tenantId: t1 } });
-    check("staff: membership removed → NOT ok (unusable immediately)", (await establishStaffTenantScope(uStaff, t1)).ok === false);
+    check("staff: membership removed → NOT ok (unusable immediately)", (await establishStaffTenantScope(uStaff, t1, false)).ok === false);
 
-    // Newly AMBIGUOUS (re-add t1 + add a second active membership) → unusable.
+    // ONE-USER-ONE-TENANT is enforced at write time (TenantMember.userId @unique):
+    // a user can never reach the "2 active memberships" ambiguous state. Restore the
+    // sole membership, then prove a second membership through the provisioning
+    // service is REJECTED and leaves NO partial state — the original membership and
+    // session stay usable (a suspended/other membership can't be silently replaced).
     await basePrisma.tenantMember.create({ data: { tenantId: t1, userId: uStaff } });
-    await basePrisma.tenantMember.create({ data: { tenantId: t2, userId: uStaff } });
-    check("staff: ambiguous (2 active memberships) → NOT ok (session unusable)", (await establishStaffTenantScope(uStaff, t1)).ok === false);
+    let secondMembershipRejected = false;
+    try {
+      await addTenantMembership(basePrisma, t2, uStaff);
+    } catch {
+      secondMembershipRejected = true;
+    }
+    check("staff: second-tenant membership is REJECTED (one-user-one-tenant)", secondMembershipRejected);
+    const staffMemberships = await basePrisma.tenantMember.findMany({
+      where: { userId: uStaff },
+      select: { tenantId: true },
+    });
+    check(
+      "staff: rejected second membership leaves NO partial state (still exactly t1)",
+      staffMemberships.length === 1 && staffMemberships[0].tenantId === t1,
+    );
+    check(
+      "staff: original membership + session remain usable after the rejected add",
+      (await establishStaffTenantScope(uStaff, t1, false)).ok === true,
+    );
 
     // ── no-user token surfaces (Phase C 2b-C1): tenant is DERIVED from the token's
     //    row via a narrow trusted lookup, then the guarded re-read runs INSIDE that
@@ -805,22 +839,33 @@ async function main() {
     // and are discarded when the disposable CI database is torn down.
     await basePrisma.auditLog.deleteMany({ where: { summary: { in: [auditSummary, sysAuditSummary] } } });
 
-    // ── AppSetting.tenantId slice: AppSetting is now tenant-scoped (its additive
-    //    tenantId column landed), so getSetting/putSetting resolve per the request
-    //    tenant via the guard — a concrete-scope read no longer 500s on a missing
-    //    column, install-global reads use a system-scope bypass, and one tenant's
-    //    setting is invisible to another. `key` stays the @id (one row per key), so
-    //    A and B use DISTINCT keys here. ─────────────────────────────────────────────
-    await basePrisma.$executeRaw`INSERT INTO "AppSetting" ("key","value","tenantId") VALUES (${cfgSetA}, 'valA', ${TENANT_A}), (${cfgSetB}, 'valB', ${TENANT_B})`;
+    // ── AppSetting per-tenant slice: surrogate id PK + @@unique([tenantId, key]).
+    //    getSetting/putSetting resolve the owning tenant per request scope. A real
+    //    tenant reads/writes ITS OWN row; system scope + off-mode resolve to the
+    //    FOUNDING tenant (the platform-default settings owner) — never an arbitrary
+    //    tenant's row; a bare read with no resolved tenant fails closed. The same key
+    //    can live in many tenants, fully isolated. ────────────────────────────────
+    await basePrisma.$executeRaw`INSERT INTO "AppSetting" ("key","value","tenantId") VALUES
+      (${cfgSetA}, 'valA', ${TENANT_A}),
+      (${cfgSetB}, 'valB', ${TENANT_B}),
+      (${cfgShared}, 'platform-default', ${DEFAULT_TENANT_ID}),
+      (${cfgShared}, 'tenantA-override', ${TENANT_A})`;
+    // SAME key present in two tenants, distinct values — proves the composite key isolates.
+    const aReadsShared = await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => await getSetting(cfgShared));
+    check("appsetting: same key resolves to the ACTING tenant's own value", aReadsShared === "tenantA-override");
+    const sysReadsShared = await withSystemScope(async () => await getSetting(cfgShared));
+    check("appsetting: system scope reads the FOUNDING tenant's value, not another tenant's", sysReadsShared === "platform-default");
+
     const aReadsA = await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => await getSetting(cfgSetA));
-    check("appsetting: scope A reads A's setting (guard no longer 500s on the column)", aReadsA === "valA");
+    check("appsetting: scope A reads A's setting", aReadsA === "valA");
     const aReadsB = await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => await getSetting(cfgSetB));
-    check("appsetting: scope A cannot read B's setting (guard-scoped, hidden)", aReadsB === null);
+    check("appsetting: scope A cannot read B's setting (isolated)", aReadsB === null);
     const bReadsB = await runInTenantScope({ tenantId: TENANT_B, system: false }, async () => await getSetting(cfgSetB));
     check("appsetting: scope B reads B's setting", bReadsB === "valB");
+    // System scope resolves to the FOUNDING tenant only — a non-founding tenant's
+    // private setting is invisible to it (no arbitrary-tenant leak).
     const sysReadsA = await withSystemScope(async () => await getSetting(cfgSetA));
-    const sysReadsB = await withSystemScope(async () => await getSetting(cfgSetB));
-    check("appsetting: system scope reads BOTH tenants' settings (install-global bypass)", sysReadsA === "valA" && sysReadsB === "valB");
+    check("appsetting: system scope cannot see a non-founding tenant's private setting", sysReadsA === null);
     // A read with NO tenant scope under enforcement fails closed (why C1–C4 read
     // pre-scope config via validateInSystemScope).
     await runInTenantScope({ tenantId: null, system: false }, async () => {
@@ -832,7 +877,7 @@ async function main() {
     });
     // putSetting inside scope A stamps the acting tenant onto the new row.
     await runInTenantScope({ tenantId: TENANT_A, system: false }, async () => { await putSetting(cfgSetW, "written"); });
-    const wRow = await basePrisma.$queryRaw<{ tenantId: string | null }[]>`SELECT "tenantId" FROM "AppSetting" WHERE "key" = ${cfgSetW}`;
+    const wRow = await basePrisma.$queryRaw<{ tenantId: string | null }[]>`SELECT "tenantId" FROM "AppSetting" WHERE "key" = ${cfgSetW} AND "tenantId" = ${TENANT_A}`;
     check("appsetting: putSetting inside scope A stamps tenant A on the created row", wRow[0]?.tenantId === TENANT_A);
 
     // ── HTTP-level booking test (design §8.5 — unblocked by the AppSetting.tenantId
@@ -939,8 +984,9 @@ async function main() {
       (await prisma.contact.findMany({ where: { id: { in: [idA, idB] } }, select: { id: true } })).map((r) => r.id),
     );
     check("cron: DORMANT runCronPerTenant runs ONCE globally (tenantId null, sees both rows)", dormCron.length === 1 && dormCron[0].tenantId === null && dormCron[0].result.length === 2);
-    // AppSetting: dormant resolves by key regardless of tenant (byte-for-byte legacy).
-    check("appsetting: DORMANT getSetting reads by key regardless of tenant (unchanged)", (await getSetting(cfgSetA)) === "valA");
+    // AppSetting: off-mode resolves to the founding tenant (the platform-default
+    // settings owner) — a deterministic owner, never an arbitrary tenant's row.
+    check("appsetting: DORMANT getSetting reads the founding tenant's value", (await getSetting(cfgShared)) === "platform-default");
     __setTenantEnforcingForTests(true);
   } finally {
     __setTenantEnforcingForTests(null);
@@ -960,7 +1006,7 @@ async function main() {
     await basePrisma.$executeRaw`DELETE FROM "TenantApiKey" WHERE "tenantId" IN (${TENANT_A}, ${TENANT_SUS}, ${ghostTenant})`;
     await basePrisma.$executeRaw`DELETE FROM "AppSetting" WHERE "key" = 'INTAKE_API_KEY'`;
     await basePrisma.$executeRaw`DELETE FROM "ChannelIdentity" WHERE "id" IN (${chIdA}, ${chIdB}, ${chIdDis}, ${chIdSus}, ${chIdGhost})`;
-    await basePrisma.appSetting.deleteMany({ where: { key: { in: [cfgKey, cfgSetA, cfgSetB, cfgSetW] } } });
+    await basePrisma.appSetting.deleteMany({ where: { key: { in: [cfgKey, cfgSetA, cfgSetB, cfgSetW, cfgShared] } } });
     await basePrisma.tenantMember.deleteMany({ where: { userId: { in: [userAId, userBId, userCId] } } });
     await basePrisma.user.deleteMany({ where: { id: { in: [userAId, userBId, userCId] } } });
     await basePrisma.tenant.deleteMany({ where: { id: { in: [TENANT_A, TENANT_B, TENANT_SUS, chTenantSus] } } });

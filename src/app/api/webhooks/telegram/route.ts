@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSetting } from "@/lib/settings";
 import { runTelegramFlow, tgAnswerCallback } from "@/lib/telegram";
 import { logError } from "@/lib/errorLog";
+import { withSystemScope } from "@/lib/tenantScope";
 
 export async function POST(req: NextRequest) {
   // Telegram echoes back the secret we set on the webhook. Fail CLOSED: without
@@ -28,15 +29,17 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    if (update.callback_query) {
-      const cq = update.callback_query;
-      await tgAnswerCallback(cq.id);
-      const chatId = cq.message?.chat?.id;
-      if (chatId != null && cq.data) await runTelegramFlow(chatId, "", cq.data);
-    } else if (update.message?.text) {
-      const chatId = update.message.chat?.id;
-      if (chatId != null) await runTelegramFlow(chatId, update.message.text);
-    }
+    await withSystemScope(async () => {
+      if (update.callback_query) {
+        const cq = update.callback_query;
+        await tgAnswerCallback(cq.id);
+        const chatId = cq.message?.chat?.id;
+        if (chatId != null && cq.data) await runTelegramFlow(chatId, "", cq.data);
+      } else if (update.message?.text) {
+        const chatId = update.message.chat?.id;
+        if (chatId != null) await runTelegramFlow(chatId, update.message.text);
+      }
+    });
   } catch {
     // never fail the webhook
   }

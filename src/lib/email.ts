@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
-import { getSetting } from "./settings";
+import { resolveIntegrationBundle } from "./settings";
+import { currentTenantScope } from "./tenantScope";
 import { formatZAR } from "./format";
 
 export type SmtpConfig = {
@@ -12,21 +13,18 @@ export type SmtpConfig = {
 };
 
 export async function getSmtpConfig(): Promise<SmtpConfig | null> {
-  const [host, port, secure, user, pass, from] = await Promise.all([
-    getSetting("SMTP_HOST"),
-    getSetting("SMTP_PORT"),
-    getSetting("SMTP_SECURE"),
-    getSetting("SMTP_USER"),
-    getSetting("SMTP_PASS"),
-    getSetting("SMTP_FROM"),
-  ]);
+  const tenantId = currentTenantScope()?.tenantId ?? null;
+  const bundle = await resolveIntegrationBundle(tenantId, "smtp");
+  if (!bundle) return null;
+  const host = bundle.SMTP_HOST;
+  const from = bundle.SMTP_FROM;
   if (!host || !from) return null;
   return {
     host,
-    port: port ? parseInt(port, 10) : 587,
-    secure: secure === "true",
-    user,
-    pass,
+    port: bundle.SMTP_PORT ? parseInt(bundle.SMTP_PORT, 10) : 587,
+    secure: bundle.SMTP_SECURE === "true",
+    user: bundle.SMTP_USER,
+    pass: bundle.SMTP_PASS,
     from,
   };
 }

@@ -1,16 +1,22 @@
 import { prisma } from "./db";
-import { getSetting } from "./settings";
+import { resolveTenantCredential } from "./settings";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
 import { saveFile } from "./storage";
 import { resolveTenantActor } from "./tenantActor";
+import { currentTenantScope } from "./tenantScope";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
 export type DmPlatform = "messenger" | "instagram";
 
+/** The tenant a Meta page-token lookup should prefer, or null (global). */
+function ambientTenantId(): string | null {
+  return currentTenantScope()?.tenantId ?? null;
+}
+
 export async function isMessengerConfigured(): Promise<boolean> {
-  return Boolean(await getSetting("META_PAGE_ACCESS_TOKEN"));
+  return Boolean(await resolveTenantCredential(ambientTenantId(), "META_PAGE_ACCESS_TOKEN"));
 }
 
 /** The system-user token manages the page; sends need the page-scoped token. */
@@ -19,7 +25,7 @@ async function getPageToken(): Promise<string | null> {
   if (cachedPageToken && Date.now() - cachedPageToken.fetchedAt < 30 * 60 * 1000) {
     return cachedPageToken.token;
   }
-  const sysToken = await getSetting("META_PAGE_ACCESS_TOKEN");
+  const sysToken = await resolveTenantCredential(ambientTenantId(), "META_PAGE_ACCESS_TOKEN");
   if (!sysToken) return null;
   try {
     const res = await fetch(

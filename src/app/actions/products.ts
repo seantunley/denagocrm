@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { withTenantWrite } from "@/lib/tenantWrite";
 import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
@@ -31,8 +32,17 @@ export async function createProduct(formData: FormData) {
     .split(",")
     .map((c) => c.trim())
     .filter(Boolean);
-  const product = await prisma.product.create({
-    data: { ...data, colors: { create: colors.map((name) => ({ name })) } },
+  // Atomic: product + its colours in ONE transaction, each explicitly stamped with
+  // the owning tenant (bypass path — the guard won't stamp; founding tenant when
+  // enforcement is off so nothing lands tenantless).
+  const product = await withTenantWrite(async (tx, tenantId) => {
+    const created = await tx.product.create({ data: { ...data, tenantId } });
+    if (colors.length > 0) {
+      await tx.productColor.createMany({
+        data: colors.map((name) => ({ productId: created.id, name, tenantId })),
+      });
+    }
+    return created;
   });
   revalidatePath("/products");
   redirect(`/products/${product.id}`);

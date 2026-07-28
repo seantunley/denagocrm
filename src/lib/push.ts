@@ -1,5 +1,6 @@
 import webpush from "web-push";
 import { prisma, basePrisma } from "./db";
+import { getSetting } from "./settings";
 import { currentScopeClass } from "./tenantWrite";
 
 type PushRecipient = { id: string; endpoint: string; p256dh: string; auth: string };
@@ -77,9 +78,9 @@ export type PushKind = (typeof PUSH_KINDS)[number]["id"];
 
 async function isKindDisabled(kind?: PushKind): Promise<boolean> {
   if (!kind) return false;
-  const row = await prisma.appSetting.findUnique({ where: { key: "PUSH_DISABLED_KINDS" } });
-  if (!row?.value) return false;
-  return row.value.split(",").includes(kind);
+  const value = await getSetting("PUSH_DISABLED_KINDS");
+  if (!value) return false;
+  return value.split(",").includes(kind);
 }
 
 /** Sends a push notification to every subscribed device; prunes dead subscriptions. */

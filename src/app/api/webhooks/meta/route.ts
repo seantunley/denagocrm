@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { prisma } from "@/lib/db";
-import { getSetting } from "@/lib/settings";
+import { getSetting, resolveTenantCredential } from "@/lib/settings";
+import { currentTenantScope } from "@/lib/tenantScope";
 import { createIntakeLead } from "@/lib/leadIntake";
 import { parseLeadFields, metaSource } from "@/lib/metaLead";
 import { recordInboundDm, recordDmEcho, type DmPlatform } from "@/lib/messenger";
@@ -128,7 +129,13 @@ export async function POST(req: NextRequest) {
       const existing = await prisma.lead.findUnique({ where: { externalId: leadgenId } });
       if (existing) return;
 
-      const accessToken = await getSetting("META_PAGE_ACCESS_TOKEN");
+      // Inside withChannelTenantScope: currentTenantScope() is this event's
+      // resolved tenant when enforcing, else undefined (dormant) — same
+      // fall-through to the global credential as before.
+      const accessToken = await resolveTenantCredential(
+        currentTenantScope()?.tenantId ?? null,
+        "META_PAGE_ACCESS_TOKEN",
+      );
       try {
         if (!accessToken) throw new Error("META_PAGE_ACCESS_TOKEN not configured");
         const details = await fetchLeadDetails(leadgenId, accessToken);

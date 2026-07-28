@@ -1,5 +1,5 @@
 import { addDays, addHours, addMinutes } from "date-fns";
-import { prisma } from "./db";
+import { prisma, basePrisma } from "./db";
 import { resolveTenantActor } from "./tenantActor";
 import { sendEmail, renderTemplate } from "./email";
 import { sendSms } from "./sms";
@@ -234,14 +234,23 @@ export async function executeJourneyStep(args: {
       if (!contactId) return { status: "skipped", note: "Tag step skipped: no contact" };
       const tagId = stringConfig(step, "tagId");
       if (!tagId) return { status: "skipped", note: "Tag step skipped: no tag configured" };
-      await prisma.contact.update({
-        where: { id: contactId },
-        data: {
-          tags: step.type === "add_tag"
-            ? { connect: { id: tagId } }
-            : { disconnect: { id: tagId } },
-        },
-      });
+      // The _ContactToTag join table carries no tenantId and has no RLS policy, so a
+      // raw write to it is NOT tenant-checked by the DB. Prove BOTH ends belong to the
+      // current tenant through the scoped client first (RLS returns null for a row
+      // outside the tenant under enforcement) — a journey step configured with another
+      // tenant's tag id must never create or delete a cross-tenant link.
+      const [contactOwned, tagOwned] = await Promise.all([
+        prisma.contact.findUnique({ where: { id: contactId }, select: { id: true } }),
+        prisma.tag.findUnique({ where: { id: tagId }, select: { id: true } }),
+      ]);
+      if (!contactOwned || !tagOwned) {
+        return { status: "skipped", note: "Tag step skipped: contact or tag not in this tenant" };
+      }
+      if (step.type === "add_tag") {
+        await basePrisma.$executeRaw`INSERT INTO "_ContactToTag" ("A", "B") VALUES (${contactId}, ${tagId}) ON CONFLICT DO NOTHING`;
+      } else {
+        await basePrisma.$executeRaw`DELETE FROM "_ContactToTag" WHERE "A" = ${contactId} AND "B" = ${tagId}`;
+      }
       return { status: "completed", note: step.type === "add_tag" ? "Tag added" : "Tag removed" };
     }
   }
