@@ -1,21 +1,14 @@
+import Link from "next/link";
 import { Plus, Lock, Activity, AlertTriangle } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { requirePlatformAdmin } from "@/lib/platformAuth";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { formatDateTime } from "@/lib/format";
-import { MODULE_REGISTRY } from "@/lib/modules/registry";
 import { parseModuleCsv } from "@/lib/modules/entitlement";
 import { getPlatformHealth, type BackupHealth } from "@/lib/platformHealth";
 import ModalTrigger from "@/components/Modal";
-import {
-  createTenantAction,
-  activateTenantAction,
-  suspendTenantAction,
-  addTenantMemberAction,
-  removeTenantMemberAction,
-  setTenantModulesAction,
-} from "@/app/actions/tenants";
+import { createTenantAction } from "@/app/actions/tenants";
 
 export const dynamic = "force-dynamic";
 
@@ -29,9 +22,6 @@ type TenantRow = {
 };
 type MemberRow = { tenantId: string; userId: string; userName: string; userEmail: string; disabledAt: Date | null };
 type UserRow = { id: string; name: string; email: string; disabledAt: Date | null };
-
-/** Optional packs only — `core` is mandatory and never part of a grant. */
-const OPTIONAL_MODULES = MODULE_REGISTRY.filter((module) => !module.mandatory);
 
 const BACKUP_LABEL: Record<BackupHealth["status"], string> = {
   never: "No runs recorded",
@@ -270,8 +260,8 @@ export default async function PlatformTenantsPage() {
         </p>
       </section>
 
-      <section className="card p-0 divide-y divide-border/50">
-        <div className="flex items-center justify-between px-5 py-3">
+      <section className="card p-0">
+        <div className="flex items-center justify-between border-b border-border/50 px-5 py-3">
           <h2 className="font-semibold">All tenants</h2>
           <span className="text-xs text-muted-foreground">{tenants.length} tenant{tenants.length === 1 ? "" : "s"}</span>
         </div>
@@ -279,175 +269,61 @@ export default async function PlatformTenantsPage() {
         {tenants.length === 0 ? (
           <p className="p-5 text-sm text-muted-foreground">No tenants yet — create one above.</p>
         ) : (
-          tenants.map((tenant) => {
-            const members = membersFor(tenant.id);
-            const isFounding = tenant.id === DEFAULT_TENANT_ID;
-            const addable = users.filter((u) => !members.some((m) => m.userId === u.id));
-            // parseModuleCsv drops unknown ids, so a stale grant naming a removed
-            // module never renders a phantom checkbox.
-            const granted = parseModuleCsv(tenant.modules);
-            const stats = health.tenants.get(tenant.id);
-            return (
-              <details key={tenant.id}>
-                <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 select-none [&::-webkit-details-marker]:hidden">
-                  <span className="flex flex-wrap items-center gap-2 text-sm font-medium">
-                    {tenant.name}
-                    <span className="text-xs font-normal text-muted-foreground">/{tenant.slug}</span>
-                    <span className={`badge ${tenant.active ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300"}`}>
-                      {tenant.active ? "Active" : "Suspended"}
-                    </span>
-                    {isFounding && <span className="badge bg-primary/15 text-primary">Founding</span>}
-                    {/* Visible WITHOUT expanding the row — the whole point of a
-                        health signal is that you see it before you go looking. */}
-                    {(stats?.errors24h ?? 0) > 0 && (
-                      <span className="badge inline-flex items-center gap-1 bg-red-500/15 text-red-300">
-                        <AlertTriangle className="size-3" />
-                        {stats?.errors24h} error{stats?.errors24h === 1 ? "" : "s"} 24h
-                      </span>
-                    )}
-                    <span className="text-xs font-normal text-muted-foreground">
-                      {members.length} member{members.length === 1 ? "" : "s"} ·{" "}
-                      {granted.size === 0
-                        ? "core only"
-                        : `${granted.size} module${granted.size === 1 ? "" : "s"}`}{" "}
-                      · created {formatDateTime(tenant.createdAt)}
-                    </span>
-                  </span>
-                  <span className="btn-secondary btn-sm shrink-0">Manage</span>
-                </summary>
-
-                <div className="space-y-5 px-5 pb-5">
-                  {/* Activate / suspend controls */}
-                  <div className="flex flex-wrap items-center gap-3">
-                    {tenant.active ? (
-                      isFounding ? (
-                        <div>
-                          <button className="btn-secondary btn-sm" disabled>Suspend</button>
-                          <p className="mt-1 text-xs text-muted-foreground">The founding tenant cannot be suspended.</p>
-                        </div>
-                      ) : (
-                        <form action={suspendTenantAction.bind(null, tenant.id)}>
-                          <button className="btn-danger btn-sm">Suspend</button>
-                        </form>
-                      )
-                    ) : enforcing ? (
-                      <form action={activateTenantAction.bind(null, tenant.id)}>
-                        <button className="btn-primary btn-sm">Activate</button>
-                      </form>
-                    ) : (
-                      <div>
-                        <button className="btn-secondary btn-sm" disabled title="Enable tenant isolation enforcement first">
-                          Activate
-                        </button>
-                        <p className="mt-1 max-w-md text-xs text-amber-300/90">
-                          Activation is disabled until tenant isolation enforcement is enabled — activating now would expose existing data.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Members */}
-                  <div>
-                    <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Members</p>
-                    <ul className="divide-y divide-border/50">
-                      {members.length === 0 && <li className="py-2 text-xs text-muted-foreground">No members.</li>}
-                      {members.map((member) => (
-                        <li key={member.userId} className="flex items-center gap-2 py-2 text-sm">
-                          <span className="flex-1">
-                            {member.userName}
-                            <span className="ml-2 text-xs text-muted-foreground">{member.userEmail}</span>
-                            {member.disabledAt && <span className="ml-2 text-xs text-red-400">Disabled</span>}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border/50 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                  <th className="px-5 py-2 font-semibold">Tenant</th>
+                  <th className="px-3 py-2 font-semibold">Status</th>
+                  <th className="px-3 py-2 text-right font-semibold">Leads</th>
+                  <th className="px-3 py-2 text-right font-semibold">Members</th>
+                  <th className="px-3 py-2 text-right font-semibold">Modules</th>
+                  <th className="px-3 py-2 text-right font-semibold">Errors 24h</th>
+                  <th className="px-5 py-2 font-semibold">Last activity</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/50">
+                {tenants.map((tenant) => {
+                  const stats = health.tenants.get(tenant.id);
+                  const granted = parseModuleCsv(tenant.modules);
+                  const isFounding = tenant.id === DEFAULT_TENANT_ID;
+                  const errors = stats?.errors24h ?? 0;
+                  return (
+                    <tr key={tenant.id} className="transition-colors hover:bg-white/[0.02]">
+                      <td className="px-5 py-3">
+                        <Link href={`/platform/tenants/${tenant.id}`} className="font-medium transition-colors hover:text-primary">
+                          {tenant.name}
+                        </Link>
+                        <span className="ml-2 text-xs text-muted-foreground">/{tenant.slug}</span>
+                        {isFounding && <span className="badge ml-2 bg-primary/15 text-primary">Founding</span>}
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className={`badge ${tenant.active ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300"}`}>
+                          {tenant.active ? "Active" : "Suspended"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums">{stats?.leads ?? 0}</td>
+                      <td className="px-3 py-3 text-right tabular-nums">{stats?.users ?? 0}</td>
+                      <td className="px-3 py-3 text-right tabular-nums">{granted.size === 0 ? <span className="text-muted-foreground">core</span> : granted.size}</td>
+                      <td className="px-3 py-3 text-right tabular-nums">
+                        {errors > 0 ? (
+                          <span className="inline-flex items-center gap-1 font-semibold text-red-300">
+                            <AlertTriangle className="size-3" />
+                            {errors}
                           </span>
-                          {members.length > 1 ? (
-                            <form action={removeTenantMemberAction.bind(null, tenant.id, member.userId)}>
-                              <button className="text-xs text-red-400 hover:text-red-300">Remove</button>
-                            </form>
-                          ) : (
-                            <span className="text-xs text-muted-foreground" title="A tenant must keep at least one member">Last member</span>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-
-                    <form action={addTenantMemberAction.bind(null, tenant.id)} className="mt-3 flex gap-2">
-                      <select name="userId" className="input flex-1" required defaultValue="">
-                        <option value="" disabled>Add a member…</option>
-                        {addable.map((u) => (
-                          <option key={u.id} value={u.id}>{u.name} — {u.email}</option>
-                        ))}
-                      </select>
-                      <button className="btn-secondary btn-sm" disabled={addable.length === 0}>Add</button>
-                    </form>
-                  </div>
-
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      Activity
-                    </p>
-                    <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-                      <dt className="text-muted-foreground">Leads</dt>
-                      <dd className="text-right tabular-nums">{stats?.leads ?? 0}</dd>
-                      <dt className="text-muted-foreground">Contacts</dt>
-                      <dd className="text-right tabular-nums">{stats?.contacts ?? 0}</dd>
-                      <dt className="text-muted-foreground">Members</dt>
-                      <dd className="text-right tabular-nums">{stats?.users ?? members.length}</dd>
-                      <dt className={(stats?.errors24h ?? 0) > 0 ? "text-red-300" : "text-muted-foreground"}>
-                        Errors (24h)
-                      </dt>
-                      <dd className={`text-right tabular-nums ${(stats?.errors24h ?? 0) > 0 ? "font-semibold text-red-300" : ""}`}>
-                        {stats?.errors24h ?? 0}
-                      </dd>
-                      <dt className="text-muted-foreground">Errors (7d)</dt>
-                      <dd className="text-right tabular-nums">{stats?.errors7d ?? 0}</dd>
-                    </dl>
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      {stats?.lastActiveAt
-                        ? <>Last staff activity {formatDateTime(stats.lastActiveAt)}</>
-                        : <>No staff session recorded — this tenant has never been used.</>}
-                    </p>
-                  </div>
-
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      Modules
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      What this tenant may use. Their own admin can switch a granted
-                      pack off, but can never switch on one that is not granted.
-                      CRM core is always on.
-                    </p>
-
-                    <form action={setTenantModulesAction.bind(null, tenant.id)} className="mt-3">
-                      <ul className="space-y-2">
-                        {OPTIONAL_MODULES.map((module) => (
-                          <li key={module.id} className="flex items-start gap-2">
-                            <input
-                              type="checkbox"
-                              id={`mod-${tenant.id}-${module.id}`}
-                              name="modules"
-                              value={module.id}
-                              defaultChecked={granted.has(module.id)}
-                              className="mt-0.5 shrink-0"
-                            />
-                            <label
-                              htmlFor={`mod-${tenant.id}-${module.id}`}
-                              className="min-w-0 flex-1 cursor-pointer"
-                            >
-                              <span className="block text-sm">{module.label}</span>
-                              <span className="block text-xs text-muted-foreground">
-                                {module.description}
-                              </span>
-                            </label>
-                          </li>
-                        ))}
-                      </ul>
-                      <button className="btn-secondary btn-sm mt-3">Save modules</button>
-                    </form>
-                  </div>
-                </div>
-              </details>
-            );
-          })
+                        ) : (
+                          <span className="text-muted-foreground">0</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3 text-xs text-muted-foreground">
+                        {stats?.lastActiveAt ? formatDateTime(stats.lastActiveAt) : "never"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
     </div>
