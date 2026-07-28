@@ -6,6 +6,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { getDailyForecast } from "@/lib/weather";
 import { listTenantStaff } from "@/lib/tenantActor";
+import { getTimelinePins } from "@/lib/timelinePins";
 import KanbanBoard, { type KanbanStage } from "@/components/KanbanBoard";
 import ModalTrigger from "@/components/Modal";
 import LeadForm from "@/components/LeadForm";
@@ -105,6 +106,53 @@ export default async function LeadsPage() {
   const nextTestDriveByLead = new Map(nextTestDriveRows.map((activity) => [activity.leadId, activity]));
   const forecast = await getDailyForecast();
 
+  // PINNED notes for the card indicator. Keyed off real TimelinePin rows, not off
+  // whether a note exists — nearly every lead carries some note text, so note
+  // presence made the icon meaningless. Three sources count as a "pinned note":
+  //   lead_note      → the lead's own original note was pinned
+  //   contact_note   → the linked contact's original note was pinned
+  //   communication  → an added timeline note (type "note") was pinned
+  const contactIdsForPins = [
+    ...new Set(
+      stages.flatMap((stage) =>
+        stage.leads.map((lead) => lead.contactId).filter((id): id is string => Boolean(id)),
+      ),
+    ),
+  ];
+  const notePins = leadIds.length
+    ? await getTimelinePins([
+        ...leadIds.map((id) => ({ kind: "lead_note" as const, itemId: id })),
+        ...contactIdsForPins.map((id) => ({ kind: "contact_note" as const, itemId: id })),
+      ])
+    : [];
+  const pinnedLeadNoteIds = new Set(
+    notePins.filter((pin) => pin.kind === "lead_note").map((pin) => pin.itemId),
+  );
+  const pinnedContactNoteIds = new Set(
+    notePins.filter((pin) => pin.kind === "contact_note").map((pin) => pin.itemId),
+  );
+
+  // Pinned timeline notes (Communication rows of type "note"). Joined in SQL so
+  // this stays one query regardless of how many leads are on the board.
+  type PinnedNoteRow = { leadId: string; body: string };
+  const pinnedNoteRows = leadIds.length
+    ? await prisma.$queryRaw<PinnedNoteRow[]>(Prisma.sql`
+        SELECT c."leadId", c."body"
+        FROM "TimelinePin" p
+        JOIN "Communication" c ON c."id" = p."itemId"
+        WHERE p."kind" = 'communication'
+          AND c."type" = 'note'
+          AND c."leadId" IN (${Prisma.join(leadIds)})
+        ORDER BY p."pinnedAt" DESC
+      `)
+    : [];
+  const pinnedNotesByLead = new Map<string, string[]>();
+  for (const row of pinnedNoteRows) {
+    const list = pinnedNotesByLead.get(row.leadId) ?? [];
+    list.push(row.body);
+    pinnedNotesByLead.set(row.leadId, list);
+  }
+
   // Active signing requests for these leads' quotes → a "quote sent · waiting for
   // X" badge on the card. Clears automatically once signing completes or is voided.
   const signingByLead = new Map<string, { label: string }>();
@@ -163,10 +211,20 @@ export default async function LeadsPage() {
         assignedToId: lead.assignedToId,
         assignee: lead.assignedTo?.name ?? null,
         research: lead.research,
-        notes:
-          lead.notes?.trim() || lead.contact?.notes?.trim()
-            ? { lead: lead.notes, contact: lead.contact?.notes ?? null }
-            : null,
+        notes: [
+          ...(pinnedLeadNoteIds.has(lead.id) && lead.notes?.trim()
+            ? [{ label: "Pinned lead note", text: lead.notes }]
+            : []),
+          ...(lead.contactId &&
+          pinnedContactNoteIds.has(lead.contactId) &&
+          lead.contact?.notes?.trim()
+            ? [{ label: "Pinned contact note", text: lead.contact.notes }]
+            : []),
+          ...(pinnedNotesByLead.get(lead.id) ?? []).map((text) => ({
+            label: "Pinned note",
+            text,
+          })),
+        ],
         isNew: !lead.viewedAt && lead.createdAt.getTime() > now.getTime() - 3 * 24 * 60 * 60 * 1000,
         noNextStep: lead._count.activities === 0,
         ageDays: Math.floor((now.getTime() - lead.stageEnteredAt.getTime()) / 86400000),
