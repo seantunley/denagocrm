@@ -514,13 +514,22 @@ export async function convertLeadToContact(leadId: string): Promise<{ ok: boolea
     const existingMatch = matchers.length > 0
       ? await prisma.contact.findFirst({ where: { OR: matchers } })
       : null;
-    // Only reuse the existing contact if its tenantId matches — the composite FK
-    // Lead_tenantId_contactId_fkey requires both to agree.
-    const existing = existingMatch?.tenantId === lead.tenantId ? existingMatch : null;
+    // Reuse if tenantId already matches, or if it's null (pre-backfill) — stamp
+    // the lead's tenantId onto it so the composite FK is satisfied without
+    // creating a duplicate.
+    const canReuse = existingMatch && (
+      existingMatch.tenantId === lead.tenantId || existingMatch.tenantId === null
+    );
 
     let contactId: string;
-    if (existing) {
-      contactId = existing.id;
+    if (canReuse && existingMatch) {
+      contactId = existingMatch.id;
+      if (existingMatch.tenantId === null && lead.tenantId !== null) {
+        await prisma.contact.update({
+          where: { id: existingMatch.id },
+          data: { tenantId: lead.tenantId },
+        });
+      }
     } else {
       const [firstName, ...rest] = lead.name.split(/\s+/);
       const contact = await prisma.contact.create({
