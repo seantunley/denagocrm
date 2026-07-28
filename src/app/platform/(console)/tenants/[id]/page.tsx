@@ -365,6 +365,10 @@ export default async function TenantProfilePage({
               <SaveForm
                 action={setTenantModulesAction.bind(null, tenant.id)}
                 success="Modules updated"
+                // EDITS existing state rather than creating something, so the
+                // checkboxes must keep showing what was just saved. A reset would
+                // snap them back to the values this page was rendered with.
+                resetOnSuccess={false}
                 className="card p-5"
               >
                 <p className="text-sm text-muted-foreground">

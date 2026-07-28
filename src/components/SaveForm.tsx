@@ -2,7 +2,9 @@
 
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { toast } from "sonner";
+import { useCloseModal } from "@/components/Modal";
 import { cn } from "@/lib/utils";
+import type { ActionResult } from "@/lib/actionResultTypes";
 
 /**
  * A form that TELLS YOU WHAT HAPPENED.
@@ -39,23 +41,31 @@ export function useSavePending(): boolean {
   return useContext(PendingContext);
 }
 
-function messageFor(error: unknown): string {
+const GENERIC_FAILURE = "Something went wrong. Please try again.";
+
+/**
+ * A THROWN server-action error never carries a usable message to the browser.
+ *
+ * Next.js replaces it with an opaque digest in production, so there is nothing
+ * here worth showing — trying to render it would leak a build artefact like
+ * `aBc123` or, worse in development, an internal database message. Expected
+ * refusals therefore travel as VALUES (`{ error }`, see lib/actionResult.ts) and
+ * anything that reaches this function is by definition unexpected: it gets one
+ * generic sentence, and the real detail stays in the server logs where it belongs.
+ */
+function isNextControlFlow(error: unknown): boolean {
+  // redirect() and notFound() throw by design and are SUCCESSFUL outcomes.
   const raw = error instanceof Error ? error.message : String(error);
-  // Next.js uses thrown control-flow objects for redirect() and notFound().
-  // Those are successful outcomes, not failures, and must never surface as one.
-  if (/NEXT_REDIRECT|NEXT_NOT_FOUND/.test(raw)) return "";
-  const trimmed = raw.trim();
-  if (!trimmed) return "Something went wrong. Please try again.";
-  // Server actions are minified in production and can throw opaque digests.
-  // Showing "Error: aBc123" helps nobody; say something true instead.
-  if (/^[A-Za-z0-9_-]{6,}$/.test(trimmed) && !trimmed.includes(" ")) {
-    return "Something went wrong. Please try again.";
-  }
-  return trimmed;
+  const digest = (error as { digest?: unknown })?.digest;
+  return (
+    /NEXT_REDIRECT|NEXT_NOT_FOUND/.test(raw) ||
+    (typeof digest === "string" && /NEXT_REDIRECT|NEXT_NOT_FOUND/.test(digest))
+  );
 }
 
 /** A result object an action may return instead of throwing. */
-type ActionResult = { error?: string | null; success?: string | null } | void | undefined;
+/** Actions may also return nothing at all (a plain void action still works). */
+type MaybeActionResult = ActionResult | void | undefined;
 
 export function SaveForm({
   action,
@@ -63,18 +73,34 @@ export function SaveForm({
   children,
   className,
   onSaved,
+  resetOnSuccess = true,
+  closeModalOnSuccess = true,
   ...rest
 }: {
-  /** Server action. May return void, or `{ error }` to report a failure without throwing. */
-  action: (formData: FormData) => Promise<ActionResult>;
+  /** Server action. Returns `{ error }` for an expected refusal; throws only on a bug. */
+  action: (formData: FormData) => Promise<MaybeActionResult>;
   /** Toast shown when the action resolves without an error. */
   success?: string;
   children: ReactNode;
   className?: string;
-  /** Optional client-side hook after a successful save (e.g. close a dialog). */
+  /** Optional client-side hook after a successful save. */
   onSaved?: () => void;
+  /**
+   * Clear the fields after a successful save. ON by default: these forms create
+   * things, and leaving the values in place both invites a duplicate submission
+   * and — for the admin/tenant creation and password-reset forms — leaves a typed
+   * PASSWORD sitting in a visible field.
+   *
+   * Turn OFF for forms that EDIT existing state (a settings panel, a checkbox
+   * grid), where the fields should keep showing what was just saved rather than
+   * snapping back to the values the page was rendered with.
+   */
+  resetOnSuccess?: boolean;
+  /** Close the enclosing modal after a successful save. No-op outside a modal. */
+  closeModalOnSuccess?: boolean;
 } & Omit<React.FormHTMLAttributes<HTMLFormElement>, "action" | "onSubmit">) {
   const [pending, setPending] = useState(false);
+  const closeModal = useCloseModal();
 
   return (
     <form
@@ -83,7 +109,10 @@ export function SaveForm({
       onSubmit={async (event) => {
         event.preventDefault();
         if (pending) return; // a second click must not fire a second save
-        const formData = new FormData(event.currentTarget);
+        // Captured BEFORE awaiting: React nulls `currentTarget` once the handler
+        // returns, so reaching for it after the await would throw.
+        const form = event.currentTarget;
+        const formData = new FormData(form);
         setPending(true);
         try {
           const result = await action(formData);
@@ -94,13 +123,13 @@ export function SaveForm({
           const message =
             (result && typeof result === "object" && "success" in result && result.success) || success;
           toast.success(String(message));
+          if (resetOnSuccess) form.reset();
+          if (closeModalOnSuccess) closeModal();
           onSaved?.();
         } catch (error) {
-          const message = messageFor(error);
-          // An empty message means redirect()/notFound() — a successful outcome
-          // that throws by design. Rethrow so Next can perform the navigation.
-          if (!message) throw error;
-          toast.error(message);
+          // redirect()/notFound() throw by design on success — let Next navigate.
+          if (isNextControlFlow(error)) throw error;
+          toast.error(GENERIC_FAILURE);
         } finally {
           setPending(false);
         }
