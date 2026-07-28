@@ -18,6 +18,7 @@ import { establishTenantScopeFromId, establishStaffTenantScope, withTokenTenantS
 import { runCronPerTenant, activeTenantIds } from "../src/lib/tenantCron";
 import { logAudit } from "../src/lib/audit";
 import { getSetting, putSetting } from "../src/lib/settings";
+import { OPTIONAL_MODULE_IDS } from "../src/lib/modules/registry";
 import { TenantScopeError } from "../src/lib/tenantGuard";
 import { resolvePortalTenant } from "../src/lib/portal";
 import { resolveActingTenant } from "../src/lib/tenantContext";
@@ -167,8 +168,14 @@ async function main() {
 
   // Real Tenant rows for A/B + one owner member each. userB is created OLDER than
   // userA on purpose: the legacy global oldest-user pick would choose B.
-  await basePrisma.tenant.create({ data: { id: TENANT_A, name: "Tenant A", slug: `ta_${SFX}`, active: true } });
-  await basePrisma.tenant.create({ data: { id: TENANT_B, name: "Tenant B", slug: `tb_${SFX}`, active: true } });
+  // Grant every optional module. Module entitlement is per-tenant (Tenant.modules)
+  // and new tenants default to CORE ONLY, so a fixture tenant without a grant would
+  // be refused by module-gated routes — the booking chokepoint tests below POST to
+  // /api/bookings, which requires "automotive". This test measures tenant SCOPING,
+  // so entitlement is granted out of its way rather than becoming a hidden variable.
+  const ALL_MODULES = OPTIONAL_MODULE_IDS.join(",");
+  await basePrisma.tenant.create({ data: { id: TENANT_A, name: "Tenant A", slug: `ta_${SFX}`, active: true, modules: ALL_MODULES } });
+  await basePrisma.tenant.create({ data: { id: TENANT_B, name: "Tenant B", slug: `tb_${SFX}`, active: true, modules: ALL_MODULES } });
   await basePrisma.user.create({ data: { id: userBId, name: "Owner B", email: `ob_${SFX}@t.test`, passwordHash: "x", role: "owner", createdAt: new Date("2020-01-01T00:00:00Z") } });
   await basePrisma.user.create({ data: { id: userAId, name: "Owner A", email: `oa_${SFX}@t.test`, passwordHash: "x", role: "owner", createdAt: new Date("2021-01-01T00:00:00Z") } });
   await basePrisma.tenantMember.create({ data: { tenantId: TENANT_B, userId: userBId } });

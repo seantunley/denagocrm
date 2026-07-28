@@ -76,6 +76,10 @@ export async function createTenant(
 ): Promise<{ tenantId: string; ownerId: string }> {
   return prisma.$transaction(async (tx) => {
     const tenant = await tx.tenant.create({
+      // modules defaults to "" — core only. FAIL-CLOSED on purpose: a new tenant
+      // is granted optional packs deliberately in the console, never implicitly,
+      // so shipping a new module never hands it (and its data surface) to tenants
+      // nobody granted it to.
       data: { name: input.name, slug: input.slug, active: false },
     });
     const owner = await tx.user.create({
@@ -94,4 +98,57 @@ export async function createTenant(
     await addTenantMembership(tx, tenant.id, owner.id);
     return { tenantId: tenant.id, ownerId: owner.id };
   });
+}
+
+/**
+ * ACTIVATE a tenant created inert by {@link createTenant} — the controlled inverse
+ * of that function's deliberate inert setup: flip `Tenant.active` to true AND clear
+ * `disabledAt` on the provisioned owner (raw SQL — `disabledAt` is the security
+ * column managed outside the Prisma model), so the owner can finally sign in.
+ *
+ * `ownerId` MUST be the userId returned by {@link createTenant}. Only that specific
+ * account is re-enabled: other TenantMembers are existing platform users whose
+ * global `disabledAt` state is unrelated to this tenant's inert setup and must not
+ * be touched — a security suspension on a shared account must survive a second
+ * tenant's activation.
+ *
+ * This module is the SINGLE source of truth for the state change, but it stays
+ * enforcement-agnostic: activating before data isolation is enforced would expose
+ * existing data, so the CALLER MUST gate on `tenantEnforcing()` (see
+ * tenantAdmin.canActivateTenant). Requires a full client (opens its own tx).
+ */
+export async function activateTenant(
+  prisma: PrismaClient,
+  tenantId: string,
+  ownerId: string,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.tenant.update({ where: { id: tenantId }, data: { active: true } });
+    // Re-enable ONLY the provisioned owner. Members added after creation are
+    // existing, already-active users whose disabledAt is not ours to clear.
+    await tx.$executeRaw`
+      UPDATE "User" SET "disabledAt" = NULL
+      WHERE "id" = ${ownerId} AND "disabledAt" IS NOT NULL
+    `;
+  });
+}
+
+/**
+ * SUSPEND a tenant — set `active` to false. Fail-closed tenant resolution filters
+ * on `active`, so a suspended tenant's members resolve to no tenant and (under
+ * enforcement) cannot act. Deliberately does NOT touch member `disabledAt`: this
+ * is a tenant-level switch, reversible via {@link activateTenant}. The caller must
+ * refuse suspending the founding tenant (see tenantAdmin.canSuspendTenant).
+ */
+export async function suspendTenant(prisma: PrismaClient, tenantId: string): Promise<void> {
+  // Defence-in-depth at the SOURCE OF TRUTH — deliberately NOT gated on enforcement.
+  // The founding tenant underpins every existing user + session, so suspending it
+  // (active:false) would fail-closed lock the whole business out. The console action
+  // already refuses this via tenantAdmin.canSuspendTenant; enforcing it here too means
+  // suspending the founding tenant is impossible no matter which caller reaches this
+  // function, enforcement on or off.
+  if (tenantId === DEFAULT_TENANT_ID) {
+    throw new Error("The founding tenant cannot be suspended.");
+  }
+  await prisma.tenant.update({ where: { id: tenantId }, data: { active: false } });
 }

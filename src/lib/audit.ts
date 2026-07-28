@@ -10,6 +10,13 @@ export type AuditEntry = {
   leadId?: string | null;
   user?: { id: string; name: string } | null;
   userName?: string;
+  /**
+   * Override the derived actor classification. Needed for principals that are NOT
+   * CRM users — a PlatformAdmin, for instance, supplies `user` for attribution but
+   * its id does not resolve in the `User` table, so recording it as "user" would
+   * make the trail lie. Pass e.g. "platform_admin".
+   */
+  actorType?: string;
   entityType?: string | null;
   entityId?: string | null;
   before?: unknown;
@@ -62,6 +69,9 @@ async function requestContext() {
 }
 
 function actorType(entry: AuditEntry, actorName: string) {
+  // An explicit classification always wins — a non-User principal (platform admin)
+  // sets `user` for attribution but must not be recorded as a CRM user.
+  if (entry.actorType) return entry.actorType;
   if (entry.user) return "user";
   if (/customer|portal/i.test(actorName)) return "customer";
   if (/automation|journey|cron|worker/i.test(actorName)) return "automation";

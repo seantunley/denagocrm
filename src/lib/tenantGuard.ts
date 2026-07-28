@@ -24,6 +24,15 @@ export const GLOBAL_MODELS: ReadonlySet<string> = new Set([
   "OtpChallenge",
   "Passkey",
   "PushSubscription",
+  // Platform-console identity. Global BY DESIGN: a cross-tenant administrator that
+  // carried a tenantId would be a contradiction, and scoping these would fail
+  // closed on a column that deliberately does not exist. See prisma/schema.prisma.
+  "PlatformAdmin",
+  "PlatformAdminSession",
+  // Backup ledger. Backups are platform-wide (one dump of the whole database), so
+  // BackupRun has no tenantId at all. Without this entry the guard would treat it
+  // as tenant-scoped and fail closed on a column that deliberately does not exist.
+  "BackupRun",
 ]);
 
 export function isTenantScopedModel(model: string): boolean {

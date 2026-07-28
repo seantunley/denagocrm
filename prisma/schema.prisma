@@ -2293,6 +2293,16 @@ model Tenant {
   name      String
   slug      String   @unique
   active    Boolean  @default(true)
+  /// Module ENTITLEMENT — the optional packs this tenant MAY use, as a CSV of
+  /// module ids ("inbox,marketing,automotive"). Granted by a platform admin in the
+  /// console. `core` is mandatory and always implied, so it is never stored here.
+  ///
+  /// This is the OUTER limit, not the effective set: a tenant's own admin may
+  /// additionally disable a granted module for themselves (the existing
+  /// DISABLED_MODULES AppSetting), but can never enable one that is not granted.
+  /// Effective = granted MINUS locally disabled. Empty string = core only, which
+  /// is the fail-closed default for a newly created tenant.
+  modules   String   @default("")
   createdAt DateTime @default(now())
 
   members  TenantMember[]
@@ -2311,7 +2321,103 @@ model TenantMember {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, userId])
+  /// NOT unique on userId, deliberately. Sign-in requires exactly one ACTIVE
+  /// membership and `soleActiveTenant` returns `ambiguous_tenant` otherwise — a
+  /// defence-in-depth branch that must keep working for data predating any guard
+  /// (and which scripts/test-integrity.ts exercises by constructing that very
+  /// state). A unique index would make that path unconstructible and therefore
+  /// untestable.
+  ///
+  /// The invariant is instead enforced at the write path: addTenantMemberAction
+  /// locks the User row FOR UPDATE, counts ALL memberships (not just active ones,
+  /// so a dormant membership cannot become ambiguous on activation), and refuses.
   @@index([userId])
+}
+
+/// Ledger of backup runs, for the platform console's health view.
+///
+/// Previously the only trace of a backup was the newest blob in storage plus a
+/// single BACKUP_LAST_RESULT setting holding the last outcome. Neither records
+/// HISTORY, and neither can distinguish "ran and failed" from "never started" —
+/// a crashed run looked identical to a quiet one.
+///
+/// A row is created when a run STARTS (status "running") and updated when it
+/// finishes. A row left in "running" long after its startedAt is therefore itself
+/// the signal that a run died, which silence could never tell you.
+///
+/// Deliberately has NO `tenantId`, and is listed in GLOBAL_MODELS. Backups are
+/// platform-wide — `exportAllData` dumps the whole database — so every row would
+/// carry a null tenant. A nullable tenantId here would be worse than none: the
+/// tenant guard would classify the model as tenant-scoped and the enforcement
+/// preflight would hard-fail on every null row. Add the column (and remove the
+/// GLOBAL_MODELS entry) in the same change that makes backups per-tenant, not
+/// before.
+model BackupRun {
+  id         String    @id @default(cuid())
+  status     String    @default("running") // running | success | failed
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  durationMs Int?
+  sizeBytes  Int?
+  blobPath   String?
+  /// Failure message, truncated. Null on success.
+  error      String?
+  /// Non-fatal problems (e.g. assets that could not be snapshotted).
+  degraded   Boolean   @default(false)
+
+  @@index([startedAt])
+  @@index([status, startedAt])
+}
+
+// Platform-admin identity — DELIBERATELY OUTSIDE the tenant model, and listed in
+// GLOBAL_MODELS so the tenant guard never tries to scope it.
+//
+// These tables make the /platform console independent of any tenant, the founding
+// Denago Cape Town tenant included. A PlatformAdmin is NOT a `User`, holds NO
+// `TenantMember` row, and authenticates through its own login (/platform/login)
+// with its own cookie. Consequences: suspending any tenant cannot lock the
+// platform operator out, and a compromised CRM session grants no console access.
+//
+// They intentionally have NO tenantId: a cross-tenant administrator that belonged
+// to a tenant would be a contradiction.
+
+/// A platform super-administrator. Created only by the `create-platform-admin`
+/// CLI — there is intentionally no self-service signup, since a "create the first
+/// admin" page is a takeover vector the moment it misfires.
+model PlatformAdmin {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  name              String
+  passwordHash      String
+  totpSecret        String? // encrypted TOTP secret; null until enrolled
+  totpEnabledAt     DateTime?
+  disabledAt        DateTime? // locks the account out without deleting it
+  sessionVersion    Int       @default(0) // bump to revoke every existing session
+  lastLoginAt       DateTime?
+  passwordChangedAt DateTime?
+  createdAt         DateTime  @default(now())
+
+  sessions PlatformAdminSession[]
+
+  @@index([disabledAt])
+}
+
+/// Session registry for platform admins — the server-side half of the cookie, so
+/// a session can be revoked remotely rather than merely expiring.
+model PlatformAdminSession {
+  id           String    @id @default(cuid())
+  jti          String    @unique // matches the jti claim inside the platform JWT
+  ip           String?
+  userAgent    String?
+  createdAt    DateTime  @default(now())
+  lastActiveAt DateTime  @default(now())
+  revokedAt    DateTime?
+
+  adminId String
+  admin   PlatformAdmin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@index([revokedAt])
 }
 
 // Phase C step 2b (C2) — per-tenant PUBLIC API keys, replacing the single global

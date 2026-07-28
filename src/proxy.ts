@@ -26,6 +26,15 @@ const PUBLIC_PATHS = [
   "/api/unsubscribe", // one-click marketing unsubscribe
   "/portal", // customer portal has its own OTP session
   "/api/portal", // portal document/upload routes self-check the portal session
+  // Platform console — "public" to THIS proxy only, because it authenticates with
+  // its OWN identity (PlatformAdmin) and its own cookie, not the CRM session this
+  // proxy checks. Without this entry the proxy bounces /platform to the CRM /login,
+  // making the console reachable only by holding a CRM session — precisely the
+  // coupling the separate identity exists to remove. Not unprotected: /platform/login
+  // is meant to be reachable signed-out, and every page under /platform/(console)
+  // calls requirePlatformAdmin while every console server action re-checks via
+  // requirePlatformAdminAction.
+  "/platform",
   "/s", // public survey response pages (token-gated)
   "/manifest.webmanifest",
   "/messages/manifest.webmanifest", // Denago Messages PWA manifest (no app data)
