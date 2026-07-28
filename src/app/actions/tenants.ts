@@ -115,11 +115,21 @@ export async function activateTenantAction(tenantId: string): Promise<void> {
   });
   if (!tenant) throw new Error("Tenant not found.");
 
-  await activateTenant(basePrisma, tenantId);
+  // The provisioned owner is the earliest TenantMember — the one createTenant
+  // disabled. Every member added after creation is an existing active user whose
+  // global disabledAt must not be touched by activation.
+  const firstMemberRows = await basePrisma.$queryRaw<Array<{ userId: string }>>`
+    SELECT "userId" FROM "TenantMember" WHERE "tenantId" = ${tenantId}
+    ORDER BY "createdAt" ASC LIMIT 1
+  `;
+  const ownerId = firstMemberRows[0]?.userId;
+  if (!ownerId) throw new Error("Tenant has no members — cannot activate.");
+
+  await activateTenant(basePrisma, tenantId, ownerId);
 
   await logAuditStrict({
     action: "tenant.activated",
-    summary: `Activated tenant “${tenant.name}” and re-enabled its members`,
+    summary: `Activated tenant “${tenant.name}” and re-enabled the provisioned owner`,
     entityType: "Tenant",
     entityId: tenantId,
     user: actor,
@@ -191,12 +201,14 @@ export async function removeTenantMemberAction(tenantId: string, userId: string)
   });
   if (!tenant) throw new Error("Tenant not found.");
 
-  // Never remove the last member of a tenant (count BEFORE the delete).
-  const memberCount = await basePrisma.tenantMember.count({ where: { tenantId } });
-  const gate = canRemoveTenantMember(memberCount);
-  if (!gate.ok) throw new Error(gate.error);
-
-  await basePrisma.tenantMember.deleteMany({ where: { tenantId, userId } });
+  // Count and delete in one transaction to eliminate the TOCTOU race where two
+  // concurrent requests both see count=2 and both proceed to remove their member.
+  await basePrisma.$transaction(async (tx) => {
+    const memberCount = await tx.tenantMember.count({ where: { tenantId } });
+    const gate = canRemoveTenantMember(memberCount);
+    if (!gate.ok) throw new Error(gate.error);
+    await tx.tenantMember.deleteMany({ where: { tenantId, userId } });
+  });
 
   await logAuditStrict({
     action: "tenant.member_removed",
