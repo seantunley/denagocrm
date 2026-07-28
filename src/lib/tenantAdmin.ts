@@ -85,8 +85,9 @@ export function canRemoveTenantMember(currentMemberCount: number): GuardResult {
  *
  * This is a friendly pre-check for a good error message, NOT the boundary. Two
  * concurrent additions could both pass it, so the authoritative guarantee is the
- * unique index on `TenantMember.userId` (migration 20260728140000); callers must
- * still handle its violation.
+ * unique index on `TenantMember.userId` (migration
+ * 20260727120000_tenant_member_single_tenant_policy); callers must still handle
+ * its violation.
  */
 export function canAddTenantMember(
   tenantIdsForUser: readonly string[],

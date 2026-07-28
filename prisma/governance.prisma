@@ -2,6 +2,7 @@
 /// pipelineId column added in migration 45; the legacy model remains in schema.prisma.
 model SalesPipeline {
   id          String   @id @default(cuid())
+  tenantId    String? // Multi-tenancy (Phase B — additive/inert): owning tenant. Each dealer configures its own pipeline stages.
   name        String
   description String?
   type        String   @default("sales")
@@ -10,10 +11,13 @@ model SalesPipeline {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   deletedAt   DateTime?
+
+  @@index([tenantId])
 }
 
 model Team {
   id          String   @id @default(cuid())
+  tenantId    String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name        String
   description String?
   active      Boolean  @default(true)
@@ -25,10 +29,12 @@ model Team {
   members TeamMember[]
 
   @@index([managerId])
+  @@index([tenantId])
 }
 
 model TeamMember {
   id        String   @id @default(cuid())
+  tenantId  String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   teamId    String
   userId    String
   isManager Boolean  @default(false)
@@ -38,11 +44,21 @@ model TeamMember {
 
   @@unique([teamId, userId])
   @@index([userId])
+  @@index([tenantId])
 }
 
 model Role {
   id          String   @id @default(cuid())
-  name        String   @unique
+  // Multi-tenancy (Phase B — additive/inert): NULL = system/seeded role, shared
+  // globally by every tenant (see `system`). Non-null = one tenant's own
+  // custom-authored role. Name uniqueness is enforced by two PARTIAL unique
+  // indexes created by hand in migration 20260727100000 (Prisma's schema DSL
+  // can't express a partial index): system role names are unique among
+  // themselves (tenantId IS NULL), and tenant-authored names are unique per
+  // tenant (tenantId, name) — see that migration for the exact SQL. The plain
+  // `@unique` on `name` that used to live here is gone for that reason.
+  tenantId    String?
+  name        String
   description String?
   system      Boolean  @default(false)
   createdAt   DateTime @default(now())
@@ -50,6 +66,8 @@ model Role {
 
   permissions RolePermission[]
   users       UserRole[]
+
+  @@index([tenantId])
 }
 
 model Permission {
@@ -63,26 +81,42 @@ model Permission {
 model RolePermission {
   roleId        String
   permissionKey String
+  // Multi-tenancy (Phase B — additive/inert): denormalized copy of the owning
+  // Role's tenantId (NULL for a system role's permissions), so raw-SQL reads
+  // can filter directly without a join — matches the CampaignRecipient/Campaign
+  // denormalization convention (see marketingCampaignQueue.ts).
+  tenantId      String?
 
   role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
   permission Permission @relation(fields: [permissionKey], references: [key], onDelete: Cascade)
 
   @@id([roleId, permissionKey])
+  @@index([tenantId])
 }
 
 model UserRole {
+  // Surrogate PK. A role ASSIGNMENT is unique PER TENANT (a user may hold the same
+  // global role in more than one tenant), so identity must include tenantId. But
+  // tenantId is nullable (Phase B — additive/inert) and Prisma forbids nullable
+  // fields in @@id, so we can't use a composite PK. Instead: surrogate `id` PK +
+  // a tenant-aware @@unique. Role/Permission/RolePermission stay GLOBAL (one shared
+  // taxonomy); only the assignment of a role TO a user is tenant-scoped.
+  id        String   @id @default(cuid())
   userId    String
   roleId    String
+  tenantId  String? // Multi-tenancy (Phase B — additive/inert): owning tenant. See note above.
   createdAt DateTime @default(now())
 
   role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
-  @@id([userId, roleId])
+  @@unique([tenantId, userId, roleId])
   @@index([roleId])
+  @@index([tenantId])
 }
 
 model ForecastSnapshot {
   id                   String   @id @default(cuid())
+  tenantId             String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   period               String
   pipelineId           String?
   teamId               String?
@@ -96,11 +130,13 @@ model ForecastSnapshot {
 
   @@index([period, capturedAt])
   @@index([pipelineId, teamId, userId, capturedAt])
+  @@index([tenantId])
 }
 
 /// Professional append-only audit stream. Database triggers reject UPDATE and DELETE.
 model AuditEvent {
   id                String   @id @default(cuid())
+  tenantId          String? // Multi-tenancy (Phase B — additive/inert): owning tenant. Nullable: platform/super-admin actions have no owning tenant.
   actorUserId       String?
   actorName         String
   actorType         String   @default("user")
@@ -122,4 +158,5 @@ model AuditEvent {
   @@index([entityType, entityId, createdAt])
   @@index([actorUserId, createdAt])
   @@index([eventType, createdAt])
+  @@index([tenantId])
 }

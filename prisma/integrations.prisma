@@ -1,0 +1,23 @@
+// Per-tenant OVERRIDE credentials for outbound integrations (WhatsApp, Meta,
+// Telegram, SMTP, IMAP, SMS, Google Reviews). `AppSetting` (schema.prisma)
+// remains the single GLOBAL, install-wide credential store for these same
+// keys; this table lets an individual tenant plug in its OWN credential for a
+// key without disturbing the global row or any other tenant's row.
+//
+// Additive + inert: with zero rows here (true today), every read falls back to
+// the existing global AppSetting behaviour untouched — see
+// resolveTenantCredential in src/lib/settings.ts, which is the ONLY reader.
+// Scalar tenantId, no FK — matches the TenantApiKey / ChannelIdentity
+// convention: resolution is app-layer, so a dangling tenantId just fails to
+// resolve (fail closed to the global fallback), never a hard DB error.
+model TenantIntegrationCredential {
+  id        String   @id @default(cuid())
+  tenantId  String
+  key       String // same key namespace as AppSetting, e.g. "WA_ACCESS_TOKEN"
+  value     String // encrypted at rest — same AES-256-GCM envelope as AppSetting.value
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+}

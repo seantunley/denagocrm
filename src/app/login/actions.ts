@@ -5,7 +5,7 @@ import crypto from "crypto";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
-import { prisma } from "@/lib/db";
+import { basePrisma } from "@/lib/db";
 import { createSessionCookie, destroySessionCookie } from "@/lib/auth";
 import { verifySession, SESSION_COOKIE } from "@/lib/session";
 import { verifyTotp } from "@/lib/totp";
@@ -92,7 +92,7 @@ export async function login(
     return { error: "Too many failed attempts. Try again later." };
   }
 
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await basePrisma.user.findUnique({ where: { email } });
   const security = user ? await getUserSecurityState(user.id) : null;
   const passwordOk = Boolean(user && security && !security.disabledAt && await bcrypt.compare(password, user.passwordHash));
 
@@ -122,7 +122,7 @@ export async function login(
 }
 
 async function sendLoginEmailCode(userId: string): Promise<boolean> {
-  const user = await prisma.user.findUnique({ where: { id: userId } });
+  const user = await basePrisma.user.findUnique({ where: { id: userId } });
   const security = user ? await getUserSecurityState(user.id) : null;
   if (!user?.email || !security || security.disabledAt) return false;
 
@@ -131,7 +131,7 @@ async function sendLoginEmailCode(userId: string): Promise<boolean> {
   if (!result.allowed) return false;
 
   const code = crypto.randomInt(100000, 1000000).toString();
-  await prisma.user.update({
+  await basePrisma.user.update({
     where: { id: userId },
     data: {
       loginOtpHash: await bcrypt.hash(code, 10),
@@ -171,7 +171,7 @@ export async function verifySecondFactor(
   }
 
   const code = String(formData.get("code") ?? "").trim();
-  const user = await prisma.user.findUnique({ where: { id: uid } });
+  const user = await basePrisma.user.findUnique({ where: { id: uid } });
   const security = user ? await getUserSecurityState(user.id) : null;
   if (!user || !security || security.disabledAt) {
     return { error: "Session expired — please sign in again." };
@@ -192,7 +192,7 @@ export async function verifySecondFactor(
     for (let index = 0; index < codes.length; index++) {
       if (await bcrypt.compare(normalized, codes[index])) {
         codes.splice(index, 1);
-        await prisma.user.update({
+        await basePrisma.user.update({
           where: { id: user.id },
           data: { totpBackupCodes: JSON.stringify(codes) },
         });
@@ -219,7 +219,7 @@ export async function verifySecondFactor(
     clearRateLimit(attemptKey),
     clearRateLimit(rateLimitKey("staff-email-otp-send", user.id)),
   ]);
-  await prisma.user.update({
+  await basePrisma.user.update({
     where: { id: user.id },
     data: { loginOtpHash: null, loginOtpExpires: null },
   });
@@ -236,7 +236,7 @@ export async function logout() {
     const token = store.get(SESSION_COOKIE)?.value;
     const session = token ? await verifySession(token) : null;
     if (session?.jti) {
-      await prisma.userSession.updateMany({
+      await basePrisma.userSession.updateMany({
         where: { jti: session.jti },
         data: { revokedAt: new Date() },
       });

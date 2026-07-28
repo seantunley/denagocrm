@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
-import { getSetting } from "@/lib/settings";
+import { resolveTenantCredential } from "@/lib/settings";
+import { currentTenantScope } from "@/lib/tenantScope";
 import { createIntakeLead } from "@/lib/leadIntake";
 import { parseLeadFields, metaSource, type FieldData } from "@/lib/metaLead";
 
@@ -12,7 +13,8 @@ const G = "https://graph.facebook.com/v21.0";
  * two paths never double-create.
  */
 export async function syncFacebookLeads(): Promise<number> {
-  const token = await getSetting("META_PAGE_ACCESS_TOKEN");
+  const tenantId = currentTenantScope()?.tenantId ?? null;
+  const token = await resolveTenantCredential(tenantId, "META_PAGE_ACCESS_TOKEN");
   if (!token) return 0;
 
   const pagesRes = await fetch(

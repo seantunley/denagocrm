@@ -2,6 +2,7 @@
 /// Kept in a separate Prisma schema file so the domain can evolve independently.
 model Journey {
   id            String   @id @default(cuid())
+  tenantId      String?
   name          String
   description   String?
   category      String   @default("automation") // automation | marketing
@@ -16,10 +17,12 @@ model Journey {
   events   JourneyEvent[]
 
   @@index([status, category])
+  @@index([tenantId])
 }
 
 model JourneyVersion {
   id              String    @id @default(cuid())
+  tenantId        String?
   journeyId       String
   journey         Journey   @relation(fields: [journeyId], references: [id], onDelete: Cascade)
   version         Int
@@ -37,11 +40,13 @@ model JourneyVersion {
   @@unique([journeyId, version])
   @@index([journeyId, state])
   @@index([trigger, state])
+  @@index([tenantId])
 }
 
 /// Durable incoming event. Events are intentionally small and provider-neutral.
 model JourneyEvent {
   id          String    @id @default(cuid())
+  tenantId    String?
   journeyId   String?
   journey     Journey?  @relation(fields: [journeyId], references: [id], onDelete: Cascade)
   type        String
@@ -60,11 +65,13 @@ model JourneyEvent {
   @@index([status, availableAt])
   @@index([type, status])
   @@index([journeyId, status])
+  @@index([tenantId])
 }
 
 /// A run is pinned to an immutable published version.
 model JourneyRun {
   id               String         @id @default(cuid())
+  tenantId         String?
   journeyId        String
   journey          Journey        @relation(fields: [journeyId], references: [id], onDelete: Cascade)
   journeyVersionId String
@@ -92,10 +99,12 @@ model JourneyRun {
   @@index([entityType, entityId])
   @@index([leadId])
   @@index([contactId])
+  @@index([tenantId])
 }
 
 model JourneyStepLog {
   id          String     @id @default(cuid())
+  tenantId    String?
   runId       String
   run         JourneyRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   stepId      String
@@ -109,4 +118,5 @@ model JourneyStepLog {
   @@unique([runId, stepId])
   @@index([runId, startedAt])
   @@index([status, startedAt])
+  @@index([tenantId])
 }

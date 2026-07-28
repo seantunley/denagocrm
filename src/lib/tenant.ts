@@ -56,6 +56,65 @@ export function honoredTenantClaim(tid: string | null, sole: SoleTenantResult): 
 }
 
 /**
+ * Decide which tenant a user's NEW login session is stamped with, given their
+ * freshly-resolved acting tenant (`ctx`), their GLOBAL `role`, and whether
+ * enforcement is on. PURE and dependency-free so it's unit-testable WITHOUT a DB.
+ * Consumed by `createSessionCookie` right after `resolveActingTenant`.
+ *
+ *   - `ctx` resolved a tenant            → that tenant (the normal path).
+ *   - error + ENFORCING + global `owner` → the founding tenant (DEFAULT_TENANT_ID):
+ *     the owner falls back to their always-active home tenant rather than failing to
+ *     get a session, so they can never be locked out. The caller ensures that
+ *     membership is real (ensureFoundingMembership) under enforcement.
+ *   - anything else                      → null.
+ *
+ * DORMANT: when `enforcing` is false this returns null on the error branch for EVERY
+ * role (owner included), so login behaviour is byte-for-byte the pre-tenancy path.
+ */
+export function resolveLoginTenant(
+  ctx: { tenantId: string } | { error: string },
+  role: string,
+  enforcing: boolean,
+): string | null {
+  if ("tenantId" in ctx) return ctx.tenantId;
+  if (enforcing && role === "owner") return DEFAULT_TENANT_ID;
+  return null;
+}
+
+/**
+ * Outcome of the staff request-time tenant-scope decision. `enterTenantId === null`
+ * means "establish NO scope at all" — critically NOT a `system` scope (there is no
+ * system field here, by design, so this decision can never grant a bypass).
+ */
+export type StaffScopeDecision =
+  | { ok: true; enterTenantId: string | null }
+  | { ok: false; enterTenantId: null };
+
+/**
+ * Decide the staff chokepoint scope outcome from whether enforcement is on, the
+ * already-honoured acting-tenant id (or null when none resolved), and whether the
+ * principal is the GLOBAL `owner`. PURE so the branch is unit-testable without a DB
+ * or `server-only`. Mirrors {@link establishStaffTenantScope}:
+ *   - not enforcing            → ok, enter NO scope (dormant).
+ *   - enforcing + a tenant     → ok, enter that tenant's scope.
+ *   - enforcing + none + owner → ok, enter NO scope — the OWNER ESCAPE HATCH. The
+ *                                owner is never a `system` principal; tenant-scoped
+ *                                CRM reads still fail closed at the db guard, only
+ *                                `basePrisma`-backed platform reads work.
+ *   - enforcing + none + other → NOT ok (fail closed — unchanged for non-owners).
+ */
+export function decideStaffTenantScope(
+  enforcing: boolean,
+  tenantId: string | null,
+  isOwner: boolean,
+): StaffScopeDecision {
+  if (!enforcing) return { ok: true, enterTenantId: null };
+  if (tenantId) return { ok: true, enterTenantId: tenantId };
+  if (isOwner) return { ok: true, enterTenantId: null }; // owner escape hatch: NO scope
+  return { ok: false, enterTenantId: null };
+}
+
+/**
  * True only when a Prisma write failed specifically because a `tenantId` foreign
  * key no longer resolves (the tenant was deleted concurrently) — the one case
  * recoverable by dropping the tenant and retrying. Duck-typed on the error's

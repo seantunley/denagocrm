@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { basePrisma } from "@/lib/db";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, getActiveTenantId } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { logAuditStrict } from "@/lib/audit";
+import { tenantEnforcing } from "@/lib/tenantEnforcement";
 
 export const dynamic = "force-dynamic";
 
@@ -51,6 +52,15 @@ export async function GET(request: NextRequest) {
     ? new Date(`${toRaw}T23:59:59+02:00`)
     : null;
 
+  // Multi-tenancy readiness: bound the export to the requester's own tenant.
+  // DORMANT while tenantEnforcing() is false (every environment today) — the
+  // `NOT enforcing OR ...` clause is always true, so this is byte-for-byte the
+  // old query. Historic AuditEvent rows predate tenant stamping and are
+  // NULL-tenant; gating on tenantEnforcing() (rather than filtering
+  // unconditionally) avoids silently hiding them from today's export.
+  const enforcing = tenantEnforcing();
+  const activeTenantId = await getActiveTenantId();
+
   const rows = await basePrisma.$queryRaw<AuditExportRow[]>`
     SELECT "createdAt", "actorName", "actorType", "eventType", "entityType", "entityId",
       "summary", "changedFieldsJson", "source", "ipAddress", "correlationId"
@@ -61,6 +71,7 @@ export async function GET(request: NextRequest) {
       AND (${query}::text IS NULL OR "summary" ILIKE '%' || ${query} || '%' OR "entityId" ILIKE '%' || ${query} || '%')
       AND (${from}::timestamp IS NULL OR "createdAt" >= ${from})
       AND (${to}::timestamp IS NULL OR "createdAt" <= ${to})
+      AND (NOT ${enforcing}::boolean OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
     ORDER BY "createdAt" DESC
     LIMIT 10000
   `;

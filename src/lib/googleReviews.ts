@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { basePrisma } from "./db";
-import { getSetting } from "./settings";
+import { getSetting, putSetting, resolveIntegrationBundle } from "./settings";
+import { currentTenantScope } from "./tenantScope";
 import { sendPushToAll } from "./push";
 
 /**
@@ -11,10 +12,13 @@ import { sendPushToAll } from "./push";
  * approved.
  */
 export async function syncGoogleReviews(): Promise<number> {
-  const [apiKey, placeId] = await Promise.all([
-    getSetting("GOOGLE_PLACES_API_KEY"),
-    getSetting("GOOGLE_PLACE_ID"),
-  ]);
+  // Ambient tenant read for the credential lookup only — the tenantId used to
+  // STAMP GOOGLE_REVIEWS_LAST_SYNC / GoogleReview rows below is a separate
+  // concern owned elsewhere in this function; not touched here.
+  const credentialTenantId = currentTenantScope()?.tenantId ?? null;
+  const bundle = await resolveIntegrationBundle(credentialTenantId, "google-reviews");
+  if (!bundle) return 0;
+  const { GOOGLE_PLACES_API_KEY: apiKey, GOOGLE_PLACE_ID: placeId } = bundle;
   if (!apiKey || !placeId) return 0;
 
   // Reviews change slowly and this Places call bills at the expensive tier —
@@ -22,11 +26,16 @@ export async function syncGoogleReviews(): Promise<number> {
   // even though the cron fires every 15 minutes.
   const last = await getSetting("GOOGLE_REVIEWS_LAST_SYNC");
   if (last && Date.now() - new Date(last).getTime() < 6 * 60 * 60 * 1000) return 0;
-  await basePrisma.appSetting.upsert({
-    where: { key: "GOOGLE_REVIEWS_LAST_SYNC" },
-    update: { value: new Date().toISOString() },
-    create: { key: "GOOGLE_REVIEWS_LAST_SYNC", value: new Date().toISOString() },
-  });
+  // Multi-tenancy: putSetting stamps the owning tenant. Called from inside
+  // runCronPerTenant's per-tenant slice (see api/cron/automations/route.ts),
+  // which sets the ambient tenant scope via runInTenantScope BEFORE invoking the
+  // slice — so putSetting picks up the correct tenant. In off-mode / no scope it
+  // resolves to the founding tenant (the platform-default settings owner).
+  await putSetting("GOOGLE_REVIEWS_LAST_SYNC", new Date().toISOString());
+
+  // Stamp the owning tenant on each stored review (GoogleReview.tenantId is a
+  // nullable Phase-B column; null in off-mode / no scope, as before).
+  const tenantId = currentTenantScope()?.tenantId ?? null;
 
   const res = await fetch(
     `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}?fields=reviews&key=${encodeURIComponent(apiKey)}`,
@@ -56,6 +65,7 @@ export async function syncGoogleReviews(): Promise<number> {
     const review = await basePrisma.googleReview.create({
       data: {
         externalKey,
+        tenantId,
         author,
         rating: Math.round(r.rating ?? 0),
         text: r.text?.text ?? r.originalText?.text ?? null,

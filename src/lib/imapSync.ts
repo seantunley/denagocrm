@@ -3,7 +3,8 @@ import { simpleParser, type ParsedMail } from "mailparser";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { resolveTenantActor } from "./tenantActor";
-import { getSetting, putSetting } from "./settings";
+import { getSetting, putSetting, resolveIntegrationBundle } from "./settings";
+import { currentTenantScope } from "./tenantScope";
 import { sendPushToAll } from "./push";
 import { sendEmail } from "./email";
 import { contactName } from "./format";
@@ -163,7 +164,7 @@ async function fileSupportEmail(mailbox: Mailbox, parsed: ParsedMail, fromEmail:
       }
 
       const existing = await findThreadCase(tx, mailbox, contact.id, parsed, norm);
-      const message = { contactId: contact.id, direction: "customer", type: "message", body, sourceMessageId: idemKey };
+      const messageBase = { contactId: contact.id, direction: "customer" as const, type: "message" as const, body, sourceMessageId: idemKey };
       if (existing) {
         await tx.customerCase.update({
           where: { id: existing.id },
@@ -171,9 +172,9 @@ async function fileSupportEmail(mailbox: Mailbox, parsed: ParsedMail, fromEmail:
             status: existing.status === "resolved" ? "open" : existing.status,
             lastReplyAt: when,
             lastReplyBy: "customer",
-            messages: { create: message },
           },
         });
+        await tx.customerCaseMessage.create({ data: { ...messageBase, caseId: existing.id } });
         return { isNew: false, caseId: existing.id, caseNumber: existing.number, contactLabel: contactName(contact) };
       }
       const created = await tx.customerCase.create({
@@ -187,10 +188,10 @@ async function fileSupportEmail(mailbox: Mailbox, parsed: ParsedMail, fromEmail:
           mailboxId: mailbox.id,
           lastReplyAt: when,
           lastReplyBy: "customer",
-          messages: { create: message },
         },
         select: { id: true, number: true },
       });
+      await tx.customerCaseMessage.create({ data: { ...messageBase, caseId: created.id } });
       return { isNew: true, caseId: created.id, caseNumber: created.number, contactLabel: contactName(contact) };
     });
   } catch (e) {
@@ -343,13 +344,15 @@ async function clearStuck(): Promise<void> {
  * row (nor a duplicate/orphan contact).
  */
 export async function syncInboundEmail(): Promise<number> {
-  const [host, portRaw, secureRaw, user, pass] = await Promise.all([
-    getSetting("IMAP_HOST"),
-    getSetting("IMAP_PORT"),
-    getSetting("IMAP_SECURE"),
-    getSetting("IMAP_USER"),
-    getSetting("IMAP_PASS"),
-  ]);
+  // Runs inside runCronPerTenant's per-tenant slice — currentTenantScope() is
+  // that tenant's scope when enforcing, else undefined (dormant): a tenant
+  // with no IMAP override correctly falls back to the one global mailbox
+  // (today's only mailbox). The "poll once globally vs per tenant" cron
+  // structure is unchanged — only the credential resolution below is new.
+  const tenantId = currentTenantScope()?.tenantId ?? null;
+  const bundle = await resolveIntegrationBundle(tenantId, "imap");
+  if (!bundle) return 0;
+  const { IMAP_HOST: host, IMAP_PORT: portRaw, IMAP_SECURE: secureRaw, IMAP_USER: user, IMAP_PASS: pass } = bundle;
   if (!host || !user || !pass) return 0;
   if (!(await acquireSyncLock())) return 0; // another run is in progress
 

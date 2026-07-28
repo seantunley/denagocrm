@@ -3,6 +3,7 @@
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { withTenantWrite } from "@/lib/tenantWrite";
 import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import {
@@ -61,24 +62,31 @@ function journeyData(formData: FormData) {
 export async function createJourney(formData: FormData) {
   const user = await requireOwner();
   const data = journeyData(formData);
-  const journey = await prisma.journey.create({
-    data: {
-      name: data.name,
-      description: data.description,
-      category: data.category,
-      createdById: user.id,
-      versions: {
-        create: {
-          version: 1,
-          state: "draft",
-          trigger: data.trigger,
-          triggerConfig: data.triggerConfig ?? Prisma.JsonNull,
-          entryConditions: data.entryConditions ?? Prisma.JsonNull,
-          definition: data.definition,
-          createdById: user.id,
-        },
+  // Atomic: journey + its first version in ONE transaction, tenant-stamped.
+  const journey = await withTenantWrite(async (tx, tenantId) => {
+    const j = await tx.journey.create({
+      data: {
+        name: data.name,
+        description: data.description,
+        category: data.category,
+        createdById: user.id,
+        tenantId,
       },
-    },
+    });
+    await tx.journeyVersion.create({
+      data: {
+        journeyId: j.id,
+        version: 1,
+        state: "draft",
+        trigger: data.trigger,
+        triggerConfig: data.triggerConfig ?? Prisma.JsonNull,
+        entryConditions: data.entryConditions ?? Prisma.JsonNull,
+        definition: data.definition,
+        createdById: user.id,
+        tenantId,
+      },
+    });
+    return j;
   });
   await logAudit({
     action: "journey.created",
@@ -276,24 +284,29 @@ export async function installJourneyTemplates() {
   for (const item of templates) {
     const exists = await prisma.journey.findFirst({ where: { name: item.name, status: { not: "archived" } } });
     if (exists) continue;
-    await prisma.journey.create({
-      data: {
-        name: item.name,
-        description: item.description,
-        category: item.category,
-        createdById: user.id,
-        versions: {
-          create: {
-            version: 1,
-            state: "draft",
-            trigger: item.trigger,
-            triggerConfig: item.triggerConfig,
-            entryConditions: item.entryConditions,
-            definition: item.definition,
-            createdById: user.id,
-          },
+    await withTenantWrite(async (tx, tenantId) => {
+      const tpl = await tx.journey.create({
+        data: {
+          name: item.name,
+          description: item.description,
+          category: item.category,
+          createdById: user.id,
+          tenantId,
         },
-      },
+      });
+      await tx.journeyVersion.create({
+        data: {
+          journeyId: tpl.id,
+          version: 1,
+          state: "draft",
+          trigger: item.trigger,
+          triggerConfig: item.triggerConfig,
+          entryConditions: item.entryConditions,
+          definition: item.definition,
+          createdById: user.id,
+          tenantId,
+        },
+      });
     });
   }
   revalidatePath("/journeys");

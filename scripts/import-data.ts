@@ -11,6 +11,7 @@
 import { PrismaClient } from "@prisma/client";
 import * as fs from "fs";
 import { ensureFoundingMembership } from "../src/lib/provisioning";
+import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 
 const prisma = new PrismaClient();
 
@@ -38,7 +39,9 @@ async function main() {
     });
   }
   for (const s of raw.appSettings) await prisma.appSetting.create({ data: s });
-  for (const t of raw.tags) await prisma.tag.create({ data: t });
+  // Legacy SQLite export predates multi-tenancy: stamp the founding tenant
+  // (Tag.tenantId is NOT NULL and tenant-scoped uniqueness is (tenantId, name)).
+  for (const t of raw.tags) await prisma.tag.create({ data: { ...t, tenantId: t.tenantId ?? DEFAULT_TENANT_ID } });
   for (const p of raw.products) {
     const { colors, ...product } = p;
     await prisma.product.create({

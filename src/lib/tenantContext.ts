@@ -76,7 +76,7 @@ export async function createUserInOwnerTenant(
       if ("error" in ctx || ctx.tenantId !== pre.tenantId) {
         throw new Error("TENANT_CONTEXT_CHANGED");
       }
-      const user = await tx.user.create({ data });
+      const user = await tx.user.create({ data: { ...data, tenantId: ctx.tenantId } });
       await addTenantMembership(tx, ctx.tenantId, user.id);
       return { user: { id: user.id }, tenantId: ctx.tenantId };
     });

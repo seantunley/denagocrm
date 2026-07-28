@@ -33,10 +33,63 @@ export const GLOBAL_MODELS: ReadonlySet<string> = new Set([
   // BackupRun has no tenantId at all. Without this entry the guard would treat it
   // as tenant-scoped and fail closed on a column that deliberately does not exist.
   "BackupRun",
+  // RBAC design decision: the PERMISSION CATALOG (the fixed, code-defined list
+  // of capability keys like `roles.manage`) is shared across every tenant —
+  // one taxonomy, not per-dealer. Role and RolePermission are NOT here: a
+  // tenant admin can author their own custom roles (createRole() in
+  // accessControl.ts), so those are tenant-owned via a nullable tenantId
+  // (NULL = system/seeded role, shared globally; non-null = one tenant's own
+  // role) — see governance.prisma and migration 20260727100000_role_tenant_scoping.
+  "Permission",
+]);
+
+/**
+ * Tenant-scoped models that ALSO legitimately hold shared rows with `tenantId IS
+ * NULL` — their RLS policy explicitly admits null (a NULL row is visible to every
+ * tenant). Today that is the RBAC pair: `Role`/`RolePermission` use NULL for the
+ * seeded SYSTEM roles shared across all tenants (non-null = one tenant's own custom
+ * role). These are tenant-scoped (a tenant CAN own rows) but must NOT be locked to
+ * `tenantId NOT NULL`, and a NULL tenantId on them is NOT a preflight failure.
+ *
+ * Authoritative source: the set of tables whose RLS policy USING/CHECK clause
+ * contains `current_setting('app.bypass_rls',true)='on' OR tenantId IS NULL OR
+ * tenantId = current_setting('app.current_tenant',true)`. AppSetting USED to be
+ * here but its null escape hatch was removed (migration 20260727210000), so it is
+ * now strictly owned.
+ */
+export const TENANT_SHARED_NULLABLE_MODELS: ReadonlySet<string> = new Set([
+  "Role",
+  "RolePermission",
 ]);
 
 export function isTenantScopedModel(model: string): boolean {
   return !GLOBAL_MODELS.has(model);
+}
+
+/**
+ * Can this Role be edited (permissions changed) by the caller currently
+ * scoped to `activeTenantId`? Pure decision extracted out of
+ * updateRolePermissions() (accessControl.ts) so it's unit-testable without a
+ * DB or a "use server" import.
+ *
+ * - A SYSTEM/global role (`roleTenantId === null`) is editable only by the
+ *   global platform admin (`isGlobalAdmin === true`). A tenant admin editing a
+ *   system role would affect every tenant's shared permission set — disallowed.
+ * - A tenant-owned role (`roleTenantId !== null`) is editable only by ITS OWN
+ *   tenant.
+ * - DORMANT while `enforcing` is false: always returns true regardless of
+ *   tenant mismatch, so today's (every real environment) behaviour — any
+ *   admin with roles.manage can edit any role — is unchanged byte-for-byte.
+ */
+export function canEditRole(
+  enforcing: boolean,
+  roleTenantId: string | null,
+  activeTenantId: string | null,
+  isGlobalAdmin: boolean = false,
+): boolean {
+  if (!enforcing) return true;
+  if (roleTenantId === null) return isGlobalAdmin;
+  return roleTenantId === activeTenantId;
 }
 
 /** Prisma nested-write operation keywords (relation fields inside `data`). */
