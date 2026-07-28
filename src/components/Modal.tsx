@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import {
   Dialog,
   DialogHeader,
@@ -8,6 +8,21 @@ import {
   DialogTrigger,
   ResponsiveDialogContent,
 } from "@/components/ui/dialog";
+
+/**
+ * Lets content inside the dialog close it — specifically <SaveForm>, which closes
+ * on a successful save. A create form that stays open after succeeding invites a
+ * duplicate submission, and for the admin/tenant creation forms it also leaves a
+ * typed password sitting in a visible field.
+ *
+ * Defaults to a no-op so <SaveForm> works identically outside a modal.
+ */
+const ModalCloseContext = createContext<() => void>(() => {});
+
+/** Close the enclosing ModalTrigger, if there is one. */
+export function useCloseModal(): () => void {
+  return useContext(ModalCloseContext);
+}
 
 /** Accessible capture-form dialog with the legacy trigger API. */
 export default function ModalTrigger({
@@ -21,8 +36,9 @@ export default function ModalTrigger({
   buttonClass?: string;
   children: ReactNode;
 }) {
+  const [open, setOpen] = useState(false);
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <button className={buttonClass}>{label}</button>
       </DialogTrigger>
@@ -31,7 +47,9 @@ export default function ModalTrigger({
           <DialogTitle className="text-xl tracking-tight">{title}</DialogTitle>
         </DialogHeader>
         <div className="p-5 sm:p-6 [&>.card]:border-0 [&>.card]:bg-transparent [&>.card]:p-0 [&>.card]:shadow-none">
-          {children}
+          <ModalCloseContext.Provider value={() => setOpen(false)}>
+            {children}
+          </ModalCloseContext.Provider>
         </div>
       </ResponsiveDialogContent>
     </Dialog>

@@ -1,5 +1,6 @@
 "use server";
 
+import { asActionResult, ActionRefusal, type ActionResult } from "@/lib/actionResult";
 import bcrypt from "bcryptjs";
 import { revalidatePath } from "next/cache";
 import { basePrisma } from "@/lib/db";
@@ -49,255 +50,265 @@ async function requirePlatformOwner(): Promise<{ id: string; name: string; email
   return requirePlatformAdminAction();
 }
 
-export async function createTenantAction(formData: FormData): Promise<void> {
-  const actor = await requirePlatformOwner();
+export async function createTenantAction(formData: FormData): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const actor = await requirePlatformOwner();
 
-  const name = value(formData, "name");
-  const slug = value(formData, "slug").toLowerCase();
-  const ownerName = value(formData, "ownerName");
-  const ownerEmail = value(formData, "ownerEmail").toLowerCase();
-  const password = String(formData.get("ownerPassword") ?? "");
+    const name = value(formData, "name");
+    const slug = value(formData, "slug").toLowerCase();
+    const ownerName = value(formData, "ownerName");
+    const ownerEmail = value(formData, "ownerEmail").toLowerCase();
+    const password = String(formData.get("ownerPassword") ?? "");
 
-  if (!name || !slug || !ownerName || !ownerEmail) {
-    throw new Error("Tenant name, slug, owner name and owner email are all required.");
-  }
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
-    throw new Error("Slug may only contain lowercase letters, numbers and single hyphens.");
-  }
-  if (!validPassword(password)) {
-    throw new Error("Owner password must be at least 12 characters and contain letters and numbers.");
-  }
-
-  // Friendly pre-checks for the common collisions; the createTenant transaction
-  // is still the authoritative uniqueness boundary (race-safe catch below).
-  const slugTaken = await basePrisma.tenant.findUnique({ where: { slug }, select: { id: true } });
-  if (slugTaken) throw new Error(`A tenant with the slug “${slug}” already exists.`);
-  const emailTaken = await basePrisma.user.findUnique({ where: { email: ownerEmail }, select: { id: true } });
-  if (emailTaken) throw new Error("A user with that email already exists.");
-
-  const passwordHash = await bcrypt.hash(password, 12);
-
-  let created: { tenantId: string; ownerId: string };
-  try {
-    created = await createTenant(basePrisma, {
-      name,
-      slug,
-      owner: { name: ownerName, email: ownerEmail, passwordHash },
-    });
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      throw new Error("That slug or owner email was just taken — choose another.");
+    if (!name || !slug || !ownerName || !ownerEmail) {
+      throw new ActionRefusal("Tenant name, slug, owner name and owner email are all required.");
     }
-    throw error;
-  }
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+      throw new ActionRefusal("Slug may only contain lowercase letters, numbers and single hyphens.");
+    }
+    if (!validPassword(password)) {
+      throw new ActionRefusal("Owner password must be at least 12 characters and contain letters and numbers.");
+    }
 
-  await logAuditStrict({
-    action: "tenant.created",
-    summary: `Created inert tenant “${name}” (${slug})`,
-    entityType: "Tenant",
-    entityId: created.tenantId,
-    // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
-    // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
-    // User row has that id, so anything joining those columns silently finds
-    // nothing. Attribute by name + actorType instead, and keep the id in metadata
-    // where it is unambiguous about which identity space it belongs to.
-    userName: actor.name,
-    actorType: "platform_admin",
-    metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
-    // No password fields here — the owner's credentials never enter the audit trail.
-    after: { name, slug, active: false, ownerId: created.ownerId, ownerEmail, inert: true },
-  });
-  revalidatePath(CONSOLE_PATH);
-}
+    // Friendly pre-checks for the common collisions; the createTenant transaction
+    // is still the authoritative uniqueness boundary (race-safe catch below).
+    const slugTaken = await basePrisma.tenant.findUnique({ where: { slug }, select: { id: true } });
+    if (slugTaken) throw new ActionRefusal(`A tenant with the slug “${slug}” already exists.`);
+    const emailTaken = await basePrisma.user.findUnique({ where: { email: ownerEmail }, select: { id: true } });
+    if (emailTaken) throw new ActionRefusal("A user with that email already exists.");
 
-export async function activateTenantAction(tenantId: string): Promise<void> {
-  const actor = await requirePlatformOwner();
+    const passwordHash = await bcrypt.hash(password, 12);
 
-  // SAFETY GATE: refuse activation until data-isolation enforcement is live.
-  const gate = canActivateTenant(tenantEnforcing());
-  if (!gate.ok) throw new Error(gate.error);
+    let created: { tenantId: string; ownerId: string };
+    try {
+      created = await createTenant(basePrisma, {
+        name,
+        slug,
+        owner: { name: ownerName, email: ownerEmail, passwordHash },
+      });
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new ActionRefusal("That slug or owner email was just taken — choose another.");
+      }
+      throw error;
+    }
 
-  const tenant = await basePrisma.tenant.findUnique({
-    where: { id: tenantId },
-    select: { id: true, name: true, slug: true, active: true },
-  });
-  if (!tenant) throw new Error("Tenant not found.");
-
-  // The provisioned owner is the earliest TenantMember — the one createTenant
-  // disabled. Every member added after creation is an existing active user whose
-  // global disabledAt must not be touched by activation.
-  const firstMemberRows = await basePrisma.$queryRaw<Array<{ userId: string }>>`
-    SELECT "userId" FROM "TenantMember" WHERE "tenantId" = ${tenantId}
-    ORDER BY "createdAt" ASC LIMIT 1
-  `;
-  const ownerId = firstMemberRows[0]?.userId;
-  if (!ownerId) throw new Error("Tenant has no members — cannot activate.");
-
-  await activateTenant(basePrisma, tenantId, ownerId);
-
-  await logAuditStrict({
-    action: "tenant.activated",
-    summary: `Activated tenant “${tenant.name}” and re-enabled the provisioned owner`,
-    entityType: "Tenant",
-    entityId: tenantId,
-    // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
-    // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
-    // User row has that id, so anything joining those columns silently finds
-    // nothing. Attribute by name + actorType instead, and keep the id in metadata
-    // where it is unambiguous about which identity space it belongs to.
-    userName: actor.name,
-    actorType: "platform_admin",
-    metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
-    before: { active: tenant.active },
-    after: { active: true },
-  });
-  revalidatePath(CONSOLE_PATH);
-}
-
-export async function suspendTenantAction(tenantId: string): Promise<void> {
-  const actor = await requirePlatformOwner();
-
-  // Never suspend the founding tenant — it underpins the whole existing business.
-  const gate = canSuspendTenant(tenantId);
-  if (!gate.ok) throw new Error(gate.error);
-
-  const tenant = await basePrisma.tenant.findUnique({
-    where: { id: tenantId },
-    select: { id: true, name: true, active: true },
-  });
-  if (!tenant) throw new Error("Tenant not found.");
-
-  await suspendTenant(basePrisma, tenantId);
-
-  await logAuditStrict({
-    action: "tenant.suspended",
-    summary: `Suspended tenant “${tenant.name}”`,
-    entityType: "Tenant",
-    entityId: tenantId,
-    // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
-    // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
-    // User row has that id, so anything joining those columns silently finds
-    // nothing. Attribute by name + actorType instead, and keep the id in metadata
-    // where it is unambiguous about which identity space it belongs to.
-    userName: actor.name,
-    actorType: "platform_admin",
-    metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
-    before: { active: tenant.active },
-    after: { active: false },
-  });
-  revalidatePath(CONSOLE_PATH);
-}
-
-export async function addTenantMemberAction(tenantId: string, formData: FormData): Promise<void> {
-  const actor = await requirePlatformOwner();
-
-  const userId = value(formData, "userId");
-  if (!userId) throw new Error("Select a user to add.");
-
-  const [tenant, user] = await Promise.all([
-    basePrisma.tenant.findUnique({ where: { id: tenantId }, select: { id: true, name: true } }),
-    basePrisma.user.findUnique({ where: { id: userId }, select: { id: true, name: true } }),
-  ]);
-  if (!tenant) throw new Error("Tenant not found.");
-  if (!user) throw new Error("Selected user does not exist.");
-
-  // LOCKOUT GUARD — see tenantAdmin.canAddTenantMember. Sign-in needs EXACTLY ONE
-  // active membership; a second yields `ambiguous_tenant` and, under enforcement,
-  // no session at all — so granting one REMOVES this user's access rather than
-  // widening it.
-  //
-  // Serialised on the USER row: every addition for this user takes the same lock,
-  // so two concurrent requests cannot both observe "no other membership" and both
-  // insert. A bare check-then-insert is not enough, and a unique index on userId is
-  // not used because `ambiguous_tenant` must remain a constructible (hence testable)
-  // state for data that predates this guard — see the schema comment.
-  //
-  // ALL memberships are counted, not just those in ACTIVE tenants: a membership in
-  // a suspended tenant looks harmless today and becomes ambiguous the moment that
-  // tenant is activated.
-  await basePrisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
-
-    const memberships = await tx.tenantMember.findMany({
-      where: { userId },
-      select: { tenantId: true },
+    await logAuditStrict({
+      action: "tenant.created",
+      summary: `Created inert tenant “${name}” (${slug})`,
+      entityType: "Tenant",
+      entityId: created.tenantId,
+      // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
+      // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
+      // User row has that id, so anything joining those columns silently finds
+      // nothing. Attribute by name + actorType instead, and keep the id in metadata
+      // where it is unambiguous about which identity space it belongs to.
+      userName: actor.name,
+      actorType: "platform_admin",
+      metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
+      // No password fields here — the owner's credentials never enter the audit trail.
+      after: { name, slug, active: false, ownerId: created.ownerId, ownerEmail, inert: true },
     });
-    const addGate = canAddTenantMember(
-      memberships.map((membership) => membership.tenantId),
-      tenantId,
-    );
-    if (!addGate.ok) throw new Error(addGate.error);
-
-    await addTenantMembership(tx, tenantId, userId);
+    revalidatePath(CONSOLE_PATH);
   });
-
-  await logAuditStrict({
-    action: "tenant.member_added",
-    summary: `Added ${user.name} to tenant “${tenant.name}”`,
-    entityType: "Tenant",
-    entityId: tenantId,
-    // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
-    // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
-    // User row has that id, so anything joining those columns silently finds
-    // nothing. Attribute by name + actorType instead, and keep the id in metadata
-    // where it is unambiguous about which identity space it belongs to.
-    userName: actor.name,
-    actorType: "platform_admin",
-    metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
-    after: { userId },
-  });
-  revalidatePath(CONSOLE_PATH);
 }
 
-export async function removeTenantMemberAction(tenantId: string, userId: string): Promise<void> {
-  const actor = await requirePlatformOwner();
+export async function activateTenantAction(tenantId: string): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const actor = await requirePlatformOwner();
 
-  const tenant = await basePrisma.tenant.findUnique({
-    where: { id: tenantId },
-    select: { id: true, name: true, ownerUserId: true },
+    // SAFETY GATE: refuse activation until data-isolation enforcement is live.
+    const gate = canActivateTenant(tenantEnforcing());
+    if (!gate.ok) throw new ActionRefusal(gate.error);
+
+    const tenant = await basePrisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, name: true, slug: true, active: true },
+    });
+    if (!tenant) throw new ActionRefusal("Tenant not found.");
+
+    // The provisioned owner is the earliest TenantMember — the one createTenant
+    // disabled. Every member added after creation is an existing active user whose
+    // global disabledAt must not be touched by activation.
+    const firstMemberRows = await basePrisma.$queryRaw<Array<{ userId: string }>>`
+      SELECT "userId" FROM "TenantMember" WHERE "tenantId" = ${tenantId}
+      ORDER BY "createdAt" ASC LIMIT 1
+    `;
+    const ownerId = firstMemberRows[0]?.userId;
+    if (!ownerId) throw new ActionRefusal("Tenant has no members — cannot activate.");
+
+    await activateTenant(basePrisma, tenantId, ownerId);
+
+    await logAuditStrict({
+      action: "tenant.activated",
+      summary: `Activated tenant “${tenant.name}” and re-enabled the provisioned owner`,
+      entityType: "Tenant",
+      entityId: tenantId,
+      // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
+      // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
+      // User row has that id, so anything joining those columns silently finds
+      // nothing. Attribute by name + actorType instead, and keep the id in metadata
+      // where it is unambiguous about which identity space it belongs to.
+      userName: actor.name,
+      actorType: "platform_admin",
+      metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
+      before: { active: tenant.active },
+      after: { active: true },
+    });
+    revalidatePath(CONSOLE_PATH);
   });
-  if (!tenant) throw new Error("Tenant not found.");
+}
 
-  // The provisioned owner cannot be removed. The last-member guard below only
-  // stops a tenant reaching ZERO members — it would happily remove the OWNER while
-  // other members remain, leaving a tenant nobody is accountable for and whose
-  // activation path (which re-enables the owner) has no owner to re-enable.
-  // Skipped when ownerUserId is null: tenants provisioned before the column
-  // existed have no recorded owner, and inventing one here would be a guess.
-  if (tenant.ownerUserId && tenant.ownerUserId === userId) {
-    throw new Error("Cannot remove the tenant owner. Transfer ownership before removing this member.");
-  }
+export async function suspendTenantAction(tenantId: string): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const actor = await requirePlatformOwner();
 
-  // A transaction ALONE does not close the last-member race: PostgreSQL's default
-  // READ COMMITTED isolation lets two concurrent removals both read count=2 and
-  // then delete DIFFERENT memberships, leaving zero. Serialise them on the parent
-  // TENANT row — every removal for this tenant takes the same lock, so the second
-  // waits and re-counts after the first commits, seeing count=1 and being refused.
-  await basePrisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT "id" FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`;
+    // Never suspend the founding tenant — it underpins the whole existing business.
+    const gate = canSuspendTenant(tenantId);
+    if (!gate.ok) throw new ActionRefusal(gate.error);
 
-    const memberCount = await tx.tenantMember.count({ where: { tenantId } });
-    const gate = canRemoveTenantMember(memberCount);
-    if (!gate.ok) throw new Error(gate.error);
-    await tx.tenantMember.deleteMany({ where: { tenantId, userId } });
+    const tenant = await basePrisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, name: true, active: true },
+    });
+    if (!tenant) throw new ActionRefusal("Tenant not found.");
+
+    await suspendTenant(basePrisma, tenantId);
+
+    await logAuditStrict({
+      action: "tenant.suspended",
+      summary: `Suspended tenant “${tenant.name}”`,
+      entityType: "Tenant",
+      entityId: tenantId,
+      // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
+      // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
+      // User row has that id, so anything joining those columns silently finds
+      // nothing. Attribute by name + actorType instead, and keep the id in metadata
+      // where it is unambiguous about which identity space it belongs to.
+      userName: actor.name,
+      actorType: "platform_admin",
+      metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
+      before: { active: tenant.active },
+      after: { active: false },
+    });
+    revalidatePath(CONSOLE_PATH);
   });
+}
 
-  await logAuditStrict({
-    action: "tenant.member_removed",
-    summary: `Removed a member from tenant “${tenant.name}”`,
-    entityType: "Tenant",
-    entityId: tenantId,
-    // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
-    // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
-    // User row has that id, so anything joining those columns silently finds
-    // nothing. Attribute by name + actorType instead, and keep the id in metadata
-    // where it is unambiguous about which identity space it belongs to.
-    userName: actor.name,
-    actorType: "platform_admin",
-    metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
-    before: { userId },
+export async function addTenantMemberAction(tenantId: string, formData: FormData): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const actor = await requirePlatformOwner();
+
+    const userId = value(formData, "userId");
+    if (!userId) throw new ActionRefusal("Select a user to add.");
+
+    const [tenant, user] = await Promise.all([
+      basePrisma.tenant.findUnique({ where: { id: tenantId }, select: { id: true, name: true } }),
+      basePrisma.user.findUnique({ where: { id: userId }, select: { id: true, name: true } }),
+    ]);
+    if (!tenant) throw new ActionRefusal("Tenant not found.");
+    if (!user) throw new ActionRefusal("Selected user does not exist.");
+
+    // LOCKOUT GUARD — see tenantAdmin.canAddTenantMember. Sign-in needs EXACTLY ONE
+    // active membership; a second yields `ambiguous_tenant` and, under enforcement,
+    // no session at all — so granting one REMOVES this user's access rather than
+    // widening it.
+    //
+    // Serialised on the USER row: every addition for this user takes the same lock,
+    // so two concurrent requests cannot both observe "no other membership" and both
+    // insert. A bare check-then-insert is not enough, and a unique index on userId is
+    // not used because `ambiguous_tenant` must remain a constructible (hence testable)
+    // state for data that predates this guard — see the schema comment.
+    //
+    // ALL memberships are counted, not just those in ACTIVE tenants: a membership in
+    // a suspended tenant looks harmless today and becomes ambiguous the moment that
+    // tenant is activated.
+    await basePrisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+
+      const memberships = await tx.tenantMember.findMany({
+        where: { userId },
+        select: { tenantId: true },
+      });
+      const addGate = canAddTenantMember(
+        memberships.map((membership) => membership.tenantId),
+        tenantId,
+      );
+      if (!addGate.ok) throw new ActionRefusal(addGate.error);
+
+      await addTenantMembership(tx, tenantId, userId);
+    });
+
+    await logAuditStrict({
+      action: "tenant.member_added",
+      summary: `Added ${user.name} to tenant “${tenant.name}”`,
+      entityType: "Tenant",
+      entityId: tenantId,
+      // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
+      // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
+      // User row has that id, so anything joining those columns silently finds
+      // nothing. Attribute by name + actorType instead, and keep the id in metadata
+      // where it is unambiguous about which identity space it belongs to.
+      userName: actor.name,
+      actorType: "platform_admin",
+      metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
+      after: { userId },
+    });
+    revalidatePath(CONSOLE_PATH);
   });
-  revalidatePath(CONSOLE_PATH);
+}
+
+export async function removeTenantMemberAction(tenantId: string, userId: string): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const actor = await requirePlatformOwner();
+
+    const tenant = await basePrisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, name: true, ownerUserId: true },
+    });
+    if (!tenant) throw new ActionRefusal("Tenant not found.");
+
+    // The provisioned owner cannot be removed. The last-member guard below only
+    // stops a tenant reaching ZERO members — it would happily remove the OWNER while
+    // other members remain, leaving a tenant nobody is accountable for and whose
+    // activation path (which re-enables the owner) has no owner to re-enable.
+    // Skipped when ownerUserId is null: tenants provisioned before the column
+    // existed have no recorded owner, and inventing one here would be a guess.
+    if (tenant.ownerUserId && tenant.ownerUserId === userId) {
+      throw new ActionRefusal("Cannot remove the tenant owner. Transfer ownership before removing this member.");
+    }
+
+    // A transaction ALONE does not close the last-member race: PostgreSQL's default
+    // READ COMMITTED isolation lets two concurrent removals both read count=2 and
+    // then delete DIFFERENT memberships, leaving zero. Serialise them on the parent
+    // TENANT row — every removal for this tenant takes the same lock, so the second
+    // waits and re-counts after the first commits, seeing count=1 and being refused.
+    await basePrisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT "id" FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`;
+
+      const memberCount = await tx.tenantMember.count({ where: { tenantId } });
+      const gate = canRemoveTenantMember(memberCount);
+      if (!gate.ok) throw new ActionRefusal(gate.error);
+      await tx.tenantMember.deleteMany({ where: { tenantId, userId } });
+    });
+
+    await logAuditStrict({
+      action: "tenant.member_removed",
+      summary: `Removed a member from tenant “${tenant.name}”`,
+      entityType: "Tenant",
+      entityId: tenantId,
+      // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
+      // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
+      // User row has that id, so anything joining those columns silently finds
+      // nothing. Attribute by name + actorType instead, and keep the id in metadata
+      // where it is unambiguous about which identity space it belongs to.
+      userName: actor.name,
+      actorType: "platform_admin",
+      metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
+      before: { userId },
+    });
+    revalidatePath(CONSOLE_PATH);
+  });
 }
 
 /**
@@ -312,41 +323,43 @@ export async function removeTenantMemberAction(tenantId: string, userId: string)
 export async function setTenantModulesAction(
   tenantId: string,
   formData: FormData,
-): Promise<void> {
-  const actor = await requirePlatformOwner();
+): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const actor = await requirePlatformOwner();
 
-  const tenant = await basePrisma.tenant.findUnique({
-    where: { id: tenantId },
-    select: { id: true, name: true, modules: true },
-  });
-  if (!tenant) throw new Error("Tenant not found.");
+    const tenant = await basePrisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, name: true, modules: true },
+    });
+    if (!tenant) throw new ActionRefusal("Tenant not found.");
 
-  // serialiseModuleGrant drops anything that is not a known OPTIONAL module, so a
-  // forged POST cannot grant "core" (already implied) or invent an id.
-  const modules = serialiseModuleGrant(formData.getAll("modules").map(String));
+    // serialiseModuleGrant drops anything that is not a known OPTIONAL module, so a
+    // forged POST cannot grant "core" (already implied) or invent an id.
+    const modules = serialiseModuleGrant(formData.getAll("modules").map(String));
 
-  if (modules === tenant.modules) {
+    if (modules === tenant.modules) {
+      revalidatePath(CONSOLE_PATH);
+      return;
+    }
+
+    await basePrisma.tenant.update({ where: { id: tenantId }, data: { modules } });
+
+    await logAuditStrict({
+      action: "tenant.modules_changed",
+      summary: `Updated modules for tenant “${tenant.name}”`,
+      entityType: "Tenant",
+      entityId: tenantId,
+      // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
+      // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
+      // User row has that id, so anything joining those columns silently finds
+      // nothing. Attribute by name + actorType instead, and keep the id in metadata
+      // where it is unambiguous about which identity space it belongs to.
+      userName: actor.name,
+      actorType: "platform_admin",
+      metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
+      before: { modules: tenant.modules },
+      after: { modules },
+    });
     revalidatePath(CONSOLE_PATH);
-    return;
-  }
-
-  await basePrisma.tenant.update({ where: { id: tenantId }, data: { modules } });
-
-  await logAuditStrict({
-    action: "tenant.modules_changed",
-    summary: `Updated modules for tenant “${tenant.name}”`,
-    entityType: "Tenant",
-    entityId: tenantId,
-    // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
-    // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
-    // User row has that id, so anything joining those columns silently finds
-    // nothing. Attribute by name + actorType instead, and keep the id in metadata
-    // where it is unambiguous about which identity space it belongs to.
-    userName: actor.name,
-    actorType: "platform_admin",
-    metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
-    before: { modules: tenant.modules },
-    after: { modules },
   });
-  revalidatePath(CONSOLE_PATH);
 }

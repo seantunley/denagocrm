@@ -6,6 +6,7 @@ import { recordView } from "@/lib/signing/events";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
 import { SignSurface } from "./SignSurface";
+import { Toaster } from "@/components/ui/sonner";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,10 @@ function Shell({ children }: { children: React.ReactNode }) {
     <div style={{ minHeight: "100vh", background: "#0f172a", color: "#e2e8f0", display: "flex", flexDirection: "column", alignItems: "center", padding: "40px 16px", fontFamily: "Helvetica, Arial, sans-serif" }}>
       <div style={{ marginBottom: 20, fontWeight: 800, letterSpacing: 1, color: "#fff" }}>DENAGO <span style={{ color: "#ea580c" }}>CAPE TOWN</span></div>
       {children}
+      {/* Signing has no layout of its own, so the Toaster is mounted on this
+          shell. Feedback matters most here: the signer is an outside party with
+          no other way to tell whether their signature was recorded. */}
+      <Toaster />
     </div>
   );
 }
