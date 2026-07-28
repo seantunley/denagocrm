@@ -2293,6 +2293,16 @@ model Tenant {
   name      String
   slug      String   @unique
   active    Boolean  @default(true)
+  /// Module ENTITLEMENT — the optional packs this tenant MAY use, as a CSV of
+  /// module ids ("inbox,marketing,automotive"). Granted by a platform admin in the
+  /// console. `core` is mandatory and always implied, so it is never stored here.
+  ///
+  /// This is the OUTER limit, not the effective set: a tenant's own admin may
+  /// additionally disable a granted module for themselves (the existing
+  /// DISABLED_MODULES AppSetting), but can never enable one that is not granted.
+  /// Effective = granted MINUS locally disabled. Empty string = core only, which
+  /// is the fail-closed default for a newly created tenant.
+  modules   String   @default("")
   createdAt DateTime @default(now())
 
   members  TenantMember[]

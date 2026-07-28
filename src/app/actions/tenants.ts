@@ -16,6 +16,7 @@ import {
   canSuspendTenant,
   canRemoveTenantMember,
 } from "@/lib/tenantAdmin";
+import { serialiseModuleGrant } from "@/lib/modules/entitlement";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
 
 /** The route every action revalidates so the console reflects the new state. */
@@ -231,6 +232,53 @@ export async function removeTenantMemberAction(tenantId: string, userId: string)
     // an actorUserId that resolves to nothing in the User table.
     actorType: "platform_admin",
     before: { userId },
+  });
+  revalidatePath(CONSOLE_PATH);
+}
+
+/**
+ * Grant the optional module packs a tenant MAY use. The platform admin sets the
+ * outer limit here; the tenant's own admin can still switch a granted pack off for
+ * themselves, but can never switch on one that was not granted.
+ *
+ * Revoking is immediate and unconditional — a module removed here disappears for
+ * the tenant on their next request regardless of their local preference, because
+ * the effective set is (granted MINUS locally disabled).
+ */
+export async function setTenantModulesAction(
+  tenantId: string,
+  formData: FormData,
+): Promise<void> {
+  const actor = await requirePlatformOwner();
+
+  const tenant = await basePrisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { id: true, name: true, modules: true },
+  });
+  if (!tenant) throw new Error("Tenant not found.");
+
+  // serialiseModuleGrant drops anything that is not a known OPTIONAL module, so a
+  // forged POST cannot grant "core" (already implied) or invent an id.
+  const modules = serialiseModuleGrant(formData.getAll("modules").map(String));
+
+  if (modules === tenant.modules) {
+    revalidatePath(CONSOLE_PATH);
+    return;
+  }
+
+  await basePrisma.tenant.update({ where: { id: tenantId }, data: { modules } });
+
+  await logAuditStrict({
+    action: "tenant.modules_changed",
+    summary: `Updated modules for tenant “${tenant.name}”`,
+    entityType: "Tenant",
+    entityId: tenantId,
+    user: actor,
+    // The actor is a PlatformAdmin, not a CRM User — say so, or the trail records
+    // an actorUserId that resolves to nothing in the User table.
+    actorType: "platform_admin",
+    before: { modules: tenant.modules },
+    after: { modules },
   });
   revalidatePath(CONSOLE_PATH);
 }

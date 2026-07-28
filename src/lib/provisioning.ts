@@ -76,6 +76,10 @@ export async function createTenant(
 ): Promise<{ tenantId: string; ownerId: string }> {
   return prisma.$transaction(async (tx) => {
     const tenant = await tx.tenant.create({
+      // modules defaults to "" — core only. FAIL-CLOSED on purpose: a new tenant
+      // is granted optional packs deliberately in the console, never implicitly,
+      // so shipping a new module never hands it (and its data surface) to tenants
+      // nobody granted it to.
       data: { name: input.name, slug: input.slug, active: false },
     });
     const owner = await tx.user.create({

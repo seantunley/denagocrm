@@ -1,11 +1,11 @@
-import { redirect } from "next/navigation";
-import { Plus, ShieldAlert, Lock } from "lucide-react";
+import { Plus, Lock } from "lucide-react";
 import { basePrisma } from "@/lib/db";
-import { getCurrentUser } from "@/lib/auth";
-import { isPlatformAdmin } from "@/lib/tenantAdmin";
+import { requirePlatformAdmin } from "@/lib/platformAuth";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { formatDateTime } from "@/lib/format";
+import { MODULE_REGISTRY } from "@/lib/modules/registry";
+import { parseModuleCsv } from "@/lib/modules/entitlement";
 import ModalTrigger from "@/components/Modal";
 import {
   createTenantAction,
@@ -13,36 +13,35 @@ import {
   suspendTenantAction,
   addTenantMemberAction,
   removeTenantMemberAction,
+  setTenantModulesAction,
 } from "@/app/actions/tenants";
 
 export const dynamic = "force-dynamic";
 
-type TenantRow = { id: string; name: string; slug: string; active: boolean; createdAt: Date };
+type TenantRow = {
+  id: string;
+  name: string;
+  slug: string;
+  active: boolean;
+  modules: string;
+  createdAt: Date;
+};
 type MemberRow = { tenantId: string; userId: string; userName: string; userEmail: string; disabledAt: Date | null };
 type UserRow = { id: string; name: string; email: string; disabledAt: Date | null };
 
+/** Optional packs only — `core` is mandatory and never part of a grant. */
+const OPTIONAL_MODULES = MODULE_REGISTRY.filter((module) => !module.mandatory);
+
 export default async function PlatformTenantsPage() {
-  // Defence-in-depth: the layout gates the whole area, but re-check here so the
-  // queries below never run for a non-owner who reaches the page component.
-  const currentUser = await getCurrentUser();
-  if (!currentUser) redirect("/login");
-  if (!isPlatformAdmin(currentUser.role)) {
-    return (
-      <div className="card mx-auto max-w-lg p-8 text-center">
-        <span className="mx-auto mb-4 grid size-12 place-items-center rounded-full border border-red-500/20 bg-red-500/10 text-red-400">
-          <ShieldAlert className="size-6" />
-        </span>
-        <h1 className="text-lg font-semibold">Not authorized</h1>
-        <p className="mt-2 text-sm text-muted-foreground">Tenant management is restricted to platform owners.</p>
-      </div>
-    );
-  }
+  // Defence-in-depth: the (console) layout already gates this route group, but
+  // re-check here so the queries below can never run without a platform session.
+  await requirePlatformAdmin();
 
   const enforcing = tenantEnforcing();
 
   const [tenants, memberRows, users] = await Promise.all([
     basePrisma.$queryRaw<TenantRow[]>`
-      SELECT "id", "name", "slug", "active", "createdAt" FROM "Tenant" ORDER BY "createdAt"
+      SELECT "id", "name", "slug", "active", "modules", "createdAt" FROM "Tenant" ORDER BY "createdAt"
     `,
     basePrisma.$queryRaw<MemberRow[]>`
       SELECT tm."tenantId", tm."userId", u."name" AS "userName", u."email" AS "userEmail", u."disabledAt"
@@ -142,6 +141,9 @@ export default async function PlatformTenantsPage() {
             const members = membersFor(tenant.id);
             const isFounding = tenant.id === DEFAULT_TENANT_ID;
             const addable = users.filter((u) => !members.some((m) => m.userId === u.id));
+            // parseModuleCsv drops unknown ids, so a stale grant naming a removed
+            // module never renders a phantom checkbox.
+            const granted = parseModuleCsv(tenant.modules);
             return (
               <details key={tenant.id}>
                 <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 select-none [&::-webkit-details-marker]:hidden">
@@ -153,7 +155,11 @@ export default async function PlatformTenantsPage() {
                     </span>
                     {isFounding && <span className="badge bg-primary/15 text-primary">Founding</span>}
                     <span className="text-xs font-normal text-muted-foreground">
-                      {members.length} member{members.length === 1 ? "" : "s"} · created {formatDateTime(tenant.createdAt)}
+                      {members.length} member{members.length === 1 ? "" : "s"} ·{" "}
+                      {granted.size === 0
+                        ? "core only"
+                        : `${granted.size} module${granted.size === 1 ? "" : "s"}`}{" "}
+                      · created {formatDateTime(tenant.createdAt)}
                     </span>
                   </span>
                   <span className="btn-secondary btn-sm shrink-0">Manage</span>
@@ -220,6 +226,44 @@ export default async function PlatformTenantsPage() {
                         ))}
                       </select>
                       <button className="btn-secondary btn-sm" disabled={addable.length === 0}>Add</button>
+                    </form>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Modules
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      What this tenant may use. Their own admin can switch a granted
+                      pack off, but can never switch on one that is not granted.
+                      CRM core is always on.
+                    </p>
+
+                    <form action={setTenantModulesAction.bind(null, tenant.id)} className="mt-3">
+                      <ul className="space-y-2">
+                        {OPTIONAL_MODULES.map((module) => (
+                          <li key={module.id} className="flex items-start gap-2">
+                            <input
+                              type="checkbox"
+                              id={`mod-${tenant.id}-${module.id}`}
+                              name="modules"
+                              value={module.id}
+                              defaultChecked={granted.has(module.id)}
+                              className="mt-0.5 shrink-0"
+                            />
+                            <label
+                              htmlFor={`mod-${tenant.id}-${module.id}`}
+                              className="min-w-0 flex-1 cursor-pointer"
+                            >
+                              <span className="block text-sm">{module.label}</span>
+                              <span className="block text-xs text-muted-foreground">
+                                {module.description}
+                              </span>
+                            </label>
+                          </li>
+                        ))}
+                      </ul>
+                      <button className="btn-secondary btn-sm mt-3">Save modules</button>
                     </form>
                   </div>
                 </div>
