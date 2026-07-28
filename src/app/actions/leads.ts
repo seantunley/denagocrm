@@ -501,62 +501,73 @@ export async function linkLeadToContact(leadId: string, formData: FormData) {
 }
 
 export async function convertLeadToContact(leadId: string): Promise<{ ok: boolean; error?: string; contactId?: string }> {
-  const user = await requireLeadAccess(leadId, "leads.link_contact");
-  const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+  try {
+    const user = await requireLeadAccess(leadId, "leads.link_contact");
+    const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
 
-  if (lead.contactId) return { ok: false, error: "Already linked to a contact" };
+    if (lead.contactId) return { ok: false, error: "Already linked to a contact" };
 
-  const matchers = [
-    ...(lead.email ? [{ email: lead.email }] : []),
-    ...(lead.phone ? [{ phone: lead.phone }] : []),
-  ];
-  const existing = matchers.length > 0
-    ? await prisma.contact.findFirst({ where: { OR: matchers } })
-    : null;
+    const matchers = [
+      ...(lead.email ? [{ email: lead.email }] : []),
+      ...(lead.phone ? [{ phone: lead.phone }] : []),
+    ];
+    const existing = matchers.length > 0
+      ? await prisma.contact.findFirst({ where: { OR: matchers } })
+      : null;
 
-  let contactId: string;
-  if (existing) {
-    contactId = existing.id;
-  } else {
-    const [firstName, ...rest] = lead.name.split(/\s+/);
-    const contact = await prisma.contact.create({
-      data: {
-        firstName: firstName || lead.name,
-        lastName: rest.join(" ") || null,
-        email: lead.email,
-        phone: lead.phone,
-        source: lead.source,
-        createdById: user.id,
-        ownerId: lead.assignedToId ?? user.id,
-      },
-    });
-    contactId = contact.id;
-    await logAudit({
-      action: "contact.created",
-      summary: `Created contact ${lead.name} from lead`,
-      contactId,
+    let contactId: string;
+    if (existing) {
+      contactId = existing.id;
+    } else {
+      const [firstName, ...rest] = lead.name.split(/\s+/);
+      const contact = await prisma.contact.create({
+        data: {
+          firstName: firstName || lead.name,
+          lastName: rest.join(" ") || null,
+          email: lead.email,
+          phone: lead.phone,
+          source: lead.source,
+          createdById: user.id,
+          ownerId: lead.assignedToId ?? user.id,
+        },
+      });
+      contactId = contact.id;
+      await logAudit({
+        action: "contact.created",
+        summary: `Created contact ${lead.name} from lead`,
+        contactId,
+        leadId,
+        user,
+        after: contact,
+      });
+    }
+
+    await prisma.lead.update({ where: { id: leadId }, data: { contactId } });
+    await logAuditStrict({
+      action: "lead.contact_linked",
+      summary: `Linked lead "${lead.title}" to contact`,
       leadId,
+      contactId,
       user,
-      after: contact,
+      before: { contactId: lead.contactId },
+      after: { contactId },
     });
+
+    revalidatePath("/leads");
+    revalidatePath("/contacts");
+    revalidatePath(`/leads/${leadId}`);
+
+    return { ok: true, contactId };
+  } catch (err: unknown) {
+    // Re-throw Next.js redirect errors so they navigate properly
+    if (err && typeof err === "object" && "digest" in err) {
+      const digest = (err as { digest: unknown }).digest;
+      if (typeof digest === "string" && digest.startsWith("NEXT_REDIRECT")) throw err;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[convertLeadToContact]", message);
+    return { ok: false, error: message };
   }
-
-  await prisma.lead.update({ where: { id: leadId }, data: { contactId } });
-  await logAuditStrict({
-    action: "lead.contact_linked",
-    summary: `Linked lead "${lead.title}" to contact`,
-    leadId,
-    contactId,
-    user,
-    before: { contactId: lead.contactId },
-    after: { contactId },
-  });
-
-  revalidatePath("/leads");
-  revalidatePath("/contacts");
-  revalidatePath(`/leads/${leadId}`);
-
-  return { ok: true, contactId };
 }
 
 export async function deleteLead(leadId: string, formData: FormData) {
