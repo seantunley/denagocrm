@@ -82,6 +82,7 @@ export default async function LeadTimeline({
   communications,
   activities = [],
   creationNote,
+  leadNotes = [],
 }: {
   leadId?: string;
   contactId?: string;
@@ -114,6 +115,18 @@ export default async function LeadTimeline({
     assignedTo?: { name: string } | null;
   }[];
   creationNote: { text: string; when: Date; who: string } | null;
+  /**
+   * Notes belonging to leads linked to THIS contact. Supplied by the contact
+   * page so a `lead_note` pin stays visible (and unpinnable) from the customer
+   * view — otherwise the pin row exists but has no item to render on.
+   */
+  leadNotes?: {
+    leadId: string;
+    title: string;
+    text: string;
+    when: Date;
+    who: string;
+  }[];
 }) {
   const originalNoteTarget: PinTarget | null = creationNote
     ? contactId
@@ -131,6 +144,10 @@ export default async function LeadTimeline({
     ...communications.map((communication) => ({
       kind: "communication" as const,
       itemId: communication.id,
+    })),
+    ...leadNotes.map((note) => ({
+      kind: "lead_note" as const,
+      itemId: note.leadId,
     })),
     ...(originalNoteTarget ? [originalNoteTarget] : []),
   ];
@@ -196,6 +213,16 @@ export default async function LeadTimeline({
           } satisfies Item,
         ]
       : []),
+    ...leadNotes.map((note): Item => ({
+      id: `lead-note-${note.leadId}`,
+      icon: icons.lead,
+      title: `Original lead note — ${note.title}`,
+      body: note.text,
+      who: note.who,
+      when: note.when,
+      pinnedAt: pinnedAt("lead_note", note.leadId),
+      pinTarget: { kind: "lead_note", itemId: note.leadId },
+    })),
   ].sort(compareTimelineItems);
 
   const pinnedItems = items.filter((item) => Boolean(item.pinnedAt));
