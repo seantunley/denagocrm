@@ -9,11 +9,44 @@ import { currentTenantScope } from "./tenantScope";
  * to whichever tenant happened to be in scope. Anything that throws here is
  * swallowed: attribution must never be able to break logging.
  */
-function tenantForError(): string | null {
+async function tenantForError(): Promise<string | null> {
   try {
     const scope = currentTenantScope();
-    if (!scope || scope.system) return null;
-    return scope.tenantId ?? null;
+    // A `system` scope is trusted cross-tenant work (backups, some cron). That is
+    // genuinely not one tenant's error, so it stays unattributed rather than being
+    // blamed on whichever tenant happened to be in scope.
+    if (scope?.system) return null;
+    if (scope?.tenantId) return scope.tenantId;
+  } catch {
+    /* fall through to the session */
+  }
+
+  // No scope. This is the NORMAL case while tenant enforcement is dormant: the
+  // scope helpers deliberately no-op when `tenantEnforcing()` is false, so without
+  // a fallback EVERY error would be unattributed until enforcement ships, and
+  // per-tenant error health would be permanently empty.
+  //
+  // But the fallback must NOT fire on a PLATFORM request. The CRM session cookie is
+  // scoped to "/", so it is sent to /platform too — meaning a platform admin who
+  // also happens to be signed into the CRM would have platform-global failures
+  // blamed on whichever tenant their CRM account belongs to. That is a wrong
+  // attribution, not a missing one, which is worse: it makes a healthy tenant look
+  // broken. A platform request is identified by its own cookie, which the CRM never
+  // sets.
+  try {
+    const { cookies } = await import("next/headers");
+    const { PLATFORM_SESSION_COOKIE } = await import("./platformSession");
+    const store = await cookies();
+    if (store.get(PLATFORM_SESSION_COOKIE)) return null;
+  } catch {
+    // No request context at all (cron, build) — nothing to attribute to anyway.
+    return null;
+  }
+
+  // A genuine CRM request: attribute to the acting staff session's tenant.
+  try {
+    const { getActiveTenantId } = await import("./auth");
+    return await getActiveTenantId();
   } catch {
     return null;
   }
@@ -34,7 +67,7 @@ export async function logError(
     const message =
       err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err);
     const stack = err instanceof Error ? err.stack?.slice(0, 4000) : undefined;
-    const tenantId = tenantForError();
+    const tenantId = await tenantForError();
 
     await basePrisma.errorLog.create({
       data: {

@@ -8,12 +8,32 @@ export type TabDef = {
   label: string;
   count?: number;
   content: ReactNode;
+  /**
+   * Hold this panel back until its tab is first opened.
+   *
+   * Every other panel is mounted up front so in-progress form input survives a
+   * tab switch (see below). That is the wrong trade for a panel whose work is
+   * expensive, because it pays the cost for everyone who never opens it. Once
+   * opened the panel STAYS mounted, so switching away and back is free and the
+   * typing guarantee still holds from that point on.
+   *
+   * Only meaningful for content that does its own client-side loading: a server
+   * component passed in as `content` is already rendered by the time this
+   * component sees it, so withholding it here would save nothing.
+   */
+  lazy?: boolean;
 };
 
 export default function Tabs({ tabs, initialKey }: { tabs: TabDef[]; initialKey?: string }) {
-  const [active, setActive] = useState(
-    initialKey && tabs.some((t) => t.key === initialKey) ? initialKey : tabs[0]?.key
-  );
+  const first =
+    initialKey && tabs.some((t) => t.key === initialKey) ? initialKey : tabs[0]?.key;
+  const [active, setActive] = useState(first);
+  const [opened, setOpened] = useState<string[]>(first ? [first] : []);
+
+  const select = (key: string) => {
+    setActive(key);
+    setOpened((prev) => (prev.includes(key) ? prev : [...prev, key]));
+  };
 
   return (
     <div>
@@ -22,7 +42,7 @@ export default function Tabs({ tabs, initialKey }: { tabs: TabDef[]; initialKey?
           <button
             key={t.key}
             type="button"
-            onClick={() => setActive(t.key)}
+            onClick={() => select(t.key)}
             className={cn(
               "select-none whitespace-nowrap rounded-lg px-3.5 py-2 text-[13px] font-medium transition-all",
               active === t.key
@@ -49,7 +69,7 @@ export default function Tabs({ tabs, initialKey }: { tabs: TabDef[]; initialKey?
       {/* Panels stay mounted so in-progress form input survives tab switches */}
       {tabs.map((t) => (
         <div key={t.key} hidden={active !== t.key} className="space-y-6">
-          {t.content}
+          {!t.lazy || opened.includes(t.key) ? t.content : null}
         </div>
       ))}
     </div>

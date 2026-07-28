@@ -44,8 +44,6 @@ export type BackupHealth = {
 export type TenantHealth = {
   tenantId: string;
   users: number;
-  leads: number;
-  contacts: number;
   /** Most recent staff session activity for this tenant, or null if never. */
   lastActiveAt: Date | null;
   /** Errors attributed to this tenant. */
@@ -155,18 +153,8 @@ async function backupHealth(): Promise<BackupHealth> {
 async function tenantHealth(): Promise<Map<string, TenantHealth>> {
   // One grouped query per signal rather than N queries per tenant, so the console
   // stays O(1) in database round-trips as tenants are added.
-  const [members, leads, contacts, sessions, errors24h, errors7d] = await Promise.all([
+  const [members, sessions, errors24h, errors7d] = await Promise.all([
     basePrisma.tenantMember.groupBy({ by: ["tenantId"], _count: { _all: true } }),
-    basePrisma.lead.groupBy({
-      by: ["tenantId"],
-      _count: { _all: true },
-      where: { deletedAt: null },
-    }),
-    basePrisma.contact.groupBy({
-      by: ["tenantId"],
-      _count: { _all: true },
-      where: { deletedAt: null },
-    }),
     basePrisma.userSession.groupBy({
       by: ["tenantId"],
       _max: { lastActiveAt: true },
@@ -190,8 +178,6 @@ async function tenantHealth(): Promise<Map<string, TenantHealth>> {
       row = {
         tenantId,
         users: 0,
-        leads: 0,
-        contacts: 0,
         lastActiveAt: null,
         errors24h: 0,
         errors7d: 0,
@@ -202,8 +188,6 @@ async function tenantHealth(): Promise<Map<string, TenantHealth>> {
   };
 
   for (const m of members) ensure(m.tenantId).users = m._count._all;
-  for (const l of leads) if (l.tenantId) ensure(l.tenantId).leads = l._count._all;
-  for (const c of contacts) if (c.tenantId) ensure(c.tenantId).contacts = c._count._all;
   for (const s of sessions) {
     if (s.tenantId) ensure(s.tenantId).lastActiveAt = s._max.lastActiveAt ?? null;
   }
