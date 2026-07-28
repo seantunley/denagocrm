@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { ListFilter } from "lucide-react";
 import { subDays } from "date-fns";
 import { prisma } from "@/lib/db";
@@ -101,7 +102,7 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
           {views.map((view) => (
             <span key={view.id} className="inline-flex items-center gap-1">
               <Link href={`/leads/list?${view.query}`} className={`badge cursor-pointer ${currentQuery === view.query ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground hover:text-foreground"}`}>{view.name}</Link>
-              <form action={deleteView.bind(null, view.id)}><button className="text-xs text-muted-foreground hover:text-red-400" title="Delete view">×</button></form>
+              <SaveForm success="View deleted" resetOnSuccess={false} action={deleteView.bind(null, view.id)}><SaveButton className="text-xs text-muted-foreground hover:text-red-400" title="Delete view">×</SaveButton></SaveForm>
             </span>
           ))}
         </div>
@@ -124,12 +125,12 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
       </form>
 
       {currentQuery && (
-        <form action={saveView} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <SaveForm success="View saved" action={saveView} className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <input type="hidden" name="page" value="leads" />
           <input type="hidden" name="query" value={currentQuery} />
           <input name="name" className="input text-sm sm:w-64" placeholder="Name this view" required />
-          <button className="btn-secondary btn-sm">Save view</button>
-        </form>
+          <SaveButton className="btn-secondary btn-sm">Save view</SaveButton>
+        </SaveForm>
       )}
 
       {leads.length === 0 ? (

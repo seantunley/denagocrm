@@ -1,5 +1,6 @@
 "use server";
 
+import { asActionResult, ActionRefusal } from "@/lib/actionResult";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
@@ -101,130 +102,134 @@ async function validateOpenStage(stageId: string) {
 }
 
 export async function createLead(formData: FormData) {
-  const user = await requirePermission("leads.create");
-  const data = leadData(formData);
-  if (!data.name) throw new Error("Name is required");
-  if (!data.stageId) data.stageId = await defaultOpenStageId();
-  await validateOpenStage(data.stageId);
+  return asActionResult(async () => {
+    const user = await requirePermission("leads.create");
+    const data = leadData(formData);
+    if (!data.name) throw new ActionRefusal("Name is required");
+    if (!data.stageId) data.stageId = await defaultOpenStageId();
+    await validateOpenStage(data.stageId);
 
-  if (!data.assignedToId) data.assignedToId = user.id;
-  if (data.assignedToId !== user.id && !(await hasPermission(user, "leads.assign"))) {
-    throw new Error("You do not have permission to assign leads to another user");
-  }
-
-  const generatedTitle = await buildTitle(data);
-  const title = String(formData.get("title") ?? "").trim() || generatedTitle;
-
-  if (!data.contactId) {
-    const matchers = [
-      ...(data.email ? [{ email: data.email }] : []),
-      ...(data.phone ? [{ phone: data.phone }] : []),
-    ];
-    const existing = matchers.length > 0
-      ? await prisma.contact.findFirst({ where: { OR: matchers } })
-      : null;
-    // Only reuse a contact whose tenantId is null (same as new leads) or whose
-    // tenantId already matches. A mismatch would violate the composite FK.
-    const canReuse = existing && (existing.tenantId === null);
-    if (canReuse && existing) {
-      data.contactId = existing.id;
-    } else {
-      const [firstName, ...rest] = data.name.split(/\s+/);
-      const contact = await prisma.contact.create({
-        data: {
-          firstName: firstName || data.name,
-          lastName: rest.join(" ") || null,
-          email: data.email,
-          phone: data.phone,
-          source: data.source,
-          createdById: user.id,
-          ownerId: data.assignedToId ?? user.id,
-        },
-      });
-      data.contactId = contact.id;
-      await logAudit({
-        action: "contact.created",
-        summary: `Created contact ${data.name} (with new lead)`,
-        contactId: contact.id,
-        user,
-        after: { firstName: contact.firstName, lastName: contact.lastName, email: contact.email, phone: contact.phone },
-      });
+    if (!data.assignedToId) data.assignedToId = user.id;
+    if (data.assignedToId !== user.id && !(await hasPermission(user, "leads.assign"))) {
+      throw new ActionRefusal("You do not have permission to assign leads to another user");
     }
-  }
 
-  const lead = await prisma.lead.create({
-    data: { ...data, title, createdById: user.id, position: await topPosition(data.stageId) },
+    const generatedTitle = await buildTitle(data);
+    const title = String(formData.get("title") ?? "").trim() || generatedTitle;
+
+    if (!data.contactId) {
+      const matchers = [
+        ...(data.email ? [{ email: data.email }] : []),
+        ...(data.phone ? [{ phone: data.phone }] : []),
+      ];
+      const existing = matchers.length > 0
+        ? await prisma.contact.findFirst({ where: { OR: matchers } })
+        : null;
+      // Only reuse a contact whose tenantId is null (same as new leads) or whose
+      // tenantId already matches. A mismatch would violate the composite FK.
+      const canReuse = existing && (existing.tenantId === null);
+      if (canReuse && existing) {
+        data.contactId = existing.id;
+      } else {
+        const [firstName, ...rest] = data.name.split(/\s+/);
+        const contact = await prisma.contact.create({
+          data: {
+            firstName: firstName || data.name,
+            lastName: rest.join(" ") || null,
+            email: data.email,
+            phone: data.phone,
+            source: data.source,
+            createdById: user.id,
+            ownerId: data.assignedToId ?? user.id,
+          },
+        });
+        data.contactId = contact.id;
+        await logAudit({
+          action: "contact.created",
+          summary: `Created contact ${data.name} (with new lead)`,
+          contactId: contact.id,
+          user,
+          after: { firstName: contact.firstName, lastName: contact.lastName, email: contact.email, phone: contact.phone },
+        });
+      }
+    }
+
+    const lead = await prisma.lead.create({
+      data: { ...data, title, createdById: user.id, position: await topPosition(data.stageId) },
+    });
+    await logAuditStrict({
+      action: "lead.created",
+      summary: `Created lead “${lead.title}”`,
+      leadId: lead.id,
+      contactId: lead.contactId,
+      user,
+      after: lead,
+    });
+    const refCode = String(formData.get("referralCode") ?? "").trim();
+    if (refCode) await recordReferral(refCode, lead.id).catch(() => {});
+    await runLeadAutomations("lead_created", lead.id);
+    revalidatePath("/leads");
+    revalidatePath("/forecast");
+    redirect(`/leads/${lead.id}`);
   });
-  await logAuditStrict({
-    action: "lead.created",
-    summary: `Created lead “${lead.title}”`,
-    leadId: lead.id,
-    contactId: lead.contactId,
-    user,
-    after: lead,
-  });
-  const refCode = String(formData.get("referralCode") ?? "").trim();
-  if (refCode) await recordReferral(refCode, lead.id).catch(() => {});
-  await runLeadAutomations("lead_created", lead.id);
-  revalidatePath("/leads");
-  revalidatePath("/forecast");
-  redirect(`/leads/${lead.id}`);
 }
 
 export async function updateLead(id: string, formData: FormData) {
-  const user = await requireLeadAccess(id, "leads.edit");
-  const data = leadData(formData);
-  if (!data.name) throw new Error("Name is required");
-  const before = await prisma.lead.findUniqueOrThrow({ where: { id } });
-  const beforePipeline = await getLeadPipeline(id);
-  const targetStage = await validateOpenStage(data.stageId);
+  return asActionResult(async () => {
+    const user = await requireLeadAccess(id, "leads.edit");
+    const data = leadData(formData);
+    if (!data.name) throw new ActionRefusal("Name is required");
+    const before = await prisma.lead.findUniqueOrThrow({ where: { id } });
+    const beforePipeline = await getLeadPipeline(id);
+    const targetStage = await validateOpenStage(data.stageId);
 
-  if (before.assignedToId !== data.assignedToId && !(await hasPermission(user, "leads.assign"))) {
-    throw new Error("You do not have permission to reassign this lead");
-  }
-  if (before.stageId !== data.stageId) {
-    if (!(await hasPermission(user, "leads.change_stage"))) {
-      throw new Error("You do not have permission to change the lead stage");
+    if (before.assignedToId !== data.assignedToId && !(await hasPermission(user, "leads.assign"))) {
+      throw new ActionRefusal("You do not have permission to reassign this lead");
     }
-    if (beforePipeline && beforePipeline.pipelineId !== targetStage.pipelineId && !(await hasPermission(user, "leads.change_pipeline"))) {
-      throw new Error("You do not have permission to move leads between pipelines");
+    if (before.stageId !== data.stageId) {
+      if (!(await hasPermission(user, "leads.change_stage"))) {
+        throw new ActionRefusal("You do not have permission to change the lead stage");
+      }
+      if (beforePipeline && beforePipeline.pipelineId !== targetStage.pipelineId && !(await hasPermission(user, "leads.change_pipeline"))) {
+        throw new ActionRefusal("You do not have permission to move leads between pipelines");
+      }
     }
-  }
 
-  const generatedTitle = await buildTitle(data);
-  const title = String(formData.get("title") ?? "").trim() || generatedTitle;
+    const generatedTitle = await buildTitle(data);
+    const title = String(formData.get("title") ?? "").trim() || generatedTitle;
 
-  if (data.contactId && data.contactId !== before.contactId && before.tenantId) {
-    const targetContact = await prisma.contact.findUnique({
-      where: { id: data.contactId },
-      select: { tenantId: true },
-    });
-    if (targetContact?.tenantId === null) {
-      await prisma.contact.update({
+    if (data.contactId && data.contactId !== before.contactId && before.tenantId) {
+      const targetContact = await prisma.contact.findUnique({
         where: { id: data.contactId },
-        data: { tenantId: before.tenantId },
+        select: { tenantId: true },
       });
+      if (targetContact?.tenantId === null) {
+        await prisma.contact.update({
+          where: { id: data.contactId },
+          data: { tenantId: before.tenantId },
+        });
+      }
     }
-  }
 
-  const lead = await prisma.lead.update({
-    where: { id },
-    data: { ...data, title, ...(before.stageId !== data.stageId ? { stageEnteredAt: new Date() } : {}) },
+    const lead = await prisma.lead.update({
+      where: { id },
+      data: { ...data, title, ...(before.stageId !== data.stageId ? { stageEnteredAt: new Date() } : {}) },
+    });
+    await logAuditStrict({
+      action: "lead.updated",
+      summary: `Updated lead “${lead.title}”`,
+      leadId: id,
+      contactId: lead.contactId,
+      user,
+      before,
+      after: lead,
+    });
+    if (before.stageId !== data.stageId) await runLeadAutomations("stage_entered", id);
+    revalidatePath("/leads");
+    revalidatePath("/forecast");
+    revalidatePath(`/leads/${id}`);
+    redirect(`/leads/${id}`);
   });
-  await logAuditStrict({
-    action: "lead.updated",
-    summary: `Updated lead “${lead.title}”`,
-    leadId: id,
-    contactId: lead.contactId,
-    user,
-    before,
-    after: lead,
-  });
-  if (before.stageId !== data.stageId) await runLeadAutomations("stage_entered", id);
-  revalidatePath("/leads");
-  revalidatePath("/forecast");
-  revalidatePath(`/leads/${id}`);
-  redirect(`/leads/${id}`);
 }
 
 export async function moveLead(leadId: string, stageId: string) {
@@ -398,127 +403,135 @@ export async function markLeadViewed(leadId: string) {
 }
 
 export async function markWon(leadId: string, formData?: FormData) {
-  const user = await requireLeadAccess(leadId, "leads.mark_won");
-  const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
-  let contactId = before.contactId;
-  if (!contactId) {
-    const [firstName, ...rest] = before.name.split(/\s+/);
-    const contact = await prisma.contact.create({
-      data: {
-        firstName: firstName || before.name,
-        lastName: rest.join(" ") || null,
-        email: before.email,
-        phone: before.phone,
-        source: before.source,
-        tenantId: before.tenantId,
-        createdById: user.id,
-        ownerId: before.assignedToId ?? user.id,
-      },
+  return asActionResult(async () => {
+    const user = await requireLeadAccess(leadId, "leads.mark_won");
+    const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+    let contactId = before.contactId;
+    if (!contactId) {
+      const [firstName, ...rest] = before.name.split(/\s+/);
+      const contact = await prisma.contact.create({
+        data: {
+          firstName: firstName || before.name,
+          lastName: rest.join(" ") || null,
+          email: before.email,
+          phone: before.phone,
+          source: before.source,
+          tenantId: before.tenantId,
+          createdById: user.id,
+          ownerId: before.assignedToId ?? user.id,
+        },
+      });
+      contactId = contact.id;
+      await logAudit({
+        action: "contact.created",
+        summary: `Created contact ${before.name} from won lead`,
+        contactId,
+        leadId,
+        user,
+        after: contact,
+      });
+    }
+    const lead = await prisma.lead.update({
+      where: { id: leadId },
+      data: { status: "won", contactId },
     });
-    contactId = contact.id;
-    await logAudit({
-      action: "contact.created",
-      summary: `Created contact ${before.name} from won lead`,
-      contactId,
+    await markReferralEarned(leadId).catch(() => {});
+    await runLeadAutomations("lead_won", leadId);
+    await logAuditStrict({
+      action: "lead.won",
+      summary: `Marked lead “${lead.title}” as WON 🎉`,
       leadId,
+      contactId,
       user,
-      after: contact,
+      before,
+      after: lead,
     });
-  }
-  const lead = await prisma.lead.update({
-    where: { id: leadId },
-    data: { status: "won", contactId },
+    await triggerSurvey("won", { contactId, leadId });
+    revalidatePath("/leads");
+    revalidatePath("/forecast");
+    revalidatePath(`/leads/${leadId}`);
+    if (formData?.get("returnTo") === "/leads") return;
+    redirect(`/contacts/${contactId}`);
   });
-  await markReferralEarned(leadId).catch(() => {});
-  await runLeadAutomations("lead_won", leadId);
-  await logAuditStrict({
-    action: "lead.won",
-    summary: `Marked lead “${lead.title}” as WON 🎉`,
-    leadId,
-    contactId,
-    user,
-    before,
-    after: lead,
-  });
-  await triggerSurvey("won", { contactId, leadId });
-  revalidatePath("/leads");
-  revalidatePath("/forecast");
-  revalidatePath(`/leads/${leadId}`);
-  if (formData?.get("returnTo") === "/leads") return;
-  redirect(`/contacts/${contactId}`);
 }
 
 export async function markLost(leadId: string, formData: FormData) {
-  const user = await requireLeadAccess(leadId, "leads.mark_lost");
-  const reason = String(formData.get("lostReason") ?? "").trim();
-  if (!reason) throw new Error("A lost reason is required");
-  const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
-  const lead = await prisma.lead.update({
-    where: { id: leadId },
-    data: { status: "lost", lostReason: reason },
+  return asActionResult(async () => {
+    const user = await requireLeadAccess(leadId, "leads.mark_lost");
+    const reason = String(formData.get("lostReason") ?? "").trim();
+    if (!reason) throw new ActionRefusal("A lost reason is required");
+    const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+    const lead = await prisma.lead.update({
+      where: { id: leadId },
+      data: { status: "lost", lostReason: reason },
+    });
+    await runLeadAutomations("lead_lost", leadId);
+    await logAuditStrict({
+      action: "lead.lost",
+      summary: `Marked lead “${lead.title}” as lost — ${reason}`,
+      leadId,
+      contactId: lead.contactId,
+      user,
+      before,
+      after: lead,
+    });
+    revalidatePath("/leads");
+    revalidatePath("/forecast");
+    revalidatePath(`/leads/${leadId}`);
   });
-  await runLeadAutomations("lead_lost", leadId);
-  await logAuditStrict({
-    action: "lead.lost",
-    summary: `Marked lead “${lead.title}” as lost — ${reason}`,
-    leadId,
-    contactId: lead.contactId,
-    user,
-    before,
-    after: lead,
-  });
-  revalidatePath("/leads");
-  revalidatePath("/forecast");
-  revalidatePath(`/leads/${leadId}`);
 }
 
 export async function reopenLead(leadId: string) {
-  const user = await requireLeadAccess(leadId, "leads.reopen");
-  const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
-  const lead = await prisma.lead.update({
-    where: { id: leadId },
-    data: { status: "open", lostReason: null },
+  return asActionResult(async () => {
+    const user = await requireLeadAccess(leadId, "leads.reopen");
+    const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+    const lead = await prisma.lead.update({
+      where: { id: leadId },
+      data: { status: "open", lostReason: null },
+    });
+    await logAuditStrict({
+      action: "lead.reopened",
+      summary: `Reopened lead “${lead.title}”`,
+      leadId,
+      contactId: lead.contactId,
+      user,
+      before,
+      after: lead,
+    });
+    revalidatePath("/leads");
+    revalidatePath("/forecast");
+    revalidatePath(`/leads/${leadId}`);
   });
-  await logAuditStrict({
-    action: "lead.reopened",
-    summary: `Reopened lead “${lead.title}”`,
-    leadId,
-    contactId: lead.contactId,
-    user,
-    before,
-    after: lead,
-  });
-  revalidatePath("/leads");
-  revalidatePath("/forecast");
-  revalidatePath(`/leads/${leadId}`);
 }
 
 export async function linkLeadToContact(leadId: string, formData: FormData) {
-  const user = await requireLeadAccess(leadId, "leads.link_contact");
-  const contactId = String(formData.get("contactId") ?? "");
-  if (!contactId) return;
-  const contact = await prisma.contact.findUnique({ where: { id: contactId }, select: { id: true, tenantId: true } });
-  if (!contact) throw new Error("Contact not found");
-  const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
-  if (contact.tenantId === null && before.tenantId !== null) {
-    await prisma.contact.update({ where: { id: contactId }, data: { tenantId: before.tenantId } });
-  }
-  const lead = await prisma.lead.update({
-    where: { id: leadId },
-    data: { contactId },
-    include: { contact: true },
+  return asActionResult(async () => {
+    const user = await requireLeadAccess(leadId, "leads.link_contact");
+    const contactId = String(formData.get("contactId") ?? "");
+    if (!contactId) return;
+    const contact = await prisma.contact.findUnique({ where: { id: contactId }, select: { id: true, tenantId: true } });
+    if (!contact) throw new ActionRefusal("Contact not found");
+    const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+    if (contact.tenantId === null && before.tenantId !== null) {
+      await prisma.contact.update({ where: { id: contactId }, data: { tenantId: before.tenantId } });
+    }
+    const lead = await prisma.lead.update({
+      where: { id: leadId },
+      data: { contactId },
+      include: { contact: true },
+    });
+    await logAuditStrict({
+      action: "lead.contact_linked",
+      summary: `Linked lead “${lead.title}” to contact ${lead.contact ? `${lead.contact.firstName} ${lead.contact.lastName ?? ""}`.trim() : ""}`,
+      leadId,
+      contactId,
+      user,
+      before: { contactId: before.contactId },
+      after: { contactId },
+    });
+    revalidatePath(`/leads/${leadId}`);
+    revalidatePath("/leads");
   });
-  await logAuditStrict({
-    action: "lead.contact_linked",
-    summary: `Linked lead “${lead.title}” to contact ${lead.contact ? `${lead.contact.firstName} ${lead.contact.lastName ?? ""}`.trim() : ""}`,
-    leadId,
-    contactId,
-    user,
-    before: { contactId: before.contactId },
-    after: { contactId },
-  });
-  revalidatePath(`/leads/${leadId}`);
-  revalidatePath("/leads");
 }
 
 export async function convertLeadToContact(leadId: string): Promise<{ ok: boolean; error?: string; contactId?: string }> {
@@ -605,20 +618,22 @@ export async function convertLeadToContact(leadId: string): Promise<{ ok: boolea
 }
 
 export async function deleteLead(leadId: string, formData: FormData) {
-  const user = await requireLeadAccess(leadId, "leads.delete");
-  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
-  const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
-  const lead = await softDeleteRecord("lead", leadId, reason, user.name);
-  await logAuditStrict({
-    action: "trash.deleted",
-    summary: `Moved lead “${lead.title}” to trash — ${reason}`,
-    leadId,
-    contactId: lead.contactId,
-    user,
-    before,
-    after: { deletedAt: lead.deletedAt, deleteReason: reason },
+  return asActionResult(async () => {
+    const user = await requireLeadAccess(leadId, "leads.delete");
+    const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+    const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+    const lead = await softDeleteRecord("lead", leadId, reason, user.name);
+    await logAuditStrict({
+      action: "trash.deleted",
+      summary: `Moved lead “${lead.title}” to trash — ${reason}`,
+      leadId,
+      contactId: lead.contactId,
+      user,
+      before,
+      after: { deletedAt: lead.deletedAt, deleteReason: reason },
+    });
+    revalidatePath("/leads");
+    revalidatePath("/forecast");
+    redirect("/leads");
   });
-  revalidatePath("/leads");
-  revalidatePath("/forecast");
-  redirect("/leads");
 }
