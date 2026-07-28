@@ -123,7 +123,10 @@ export async function createLead(formData: FormData) {
     const existing = matchers.length > 0
       ? await prisma.contact.findFirst({ where: { OR: matchers } })
       : null;
-    if (existing) {
+    // Only reuse a contact whose tenantId is null (same as new leads) or whose
+    // tenantId already matches. A mismatch would violate the composite FK.
+    const canReuse = existing && (existing.tenantId === null);
+    if (canReuse && existing) {
       data.contactId = existing.id;
     } else {
       const [firstName, ...rest] = data.name.split(/\s+/);
@@ -407,6 +410,7 @@ export async function markWon(leadId: string, formData?: FormData) {
         email: before.email,
         phone: before.phone,
         source: before.source,
+        tenantId: before.tenantId,
         createdById: user.id,
         ownerId: before.assignedToId ?? user.id,
       },
@@ -493,9 +497,12 @@ export async function linkLeadToContact(leadId: string, formData: FormData) {
   const user = await requireLeadAccess(leadId, "leads.link_contact");
   const contactId = String(formData.get("contactId") ?? "");
   if (!contactId) return;
-  const contact = await prisma.contact.findUnique({ where: { id: contactId }, select: { id: true } });
+  const contact = await prisma.contact.findUnique({ where: { id: contactId }, select: { id: true, tenantId: true } });
   if (!contact) throw new Error("Contact not found");
   const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+  if (contact.tenantId === null && before.tenantId !== null) {
+    await prisma.contact.update({ where: { id: contactId }, data: { tenantId: before.tenantId } });
+  }
   const lead = await prisma.lead.update({
     where: { id: leadId },
     data: { contactId },
