@@ -511,9 +511,12 @@ export async function convertLeadToContact(leadId: string): Promise<{ ok: boolea
       ...(lead.email ? [{ email: lead.email }] : []),
       ...(lead.phone ? [{ phone: lead.phone }] : []),
     ];
-    const existing = matchers.length > 0
+    const existingMatch = matchers.length > 0
       ? await prisma.contact.findFirst({ where: { OR: matchers } })
       : null;
+    // Only reuse the existing contact if its tenantId matches — the composite FK
+    // Lead_tenantId_contactId_fkey requires both to agree.
+    const existing = existingMatch?.tenantId === lead.tenantId ? existingMatch : null;
 
     let contactId: string;
     if (existing) {
@@ -527,6 +530,7 @@ export async function convertLeadToContact(leadId: string): Promise<{ ok: boolea
           email: lead.email,
           phone: lead.phone,
           source: lead.source,
+          tenantId: lead.tenantId,
           createdById: user.id,
           ownerId: lead.assignedToId ?? user.id,
         },
