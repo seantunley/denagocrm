@@ -176,6 +176,54 @@ export function assertSchemaObjectsPresent(childEnv, runDiff = defaultRunDiff) {
   console.log("✓ Integrity check passed — all tables and columns the deployed schema needs are present.");
 }
 
+/**
+ * Refuse to migrate from a PREVIEW deployment unless that preview owns its
+ * database.
+ *
+ * This is not hypothetical. Vercel runs this script in the build command for
+ * EVERY deployment, previews included, against whatever DATABASE_URL that
+ * environment provides. With previews pointed at the production database, each
+ * open pull request silently migrated production — so production ran a schema
+ * that no merged code knew about. It stayed invisible until a migration changed
+ * a constraint the deployed code depended on: AppSetting's primary key moved to
+ * a composite, every `ON CONFLICT (key)` upsert started failing with 42P10, and
+ * saving ANY setting broke in production for a day and a half. A withdrawn
+ * migration was also left permanently recorded, and composite tenant FKs went
+ * live ahead of the code that populates them — which is what produced the
+ * lead/contact foreign-key failures that looked like unrelated bugs.
+ *
+ * A preview must therefore prove it is isolated before it may write schema.
+ * `PREVIEW_DB_ISOLATED=1` is that proof, and it is deliberately a manual
+ * assertion: there is no reliable way to detect "this is a scratch database"
+ * from the connection string alone, and guessing wrong is exactly the failure
+ * this prevents.
+ *
+ * Skipping is the right failure mode, not erroring. A preview pointed at
+ * production still runs correctly against the schema already there — it simply
+ * cannot test its own migrations, which is a far smaller problem than corrupting
+ * the live database. Production deploys are never affected.
+ */
+/**
+ * @param {Record<string, string | undefined>} [env]
+ * @param {(message: string) => void} [warn]
+ * @returns {boolean}
+ */
+export function previewMayMigrate(env = process.env, warn = console.warn) {
+  if (env.VERCEL_ENV !== "preview") return true;
+  if (env.PREVIEW_DB_ISOLATED === "1") return true;
+
+  warn(
+    "\n⚠ PREVIEW DEPLOYMENT — SKIPPING MIGRATIONS.\n" +
+      "  This build is a preview and has not declared an isolated database, so it will\n" +
+      "  NOT apply migrations. Previews have historically shared the production\n" +
+      "  DATABASE_URL, which let pull requests migrate the live database ahead of the\n" +
+      "  code that was actually deployed.\n" +
+      "  Give previews their own database branch, then set PREVIEW_DB_ISOLATED=1 on the\n" +
+      "  Preview environment to re-enable migrations here.\n",
+  );
+  return false;
+}
+
 async function main() {
   // A session advisory lock must be held on a DIRECT (non-pooled) connection —
   // it is not reliable through a transaction pooler. Fall back to DATABASE_URL
@@ -192,6 +240,10 @@ async function main() {
       assertSchemaObjectsPresent(childEnv);
       return;
     }
+
+    // Checked AFTER --check (a read-only drift probe is always safe) and BEFORE
+    // the lock is taken, so a skipped preview never queues behind a real deploy.
+    if (!previewMayMigrate()) return;
 
     if (!DRY_RUN) {
       // Blocks until any other in-flight migration run releases the lock.

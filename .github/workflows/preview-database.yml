@@ -1,0 +1,168 @@
+name: Preview database branch
+
+# Gives every pull request its own Neon branch, and DELETES it when the pull
+# request closes.
+#
+# Why this exists
+# ---------------
+# `vercel.json` runs `scripts/apply-migrations.mjs` in the build command for
+# EVERY deployment, previews included. Previews used to share the production
+# DATABASE_URL, so each open pull request migrated the live database ahead of the
+# code that was actually deployed. That is not a theoretical risk: it moved
+# AppSetting's primary key to a composite while the running app still emitted
+# `ON CONFLICT (key)`, and every settings save in production failed with 42P10
+# for a day and a half. It also left a withdrawn migration permanently recorded,
+# and put composite tenant foreign keys live ahead of the code that populates
+# them.
+#
+# A branch per pull request removes the shared target entirely. The runner's own
+# `previewMayMigrate` guard is the belt to this pair of braces: even if a preview
+# is somehow pointed at production again, it refuses to write schema unless
+# PREVIEW_DB_ISOLATED=1 says the database is its own.
+#
+# DELETION IS THE POINT, not an afterthought. Neon branches consume storage and
+# compute, and a branch left behind after a merge is a copy of production data
+# sitting around with no owner. The close job runs for merged AND unmerged pull
+# requests, and `if: always()` on the delete step means a failure earlier in the
+# job still removes the branch.
+#
+# Required repository secrets:
+#   NEON_API_KEY     — Neon personal API key (Account settings → API keys)
+#   NEON_PROJECT_ID  — the Neon project id (Project settings → General)
+#
+# Without those secrets every job here no-ops with a notice rather than failing:
+# a missing secret must not turn every pull request red.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: preview-db-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  create:
+    name: Create or reuse the branch
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for credentials
+        id: creds
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
+        run: |
+          if [ -z "$NEON_API_KEY" ] || [ -z "$NEON_PROJECT_ID" ]; then
+            echo "::notice::NEON_API_KEY / NEON_PROJECT_ID not set — skipping preview branch creation."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create the branch
+        if: steps.creds.outputs.ok == 'true'
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
+          BRANCH: preview-pr-${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          api="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID"
+
+          existing=$(curl -sf -H "Authorization: Bearer $NEON_API_KEY" "$api/branches" \
+            | jq -r --arg b "$BRANCH" '.branches[] | select(.name == $b) | .id' | head -1)
+
+          if [ -n "$existing" ]; then
+            echo "::notice::Reusing existing Neon branch $BRANCH ($existing)."
+            exit 0
+          fi
+
+          # read_write endpoint so the preview can actually run migrations.
+          curl -sf -X POST -H "Authorization: Bearer $NEON_API_KEY" \
+            -H "Content-Type: application/json" "$api/branches" \
+            -d "$(jq -nc --arg b "$BRANCH" \
+                  '{branch: {name: $b}, endpoints: [{type: "read_write"}]}')" > /dev/null
+
+          echo "::notice::Created Neon branch $BRANCH."
+
+  destroy:
+    name: Delete the branch
+    # Runs for MERGED and CLOSED-WITHOUT-MERGING alike. Leaving a branch behind
+    # after a merge is the common case and the one that quietly accumulates cost.
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete the branch
+        if: always()
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
+          BRANCH: preview-pr-${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+          if [ -z "${NEON_API_KEY:-}" ] || [ -z "${NEON_PROJECT_ID:-}" ]; then
+            echo "::notice::NEON_API_KEY / NEON_PROJECT_ID not set — nothing to delete."
+            exit 0
+          fi
+          api="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID"
+
+          id=$(curl -sf -H "Authorization: Bearer $NEON_API_KEY" "$api/branches" \
+            | jq -r --arg b "$BRANCH" '.branches[] | select(.name == $b) | .id' | head -1)
+
+          if [ -z "$id" ]; then
+            echo "::notice::No Neon branch named $BRANCH — nothing to delete."
+            exit 0
+          fi
+
+          # Never allow this to delete a protected or default branch, whatever the
+          # name lookup returned. Deleting production would be catastrophic and is
+          # exactly the kind of thing a rename could cause by accident.
+          meta=$(curl -sf -H "Authorization: Bearer $NEON_API_KEY" "$api/branches/$id")
+          if [ "$(echo "$meta" | jq -r '.branch.default')" = "true" ] \
+             || [ "$(echo "$meta" | jq -r '.branch.protected')" = "true" ]; then
+            echo "::error::Refusing to delete $BRANCH — it is the default or a protected branch."
+            exit 1
+          fi
+
+          curl -sf -X DELETE -H "Authorization: Bearer $NEON_API_KEY" "$api/branches/$id" > /dev/null
+          echo "::notice::Deleted Neon branch $BRANCH ($id)."
+
+  sweep:
+    name: Sweep orphaned preview branches
+    # A safety net for branches whose close event was missed (workflow disabled,
+    # secrets absent at the time, API outage). Without this, "delete on close" is
+    # only as reliable as one webhook delivery.
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove preview branches whose pull request is closed
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          if [ -z "${NEON_API_KEY:-}" ] || [ -z "${NEON_PROJECT_ID:-}" ]; then
+            echo "::notice::NEON_API_KEY / NEON_PROJECT_ID not set — skipping sweep."
+            exit 0
+          fi
+          api="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID"
+
+          curl -sf -H "Authorization: Bearer $NEON_API_KEY" "$api/branches" \
+            | jq -r '.branches[] | select(.name | startswith("preview-pr-"))
+                     | select(.default != true and .protected != true)
+                     | "\(.id) \(.name)"' \
+          | while read -r id name; do
+              pr="${name#preview-pr-}"
+              state=$(gh api "repos/$REPO/pulls/$pr" --jq .state 2>/dev/null || echo "unknown")
+              if [ "$state" = "closed" ]; then
+                curl -sf -X DELETE -H "Authorization: Bearer $NEON_API_KEY" "$api/branches/$id" > /dev/null \
+                  && echo "::notice::Swept orphaned branch $name ($id)."
+              fi
+            done
