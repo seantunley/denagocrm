@@ -29,6 +29,10 @@ export const GLOBAL_MODELS: ReadonlySet<string> = new Set([
   // closed on a column that deliberately does not exist. See prisma/schema.prisma.
   "PlatformAdmin",
   "PlatformAdminSession",
+  // Backup ledger. Backups are platform-wide (one dump of the whole database), so
+  // BackupRun has no tenantId at all. Without this entry the guard would treat it
+  // as tenant-scoped and fail closed on a column that deliberately does not exist.
+  "BackupRun",
 ]);
 
 export function isTenantScopedModel(model: string): boolean {

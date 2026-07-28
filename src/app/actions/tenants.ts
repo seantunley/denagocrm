@@ -202,36 +202,34 @@ export async function addTenantMemberAction(tenantId: string, formData: FormData
   if (!user) throw new Error("Selected user does not exist.");
 
   // LOCKOUT GUARD — see tenantAdmin.canAddTenantMember. Sign-in needs EXACTLY ONE
-  // membership; a second yields `ambiguous_tenant` and, under enforcement, no
-  // session at all, so granting one removes this user's access rather than widening
-  // it. ALL memberships count, not just those in active tenants: one in an inactive
-  // tenant becomes ambiguous the moment that tenant is activated.
+  // active membership; a second yields `ambiguous_tenant` and, under enforcement,
+  // no session at all — so granting one REMOVES this user's access rather than
+  // widening it.
   //
-  // This pre-check exists for the error message. The AUTHORITATIVE guarantee is the
-  // unique index on TenantMember.userId — two concurrent adds could both pass here,
-  // and only the database can serialise that, so the violation is handled below.
-  const memberships = await basePrisma.tenantMember.findMany({
-    where: { userId },
-    select: { tenantId: true },
-  });
-  const addGate = canAddTenantMember(
-    memberships.map((membership) => membership.tenantId),
-    tenantId,
-  );
-  if (!addGate.ok) throw new Error(addGate.error);
+  // Serialised on the USER row: every addition for this user takes the same lock,
+  // so two concurrent requests cannot both observe "no other membership" and both
+  // insert. A bare check-then-insert is not enough, and a unique index on userId is
+  // not used because `ambiguous_tenant` must remain a constructible (hence testable)
+  // state for data that predates this guard — see the schema comment.
+  //
+  // ALL memberships are counted, not just those in ACTIVE tenants: a membership in
+  // a suspended tenant looks harmless today and becomes ambiguous the moment that
+  // tenant is activated.
+  await basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
 
-  try {
-    await addTenantMembership(basePrisma, tenantId, userId);
-  } catch (error) {
-    // The unique index fired — a concurrent request added this user to another
-    // tenant between our check and our insert.
-    if (isUniqueViolation(error)) {
-      throw new Error(
-        "That user was just added to another tenant. Sign-in requires exactly one tenant, so this membership was refused.",
-      );
-    }
-    throw error;
-  }
+    const memberships = await tx.tenantMember.findMany({
+      where: { userId },
+      select: { tenantId: true },
+    });
+    const addGate = canAddTenantMember(
+      memberships.map((membership) => membership.tenantId),
+      tenantId,
+    );
+    if (!addGate.ok) throw new Error(addGate.error);
+
+    await addTenantMembership(tx, tenantId, userId);
+  });
 
   await logAuditStrict({
     action: "tenant.member_added",

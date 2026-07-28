@@ -36,17 +36,43 @@ async function locallyDisabledIds(): Promise<string[]> {
  * enforcement is on and a tenant always resolves, the fallback stops being reached
  * for user requests.
  */
-export const getEnabledModuleIds = cache(async (): Promise<Set<ModuleId>> => {
+export async function getEnabledModuleIds(): Promise<Set<ModuleId>> {
+  // Resolve the tenant FIRST, OUTSIDE the cache, then memoise keyed by the answer.
+  //
+  // This function used to be `cache(async () => ...)` with no arguments. React's
+  // cache dedupes per REQUEST, and a zero-argument function has exactly one cache
+  // entry — so a request that spans SEVERAL tenants (the automation cron sweeps
+  // tenants in one request) computed the first tenant's modules and then handed
+  // that same set to every later tenant. Harmless while the answer was
+  // install-wide for everyone; a cross-tenant leak the moment it varies by tenant.
+  //
+  // Keying on the resolution keeps the per-request dedupe that render paths rely
+  // on (this is called by many components per page) while making each distinct
+  // tenant its own entry.
+  const resolution = await resolveTenantForModules();
+  const key =
+    resolution.kind === "tenant" ? `tenant:${resolution.tenantId}` : resolution.kind;
+  return modulesForResolution(key);
+}
+
+/**
+ * The cached half. Keyed by a STRING so React's cache compares by value — passing
+ * the resolution object would key on identity and never hit.
+ */
+const modulesForResolution = cache(async (key: string): Promise<Set<ModuleId>> => {
+  // The local "switched off" list is itself tenant-scoped under enforcement
+  // (AppSetting carries a tenantId), so it must be read INSIDE the keyed cache —
+  // reading it outside would reintroduce the same cross-tenant bleed.
   const disabled = await locallyDisabledIds();
 
-  const resolution = await resolveTenantForModules();
-
   // No tenant anywhere: pre-tenancy install-wide behaviour (also the dormant path).
-  if (resolution.kind === "none") return installWideModuleIds(disabled);
+  if (key === "none") return installWideModuleIds(disabled);
   // Trusted cross-tenant work legitimately spans tenants; no single grant applies.
-  if (resolution.kind === "system") return installWideModuleIds(disabled);
+  if (key === "system") return installWideModuleIds(disabled);
   // A scope exists but names no tenant — FAIL CLOSED rather than widen access.
-  if (resolution.kind === "scoped-but-unresolved") return effectiveModuleIds("", disabled);
+  if (key === "scoped-but-unresolved") return effectiveModuleIds("", disabled);
+
+  const tenantId = key.slice("tenant:".length);
 
   // Once a tenant is known this must FAIL CLOSED. Falling back to the install-wide
   // set here would turn a resolution or database failure into BROADER access than
@@ -59,7 +85,7 @@ export const getEnabledModuleIds = cache(async (): Promise<Set<ModuleId>> => {
   // basePrisma: Tenant is a GLOBAL model, and this runs during rendering where a
   // tenant scope may not be established yet.
   const tenant = await basePrisma.tenant.findUnique({
-    where: { id: resolution.tenantId },
+    where: { id: tenantId },
     select: { modules: true },
   });
 

@@ -9,13 +9,15 @@
 -- finishes, so a row still 'running' long after startedAt is itself the evidence
 -- that a run died. Silence can never carry that signal.
 --
--- tenantId is nullable and always NULL for now: backups are platform-wide, not
--- per-tenant. The column exists so per-tenant backups can populate it later
--- without a schema change.
+-- Deliberately has NO tenantId column, and BackupRun is listed in GLOBAL_MODELS.
+-- Backups are platform-wide (exportAllData dumps the whole database), so every row
+-- would carry a null tenant. A nullable tenantId would be worse than none: the
+-- tenant guard would classify this model as tenant-scoped and the enforcement
+-- preflight would hard-fail on every null row. Add the column, and drop the
+-- GLOBAL_MODELS entry, in the same change that makes backups per-tenant.
 
 CREATE TABLE IF NOT EXISTS "BackupRun" (
   "id"         TEXT         NOT NULL,
-  "tenantId"   TEXT,
   "status"     TEXT         NOT NULL DEFAULT 'running',
   "startedAt"  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "finishedAt" TIMESTAMP(3),
@@ -34,5 +36,3 @@ CREATE INDEX IF NOT EXISTS "BackupRun_startedAt_idx"
 CREATE INDEX IF NOT EXISTS "BackupRun_status_startedAt_idx"
   ON "BackupRun"("status", "startedAt");
 
-CREATE INDEX IF NOT EXISTS "BackupRun_tenantId_startedAt_idx"
-  ON "BackupRun"("tenantId", "startedAt");

@@ -2321,22 +2321,17 @@ model TenantMember {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, userId])
-  /// ONE TENANT PER USER, enforced by the database.
+  /// NOT unique on userId, deliberately. Sign-in requires exactly one ACTIVE
+  /// membership and `soleActiveTenant` returns `ambiguous_tenant` otherwise — a
+  /// defence-in-depth branch that must keep working for data predating any guard
+  /// (and which scripts/test-integrity.ts exercises by constructing that very
+  /// state). A unique index would make that path unconstructible and therefore
+  /// untestable.
   ///
-  /// Sign-in resolves the acting tenant with `soleActiveTenant`, which requires
-  /// EXACTLY ONE active membership: zero gives `no_tenant`, two or more give
-  /// `ambiguous_tenant`. Both mean no honoured tenant claim, and under enforcement
-  /// that means the user cannot sign in at all. So a second membership does not
-  /// widen a user's access, it DESTROYS it.
-  ///
-  /// An application check cannot hold this: two concurrent adds can both pass it,
-  /// and a membership in an INACTIVE tenant looks harmless until that tenant is
-  /// activated. A unique index closes both — it is atomic, and it covers memberships
-  /// regardless of tenant state.
-  ///
-  /// Lift this when an explicit tenant-switching model exists (session-selected
-  /// tenant), not before.
-  @@unique([userId])
+  /// The invariant is instead enforced at the write path: addTenantMemberAction
+  /// locks the User row FOR UPDATE, counts ALL memberships (not just active ones,
+  /// so a dormant membership cannot become ambiguous on activation), and refuses.
+  @@index([userId])
 }
 
 /// Ledger of backup runs, for the platform console's health view.
@@ -2350,13 +2345,15 @@ model TenantMember {
 /// finishes. A row left in "running" long after its startedAt is therefore itself
 /// the signal that a run died, which silence could never tell you.
 ///
-/// `tenantId` is nullable and today always NULL: backups are platform-wide (one
-/// dump of the whole database), not per-tenant. The column exists so per-tenant
-/// backups can populate it without a schema change; the console is explicit that
-/// the current status is platform-wide rather than pretending otherwise.
+/// Deliberately has NO `tenantId`, and is listed in GLOBAL_MODELS. Backups are
+/// platform-wide — `exportAllData` dumps the whole database — so every row would
+/// carry a null tenant. A nullable tenantId here would be worse than none: the
+/// tenant guard would classify the model as tenant-scoped and the enforcement
+/// preflight would hard-fail on every null row. Add the column (and remove the
+/// GLOBAL_MODELS entry) in the same change that makes backups per-tenant, not
+/// before.
 model BackupRun {
   id         String    @id @default(cuid())
-  tenantId   String? // null = platform-wide backup (always, for now)
   status     String    @default("running") // running | success | failed
   startedAt  DateTime  @default(now())
   finishedAt DateTime?
@@ -2370,7 +2367,6 @@ model BackupRun {
 
   @@index([startedAt])
   @@index([status, startedAt])
-  @@index([tenantId, startedAt])
 }
 
 // Platform-admin identity — DELIBERATELY OUTSIDE the tenant model, and listed in
