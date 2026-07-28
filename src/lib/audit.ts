@@ -106,7 +106,17 @@ async function actingTenantId(entry: AuditEntry): Promise<string | null> {
  * AuditEvent stream. Use logAuditStrict for permission, role, pipeline, forecast,
  * deletion, export, and other governance-sensitive changes.
  */
-async function writeAudit(entry: AuditEntry) {
+/**
+ * A caller-supplied transaction the audit should join. When present the audit
+ * rows are written on THAT transaction, so the change being audited and its audit
+ * record commit or roll back together. Without it the audit opens its own
+ * transaction and can therefore fail independently — which for a governance
+ * action means the change lands while the operator is told it failed and no trail
+ * exists.
+ */
+type AuditTx = Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0];
+
+async function writeAudit(entry: AuditEntry, tx?: AuditTx) {
   const context = await requestContext();
   const entityType = entry.entityType ?? (entry.leadId ? "Lead" : entry.contactId ? "Contact" : null);
   const entityId = entry.entityId ?? entry.leadId ?? entry.contactId ?? null;
@@ -119,7 +129,7 @@ async function writeAudit(entry: AuditEntry) {
   const actorName = entry.userName ?? entry.user?.name ?? "System";
   const tenantId = await actingTenantId(entry);
 
-  await basePrisma.$transaction(async (transaction) => {
+  const write = async (transaction: AuditTx) => {
     await transaction.$executeRaw`
       INSERT INTO "AuditEvent" (
         "id", "actorUserId", "actorName", "actorType", "eventType", "entityType", "entityId",
@@ -147,7 +157,12 @@ async function writeAudit(entry: AuditEntry) {
         tenantId,
       },
     });
-  });
+  };
+
+  // Join the caller's transaction when given one, so the audited change and its
+  // audit row share a fate. Otherwise open our own.
+  if (tx) await write(tx);
+  else await basePrisma.$transaction(write);
 }
 
 export async function logAudit(entry: AuditEntry): Promise<void> {
@@ -171,6 +186,16 @@ export async function logAudit(entry: AuditEntry): Promise<void> {
   }
 }
 
-export async function logAuditStrict(entry: AuditEntry): Promise<void> {
-  await writeAudit(entry);
+/**
+ * Governance-sensitive audit. Throws on failure — the caller is expected to treat
+ * an unwritable audit trail as a failed operation.
+ *
+ * Pass `tx` to write the audit ON the caller's transaction, so the change and its
+ * audit record commit together. Without it the audit commits separately, which
+ * means a failing audit leaves the change in place while the caller reports
+ * failure — for something like a password reset, the operator would be told it did
+ * not happen when it did.
+ */
+export async function logAuditStrict(entry: AuditEntry, tx?: AuditTx): Promise<void> {
+  await writeAudit(entry, tx);
 }
