@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { getActiveTenantId, requireUser } from "@/lib/auth";
 import {
   createStage,
   renameStage,
@@ -98,8 +98,23 @@ export default async function SettingsPage({
     }
   };
   const isOwner = isAdmin;
-  const errorLogs = isAdmin && tab === "system"
-    ? await basePrisma.errorLog.findMany({ orderBy: { createdAt: "desc" }, take: 500 })
+  // The System Log is TENANT-SCOPED. `basePrisma` bypasses the tenant guard, so the
+  // unfiltered read this replaced handed every tenant owner every other tenant's
+  // error messages, stack traces and context — the most revealing rows in the
+  // database. Errors with no tenant (system/cron work, and everything logged before
+  // ErrorLog gained the column) stay out of here too: a tenant cannot tell whose
+  // they are. Unattributed and cross-tenant errors are the platform console's job.
+  //
+  // A session with no resolvable tenant therefore sees nothing rather than
+  // everything. That is the same condition under which `logError` records
+  // `tenantId: null`, so read and write agree; signing in again mints the claim.
+  const logTenantId = isAdmin && tab === "system" ? await getActiveTenantId() : null;
+  const errorLogs = logTenantId
+    ? await basePrisma.errorLog.findMany({
+        where: { tenantId: logTenantId },
+        orderBy: { createdAt: "desc" },
+        take: 500,
+      })
     : [];
   // Collapse identical errors (same scope + message) into one row with an
   // occurrence count and first/last-seen, so a crash-loop is one line, not 200.
@@ -470,9 +485,9 @@ export default async function SettingsPage({
         <div className="w-full space-y-4">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <p className="text-sm text-muted-foreground max-w-2xl">
-              System errors from syncs, webhooks, email/SMS and unhandled crashes. Identical errors
-              are grouped. Auto-purged after 30 days; a push fires on the first error in any
-              30-minute window.
+              System errors from syncs, webhooks, email/SMS and unhandled crashes, for this
+              workspace only. Identical errors are grouped. Auto-purged after 30 days; a push
+              fires on the first error in any 30-minute window.
             </p>
             {errorLogs.length > 0 && (
               <form action={clearErrorLog}>
@@ -480,6 +495,14 @@ export default async function SettingsPage({
               </form>
             )}
           </div>
+
+          {!logTenantId && (
+            <p className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200/90">
+              This sign-in has no workspace attached, so no errors can be shown — the log is
+              scoped to one workspace and showing you another&apos;s would be worse than showing
+              none. Sign out and back in to attach it.
+            </p>
+          )}
 
           {errorLogs.length > 0 && (
             <div className="grid grid-cols-3 gap-3">
