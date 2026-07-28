@@ -212,6 +212,12 @@ export async function runSecurityChecks(): Promise<RunbookRun> {
     fix: no2fa.length ? "Ask them to enable 2FA under Settings → My Account." : undefined,
   });
 
+  // NOT tenant-scoped, unlike Settings → System Log. This whole runbook is an
+  // install-wide operator report — it probes the deployment, lists every user's 2FA
+  // state and reaches blob storage — and it also runs from cron, where there is no
+  // session and so no tenant to scope to. Scoping this one line would leave the
+  // surface half-scoped while reading as fully scoped, which is worse than leaving
+  // it consistently install-wide. It exposes a COUNT, never error content.
   const weekErrors = await basePrisma.errorLog.count({
     where: { createdAt: { gte: new Date(Date.now() - 7 * 864e5) } },
   });
