@@ -76,23 +76,28 @@ export function canRemoveTenantMember(currentMemberCount: number): GuardResult {
  * tenant claim, and under enforcement that makes `getCurrentUser` return null —
  * the user cannot sign in at all.
  *
- * So granting a second ACTIVE membership does not "add access", it DESTROYS the
- * user's access. Refuse it until an explicit tenant-switching model exists.
+ * So granting a second membership does not "add access", it DESTROYS the user's
+ * access. Refuse it until an explicit tenant-switching model exists.
  *
- * `activeTenantIdsForUser` is the user's current memberships in ACTIVE tenants.
- * Re-adding them to a tenant they already belong to is allowed (idempotent), and a
- * user with no active membership can be added to anything.
+ * `tenantIdsForUser` must be EVERY membership the user holds, not merely those in
+ * ACTIVE tenants: a membership in an inactive tenant looks harmless today and
+ * becomes ambiguous the moment that tenant is activated.
+ *
+ * This is a friendly pre-check for a good error message, NOT the boundary. Two
+ * concurrent additions could both pass it, so the authoritative guarantee is the
+ * unique index on `TenantMember.userId` (migration 20260728140000); callers must
+ * still handle its violation.
  */
 export function canAddTenantMember(
-  activeTenantIdsForUser: readonly string[],
+  tenantIdsForUser: readonly string[],
   targetTenantId: string,
 ): GuardResult {
-  const others = [...new Set(activeTenantIdsForUser)].filter((id) => id !== targetTenantId);
+  const others = [...new Set(tenantIdsForUser)].filter((id) => id !== targetTenantId);
   return others.length === 0
     ? OK
     : {
         ok: false,
         error:
-          "That user already belongs to another active tenant. Sign-in requires exactly one active tenant, so adding a second membership would lock them out entirely.",
+          "That user already belongs to another tenant. Sign-in requires exactly one tenant, so a second membership would lock them out entirely.",
       };
 }

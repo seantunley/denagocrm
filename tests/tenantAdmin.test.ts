@@ -78,7 +78,7 @@ test("canRemoveTenantMember: allowed when more than one member remains", () => {
 // soleActiveTenant, which needs exactly one active membership; a second one yields
 // `ambiguous_tenant` and, under enforcement, no session at all.
 
-test("canAddTenantMember: allowed when the user has no active membership", () => {
+test("canAddTenantMember: allowed when the user has no membership at all", () => {
   assert.deepEqual(canAddTenantMember([], "tenant_b"), { ok: true });
 });
 
@@ -86,7 +86,7 @@ test("canAddTenantMember: allowed when re-adding to the SAME tenant (idempotent)
   assert.deepEqual(canAddTenantMember(["tenant_b"], "tenant_b"), { ok: true });
 });
 
-test("canAddTenantMember: REFUSED when the user already belongs to another active tenant", () => {
+test("canAddTenantMember: REFUSED when the user already belongs to another tenant", () => {
   const result = canAddTenantMember([DEFAULT_TENANT_ID], "tenant_b");
   assert.equal(result.ok, false);
   if (!result.ok) assert.match(result.error, /lock them out/i);
@@ -100,4 +100,12 @@ test("canAddTenantMember: refused even if the target is among several existing m
 
 test("canAddTenantMember: duplicate ids of the same tenant do not count as 'another'", () => {
   assert.deepEqual(canAddTenantMember(["tenant_b", "tenant_b"], "tenant_b"), { ok: true });
+});
+
+test("canAddTenantMember: an INACTIVE tenant membership still blocks (activation-safe)", () => {
+  // The caller passes every membership regardless of tenant state, precisely so a
+  // dormant membership cannot turn into ambiguity later when that tenant is
+  // activated. The guard cannot see tenant state, so this documents the contract.
+  const result = canAddTenantMember(["tenant_inactive_somewhere"], "tenant_b");
+  assert.equal(result.ok, false);
 });

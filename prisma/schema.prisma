@@ -2321,7 +2321,22 @@ model TenantMember {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, userId])
-  @@index([userId])
+  /// ONE TENANT PER USER, enforced by the database.
+  ///
+  /// Sign-in resolves the acting tenant with `soleActiveTenant`, which requires
+  /// EXACTLY ONE active membership: zero gives `no_tenant`, two or more give
+  /// `ambiguous_tenant`. Both mean no honoured tenant claim, and under enforcement
+  /// that means the user cannot sign in at all. So a second membership does not
+  /// widen a user's access, it DESTROYS it.
+  ///
+  /// An application check cannot hold this: two concurrent adds can both pass it,
+  /// and a membership in an INACTIVE tenant looks harmless until that tenant is
+  /// activated. A unique index closes both — it is atomic, and it covers memberships
+  /// regardless of tenant state.
+  ///
+  /// Lift this when an explicit tenant-switching model exists (session-selected
+  /// tenant), not before.
+  @@unique([userId])
 }
 
 // Platform-admin identity — DELIBERATELY OUTSIDE the tenant model, and listed in

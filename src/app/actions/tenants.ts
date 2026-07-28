@@ -96,10 +96,14 @@ export async function createTenantAction(formData: FormData): Promise<void> {
     summary: `Created inert tenant “${name}” (${slug})`,
     entityType: "Tenant",
     entityId: created.tenantId,
-    user: actor,
-    // The actor is a PlatformAdmin, not a CRM User — say so, or the trail records
-    // an actorUserId that resolves to nothing in the User table.
+    // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
+    // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
+    // User row has that id, so anything joining those columns silently finds
+    // nothing. Attribute by name + actorType instead, and keep the id in metadata
+    // where it is unambiguous about which identity space it belongs to.
+    userName: actor.name,
     actorType: "platform_admin",
+    metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
     // No password fields here — the owner's credentials never enter the audit trail.
     after: { name, slug, active: false, ownerId: created.ownerId, ownerEmail, inert: true },
   });
@@ -136,10 +140,14 @@ export async function activateTenantAction(tenantId: string): Promise<void> {
     summary: `Activated tenant “${tenant.name}” and re-enabled the provisioned owner`,
     entityType: "Tenant",
     entityId: tenantId,
-    user: actor,
-    // The actor is a PlatformAdmin, not a CRM User — say so, or the trail records
-    // an actorUserId that resolves to nothing in the User table.
+    // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
+    // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
+    // User row has that id, so anything joining those columns silently finds
+    // nothing. Attribute by name + actorType instead, and keep the id in metadata
+    // where it is unambiguous about which identity space it belongs to.
+    userName: actor.name,
     actorType: "platform_admin",
+    metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
     before: { active: tenant.active },
     after: { active: true },
   });
@@ -166,10 +174,14 @@ export async function suspendTenantAction(tenantId: string): Promise<void> {
     summary: `Suspended tenant “${tenant.name}”`,
     entityType: "Tenant",
     entityId: tenantId,
-    user: actor,
-    // The actor is a PlatformAdmin, not a CRM User — say so, or the trail records
-    // an actorUserId that resolves to nothing in the User table.
+    // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
+    // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
+    // User row has that id, so anything joining those columns silently finds
+    // nothing. Attribute by name + actorType instead, and keep the id in metadata
+    // where it is unambiguous about which identity space it belongs to.
+    userName: actor.name,
     actorType: "platform_admin",
+    metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
     before: { active: tenant.active },
     after: { active: false },
   });
@@ -189,31 +201,51 @@ export async function addTenantMemberAction(tenantId: string, formData: FormData
   if (!tenant) throw new Error("Tenant not found.");
   if (!user) throw new Error("Selected user does not exist.");
 
-  // LOCKOUT GUARD — see tenantAdmin.canAddTenantMember. Sign-in resolves the acting
-  // tenant with soleActiveTenant, which needs EXACTLY ONE active membership; a
-  // second one yields `ambiguous_tenant` and, under enforcement, no session at all.
-  // Granting it would remove this user's access rather than widen it.
-  const activeMemberships = await basePrisma.tenantMember.findMany({
-    where: { userId, tenant: { active: true } },
+  // LOCKOUT GUARD — see tenantAdmin.canAddTenantMember. Sign-in needs EXACTLY ONE
+  // membership; a second yields `ambiguous_tenant` and, under enforcement, no
+  // session at all, so granting one removes this user's access rather than widening
+  // it. ALL memberships count, not just those in active tenants: one in an inactive
+  // tenant becomes ambiguous the moment that tenant is activated.
+  //
+  // This pre-check exists for the error message. The AUTHORITATIVE guarantee is the
+  // unique index on TenantMember.userId — two concurrent adds could both pass here,
+  // and only the database can serialise that, so the violation is handled below.
+  const memberships = await basePrisma.tenantMember.findMany({
+    where: { userId },
     select: { tenantId: true },
   });
   const addGate = canAddTenantMember(
-    activeMemberships.map((membership) => membership.tenantId),
+    memberships.map((membership) => membership.tenantId),
     tenantId,
   );
   if (!addGate.ok) throw new Error(addGate.error);
 
-  await addTenantMembership(basePrisma, tenantId, userId);
+  try {
+    await addTenantMembership(basePrisma, tenantId, userId);
+  } catch (error) {
+    // The unique index fired — a concurrent request added this user to another
+    // tenant between our check and our insert.
+    if (isUniqueViolation(error)) {
+      throw new Error(
+        "That user was just added to another tenant. Sign-in requires exactly one tenant, so this membership was refused.",
+      );
+    }
+    throw error;
+  }
 
   await logAuditStrict({
     action: "tenant.member_added",
     summary: `Added ${user.name} to tenant “${tenant.name}”`,
     entityType: "Tenant",
     entityId: tenantId,
-    user: actor,
-    // The actor is a PlatformAdmin, not a CRM User — say so, or the trail records
-    // an actorUserId that resolves to nothing in the User table.
+    // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
+    // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
+    // User row has that id, so anything joining those columns silently finds
+    // nothing. Attribute by name + actorType instead, and keep the id in metadata
+    // where it is unambiguous about which identity space it belongs to.
+    userName: actor.name,
     actorType: "platform_admin",
+    metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
     after: { userId },
   });
   revalidatePath(CONSOLE_PATH);
@@ -247,10 +279,14 @@ export async function removeTenantMemberAction(tenantId: string, userId: string)
     summary: `Removed a member from tenant “${tenant.name}”`,
     entityType: "Tenant",
     entityId: tenantId,
-    user: actor,
-    // The actor is a PlatformAdmin, not a CRM User — say so, or the trail records
-    // an actorUserId that resolves to nothing in the User table.
+    // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
+    // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
+    // User row has that id, so anything joining those columns silently finds
+    // nothing. Attribute by name + actorType instead, and keep the id in metadata
+    // where it is unambiguous about which identity space it belongs to.
+    userName: actor.name,
     actorType: "platform_admin",
+    metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
     before: { userId },
   });
   revalidatePath(CONSOLE_PATH);
@@ -293,10 +329,14 @@ export async function setTenantModulesAction(
     summary: `Updated modules for tenant “${tenant.name}”`,
     entityType: "Tenant",
     entityId: tenantId,
-    user: actor,
-    // The actor is a PlatformAdmin, not a CRM User — say so, or the trail records
-    // an actorUserId that resolves to nothing in the User table.
+    // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
+    // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
+    // User row has that id, so anything joining those columns silently finds
+    // nothing. Attribute by name + actorType instead, and keep the id in metadata
+    // where it is unambiguous about which identity space it belongs to.
+    userName: actor.name,
     actorType: "platform_admin",
+    metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
     before: { modules: tenant.modules },
     after: { modules },
   });
