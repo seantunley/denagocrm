@@ -9,11 +9,29 @@ import { currentTenantScope } from "./tenantScope";
  * to whichever tenant happened to be in scope. Anything that throws here is
  * swallowed: attribution must never be able to break logging.
  */
-function tenantForError(): string | null {
+async function tenantForError(): Promise<string | null> {
   try {
     const scope = currentTenantScope();
-    if (!scope || scope.system) return null;
-    return scope.tenantId ?? null;
+    // A `system` scope is trusted cross-tenant work (backups, some cron). That is
+    // genuinely not one tenant's error, so it stays unattributed rather than being
+    // blamed on whichever tenant happened to be in scope.
+    if (scope?.system) return null;
+    if (scope?.tenantId) return scope.tenantId;
+  } catch {
+    /* fall through to the session */
+  }
+
+  // No scope. This is the NORMAL case while tenant enforcement is dormant: the
+  // scope helpers deliberately no-op when `tenantEnforcing()` is false, so without
+  // this fallback EVERY error would be unattributed until enforcement ships, and
+  // per-tenant error health would be permanently empty.
+  //
+  // Fall back to the acting staff session's tenant. Errors raised outside a request
+  // (cron, webhooks, build) have no cookies to read, which throws — that is exactly
+  // the unattributed case, so it resolves to null.
+  try {
+    const { getActiveTenantId } = await import("./auth");
+    return await getActiveTenantId();
   } catch {
     return null;
   }
@@ -34,7 +52,7 @@ export async function logError(
     const message =
       err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err);
     const stack = err instanceof Error ? err.stack?.slice(0, 4000) : undefined;
-    const tenantId = tenantForError();
+    const tenantId = await tenantForError();
 
     await basePrisma.errorLog.create({
       data: {

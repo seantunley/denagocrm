@@ -261,18 +261,23 @@ export default async function PlatformTenantsPage() {
           multi-thousand-character invocation dump, which as raw text buried the
           whole page. */}
       {health.errors.recent.length > 0 && (
-        <section className="card p-0">
-          <div className="flex items-center justify-between border-b border-border/50 px-5 py-3">
+        <details className="card group p-0">
+          {/* COLLAPSED by default. The status strip at the top already reports the
+              count, so this is the detail you open when you want it — an expanded
+              wall of stack traces greeted every visit and buried the page. */}
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-3 select-none [&::-webkit-details-marker]:hidden">
             <h2 className="flex items-center gap-2 font-semibold">
               <AlertTriangle className="size-4 text-red-300" />
               Recent errors
+              <span className="text-xs font-normal text-muted-foreground">
+                {health.errors.total24h} in 24h · last 7 days
+              </span>
             </h2>
-            <span className="text-xs text-muted-foreground">
-              {health.errors.total24h} in 24h · last 7 days shown
-            </span>
-          </div>
+            <span className="btn-secondary btn-sm shrink-0 group-open:hidden">Show</span>
+            <span className="btn-secondary btn-sm hidden shrink-0 group-open:inline-flex">Hide</span>
+          </summary>
 
-          <ul className="divide-y divide-border/50">
+          <ul className="divide-y divide-border/50 border-t border-border/50">
             {health.errors.recent.map((error) => (
               <li key={error.id} className="px-5 py-3">
                 <div className="flex flex-wrap items-baseline gap-2">
@@ -299,7 +304,7 @@ export default async function PlatformTenantsPage() {
               </li>
             ))}
           </ul>
-        </section>
+        </details>
       )}
 
     </div>

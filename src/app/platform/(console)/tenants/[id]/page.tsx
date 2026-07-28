@@ -120,7 +120,7 @@ export default async function TenantProfilePage({
   const since24h = new Date(Date.now() - 24 * 3600_000);
   const since7d = new Date(Date.now() - 7 * 24 * 3600_000);
 
-  const [members, addableUsers, contacts, lastSession, errors, integrations] =
+  const [members, addableUsers, lastSession, errors, integrations] =
     await Promise.all([
       basePrisma.tenantMember.findMany({
         where: { tenantId: id },
@@ -133,7 +133,6 @@ export default async function TenantProfilePage({
         select: { id: true, name: true, email: true },
         orderBy: { name: "asc" },
       }),
-      basePrisma.contact.count({ where: { tenantId: id, deletedAt: null } }),
       basePrisma.userSession.findFirst({
         where: { tenantId: id },
         orderBy: { lastActiveAt: "desc" },
@@ -229,11 +228,12 @@ export default async function TenantProfilePage({
       </div>
 
       {/* At-a-glance figures, visible on every tab rather than hidden inside one. */}
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {[
-          // Lead count is a sales metric, not a platform one — it tells an operator
-          // nothing about whether this tenant is healthy or how much it costs to run.
-          { label: "Contacts", value: contacts },
+          // Deliberately NOT lead or contact counts: those are sales metrics that say
+          // nothing about whether a tenant is healthy or what it costs to run. What a
+          // platform operator needs is who can get in, what they may use, how much
+          // room they take, and whether anything is broken.
           { label: "Members", value: members.length },
           { label: "Modules", value: granted.size },
           { label: "Storage", value: formatBytes(storage.estimatedBytes) },
