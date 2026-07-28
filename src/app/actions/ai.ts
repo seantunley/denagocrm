@@ -1,7 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/db";
-import { requireOperational, requireOwner } from "@/lib/auth";
+import { getActiveTenantId, requireOperational, requireOwner } from "@/lib/auth";
 import { requireLeadAccess, requireContactAccess, canAccessContact, hasPermission } from "@/lib/permissions";
 import { aiCheckDraft, aiResearch } from "@/lib/ai";
 import { basePrisma } from "@/lib/db";
@@ -79,10 +79,26 @@ export async function findPossibleDuplicates(input: {
   }));
 }
 
-/** Admin: wipe the system error log. */
+/**
+ * Admin: wipe THIS TENANT's system error log.
+ *
+ * Scoped deliberately. `basePrisma` bypasses the tenant guard, so the previous
+ * `deleteMany({})` let any tenant owner erase every other tenant's error history
+ * — and the platform's unattributed rows with it — destroying the evidence the
+ * console relies on to answer "which tenant is broken?".
+ *
+ * Rows with no tenant (system/cron work, and everything logged before ErrorLog
+ * gained the column) are NOT cleared here: a tenant cannot tell whose they are,
+ * so they belong to the platform console alone. With no resolvable acting tenant
+ * this deletes nothing — the button is only rendered when scoped rows exist, so
+ * that path is reachable only by a hand-made request, and doing nothing is the
+ * right answer to one.
+ */
 export async function clearErrorLog() {
   await requireOwner();
-  await basePrisma.errorLog.deleteMany({});
+  const tenantId = await getActiveTenantId();
+  if (!tenantId) return;
+  await basePrisma.errorLog.deleteMany({ where: { tenantId } });
   // Without this the Settings → System tab keeps rendering the cached (now
   // deleted) rows, so the button looked like it did nothing.
   const { revalidatePath } = await import("next/cache");
