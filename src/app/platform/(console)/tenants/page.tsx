@@ -1,4 +1,4 @@
-import { Plus, Lock, Activity } from "lucide-react";
+import { Plus, Lock, Activity, AlertTriangle } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { requirePlatformAdmin } from "@/lib/platformAuth";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
@@ -75,6 +75,10 @@ export default async function PlatformTenantsPage() {
   ]);
 
   const membersFor = (tenantId: string) => memberRows.filter((row) => row.tenantId === tenantId);
+  // A tenant id in the error list may name a tenant that has since been deleted;
+  // fall back to the raw id rather than rendering a blank.
+  const tenantName = (tenantId: string) =>
+    tenants.find((tenant) => tenant.id === tenantId)?.name ?? tenantId;
 
   return (
     <div className="space-y-6">
@@ -149,9 +153,54 @@ export default async function PlatformTenantsPage() {
         </div>
       </section>
 
-      {/* Platform health. Backups and errors are PLATFORM-WIDE facts, not per-tenant
-          ones, and are shown as such rather than repeated under each tenant as if
-          they were scoped. Per-tenant size/activity lives on the tenant rows below. */}
+      {/* Errors first, and only when there ARE any. A count buried behind a click
+          cannot tell you something is wrong; this shows the actual failures, newest
+          first, with the tenant that owns them. Silent when everything is healthy so
+          it stays meaningful rather than becoming furniture. */}
+      {health.errors.total24h > 0 && (
+        <section className="card border-l-4 border-l-red-500 p-5">
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-red-500/10 text-red-300">
+              <AlertTriangle className="size-4" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <h2 className="font-semibold text-red-200">
+                {health.errors.total24h} error{health.errors.total24h === 1 ? "" : "s"} in the last 24 hours
+              </h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Most recent first. Full detail lives in each tenant&apos;s Settings → System Log.
+              </p>
+
+              <ul className="mt-3 divide-y divide-border/50">
+                {health.errors.recent.map((error) => (
+                  <li key={error.id} className="py-2 first:pt-0">
+                    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                      <span className="rounded bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                        {error.scope}
+                      </span>
+                      <span className="text-xs font-medium">
+                        {error.tenantId
+                          ? tenantName(error.tenantId)
+                          : <span className="text-muted-foreground">unattributed</span>}
+                      </span>
+                      <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+                        {formatDateTime(error.createdAt)}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 break-words text-xs text-foreground/80 [overflow-wrap:anywhere]">
+                      {error.message}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Platform health. Backups are PLATFORM-WIDE facts, not per-tenant ones, and
+          are shown as such rather than repeated under each tenant as if they were
+          scoped. Per-tenant size/activity lives on the tenant rows below. */}
       <section className="card p-5">
         <div className="mb-4 flex items-center gap-2">
           <Activity className="size-4 text-muted-foreground" />
@@ -248,6 +297,14 @@ export default async function PlatformTenantsPage() {
                       {tenant.active ? "Active" : "Suspended"}
                     </span>
                     {isFounding && <span className="badge bg-primary/15 text-primary">Founding</span>}
+                    {/* Visible WITHOUT expanding the row — the whole point of a
+                        health signal is that you see it before you go looking. */}
+                    {(stats?.errors24h ?? 0) > 0 && (
+                      <span className="badge inline-flex items-center gap-1 bg-red-500/15 text-red-300">
+                        <AlertTriangle className="size-3" />
+                        {stats?.errors24h} error{stats?.errors24h === 1 ? "" : "s"} 24h
+                      </span>
+                    )}
                     <span className="text-xs font-normal text-muted-foreground">
                       {members.length} member{members.length === 1 ? "" : "s"} ·{" "}
                       {granted.size === 0

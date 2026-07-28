@@ -62,6 +62,20 @@ export type PlatformErrorHealth = {
   unattributed24h: number;
   unattributed7d: number;
   topScopes: { scope: string; count: number }[];
+  /** Errors across ALL tenants in the last 24h — the "is anything wrong" number. */
+  total24h: number;
+  /**
+   * The most recent errors themselves, newest first. A COUNT alone cannot tell you
+   * whether to act; you need to see what actually broke. `tenantId` is null for
+   * unattributed ones.
+   */
+  recent: {
+    id: string;
+    tenantId: string | null;
+    scope: string;
+    message: string;
+    createdAt: Date;
+  }[];
 };
 
 export type PlatformHealth = {
@@ -203,7 +217,7 @@ async function errorHealth(): Promise<PlatformErrorHealth> {
   // Only the UNATTRIBUTED ones: anything with a tenant is reported on that tenant's
   // row instead. Counting everything here would double-count and reproduce the
   // original problem — a single number nobody can act on.
-  const [unattributed24h, unattributed7d, scopes] = await Promise.all([
+  const [unattributed24h, unattributed7d, scopes, total24h, recent] = await Promise.all([
     basePrisma.errorLog.count({
       where: { createdAt: { gte: hoursAgo(24) }, tenantId: null },
     }),
@@ -217,12 +231,25 @@ async function errorHealth(): Promise<PlatformErrorHealth> {
       orderBy: { _count: { scope: "desc" } },
       take: 5,
     }),
+    // Across every tenant AND unattributed — the single "is anything wrong now?"
+    // number that decides whether the console shouts or stays quiet.
+    basePrisma.errorLog.count({ where: { createdAt: { gte: hoursAgo(24) } } }),
+    // The errors themselves. A count cannot guide anyone; seeing "smtp: connection
+    // refused" can. Capped so a storm cannot flood the page.
+    basePrisma.errorLog.findMany({
+      where: { createdAt: { gte: hoursAgo(24 * 7) } },
+      orderBy: { createdAt: "desc" },
+      take: 15,
+      select: { id: true, tenantId: true, scope: true, message: true, createdAt: true },
+    }),
   ]);
 
   return {
     unattributed24h,
     unattributed7d,
     topScopes: scopes.map((s) => ({ scope: s.scope, count: s._count._all })),
+    total24h,
+    recent,
   };
 }
 
