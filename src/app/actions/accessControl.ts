@@ -455,19 +455,22 @@ export async function updateUserRoles(userId: string, formData: FormData) {
     const target = targetRows[0];
     if (!target) throw new ActionRefusal("User not found");
 
-    // Whether the REQUESTED roles grant administration is the only part of this
-    // that cannot change under us — it comes from the submitted form. Everything
-    // else (their current roles, their owner flag, whether they are disabled)
-    // must be re-read under the lock, so the decision to take the lock rests on
-    // the request alone.
-    const requestGrantsAdmin = await roleIdsGrantAdmin(validRoleIds);
-
     // Under enforcement scope the DELETE to the active tenant so another tenant's
     // role assignments for the same user are left untouched.
     await basePrisma.$transaction(async (tx) => {
-      // Same invariant, same lock — see updateRolePermissions.
+      // ALWAYS take the lock here — unlike the other three sites, this one has no
+      // immutable predicate that can rule the invariant out in advance.
+      //
+      // "Do the requested roles grant administration?" reads RolePermission,
+      // which is itself mutable: a concurrent updateRolePermissions can strip
+      // roles.manage from that very role under this lock. Deciding from that
+      // read outside the transaction — as an earlier version did — meant a
+      // request that LOOKED admin-granting skipped the lock entirely and then
+      // removed the user's other admin role, leaving nobody. The only safe
+      // decision is no decision: lock first, evaluate everything under it.
+      await lockGovernanceAdmins(tx);
+      const requestGrantsAdmin = await roleIdsGrantAdmin(validRoleIds, tx);
       if (!requestGrantsAdmin) {
-        await lockGovernanceAdmins(tx);
         const [current] = await tx.$queryRaw<Array<{ role: string; disabledAt: Date | null }>>`
           SELECT "role", "disabledAt" FROM "User" WHERE "id" = ${userId} LIMIT 1
         `;
