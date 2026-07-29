@@ -1,6 +1,9 @@
 "use client";
 
 import { useState } from "react";
+
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import type { ActionResult } from "@/lib/actionResultTypes";
 import { MessageSquare, StickyNote, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -16,12 +19,19 @@ export function TicketComposer({
   cannedReplies,
   statusOptions,
   signature,
+  expectedStatus,
 }: {
-  replyAction: (formData: FormData) => void | Promise<void>;
-  noteAction: (formData: FormData) => void | Promise<void>;
+  replyAction: (formData: FormData) => Promise<ActionResult | void>;
+  noteAction: (formData: FormData) => Promise<ActionResult | void>;
   cannedReplies: Canned[];
   statusOptions: { value: string; label: string }[];
   signature?: string | null;
+  /**
+   * The status the ticket had when this composer was rendered. Sent with the
+   * reply so the action can refuse rather than overwrite a status someone else
+   * changed while this reply was being written.
+   */
+  expectedStatus: string;
 }) {
   const [mode, setMode] = useState<"reply" | "note">("reply");
   const [body, setBody] = useState("");
@@ -52,11 +62,16 @@ export function TicketComposer({
       </div>
 
       {mode === "reply" ? (
-        <form
+        <SaveForm
           action={replyAction}
-          onSubmit={() => setTimeout(() => setBody(""), 0)}
+          success="Reply sent"
+          // The body was cleared ON SUBMIT, so a reply that failed to send took
+          // the typed text with it. Clear it only once the send succeeded.
+          resetOnSuccess={false}
+          onSaved={() => setBody("")}
           className="space-y-3 p-3"
         >
+          <input type="hidden" name="expectedStatus" value={expectedStatus} />
           {cannedReplies.length > 0 && (
             <select
               className="input text-sm"
@@ -91,15 +106,16 @@ export function TicketComposer({
                 ))}
               </select>
             </label>
-            <button type="submit" className="btn-primary">
+            <SaveButton className="btn-primary" pendingLabel="Sending…">
               <Send className="size-4" /> Send reply
-            </button>
+            </SaveButton>
           </div>
-        </form>
+        </SaveForm>
       ) : (
-        <form
+        <SaveForm
           action={noteAction}
-          onSubmit={() => setTimeout(() => setBody(""), 0)}
+          success="Note added"
+          onSaved={() => setBody("")}
           className="space-y-3 p-3"
         >
           <textarea
@@ -110,11 +126,11 @@ export function TicketComposer({
             className="input min-h-24 resize-y border-amber-400/20 bg-amber-400/[0.03]"
           />
           <div className="flex justify-end">
-            <button type="submit" className="btn-secondary">
+            <SaveButton className="btn-secondary" pendingLabel="Saving…">
               <StickyNote className="size-4" /> Save note
-            </button>
+            </SaveButton>
           </div>
-        </form>
+        </SaveForm>
       )}
     </div>
   );

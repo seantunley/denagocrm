@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { Plus, Pencil, MessageSquareText, Tag, Inbox } from "lucide-react";
 import { requirePermission } from "@/lib/permissions";
 import { isModuleEnabled } from "@/lib/modules/enabled";
@@ -20,7 +21,7 @@ type Mailbox = Awaited<ReturnType<typeof listMailboxes>>[number];
 
 function MailboxForm({ mailbox }: { mailbox?: Mailbox }) {
   return (
-    <form action={saveMailbox} className="card space-y-4">
+    <SaveForm success="Mailbox saved" resetOnSuccess={false} action={saveMailbox} className="card space-y-4">
       {mailbox && <input type="hidden" name="id" value={mailbox.id} />}
       <div>
         <label className="label" htmlFor="mailbox-name">Name</label>
@@ -52,14 +53,14 @@ function MailboxForm({ mailbox }: { mailbox?: Mailbox }) {
         Active
         <input type="hidden" name="active" value="off" />
       </label>
-      <button className="btn-primary w-full">{mailbox ? "Save mailbox" : "Create mailbox"}</button>
-    </form>
+      <SaveButton className="btn-primary w-full">{mailbox ? "Save mailbox" : "Create mailbox"}</SaveButton>
+    </SaveForm>
   );
 }
 
 function CannedReplyForm({ reply, mailboxes }: { reply?: Awaited<ReturnType<typeof listCannedReplies>>[number]; mailboxes: Mailbox[] }) {
   return (
-    <form action={saveCannedReply} className="card space-y-4">
+    <SaveForm success="Canned reply saved" action={saveCannedReply} className="card space-y-4">
       {reply && <input type="hidden" name="id" value={reply.id} />}
       <div>
         <label className="label" htmlFor="reply-title">Title</label>
@@ -76,8 +77,8 @@ function CannedReplyForm({ reply, mailboxes }: { reply?: Awaited<ReturnType<type
         <label className="label" htmlFor="reply-body">Body</label>
         <textarea id="reply-body" name="body" className="input" rows={6} required minLength={2} defaultValue={reply?.body} placeholder="Thanks for reaching out — we've received your message…" />
       </div>
-      <button className="btn-primary w-full">{reply ? "Save reply" : "Create reply"}</button>
-    </form>
+      <SaveButton className="btn-primary w-full">{reply ? "Save reply" : "Create reply"}</SaveButton>
+    </SaveForm>
   );
 }
 
@@ -160,9 +161,9 @@ export default async function HelpdeskSettingsPage() {
                   <ModalTrigger label={<><Pencil className="size-4" />Edit</>} title={`Edit ${reply.title}`} buttonClass={buttonVariants({ size: "sm", variant: "outline" })}>
                     <CannedReplyForm reply={reply} mailboxes={mailboxes} />
                   </ModalTrigger>
-                  <form action={deleteCannedReply.bind(null, reply.id)}>
-                    <button className="text-red-400 text-sm">Delete</button>
-                  </form>
+                  <SaveForm success="Canned reply deleted" resetOnSuccess={false} action={deleteCannedReply.bind(null, reply.id)}>
+                    <SaveButton className="text-red-400 text-sm">Delete</SaveButton>
+                  </SaveForm>
                 </div>
               </div>
             ))}
@@ -181,13 +182,13 @@ export default async function HelpdeskSettingsPage() {
         ) : (
           <div className="flex flex-wrap gap-2">
             {tags.map((tag) => (
-              <form key={tag.id} action={deleteTag.bind(null, tag.id)}>
-                <button className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-3 py-1 text-sm text-slate-300 transition-colors hover:border-red-400/40 hover:text-red-300" title={`Remove ${tag.name}`}>
+              <SaveForm key={tag.id} success="Tag deleted" resetOnSuccess={false} action={deleteTag.bind(null, tag.id)}>
+                <SaveButton className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-3 py-1 text-sm text-slate-300 transition-colors hover:border-red-400/40 hover:text-red-300" title={`Remove ${tag.name}`}>
                   <span className="inline-block size-2 rounded-full" style={{ backgroundColor: tag.color }} />
                   {tag.name}
                   <span aria-hidden className="text-slate-500">×</span>
-                </button>
-              </form>
+                </SaveButton>
+              </SaveForm>
             ))}
           </div>
         )}

@@ -1,5 +1,6 @@
 "use server";
 
+import { asActionResult, ActionRefusal, refuse, type ActionResult } from "@/lib/actionResult";
 import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
@@ -8,6 +9,7 @@ import { prisma, basePrisma } from "@/lib/db";
 import { writeTenantId, withTenantWrite } from "@/lib/tenantWrite";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { logAudit } from "@/lib/audit";
+import { logError } from "@/lib/errorLog";
 import {
   requirePermission,
   requireCaseAccess,
@@ -35,290 +37,413 @@ async function loadCase(caseId: string) {
   });
 }
 
-/** Insert a PortalNotification so the customer sees the update in their portal. */
+/**
+ * BEST-EFFORT ON PURPOSE — both of these run AFTER the ticket transaction has
+ * committed.
+ *
+ * When they threw, the committed change was reported to the person as a
+ * failure, so they retried: a second reply posted to the CUSTOMER, or a
+ * duplicate timeline entry. Neither of these is the thing being saved; neither
+ * may invalidate a write that already happened.
+ *
+ * The failure is not swallowed — it lands in the system log (Settings → System
+ * Log) so a missing notification or timeline gap is visible.
+ */
+async function bestEffort(scope: string, context: string, write: () => Promise<unknown>) {
+  try {
+    await write();
+  } catch (error) {
+    await logError(scope, error, context);
+  }
+}
+
 async function notifyCustomer(contactId: string, title: string, body: string, href: string) {
   // Founding tenant when enforcement is off, so this never lands tenantless.
   const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
-  await basePrisma.$executeRaw`
+  await bestEffort("helpdesk.notify", `${title} for contact ${contactId}`, () => basePrisma.$executeRaw`
     INSERT INTO "PortalNotification" ("id","contactId","title","body","href","kind","tenantId")
-    VALUES (${randomUUID()}, ${contactId}, ${title}, ${body}, ${href}, 'case', ${tenantId})`;
+    VALUES (${randomUUID()}, ${contactId}, ${title}, ${body}, ${href}, 'case', ${tenantId})`);
 }
 
 /** Append a system "event" line item to the ticket timeline. */
 async function logEvent(caseId: string, userId: string, body: string, meta: Prisma.InputJsonObject) {
-  await prisma.customerCaseMessage.create({
-    data: { caseId, userId, direction: "staff", type: "event", body, meta, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
-  });
+  await bestEffort("helpdesk.event", `${body} on case ${caseId}`, () =>
+    prisma.customerCaseMessage.create({
+      data: { caseId, userId, direction: "staff", type: "event", body, meta, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
+    }),
+  );
 }
 
 // ── Create ──────────────────────────────────────────────────────────────────
-export async function createTicket(formData: FormData): Promise<void> {
-  const contactId = str(formData, "contactId");
-  const user = await requireContactAccess(contactId, "cases.create");
-  const subject = str(formData, "subject");
-  const description = str(formData, "description");
-  if (subject.length < 3 || description.length < 5) {
-    throw new Error("A ticket needs a subject and a short description.");
-  }
-  const type = TICKET_TYPES.includes(str(formData, "type") as (typeof TICKET_TYPES)[number]) ? str(formData, "type") : "support";
-  const priority = PRIORITY_VALUES.includes(str(formData, "priority")) ? str(formData, "priority") : "normal";
-  const mailboxId = str(formData, "mailboxId") || null;
-  const vehicleId = str(formData, "vehicleId") || null;
-  const assignToMe = formData.get("assignToMe") === "on";
+export async function createTicket(formData: FormData): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const contactId = str(formData, "contactId");
+    const user = await requireContactAccess(contactId, "cases.create");
+    const subject = str(formData, "subject");
+    const description = str(formData, "description");
+    if (subject.length < 3 || description.length < 5) {
+      throw new ActionRefusal("A ticket needs a subject and a short description.");
+    }
+    const type = TICKET_TYPES.includes(str(formData, "type") as (typeof TICKET_TYPES)[number]) ? str(formData, "type") : "support";
+    const priority = PRIORITY_VALUES.includes(str(formData, "priority")) ? str(formData, "priority") : "normal";
+    const mailboxId = str(formData, "mailboxId") || null;
+    const vehicleId = str(formData, "vehicleId") || null;
+    const assignToMe = formData.get("assignToMe") === "on";
 
-  // Atomic: the case + its opening message in ONE transaction, tenant-stamped.
-  const created = await withTenantWrite(async (tx, tenantId) => {
-    const c = await tx.customerCase.create({
-      data: {
-        subject,
-        description,
-        type,
-        priority,
-        status: "open",
-        source: "staff",
-        contactId,
-        vehicleId,
-        mailboxId,
-        assignedToId: assignToMe ? user.id : null,
-        lastReplyBy: "staff",
-        lastReplyAt: new Date(),
-        tenantId,
-      },
-      select: { id: true, number: true },
+    // Atomic: the case + its opening message in ONE transaction, tenant-stamped.
+    const created = await withTenantWrite(async (tx, tenantId) => {
+      const c = await tx.customerCase.create({
+        data: {
+          subject,
+          description,
+          type,
+          priority,
+          status: "open",
+          source: "staff",
+          contactId,
+          vehicleId,
+          mailboxId,
+          assignedToId: assignToMe ? user.id : null,
+          lastReplyBy: "staff",
+          lastReplyAt: new Date(),
+          tenantId,
+        },
+        select: { id: true, number: true },
+      });
+      await tx.customerCaseMessage.create({
+        data: { caseId: c.id, userId: user.id, direction: "staff", type: "staff", body: description, tenantId },
+      });
+      return c;
     });
-    await tx.customerCaseMessage.create({
-      data: { caseId: c.id, userId: user.id, direction: "staff", type: "staff", body: description, tenantId },
-    });
-    return c;
-  });
 
-  await logAudit({
-    action: "case.created",
-    summary: `Created ticket C-${created.number} for a customer`,
-    contactId,
-    user,
-    entityType: "CustomerCase",
-    entityId: created.id,
+    await logAudit({
+      action: "case.created",
+      summary: `Created ticket C-${created.number} for a customer`,
+      contactId,
+      user,
+      entityType: "CustomerCase",
+      entityId: created.id,
+    });
+    revalidatePath("/cases");
+    return { redirectTo: `/cases/${created.id}` };
   });
-  revalidatePath("/cases");
-  redirect(`/cases/${created.id}`);
 }
 
 // ── Public reply ──────────────────────────────────────────────────────────────
-export async function replyToTicket(caseId: string, formData: FormData): Promise<void> {
-  const user = await requireCaseAccess(caseId, "cases.reply");
-  const body = str(formData, "body");
-  if (body.length < 2) throw new Error("Write a reply before sending.");
-  const requested = str(formData, "status");
-  const nextStatus = STATUS_VALUES.includes(requested) ? requested : "waiting_customer";
+export async function replyToTicket(caseId: string, formData: FormData): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const user = await requireCaseAccess(caseId, "cases.reply");
+    const body = str(formData, "body");
+    if (body.length < 2) throw new ActionRefusal("Write a reply before sending.");
+    const requested = str(formData, "status");
+    const nextStatus = STATUS_VALUES.includes(requested) ? requested : "waiting_customer";
 
-  const item = await loadCase(caseId);
-  if (!item) redirect("/cases");
-  const now = new Date();
+    const item = await loadCase(caseId);
+    if (!item) redirect("/cases");
+    // Falls back to the fresh read only when the form did not send one, so an
+    // older cached page still saves rather than failing outright.
+    const expectedStatus = str(formData, "expectedStatus") || item.status;
+    const now = new Date();
 
-  // Atomic: append the reply + advance the case in ONE transaction (the case was
-  // authorised by requireCaseAccess above). Uses the proven bypass transaction path
-  // rather than a scoped array transaction, whose GUC interaction is the fragile area.
-  await withTenantWrite(async (tx, tenantId) => {
-    await tx.customerCaseMessage.create({
-      data: { caseId, userId: user.id, direction: "staff", type: "staff", body, tenantId },
+    // Atomic: append the reply + advance the case in ONE transaction (the case was
+    // authorised by requireCaseAccess above). Uses the proven bypass transaction path
+    // rather than a scoped array transaction, whose GUC interaction is the fragile area.
+    await withTenantWrite(async (tx, tenantId) => {
+      await tx.customerCaseMessage.create({
+        data: { caseId, userId: user.id, direction: "staff", type: "staff", body, tenantId },
+      });
+      // Compare-and-set against the status the COMPOSER WAS RENDERED WITH, not
+      // against a value re-read moments ago in this same request. Re-reading
+      // checks almost nothing: it is current by construction, so a reply written
+      // against a stale page still overwrote whatever changed in between and
+      // both operations reported success. The client sends what it showed.
+      //
+      // The message is created inside this transaction, so refusing rolls it
+      // back too — a half-sent reply would be worse than the overwrite.
+      const advanced = await tx.customerCase.updateMany({
+        where: { id: caseId, status: expectedStatus },
+        data: {
+          status: nextStatus,
+          lastReplyBy: "staff",
+          lastReplyAt: now,
+          firstResponseAt: item.firstResponseAt ?? now,
+          resolvedAt: nextStatus === "resolved" ? now : undefined,
+          closedAt: nextStatus === "closed" ? now : undefined,
+        },
+      });
+      if (advanced.count !== 1) {
+        refuse("Someone else changed this ticket while you were writing. Refresh and send again.");
+      }
     });
-    await tx.customerCase.update({
-      where: { id: caseId },
-      data: {
-        status: nextStatus,
-        lastReplyBy: "staff",
-        lastReplyAt: now,
-        firstResponseAt: item.firstResponseAt ?? now,
-        resolvedAt: nextStatus === "resolved" ? now : undefined,
-        closedAt: nextStatus === "closed" ? now : undefined,
-      },
-    });
-  });
 
-  await notifyCustomer(
-    item.contactId,
-    `Update on ticket C-${item.number}`,
-    body.slice(0, 180),
-    `/portal/support/${caseId}`,
-  );
-  await logAudit({
-    action: "case.staff_reply",
-    summary: `Replied to ticket C-${item.number}`,
-    contactId: item.contactId,
-    user,
-    entityType: "CustomerCase",
-    entityId: caseId,
+    await notifyCustomer(
+      item.contactId,
+      `Update on ticket C-${item.number}`,
+      body.slice(0, 180),
+      `/portal/support/${caseId}`,
+    );
+    await logAudit({
+      action: "case.staff_reply",
+      summary: `Replied to ticket C-${item.number}`,
+      contactId: item.contactId,
+      user,
+      entityType: "CustomerCase",
+      entityId: caseId,
+    });
+    revalidatePath(`/cases/${caseId}`);
+    revalidatePath("/cases");
+    revalidatePath(`/portal/support/${caseId}`);
   });
-  revalidatePath(`/cases/${caseId}`);
-  revalidatePath("/cases");
-  revalidatePath(`/portal/support/${caseId}`);
 }
 
 // ── Internal note (never shown to the customer) ───────────────────────────────
-export async function addNote(caseId: string, formData: FormData): Promise<void> {
-  const user = await requireCaseAccess(caseId, "cases.reply");
-  const body = str(formData, "body");
-  if (body.length < 1) throw new Error("Write a note before saving.");
-  await prisma.customerCaseMessage.create({
-    data: { caseId, userId: user.id, direction: "staff", type: "note", body, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
+export async function addNote(caseId: string, formData: FormData): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const user = await requireCaseAccess(caseId, "cases.reply");
+    const body = str(formData, "body");
+    if (body.length < 1) throw new ActionRefusal("Write a note before saving.");
+    await prisma.customerCaseMessage.create({
+      data: { caseId, userId: user.id, direction: "staff", type: "note", body, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID },
+    });
+    await logAudit({ action: "case.note_added", summary: "Added an internal note", user, entityType: "CustomerCase", entityId: caseId });
+    revalidatePath(`/cases/${caseId}`);
   });
-  await logAudit({ action: "case.note_added", summary: "Added an internal note", user, entityType: "CustomerCase", entityId: caseId });
-  revalidatePath(`/cases/${caseId}`);
 }
 
 // ── Assignment ────────────────────────────────────────────────────────────────
-export async function assignTicket(caseId: string, formData: FormData): Promise<void> {
-  const user = await requireCaseAccess(caseId, "cases.assign");
-  const raw = str(formData, "assigneeId");
-  const assigneeId = raw === "" ? null : raw;
-  const assignee = assigneeId ? await basePrisma.user.findUnique({ where: { id: assigneeId }, select: { name: true } }) : null;
-  if (assigneeId && !assignee) throw new Error("That agent no longer exists.");
+export async function assignTicket(caseId: string, formData: FormData): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const user = await requireCaseAccess(caseId, "cases.assign");
+    const raw = str(formData, "assigneeId");
+    const assigneeId = raw === "" ? null : raw;
+    const assignee = assigneeId ? await basePrisma.user.findUnique({ where: { id: assigneeId }, select: { name: true } }) : null;
+    if (assigneeId && !assignee) throw new ActionRefusal("That agent no longer exists.");
 
-  await prisma.customerCase.update({ where: { id: caseId }, data: { assignedToId: assigneeId, updatedAt: new Date() } });
-  await logEvent(caseId, user.id, assigneeId ? `Assigned to ${assignee?.name}` : "Unassigned", { event: "assigned", to: assigneeId });
-  await logAudit({ action: "case.assigned", summary: assigneeId ? `Assigned ticket to ${assignee?.name}` : "Unassigned ticket", user, entityType: "CustomerCase", entityId: caseId });
-  revalidatePath(`/cases/${caseId}`);
-  revalidatePath("/cases");
+    await prisma.customerCase.update({ where: { id: caseId }, data: { assignedToId: assigneeId, updatedAt: new Date() } });
+    await logEvent(caseId, user.id, assigneeId ? `Assigned to ${assignee?.name}` : "Unassigned", { event: "assigned", to: assigneeId });
+    await logAudit({ action: "case.assigned", summary: assigneeId ? `Assigned ticket to ${assignee?.name}` : "Unassigned ticket", user, entityType: "CustomerCase", entityId: caseId });
+    revalidatePath(`/cases/${caseId}`);
+    revalidatePath("/cases");
+  });
 }
 
 // ── Status ────────────────────────────────────────────────────────────────────
-export async function setTicketStatus(caseId: string, formData: FormData): Promise<void> {
-  const user = await requireCaseAccess(caseId, "cases.manage");
-  const status = str(formData, "status");
-  if (!STATUS_VALUES.includes(status)) throw new Error("Invalid ticket status.");
-  const item = await loadCase(caseId);
-  if (!item) redirect("/cases");
-  if (item.status === status) return;
-  const now = new Date();
-  await prisma.customerCase.update({
-    where: { id: caseId },
-    data: {
-      status,
-      resolvedAt: status === "resolved" ? now : undefined,
-      closedAt: status === "closed" ? now : undefined,
-    },
+export async function setTicketStatus(caseId: string, formData: FormData): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const user = await requireCaseAccess(caseId, "cases.manage");
+    const status = str(formData, "status");
+    if (!STATUS_VALUES.includes(status)) throw new ActionRefusal("Invalid ticket status.");
+    const item = await loadCase(caseId);
+    if (!item) redirect("/cases");
+    // The status the select was RENDERED with — see replyToTicket for why a
+    // fresh re-read here would check almost nothing.
+    const expectedStatus = str(formData, "expectedStatus") || item.status;
+    // Already there. Reporting a change would be a lie, but this is not a
+    // failure either — say what is true and stop.
+    if (item.status === status) return { success: `Already ${status}.` };
+    const now = new Date();
+    // Compare-and-set on the status this caller actually saw. A plain update
+    // let two people move the same ticket to different states a moment apart
+    // and told BOTH of them it worked, with contradictory customer
+    // notifications to match.
+    const changed = await prisma.customerCase.updateMany({
+      where: { id: caseId, status: expectedStatus },
+      data: {
+        status,
+        resolvedAt: status === "resolved" ? now : undefined,
+        closedAt: status === "closed" ? now : undefined,
+      },
+    });
+    if (changed.count !== 1) {
+      refuse("Someone else changed this ticket's status. Refresh to see where it is now.");
+    }
+    await logEvent(caseId, user.id, `Status changed to ${statusMeta(status).label}`, { event: "status", from: item.status, to: status });
+    await notifyCustomer(item.contactId, `Ticket C-${item.number} updated`, `Your ticket is now ${statusMeta(status).label}.`, `/portal/support/${caseId}`);
+    await logAudit({ action: "case.status_changed", summary: `Ticket C-${item.number}: ${item.status} → ${status}`, contactId: item.contactId, user, entityType: "CustomerCase", entityId: caseId, before: { status: item.status }, after: { status } });
+    revalidatePath(`/cases/${caseId}`);
+    revalidatePath("/cases");
+    revalidatePath(`/portal/support/${caseId}`);
   });
-  await logEvent(caseId, user.id, `Status changed to ${statusMeta(status).label}`, { event: "status", from: item.status, to: status });
-  await notifyCustomer(item.contactId, `Ticket C-${item.number} updated`, `Your ticket is now ${statusMeta(status).label}.`, `/portal/support/${caseId}`);
-  await logAudit({ action: "case.status_changed", summary: `Ticket C-${item.number}: ${item.status} → ${status}`, contactId: item.contactId, user, entityType: "CustomerCase", entityId: caseId, before: { status: item.status }, after: { status } });
-  revalidatePath(`/cases/${caseId}`);
-  revalidatePath("/cases");
-  revalidatePath(`/portal/support/${caseId}`);
 }
 
 // ── Priority / type / mailbox ─────────────────────────────────────────────────
-export async function setTicketPriority(caseId: string, formData: FormData): Promise<void> {
-  const user = await requireCaseAccess(caseId, "cases.manage");
-  const priority = str(formData, "priority");
-  if (!PRIORITY_VALUES.includes(priority)) throw new Error("Invalid priority.");
-  await prisma.customerCase.update({ where: { id: caseId }, data: { priority } });
-  await logEvent(caseId, user.id, `Priority set to ${priority}`, { event: "priority", to: priority });
-  revalidatePath(`/cases/${caseId}`);
-  revalidatePath("/cases");
+export async function setTicketPriority(caseId: string, formData: FormData): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const user = await requireCaseAccess(caseId, "cases.manage");
+    const priority = str(formData, "priority");
+    if (!PRIORITY_VALUES.includes(priority)) throw new ActionRefusal("Invalid priority.");
+    await prisma.customerCase.update({ where: { id: caseId }, data: { priority } });
+    await logEvent(caseId, user.id, `Priority set to ${priority}`, { event: "priority", to: priority });
+    revalidatePath(`/cases/${caseId}`);
+    revalidatePath("/cases");
+  });
 }
 
-export async function setTicketMailbox(caseId: string, formData: FormData): Promise<void> {
-  const user = await requireCaseAccess(caseId, "cases.manage");
-  const mailboxId = str(formData, "mailboxId") || null;
-  const mailbox = mailboxId ? await basePrisma.supportMailbox.findUnique({ where: { id: mailboxId }, select: { name: true } }) : null;
-  await prisma.customerCase.update({ where: { id: caseId }, data: { mailboxId } });
-  await logEvent(caseId, user.id, mailbox ? `Moved to ${mailbox.name}` : "Removed from mailbox", { event: "mailbox", to: mailboxId });
-  revalidatePath(`/cases/${caseId}`);
-  revalidatePath("/cases");
+export async function setTicketMailbox(caseId: string, formData: FormData): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const user = await requireCaseAccess(caseId, "cases.manage");
+    const mailboxId = str(formData, "mailboxId") || null;
+    const mailbox = mailboxId ? await basePrisma.supportMailbox.findUnique({ where: { id: mailboxId }, select: { name: true } }) : null;
+    await prisma.customerCase.update({ where: { id: caseId }, data: { mailboxId } });
+    await logEvent(caseId, user.id, mailbox ? `Moved to ${mailbox.name}` : "Removed from mailbox", { event: "mailbox", to: mailboxId });
+    revalidatePath(`/cases/${caseId}`);
+    revalidatePath("/cases");
+  });
 }
 
 // ── Tags (create-on-use) ──────────────────────────────────────────────────────
-export async function addTicketTag(caseId: string, formData: FormData): Promise<void> {
-  const user = await requireCaseAccess(caseId, "cases.manage");
-  const name = str(formData, "name");
-  if (name.length < 1) return;
-  const slug = slugify(name);
-  // slug is unique PER TENANT now (@@unique([tenantId, slug])). Stamp the owning
-  // tenant explicitly so this is correct with enforcement OFF too (the scoped
-  // guard is dormant then and would leave tenantId NULL, violating NOT NULL).
-  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
-  const tag = await prisma.supportTag.upsert({
-    where: { tenantId_slug: { tenantId, slug } },
-    update: {},
-    create: { name, slug, tenantId },
+export async function addTicketTag(caseId: string, formData: FormData): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const user = await requireCaseAccess(caseId, "cases.manage");
+    const name = str(formData, "name");
+    if (name.length < 1) refuse("Give the tag a name.");
+    const slug = slugify(name);
+    // slug is unique PER TENANT now (@@unique([tenantId, slug])). Stamp the owning
+    // tenant explicitly so this is correct with enforcement OFF too (the scoped
+    // guard is dormant then and would leave tenantId NULL, violating NOT NULL).
+    const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+    const tag = await prisma.supportTag.upsert({
+      where: { tenantId_slug: { tenantId, slug } },
+      update: {},
+      create: { name, slug, tenantId },
+    });
+    await prisma.customerCaseTag.upsert({
+      where: { caseId_tagId: { caseId, tagId: tag.id } },
+      update: {},
+      create: { caseId, tagId: tag.id, tenantId },
+    });
+    await logEvent(caseId, user.id, `Tagged "${tag.name}"`, { event: "tag_added", tag: tag.name });
+    revalidatePath(`/cases/${caseId}`);
   });
-  await prisma.customerCaseTag.upsert({
-    where: { caseId_tagId: { caseId, tagId: tag.id } },
-    update: {},
-    create: { caseId, tagId: tag.id, tenantId },
-  });
-  await logEvent(caseId, user.id, `Tagged "${tag.name}"`, { event: "tag_added", tag: tag.name });
-  revalidatePath(`/cases/${caseId}`);
 }
 
-export async function removeTicketTag(caseId: string, tagId: string): Promise<void> {
-  const user = await requireCaseAccess(caseId, "cases.manage");
-  await prisma.customerCaseTag.deleteMany({ where: { caseId, tagId } });
-  await logEvent(caseId, user.id, "Removed a tag", { event: "tag_removed", tagId });
-  revalidatePath(`/cases/${caseId}`);
+export async function removeTicketTag(caseId: string, tagId: string): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const user = await requireCaseAccess(caseId, "cases.manage");
+    await prisma.customerCaseTag.deleteMany({ where: { caseId, tagId } });
+    await logEvent(caseId, user.id, "Removed a tag", { event: "tag_removed", tagId });
+    revalidatePath(`/cases/${caseId}`);
+  });
 }
 
 // ── Settings: mailboxes ───────────────────────────────────────────────────────
-export async function saveMailbox(formData: FormData): Promise<void> {
-  const user = await requirePermission("cases.manage");
-  const id = str(formData, "id");
-  const name = str(formData, "name");
-  if (name.length < 2) throw new Error("Give the mailbox a name.");
-  const color = str(formData, "color") || "#ea580c";
-  const signature = str(formData, "signature") || null;
-  const email = str(formData, "email").toLowerCase() || null;
-  const autoReplyEnabled = formData.get("autoReplyEnabled") === "on";
-  const autoReplyBody = str(formData, "autoReplyBody") || null;
-  const active = formData.get("active") !== "off";
-  // Check cross-tenant for email uniqueness — the inbound address routes mail globally.
-  if (email) {
-    const clash = await basePrisma.supportMailbox.findFirst({
-      where: { email: { equals: email, mode: "insensitive" }, ...(id ? { id: { not: id } } : {}) },
-      select: { name: true },
+/**
+ * SupportMailbox carries two unique constraints the UI can trip:
+ * `SupportMailbox_email_lower_key` (lower(email), install-wide) and
+ * `SupportMailbox_tenantId_slug_key` (the slug derived from the name).
+ *
+ * The email pre-check above is check-then-write, so a concurrent claim still
+ * reaches the database — and nothing pre-checked the slug at all, so two names
+ * that slugify the same ("Support" and "support!") always did. Both surfaced as
+ * the digested "Something went wrong", which tells the person nothing about the
+ * one thing they can act on: pick a different name or address.
+ */
+async function refusingMailboxClash<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    const code = (error as { code?: string })?.code;
+    const detail = `${String((error as { meta?: { target?: unknown } })?.meta?.target ?? "")} ${
+      error instanceof Error ? error.message : ""
+    }`;
+    if (code === "P2002" || detail.includes("23505")) {
+      if (/email/i.test(detail)) {
+        refuse("That inbox address is already used by another mailbox.");
+      }
+      if (/slug/i.test(detail)) {
+        refuse("A mailbox with a very similar name already exists. Choose a more distinct name.");
+      }
+      refuse("That mailbox clashes with an existing one. Check its name and inbox address.");
+    }
+    throw error;
+  }
+}
+
+export async function saveMailbox(formData: FormData): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const user = await requirePermission("cases.manage");
+    const id = str(formData, "id");
+    const name = str(formData, "name");
+    if (name.length < 2) throw new ActionRefusal("Give the mailbox a name.");
+    const color = str(formData, "color") || "#ea580c";
+    const signature = str(formData, "signature") || null;
+    const email = str(formData, "email").toLowerCase() || null;
+    const autoReplyEnabled = formData.get("autoReplyEnabled") === "on";
+    const autoReplyBody = str(formData, "autoReplyBody") || null;
+    const active = formData.get("active") !== "off";
+    // Check cross-tenant for email uniqueness — the inbound address routes mail globally.
+    if (email) {
+      const clash = await basePrisma.supportMailbox.findFirst({
+        where: { email: { equals: email, mode: "insensitive" }, ...(id ? { id: { not: id } } : {}) },
+        select: { name: true },
+      });
+      if (clash) throw new ActionRefusal(`That inbox address is already used by the "${clash.name}" mailbox.`);
+    }
+    const data = { name, color, signature, email, autoReplyEnabled, autoReplyBody, active };
+    await refusingMailboxClash(async () => {
+      if (id) {
+        await prisma.supportMailbox.update({ where: { id }, data });
+      } else {
+        // Stamp the owning tenant explicitly — tenantId is NOT NULL and the scoped
+        // guard is dormant with enforcement off. slug is unique per tenant.
+        const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+        await prisma.supportMailbox.create({ data: { ...data, slug: slugify(name), tenantId } });
+      }
     });
-    if (clash) throw new Error(`That inbox address is already used by the "${clash.name}" mailbox.`);
-  }
-  const data = { name, color, signature, email, autoReplyEnabled, autoReplyBody, active };
-  if (id) {
-    await prisma.supportMailbox.update({ where: { id }, data });
-  } else {
-    // Stamp the owning tenant explicitly — tenantId is NOT NULL and the scoped
-    // guard is dormant with enforcement off. slug is unique per tenant.
-    const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
-    await prisma.supportMailbox.create({ data: { ...data, slug: slugify(name), tenantId } });
-  }
-  await logAudit({ action: "helpdesk.mailbox_saved", summary: `Saved mailbox ${name}`, user });
-  revalidatePath("/settings/helpdesk");
+    await logAudit({ action: "helpdesk.mailbox_saved", summary: `Saved mailbox ${name}`, user });
+    revalidatePath("/settings/helpdesk");
+  });
 }
 
 // ── Settings: canned replies ──────────────────────────────────────────────────
-export async function saveCannedReply(formData: FormData): Promise<void> {
-  const user = await requirePermission("cases.manage");
-  const id = str(formData, "id");
-  const title = str(formData, "title");
-  const body = str(formData, "body");
-  const mailboxId = str(formData, "mailboxId") || null;
-  if (title.length < 2 || body.length < 2) throw new Error("A saved reply needs a title and body.");
-  if (id) {
-    await prisma.cannedReply.update({ where: { id }, data: { title, body, mailboxId } });
-  } else {
-    await prisma.cannedReply.create({ data: { title, body, mailboxId, createdById: user.id, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID } });
+export async function saveCannedReply(formData: FormData): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const user = await requirePermission("cases.manage");
+    const id = str(formData, "id");
+    const title = str(formData, "title");
+    const body = str(formData, "body");
+    const mailboxId = str(formData, "mailboxId") || null;
+    if (title.length < 2 || body.length < 2) throw new ActionRefusal("A saved reply needs a title and body.");
+    if (id) {
+      await prisma.cannedReply.update({ where: { id }, data: { title, body, mailboxId } });
+    } else {
+      await prisma.cannedReply.create({ data: { title, body, mailboxId, createdById: user.id, tenantId: writeTenantId() ?? DEFAULT_TENANT_ID } });
+    }
+    await logAudit({ action: "helpdesk.canned_saved", summary: `Saved reply ${title}`, user });
+    revalidatePath("/settings/helpdesk");
+  });
+}
+
+/**
+ * A delete whose row is already gone is the caller's goal, not a failure; a
+ * constraint violation is a refusal with a reason. Letting either reach the
+ * generic "Something went wrong" told the person nothing.
+ */
+async function deleting(inUse: string, run: () => Promise<unknown>) {
+  try {
+    await run();
+  } catch (error) {
+    const code = (error as { code?: string })?.code;
+    if (code === "P2025") return; // already deleted
+    if (code === "P2003" || code === "P2014") refuse(inUse);
+    throw error;
   }
-  await logAudit({ action: "helpdesk.canned_saved", summary: `Saved reply ${title}`, user });
-  revalidatePath("/settings/helpdesk");
 }
 
-export async function deleteCannedReply(id: string): Promise<void> {
-  const user = await requirePermission("cases.manage");
-  await prisma.cannedReply.delete({ where: { id } });
-  await logAudit({ action: "helpdesk.canned_deleted", summary: "Deleted a saved reply", user });
-  revalidatePath("/settings/helpdesk");
+export async function deleteCannedReply(id: string): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const user = await requirePermission("cases.manage");
+    await deleting("That saved reply is still in use.", () => prisma.cannedReply.delete({ where: { id } }));
+    await logAudit({ action: "helpdesk.canned_deleted", summary: "Deleted a saved reply", user });
+    revalidatePath("/settings/helpdesk");
+  });
 }
 
-export async function deleteTag(id: string): Promise<void> {
-  const user = await requirePermission("cases.manage");
-  await prisma.supportTag.delete({ where: { id } });
-  await logAudit({ action: "helpdesk.tag_deleted", summary: "Deleted a tag", user });
-  revalidatePath("/settings/helpdesk");
+export async function deleteTag(id: string): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const user = await requirePermission("cases.manage");
+    await deleting("That tag is still attached to a ticket — remove it there first.", () => prisma.supportTag.delete({ where: { id } }));
+    await logAudit({ action: "helpdesk.tag_deleted", summary: "Deleted a tag", user });
+    revalidatePath("/settings/helpdesk");
+  });
 }

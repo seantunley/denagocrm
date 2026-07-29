@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { notFound } from "next/navigation";
 import {
   ArrowLeft, Paperclip, StickyNote, CircleDot, User as UserIcon, Car, X, Tag as TagIcon,
@@ -113,6 +114,7 @@ export default async function TicketDetailPage({ params }: { params: Promise<{ i
             noteAction={addNote.bind(null, ticket.id)}
             cannedReplies={canned.map((c) => ({ id: c.id, title: c.title, body: c.body }))}
             statusOptions={replyStatusOptions}
+            expectedStatus={ticket.status}
           />
         </div>
 
@@ -120,26 +122,29 @@ export default async function TicketDetailPage({ params }: { params: Promise<{ i
         <aside className="space-y-4">
           <div className="card space-y-3">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Properties</p>
-            <label className="block text-xs text-muted-foreground">Status
-              <form action={setTicketStatus.bind(null, ticket.id)}>
+            <div className="block text-xs text-muted-foreground"><span className="mb-1 block">Status</span>
+              <SaveForm success="Status updated" resetOnSuccess={false} action={setTicketStatus.bind(null, ticket.id)}>
+                {/* The status this control was RENDERED with, so the action can
+                    refuse rather than clobber a change made since. */}
+                <input type="hidden" name="expectedStatus" value={ticket.status} />
                 <AutoSubmitSelect name="status" defaultValue={ticket.status} aria-label="Status" options={STATUSES.map((s) => ({ value: s.value, label: s.label }))} />
-              </form>
-            </label>
-            <label className="block text-xs text-muted-foreground">Assignee
-              <form action={assignTicket.bind(null, ticket.id)}>
+              </SaveForm>
+            </div>
+            <div className="block text-xs text-muted-foreground"><span className="mb-1 block">Assignee</span>
+              <SaveForm success="Ticket assigned" resetOnSuccess={false} action={assignTicket.bind(null, ticket.id)}>
                 <AutoSubmitSelect name="assigneeId" defaultValue={ticket.assigneeId ?? ""} aria-label="Assignee" options={[{ value: "", label: "Unassigned" }, ...assignees.map((u) => ({ value: u.id, label: u.name }))]} />
-              </form>
-            </label>
-            <label className="block text-xs text-muted-foreground">Priority
-              <form action={setTicketPriority.bind(null, ticket.id)}>
+              </SaveForm>
+            </div>
+            <div className="block text-xs text-muted-foreground"><span className="mb-1 block">Priority</span>
+              <SaveForm success="Priority updated" resetOnSuccess={false} action={setTicketPriority.bind(null, ticket.id)}>
                 <AutoSubmitSelect name="priority" defaultValue={ticket.priority} aria-label="Priority" options={PRIORITIES.map((p) => ({ value: p.value, label: p.label }))} />
-              </form>
-            </label>
-            <label className="block text-xs text-muted-foreground">Mailbox
-              <form action={setTicketMailbox.bind(null, ticket.id)}>
+              </SaveForm>
+            </div>
+            <div className="block text-xs text-muted-foreground"><span className="mb-1 block">Mailbox</span>
+              <SaveForm success="Mailbox updated" resetOnSuccess={false} action={setTicketMailbox.bind(null, ticket.id)}>
                 <AutoSubmitSelect name="mailboxId" defaultValue={ticket.mailboxId ?? ""} aria-label="Mailbox" options={[{ value: "", label: "No mailbox" }, ...mailboxes.map((m) => ({ value: m.id, label: m.name }))]} />
-              </form>
-            </label>
+              </SaveForm>
+            </div>
           </div>
 
           <div className="card space-y-2">
@@ -148,17 +153,17 @@ export default async function TicketDetailPage({ params }: { params: Promise<{ i
               {ticket.tags.map((t) => (
                 <span key={t.id} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs" style={{ backgroundColor: `${t.color}22`, color: t.color }}>
                   {t.name}
-                  <form action={removeTicketTag.bind(null, ticket.id, t.id)}>
-                    <button type="submit" aria-label={`Remove ${t.name}`} className="opacity-60 hover:opacity-100"><X className="size-3" /></button>
-                  </form>
+                  <SaveForm success="Tag removed" resetOnSuccess={false} action={removeTicketTag.bind(null, ticket.id, t.id)}>
+                    <SaveButton aria-label={`Remove ${t.name}`} className="opacity-60 hover:opacity-100"><X className="size-3" /></SaveButton>
+                  </SaveForm>
                 </span>
               ))}
               {ticket.tags.length === 0 && <span className="text-xs text-muted-foreground">No tags</span>}
             </div>
-            <form action={addTicketTag.bind(null, ticket.id)} className="flex gap-1.5">
+            <SaveForm success="Tag added" action={addTicketTag.bind(null, ticket.id)} className="flex gap-1.5">
               <input name="name" placeholder="Add tag…" className="input h-8 py-0 text-xs" />
-              <button className="btn-secondary h-8 px-2 text-xs"><TagIcon className="size-3.5" /></button>
-            </form>
+              <SaveButton className="btn-secondary h-8 px-2 text-xs"><TagIcon className="size-3.5" /></SaveButton>
+            </SaveForm>
           </div>
 
           <div className="card space-y-2 text-sm">
