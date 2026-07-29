@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import Link from "next/link";
 import { Boxes, Plus, Pencil, Settings2, Warehouse, Wrench, Package } from "lucide-react";
 import { requirePermission } from "@/lib/permissions";
@@ -27,7 +28,7 @@ type Bay = { id: string; name: string; color: string; active: boolean; sortOrder
 
 function BayForm({ bay }: { bay?: Bay }) {
   return (
-    <form action={saveBay} className="card space-y-4">
+    <SaveForm success="Bay saved" action={saveBay} className="card space-y-4">
       {bay && <input type="hidden" name="id" value={bay.id} />}
       <div>
         <label className="label" htmlFor="bay-name">Name</label>
@@ -51,14 +52,14 @@ function BayForm({ bay }: { bay?: Bay }) {
         <input type="checkbox" name="active" defaultChecked={bay ? bay.active : true} className="h-4 w-4" />
         Active (available for assignment)
       </label>
-      <button className="btn-primary w-full">{bay ? "Save bay" : "Create bay"}</button>
-    </form>
+      <SaveButton className="btn-primary w-full">{bay ? "Save bay" : "Create bay"}</SaveButton>
+    </SaveForm>
   );
 }
 
 function PackageForm({ pkg }: { pkg?: { id: string; name: string; description: string | null; active: boolean } }) {
   return (
-    <form action={savePackage} className="card space-y-4">
+    <SaveForm success="Package saved" action={savePackage} className="card space-y-4">
       {pkg && <input type="hidden" name="id" value={pkg.id} />}
       <div>
         <label className="label" htmlFor="pkg-name">Name</label>
@@ -72,8 +73,8 @@ function PackageForm({ pkg }: { pkg?: { id: string; name: string; description: s
         <input type="checkbox" name="active" defaultChecked={pkg ? pkg.active : true} className="h-4 w-4" />
         Active (available to apply)
       </label>
-      <button className="btn-primary w-full">{pkg ? "Save package" : "Create package"}</button>
-    </form>
+      <SaveButton className="btn-primary w-full">{pkg ? "Save package" : "Create package"}</SaveButton>
+    </SaveForm>
   );
 }
 
@@ -109,13 +110,13 @@ export default async function WorkshopSettingsPage() {
           <h2 className="font-semibold tracking-tight">Default labour rate</h2>
         </div>
         <p className="text-sm text-slate-400">Used to value logged technician time. Individual job cards can override it.</p>
-        <form action={saveDefaultLabourRate} className="card flex flex-wrap items-end gap-3">
+        <SaveForm success="Labour rate saved" resetOnSuccess={false} action={saveDefaultLabourRate} className="card flex flex-wrap items-end gap-3">
           <div className="flex-1 min-w-48">
             <label className="label" htmlFor="labourRate">Rate per hour (R)</label>
             <input id="labourRate" name="labourRate" className="input tabular-nums" inputMode="decimal" defaultValue={(rateCents / 100).toFixed(2)} />
           </div>
-          <button className="btn-primary">Save rate</button>
-        </form>
+          <SaveButton className="btn-primary">Save rate</SaveButton>
+        </SaveForm>
       </section>
 
       {/* Bays ──────────────────────────────────────────────────────────────── */}
@@ -194,13 +195,13 @@ export default async function WorkshopSettingsPage() {
                           <span className="min-w-0 truncate text-muted-foreground"><span className="capitalize">{i.kind}</span> · {i.qty}× {i.description}</span>
                           <span className="flex items-center gap-2 shrink-0">
                             <span className="tabular-nums">{formatZAR(Math.round(i.qty * i.unitPriceCents))}</span>
-                            <form action={deletePackageItem.bind(null, i.id)}><button className="text-xs text-slate-600 hover:text-red-500">✕</button></form>
+                            <SaveForm success="Line item removed" resetOnSuccess={false} action={deletePackageItem.bind(null, i.id)}><SaveButton className="text-xs text-slate-600 hover:text-red-500">✕</SaveButton></SaveForm>
                           </span>
                         </div>
                       ))}
                     </div>
                   )}
-                  <form action={addPackageItem.bind(null, pkg.id)} className="flex flex-wrap items-end gap-2">
+                  <SaveForm success="Line item added" action={addPackageItem.bind(null, pkg.id)} className="flex flex-wrap items-end gap-2">
                     <select name="kind" defaultValue="part" className="input w-24">
                       <option value="part">Part</option>
                       <option value="labour">Labour</option>
@@ -208,8 +209,8 @@ export default async function WorkshopSettingsPage() {
                     <input name="description" required placeholder="Description" className="input flex-1 min-w-40" />
                     <input name="qty" type="number" min={0.5} step={0.5} defaultValue={1} className="input w-20 tabular-nums" />
                     <input name="unitPrice" inputMode="decimal" placeholder="Unit R" className="input w-24 tabular-nums" />
-                    <button className="btn-secondary btn-sm">Add item</button>
-                  </form>
+                    <SaveButton className="btn-secondary btn-sm">Add item</SaveButton>
+                  </SaveForm>
                 </div>
               );
             })}

@@ -1,5 +1,7 @@
 "use server";
 
+
+import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
@@ -7,80 +9,84 @@ import { basePrisma, prisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { requirePermission } from "@/lib/permissions";
-import { logAudit } from "@/lib/audit";
+import { GOVERNANCE_TX, logAudit } from "@/lib/audit";
 
 const text = (formData: FormData, key: string) => String(formData.get(key) ?? "").trim();
 
 export async function grantPortalAccess(formData: FormData) {
-  const user = await requirePermission("portal_access.manage");
-  const viewerContactId = text(formData, "viewerContactId");
-  const targetType = text(formData, "targetType");
-  const targetId = text(formData, "targetId");
-  const role = text(formData, "role") || "viewer";
-  if (!viewerContactId || !targetId || !["contact", "fleet"].includes(targetType)) {
-    throw new Error("Viewer and target are required");
-  }
-  if (!["viewer", "manager", "owner"].includes(role)) throw new Error("Invalid portal role");
+  return asActionResult(async () => {
+    const user = await requirePermission("portal_access.manage");
+    const viewerContactId = text(formData, "viewerContactId");
+    const targetType = text(formData, "targetType");
+    const targetId = text(formData, "targetId");
+    const role = text(formData, "role") || "viewer";
+    if (!viewerContactId || !targetId || !["contact", "fleet"].includes(targetType)) {
+      throw new ActionRefusal("Viewer and target are required");
+    }
+    if (!["viewer", "manager", "owner"].includes(role)) throw new ActionRefusal("Invalid portal role");
 
-  const id = crypto.randomUUID();
-  // Multi-tenancy readiness: stamp the owning tenant, same idiom as
-  // accessControl.ts's createTeam (staff-side action, getActiveTenantId()).
-  // Purely additive — nothing currently filters PortalAccessGrant by tenantId.
-  const activeTenantId = await getActiveTenantId();
-  if (targetType === "contact") {
-    await basePrisma.$executeRaw`
-      INSERT INTO "PortalAccessGrant" ("id", "tenantId", "viewerContactId", "grantedContactId", "role", "createdById")
-      VALUES (${id}, ${activeTenantId}, ${viewerContactId}, ${targetId}, ${role}, ${user.id})
-      ON CONFLICT ("viewerContactId", "grantedContactId") WHERE "grantedContactId" IS NOT NULL
-      DO UPDATE SET "active" = true, "role" = EXCLUDED."role", "createdById" = EXCLUDED."createdById"
-    `;
-  } else {
-    await basePrisma.$executeRaw`
-      INSERT INTO "PortalAccessGrant" ("id", "tenantId", "viewerContactId", "fleetId", "role", "createdById")
-      VALUES (${id}, ${activeTenantId}, ${viewerContactId}, ${targetId}, ${role}, ${user.id})
-      ON CONFLICT ("viewerContactId", "fleetId") WHERE "fleetId" IS NOT NULL
-      DO UPDATE SET "active" = true, "role" = EXCLUDED."role", "createdById" = EXCLUDED."createdById"
-    `;
-  }
-  await logAudit({
-    action: "portal.access_granted",
-    summary: `Granted ${role} portal access to ${targetType} ${targetId}`,
-    contactId: viewerContactId,
-    user,
-    entityType: "PortalAccessGrant",
-    entityId: id,
+    const id = crypto.randomUUID();
+    // Multi-tenancy readiness: stamp the owning tenant, same idiom as
+    // accessControl.ts's createTeam (staff-side action, getActiveTenantId()).
+    // Purely additive — nothing currently filters PortalAccessGrant by tenantId.
+    const activeTenantId = await getActiveTenantId();
+    if (targetType === "contact") {
+      await basePrisma.$executeRaw`
+        INSERT INTO "PortalAccessGrant" ("id", "tenantId", "viewerContactId", "grantedContactId", "role", "createdById")
+        VALUES (${id}, ${activeTenantId}, ${viewerContactId}, ${targetId}, ${role}, ${user.id})
+        ON CONFLICT ("viewerContactId", "grantedContactId") WHERE "grantedContactId" IS NOT NULL
+        DO UPDATE SET "active" = true, "role" = EXCLUDED."role", "createdById" = EXCLUDED."createdById"
+      `;
+    } else {
+      await basePrisma.$executeRaw`
+        INSERT INTO "PortalAccessGrant" ("id", "tenantId", "viewerContactId", "fleetId", "role", "createdById")
+        VALUES (${id}, ${activeTenantId}, ${viewerContactId}, ${targetId}, ${role}, ${user.id})
+        ON CONFLICT ("viewerContactId", "fleetId") WHERE "fleetId" IS NOT NULL
+        DO UPDATE SET "active" = true, "role" = EXCLUDED."role", "createdById" = EXCLUDED."createdById"
+      `;
+    }
+    await logAudit({
+      action: "portal.access_granted",
+      summary: `Granted ${role} portal access to ${targetType} ${targetId}`,
+      contactId: viewerContactId,
+      user,
+      entityType: "PortalAccessGrant",
+      entityId: id,
+    });
+    revalidatePath("/settings/portal-access");
   });
-  revalidatePath("/settings/portal-access");
 }
 
 export async function revokePortalAccess(id: string, formData: FormData) {
-  void formData;
-  const user = await requirePermission("portal_access.manage");
-  const rows = await basePrisma.$queryRaw<Array<{ viewerContactId: string; tenantId: string | null }>>`
-    SELECT "viewerContactId", "tenantId" FROM "PortalAccessGrant" WHERE "id" = ${id} LIMIT 1
-  `;
-  const grant = rows[0];
-  if (!grant) throw new Error("Portal access grant not found");
-  // Multi-tenancy readiness: confirm the grant belongs to the caller's tenant
-  // before flipping it off. Gated on tenantEnforcing() — PortalAccessGrant rows
-  // written before this change may still be NULL-tenant, so comparing
-  // unconditionally against a real activeTenantId could wrongly 404 a legitimate
-  // revoke today; this keeps today's behaviour unchanged and only asserts the
-  // boundary once enforcement (and the tenant stamping it depends on) is on.
-  if (tenantEnforcing()) {
-    const activeTenantId = await getActiveTenantId();
-    if (grant.tenantId !== activeTenantId) throw new Error("Portal access grant not found");
-  }
-  await basePrisma.$executeRaw`UPDATE "PortalAccessGrant" SET "active" = false WHERE "id" = ${id}`;
-  await logAudit({
-    action: "portal.access_revoked",
-    summary: "Revoked portal access grant",
-    contactId: grant.viewerContactId,
-    user,
-    entityType: "PortalAccessGrant",
-    entityId: id,
+  return asActionResult(async () => {
+    void formData;
+    const user = await requirePermission("portal_access.manage");
+    const rows = await basePrisma.$queryRaw<Array<{ viewerContactId: string; tenantId: string | null }>>`
+      SELECT "viewerContactId", "tenantId" FROM "PortalAccessGrant" WHERE "id" = ${id} LIMIT 1
+    `;
+    const grant = rows[0];
+    if (!grant) throw new ActionRefusal("Portal access grant not found");
+    // Multi-tenancy readiness: confirm the grant belongs to the caller's tenant
+    // before flipping it off. Gated on tenantEnforcing() — PortalAccessGrant rows
+    // written before this change may still be NULL-tenant, so comparing
+    // unconditionally against a real activeTenantId could wrongly 404 a legitimate
+    // revoke today; this keeps today's behaviour unchanged and only asserts the
+    // boundary once enforcement (and the tenant stamping it depends on) is on.
+    if (tenantEnforcing()) {
+      const activeTenantId = await getActiveTenantId();
+      if (grant.tenantId !== activeTenantId) throw new ActionRefusal("Portal access grant not found");
+    }
+    await basePrisma.$executeRaw`UPDATE "PortalAccessGrant" SET "active" = false WHERE "id" = ${id}`;
+    await logAudit({
+      action: "portal.access_revoked",
+      summary: "Revoked portal access grant",
+      contactId: grant.viewerContactId,
+      user,
+      entityType: "PortalAccessGrant",
+      entityId: id,
+    });
+    revalidatePath("/settings/portal-access");
   });
-  revalidatePath("/settings/portal-access");
 }
 
 type ProfileRequestRow = {
@@ -128,47 +134,62 @@ export async function reviewPortalProfileRequest(
   decision: "approved" | "rejected",
   formData: FormData
 ) {
-  const user = await requirePermission("portal_access.manage");
-  const reviewNote = text(formData, "reviewNote") || null;
-  const rows = await basePrisma.$queryRaw<ProfileRequestRow[]>`
-    SELECT "id", "contactId", "changes", "status"
-    FROM "PortalProfileChangeRequest" WHERE "id" = ${id} LIMIT 1
-  `;
-  const request = rows[0];
-  if (!request) throw new Error("Profile request not found");
-  if (request.status !== "pending") throw new Error("Profile request has already been reviewed");
+  return asActionResult(async () => {
+    const user = await requirePermission("portal_access.manage");
+    const reviewNote = text(formData, "reviewNote") || null;
+    const rows = await basePrisma.$queryRaw<ProfileRequestRow[]>`
+      SELECT "id", "contactId", "changes", "status"
+      FROM "PortalProfileChangeRequest" WHERE "id" = ${id} LIMIT 1
+    `;
+    const request = rows[0];
+    if (!request) throw new ActionRefusal("Profile request not found");
+    if (request.status !== "pending") throw new ActionRefusal("Profile request has already been reviewed");
 
-  const before = await prisma.contact.findUniqueOrThrow({ where: { id: request.contactId } });
-  const changes = profileData(request.changes);
-  await basePrisma.$transaction(async (tx) => {
-    if (decision === "approved") {
-      await tx.contact.update({ where: { id: request.contactId }, data: changes });
-    }
-    await tx.$executeRaw`
-      UPDATE "PortalProfileChangeRequest"
-      SET "status" = ${decision}, "reviewNote" = ${reviewNote}, "reviewedAt" = CURRENT_TIMESTAMP, "reviewedById" = ${user.id}
-      WHERE "id" = ${id} AND "status" = 'pending'
-    `;
-    await tx.$executeRaw`
-      INSERT INTO "PortalNotification" ("id", "contactId", "title", "body", "href", "kind")
-      VALUES (
-        ${crypto.randomUUID()}, ${request.contactId},
-        ${decision === "approved" ? "Profile update approved" : "Profile update needs attention"},
-        ${decision === "approved" ? "Your requested profile changes have been applied." : reviewNote || "Your requested profile changes were not applied."},
-        '/portal/profile', 'profile'
-      )
-    `;
+    const before = await prisma.contact.findUniqueOrThrow({ where: { id: request.contactId } });
+    const changes = profileData(request.changes);
+    await basePrisma.$transaction(async (tx) => {
+      // Lock the request and RE-CHECK inside the transaction. The check above
+      // happens outside it, so two reviewers could both pass it: the second's
+      // conditional UPDATE then matched zero rows — which was never inspected —
+      // while the contact changes were still applied and a contradictory
+      // notification sent, and both reviewers were told it worked.
+      const locked = await tx.$queryRaw<Array<{ status: string }>>`
+        SELECT "status" FROM "PortalProfileChangeRequest" WHERE "id" = ${id} FOR UPDATE
+      `;
+      if (!locked[0]) refuse("Profile request not found.");
+      if (locked[0].status !== "pending") {
+        refuse("Someone else reviewed this request already. Refresh to see the outcome.");
+      }
+      if (decision === "approved") {
+        await tx.contact.update({ where: { id: request.contactId }, data: changes });
+      }
+      const reviewed = await tx.$executeRaw`
+        UPDATE "PortalProfileChangeRequest"
+        SET "status" = ${decision}, "reviewNote" = ${reviewNote}, "reviewedAt" = CURRENT_TIMESTAMP, "reviewedById" = ${user.id}
+        WHERE "id" = ${id} AND "status" = 'pending'
+      `;
+      if (reviewed !== 1) refuse("Someone else reviewed this request already. Refresh to see the outcome.");
+      await tx.$executeRaw`
+        INSERT INTO "PortalNotification" ("id", "contactId", "title", "body", "href", "kind")
+        VALUES (
+          ${crypto.randomUUID()}, ${request.contactId},
+          ${decision === "approved" ? "Profile update approved" : "Profile update needs attention"},
+          ${decision === "approved" ? "Your requested profile changes have been applied." : reviewNote || "Your requested profile changes were not applied."},
+          '/portal/profile', 'profile'
+        )
+      `;
+    }, GOVERNANCE_TX);
+    await logAudit({
+      action: `portal.profile_change_${decision}`,
+      summary: `Portal profile request ${decision}`,
+      contactId: request.contactId,
+      user,
+      entityType: "PortalProfileChangeRequest",
+      entityId: id,
+      before,
+      after: decision === "approved" ? changes : { decision, reviewNote },
+    });
+    revalidatePath("/settings/portal-access");
+    revalidatePath(`/contacts/${request.contactId}`);
   });
-  await logAudit({
-    action: `portal.profile_change_${decision}`,
-    summary: `Portal profile request ${decision}`,
-    contactId: request.contactId,
-    user,
-    entityType: "PortalProfileChangeRequest",
-    entityId: id,
-    before,
-    after: decision === "approved" ? changes : { decision, reviewNote },
-  });
-  revalidatePath("/settings/portal-access");
-  revalidatePath(`/contacts/${request.contactId}`);
 }

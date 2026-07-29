@@ -1,6 +1,13 @@
 import { cache } from "react";
 import { basePrisma } from "./db";
 
+/**
+ * A transaction client, so callers that must record a governance audit in the
+ * SAME transaction as the security change can pass one in. Without this the
+ * change committed while a failed audit made the save report as failed.
+ */
+export type SecurityTx = Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0];
+
 export type UserSecurityState = {
   sessionVersion: number;
   disabledAt: Date | null;
@@ -43,8 +50,8 @@ export const getUserSecurityState = cache(readUserSecurityState);
 // would be stale and would sign the user straight back out.
 export const getUserSecurityStateFresh = readUserSecurityState;
 
-export async function bumpUserSessionVersion(userId: string): Promise<number> {
-  const rows = await basePrisma.$queryRaw<Array<{ sessionVersion: number }>>`
+export async function bumpUserSessionVersion(userId: string, tx?: SecurityTx): Promise<number> {
+  const rows = await (tx ?? basePrisma).$queryRaw<Array<{ sessionVersion: number }>>`
     UPDATE "User"
     SET "sessionVersion" = "sessionVersion" + 1
     WHERE "id" = ${userId}
@@ -73,8 +80,8 @@ export async function recordFailedLogin(userId: string): Promise<void> {
   `;
 }
 
-export async function setUserDisabledState(userId: string, disabled: boolean): Promise<number> {
-  const rows = await basePrisma.$queryRaw<Array<{ sessionVersion: number }>>`
+export async function setUserDisabledState(userId: string, disabled: boolean, tx?: SecurityTx): Promise<number> {
+  const rows = await (tx ?? basePrisma).$queryRaw<Array<{ sessionVersion: number }>>`
     UPDATE "User"
     SET "disabledAt" = ${disabled ? new Date() : null},
         "sessionVersion" = "sessionVersion" + 1

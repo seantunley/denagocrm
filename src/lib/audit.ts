@@ -116,6 +116,18 @@ async function actingTenantId(entry: AuditEntry): Promise<string | null> {
  */
 type AuditTx = Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0];
 
+/**
+ * Transaction options for a governance change that carries its audit inside the
+ * same transaction.
+ *
+ * logAuditStrict resolves the request context and the acting tenant before it
+ * writes, and that work now counts against the transaction budget. Prisma's
+ * default interactive timeout is 5s, which a cold path can exceed — and the
+ * failure mode is the exact one this atomicity exists to prevent, only louder:
+ * the whole change rolls back and the person is told it failed.
+ */
+export const GOVERNANCE_TX = { timeout: 20_000, maxWait: 10_000 } as const;
+
 async function writeAudit(entry: AuditEntry, tx?: AuditTx) {
   const context = await requestContext();
   const entityType = entry.entityType ?? (entry.leadId ? "Lead" : entry.contactId ? "Contact" : null);
