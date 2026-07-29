@@ -123,7 +123,7 @@ async function createQuoteFromLeadRecord(leadId: string) {
 export async function createQuoteFromLead(leadId: string) {
   return asActionResult(async () => {
     const quote = await createQuoteFromLeadRecord(leadId);
-    redirect(`/quotes/${quote.id}`);
+    return { redirectTo: `/quotes/${quote.id}` };
   });
 }
 
@@ -498,7 +498,7 @@ export async function createQuoteRevision(quoteId: string) {
     });
     revalidatePath("/quotes");
     revalidatePath(`/quotes/${quoteId}`);
-    redirect(`/quotes/${revision.id}`);
+    return { redirectTo: `/quotes/${revision.id}` };
   });
 }
 
@@ -625,7 +625,11 @@ export async function setQuoteStatus(quoteId: string, status: string) {
       }
       return { beforeStatus: before.status, quote: updated, wonLeadId, reopenedLead };
     });
-    if (!result) return;
+    // The transaction returns null BEFORE touching anything when the quote is
+    // missing, deleted, signed or superseded — so this is "nothing happened",
+    // not a defensive check after a committed write. Returning normally reported
+    // "Quote status updated" for a quote that had not changed.
+    if (!result) refuse("This quote can no longer be changed — reload the page.");
     if ("blocked" in result) {
       throw new ActionRefusal("This quote is out for signature — void the signing request before changing its status.");
     }
@@ -702,6 +706,6 @@ export async function deleteQuote(id: string, formData: FormData) {
       await auditLeadReopened(reopenedLead, quote.leadId, quote.number, user);
     }
     revalidatePath("/quotes");
-    redirect("/quotes");
+    return { redirectTo: "/quotes" };
   });
 }

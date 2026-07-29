@@ -96,7 +96,7 @@ export async function createContact(formData: FormData) {
       user,
     });
     revalidatePath("/contacts");
-    redirect(`/contacts/${contact.id}`);
+    return { redirectTo: `/contacts/${contact.id}` };
   });
 }
 
@@ -123,7 +123,7 @@ export async function updateContact(id: string, formData: FormData) {
     });
     revalidatePath("/contacts");
     revalidatePath(`/contacts/${id}`);
-    redirect(`/contacts/${id}`);
+    return { redirectTo: `/contacts/${id}` };
   });
 }
 
@@ -139,6 +139,6 @@ export async function deleteContact(id: string, formData: FormData) {
       user,
     });
     revalidatePath("/contacts");
-    redirect("/contacts");
+    return { redirectTo: "/contacts" };
   });
 }

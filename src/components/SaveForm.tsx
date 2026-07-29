@@ -1,6 +1,8 @@
 "use client";
 
 import { createContext, useContext, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
+import { unstable_rethrow } from "next/navigation";
 import { toast } from "sonner";
 import { useCloseModal } from "@/components/Modal";
 import { cn } from "@/lib/utils";
@@ -53,14 +55,21 @@ const GENERIC_FAILURE = "Something went wrong. Please try again.";
  * anything that reaches this function is by definition unexpected: it gets one
  * generic sentence, and the real detail stays in the server logs where it belongs.
  */
-function nextControlFlow(error: unknown): "redirect" | "not-found" | null {
-  const raw = error instanceof Error ? error.message : String(error);
-  const digest = (error as { digest?: unknown })?.digest;
-  const text = `${raw} ${typeof digest === "string" ? digest : ""}`;
-  if (/NEXT_REDIRECT/.test(text)) return "redirect";
-  if (/NEXT_NOT_FOUND/.test(text)) return "not-found";
-  return null;
-}
+/**
+ * A THROWN redirect is NOT evidence of a successful save.
+ *
+ * This previously treated ANY thrown redirect as success, which was wrong in the
+ * most damaging direction: the auth guards redirect too — an expired session to
+ * /login, a revoked permission to /, denied record access to /leads — so a save
+ * that never ran could still toast "Lead saved" and then throw the form away.
+ *
+ * Success navigation is now explicit: an action returns `{ redirectTo }` and the
+ * client navigates. Anything that THROWS is either a framework signal to be
+ * re-thrown untouched, or a genuine failure. `unstable_rethrow` is Next's own
+ * predicate for that first case, and is used instead of matching the internal
+ * digest strings — those markers change between versions, and a stale matcher
+ * here would silently swallow a redirect or misreport a 404.
+ */
 
 /** A result object an action may return instead of throwing. */
 /** Actions may also return nothing at all (a plain void action still works). */
@@ -100,6 +109,7 @@ export function SaveForm({
 } & Omit<React.FormHTMLAttributes<HTMLFormElement>, "action" | "onSubmit">) {
   const [pending, setPending] = useState(false);
   const closeModal = useCloseModal();
+  const router = useRouter();
 
   return (
     <form
@@ -139,24 +149,19 @@ export function SaveForm({
           }
           if (closeModalOnSuccess) closeModal();
           onSaved?.();
+          // Navigate only when the ACTION said the save succeeded and named the
+          // destination. Nothing here is inferred from a thrown redirect.
+          const redirectTo =
+            result && typeof result === "object" && "redirectTo" in result
+              ? result.redirectTo
+              : undefined;
+          if (redirectTo) router.push(String(redirectTo));
         } catch (error) {
-          const control = nextControlFlow(error);
-          if (control === "redirect") {
-            // A redirect IS the success path — createLead, updateLead, markWon and
-            // the contacts equivalents all end by navigating to the saved record.
-            // redirect() throws, so it lands here BEFORE the success toast above
-            // would have run, and those saves would confirm nothing at all.
-            //
-            // Toast first, then rethrow so Next performs the navigation. The
-            // Toaster is mounted in the layout, which survives a client-side
-            // navigation, so the confirmation is still on screen when the
-            // destination renders.
-            toast.success(success);
-            throw error;
-          }
-          // notFound() is control flow too, but it is NOT a success — never
-          // congratulate someone for landing on a 404.
-          if (control === "not-found") throw error;
+          // Framework signals (redirect, notFound, forbidden, unauthorized, and
+          // the render-control errors) are rethrown untouched and NEVER reported
+          // as a save. A guard redirect landing here means the mutation did not
+          // run — silence plus navigation is the honest outcome.
+          unstable_rethrow(error);
           toast.error(GENERIC_FAILURE);
         } finally {
           setPending(false);

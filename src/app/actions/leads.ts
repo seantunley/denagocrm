@@ -170,7 +170,7 @@ export async function createLead(formData: FormData) {
     await runLeadAutomations("lead_created", lead.id);
     revalidatePath("/leads");
     revalidatePath("/forecast");
-    redirect(`/leads/${lead.id}`);
+    return { redirectTo: `/leads/${lead.id}` };
   });
 }
 
@@ -228,7 +228,7 @@ export async function updateLead(id: string, formData: FormData) {
     revalidatePath("/leads");
     revalidatePath("/forecast");
     revalidatePath(`/leads/${id}`);
-    redirect(`/leads/${id}`);
+    return { redirectTo: `/leads/${id}` };
   });
 }
 
@@ -450,8 +450,11 @@ export async function markWon(leadId: string, formData?: FormData) {
     revalidatePath("/leads");
     revalidatePath("/forecast");
     revalidatePath(`/leads/${leadId}`);
-    if (formData?.get("returnTo") === "/leads") return;
-    redirect(`/contacts/${contactId}`);
+    // A real success that simply stays put: the win IS recorded, this only skips
+    // the hop to the contact. Said explicitly so it cannot be mistaken for one of
+    // the silent "nothing happened" returns.
+    if (formData?.get("returnTo") === "/leads") return { success: "Marked won" };
+    return { redirectTo: `/contacts/${contactId}` };
   });
 }
 
@@ -634,6 +637,6 @@ export async function deleteLead(leadId: string, formData: FormData) {
     });
     revalidatePath("/leads");
     revalidatePath("/forecast");
-    redirect("/leads");
+    return { redirectTo: "/leads" };
   });
 }
