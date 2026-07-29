@@ -1,7 +1,7 @@
 "use server";
 
 
-import { asActionResult, ActionRefusal } from "@/lib/actionResult";
+import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
@@ -9,7 +9,7 @@ import { basePrisma, prisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { requirePermission } from "@/lib/permissions";
-import { logAudit } from "@/lib/audit";
+import { GOVERNANCE_TX, logAudit } from "@/lib/audit";
 
 const text = (formData: FormData, key: string) => String(formData.get(key) ?? "").trim();
 
@@ -148,14 +148,27 @@ export async function reviewPortalProfileRequest(
     const before = await prisma.contact.findUniqueOrThrow({ where: { id: request.contactId } });
     const changes = profileData(request.changes);
     await basePrisma.$transaction(async (tx) => {
+      // Lock the request and RE-CHECK inside the transaction. The check above
+      // happens outside it, so two reviewers could both pass it: the second's
+      // conditional UPDATE then matched zero rows — which was never inspected —
+      // while the contact changes were still applied and a contradictory
+      // notification sent, and both reviewers were told it worked.
+      const locked = await tx.$queryRaw<Array<{ status: string }>>`
+        SELECT "status" FROM "PortalProfileChangeRequest" WHERE "id" = ${id} FOR UPDATE
+      `;
+      if (!locked[0]) refuse("Profile request not found.");
+      if (locked[0].status !== "pending") {
+        refuse("Someone else reviewed this request already. Refresh to see the outcome.");
+      }
       if (decision === "approved") {
         await tx.contact.update({ where: { id: request.contactId }, data: changes });
       }
-      await tx.$executeRaw`
+      const reviewed = await tx.$executeRaw`
         UPDATE "PortalProfileChangeRequest"
         SET "status" = ${decision}, "reviewNote" = ${reviewNote}, "reviewedAt" = CURRENT_TIMESTAMP, "reviewedById" = ${user.id}
         WHERE "id" = ${id} AND "status" = 'pending'
       `;
+      if (reviewed !== 1) refuse("Someone else reviewed this request already. Refresh to see the outcome.");
       await tx.$executeRaw`
         INSERT INTO "PortalNotification" ("id", "contactId", "title", "body", "href", "kind")
         VALUES (
@@ -165,7 +178,7 @@ export async function reviewPortalProfileRequest(
           '/portal/profile', 'profile'
         )
       `;
-    });
+    }, GOVERNANCE_TX);
     await logAudit({
       action: `portal.profile_change_${decision}`,
       summary: `Portal profile request ${decision}`,

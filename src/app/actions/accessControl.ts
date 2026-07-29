@@ -9,7 +9,7 @@ import { getActiveTenantId } from "@/lib/auth";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { canEditRole } from "@/lib/tenantGuard";
 import { PERMISSIONS, requirePermission } from "@/lib/permissions";
-import { logAuditStrict } from "@/lib/audit";
+import { GOVERNANCE_TX, logAuditStrict } from "@/lib/audit";
 import { bumpUserSessionVersion } from "@/lib/userSecurity";
 
 const value = (formData: FormData, key: string) => String(formData.get(key) ?? "").trim();
@@ -140,16 +140,19 @@ export async function createTeam(formData: FormData) {
             ON CONFLICT ("teamId", "userId") DO UPDATE SET "isManager" = true
           `;
         }
-      }),
+        // Inside the transaction: a governance audit that cannot be written must
+        // roll the change back, not leave it committed while the person is told
+        // the save failed. That is what makes this the STRICT logger.
+        await logAuditStrict({
+          action: "team.created",
+          summary: `Created team “${name}”`,
+          entityType: "Team",
+          entityId: id,
+          user,
+          after: { name, description, managerId, active: true },
+        }, tx);
+      }, GOVERNANCE_TX),
     );
-    await logAuditStrict({
-      action: "team.created",
-      summary: `Created team “${name}”`,
-      entityType: "Team",
-      entityId: id,
-      user,
-      after: { name, description, managerId, active: true },
-    });
     revalidatePath("/settings/access");
   });
 }
@@ -196,17 +199,17 @@ export async function updateTeam(id: string, formData: FormData) {
             ON CONFLICT ("teamId", "userId") DO UPDATE SET "isManager" = true
           `;
         }
-      }),
+        await logAuditStrict({
+          action: "team.updated",
+          summary: `Updated team “${name}”`,
+          entityType: "Team",
+          entityId: id,
+          user,
+          before: before[0],
+          after: { name, description, managerId, active },
+        }, tx);
+      }, GOVERNANCE_TX),
     );
-    await logAuditStrict({
-      action: "team.updated",
-      summary: `Updated team “${name}”`,
-      entityType: "Team",
-      entityId: id,
-      user,
-      before: before[0],
-      after: { name, description, managerId, active },
-    });
     revalidatePath("/settings/access");
   });
 }
@@ -225,19 +228,25 @@ export async function addTeamMember(teamId: string, formData: FormData) {
       LIMIT 1
     `;
     if (!team[0]) throw new ActionRefusal("Team not found");
-    await basePrisma.$executeRaw`
-      INSERT INTO "TeamMember" ("id", "teamId", "userId", "isManager", "tenantId")
-      VALUES (${crypto.randomUUID()}, ${teamId}, ${userId}, false, ${activeTenantId})
-      ON CONFLICT DO NOTHING
-    `;
-    await logAuditStrict({
-      action: "team.member_added",
-      summary: "Added user to team",
-      entityType: "Team",
-      entityId: teamId,
-      user,
-      after: { userId },
-    });
+    await basePrisma.$transaction(async (tx) => {
+      // ON CONFLICT DO NOTHING returns zero rows when they are ALREADY a member.
+      // That was reported as "Member added" and audited as if it happened. Say
+      // what is true instead, and skip the audit entry for the non-event.
+      const inserted = await tx.$executeRaw`
+        INSERT INTO "TeamMember" ("id", "teamId", "userId", "isManager", "tenantId")
+        VALUES (${crypto.randomUUID()}, ${teamId}, ${userId}, false, ${activeTenantId})
+        ON CONFLICT DO NOTHING
+      `;
+      if (inserted === 0) refuse("They are already a member of this team.");
+      await logAuditStrict({
+        action: "team.member_added",
+        summary: "Added user to team",
+        entityType: "Team",
+        entityId: teamId,
+        user,
+        after: { userId },
+      }, tx);
+    }, GOVERNANCE_TX);
     revalidatePath("/settings/access");
   });
 }
@@ -267,15 +276,15 @@ export async function removeTeamMember(teamId: string, memberUserId: string, for
             AND (NOT ${enforcing}::boolean OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
         `;
       }
-    });
-    await logAuditStrict({
-      action: "team.member_removed",
-      summary: "Removed user from team",
-      entityType: "Team",
-      entityId: teamId,
-      user,
-      before: { userId: memberUserId, isManager: before[0]?.isManager ?? false },
-    });
+      await logAuditStrict({
+        action: "team.member_removed",
+        summary: "Removed user from team",
+        entityType: "Team",
+        entityId: teamId,
+        user,
+        before: { userId: memberUserId, isManager: before[0]?.isManager ?? false },
+      }, tx);
+    }, GOVERNANCE_TX);
     revalidatePath("/settings/access");
   });
 }
@@ -292,17 +301,21 @@ export async function createRole(formData: FormData) {
     // unconditionally so newly-created roles are always tenant-owned.
     const tenantId = await getActiveTenantId();
     if (!tenantId) throw new ActionRefusal("No active tenant");
-    await refusingDuplicateName("role", () => basePrisma.$executeRaw`
-      INSERT INTO "Role" ("id", "name", "description", "tenantId") VALUES (${id}, ${name}, ${description}, ${tenantId})
-    `);
-    await logAuditStrict({
-      action: "role.created",
-      summary: `Created role “${name}”`,
-      entityType: "Role",
-      entityId: id,
-      user,
-      after: { name, description },
-    });
+    await refusingDuplicateName("role", () =>
+      basePrisma.$transaction(async (tx) => {
+        await tx.$executeRaw`
+          INSERT INTO "Role" ("id", "name", "description", "tenantId") VALUES (${id}, ${name}, ${description}, ${tenantId})
+        `;
+        await logAuditStrict({
+          action: "role.created",
+          summary: `Created role “${name}”`,
+          entityType: "Role",
+          entityId: id,
+          user,
+          after: { name, description },
+        }, tx);
+      }, GOVERNANCE_TX),
+    );
     revalidatePath("/settings/access");
   });
 }
@@ -366,16 +379,16 @@ export async function updateRolePermissions(roleId: string, formData: FormData) 
           WHERE "id" = ANY(${assignedUsers.map((item) => item.userId)}::text[])
         `;
       }
-    });
-    await logAuditStrict({
-      action: "role.permissions_updated",
-      summary: `Updated permissions for role “${role.name}”; affected sessions revoked`,
-      entityType: "Role",
-      entityId: roleId,
-      user,
-      before: { permissions: beforeKeys },
-      after: { permissions },
-    });
+      await logAuditStrict({
+        action: "role.permissions_updated",
+        summary: `Updated permissions for role “${role.name}”; affected sessions revoked`,
+        entityType: "Role",
+        entityId: roleId,
+        user,
+        before: { permissions: beforeKeys },
+        after: { permissions },
+      }, tx);
+    }, GOVERNANCE_TX);
     revalidatePath("/settings/access");
   });
 }
@@ -447,16 +460,16 @@ export async function updateUserRoles(userId: string, formData: FormData) {
       await tx.$executeRaw`
         UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1 WHERE "id" = ${userId}
       `;
-    });
-    await logAuditStrict({
-      action: "user.roles_updated",
-      summary: "Updated user roles; active sessions revoked",
-      entityType: "User",
-      entityId: userId,
-      user: actor,
-      before: { roles: before.map((item) => item.roleId) },
-      after: { roles: validRoleIds },
-    });
+      await logAuditStrict({
+        action: "user.roles_updated",
+        summary: "Updated user roles; active sessions revoked",
+        entityType: "User",
+        entityId: userId,
+        user: actor,
+        before: { roles: before.map((item) => item.roleId) },
+        after: { roles: validRoleIds },
+      }, tx);
+    }, GOVERNANCE_TX);
     revalidatePath("/settings/access");
     revalidatePath("/settings");
     await bumpUserSessionVersion(actor.id).catch(() => {});

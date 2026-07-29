@@ -28,6 +28,10 @@ export default function SecurityPanel({
     undefined
   );
   const [emailOn, setEmailOn] = useState(emailOtpEnabled);
+  // Without this the checkbox stayed live while a save was in flight, so rapid
+  // toggles could complete out of order and leave the box disagreeing with what
+  // was stored.
+  const [emailSaving, setEmailSaving] = useState(false);
   const codes = confirmState?.backupCodes;
 
   return (
@@ -110,13 +114,16 @@ export default function SecurityPanel({
           <input
             type="checkbox"
             checked={emailOn}
+            disabled={emailSaving}
             onChange={async (e) => {
               // The toggle flipped optimistically and the result was discarded,
               // so a failed save left the box showing a setting that was never
               // stored. It now reports, and reverts when the save is refused.
+              if (emailSaving) return;
               const next = e.target.checked;
               const before = emailOn;
               setEmailOn(next);
+              setEmailSaving(true);
               try {
                 const result = await setEmailOtp(next);
                 if (result?.error) {
@@ -129,9 +136,11 @@ export default function SecurityPanel({
                 unstable_rethrow(error);
                 toast.error("Something went wrong. Please try again.");
                 setEmailOn(before);
+              } finally {
+                setEmailSaving(false);
               }
             }}
-            className="h-4 w-4"
+            className="h-4 w-4 disabled:opacity-50"
           />
           Also allow email sign-in codes as a backup
         </label>
