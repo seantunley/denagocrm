@@ -9,7 +9,7 @@ import { logAudit } from "@/lib/audit";
 import {
   addStockEvent,
   canTransitionStock,
-  nextStockNumber,
+  withStockNumber,
   type StockActor,
 } from "@/lib/stockPlatform";
 import { getStockLabels, saveStockLabels, slugifyLabel } from "@/lib/stockLabels";
@@ -40,7 +40,10 @@ async function activeUnit(id: string) {
     where: { id, deletedAt: null },
     include: { product: { select: { name: true } } },
   });
-  if (!unit) throw new Error("Stock unit not found");
+  // A refusal, not an Error: this is a stale link or an already-archived unit,
+  // which the person can act on. Thrown Errors get digested into the generic
+  // "Something went wrong" and tell them nothing. Every caller authorises first.
+  if (!unit) refuse("That stock unit no longer exists. Refresh and try again.");
   return unit;
 }
 
@@ -55,7 +58,7 @@ async function assertUniqueSerial(serial: string | null, exceptId?: string) {
     },
     select: { id: true },
   });
-  if (clash) throw new Error("That serial/VIN is already assigned to another active stock unit");
+  if (clash) refuse("That serial/VIN is already assigned to another active stock unit.");
 }
 
 export async function createPurchaseOrder(formData: FormData) {
@@ -293,27 +296,29 @@ export async function addStockUnit(formData: FormData) {
     if (!productId) refuse("Choose a product for this stock unit.");
     const serial = str(formData.get("serial")).toUpperCase() || null;
     await assertUniqueSerial(serial);
-    const stockNumber = await nextStockNumber();
     const costCents = rand(formData.get("cost"));
-    const unit = await prisma.stockUnit.create({
-      data: {
-        productId,
-        color: str(formData.get("color")) || null,
-        serial,
-        costCents,
-        landedCostCents: costCents,
-        notes: str(formData.get("notes")) || null,
-        status: "available",
-        arrivedAt: new Date(),
-        stockNumber,
-        location: str(formData.get("location")) || null,
-        condition: str(formData.get("condition")) || "new",
-        batterySerial: str(formData.get("batterySerial")) || null,
-        chargerSerial: str(formData.get("chargerSerial")) || null,
-        odometerKm: integer(formData.get("odometerKm"), 0) || null,
-      },
-      include: { product: true },
-    });
+    const { unit, stockNumber } = await withStockNumber(null, async (stockNumber) => ({
+      stockNumber,
+      unit: await prisma.stockUnit.create({
+        data: {
+          productId,
+          color: str(formData.get("color")) || null,
+          serial,
+          costCents,
+          landedCostCents: costCents,
+          notes: str(formData.get("notes")) || null,
+          status: "available",
+          arrivedAt: new Date(),
+          stockNumber,
+          location: str(formData.get("location")) || null,
+          condition: str(formData.get("condition")) || "new",
+          batterySerial: str(formData.get("batterySerial")) || null,
+          chargerSerial: str(formData.get("chargerSerial")) || null,
+          odometerKm: integer(formData.get("odometerKm"), 0) || null,
+        },
+        include: { product: true },
+      }),
+    }));
     await addStockEvent({ stockUnitId: unit.id, eventType: "unit.created", toStatus: "available", costAfterCents: costCents, detail: stockNumber, actor: actor(user) });
     await logAudit({ action: "stock.unit_added", summary: `Added ${stockNumber}: ${unit.product.name}${serial ? ` — ${serial}` : ""}`, user });
     refresh(unit.id);
@@ -365,21 +370,23 @@ export async function inspectReceivedUnit(id: string, formData: FormData) {
     const accepted = formData.get("accepted") !== "no";
     const serial = str(formData.get("serial")).toUpperCase() || null;
     await assertUniqueSerial(serial, id);
-    const stockNumber = current.stockNumber ?? await nextStockNumber();
     const toStatus = accepted ? "available" : "damaged";
     const conditionNote = str(formData.get("conditionNote")) || null;
-    const result = await prisma.stockUnit.updateMany({
-      where: { id, status: "received_pending_check", deletedAt: null },
-      data: {
-        status: toStatus,
-        serial,
-        stockNumber,
-        location: str(formData.get("location")) || null,
-        notes: conditionNote,
-        condition: accepted ? "new" : "damaged",
-        landedCostCents: current.landedCostCents === 0 ? current.costCents : current.landedCostCents,
-      },
-    });
+    const { result, stockNumber } = await withStockNumber(current.stockNumber, async (stockNumber) => ({
+      stockNumber,
+      result: await prisma.stockUnit.updateMany({
+        where: { id, status: "received_pending_check", deletedAt: null },
+        data: {
+          status: toStatus,
+          serial,
+          stockNumber,
+          location: str(formData.get("location")) || null,
+          notes: conditionNote,
+          condition: accepted ? "new" : "damaged",
+          landedCostCents: current.landedCostCents === 0 ? current.costCents : current.landedCostCents,
+        },
+      }),
+    }));
     if (result.count !== 1) throw new ActionRefusal("The unit changed while it was being inspected");
     await addStockEvent({ stockUnitId: id, eventType: "goods.inspected", fromStatus: current.status, toStatus, reason: conditionNote, detail: stockNumber, actor: actor(user) });
     refresh(id);
