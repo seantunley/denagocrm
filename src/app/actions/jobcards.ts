@@ -555,7 +555,7 @@ export async function requestAdditionalWork(jobCardId: string, formData: FormDat
   return asActionResult(async () => {
     const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
     const description = String(formData.get("description") ?? "").trim();
-    if (!description) refuse("Give the line a description.");
+    if (!description) refuse("Describe the additional work you are requesting.");
     const amountCents = parseRands(String(formData.get("amount") ?? ""));
     const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId }, select: { number: true, contactId: true } });
     await prisma.jobCardApproval.create({

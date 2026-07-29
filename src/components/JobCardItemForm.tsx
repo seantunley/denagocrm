@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { Clock3, Package, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import type { ActionResult } from "@/lib/actionResultTypes";
 
 type PartOption = { id: string; name: string; priceCents: number; stockQty: number };
 
@@ -10,7 +12,14 @@ export default function JobCardItemForm({
   action,
   parts,
 }: {
-  action: (formData: FormData) => void;
+  /**
+   * NOT `=> void`. TypeScript lets a value-returning function satisfy a
+   * void-returning signature, so a `=> void` prop silently accepts a converted
+   * action — and the `{ error }` it returns is then dropped on the floor,
+   * exactly the silent failure the conversion exists to prevent. Typing the
+   * result makes the compiler enforce that this form handles it.
+   */
+  action: (formData: FormData) => Promise<ActionResult | void>;
   parts: PartOption[];
 }) {
   const [kind, setKind] = useState<"part" | "labour">("part");
@@ -34,7 +43,12 @@ export default function JobCardItemForm({
   }
 
   return (
-    <form action={action} className="rounded-2xl border border-border bg-muted/20 p-4">
+    <SaveForm
+      action={action}
+      success="Line added"
+      onSaved={() => { setPartId(""); setDescription(""); setUnitPrice(""); }}
+      className="rounded-2xl border border-border bg-muted/20 p-4"
+    >
       <input type="hidden" name="kind" value={kind} />
       <input type="hidden" name="partId" value={kind === "part" ? partId : ""} />
       <input type="hidden" name="description" value={description} />
@@ -77,8 +91,8 @@ export default function JobCardItemForm({
             <input id="job-item-price" name="unitPrice" className="input pl-7" inputMode="decimal" value={unitPrice} onChange={(event) => setUnitPrice(event.target.value)} placeholder="0.00" />
           </div>
         </div>
-        <button className="btn-primary h-9 w-full sm:w-auto"><Plus className="size-4" />Add line</button>
+        <SaveButton pendingLabel="Adding…" className="btn-primary h-9 w-full sm:w-auto"><Plus className="size-4" />Add line</SaveButton>
       </div>
-    </form>
+    </SaveForm>
   );
 }

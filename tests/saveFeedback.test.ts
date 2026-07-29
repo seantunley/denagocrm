@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -232,4 +232,87 @@ test("redeemReferral: authorises before any state-revealing refusal", () => {
   assert.ok(gate > 0, "the capability must be checked");
   assert.ok(gate < existence, "existence must not be revealed before the capability check");
   assert.ok(scoped < status, "status must not be revealed before the contact-scoped check");
+});
+
+// ── Authorisation precedes disclosure, EVERYWHERE ──────────────────────────
+
+// redeemReferral shipped a refusal that described referral state before its
+// permission check, turning the action into an existence/status oracle. That is
+// a property of the whole conversion, not of one action: making refusals
+// SPECIFIC is a security decision, so it is enforced across every converted
+// module rather than re-checked by hand each batch.
+test("every converted action authorises before it refuses", () => {
+  const modules = [
+    "settings", "pipelines", "emails", "security", "ai", "stock",
+    "leads", "contacts", "quotes", "cpq", "views", "privacy",
+    "fulfilment", "referrals", "tenants", "platformAdmins",
+    "jobcards", "doceditor", "docbuilder",
+  ];
+  const offenders: string[] = [];
+
+  for (const name of modules) {
+    const lines = src(`src/app/actions/${name}.ts`).replace(/\r\n/g, "\n").split("\n");
+    let fn: string | null = null;
+    let start = 0;
+    let wrapped = false;
+
+    const inspect = (end: number) => {
+      if (!fn || !wrapped) return;
+      const body = lines.slice(start, end);
+      const gate = body.findIndex((l) => /await require[A-Za-z]*\(/.test(l));
+      const refusal = body.findIndex((l) => /\brefuse\(|throw new ActionRefusal\(/.test(l));
+      if (refusal >= 0 && gate >= 0 && refusal < gate) {
+        offenders.push(`${name}.${fn}`);
+      }
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^export async function ([a-zA-Z0-9_]+)\(/);
+      if (m) { inspect(i); fn = m[1]; start = i; wrapped = false; }
+      if (fn && lines[i].includes("asActionResult(async")) wrapped = true;
+    }
+    inspect(lines.length);
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `these actions refuse before authorising, which lets an unauthorised caller read state: ${offenders.join(", ")}`,
+  );
+});
+
+// ── The compiler's guarantee has one hole; close it ────────────────────────
+
+// Converting an action while one of its forms stays a plain <form action> is
+// normally a COMPILE error, which is what makes this rollout safe. That
+// guarantee does not hold for a prop typed `(formData: FormData) => void`:
+// TypeScript deliberately lets a value-returning function satisfy a
+// void-returning signature, so such a prop silently accepts a converted action
+// and drops the `{ error }` it returns.
+//
+// JobCardItemForm was exactly that — found only by clicking the button, after
+// the compiler, lint, tests and the build were all green.
+test("no component takes an action prop typed as bare `=> void`", () => {
+  const roots = ["src/components", "src/app"];
+  const offenders: string[] = [];
+
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!/\.tsx?$/.test(entry.name)) continue;
+      const code = readFileSync(full, "utf8");
+      // `action: (…) => void` — with no Promise/ActionResult in the return type.
+      if (/\baction\s*:\s*\([^)]*\)\s*=>\s*void\s*;/.test(code)) {
+        offenders.push(path.relative(process.cwd(), full).split(path.sep).join("/"));
+      }
+    }
+  };
+  for (const r of roots) walk(path.join(root, r));
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `a bare \`=> void\` action prop hides a converted action's refusal: ${offenders.join(", ")}`,
+  );
 });
