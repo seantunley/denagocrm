@@ -114,6 +114,7 @@ export default async function TicketDetailPage({ params }: { params: Promise<{ i
             noteAction={addNote.bind(null, ticket.id)}
             cannedReplies={canned.map((c) => ({ id: c.id, title: c.title, body: c.body }))}
             statusOptions={replyStatusOptions}
+            expectedStatus={ticket.status}
           />
         </div>
 
@@ -123,6 +124,9 @@ export default async function TicketDetailPage({ params }: { params: Promise<{ i
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Properties</p>
             <div className="block text-xs text-muted-foreground"><span className="mb-1 block">Status</span>
               <SaveForm success="Status updated" resetOnSuccess={false} action={setTicketStatus.bind(null, ticket.id)}>
+                {/* The status this control was RENDERED with, so the action can
+                    refuse rather than clobber a change made since. */}
+                <input type="hidden" name="expectedStatus" value={ticket.status} />
                 <AutoSubmitSelect name="status" defaultValue={ticket.status} aria-label="Status" options={STATUSES.map((s) => ({ value: s.value, label: s.label }))} />
               </SaveForm>
             </div>

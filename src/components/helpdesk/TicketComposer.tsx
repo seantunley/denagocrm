@@ -19,12 +19,19 @@ export function TicketComposer({
   cannedReplies,
   statusOptions,
   signature,
+  expectedStatus,
 }: {
   replyAction: (formData: FormData) => Promise<ActionResult | void>;
   noteAction: (formData: FormData) => Promise<ActionResult | void>;
   cannedReplies: Canned[];
   statusOptions: { value: string; label: string }[];
   signature?: string | null;
+  /**
+   * The status the ticket had when this composer was rendered. Sent with the
+   * reply so the action can refuse rather than overwrite a status someone else
+   * changed while this reply was being written.
+   */
+  expectedStatus: string;
 }) {
   const [mode, setMode] = useState<"reply" | "note">("reply");
   const [body, setBody] = useState("");
@@ -64,6 +71,7 @@ export function TicketComposer({
           onSaved={() => setBody("")}
           className="space-y-3 p-3"
         >
+          <input type="hidden" name="expectedStatus" value={expectedStatus} />
           {cannedReplies.length > 0 && (
             <select
               className="input text-sm"

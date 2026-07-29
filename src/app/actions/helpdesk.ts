@@ -140,6 +140,9 @@ export async function replyToTicket(caseId: string, formData: FormData): Promise
 
     const item = await loadCase(caseId);
     if (!item) redirect("/cases");
+    // Falls back to the fresh read only when the form did not send one, so an
+    // older cached page still saves rather than failing outright.
+    const expectedStatus = str(formData, "expectedStatus") || item.status;
     const now = new Date();
 
     // Atomic: append the reply + advance the case in ONE transaction (the case was
@@ -149,8 +152,16 @@ export async function replyToTicket(caseId: string, formData: FormData): Promise
       await tx.customerCaseMessage.create({
         data: { caseId, userId: user.id, direction: "staff", type: "staff", body, tenantId },
       });
-      await tx.customerCase.update({
-        where: { id: caseId },
+      // Compare-and-set against the status the COMPOSER WAS RENDERED WITH, not
+      // against a value re-read moments ago in this same request. Re-reading
+      // checks almost nothing: it is current by construction, so a reply written
+      // against a stale page still overwrote whatever changed in between and
+      // both operations reported success. The client sends what it showed.
+      //
+      // The message is created inside this transaction, so refusing rolls it
+      // back too — a half-sent reply would be worse than the overwrite.
+      const advanced = await tx.customerCase.updateMany({
+        where: { id: caseId, status: expectedStatus },
         data: {
           status: nextStatus,
           lastReplyBy: "staff",
@@ -160,6 +171,9 @@ export async function replyToTicket(caseId: string, formData: FormData): Promise
           closedAt: nextStatus === "closed" ? now : undefined,
         },
       });
+      if (advanced.count !== 1) {
+        refuse("Someone else changed this ticket while you were writing. Refresh and send again.");
+      }
     });
 
     await notifyCustomer(
@@ -221,6 +235,9 @@ export async function setTicketStatus(caseId: string, formData: FormData): Promi
     if (!STATUS_VALUES.includes(status)) throw new ActionRefusal("Invalid ticket status.");
     const item = await loadCase(caseId);
     if (!item) redirect("/cases");
+    // The status the select was RENDERED with — see replyToTicket for why a
+    // fresh re-read here would check almost nothing.
+    const expectedStatus = str(formData, "expectedStatus") || item.status;
     // Already there. Reporting a change would be a lie, but this is not a
     // failure either — say what is true and stop.
     if (item.status === status) return { success: `Already ${status}.` };
@@ -230,7 +247,7 @@ export async function setTicketStatus(caseId: string, formData: FormData): Promi
     // and told BOTH of them it worked, with contradictory customer
     // notifications to match.
     const changed = await prisma.customerCase.updateMany({
-      where: { id: caseId, status: item.status },
+      where: { id: caseId, status: expectedStatus },
       data: {
         status,
         resolvedAt: status === "resolved" ? now : undefined,
@@ -310,6 +327,38 @@ export async function removeTicketTag(caseId: string, tagId: string): Promise<Ac
 }
 
 // ── Settings: mailboxes ───────────────────────────────────────────────────────
+/**
+ * SupportMailbox carries two unique constraints the UI can trip:
+ * `SupportMailbox_email_lower_key` (lower(email), install-wide) and
+ * `SupportMailbox_tenantId_slug_key` (the slug derived from the name).
+ *
+ * The email pre-check above is check-then-write, so a concurrent claim still
+ * reaches the database — and nothing pre-checked the slug at all, so two names
+ * that slugify the same ("Support" and "support!") always did. Both surfaced as
+ * the digested "Something went wrong", which tells the person nothing about the
+ * one thing they can act on: pick a different name or address.
+ */
+async function refusingMailboxClash<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    const code = (error as { code?: string })?.code;
+    const detail = `${String((error as { meta?: { target?: unknown } })?.meta?.target ?? "")} ${
+      error instanceof Error ? error.message : ""
+    }`;
+    if (code === "P2002" || detail.includes("23505")) {
+      if (/email/i.test(detail)) {
+        refuse("That inbox address is already used by another mailbox.");
+      }
+      if (/slug/i.test(detail)) {
+        refuse("A mailbox with a very similar name already exists. Choose a more distinct name.");
+      }
+      refuse("That mailbox clashes with an existing one. Check its name and inbox address.");
+    }
+    throw error;
+  }
+}
+
 export async function saveMailbox(formData: FormData): Promise<ActionResult> {
   return asActionResult(async () => {
     const user = await requirePermission("cases.manage");
@@ -331,14 +380,16 @@ export async function saveMailbox(formData: FormData): Promise<ActionResult> {
       if (clash) throw new ActionRefusal(`That inbox address is already used by the "${clash.name}" mailbox.`);
     }
     const data = { name, color, signature, email, autoReplyEnabled, autoReplyBody, active };
-    if (id) {
-      await prisma.supportMailbox.update({ where: { id }, data });
-    } else {
-      // Stamp the owning tenant explicitly — tenantId is NOT NULL and the scoped
-      // guard is dormant with enforcement off. slug is unique per tenant.
-      const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
-      await prisma.supportMailbox.create({ data: { ...data, slug: slugify(name), tenantId } });
-    }
+    await refusingMailboxClash(async () => {
+      if (id) {
+        await prisma.supportMailbox.update({ where: { id }, data });
+      } else {
+        // Stamp the owning tenant explicitly — tenantId is NOT NULL and the scoped
+        // guard is dormant with enforcement off. slug is unique per tenant.
+        const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+        await prisma.supportMailbox.create({ data: { ...data, slug: slugify(name), tenantId } });
+      }
+    });
     await logAudit({ action: "helpdesk.mailbox_saved", summary: `Saved mailbox ${name}`, user });
     revalidatePath("/settings/helpdesk");
   });
