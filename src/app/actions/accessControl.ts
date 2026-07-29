@@ -104,9 +104,9 @@ async function otherGovernanceAdminCount(activeTenantId: string | null, excluded
   return Number(rows[0]?.count ?? 0);
 }
 
-async function roleIdsGrantAdmin(roleIds: string[]): Promise<boolean> {
+async function roleIdsGrantAdmin(roleIds: string[], tx?: GovernanceTx): Promise<boolean> {
   if (roleIds.length === 0) return false;
-  const rows = await basePrisma.$queryRaw<Array<{ allowed: boolean }>>`
+  const rows = await (tx ?? basePrisma).$queryRaw<Array<{ allowed: boolean }>>`
     SELECT EXISTS (
       SELECT 1 FROM "RolePermission"
       WHERE "roleId" = ANY(${roleIds}::text[])
@@ -355,7 +355,12 @@ export async function updateRolePermissions(roleId: string, formData: FormData) 
       const missing = [...REQUIRED_ADMIN_PERMISSIONS].filter((permission) => !permissions.includes(permission));
       if (missing.length) throw new ActionRefusal(`CRM administrator must retain: ${missing.join(", ")}`);
     }
-    const droppingGovernance = beforeKeys.includes("roles.manage") && !permissions.includes("roles.manage");
+    // Decided from the REQUEST, not from `beforeKeys`: whether the role
+    // currently grants roles.manage can change under us between that read and
+    // the write, and a decision made from the stale value skips the lock
+    // entirely. Any request that does not keep roles.manage takes the lock, then
+    // re-reads what the role actually grants right now.
+    const requestDropsGovernance = !permissions.includes("roles.manage");
 
     const assignedUsers = await basePrisma.$queryRaw<Array<{ userId: string }>>`
       SELECT "userId" FROM "UserRole" WHERE "roleId" = ${roleId}
@@ -364,10 +369,15 @@ export async function updateRolePermissions(roleId: string, formData: FormData) 
       // Check and mutate under the same lock. Counted outside the transaction,
       // two callers each still saw the other's admins and both writes landed,
       // leaving nobody able to administer the workspace.
-      if (droppingGovernance) {
-        await lockGovernanceAdmins(tx, activeTenantId);
-        const remaining = await otherGovernanceAdminCount(activeTenantId, undefined, roleId, tx);
-        if (remaining < 1) refuse("This change would remove the last governance administrator.");
+      if (requestDropsGovernance) {
+        await lockGovernanceAdmins(tx);
+        const currentKeys = await tx.$queryRaw<Array<{ permissionKey: string }>>`
+          SELECT "permissionKey" FROM "RolePermission" WHERE "roleId" = ${roleId}
+        `;
+        if (currentKeys.some((item) => item.permissionKey === "roles.manage")) {
+          const remaining = await otherGovernanceAdminCount(activeTenantId, undefined, roleId, tx);
+          if (remaining < 1) refuse("This change would remove the last governance administrator.");
+        }
       }
       await tx.$executeRaw`DELETE FROM "RolePermission" WHERE "roleId" = ${roleId}`;
       for (const permission of permissions) {
@@ -445,18 +455,36 @@ export async function updateUserRoles(userId: string, formData: FormData) {
     const target = targetRows[0];
     if (!target) throw new ActionRefusal("User not found");
 
-    const hadAdmin = target.role === "owner" || await roleIdsGrantAdmin(before.map((item) => item.roleId));
-    const keepsAdmin = target.role === "owner" || await roleIdsGrantAdmin(validRoleIds);
-    const droppingGovernance = hadAdmin && !keepsAdmin && !target.disabledAt;
+    // Whether the REQUESTED roles grant administration is the only part of this
+    // that cannot change under us — it comes from the submitted form. Everything
+    // else (their current roles, their owner flag, whether they are disabled)
+    // must be re-read under the lock, so the decision to take the lock rests on
+    // the request alone.
+    const requestGrantsAdmin = await roleIdsGrantAdmin(validRoleIds);
 
     // Under enforcement scope the DELETE to the active tenant so another tenant's
     // role assignments for the same user are left untouched.
     await basePrisma.$transaction(async (tx) => {
       // Same invariant, same lock — see updateRolePermissions.
-      if (droppingGovernance) {
-        await lockGovernanceAdmins(tx, activeTenantId);
-        const remaining = await otherGovernanceAdminCount(activeTenantId, userId, undefined, tx);
-        if (remaining < 1) refuse("This change would remove the last governance administrator.");
+      if (!requestGrantsAdmin) {
+        await lockGovernanceAdmins(tx);
+        const [current] = await tx.$queryRaw<Array<{ role: string; disabledAt: Date | null }>>`
+          SELECT "role", "disabledAt" FROM "User" WHERE "id" = ${userId} LIMIT 1
+        `;
+        if (!current) refuse("That teammate no longer exists. Refresh and try again.");
+        const currentRoles = await tx.$queryRaw<Array<{ roleId: string }>>`
+          SELECT "roleId" FROM "UserRole"
+          WHERE "userId" = ${userId}
+            AND (NOT ${enforcing}::boolean OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
+        `;
+        const hasAdminNow =
+          current.role === "owner" || (await roleIdsGrantAdmin(currentRoles.map((item) => item.roleId), tx));
+        // `owner` survives a role-assignment change, so it only drops admin when
+        // they are not an owner. Re-read, never inferred from the earlier read.
+        if (hasAdminNow && current.role !== "owner" && !current.disabledAt) {
+          const remaining = await otherGovernanceAdminCount(activeTenantId, userId, undefined, tx);
+          if (remaining < 1) refuse("This change would remove the last governance administrator.");
+        }
       }
       await tx.$executeRaw`
         DELETE FROM "UserRole"

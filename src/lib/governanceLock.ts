@@ -20,12 +20,28 @@ type Tx = Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0];
  * automatically when the transaction ends, in either direction — there is no
  * unlock to forget or leak on an error path.
  *
- * The key is per-tenant so one workspace's governance change never blocks
- * another's. `hashtext` is Postgres's own stable string hash.
+ * ONE GLOBAL KEY, deliberately — an earlier version keyed this per tenant, which
+ * serialized nothing that mattered:
+ *
+ *   - The `User.role = 'owner'` checks count owners across the WHOLE install, so
+ *     two owners acting from different tenants took different keys, never
+ *     blocked each other, and could still remove the last one between them.
+ *   - The tenant-scoped counts in accessControl.ts are not independent either:
+ *     a global owner counts toward a tenant's admin tally, so a concurrent
+ *     demotion elsewhere invalidates a count taken under a tenant-only key.
+ *
+ * Since the invariant spans tenants, so must the lock. The cost is that two
+ * governance changes anywhere serialize — which is the correct behaviour for a
+ * rare, deliberate, safety-critical operation.
  *
  * MUST be called INSIDE the transaction that performs the mutation, and BEFORE
- * the count that guards it — a lock taken after the count guarantees nothing.
+ * the read whose result the check depends on. A lock taken after that read
+ * guarantees nothing — and so does deciding whether to take it from a value read
+ * before it. Take it whenever the REQUESTED end state could remove
+ * administration, then re-read the current state under it.
+ *
+ * `hashtext` is Postgres's own stable string hash.
  */
-export async function lockGovernanceAdmins(tx: Tx, tenantId: string | null): Promise<void> {
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`governance_admins:${tenantId ?? "global"}`}))`;
+export async function lockGovernanceAdmins(tx: Tx): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('governance_admins'))`;
 }

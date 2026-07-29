@@ -5,7 +5,7 @@ import bcrypt from "bcryptjs";
 import QRCode from "qrcode";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
-import { createSessionCookie, requireUser, requireOwner, getActiveTenantId } from "@/lib/auth";
+import { createSessionCookie, requireUser, requireOwner } from "@/lib/auth";
 import { encryptValue, decryptValue, putSetting } from "@/lib/settings";
 import { GOVERNANCE_TX, logAuditStrict } from "@/lib/audit";
 import { lockGovernanceAdmins } from "@/lib/governanceLock";
@@ -166,20 +166,30 @@ export async function saveSessionPolicy(formData: FormData) {
 export async function setUserRole(userId: string, role: "owner" | "member"): Promise<ActionResult> {
   return asActionResult(async () => {
     const owner = await requireOwner();
-    const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-    const demoting = target.role === "owner" && role === "member";
+    await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { id: true } });
     const updated = await basePrisma.$transaction(async (tx) => {
-      // The count and the write must be atomic against another demotion. Held
-      // BEFORE the count, so a second caller waits and then counts against this
-      // one's committed state instead of the stale world both used to see.
-      if (demoting) {
-        await lockGovernanceAdmins(tx, await getActiveTenantId());
-        const rows = await tx.$queryRaw<Array<{ count: bigint }>>`
-          SELECT COUNT(*)::bigint AS count
-          FROM "User"
-          WHERE "role" = 'owner' AND "disabledAt" IS NULL AND "id" <> ${userId}
-        `;
-        if (Number(rows[0]?.count ?? 0) < 1) refuse("At least one active owner must remain.");
+      // Lock on the REQUESTED end state, not on what we read beforehand.
+      // Deciding from a pre-lock read ("they are only a member, so this cannot
+      // remove an owner") is itself racy: a concurrent promotion between that
+      // read and this write made it demote the last owner with no check at all.
+      // Any request for "member" could remove an owner, so any such request
+      // takes the lock and then re-reads the truth under it.
+      let previousRole = role;
+      if (role === "member") {
+        await lockGovernanceAdmins(tx);
+        const current = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { role: true } });
+        previousRole = current.role as typeof role;
+        if (current.role === "owner") {
+          const rows = await tx.$queryRaw<Array<{ count: bigint }>>`
+            SELECT COUNT(*)::bigint AS count
+            FROM "User"
+            WHERE "role" = 'owner' AND "disabledAt" IS NULL AND "id" <> ${userId}
+          `;
+          if (Number(rows[0]?.count ?? 0) < 1) refuse("At least one active owner must remain.");
+        }
+      } else {
+        const current = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { role: true } });
+        previousRole = current.role as typeof role;
       }
       const updated = await tx.user.update({ where: { id: userId }, data: { role } });
       await bumpUserSessionVersion(userId, tx);
@@ -189,7 +199,7 @@ export async function setUserRole(userId: string, role: "owner" | "member"): Pro
         entityType: "User",
         entityId: userId,
         user: owner,
-        before: { role: target.role },
+        before: { role: previousRole },
         after: { role },
       }, tx);
       return updated;
@@ -278,16 +288,20 @@ export async function setUserDisabled(userId: string, disabled: boolean): Promis
     if (userId === owner.id) throw new ActionRefusal("You cannot disable your own account");
     const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     await basePrisma.$transaction(async (tx) => {
-      // Same invariant, same lock: two owners disabling each other at once both
-      // passed a count taken outside any transaction and left zero admins.
-      if (disabled && target.role === "owner") {
-        await lockGovernanceAdmins(tx, await getActiveTenantId());
-        const rows = await tx.$queryRaw<Array<{ count: bigint }>>`
-          SELECT COUNT(*)::bigint AS count
-          FROM "User"
-          WHERE "role" = 'owner' AND "disabledAt" IS NULL AND "id" <> ${userId}
-        `;
-        if (Number(rows[0]?.count ?? 0) < 1) refuse("At least one active owner must remain.");
+      // Same invariant, same lock, same rule about staleness: ANY disable could
+      // remove an owner, because the target may be promoted between the read
+      // above and this write. Take the lock on the request, then re-read.
+      if (disabled) {
+        await lockGovernanceAdmins(tx);
+        const current = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { role: true } });
+        if (current.role === "owner") {
+          const rows = await tx.$queryRaw<Array<{ count: bigint }>>`
+            SELECT COUNT(*)::bigint AS count
+            FROM "User"
+            WHERE "role" = 'owner' AND "disabledAt" IS NULL AND "id" <> ${userId}
+          `;
+          if (Number(rows[0]?.count ?? 0) < 1) refuse("At least one active owner must remain.");
+        }
       }
       await setUserDisabledState(userId, disabled, tx);
       await logAuditStrict({
