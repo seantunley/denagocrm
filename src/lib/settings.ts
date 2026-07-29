@@ -146,10 +146,16 @@ export async function getSetting(key: string): Promise<string | null> {
 }
 
 /** Writes a setting, encrypting credential-class keys when a key is configured. */
-export async function putSetting(key: string, value: string): Promise<void> {
+/**
+ * A transaction client, so a setting that is only meaningful together with other
+ * changes can be written in the SAME transaction as them.
+ */
+export type SettingsTx = Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0];
+
+export async function putSetting(key: string, value: string, tx?: SettingsTx): Promise<void> {
   const stored = value && isSecretSettingKey(key) ? encryptValue(value) : value;
   const tenantId = settingsOwnerTenantId();
-  await basePrisma.appSetting.upsert({
+  await (tx ?? basePrisma).appSetting.upsert({
     where: { tenantId_key: { tenantId, key } },
     update: { value: stored },
     create: { tenantId, key, value: stored },

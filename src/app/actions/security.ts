@@ -1,13 +1,14 @@
 "use server";
 
-import { asActionResult, ActionRefusal, type ActionResult } from "@/lib/actionResult";
+import { asActionResult, ActionRefusal, refuse, type ActionResult } from "@/lib/actionResult";
 import bcrypt from "bcryptjs";
 import QRCode from "qrcode";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
-import { createSessionCookie, requireUser, requireOwner } from "@/lib/auth";
+import { createSessionCookie, requireUser, requireOwner, getActiveTenantId } from "@/lib/auth";
 import { encryptValue, decryptValue, putSetting } from "@/lib/settings";
 import { GOVERNANCE_TX, logAuditStrict } from "@/lib/audit";
+import { lockGovernanceAdmins } from "@/lib/governanceLock";
 import {
   generateTotpSecret,
   totpKeyUri,
@@ -141,8 +142,12 @@ export async function saveSessionPolicy(formData: FormData) {
     const owner = await requireOwner();
     const minutes = parseInt(String(formData.get("idleMinutes") ?? "60"), 10);
     const safe = isNaN(minutes) || minutes < 5 ? 60 : Math.min(minutes, 1440);
-    await putSetting("SESSION_IDLE_MINUTES", String(safe));
     await basePrisma.$transaction(async (tx) => {
+      // The setting used to be written and committed BEFORE this transaction.
+      // If the revocation or the audit then failed, the new idle timeout was
+      // already live while the person was told the save failed — and every
+      // existing session stayed valid under a policy nobody knew had changed.
+      await putSetting("SESSION_IDLE_MINUTES", String(safe), tx);
       await tx.$executeRaw`UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1`;
       await logAuditStrict({
         action: "security.policy_changed",
@@ -162,15 +167,20 @@ export async function setUserRole(userId: string, role: "owner" | "member"): Pro
   return asActionResult(async () => {
     const owner = await requireOwner();
     const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-    if (target.role === "owner" && role === "member") {
-      const rows = await basePrisma.$queryRaw<Array<{ count: bigint }>>`
-        SELECT COUNT(*)::bigint AS count
-        FROM "User"
-        WHERE "role" = 'owner' AND "disabledAt" IS NULL AND "id" <> ${userId}
-      `;
-      if (Number(rows[0]?.count ?? 0) < 1) throw new ActionRefusal("At least one active owner must remain");
-    }
+    const demoting = target.role === "owner" && role === "member";
     const updated = await basePrisma.$transaction(async (tx) => {
+      // The count and the write must be atomic against another demotion. Held
+      // BEFORE the count, so a second caller waits and then counts against this
+      // one's committed state instead of the stale world both used to see.
+      if (demoting) {
+        await lockGovernanceAdmins(tx, await getActiveTenantId());
+        const rows = await tx.$queryRaw<Array<{ count: bigint }>>`
+          SELECT COUNT(*)::bigint AS count
+          FROM "User"
+          WHERE "role" = 'owner' AND "disabledAt" IS NULL AND "id" <> ${userId}
+        `;
+        if (Number(rows[0]?.count ?? 0) < 1) refuse("At least one active owner must remain.");
+      }
       const updated = await tx.user.update({ where: { id: userId }, data: { role } });
       await bumpUserSessionVersion(userId, tx);
       await logAuditStrict({
@@ -267,15 +277,18 @@ export async function setUserDisabled(userId: string, disabled: boolean): Promis
     const owner = await requireOwner();
     if (userId === owner.id) throw new ActionRefusal("You cannot disable your own account");
     const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-    if (disabled && target.role === "owner") {
-      const rows = await basePrisma.$queryRaw<Array<{ count: bigint }>>`
-        SELECT COUNT(*)::bigint AS count
-        FROM "User"
-        WHERE "role" = 'owner' AND "disabledAt" IS NULL AND "id" <> ${userId}
-      `;
-      if (Number(rows[0]?.count ?? 0) < 1) throw new ActionRefusal("At least one active owner must remain");
-    }
     await basePrisma.$transaction(async (tx) => {
+      // Same invariant, same lock: two owners disabling each other at once both
+      // passed a count taken outside any transaction and left zero admins.
+      if (disabled && target.role === "owner") {
+        await lockGovernanceAdmins(tx, await getActiveTenantId());
+        const rows = await tx.$queryRaw<Array<{ count: bigint }>>`
+          SELECT COUNT(*)::bigint AS count
+          FROM "User"
+          WHERE "role" = 'owner' AND "disabledAt" IS NULL AND "id" <> ${userId}
+        `;
+        if (Number(rows[0]?.count ?? 0) < 1) refuse("At least one active owner must remain.");
+      }
       await setUserDisabledState(userId, disabled, tx);
       await logAuditStrict({
         action: disabled ? "security.user_disabled" : "security.user_reactivated",

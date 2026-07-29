@@ -11,6 +11,9 @@ import { canEditRole } from "@/lib/tenantGuard";
 import { PERMISSIONS, requirePermission } from "@/lib/permissions";
 import { GOVERNANCE_TX, logAuditStrict } from "@/lib/audit";
 import { bumpUserSessionVersion } from "@/lib/userSecurity";
+import { lockGovernanceAdmins } from "@/lib/governanceLock";
+
+type GovernanceTx = Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0];
 
 const value = (formData: FormData, key: string) => String(formData.get(key) ?? "").trim();
 
@@ -66,12 +69,12 @@ async function validUserId(userId: string | null) {
   return userId;
 }
 
-async function otherGovernanceAdminCount(activeTenantId: string | null, excludedUserId?: string, excludedRoleId?: string): Promise<number> {
+async function otherGovernanceAdminCount(activeTenantId: string | null, excludedUserId?: string, excludedRoleId?: string, tx?: GovernanceTx): Promise<number> {
   // When tenantId is known, count only admins belonging to THAT tenant — the
   // global platform owner counts only if they are also a member of that tenant,
   // and role-based admins only via assignments scoped to that tenant. Otherwise
   // (no tenantId, pre-enforcement) count globally as before.
-  const rows = await basePrisma.$queryRaw<Array<{ count: bigint }>>`
+  const rows = await (tx ?? basePrisma).$queryRaw<Array<{ count: bigint }>>`
     SELECT COUNT(DISTINCT u."id")::bigint AS count
     FROM "User" u
     WHERE u."disabledAt" IS NULL
@@ -352,15 +355,20 @@ export async function updateRolePermissions(roleId: string, formData: FormData) 
       const missing = [...REQUIRED_ADMIN_PERMISSIONS].filter((permission) => !permissions.includes(permission));
       if (missing.length) throw new ActionRefusal(`CRM administrator must retain: ${missing.join(", ")}`);
     }
-    if (beforeKeys.includes("roles.manage") && !permissions.includes("roles.manage")) {
-      const remaining = await otherGovernanceAdminCount(activeTenantId, undefined, roleId);
-      if (remaining < 1) throw new ActionRefusal("This change would remove the last governance administrator");
-    }
+    const droppingGovernance = beforeKeys.includes("roles.manage") && !permissions.includes("roles.manage");
 
     const assignedUsers = await basePrisma.$queryRaw<Array<{ userId: string }>>`
       SELECT "userId" FROM "UserRole" WHERE "roleId" = ${roleId}
     `;
     await basePrisma.$transaction(async (tx) => {
+      // Check and mutate under the same lock. Counted outside the transaction,
+      // two callers each still saw the other's admins and both writes landed,
+      // leaving nobody able to administer the workspace.
+      if (droppingGovernance) {
+        await lockGovernanceAdmins(tx, activeTenantId);
+        const remaining = await otherGovernanceAdminCount(activeTenantId, undefined, roleId, tx);
+        if (remaining < 1) refuse("This change would remove the last governance administrator.");
+      }
       await tx.$executeRaw`DELETE FROM "RolePermission" WHERE "roleId" = ${roleId}`;
       for (const permission of permissions) {
         // Denormalized tenantId stamp (unconditional — matches createRole's stamp;
@@ -439,14 +447,17 @@ export async function updateUserRoles(userId: string, formData: FormData) {
 
     const hadAdmin = target.role === "owner" || await roleIdsGrantAdmin(before.map((item) => item.roleId));
     const keepsAdmin = target.role === "owner" || await roleIdsGrantAdmin(validRoleIds);
-    if (hadAdmin && !keepsAdmin && !target.disabledAt) {
-      const remaining = await otherGovernanceAdminCount(activeTenantId, userId);
-      if (remaining < 1) throw new ActionRefusal("This change would remove the last governance administrator");
-    }
+    const droppingGovernance = hadAdmin && !keepsAdmin && !target.disabledAt;
 
     // Under enforcement scope the DELETE to the active tenant so another tenant's
     // role assignments for the same user are left untouched.
     await basePrisma.$transaction(async (tx) => {
+      // Same invariant, same lock — see updateRolePermissions.
+      if (droppingGovernance) {
+        await lockGovernanceAdmins(tx, activeTenantId);
+        const remaining = await otherGovernanceAdminCount(activeTenantId, userId, undefined, tx);
+        if (remaining < 1) refuse("This change would remove the last governance administrator.");
+      }
       await tx.$executeRaw`
         DELETE FROM "UserRole"
         WHERE "userId" = ${userId}
