@@ -354,8 +354,10 @@ export default async function QuoteDetailPage({
                 The happy handover — filed on the customer and this quote.
               </p>
             </div>
+            {/* No `success` prop: the action returns a count-aware message
+                ("3 photos uploaded — 1 skipped"), which takes precedence anyway,
+                so a hardcoded one here would only be misleading to read. */}
             <SaveForm
-              success="Photos uploaded"
               action={uploadDeliveryPhotos.bind(null, quote.id)}
               className="flex items-center gap-2"
             >

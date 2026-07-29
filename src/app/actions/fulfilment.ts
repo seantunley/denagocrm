@@ -114,7 +114,11 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
     const when = new Date(dateRaw);
     if (isNaN(when.getTime())) refuse("That delivery date is not valid.");
     const file = pickFile(formData);
-    if (file && file.size <= MAX_FILE) {
+    // The file is optional, but a SELECTED one that is too large must not be
+    // dropped while the stage change proceeds: the user picked it, the toast says
+    // it worked, and the form is gone. Refuse before anything is committed.
+    if (file && file.size > MAX_FILE) refuse("That delivery paperwork is larger than 4 MB.");
+    if (file) {
       await attachStageDocument(quoteId, quote.contactId, "delivery-note", `Delivery paperwork — Q-${quote.number} — ${file.name}`, file, user.id);
     }
     const model = quote.lead?.product?.name ?? quote.items[0]?.description ?? "cart";
@@ -158,12 +162,27 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
     const files = formData.getAll("files").filter(
       (file): file is File => typeof file === "object" && (file as File).size > 0
     );
+    // The input is not `required`, so "Add delivery photos" with nothing selected
+    // used to report "Photos uploaded" having saved nothing at all.
+    if (files.length === 0) refuse("Choose at least one photo.");
+
+    const MAX_PHOTOS = 10;
+    const accepted = files.filter((file) => file.size <= MAX_FILE && file.type.startsWith("image/"));
+    if (accepted.length === 0) {
+      refuse("None of those files could be used — photos must be images under 4 MB.");
+    }
+
     let saved = 0;
-    for (const file of files.slice(0, 10)) {
-      if (file.size > MAX_FILE || !file.type.startsWith("image/")) continue;
+    for (const file of accepted.slice(0, MAX_PHOTOS)) {
       await attachStageDocument(quoteId, quote.contactId, "delivery-photo", `Delivery photo — Q-${quote.number} — ${file.name}`, file, user.id);
       saved++;
     }
+    // Say what actually happened when some were dropped: "Photos uploaded" after
+    // silently discarding six of sixteen is the same lie as reporting a save that
+    // never ran, just quieter.
+    const rejected = files.length - accepted.length;
+    const overCap = Math.max(0, accepted.length - MAX_PHOTOS);
+    const skipped = rejected + overCap;
     if (saved > 0) {
       await logAudit({
         action: "fulfilment.photos",
@@ -175,6 +194,12 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
     }
     revalidatePath("/deliveries");
     revalidatePath(`/quotes/${quoteId}`);
+    return {
+      success:
+        skipped > 0
+          ? `${saved} photo${saved === 1 ? "" : "s"} uploaded — ${skipped} skipped (not an image, over 4 MB, or past the ${MAX_PHOTOS}-photo limit)`
+          : `${saved} photo${saved === 1 ? "" : "s"} uploaded`,
+    };
   });
 }
 
@@ -192,7 +217,11 @@ export async function markDelivered(quoteId: string, formData: FormData): Promis
     if (!quote.deliveryScheduledFor) refuse("Schedule the delivery before marking it delivered.");
     if (quote.deliveredAt) refuse("This delivery is already marked as delivered.");
     const file = pickFile(formData);
-    if (file && file.size <= MAX_FILE) {
+    // The file is optional, but a SELECTED one that is too large must not be
+    // dropped while the stage change proceeds: the user picked it, the toast says
+    // it worked, and the form is gone. Refuse before anything is committed.
+    if (file && file.size > MAX_FILE) refuse("That delivery note is larger than 4 MB.");
+    if (file) {
       await attachStageDocument(quoteId, quote.contactId, "delivery-note", `Delivery note — Q-${quote.number} — ${file.name}`, file, user.id);
     }
 
