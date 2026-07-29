@@ -21,6 +21,18 @@ import {
   requireVehicleAccess,
 } from "@/lib/permissions";
 
+/**
+ * Says what actually happened. Reporting "Photos uploaded" after silently
+ * discarding half the selection is the same lie as reporting a save that never
+ * ran, only quieter — the user walks away believing the record is complete.
+ */
+function photoMessage(saved: number, skipped: number): string {
+  const base = `${saved} photo${saved === 1 ? "" : "s"} uploaded`;
+  return skipped > 0
+    ? `${base} — ${skipped} skipped (not an image, over 4 MB, or past the 12-photo limit)`
+    : base;
+}
+
 export async function uploadJobCardPhotos(jobCardId: string, formData: FormData) {
   return asActionResult(async () => {
     const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
@@ -28,9 +40,20 @@ export async function uploadJobCardPhotos(jobCardId: string, formData: FormData)
     const files = formData
       .getAll("files")
       .filter((f): f is File => typeof f === "object" && (f as File).size > 0);
+    // The input is not `required`, and invalid files were skipped silently — so
+    // "Photos uploaded" could report saving nothing at all.
+    if (files.length === 0) refuse("Choose at least one photo.");
+    const MAX_PHOTOS = 12;
+    const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
+    const accepted = files.filter(
+      (file) => file.size <= MAX_PHOTO_BYTES && file.type.startsWith("image/"),
+    );
+    if (accepted.length === 0) {
+      refuse("None of those files could be used — photos must be images under 4 MB.");
+    }
+    const skipped = (files.length - accepted.length) + Math.max(0, accepted.length - MAX_PHOTOS);
     let saved = 0;
-    for (const file of files.slice(0, 12)) {
-      if (file.size > 4 * 1024 * 1024 || !file.type.startsWith("image/")) continue;
+    for (const file of accepted.slice(0, MAX_PHOTOS)) {
       const buf = Buffer.from(await file.arrayBuffer());
       const storedName = await saveFile(buf, file.name || "checkin.jpg", file.type);
       await prisma.document.create({
@@ -56,6 +79,7 @@ export async function uploadJobCardPhotos(jobCardId: string, formData: FormData)
       });
     }
     revalidatePath(`/jobcards/${jobCardId}`);
+    return { success: photoMessage(saved, skipped) };
   });
 }
 
@@ -468,9 +492,20 @@ export async function uploadCheckoutPhotos(jobCardId: string, formData: FormData
     const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
     const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId } });
     const files = formData.getAll("files").filter((f): f is File => typeof f === "object" && (f as File).size > 0);
+    // The input is not `required`, and invalid files were skipped silently — so
+    // "Photos uploaded" could report saving nothing at all.
+    if (files.length === 0) refuse("Choose at least one photo.");
+    const MAX_PHOTOS = 12;
+    const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
+    const accepted = files.filter(
+      (file) => file.size <= MAX_PHOTO_BYTES && file.type.startsWith("image/"),
+    );
+    if (accepted.length === 0) {
+      refuse("None of those files could be used — photos must be images under 4 MB.");
+    }
+    const skipped = (files.length - accepted.length) + Math.max(0, accepted.length - MAX_PHOTOS);
     let saved = 0;
-    for (const file of files.slice(0, 12)) {
-      if (file.size > 4 * 1024 * 1024 || !file.type.startsWith("image/")) continue;
+    for (const file of accepted.slice(0, MAX_PHOTOS)) {
       const buf = Buffer.from(await file.arrayBuffer());
       const storedName = await saveFile(buf, file.name || "checkout.jpg", file.type);
       await prisma.document.create({
@@ -491,6 +526,7 @@ export async function uploadCheckoutPhotos(jobCardId: string, formData: FormData
       await logAudit({ action: "jobcard.photos", summary: `${saved} check-out photo${saved !== 1 ? "s" : ""} added to job card #${jobCard.number} (post-work condition)`, contactId: jobCard.contactId, user });
     }
     revalidatePath(`/jobcards/${jobCardId}`);
+    return { success: photoMessage(saved, skipped) };
   });
 }
 
@@ -652,10 +688,16 @@ export async function releaseReservation(reservationId: string, jobCardId: strin
     // Require status "active" so a consumed reservation can't be flipped back to
     // released (which would leave its stock decrement + job-card line in place and
     // let it be consumed again).
-    await prisma.partReservation.updateMany({
+    const released = await prisma.partReservation.updateMany({
       where: { id: reservationId, jobCardId, status: "active" },
       data: { status: "released" },
     });
+    // count === 0 means the reservation was already consumed or released, or
+    // belongs to another job card — nothing changed, so "Reservation released"
+    // would be a plain untruth.
+    if (released.count === 0) {
+      refuse("That reservation is no longer active — reload the page.");
+    }
     revalidatePath(`/jobcards/${jobCardId}`);
     revalidatePath("/parts");
   });
@@ -670,12 +712,14 @@ export async function consumeReservation(reservationId: string, jobCardId: strin
     // direct stock claim could lock the part, no longer see this (now-consumed)
     // reservation in the availability calc, claim the "freed" stock, and both paths
     // decrement into negative stock. Locking the part serializes the two.
-    await prisma.$transaction(async (tx) => {
+    const outcome = await prisma.$transaction(async (tx) => {
       const reservation = await tx.partReservation.findUnique({ where: { id: reservationId } });
-      if (!reservation || reservation.jobCardId !== jobCardId || reservation.status !== "active") return { ok: false as const };
+      if (!reservation || reservation.jobCardId !== jobCardId || reservation.status !== "active") {
+        return { ok: false as const, why: "stale" as const };
+      }
       await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${reservation.partId} AND "deletedAt" IS NULL FOR UPDATE`;
       const part = await tx.part.findFirst({ where: { id: reservation.partId, deletedAt: null }, select: { name: true, priceCents: true, stockQty: true } });
-      if (!part) return { ok: false as const };
+      if (!part) return { ok: false as const, why: "part-gone" as const };
       // Claim the reservation FIRST, under the part lock. Only the request that
       // flips active→consumed proceeds — a second waiter (whose reservation was
       // already consumed) exits harmlessly instead of throwing a false shortage
@@ -684,7 +728,7 @@ export async function consumeReservation(reservationId: string, jobCardId: strin
         where: { id: reservationId, jobCardId, status: "active" },
         data: { status: "consumed" },
       });
-      if (claimed.count !== 1) return { ok: false as const };
+      if (claimed.count !== 1) return { ok: false as const, why: "stale" as const };
       if (part.stockQty < reservation.qty) {
         // Throw (not return) so the reservation claim rolls back — otherwise it
         // would commit as "consumed" with no job-card line or stock decrement.
@@ -696,6 +740,16 @@ export async function consumeReservation(reservationId: string, jobCardId: strin
       await tx.part.update({ where: { id: reservation.partId }, data: { stockQty: { decrement: reservation.qty } } });
       return { ok: true as const };
     });
+    // The transaction's verdict was previously DISCARDED, so a stale, already
+    // consumed, mismatched or deleted-part reservation still toasted "Part
+    // consumed" — telling the workshop stock had moved when it had not.
+    if (!outcome.ok) {
+      refuse(
+        outcome.why === "part-gone"
+          ? "That part no longer exists — the reservation cannot be consumed."
+          : "That reservation is no longer active — reload the page.",
+      );
+    }
     revalidatePath(`/jobcards/${jobCardId}`);
     revalidatePath("/parts");
   });
