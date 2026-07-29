@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Plus, ShoppingCart, Trash2 } from "lucide-react";
 import { createPurchaseOrder } from "@/app/actions/stock";
 import { CaptureField, CaptureFooter, CaptureHero, CaptureSection } from "@/components/capture-form";
+import { SaveForm } from "@/components/SaveForm";
 
 type Product = { id: string; name: string; colors: string[] };
 type Line = { id: string; productId: string; color: string; qty: number; cost: string; freight: string; notes: string };
@@ -31,7 +32,13 @@ export default function StockPurchaseOrderForm({ products }: { products: Product
   const serialised = JSON.stringify(lines.map(({ id: _id, ...line }) => line));
 
   return (
-    <form action={createPurchaseOrder} className="space-y-5">
+    <SaveForm
+      action={createPurchaseOrder}
+      success="Purchase order created"
+      // The lines live in useState, so form.reset() cannot clear them.
+      onSaved={() => setLines([blankLine()])}
+      className="space-y-5"
+    >
       <input type="hidden" name="lines" value={serialised} />
       <CaptureHero
         icon={ShoppingCart}
@@ -104,6 +111,6 @@ export default function StockPurchaseOrderForm({ products }: { products: Product
       </CaptureSection>
 
       <CaptureFooter label="Create purchase order" requiredNote="At least one model and quantity are required." kind="stock" variant="dialog" />
-    </form>
+    </SaveForm>
   );
 }

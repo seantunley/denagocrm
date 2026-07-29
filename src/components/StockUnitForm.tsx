@@ -19,6 +19,8 @@ import {
   CaptureSection,
   type CaptureFormVariant,
 } from "@/components/capture-form";
+import { SaveForm } from "@/components/SaveForm";
+import type { ActionResult } from "@/lib/actionResultTypes";
 import { cn } from "@/lib/utils";
 
 export type StockUnitProduct = {
@@ -32,7 +34,7 @@ export default function StockUnitForm({
   products,
   variant = "compact",
 }: {
-  action: (formData: FormData) => Promise<void>;
+  action: (formData: FormData) => Promise<ActionResult | void>;
   products: StockUnitProduct[];
   variant?: CaptureFormVariant;
 }) {
@@ -48,8 +50,17 @@ export default function StockUnitForm({
   }
 
   return (
-    <form
+    <SaveForm
       action={action}
+      success="Stock unit added"
+      // form.reset() cannot reach these — they are controlled by useState, so
+      // without this the model, colour and serial would survive a save.
+      onSaved={() => {
+        setProductId("");
+        setColor("");
+        setSerial("");
+        setCost("");
+      }}
       className={cn("space-y-4", variant === "compact" && "card max-w-3xl", variant === "page" && "min-w-0 space-y-5")}
     >
       {(variant === "page" || variant === "dialog") && (
@@ -165,6 +176,6 @@ export default function StockUnitForm({
       </CaptureSection>
 
       <CaptureFooter label="Add to stock" requiredNote="A catalogue model is required." kind="stock" variant={variant} />
-    </form>
+    </SaveForm>
   );
 }

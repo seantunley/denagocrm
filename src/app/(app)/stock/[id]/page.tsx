@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { notFound } from "next/navigation";
 import { Prisma } from "@prisma/client";
 import {
@@ -164,7 +165,7 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
         )}
         {canManage && (
           <ModalTrigger label="Label" title="Organisational label" buttonClass={buttonVariants({ variant: "outline", size: "sm" })}>
-            <form action={setStockUnitLabel.bind(null, unit.id)} className="space-y-3">
+            <SaveForm success="Label updated" resetOnSuccess={false} action={setStockUnitLabel.bind(null, unit.id)} className="space-y-3">
               <p className="text-xs text-muted-foreground">
                 A label is separate from the lifecycle status — flag demo units, showroom stock, consignment, holds, etc. Manage the list in Settings → Stock.
               </p>
@@ -172,13 +173,13 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
                 <option value="">No label</option>
                 {stockLabels.map((l) => <option key={l.slug} value={l.slug}>{l.label}</option>)}
               </select>
-              <button className={buttonVariants({ size: "sm" })}>Save label</button>
-            </form>
+              <SaveButton className={buttonVariants({ size: "sm" })}>Save label</SaveButton>
+            </SaveForm>
           </ModalTrigger>
         )}
         {canManage && (
           <ModalTrigger label="Edit details" title="Edit stock unit" buttonClass={buttonVariants({ variant: "outline", size: "sm" })}>
-            <form action={updateStockUnit.bind(null, unit.id)} className="space-y-4">
+            <SaveForm success="Stock unit saved" resetOnSuccess={false} action={updateStockUnit.bind(null, unit.id)} className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div><label className="label">Serial / VIN</label><input name="serial" className="input font-mono uppercase" defaultValue={unit.serial ?? ""} /></div>
                 <div><label className="label">Colour</label><input name="color" className="input" defaultValue={unit.color ?? ""} /></div>
@@ -191,8 +192,8 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
                 <div><label className="label">Odometer / km</label><input name="odometerKm" type="number" min="0" className="input" defaultValue={unit.odometerKm ?? ""} /></div>
                 <div className="sm:col-span-2"><label className="label">Internal notes</label><textarea name="notes" className="input min-h-28" defaultValue={unit.notes ?? ""} /></div>
               </div>
-              <button className="btn-primary">Save changes</button>
-            </form>
+              <SaveButton className="btn-primary">Save changes</SaveButton>
+            </SaveForm>
           </ModalTrigger>
         )}
       </PageHeader>
@@ -214,69 +215,69 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
               <div className="mt-4 flex flex-wrap gap-2">
                 {unit.status === "received_pending_check" && (
                   <ModalTrigger label="Inspect arrival" title="Inspect received unit" buttonClass="btn-primary">
-                    <form action={inspectReceivedUnit.bind(null, unit.id)} className="space-y-4">
+                    <SaveForm success="Inspection recorded" resetOnSuccess={false} action={inspectReceivedUnit.bind(null, unit.id)} className="space-y-4">
                       <div><label className="label">Serial / VIN *</label><input name="serial" className="input font-mono uppercase" defaultValue={unit.serial ?? ""} required /></div>
                       <div><label className="label">Storage location</label><input name="location" className="input" defaultValue={unit.location ?? ""} /></div>
                       <div><label className="label">Inspection result</label><select name="accepted" className="input" defaultValue="yes"><option value="yes">Accepted into available stock</option><option value="no">Damaged / quarantine</option></select></div>
                       <div><label className="label">Condition notes</label><textarea name="conditionNote" className="input min-h-24" /></div>
-                      <button className="btn-primary">Complete inspection</button>
-                    </form>
+                      <SaveButton className="btn-primary">Complete inspection</SaveButton>
+                    </SaveForm>
                   </ModalTrigger>
                 )}
 
                 {unit.status === "available" && leads.length > 0 && (
                   <ModalTrigger label="Reserve for lead" title="Reserve this unit" buttonClass="btn-primary">
-                    <form action={reserveUnit.bind(null, unit.id)} className="space-y-4">
+                    <SaveForm success="Unit reserved" resetOnSuccess={false} action={reserveUnit.bind(null, unit.id)} className="space-y-4">
                       <div><label className="label">Open lead *</label><select name="leadId" className="input" required defaultValue=""><option value="" disabled>Choose lead…</option>{leads.map((lead) => <option key={lead.id} value={lead.id}>{lead.title} — {lead.name}</option>)}</select></div>
                       <div className="grid grid-cols-2 gap-3"><div><label className="label">Reservation days</label><input name="days" type="number" min="1" max="30" defaultValue="3" className="input" /></div><div><label className="label">Deposit required (R)</label><input name="depositRequired" className="input" placeholder="0.00" /></div></div>
-                      <button className="btn-primary">Reserve unit</button>
-                    </form>
+                      <SaveButton className="btn-primary">Reserve unit</SaveButton>
+                    </SaveForm>
                   </ModalTrigger>
                 )}
 
                 {["available", "reserved"].includes(unit.status) && quotes.length > 0 && (
                   <ModalTrigger label="Allocate accepted quote" title="Allocate unit" buttonClass="btn-primary">
-                    <form action={allocateUnit.bind(null, unit.id)} className="space-y-4">
+                    <SaveForm success="Unit allocated" resetOnSuccess={false} action={allocateUnit.bind(null, unit.id)} className="space-y-4">
                       <div><label className="label">Accepted quote *</label><select name="quoteId" className="input" required defaultValue=""><option value="" disabled>Choose quote…</option>{quotes.map((quote) => <option key={quote.id} value={quote.id}>Q-{quote.number} — {quote.contact ? `${quote.contact.firstName} ${quote.contact.lastName ?? ""}` : quote.lead?.name ?? "Customer"}</option>)}</select></div>
-                      <button className="btn-primary">Allocate to quote</button>
-                    </form>
+                      <SaveButton className="btn-primary">Allocate to quote</SaveButton>
+                    </SaveForm>
                   </ModalTrigger>
                 )}
 
                 {unit.status === "reserved" && !unit.depositReceivedAt && (
                   <ModalTrigger label="Record deposit" title="Record reservation deposit" buttonClass="btn-secondary">
-                    <form action={recordReservationDeposit.bind(null, unit.id)} className="space-y-4"><div><label className="label">Payment reference</label><input name="reference" className="input" /></div><button className="btn-primary">Confirm deposit received</button></form>
+                    <SaveForm success="Deposit recorded" resetOnSuccess={false} action={recordReservationDeposit.bind(null, unit.id)} className="space-y-4"><div><label className="label">Payment reference</label><input name="reference" className="input" /></div><SaveButton className="btn-primary">Confirm deposit received</SaveButton></SaveForm>
                   </ModalTrigger>
                 )}
 
                 {["reserved", "allocated"].includes(unit.status) && (
                   <ModalTrigger label="Release" title="Release this unit" buttonClass="btn-secondary">
-                    <form action={releaseUnit.bind(null, unit.id)} className="space-y-4"><div><label className="label">Reason *</label><textarea name="reason" className="input min-h-24" required /></div><button className="btn-primary">Return to available stock</button></form>
+                    <SaveForm success="Reservation released" resetOnSuccess={false} action={releaseUnit.bind(null, unit.id)} className="space-y-4"><div><label className="label">Reason *</label><textarea name="reason" className="input min-h-24" required /></div><SaveButton className="btn-primary">Return to available stock</SaveButton></SaveForm>
                   </ModalTrigger>
                 )}
 
-                {unit.status === "allocated" && <form action={transitionStockUnit.bind(null, unit.id)}><input type="hidden" name="status" value="pdi" /><button className="btn-primary"><Wrench className="size-4" /> Start PDI</button></form>}
+                {unit.status === "allocated" && <SaveForm success="Status updated" resetOnSuccess={false} action={transitionStockUnit.bind(null, unit.id)}><input type="hidden" name="status" value="pdi" /><SaveButton className="btn-primary"><Wrench className="size-4" /> Start PDI</SaveButton></SaveForm>}
 
                 {unit.status === "pdi" && (
                   <ModalTrigger label="Complete PDI" title="Complete pre-delivery inspection" buttonClass="btn-primary">
-                    <form action={completePdi.bind(null, unit.id)} className="space-y-4"><div><label className="label">Outcome</label><select name="passed" className="input" defaultValue="yes"><option value="yes">Passed — ready for delivery</option><option value="no">Failed — place on hold</option></select></div><div><label className="label">Issues / work completed</label><textarea name="issues" className="input min-h-28" /></div><button className="btn-primary">Complete PDI</button></form>
+                    <SaveForm success="PDI completed" resetOnSuccess={false} action={completePdi.bind(null, unit.id)} className="space-y-4"><div><label className="label">Outcome</label><select name="passed" className="input" defaultValue="yes"><option value="yes">Passed — ready for delivery</option><option value="no">Failed — place on hold</option></select></div><div><label className="label">Issues / work completed</label><textarea name="issues" className="input min-h-28" /></div><SaveButton className="btn-primary">Complete PDI</SaveButton></SaveForm>
                   </ModalTrigger>
                 )}
 
                 {unit.status === "ready_for_delivery" && (
                   <ModalTrigger label="Complete delivery" title="Customer handover" buttonClass="btn bg-emerald-700 text-white hover:bg-emerald-600">
-                    <form action={deliverStockUnit.bind(null, unit.id)} className="space-y-4"><p className="text-sm text-muted-foreground">This creates the customer&apos;s vehicle record, files the sale value and starts the warranty.</p><div><label className="label">Warranty months</label><input name="warrantyMonths" type="number" min="0" defaultValue="12" className="input" /></div><button className="btn bg-emerald-700 text-white hover:bg-emerald-600">Confirm delivered</button></form>
+                    <SaveForm success="Unit delivered" resetOnSuccess={false} action={deliverStockUnit.bind(null, unit.id)} className="space-y-4"><p className="text-sm text-muted-foreground">This creates the customer&apos;s vehicle record, files the sale value and starts the warranty.</p><div><label className="label">Warranty months</label><input name="warrantyMonths" type="number" min="0" defaultValue="12" className="input" /></div><SaveButton className="btn bg-emerald-700 text-white hover:bg-emerald-600">Confirm delivered</SaveButton></SaveForm>
                   </ModalTrigger>
                 )}
 
                 {["available", "allocated", "pdi"].includes(unit.status) && (
                   <ModalTrigger label="Place on hold" title="Place unit on hold" buttonClass="btn-secondary">
-                    <form action={transitionStockUnit.bind(null, unit.id)} className="space-y-4"><input type="hidden" name="status" value="hold" /><div><label className="label">Reason *</label><textarea name="reason" className="input min-h-24" required /></div><button className="btn-danger">Place on hold</button></form>
+                    <SaveForm success="Status updated" resetOnSuccess={false} action={transitionStockUnit.bind(null, unit.id)} className="space-y-4"><input type="hidden" name="status" value="hold" /><div><label className="label">Reason *</label><textarea name="reason" className="input min-h-24" required /></div><SaveButton className="btn-danger">Place on hold</SaveButton></SaveForm>
                   </ModalTrigger>
                 )}
 
-                {unit.status === "hold" && <form action={transitionStockUnit.bind(null, unit.id)}><input type="hidden" name="status" value={unit.soldQuoteId ? "allocated" : "available"} /><button className="btn-primary">Resolve hold</button></form>}
-                {unit.status === "damaged" && <form action={transitionStockUnit.bind(null, unit.id)}><input type="hidden" name="status" value="hold" /><button className="btn-secondary">Send for assessment</button></form>}
+                {unit.status === "hold" && <SaveForm success="Status updated" resetOnSuccess={false} action={transitionStockUnit.bind(null, unit.id)}><input type="hidden" name="status" value={unit.soldQuoteId ? "allocated" : "available"} /><SaveButton className="btn-primary">Resolve hold</SaveButton></SaveForm>}
+                {unit.status === "damaged" && <SaveForm success="Status updated" resetOnSuccess={false} action={transitionStockUnit.bind(null, unit.id)}><input type="hidden" name="status" value="hold" /><SaveButton className="btn-secondary">Send for assessment</SaveButton></SaveForm>}
               </div>
             </Surface>
           )}
@@ -337,7 +338,7 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
             <Surface className="border-red-400/20 p-5">
               <SectionHeading title="Archive unit" description="Remove this record from active inventory while retaining its audit history." action={<Trash2 className="size-4 text-red-300" />} />
               <ModalTrigger label="Remove from active stock" title="Archive stock unit" buttonClass="btn-danger btn-sm mt-4">
-                <form action={deleteStockUnit.bind(null, unit.id)} className="space-y-4"><div><label className="label">Reason *</label><textarea name="reason" className="input min-h-24" required /></div><button className="btn-danger">Archive unit</button></form>
+                <SaveForm success="Stock unit deleted" resetOnSuccess={false} action={deleteStockUnit.bind(null, unit.id)} className="space-y-4"><div><label className="label">Reason *</label><textarea name="reason" className="input min-h-24" required /></div><SaveButton className="btn-danger">Archive unit</SaveButton></SaveForm>
               </ModalTrigger>
             </Surface>
           )}

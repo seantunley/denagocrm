@@ -2,6 +2,7 @@ import "server-only";
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { logError } from "@/lib/errorLog";
 
 export const STOCK_STATUSES = [
   "incoming",
@@ -41,6 +42,38 @@ export function canTransitionStock(from: string, to: string): boolean {
 export type StockActor = { id: string; name: string };
 
 export async function addStockEvent(input: {
+  stockUnitId?: string | null;
+  purchaseOrderId?: string | null;
+  eventType: string;
+  fromStatus?: string | null;
+  toStatus?: string | null;
+  leadId?: string | null;
+  quoteId?: string | null;
+  reason?: string | null;
+  detail?: string | null;
+  costBeforeCents?: number | null;
+  costAfterCents?: number | null;
+  actor: StockActor;
+}) {
+  // BEST-EFFORT ON PURPOSE.
+  //
+  // Every caller writes its inventory change in a transaction and then records
+  // the lifecycle event afterwards. When this insert threw, the committed
+  // change was reported to the person as a FAILURE — so they retried, and the
+  // retry created a second purchase order, or a second unserialized unit. The
+  // timeline entry is bookkeeping; it must not be able to invalidate a write
+  // that already happened.
+  //
+  // The failure is not swallowed: it lands in the system log (Settings → System
+  // Log) so a gap in the timeline is visible and can be reconstructed.
+  try {
+    await writeStockEvent(input);
+  } catch (error) {
+    await logError("stock.event", error, `${input.eventType} for ${input.stockUnitId ?? input.purchaseOrderId ?? "?"}`);
+  }
+}
+
+async function writeStockEvent(input: {
   stockUnitId?: string | null;
   purchaseOrderId?: string | null;
   eventType: string;
@@ -252,12 +285,50 @@ export async function expireReservations(actor: StockActor) {
 
 export async function nextStockNumber(): Promise<string> {
   const year = new Date().getFullYear();
+  // Take the sequence suffix only. Stripping every non-digit swept the year in
+  // too, so the second unit of a year became STK-2026-20260002 and the third
+  // overflowed int (22003) — every stock intake 500ed from then on. Suffixes
+  // longer than six digits are the rows that bug already produced; excluding
+  // them here lets the sequence resume from the last well-formed number.
   const [row] = await prisma.$queryRaw<Array<{ next: number }>>(Prisma.sql`
-    SELECT COALESCE(MAX(NULLIF(REGEXP_REPLACE("stockNumber", '\\D', '', 'g'), '')::int), 0) + 1 AS "next"
+    SELECT COALESCE(MAX((SUBSTRING("stockNumber" FROM ${`^STK-${year}-([0-9]{1,6})$`}))::int), 0) + 1 AS "next"
     FROM "StockUnit"
     WHERE "stockNumber" LIKE ${`STK-${year}-%`}
   `);
   return `STK-${year}-${String(row?.next ?? 1).padStart(4, "0")}`;
+}
+
+/**
+ * Allocates a stock number and performs `write` with it, retrying on the unique
+ * constraint.
+ *
+ * nextStockNumber() reads MAX + 1 in a separate statement from the write, so two
+ * intakes running at the same time both see the same maximum and both try to
+ * claim the same number. The loser hit "StockUnit_stockNumber_key" and the
+ * person was told their intake failed — for a collision that costs nothing to
+ * resolve. The database constraint stays the arbiter; this just re-derives and
+ * tries again instead of surfacing the conflict.
+ *
+ * `existing` short-circuits the whole thing: a unit that already has a number
+ * keeps it, and a conflict there is a real error, not a race.
+ */
+export async function withStockNumber<T>(
+  existing: string | null,
+  write: (stockNumber: string) => Promise<T>,
+): Promise<T> {
+  const ATTEMPTS = 5;
+  for (let attempt = 1; ; attempt++) {
+    const stockNumber = existing ?? (await nextStockNumber());
+    try {
+      return await write(stockNumber);
+    } catch (error) {
+      const meta = error as { code?: string; meta?: { target?: unknown } };
+      const target = Array.isArray(meta.meta?.target) ? meta.meta.target : [];
+      const raced =
+        meta.code === "P2002" && (target.includes("stockNumber") || String(meta.meta?.target ?? "").includes("stockNumber"));
+      if (existing || !raced || attempt >= ATTEMPTS) throw error;
+    }
+  }
 }
 
 export async function stockEvents(stockUnitId: string) {
