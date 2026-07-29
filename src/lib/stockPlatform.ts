@@ -252,8 +252,13 @@ export async function expireReservations(actor: StockActor) {
 
 export async function nextStockNumber(): Promise<string> {
   const year = new Date().getFullYear();
+  // Take the sequence suffix only. Stripping every non-digit swept the year in
+  // too, so the second unit of a year became STK-2026-20260002 and the third
+  // overflowed int (22003) — every stock intake 500ed from then on. Suffixes
+  // longer than six digits are the rows that bug already produced; excluding
+  // them here lets the sequence resume from the last well-formed number.
   const [row] = await prisma.$queryRaw<Array<{ next: number }>>(Prisma.sql`
-    SELECT COALESCE(MAX(NULLIF(REGEXP_REPLACE("stockNumber", '\\D', '', 'g'), '')::int), 0) + 1 AS "next"
+    SELECT COALESCE(MAX((SUBSTRING("stockNumber" FROM ${`^STK-${year}-([0-9]{1,6})$`}))::int), 0) + 1 AS "next"
     FROM "StockUnit"
     WHERE "stockNumber" LIKE ${`STK-${year}-%`}
   `);

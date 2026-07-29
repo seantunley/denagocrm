@@ -2,6 +2,9 @@
 
 import { useState } from "react";
 
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import type { ActionResult } from "@/lib/actionResultTypes";
+
 type Line = {
   id: string;
   name: string;
@@ -20,7 +23,7 @@ export function StockReceiveForm({
   action,
   lines,
 }: {
-  action: (formData: FormData) => Promise<void>;
+  action: (formData: FormData) => Promise<ActionResult | void>;
   lines: Line[];
 }) {
   const receivable = lines.filter((l) => l.outstanding > 0);
@@ -32,7 +35,7 @@ export function StockReceiveForm({
   const total = Object.values(map).reduce((s, v) => s + v, 0);
 
   return (
-    <form action={action} className="space-y-3">
+    <SaveForm action={action} success="Units received" resetOnSuccess={false} className="space-y-3">
       <input type="hidden" name="receiveLines" value={JSON.stringify(map)} />
       <p className="text-sm text-muted-foreground">
         Receive some or all outstanding units — the rest stay on backorder. Received units go to the
@@ -65,9 +68,9 @@ export function StockReceiveForm({
         <div><label className="label">Receipt / waybill ref</label><input name="receiptReference" className="input" /></div>
         <div><label className="label">Notes</label><input name="notes" className="input" /></div>
       </div>
-      <button className="btn-primary btn-sm" disabled={total === 0}>
+      <SaveButton className="btn-primary btn-sm" disabled={total === 0} pendingLabel="Receiving…">
         Receive {total} unit{total === 1 ? "" : "s"}
-      </button>
-    </form>
+      </SaveButton>
+    </SaveForm>
   );
 }

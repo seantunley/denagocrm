@@ -3,6 +3,8 @@
 import { CarFront, LoaderCircle, PackagePlus, Shapes, Wrench } from "lucide-react";
 import { useFormStatus } from "react-dom";
 
+import { useSavePending } from "@/components/SaveForm";
+
 export type CaptureKind = "stock" | "vehicle" | "part" | "product";
 
 const icons = {
@@ -20,7 +22,12 @@ const pendingLabels = {
 };
 
 export default function CaptureSubmitButton({ label, kind }: { label: string; kind: CaptureKind }) {
-  const { pending } = useFormStatus();
+  // useFormStatus only reports for a <form action={…}>. Inside a SaveForm the
+  // submit goes through onSubmit instead, so the pending state comes from its
+  // context — which defaults to false for the still-unconverted callers.
+  const { pending: formPending } = useFormStatus();
+  const savePending = useSavePending();
+  const pending = formPending || savePending;
   const Icon = icons[kind];
   const pendingLabel = label.toLowerCase().includes("save") ? "Saving changes…" : pendingLabels[kind];
 
