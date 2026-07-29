@@ -1,5 +1,6 @@
 "use server";
 
+import { asActionResult, ActionRefusal } from "@/lib/actionResult";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
@@ -77,61 +78,67 @@ async function syncContactTagsTx(tx: any, tenantId: string, contactId: string, t
 }
 
 export async function createContact(formData: FormData) {
-  const user = await requirePermission("contacts.create");
-  const data = contactData(formData);
-  if (!data.firstName) throw new Error("Name is required");
-  const tags = parseTags(formData);
-  // Atomic: contact + all its tag links in ONE transaction, tenant-stamped.
-  const contact = await withTenantWrite(async (tx, tenantId) => {
-    const c = await tx.contact.create({ data: { ...data, createdById: user.id, tenantId } });
-    await syncContactTagsTx(tx, tenantId, c.id, tags);
-    return c;
+  return asActionResult(async () => {
+    const user = await requirePermission("contacts.create");
+    const data = contactData(formData);
+    if (!data.firstName) throw new ActionRefusal("Name is required");
+    const tags = parseTags(formData);
+    // Atomic: contact + all its tag links in ONE transaction, tenant-stamped.
+    const contact = await withTenantWrite(async (tx, tenantId) => {
+      const c = await tx.contact.create({ data: { ...data, createdById: user.id, tenantId } });
+      await syncContactTagsTx(tx, tenantId, c.id, tags);
+      return c;
+    });
+    await logAudit({
+      action: "contact.created",
+      summary: `Created contact ${contactName(contact)}`,
+      contactId: contact.id,
+      user,
+    });
+    revalidatePath("/contacts");
+    return { redirectTo: `/contacts/${contact.id}` };
   });
-  await logAudit({
-    action: "contact.created",
-    summary: `Created contact ${contactName(contact)}`,
-    contactId: contact.id,
-    user,
-  });
-  revalidatePath("/contacts");
-  redirect(`/contacts/${contact.id}`);
 }
 
 export async function updateContact(id: string, formData: FormData) {
-  const user = await requireContactAccess(id, "contacts.edit");
-  const data = contactData(formData);
-  if (!data.firstName) throw new Error("Name is required");
-  const tags = parseTags(formData);
-  // Contact fields via the scoped client (RLS scopes the row to the tenant, and
-  // matches legacy rows regardless of tenantId when enforcement is off). Tag
-  // replacement is atomic: clear + re-add in ONE transaction, so a mid-way failure
-  // can never leave the contact stripped of its tags.
-  const contact = await prisma.contact.update({ where: { id }, data });
-  await withTenantWrite(async (tx, tenantId) => {
-    await tx.$executeRaw`DELETE FROM "_ContactToTag" WHERE "A" = ${id}`;
-    await syncContactTagsTx(tx, tenantId, id, tags);
+  return asActionResult(async () => {
+    const user = await requireContactAccess(id, "contacts.edit");
+    const data = contactData(formData);
+    if (!data.firstName) throw new ActionRefusal("Name is required");
+    const tags = parseTags(formData);
+    // Contact fields via the scoped client (RLS scopes the row to the tenant, and
+    // matches legacy rows regardless of tenantId when enforcement is off). Tag
+    // replacement is atomic: clear + re-add in ONE transaction, so a mid-way failure
+    // can never leave the contact stripped of its tags.
+    const contact = await prisma.contact.update({ where: { id }, data });
+    await withTenantWrite(async (tx, tenantId) => {
+      await tx.$executeRaw`DELETE FROM "_ContactToTag" WHERE "A" = ${id}`;
+      await syncContactTagsTx(tx, tenantId, id, tags);
+    });
+    await logAudit({
+      action: "contact.updated",
+      summary: `Updated details for ${contactName(contact)}`,
+      contactId: id,
+      user,
+    });
+    revalidatePath("/contacts");
+    revalidatePath(`/contacts/${id}`);
+    return { redirectTo: `/contacts/${id}` };
   });
-  await logAudit({
-    action: "contact.updated",
-    summary: `Updated details for ${contactName(contact)}`,
-    contactId: id,
-    user,
-  });
-  revalidatePath("/contacts");
-  revalidatePath(`/contacts/${id}`);
-  redirect(`/contacts/${id}`);
 }
 
 export async function deleteContact(id: string, formData: FormData) {
-  const user = await requireContactAccess(id, "contacts.delete");
-  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
-  const contact = await softDeleteRecord("contact", id, reason, user.name);
-  await logAudit({
-    action: "trash.deleted",
-    summary: `Moved contact ${contactName(contact)} to trash — ${reason}`,
-    contactId: id,
-    user,
+  return asActionResult(async () => {
+    const user = await requireContactAccess(id, "contacts.delete");
+    const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+    const contact = await softDeleteRecord("contact", id, reason, user.name);
+    await logAudit({
+      action: "trash.deleted",
+      summary: `Moved contact ${contactName(contact)} to trash — ${reason}`,
+      contactId: id,
+      user,
+    });
+    revalidatePath("/contacts");
+    return { redirectTo: "/contacts" };
   });
-  revalidatePath("/contacts");
-  redirect("/contacts");
 }

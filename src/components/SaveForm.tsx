@@ -1,6 +1,8 @@
 "use client";
 
 import { createContext, useContext, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
+import { unstable_rethrow } from "next/navigation";
 import { toast } from "sonner";
 import { useCloseModal } from "@/components/Modal";
 import { cn } from "@/lib/utils";
@@ -53,15 +55,21 @@ const GENERIC_FAILURE = "Something went wrong. Please try again.";
  * anything that reaches this function is by definition unexpected: it gets one
  * generic sentence, and the real detail stays in the server logs where it belongs.
  */
-function isNextControlFlow(error: unknown): boolean {
-  // redirect() and notFound() throw by design and are SUCCESSFUL outcomes.
-  const raw = error instanceof Error ? error.message : String(error);
-  const digest = (error as { digest?: unknown })?.digest;
-  return (
-    /NEXT_REDIRECT|NEXT_NOT_FOUND/.test(raw) ||
-    (typeof digest === "string" && /NEXT_REDIRECT|NEXT_NOT_FOUND/.test(digest))
-  );
-}
+/**
+ * A THROWN redirect is NOT evidence of a successful save.
+ *
+ * This previously treated ANY thrown redirect as success, which was wrong in the
+ * most damaging direction: the auth guards redirect too — an expired session to
+ * /login, a revoked permission to /, denied record access to /leads — so a save
+ * that never ran could still toast "Lead saved" and then throw the form away.
+ *
+ * Success navigation is now explicit: an action returns `{ redirectTo }` and the
+ * client navigates. Anything that THROWS is either a framework signal to be
+ * re-thrown untouched, or a genuine failure. `unstable_rethrow` is Next's own
+ * predicate for that first case, and is used instead of matching the internal
+ * digest strings — those markers change between versions, and a stale matcher
+ * here would silently swallow a redirect or misreport a 404.
+ */
 
 /** A result object an action may return instead of throwing. */
 /** Actions may also return nothing at all (a plain void action still works). */
@@ -101,6 +109,7 @@ export function SaveForm({
 } & Omit<React.FormHTMLAttributes<HTMLFormElement>, "action" | "onSubmit">) {
   const [pending, setPending] = useState(false);
   const closeModal = useCloseModal();
+  const router = useRouter();
 
   return (
     <form
@@ -140,9 +149,19 @@ export function SaveForm({
           }
           if (closeModalOnSuccess) closeModal();
           onSaved?.();
+          // Navigate only when the ACTION said the save succeeded and named the
+          // destination. Nothing here is inferred from a thrown redirect.
+          const redirectTo =
+            result && typeof result === "object" && "redirectTo" in result
+              ? result.redirectTo
+              : undefined;
+          if (redirectTo) router.push(String(redirectTo));
         } catch (error) {
-          // redirect()/notFound() throw by design on success — let Next navigate.
-          if (isNextControlFlow(error)) throw error;
+          // Framework signals (redirect, notFound, forbidden, unauthorized, and
+          // the render-control errors) are rethrown untouched and NEVER reported
+          // as a save. A guard redirect landing here means the mutation did not
+          // run — silence plus navigation is the honest outcome.
+          unstable_rethrow(error);
           toast.error(GENERIC_FAILURE);
         } finally {
           setPending(false);

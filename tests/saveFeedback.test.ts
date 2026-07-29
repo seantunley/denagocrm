@@ -44,11 +44,58 @@ test("SaveForm: unknown throws produce a GENERIC message, never a raw one", () =
   );
 });
 
-test("SaveForm: redirect()/notFound() are rethrown, not reported as failures", () => {
+// redirect() and notFound() both throw, but they are NOT the same outcome. A
+// redirect is the success path for every action that navigates to the saved
+// record (createLead, updateLead, markWon…) — it throws before the success toast
+// would run, so those saves confirmed nothing until it was handled explicitly.
+// notFound() must never be congratulated.
+// A THROWN redirect is not evidence of a save. The auth guards redirect too — an
+// expired session to /login, a revoked permission to /, denied record access to
+// /leads — so inferring success from one meant "Lead saved" could appear when the
+// mutation never ran. Success navigation must be explicit.
+test("SaveForm: never infers success from a thrown redirect", () => {
   const code = src("src/components/SaveForm.tsx");
-  assert.match(code, /isNextControlFlow\(error\)\)\s*throw error/, "control-flow throws are successful outcomes");
-  assert.match(code, /NEXT_REDIRECT\|NEXT_NOT_FOUND/, "both control-flow signals must be recognised");
+  const catchBlock = code.slice(code.indexOf("} catch (error) {"));
+  assert.doesNotMatch(
+    catchBlock,
+    /toast\.success/,
+    "nothing in the catch may report a save — a guard redirect lands there too",
+  );
+  assert.match(
+    catchBlock,
+    /unstable_rethrow\(error\)/,
+    "framework signals must be rethrown via Next's own predicate, not a digest-string match",
+  );
+  assert.doesNotMatch(
+    code,
+    /NEXT_REDIRECT|NEXT_NOT_FOUND/,
+    "hand-rolled digest matchers go stale between Next versions",
+  );
 });
+
+test("SaveForm: navigates only when the action returns redirectTo", () => {
+  const code = src("src/components/SaveForm.tsx");
+  assert.match(code, /"redirectTo" in result/, "the destination must come from the action's result");
+  assert.match(code, /if \(redirectTo\) router\.push/, "and drive a client-side navigation");
+});
+
+// The actions that used to redirect() on success must now RETURN the destination,
+// so the redirect can no longer be confused with a guard's.
+for (const file of ["src/app/actions/leads.ts", "src/app/actions/contacts.ts", "src/app/actions/quotes.ts"]) {
+  test(`${file}: success paths return redirectTo instead of throwing a redirect`, () => {
+    const code = src(file);
+    const wrapped = code.split("return asActionResult(async () => {").slice(1);
+    for (const block of wrapped) {
+      const body = block.split("\n  });")[0];
+      assert.doesNotMatch(
+        body,
+        /^\s*redirect\(/m,
+        "a thrown redirect inside a converted action is indistinguishable from a guard's",
+      );
+    }
+    assert.match(code, /redirectTo:/, "and the destination must be returned");
+  });
+}
 
 // The form element is nulled once the handler returns, so a reference taken after
 // the await would throw — and the reset would silently never happen.
@@ -99,11 +146,25 @@ test("SaveForm: password inputs are cleared on success even without a reset", ()
 // asActionResult resolves any normal return as success, so a silent early return
 // produced a confident lie — "Deleted" for a stage that still holds leads being
 // the worst of them.
+// EVERY module with a converted action, not a sample. The first version of this
+// test listed four, and setQuoteStatus's silent early return slipped through in
+// quotes.ts precisely because it was not on the list.
 for (const file of [
   "src/app/actions/settings.ts",
   "src/app/actions/pipelines.ts",
   "src/app/actions/emails.ts",
   "src/app/actions/ai.ts",
+  "src/app/actions/stock.ts",
+  "src/app/actions/leads.ts",
+  "src/app/actions/contacts.ts",
+  "src/app/actions/quotes.ts",
+  "src/app/actions/cpq.ts",
+  "src/app/actions/views.ts",
+  "src/app/actions/privacy.ts",
+  "src/app/actions/fulfilment.ts",
+  "src/app/actions/referrals.ts",
+  "src/app/actions/tenants.ts",
+  "src/app/actions/platformAdmins.ts",
 ]) {
   test(`${file}: converted actions have no silent early returns`, () => {
     const code = src(file);

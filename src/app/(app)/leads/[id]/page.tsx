@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import {
@@ -126,20 +127,20 @@ export default async function LeadDetailPage({
         actions={<>
           {lead.status === "open" && (
             <>
-              <form action={createQuoteFromLead.bind(null, lead.id)}>
-                <button className="btn-primary"><FileText className="size-4" />Create quote</button>
-              </form>
-              <form action={markWon.bind(null, lead.id)}>
-                <button className="btn bg-emerald-700 text-white hover:bg-emerald-600">
+              <SaveForm success="Quote created" resetOnSuccess={false} action={createQuoteFromLead.bind(null, lead.id)}>
+                <SaveButton className="btn-primary"><FileText className="size-4" />Create quote</SaveButton>
+              </SaveForm>
+              <SaveForm success="Marked won" resetOnSuccess={false} action={markWon.bind(null, lead.id)}>
+                <SaveButton className="btn bg-emerald-700 text-white hover:bg-emerald-600">
                   <Check className="size-4" />Mark won
-                </button>
-              </form>
+                </SaveButton>
+              </SaveForm>
               <ModalTrigger
                 label="Mark lost"
                 title={`Why was “${lead.title}” lost?`}
                 buttonClass="btn-danger"
               >
-                <form action={markLost.bind(null, lead.id)} className="card space-y-4">
+                <SaveForm success="Marked lost" resetOnSuccess={false} action={markLost.bind(null, lead.id)} className="card space-y-4">
                   <div>
                     <label className="label">Reason lost *</label>
                     <input
@@ -150,15 +151,15 @@ export default async function LeadDetailPage({
                       placeholder="e.g. Bought elsewhere · too expensive · no response"
                     />
                   </div>
-                  <button className="btn-danger">Mark lost</button>
-                </form>
+                  <SaveButton className="btn-danger">Mark lost</SaveButton>
+                </SaveForm>
               </ModalTrigger>
             </>
           )}
           {lead.status !== "open" && (
-            <form action={reopenLead.bind(null, lead.id)}>
-              <button className="btn-secondary">Reopen</button>
-            </form>
+            <SaveForm success="Lead reopened" resetOnSuccess={false} action={reopenLead.bind(null, lead.id)}>
+              <SaveButton className="btn-secondary">Reopen</SaveButton>
+            </SaveForm>
           )}
           <Link
             href={`/leads/${lead.id}/indemnity`}
@@ -320,7 +321,7 @@ export default async function LeadDetailPage({
                         {contactName(lead.contact)} →
                       </Link>
                     )}
-                    <form action={linkLeadToContact.bind(null, lead.id)} className="space-y-2">
+                    <SaveForm success="Linked to contact" resetOnSuccess={false} action={linkLeadToContact.bind(null, lead.id)} className="space-y-2">
                       <label className="label">
                         {lead.contact ? "Change linked customer" : "Link to customer"}
                       </label>
@@ -336,8 +337,8 @@ export default async function LeadDetailPage({
                           </option>
                         ))}
                       </select>
-                      <button className="btn-secondary btn-sm w-full">Save customer link</button>
-                    </form>
+                      <SaveButton className="btn-secondary btn-sm w-full">Save customer link</SaveButton>
+                    </SaveForm>
                   </div>
                 ),
               },
@@ -365,9 +366,9 @@ export default async function LeadDetailPage({
                     <div className="flex items-center justify-between mb-3">
                       <h2 className="font-semibold">Quotes</h2>
                       {lead.status === "open" && (
-                        <form action={createQuoteFromLead.bind(null, lead.id)}>
-                          <button className="btn-secondary btn-sm">+ Create quote</button>
-                        </form>
+                        <SaveForm success="Quote created" resetOnSuccess={false} action={createQuoteFromLead.bind(null, lead.id)}>
+                          <SaveButton className="btn-secondary btn-sm">+ Create quote</SaveButton>
+                        </SaveForm>
                       )}
                     </div>
                     {lead.quotes.length === 0 ? (

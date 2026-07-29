@@ -1,10 +1,13 @@
 "use client";
 
 import { LoaderCircle, Sparkles } from "lucide-react";
-import { useFormStatus } from "react-dom";
+import { useSavePending } from "@/components/SaveForm";
 
 export default function LeadSubmitButton({ label }: { label: string }) {
-  const { pending } = useFormStatus();
+  // useSavePending, NOT useFormStatus: the enclosing <SaveForm> owns submission via
+  // onSubmit, and useFormStatus only reports pending for React's native form-action
+  // path. Left as it was, this button would simply never show pending again.
+  const pending = useSavePending();
   const pendingLabel = label.toLowerCase().includes("save") ? "Saving changes…" : "Creating lead…";
 
   return (

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
@@ -168,7 +169,7 @@ export default async function QuoteDetailPage({
             </>
           )}
           {builderDocs.length > 0 && currentUser.role === "owner" && (
-            <form action={generateDocEditorDocument} className="flex items-center gap-1">
+            <SaveForm resetOnSuccess={false} action={generateDocEditorDocument} className="flex items-center gap-1">
               <input type="hidden" name="quoteId" value={quote.id} />
               <select
                 name="templateId"
@@ -180,42 +181,47 @@ export default async function QuoteDetailPage({
                   <option key={t.id} value={t.id}>{t.name}</option>
                 ))}
               </select>
-              <button className="btn-secondary" title="Generate this builder document for the quote and file it in the repository">
+              <SaveButton className="btn-secondary" title="Generate this builder document for the quote and file it in the repository">
                 📄 Generate
-              </button>
-            </form>
+              </SaveButton>
+            </SaveForm>
           )}
           {canRevise && (
-            <form action={createQuoteRevision.bind(null, quote.id)}>
-              <button
+            <SaveForm
+              success="Revision created"
+              resetOnSuccess={false}
+              action={createQuoteRevision.bind(null, quote.id)}
+            >
+              <SaveButton
+                pendingLabel="Creating revision…"
                 className="btn-primary"
                 title="Copies this quote into a fresh editable draft; this version stays on record read-only."
               >
                 ↻ Create revision
-              </button>
-            </form>
+              </SaveButton>
+            </SaveForm>
           )}
           {!readOnly && quote.status === "draft" && (
-            <form action={setQuoteStatus.bind(null, quote.id, "sent")}>
-              <button className="btn-primary">Mark sent</button>
-            </form>
+            <SaveForm success="Quote status updated" resetOnSuccess={false} action={setQuoteStatus.bind(null, quote.id, "sent")}>
+              <SaveButton className="btn-primary">Mark sent</SaveButton>
+            </SaveForm>
           )}
           {!readOnly && quote.status === "sent" && (
             <>
-              <form action={setQuoteStatus.bind(null, quote.id, "accepted")}>
-                <button className="btn bg-emerald-700 text-white hover:bg-emerald-600">
+              <SaveForm success="Quote status updated" resetOnSuccess={false} action={setQuoteStatus.bind(null, quote.id, "accepted")}>
+                <SaveButton className="btn bg-emerald-700 text-white hover:bg-emerald-600">
                   ✓ Accepted
-                </button>
-              </form>
-              <form action={setQuoteStatus.bind(null, quote.id, "declined")}>
-                <button className="btn-secondary">Declined</button>
-              </form>
+                </SaveButton>
+              </SaveForm>
+              <SaveForm success="Quote status updated" resetOnSuccess={false} action={setQuoteStatus.bind(null, quote.id, "declined")}>
+                <SaveButton className="btn-secondary">Declined</SaveButton>
+              </SaveForm>
             </>
           )}
           {!readOnly && (quote.status === "accepted" || quote.status === "declined") && (
-            <form action={setQuoteStatus.bind(null, quote.id, "draft")}>
-              <button className="btn-secondary">Back to draft</button>
-            </form>
+            <SaveForm success="Quote status updated" resetOnSuccess={false} action={setQuoteStatus.bind(null, quote.id, "draft")}>
+              <SaveButton className="btn-secondary">Back to draft</SaveButton>
+            </SaveForm>
           )}
           <ConfirmDelete
             action={deleteQuote.bind(null, quote.id)}
@@ -249,9 +255,9 @@ export default async function QuoteDetailPage({
             ✏️ Customer requested changes on {formatDate(quote.changeRequestedAt)} —{" "}
             <span className="font-medium">“{quote.changeRequestNote}”</span>
           </p>
-          <form action={createQuoteRevision.bind(null, quote.id)}>
-            <button className="btn-primary btn-sm">↻ Create revision</button>
-          </form>
+          <SaveForm success="Revision created" resetOnSuccess={false} action={createQuoteRevision.bind(null, quote.id)}>
+            <SaveButton className="btn-primary btn-sm">↻ Create revision</SaveButton>
+          </SaveForm>
         </div>
       )}
 
@@ -348,7 +354,8 @@ export default async function QuoteDetailPage({
                 The happy handover — filed on the customer and this quote.
               </p>
             </div>
-            <form
+            <SaveForm
+              success="Photos uploaded"
               action={uploadDeliveryPhotos.bind(null, quote.id)}
               className="flex items-center gap-2"
             >
@@ -362,7 +369,7 @@ export default async function QuoteDetailPage({
                 className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0"
               />
               <button className="btn-primary btn-sm">Upload</button>
-            </form>
+            </SaveForm>
           </div>
           {deliveryPhotos.length === 0 ? (
             <p className="text-xs text-slate-500">No photos yet.</p>
@@ -434,7 +441,8 @@ export default async function QuoteDetailPage({
           </div>
 
           {editable && (
-            <form
+            <SaveForm
+              success="Item added"
               action={addQuoteItem.bind(null, quote.id)}
               className="grid grid-cols-12 gap-2 items-end rounded-lg bg-slate-800/40 p-3 border border-slate-800"
             >
@@ -451,9 +459,9 @@ export default async function QuoteDetailPage({
                 <input name="unitPrice" className="input" inputMode="decimal" />
               </div>
               <div className="col-span-2">
-                <button className="btn-primary w-full">Add</button>
+                <SaveButton pendingLabel="Adding…" className="btn-primary w-full">Add</SaveButton>
               </div>
-            </form>
+            </SaveForm>
           )}
 
           <div className="flex justify-end mt-4">
@@ -493,21 +501,21 @@ export default async function QuoteDetailPage({
                     <span className="min-w-0 truncate text-muted-foreground"><span className="capitalize">{f.kind}</span> · {f.label}</span>
                     <span className="flex items-center gap-2 shrink-0">
                       <span className="tabular-nums">{formatZAR(f.amountCents)}</span>
-                      <form action={deleteQuoteFee.bind(null, f.id, quote.id)}><button className="text-xs text-slate-600 hover:text-red-500">✕</button></form>
+                      <SaveForm success="Fee removed" resetOnSuccess={false} action={deleteQuoteFee.bind(null, f.id, quote.id)}><SaveButton className="text-xs text-slate-600 hover:text-red-500">✕</SaveButton></SaveForm>
                     </span>
                   </div>
                 ))}
               </div>
             )}
-            <form action={addQuoteFee.bind(null, quote.id)} className="flex flex-wrap items-end gap-2">
+            <SaveForm success="Fee added" action={addQuoteFee.bind(null, quote.id)} className="flex flex-wrap items-end gap-2">
               <select name="kind" defaultValue="fee" className="input w-28"><option value="fee">Fee</option><option value="delivery">Delivery</option></select>
               <input name="label" required placeholder="Label (e.g. Delivery to Cape Town)" className="input flex-1 min-w-40" />
               <input name="amount" inputMode="decimal" placeholder="Amount R" className="input w-28 tabular-nums" />
               <input name="taxRatePct" inputMode="decimal" defaultValue="15" placeholder="VAT %" className="input w-20 tabular-nums" title="VAT %" />
-              <button className="btn-secondary btn-sm">Add</button>
-            </form>
+              <SaveButton className="btn-secondary btn-sm">Add</SaveButton>
+            </SaveForm>
             <div className="grid gap-3 sm:grid-cols-2">
-              <form action={setQuoteDeposit.bind(null, quote.id)} className="flex items-end gap-2">
+              <SaveForm success="Deposit updated" resetOnSuccess={false} action={setQuoteDeposit.bind(null, quote.id)} className="flex items-end gap-2">
                 <div className="flex-1">
                   <label className="label" htmlFor="depositType">Deposit</label>
                   <select id="depositType" name="depositType" defaultValue={quote.depositType ?? ""} className="input">
@@ -517,9 +525,9 @@ export default async function QuoteDetailPage({
                   </select>
                 </div>
                 <input name="depositValue" inputMode="decimal" defaultValue={quote.depositValue ?? ""} placeholder="% or R" className="input w-24 tabular-nums" />
-                <button className="btn-secondary btn-sm">Save</button>
-              </form>
-              <form action={setQuoteTaxMode.bind(null, quote.id)} className="flex items-end gap-2">
+                <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+              </SaveForm>
+              <SaveForm success="Tax mode updated" resetOnSuccess={false} action={setQuoteTaxMode.bind(null, quote.id)} className="flex items-end gap-2">
                 <div className="flex-1">
                   <label className="label" htmlFor="taxInclusive">Pricing basis</label>
                   <select id="taxInclusive" name="taxInclusive" defaultValue={quote.taxInclusive ? "true" : "false"} className="input">
@@ -527,14 +535,14 @@ export default async function QuoteDetailPage({
                     <option value="false">Add VAT on top</option>
                   </select>
                 </div>
-                <button className="btn-secondary btn-sm">Save</button>
-              </form>
+                <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+              </SaveForm>
             </div>
           </div>
         )}
 
         {editable ? (
-          <form action={updateQuoteMeta.bind(null, quote.id)} className="card space-y-4">
+          <SaveForm success="Quote updated" resetOnSuccess={false} action={updateQuoteMeta.bind(null, quote.id)} className="card space-y-4">
             <h2 className="font-semibold">Quote details</h2>
             <div>
               <label className="label">Valid until</label>
@@ -549,8 +557,8 @@ export default async function QuoteDetailPage({
               <label className="label">Terms</label>
               <textarea name="terms" className="input" rows={5} defaultValue={quote.terms ?? ""} />
             </div>
-            <button className="btn-secondary w-full">Save details</button>
-          </form>
+            <SaveButton className="btn-secondary w-full">Save details</SaveButton>
+          </SaveForm>
         ) : (
           <div className="card space-y-3">
             <h2 className="font-semibold">Quote details</h2>

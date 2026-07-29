@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { deleteContact } from "@/app/actions/contacts";
@@ -436,7 +437,14 @@ export default async function ContactDetailPage({
                                 </span>
                               </div>
                               {r.status === "earned" && (
-                                <form
+                                <SaveForm
+                                  // The FORM is converted but redeemReferral is not:
+                                  // it also has a form on the referrals page, and an
+                                  // action may only be converted alongside every one
+                                  // of its call sites. This direction is safe — the
+                                  // action still throws and SaveForm reports a
+                                  // generic failure instead of losing the page.
+                                  success="Referral redeemed"
                                   action={redeemReferral.bind(null, r.id)}
                                   className="flex items-center gap-1.5 mt-2"
                                 >
@@ -446,8 +454,10 @@ export default async function ContactDetailPage({
                                     className="input btn-sm flex-1 text-xs"
                                     placeholder="What was given? e.g. R1,000 service voucher"
                                   />
-                                  <button className="btn-primary btn-sm">Redeem</button>
-                                </form>
+                                  <SaveButton pendingLabel="Redeeming…" className="btn-primary btn-sm">
+                                    Redeem
+                                  </SaveButton>
+                                </SaveForm>
                               )}
                               {r.redeemedNote && (
                                 <p className="text-xs text-slate-500 mt-1">🎁 {r.redeemedNote}</p>
@@ -488,7 +498,8 @@ export default async function ContactDetailPage({
                           ⬇ Export data
                         </a>
                       </div>
-                      <form
+                      <SaveForm
+                        success="Consent recorded"
                         action={recordConsent.bind(null, contact.id)}
                         className="flex flex-wrap items-end gap-2 mb-4"
                       >
@@ -510,8 +521,10 @@ export default async function ContactDetailPage({
                           </select>
                         </div>
                         <input name="source" className="input !w-32" placeholder="Source" defaultValue="admin" />
-                        <button className="btn-primary btn-sm">Record</button>
-                      </form>
+                        <SaveButton pendingLabel="Recording…" className="btn-primary btn-sm">
+                          Record
+                        </SaveButton>
+                      </SaveForm>
                       {contact.consentRecords.length === 0 ? (
                         <p className="text-sm text-slate-400">No consent recorded yet.</p>
                       ) : (

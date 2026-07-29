@@ -339,7 +339,9 @@ export async function setTenantModulesAction(
 
     if (modules === tenant.modules) {
       revalidatePath(CONSOLE_PATH);
-      return;
+      // Nothing changed — saying "Modules updated" here would claim a grant
+      // change that never happened.
+      return { success: "No change — the grants were already set that way" };
     }
 
     await basePrisma.tenant.update({ where: { id: tenantId }, data: { modules } });

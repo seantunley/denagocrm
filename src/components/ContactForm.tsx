@@ -1,4 +1,6 @@
 import type { LucideIcon } from "lucide-react";
+import type { ActionResult } from "@/lib/actionResultTypes";
+import { SaveForm } from "@/components/SaveForm";
 import {
   AtSign,
   Building2,
@@ -88,7 +90,7 @@ export default function ContactForm({
   users = [],
   variant = "compact",
 }: {
-  action: (formData: FormData) => Promise<void>;
+  action: (formData: FormData) => Promise<ActionResult | void>;
   defaults?: ContactDefaults;
   submitLabel: string;
   users?: { id: string; name: string }[];
@@ -98,8 +100,13 @@ export default function ContactForm({
   const isDialog = variant === "dialog";
 
   return (
-    <form
+    <SaveForm
       action={action}
+      success={submitLabel.toLowerCase().includes("create") ? "Contact created" : "Contact saved"}
+      // The form is REPLACED on success — create redirects, edit re-renders with
+      // the saved values — so clearing it here would only blank fields the person
+      // is still looking at.
+      resetOnSuccess={false}
       className={cn(
         "space-y-4",
         variant === "compact" && "card max-w-3xl",
@@ -351,6 +358,6 @@ export default function ContactForm({
         <p className="hidden text-xs text-muted-foreground sm:block">Fields marked * are required.</p>
         <ContactSubmitButton label={submitLabel} />
       </div>
-    </form>
+    </SaveForm>
   );
 }

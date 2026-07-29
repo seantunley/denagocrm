@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState, type ReactNode } from "react";
+import { SaveForm } from "@/components/SaveForm";
+import type { ActionResult } from "@/lib/actionResultTypes";
 import type { LucideIcon } from "lucide-react";
 import {
   BadgeDollarSign,
@@ -107,7 +109,7 @@ export default function LeadForm({
   users = [],
   variant = "compact",
 }: {
-  action: (formData: FormData) => Promise<void>;
+  action: (formData: FormData) => Promise<ActionResult | void>;
   products: LeadFormProduct[];
   stages: { id: string; name: string }[];
   contacts: { id: string; label: string }[];
@@ -161,8 +163,12 @@ export default function LeadForm({
   }
 
   return (
-    <form
+    <SaveForm
       action={action}
+      success={submitLabel.toLowerCase().includes("create") ? "Lead created" : "Lead saved"}
+      // Replaced on success — create redirects, edit re-renders with the saved
+      // values — so a reset would only blank fields still on screen.
+      resetOnSuccess={false}
       className={cn(
         "space-y-4",
         variant === "compact" && "card max-w-3xl",
@@ -393,6 +399,6 @@ export default function LeadForm({
         <p className="hidden text-xs text-muted-foreground sm:block">Customer name and pipeline stage are required.</p>
         <LeadSubmitButton label={submitLabel} />
       </div>
-    </form>
+    </SaveForm>
   );
 }

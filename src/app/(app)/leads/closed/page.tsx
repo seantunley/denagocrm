@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { prisma } from "@/lib/db";
 import { reopenLead } from "@/app/actions/leads";
 import { formatDate, formatZAR } from "@/lib/format";
@@ -65,9 +66,9 @@ export default async function ClosedLeadsPage() {
                 <td data-label="Closed" className="text-slate-400">{formatDate(lead.updatedAt)}</td>
                 <td data-actions>
                   {canReopen && (
-                    <form action={reopenLead.bind(null, lead.id)}>
-                      <button className="btn-secondary btn-sm">Reopen</button>
-                    </form>
+                    <SaveForm success="Lead reopened" resetOnSuccess={false} action={reopenLead.bind(null, lead.id)}>
+                      <SaveButton className="btn-secondary btn-sm">Reopen</SaveButton>
+                    </SaveForm>
                   )}
                 </td>
               </tr>
