@@ -1,6 +1,6 @@
 "use server";
 
-import { asActionResult } from "@/lib/actionResult";
+import { asActionResult, ActionRefusal, type ActionResult } from "@/lib/actionResult";
 import bcrypt from "bcryptjs";
 import QRCode from "qrcode";
 import { revalidatePath } from "next/cache";
@@ -103,22 +103,24 @@ export async function disableTotp(
   return { ok: "Two-factor authentication turned off." };
 }
 
-export async function setEmailOtp(enabled: boolean) {
-  const user = await requireUser();
-  const updated = await prisma.user.update({
-    where: { id: user.id },
-    data: { emailOtpEnabled: enabled },
+export async function setEmailOtp(enabled: boolean): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const user = await requireUser();
+    const updated = await prisma.user.update({
+      where: { id: user.id },
+      data: { emailOtpEnabled: enabled },
+    });
+    await bumpUserSessionVersion(user.id);
+    await createSessionCookie(updated);
+    await logAuditStrict({
+      action: enabled ? "auth.email_2fa_enabled" : "auth.email_2fa_disabled",
+      summary: `Email sign-in codes ${enabled ? "enabled" : "disabled"}; prior sessions revoked`,
+      entityType: "User",
+      entityId: user.id,
+      user,
+    });
+    revalidatePath("/settings");
   });
-  await bumpUserSessionVersion(user.id);
-  await createSessionCookie(updated);
-  await logAuditStrict({
-    action: enabled ? "auth.email_2fa_enabled" : "auth.email_2fa_disabled",
-    summary: `Email sign-in codes ${enabled ? "enabled" : "disabled"}; prior sessions revoked`,
-    entityType: "User",
-    entityId: user.id,
-    user,
-  });
-  revalidatePath("/settings");
 }
 
 export async function saveSessionPolicy(formData: FormData) {
@@ -141,109 +143,124 @@ export async function saveSessionPolicy(formData: FormData) {
   });
 }
 
-export async function setUserRole(userId: string, role: "owner" | "member") {
-  const owner = await requireOwner();
-  const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-  if (target.role === "owner" && role === "member") {
-    const rows = await basePrisma.$queryRaw<Array<{ count: bigint }>>`
-      SELECT COUNT(*)::bigint AS count
-      FROM "User"
-      WHERE "role" = 'owner' AND "disabledAt" IS NULL AND "id" <> ${userId}
-    `;
-    if (Number(rows[0]?.count ?? 0) < 1) throw new Error("At least one active owner must remain");
-  }
-  const updated = await prisma.user.update({ where: { id: userId }, data: { role } });
-  await bumpUserSessionVersion(userId);
-  await logAuditStrict({
-    action: "security.role_changed",
-    summary: `${updated.name} set to ${role}; active sessions revoked`,
-    entityType: "User",
-    entityId: userId,
-    user: owner,
-    before: { role: target.role },
-    after: { role },
+export async function setUserRole(userId: string, role: "owner" | "member"): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const owner = await requireOwner();
+    const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    if (target.role === "owner" && role === "member") {
+      const rows = await basePrisma.$queryRaw<Array<{ count: bigint }>>`
+        SELECT COUNT(*)::bigint AS count
+        FROM "User"
+        WHERE "role" = 'owner' AND "disabledAt" IS NULL AND "id" <> ${userId}
+      `;
+      if (Number(rows[0]?.count ?? 0) < 1) throw new ActionRefusal("At least one active owner must remain");
+    }
+    const updated = await prisma.user.update({ where: { id: userId }, data: { role } });
+    await bumpUserSessionVersion(userId);
+    await logAuditStrict({
+      action: "security.role_changed",
+      summary: `${updated.name} set to ${role}; active sessions revoked`,
+      entityType: "User",
+      entityId: userId,
+      user: owner,
+      before: { role: target.role },
+      after: { role },
+    });
+    revalidatePath("/settings");
+    return { success: `${updated.name} is now ${role === "owner" ? "an admin" : "a member"}. They have been signed out.` };
   });
-  revalidatePath("/settings");
 }
 
-export async function ownerResetUser2fa(userId: string) {
-  const owner = await requireOwner();
-  const before = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-  const target = await prisma.user.update({
-    where: { id: userId },
-    data: { totpSecret: null, totpEnabledAt: null, totpBackupCodes: null, emailOtpEnabled: false },
+export async function ownerResetUser2fa(userId: string): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const owner = await requireOwner();
+    const before = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const target = await prisma.user.update({
+      where: { id: userId },
+      data: { totpSecret: null, totpEnabledAt: null, totpBackupCodes: null, emailOtpEnabled: false },
+    });
+    await bumpUserSessionVersion(userId);
+    await logAuditStrict({
+      action: "security.2fa_reset",
+      summary: `2FA reset for ${target.name}; active sessions revoked`,
+      entityType: "User",
+      entityId: userId,
+      user: owner,
+      before: { totpEnabled: Boolean(before.totpEnabledAt), emailOtpEnabled: before.emailOtpEnabled },
+      after: { totpEnabled: false, emailOtpEnabled: false },
+    });
+    revalidatePath("/settings");
+    return { success: "2FA reset. They have been signed out." };
   });
-  await bumpUserSessionVersion(userId);
-  await logAuditStrict({
-    action: "security.2fa_reset",
-    summary: `2FA reset for ${target.name}; active sessions revoked`,
-    entityType: "User",
-    entityId: userId,
-    user: owner,
-    before: { totpEnabled: Boolean(before.totpEnabledAt), emailOtpEnabled: before.emailOtpEnabled },
-    after: { totpEnabled: false, emailOtpEnabled: false },
-  });
-  revalidatePath("/settings");
 }
 
-export async function setUserModules(userId: string, modulesCsv: string) {
-  const owner = await requireOwner();
-  const valid = new Set(["crm", "workshop", "reports", "inbox"]);
-  const clean = modulesCsv
-    .split(",")
-    .map((module) => module.trim())
-    .filter((module) => valid.has(module))
-    .join(",");
-  const before = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-  const target = await prisma.user.update({ where: { id: userId }, data: { modules: clean } });
-  await bumpUserSessionVersion(userId);
-  await logAuditStrict({
-    action: "security.modules_changed",
-    summary: `${target.name}'s legacy modules set to ${clean || "none"}; active sessions revoked`,
-    entityType: "User",
-    entityId: userId,
-    user: owner,
-    before: { modules: before.modules },
-    after: { modules: clean },
+export async function setUserModules(userId: string, modulesCsv: string): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const owner = await requireOwner();
+    const valid = new Set(["crm", "workshop", "reports", "inbox"]);
+    const clean = modulesCsv
+      .split(",")
+      .map((module) => module.trim())
+      .filter((module) => valid.has(module))
+      .join(",");
+    const before = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const target = await prisma.user.update({ where: { id: userId }, data: { modules: clean } });
+    await bumpUserSessionVersion(userId);
+    await logAuditStrict({
+      action: "security.modules_changed",
+      summary: `${target.name}'s legacy modules set to ${clean || "none"}; active sessions revoked`,
+      entityType: "User",
+      entityId: userId,
+      user: owner,
+      before: { modules: before.modules },
+      after: { modules: clean },
+    });
+    revalidatePath("/settings");
+    return { success: "Modules updated." };
   });
-  revalidatePath("/settings");
 }
 
-export async function revokeUserSessions(userId: string) {
-  const owner = await requireOwner();
-  if (userId === owner.id) throw new Error("Use sign out to end your current session");
-  const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-  await bumpUserSessionVersion(userId);
-  await logAuditStrict({
-    action: "security.sessions_revoked",
-    summary: `Revoked all active sessions for ${target.name}`,
-    entityType: "User",
-    entityId: userId,
-    user: owner,
+export async function revokeUserSessions(userId: string): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const owner = await requireOwner();
+    if (userId === owner.id) throw new ActionRefusal("Use sign out to end your current session");
+    const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    await bumpUserSessionVersion(userId);
+    await logAuditStrict({
+      action: "security.sessions_revoked",
+      summary: `Revoked all active sessions for ${target.name}`,
+      entityType: "User",
+      entityId: userId,
+      user: owner,
+    });
+    revalidatePath("/settings");
+    return { success: "All their sessions were signed out." };
   });
-  revalidatePath("/settings");
 }
 
-export async function setUserDisabled(userId: string, disabled: boolean) {
-  const owner = await requireOwner();
-  if (userId === owner.id) throw new Error("You cannot disable your own account");
-  const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-  if (disabled && target.role === "owner") {
-    const rows = await basePrisma.$queryRaw<Array<{ count: bigint }>>`
-      SELECT COUNT(*)::bigint AS count
-      FROM "User"
-      WHERE "role" = 'owner' AND "disabledAt" IS NULL AND "id" <> ${userId}
-    `;
-    if (Number(rows[0]?.count ?? 0) < 1) throw new Error("At least one active owner must remain");
-  }
-  await setUserDisabledState(userId, disabled);
-  await logAuditStrict({
-    action: disabled ? "security.user_disabled" : "security.user_reactivated",
-    summary: `${target.name} ${disabled ? "disabled" : "reactivated"}`,
-    entityType: "User",
-    entityId: userId,
-    user: owner,
-    after: { disabled },
+export async function setUserDisabled(userId: string, disabled: boolean): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const owner = await requireOwner();
+    if (userId === owner.id) throw new ActionRefusal("You cannot disable your own account");
+    const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    if (disabled && target.role === "owner") {
+      const rows = await basePrisma.$queryRaw<Array<{ count: bigint }>>`
+        SELECT COUNT(*)::bigint AS count
+        FROM "User"
+        WHERE "role" = 'owner' AND "disabledAt" IS NULL AND "id" <> ${userId}
+      `;
+      if (Number(rows[0]?.count ?? 0) < 1) throw new ActionRefusal("At least one active owner must remain");
+    }
+    await setUserDisabledState(userId, disabled);
+    await logAuditStrict({
+      action: disabled ? "security.user_disabled" : "security.user_reactivated",
+      summary: `${target.name} ${disabled ? "disabled" : "reactivated"}`,
+      entityType: "User",
+      entityId: userId,
+      user: owner,
+      after: { disabled },
+    });
+    revalidatePath("/settings");
+    return { success: `${target.name} ${disabled ? "disabled" : "reactivated"}.` };
   });
-  revalidatePath("/settings");
 }

@@ -1,6 +1,8 @@
 "use client";
 
 import { useActionState, useState } from "react";
+import { unstable_rethrow } from "next/navigation";
+import { toast } from "sonner";
 import {
   beginTotpEnrolment,
   confirmTotpEnrolment,
@@ -69,8 +71,14 @@ export default function SecurityPanel({
         <button
           className="btn-primary"
           onClick={async () => {
-            const r = await beginTotpEnrolment();
-            setEnrol({ qr: r.qr, secret: r.secret });
+            // A throw here used to leave the button looking like it did nothing.
+            try {
+              const r = await beginTotpEnrolment();
+              setEnrol({ qr: r.qr, secret: r.secret });
+            } catch (error) {
+              unstable_rethrow(error);
+              toast.error("Could not start setup. Please try again.");
+            }
           }}
         >
           Set up authenticator app
@@ -103,8 +111,25 @@ export default function SecurityPanel({
             type="checkbox"
             checked={emailOn}
             onChange={async (e) => {
-              setEmailOn(e.target.checked);
-              await setEmailOtp(e.target.checked);
+              // The toggle flipped optimistically and the result was discarded,
+              // so a failed save left the box showing a setting that was never
+              // stored. It now reports, and reverts when the save is refused.
+              const next = e.target.checked;
+              const before = emailOn;
+              setEmailOn(next);
+              try {
+                const result = await setEmailOtp(next);
+                if (result?.error) {
+                  toast.error(result.error);
+                  setEmailOn(before);
+                  return;
+                }
+                toast.success(next ? "Email sign-in codes are on." : "Email sign-in codes are off.");
+              } catch (error) {
+                unstable_rethrow(error);
+                toast.error("Something went wrong. Please try again.");
+                setEmailOn(before);
+              }
             }}
             className="h-4 w-4"
           />

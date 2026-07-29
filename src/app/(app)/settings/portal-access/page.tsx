@@ -1,4 +1,5 @@
 import { basePrisma, prisma } from "@/lib/db";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { requirePermission } from "@/lib/permissions";
 import {
   grantPortalAccess,
@@ -94,14 +95,14 @@ export default async function PortalAccessPage() {
               </dl>
               {request.note && <p className="text-sm text-muted-foreground">Customer note: {request.note}</p>}
               <div className="grid md:grid-cols-2 gap-3">
-                <form action={reviewPortalProfileRequest.bind(null, request.id, "approved")} className="flex gap-2">
+                <SaveForm success="Request reviewed" resetOnSuccess={false} action={reviewPortalProfileRequest.bind(null, request.id, "approved")} className="flex gap-2">
                   <input name="reviewNote" className="input" placeholder="Optional approval note" />
-                  <button className="btn-primary">Approve & apply</button>
-                </form>
-                <form action={reviewPortalProfileRequest.bind(null, request.id, "rejected")} className="flex gap-2">
+                  <SaveButton className="btn-primary">Approve & apply</SaveButton>
+                </SaveForm>
+                <SaveForm success="Request reviewed" resetOnSuccess={false} action={reviewPortalProfileRequest.bind(null, request.id, "rejected")} className="flex gap-2">
                   <input name="reviewNote" className="input" placeholder="Reason for rejection" required />
-                  <button className="btn-secondary text-red-300">Reject</button>
-                </form>
+                  <SaveButton className="btn-secondary text-red-300">Reject</SaveButton>
+                </SaveForm>
               </div>
             </div>
           ))}
@@ -112,21 +113,21 @@ export default async function PortalAccessPage() {
     <section className="space-y-3">
       <h2 className="font-semibold">Delegated account and fleet access</h2>
       <div className="grid lg:grid-cols-2 gap-4">
-        <form action={grantPortalAccess} className="card space-y-3">
+        <SaveForm success="Portal access granted" action={grantPortalAccess} className="card space-y-3">
           <input type="hidden" name="targetType" value="contact" />
           <h3 className="font-semibold">Grant contact/account access</h3>
           <select name="viewerContactId" className="input" required><option value="">Portal user</option>{portalUsers.map((contact) => <option key={contact.id} value={contact.id}>{contactName(contact)} · {contact.email}</option>)}</select>
           <select name="targetId" className="input" required><option value="">Contact or account to expose</option>{contacts.map((contact) => <option key={contact.id} value={contact.id}>{contactName(contact)}</option>)}</select>
-          <div className="flex gap-2"><RoleSelect /><button className="btn-primary">Grant access</button></div>
-        </form>
+          <div className="flex gap-2"><RoleSelect /><SaveButton className="btn-primary">Grant access</SaveButton></div>
+        </SaveForm>
 
-        <form action={grantPortalAccess} className="card space-y-3">
+        <SaveForm success="Portal access granted" action={grantPortalAccess} className="card space-y-3">
           <input type="hidden" name="targetType" value="fleet" />
           <h3 className="font-semibold">Grant fleet access</h3>
           <select name="viewerContactId" className="input" required><option value="">Portal user</option>{portalUsers.map((contact) => <option key={contact.id} value={contact.id}>{contactName(contact)} · {contact.email}</option>)}</select>
           <select name="targetId" className="input" required><option value="">Fleet to expose</option>{fleets.map((fleet) => <option key={fleet.id} value={fleet.id}>{fleet.name}</option>)}</select>
-          <div className="flex gap-2"><RoleSelect /><button className="btn-primary">Grant access</button></div>
-        </form>
+          <div className="flex gap-2"><RoleSelect /><SaveButton className="btn-primary">Grant access</SaveButton></div>
+        </SaveForm>
       </div>
 
       <ResponsiveEntityTable>
@@ -141,7 +142,7 @@ export default async function PortalAccessPage() {
                 <td data-label="Role" className="capitalize">{grant.role}</td>
                 <td data-label="Status"><span className={`badge ${grant.active ? "bg-emerald-500/15 text-emerald-300" : "bg-muted text-muted-foreground"}`}>{grant.active ? "Active" : "Revoked"}</span></td>
                 <td data-label="Granted">{formatDateTime(grant.createdAt)}</td>
-                <td data-actions>{grant.active && <form action={revokePortalAccess.bind(null, grant.id)}><button className="text-red-400 text-sm">Revoke</button></form>}</td>
+                <td data-actions>{grant.active && <SaveForm success="Portal access revoked" resetOnSuccess={false} action={revokePortalAccess.bind(null, grant.id)}><SaveButton className="text-red-400 text-sm">Revoke</SaveButton></SaveForm>}</td>
               </tr>
             ))}
           </tbody>

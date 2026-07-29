@@ -1,4 +1,5 @@
 import { Plus } from "lucide-react";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { basePrisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
@@ -151,14 +152,14 @@ export default async function AccessSettingsPage() {
                   <td>
                     {user.id !== currentUser.id && (
                       <div className="flex gap-2 justify-end">
-                        <form action={revokeUserSessions.bind(null, user.id)}>
-                          <button className="btn-secondary btn-sm">Revoke sessions</button>
-                        </form>
-                        <form action={setUserDisabled.bind(null, user.id, !user.disabledAt)}>
-                          <button className={user.disabledAt ? "btn-secondary btn-sm" : "btn-danger btn-sm"}>
+                        <SaveForm resetOnSuccess={false} action={revokeUserSessions.bind(null, user.id)}>
+                          <SaveButton className="btn-secondary btn-sm">Revoke sessions</SaveButton>
+                        </SaveForm>
+                        <SaveForm resetOnSuccess={false} action={setUserDisabled.bind(null, user.id, !user.disabledAt)}>
+                          <SaveButton className={user.disabledAt ? "btn-secondary btn-sm" : "btn-danger btn-sm"}>
                             {user.disabledAt ? "Reactivate" : "Disable"}
-                          </button>
-                        </form>
+                          </SaveButton>
+                        </SaveForm>
                       </div>
                     )}
                   </td>
@@ -182,7 +183,7 @@ export default async function AccessSettingsPage() {
                 title="Create team"
                 buttonClass={buttonVariants({ size: "sm" })}
               >
-                <form action={createTeam} className="space-y-4">
+                <SaveForm success="Team created" action={createTeam} className="space-y-4">
                   <div>
                     <label className="label">Name</label>
                     <input name="name" className="input" required autoFocus placeholder="e.g. Sales floor" />
@@ -198,8 +199,8 @@ export default async function AccessSettingsPage() {
                     <label className="label">Description</label>
                     <input name="description" className="input" placeholder="Optional" />
                   </div>
-                  <button className="btn-primary w-full">Create team</button>
-                </form>
+                  <SaveButton className="btn-primary w-full">Create team</SaveButton>
+                </SaveForm>
               </ModalTrigger>
             )}
           </div>
@@ -222,7 +223,7 @@ export default async function AccessSettingsPage() {
                   </summary>
                   <div className="px-5 pb-5 space-y-4">
                     {canManageTeams && (
-                      <form action={updateTeam.bind(null, team.id)} className="grid sm:grid-cols-2 gap-2">
+                      <SaveForm success="Team saved" resetOnSuccess={false} action={updateTeam.bind(null, team.id)} className="grid sm:grid-cols-2 gap-2">
                         <input name="name" className="input" defaultValue={team.name} required />
                         <select name="managerId" className="input" defaultValue={team.managerId ?? ""}>
                           <option value="">No manager</option>
@@ -230,8 +231,8 @@ export default async function AccessSettingsPage() {
                         </select>
                         <input name="description" className="input sm:col-span-2" defaultValue={team.description ?? ""} placeholder="Description" />
                         <label className="flex items-center gap-2 text-sm text-muted-foreground"><input type="checkbox" name="active" defaultChecked={team.active} className="h-4 w-4" /> Active</label>
-                        <div className="sm:text-right"><button className="btn-secondary btn-sm">Save team</button></div>
-                      </form>
+                        <div className="sm:text-right"><SaveButton className="btn-secondary btn-sm">Save team</SaveButton></div>
+                      </SaveForm>
                     )}
                     <div>
                       <p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Members</p>
@@ -240,19 +241,19 @@ export default async function AccessSettingsPage() {
                         {membersFor(team.id).map((member) => (
                           <li key={member.userId} className="py-2 flex items-center gap-2 text-sm">
                             <span className="flex-1">{member.userName}{member.isManager && <span className="text-xs text-primary ml-2">Manager</span>}</span>
-                            {canManageTeams && <form action={removeTeamMember.bind(null, team.id, member.userId)}><button className="text-xs text-red-400 hover:text-red-300">Remove</button></form>}
+                            {canManageTeams && <SaveForm success="Member removed" resetOnSuccess={false} action={removeTeamMember.bind(null, team.id, member.userId)}><SaveButton className="text-xs text-red-400 hover:text-red-300">Remove</SaveButton></SaveForm>}
                           </li>
                         ))}
                       </ul>
                     </div>
                     {canManageTeams && (
-                      <form action={addTeamMember.bind(null, team.id)} className="flex gap-2">
+                      <SaveForm success="Member added" action={addTeamMember.bind(null, team.id)} className="flex gap-2">
                         <select name="userId" className="input flex-1" required defaultValue="">
                           <option value="" disabled>Add member…</option>
                           {users.filter((c) => !c.disabledAt && !membersFor(team.id).some((m) => m.userId === c.id)).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                         </select>
-                        <button className="btn-secondary btn-sm">Add</button>
-                      </form>
+                        <SaveButton className="btn-secondary btn-sm">Add</SaveButton>
+                      </SaveForm>
                     )}
                   </div>
                 </details>
@@ -275,7 +276,7 @@ export default async function AccessSettingsPage() {
                 title="Create role"
                 buttonClass={buttonVariants({ size: "sm" })}
               >
-                <form action={createRole} className="space-y-4">
+                <SaveForm success="Role created" action={createRole} className="space-y-4">
                   <div>
                     <label className="label">Role name</label>
                     <input name="name" className="input" required autoFocus placeholder="e.g. Sales manager" />
@@ -284,8 +285,8 @@ export default async function AccessSettingsPage() {
                     <label className="label">Description</label>
                     <input name="description" className="input" placeholder="Optional" />
                   </div>
-                  <button className="btn-primary w-full">Create role</button>
-                </form>
+                  <SaveButton className="btn-primary w-full">Create role</SaveButton>
+                </SaveForm>
               </ModalTrigger>
             )}
           </div>
@@ -310,7 +311,7 @@ export default async function AccessSettingsPage() {
                     <span className="btn-secondary btn-sm shrink-0">{canManageRoles ? "Edit" : "View"}</span>
                   </summary>
                   <div className="px-5 pb-5">
-                    <form action={updateRolePermissions.bind(null, role.id)} className="space-y-4">
+                    <SaveForm success="Permissions saved" resetOnSuccess={false} action={updateRolePermissions.bind(null, role.id)} className="space-y-4">
                       {categories.map((category) => (
                         <div key={category}>
                           <p className="text-xs uppercase tracking-wide text-muted-foreground mb-2">{category}</p>
@@ -324,8 +325,8 @@ export default async function AccessSettingsPage() {
                           </div>
                         </div>
                       ))}
-                      {canManageRoles && <button className="btn-secondary btn-sm">Save permissions</button>}
-                    </form>
+                      {canManageRoles && <SaveButton className="btn-secondary btn-sm">Save permissions</SaveButton>}
+                    </SaveForm>
                   </div>
                 </details>
               );
@@ -342,10 +343,10 @@ export default async function AccessSettingsPage() {
                     <tr key={user.id}>
                       <td>{user.name}<p className="text-xs text-muted-foreground">{user.email}</p>{user.disabledAt && <span className="text-xs text-red-400">Disabled</span>}</td>
                       <td>
-                        <form action={updateUserRoles.bind(null, user.id)} className="flex flex-wrap gap-3 items-center">
+                        <SaveForm success="Roles saved" resetOnSuccess={false} action={updateUserRoles.bind(null, user.id)} className="flex flex-wrap gap-3 items-center">
                           {roles.map((role) => <label key={role.id} className="text-xs flex items-center gap-1"><input type="checkbox" name="roles" value={role.id} defaultChecked={userRoleSet.has(`${user.id}:${role.id}`)} disabled={!canManageRoles} className="h-3.5 w-3.5" /> {role.name}</label>)}
-                          {canManageRoles && <button className="btn-secondary btn-sm">Save</button>}
-                        </form>
+                          {canManageRoles && <SaveButton className="btn-secondary btn-sm">Save</SaveButton>}
+                        </SaveForm>
                       </td>
                     </tr>
                   ))}
