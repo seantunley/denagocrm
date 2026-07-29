@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight } from "lucide-react";
 import { prisma } from "@/lib/db";
 import {
@@ -211,23 +212,23 @@ export default async function DeliveriesPage() {
                         })()}
 
                         {canManage && column.key === "invoice" && (
-                          <form action={markInvoiced.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
+                          <SaveForm success="Invoice recorded" resetOnSuccess={false} action={markInvoiced.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
                             <input type="file" name="file" required accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-                            <button className="btn-primary btn-sm w-full">Mark invoiced</button>
-                          </form>
+                            <SaveButton className="btn-primary btn-sm w-full">Mark invoiced</SaveButton>
+                          </SaveForm>
                         )}
                         {canManage && column.key === "deposit" && (
-                          <form action={markDepositPaid.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
+                          <SaveForm success="Deposit recorded" resetOnSuccess={false} action={markDepositPaid.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
                             <input type="file" name="file" required accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-                            <button className="btn-primary btn-sm w-full">Deposit paid</button>
-                          </form>
+                            <SaveButton className="btn-primary btn-sm w-full">Deposit paid</SaveButton>
+                          </SaveForm>
                         )}
                         {canManage && column.key === "schedule" && (
-                          <form action={scheduleDelivery.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
+                          <SaveForm success="Delivery scheduled" resetOnSuccess={false} action={scheduleDelivery.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
                             <input type="date" name="date" required className="input text-xs py-1.5" />
                             <input type="file" name="file" accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-                            <button className="btn-primary btn-sm w-full">Schedule delivery</button>
-                          </form>
+                            <SaveButton className="btn-primary btn-sm w-full">Schedule delivery</SaveButton>
+                          </SaveForm>
                         )}
                         {(column.key === "schedule" || column.key === "deliver") && (
                           <a href={`/quotes/${quote.id}/delivery-note`} target="_blank" rel="noreferrer" className="mt-2 block text-xs text-primary hover:underline">
@@ -238,10 +239,14 @@ export default async function DeliveriesPage() {
                           <div className="mt-2.5 border-t border-border/60 pt-2.5">
                             <ProofOfDelivery quoteId={quote.id} />
                             <p className="mt-1 text-[10px] text-muted-foreground/70">Capture driver, handover checklist &amp; signature.</p>
-                            <form action={uploadDeliveryPhotos.bind(null, quote.id)} className="mt-1.5 space-y-1.5">
+                            {/* Resets on success: an upload form that keeps its
+                                file selection invites the same photos being sent
+                                again. The action returns its own count-aware
+                                message, so no `success` prop is needed here. */}
+                            <SaveForm action={uploadDeliveryPhotos.bind(null, quote.id)} className="mt-1.5 space-y-1.5">
                               <input type="file" name="files" multiple accept="image/*" capture="environment" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-                              <button className="btn-secondary btn-sm w-full">📷 Add delivery photos</button>
-                            </form>
+                              <SaveButton className="btn-secondary btn-sm w-full">📷 Add delivery photos</SaveButton>
+                            </SaveForm>
                           </div>
                         )}
                       </div>

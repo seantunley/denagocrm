@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { CheckCircle2, Clock3, Gift, HandCoins } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
@@ -82,11 +83,11 @@ export default async function ReferralsPage() {
                       </MobileDataField>
                     </MobileDataFields>
                     {referral.status === "earned" && (
-                      <form action={redeemReferral.bind(null, referral.id)} className="space-y-2 border-t border-border pt-3">
+                      <SaveForm success="Referral redeemed" resetOnSuccess={false} action={redeemReferral.bind(null, referral.id)} className="space-y-2 border-t border-border pt-3">
                         <label className="label" htmlFor={`reward-${referral.id}`}>Reward provided</label>
                         <input id={`reward-${referral.id}`} name="note" required className="input" placeholder="e.g. R1,000 voucher" />
-                        <button className="btn-primary w-full">Mark reward redeemed</button>
-                      </form>
+                        <SaveButton className="btn-primary w-full">Mark reward redeemed</SaveButton>
+                      </SaveForm>
                     )}
                     {referral.status === "redeemed" && referral.redeemedNote && <p className="rounded-xl border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">Reward: {referral.redeemedNote}</p>}
                   </MobileDataCard>
@@ -144,7 +145,9 @@ export default async function ReferralsPage() {
                 </td>
                 <td className="text-right">
                   {r.status === "earned" ? (
-                    <form
+                    <SaveForm
+                      success="Referral redeemed"
+                      resetOnSuccess={false}
                       action={redeemReferral.bind(null, r.id)}
                       className="flex items-center gap-1.5 justify-end"
                     >
@@ -154,8 +157,10 @@ export default async function ReferralsPage() {
                         className="input btn-sm w-44 text-xs"
                         placeholder="What was given? e.g. R1,000 voucher"
                       />
-                      <button className="btn-primary btn-sm">Redeem</button>
-                    </form>
+                      <SaveButton pendingLabel="Redeeming…" className="btn-primary btn-sm">
+                        Redeem
+                      </SaveButton>
+                    </SaveForm>
                   ) : r.status === "redeemed" ? (
                     <span className="text-xs text-slate-400">{r.redeemedNote}</span>
                   ) : (
