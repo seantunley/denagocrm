@@ -1,11 +1,26 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
+
+/**
+ * EVERY action module that has been converted, discovered from disk.
+ *
+ * This list used to be hand-written, and it went stale twice: setQuoteStatus's
+ * silent early return escaped because quotes.ts was not on it, and the whole of
+ * jobcards.ts escaped one PR later for the same reason. A list that must be
+ * remembered will be forgotten — so it is computed.
+ */
+const convertedModules = (): string[] =>
+  readdirSync(path.join(root, "src/app/actions"))
+    .filter((f) => f.endsWith(".ts"))
+    .map((f) => `src/app/actions/${f}`)
+    .filter((rel) => src(rel).includes("asActionResult("));
+
 
 // ── Expected refusals must travel as VALUES, never as throws ────────────────
 
@@ -146,26 +161,7 @@ test("SaveForm: password inputs are cleared on success even without a reset", ()
 // asActionResult resolves any normal return as success, so a silent early return
 // produced a confident lie — "Deleted" for a stage that still holds leads being
 // the worst of them.
-// EVERY module with a converted action, not a sample. The first version of this
-// test listed four, and setQuoteStatus's silent early return slipped through in
-// quotes.ts precisely because it was not on the list.
-for (const file of [
-  "src/app/actions/settings.ts",
-  "src/app/actions/pipelines.ts",
-  "src/app/actions/emails.ts",
-  "src/app/actions/ai.ts",
-  "src/app/actions/stock.ts",
-  "src/app/actions/leads.ts",
-  "src/app/actions/contacts.ts",
-  "src/app/actions/quotes.ts",
-  "src/app/actions/cpq.ts",
-  "src/app/actions/views.ts",
-  "src/app/actions/privacy.ts",
-  "src/app/actions/fulfilment.ts",
-  "src/app/actions/referrals.ts",
-  "src/app/actions/tenants.ts",
-  "src/app/actions/platformAdmins.ts",
-]) {
+for (const file of convertedModules()) {
   test(`${file}: converted actions have no silent early returns`, () => {
     const code = src(file);
     const inWrapped = code.split("return asActionResult(async () => {").slice(1);
@@ -232,4 +228,149 @@ test("redeemReferral: authorises before any state-revealing refusal", () => {
   assert.ok(gate > 0, "the capability must be checked");
   assert.ok(gate < existence, "existence must not be revealed before the capability check");
   assert.ok(scoped < status, "status must not be revealed before the contact-scoped check");
+});
+
+// ── Authorisation precedes disclosure, EVERYWHERE ──────────────────────────
+
+// redeemReferral shipped a refusal that described referral state before its
+// permission check, turning the action into an existence/status oracle. That is
+// a property of the whole conversion, not of one action: making refusals
+// SPECIFIC is a security decision, so it is enforced across every converted
+// module rather than re-checked by hand each batch.
+test("every converted action authorises before it refuses", () => {
+  const modules = convertedModules();
+  const offenders: string[] = [];
+
+  for (const name of modules) {
+    const lines = src(name).replace(/\r\n/g, "\n").split("\n");
+    let fn: string | null = null;
+    let start = 0;
+    let wrapped = false;
+
+    const inspect = (end: number) => {
+      if (!fn || !wrapped) return;
+      const body = lines.slice(start, end);
+      const gate = body.findIndex((l) => /await require[A-Za-z]*\(/.test(l));
+      const refusal = body.findIndex((l) => /\brefuse\(|throw new ActionRefusal\(/.test(l));
+      if (refusal >= 0 && gate >= 0 && refusal < gate) {
+        offenders.push(`${name.split("/").pop()}.${fn}`);
+      }
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^export async function ([a-zA-Z0-9_]+)\(/);
+      if (m) { inspect(i); fn = m[1]; start = i; wrapped = false; }
+      if (fn && lines[i].includes("asActionResult(async")) wrapped = true;
+    }
+    inspect(lines.length);
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `these actions refuse before authorising, which lets an unauthorised caller read state: ${offenders.join(", ")}`,
+  );
+});
+
+// ── The compiler's guarantee has one hole; close it ────────────────────────
+
+// Converting an action while one of its forms stays a plain <form action> is
+// normally a COMPILE error, which is what makes this rollout safe. That
+// guarantee does not hold for a prop typed `(formData: FormData) => void`:
+// TypeScript deliberately lets a value-returning function satisfy a
+// void-returning signature, so such a prop silently accepts a converted action
+// and drops the `{ error }` it returns.
+//
+// JobCardItemForm was exactly that — found only by clicking the button, after
+// the compiler, lint, tests and the build were all green.
+test("no component takes an action prop typed as bare `=> void`", () => {
+  const roots = ["src/components", "src/app"];
+  const offenders: string[] = [];
+
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!/\.tsx?$/.test(entry.name)) continue;
+      const code = readFileSync(full, "utf8");
+      // `action: (…) => void` — with no Promise/ActionResult in the return type.
+      if (/\baction\s*:\s*\([^)]*\)\s*=>\s*void\s*;/.test(code)) {
+        offenders.push(path.relative(process.cwd(), full).split(path.sep).join("/"));
+      }
+    }
+  };
+  for (const r of roots) walk(path.join(root, r));
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `a bare \`=> void\` action prop hides a converted action's refusal: ${offenders.join(", ")}`,
+  );
+});
+
+// A derived list that silently returns nothing would make every test above pass
+// while checking not one action — the vacuous-pass failure. Pin the discovery.
+test("the converted-module list is derived and non-trivial", () => {
+  const modules = convertedModules();
+  assert.ok(modules.length >= 15, `expected the conversion to span many modules, got ${modules.length}`);
+  for (const expected of [
+    "src/app/actions/jobcards.ts",
+    "src/app/actions/quotes.ts",
+    "src/app/actions/fulfilment.ts",
+    "src/app/actions/tenants.ts",
+  ]) {
+    assert.ok(modules.includes(expected), `${expected} must be covered`);
+  }
+});
+
+// ── Photo uploads must not report saving nothing ───────────────────────────
+
+// The same failure as uploadDeliveryPhotos, which was fixed one PR earlier and
+// should have been fixed here at the same time: files over 4 MB, non-images, and
+// everything past the cap were skipped silently, so an upload that saved zero
+// files still toasted "Photos uploaded".
+for (const fn of ["uploadJobCardPhotos", "uploadCheckoutPhotos", "uploadDeliveryPhotos"]) {
+  test(`${fn}: refuses an empty or wholly invalid selection`, () => {
+    const file = fn === "uploadDeliveryPhotos"
+      ? "src/app/actions/fulfilment.ts"
+      : "src/app/actions/jobcards.ts";
+    const code = src(file);
+    const body = code.slice(code.indexOf(`export async function ${fn}`));
+    const end = body.indexOf("\nexport async function");
+    const scoped = end > 0 ? body.slice(0, end) : body;
+    assert.match(scoped, /files\.length === 0\)\s*\{?\s*refuse\(/, "nothing selected is not a successful upload");
+    assert.match(scoped, /accepted\.length === 0\)\s*\{?\s*refuse\(/, "all-invalid is not a successful upload");
+    assert.match(scoped, /skipped/, "a partial upload must report how many were dropped");
+  });
+}
+
+// ── A component that awaits an action must inspect its result ──────────────
+
+// CameraCapture awaited the newly typed ActionResult and threw it away, then
+// refreshed and closed — recreating the dropped-{ error } failure one layer above
+// the forms, and discarding the captured photos with it.
+test("CameraCapture surfaces the action's refusal and keeps the shots", () => {
+  const code = src("src/components/CameraCapture.tsx");
+  const upload = code.slice(code.indexOf("const upload = async"));
+  assert.match(upload, /const result = await action\(fd\)/, "the result must be captured");
+  assert.match(upload, /"error" in result/, "and inspected");
+  assert.match(upload, /setError\(String\(result\.error\)\)/, "the reason must be shown");
+  const errBranch = upload.indexOf("setError(String(result.error))");
+  const closeCall = upload.indexOf("close()");
+  assert.ok(errBranch < closeCall, "a refusal must return BEFORE close() discards the captured shots");
+});
+
+// ── Reservation actions must not claim work they did not do ────────────────
+
+test("reservation actions refuse when nothing actually changed", () => {
+  const code = src("src/app/actions/jobcards.ts");
+  const release = code.slice(code.indexOf("export async function releaseReservation"));
+  assert.match(
+    release.slice(0, release.indexOf("\nexport async function")),
+    /released\.count === 0\)\s*\{?\s*refuse\(/,
+    "an updateMany that matched nothing is not a released reservation",
+  );
+  const consume = code.slice(code.indexOf("export async function consumeReservation"));
+  assert.match(consume, /const outcome = await prisma\.\$transaction/, "the verdict must be captured");
+  assert.match(consume, /if \(!outcome\.ok\)\s*\{?\s*refuse\(/, "and a failed transaction must refuse");
 });

@@ -1,5 +1,6 @@
 "use server";
 
+import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { createHash } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -60,76 +61,80 @@ async function validatedBinding(
 
 /** Create a new doc-editor template seeded with a blank A4 proposal, then open it. */
 export async function createDocEditorTemplate(formData: FormData) {
-  const user = await requirePermission("docbuilder.manage");
-  const name =
-    String(formData.get("name") ?? "").trim() || "Untitled proposal";
-  const key = String(formData.get("key") ?? "proposal").trim() || "proposal";
-  const created = await prisma.docBuilderTemplate.create({
-    data: {
-      name,
-      key,
-      data: blankDocument(name) as object,
-      createdById: user.id,
-    },
+  return asActionResult(async () => {
+    const user = await requirePermission("docbuilder.manage");
+    const name =
+      String(formData.get("name") ?? "").trim() || "Untitled proposal";
+    const key = String(formData.get("key") ?? "proposal").trim() || "proposal";
+    const created = await prisma.docBuilderTemplate.create({
+      data: {
+        name,
+        key,
+        data: blankDocument(name) as object,
+        createdById: user.id,
+      },
+    });
+    await logAudit({
+      action: "doceditor.create",
+      summary: `Created document “${name}”`,
+      entityType: "DocBuilderTemplate",
+      entityId: created.id,
+      user,
+    });
+    revalidatePath(BASE);
+    return { redirectTo: `/doc-editor/${created.id}` };
   });
-  await logAudit({
-    action: "doceditor.create",
-    summary: `Created document “${name}”`,
-    entityType: "DocBuilderTemplate",
-    entityId: created.id,
-    user,
-  });
-  revalidatePath(BASE);
-  redirect(`/doc-editor/${created.id}`);
 }
 
 /** Generate and file a builder document bound to at most one compatible record. */
 export async function generateDocEditorDocument(formData: FormData) {
-  const user = await requirePermission("docbuilder.manage");
-  const templateId = String(formData.get("templateId") ?? "").trim();
-  if (!templateId) return;
+  return asActionResult(async () => {
+    const user = await requirePermission("docbuilder.manage");
+    const templateId = String(formData.get("templateId") ?? "").trim();
+    if (!templateId) refuse("Choose a template.");
 
-  const submittedRecord = String(formData.get("record") ?? "").trim();
-  const record = submittedRecord
-    ? parseBuilderRecord(submittedRecord)
-    : legacyRecord(formData);
-  if (submittedRecord && !record) throw new Error("Choose a valid record.");
+    const submittedRecord = String(formData.get("record") ?? "").trim();
+    const record = submittedRecord
+      ? parseBuilderRecord(submittedRecord)
+      : legacyRecord(formData);
+    if (submittedRecord && !record) throw new ActionRefusal("Choose a valid record.");
 
-  const { quoteId, jobCardId } = await validatedBinding(templateId, record);
-  const result = await generateDocEditorPdf({
-    templateId,
-    quoteId,
-    jobCardId,
-  });
-  if (!result) return;
+    const { quoteId, jobCardId } = await validatedBinding(templateId, record);
+    const result = await generateDocEditorPdf({
+      templateId,
+      quoteId,
+      jobCardId,
+    });
+    if (!result) refuse("Could not build that document — check the template.");
 
-  const storedName = await saveFile(
-    result.buffer,
-    `${result.title}.pdf`,
-    "application/pdf",
-  );
-  const document = await prisma.document.create({
-    data: {
-      fileName: `${result.title}.pdf`,
-      storedName,
-      mimeType: "application/pdf",
-      sizeBytes: result.buffer.length,
-      quoteId: result.quoteId,
-      jobCardId: result.jobCardId,
-      contactId: result.contactId,
-      tag: "generated-pdf",
-      uploadedById: user.id,
-    },
+    const storedName = await saveFile(
+      result.buffer,
+      `${result.title}.pdf`,
+      "application/pdf",
+    );
+    const document = await prisma.document.create({
+      data: {
+        fileName: `${result.title}.pdf`,
+        storedName,
+        mimeType: "application/pdf",
+        sizeBytes: result.buffer.length,
+        quoteId: result.quoteId,
+        jobCardId: result.jobCardId,
+        contactId: result.contactId,
+        tag: "generated-pdf",
+        uploadedById: user.id,
+      },
+    });
+    await logAudit({
+      action: "doceditor.generate",
+      summary: `Generated “${result.title}” to the document repository`,
+      entityType: "Document",
+      entityId: document.id,
+      user,
+    });
+    revalidatePath(BASE);
+    return { redirectTo: `/api/files/${document.id}` };
   });
-  await logAudit({
-    action: "doceditor.generate",
-    summary: `Generated “${result.title}” to the document repository`,
-    entityType: "Document",
-    entityId: document.id,
-    user,
-  });
-  revalidatePath(BASE);
-  redirect(`/api/files/${document.id}`);
 }
 
 /**
@@ -333,25 +338,27 @@ export async function sendDocForSigning(
 
 /** Create a template pre-built as the branded standard quotation. */
 export async function createStandardQuoteTemplate() {
-  const user = await requirePermission("docbuilder.manage");
-  const doc = standardQuoteTemplate();
-  const created = await prisma.docBuilderTemplate.create({
-    data: {
-      name: "Standard quotation",
-      key: "quote",
-      data: doc as object,
-      createdById: user.id,
-    },
+  return asActionResult(async () => {
+    const user = await requirePermission("docbuilder.manage");
+    const doc = standardQuoteTemplate();
+    const created = await prisma.docBuilderTemplate.create({
+      data: {
+        name: "Standard quotation",
+        key: "quote",
+        data: doc as object,
+        createdById: user.id,
+      },
+    });
+    await logAudit({
+      action: "doceditor.create",
+      summary: "Created “Standard quotation” from the branded preset",
+      entityType: "DocBuilderTemplate",
+      entityId: created.id,
+      user,
+    });
+    revalidatePath(BASE);
+    return { redirectTo: `/doc-editor/${created.id}` };
   });
-  await logAudit({
-    action: "doceditor.create",
-    summary: "Created “Standard quotation” from the branded preset",
-    entityType: "DocBuilderTemplate",
-    entityId: created.id,
-    user,
-  });
-  revalidatePath(BASE);
-  redirect(`/doc-editor/${created.id}`);
 }
 
 /** Persist validated editor JSON. */

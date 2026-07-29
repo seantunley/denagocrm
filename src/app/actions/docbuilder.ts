@@ -1,5 +1,6 @@
 "use server";
 
+import { asActionResult, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
@@ -56,15 +57,17 @@ export async function renameBuilderTemplate(id: string, formData: FormData) {
 }
 
 export async function setDefaultBuilderTemplate(id: string) {
-  const user = await requirePermission("docbuilder.manage");
-  const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
-  if (!tpl || tpl.deletedAt) return;
-  await prisma.$transaction([
-    prisma.docBuilderTemplate.updateMany({ where: { key: tpl.key }, data: { isDefault: false } }),
-    prisma.docBuilderTemplate.update({ where: { id }, data: { isDefault: true } }),
-  ]);
-  await logAudit({ action: "docbuilder.default", summary: `Set “${tpl.name}” as default ${tpl.key}`, entityType: "DocBuilderTemplate", entityId: id, user });
-  revalidatePath(BASE);
+  return asActionResult(async () => {
+    const user = await requirePermission("docbuilder.manage");
+    const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
+    if (!tpl || tpl.deletedAt) refuse("That template no longer exists.");
+    await prisma.$transaction([
+      prisma.docBuilderTemplate.updateMany({ where: { key: tpl.key }, data: { isDefault: false } }),
+      prisma.docBuilderTemplate.update({ where: { id }, data: { isDefault: true } }),
+    ]);
+    await logAudit({ action: "docbuilder.default", summary: `Set “${tpl.name}” as default ${tpl.key}`, entityType: "DocBuilderTemplate", entityId: id, user });
+    revalidatePath(BASE);
+  });
 }
 
 /** Snapshot the current draft as an immutable, restorable version and mark it published. */
@@ -124,10 +127,12 @@ export async function listBuilderVersionsAction(id: string) {
 }
 
 export async function deleteBuilderTemplate(id: string) {
-  const user = await requirePermission("docbuilder.manage");
-  const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
-  if (!tpl || tpl.deletedAt) return;
-  await prisma.docBuilderTemplate.update({ where: { id }, data: { deletedAt: new Date() } });
-  await logAudit({ action: "docbuilder.delete", summary: `Deleted document “${tpl.name}”`, entityType: "DocBuilderTemplate", entityId: id, user });
-  revalidatePath(BASE);
+  return asActionResult(async () => {
+    const user = await requirePermission("docbuilder.manage");
+    const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
+    if (!tpl || tpl.deletedAt) refuse("That template no longer exists.");
+    await prisma.docBuilderTemplate.update({ where: { id }, data: { deletedAt: new Date() } });
+    await logAudit({ action: "docbuilder.delete", summary: `Deleted document “${tpl.name}”`, entityType: "DocBuilderTemplate", entityId: id, user });
+    revalidatePath(BASE);
+  });
 }

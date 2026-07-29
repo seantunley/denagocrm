@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { SaveForm } from "@/components/SaveForm";
+import { SaveSubmitButton } from "@/components/SaveSubmitButton";
 import {
   ArrowLeft,
   Plus,
@@ -112,14 +114,15 @@ export default async function BuilderIndexPage() {
       <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
         <div className="mb-3 flex items-center justify-between gap-2">
           <p className="text-sm font-semibold text-foreground">New document</p>
-          <form action={createStandardQuoteTemplate}>
-            <Button type="submit" variant="outline" size="sm">
+          <SaveForm success="Template created" action={createStandardQuoteTemplate}>
+            <SaveSubmitButton variant="outline" size="sm">
               <Sparkles className="size-3.5" />
               Start from “Standard” quote
-            </Button>
-          </form>
+            </SaveSubmitButton>
+          </SaveForm>
         </div>
-        <form
+        <SaveForm
+          success="Template created"
           action={createDocEditorTemplate}
           className="flex flex-wrap items-center gap-2"
         >
@@ -136,11 +139,11 @@ export default async function BuilderIndexPage() {
               </option>
             ))}
           </select>
-          <Button type="submit">
+          <SaveSubmitButton>
             <Plus className="size-4" />
             Create &amp; edit
-          </Button>
-        </form>
+          </SaveSubmitButton>
+        </SaveForm>
       </div>
 
       <div className="rounded-xl border border-primary/25 bg-primary/[0.05] p-4 shadow-sm">
@@ -153,7 +156,9 @@ export default async function BuilderIndexPage() {
           accept quotes; workshop templates accept job cards. The server rejects
           mismatched combinations before generating or filing anything.
         </p>
-        <form
+        <SaveForm
+          success="Document generated"
+          resetOnSuccess={false}
           action={generateDocEditorDocument}
           className="flex flex-wrap items-end gap-2"
         >
@@ -190,11 +195,11 @@ export default async function BuilderIndexPage() {
               ))}
             </optgroup>
           </select>
-          <Button type="submit">
+          <SaveSubmitButton>
             <FileDown className="size-4" />
             Generate &amp; file
-          </Button>
-        </form>
+          </SaveSubmitButton>
+        </SaveForm>
       </div>
 
       <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
@@ -279,15 +284,17 @@ export default async function BuilderIndexPage() {
                   </Link>
                 </Button>
                 {!template.isDefault && (
-                  <form
+                  <SaveForm
+                    success="Default template set"
+                    resetOnSuccess={false}
                     action={setDefaultBuilderTemplate.bind(null, template.id)}
                   >
-                    <Button variant="ghost" size="sm" title="Make default">
+                    <SaveSubmitButton variant="ghost" size="sm" title="Make default">
                       <Star className="size-3.5" />
-                    </Button>
-                  </form>
+                    </SaveSubmitButton>
+                  </SaveForm>
                 )}
-                <form action={deleteBuilderTemplate.bind(null, template.id)}>
+                <SaveForm success="Template deleted" resetOnSuccess={false} action={deleteBuilderTemplate.bind(null, template.id)}>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -296,7 +303,7 @@ export default async function BuilderIndexPage() {
                   >
                     <Trash2 className="size-3.5" />
                   </Button>
-                </form>
+                </SaveForm>
               </li>
             ))}
           </ul>

@@ -152,12 +152,16 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
 
 export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) {
   return asActionResult(async () => {
-    // Delivery photos are automotive-owned paperwork; reject when the pack is off
-    // (matches this file's early-return failure convention). Belt-and-braces with
-    // the automotive-gated UI on the quote page — the action is reachable by a
-    // direct POST regardless of what is rendered.
-    if (!(await isModuleEnabled("automotive"))) refuse("The automotive pack is switched off.");
+    // Authorise the caller BEFORE any refusal, so the rule holds everywhere
+    // without exceptions to reason about. This particular one leaks nothing about
+    // the quote — the automotive pack being off is install-wide config — but
+    // "except where the message is harmless" is precisely the judgement that goes
+    // wrong later, and it costs nothing to order it correctly.
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
+    // Delivery photos are automotive-owned paperwork; reject when the pack is off.
+    // Belt-and-braces with the automotive-gated UI on the quote page — the action
+    // is reachable by a direct POST regardless of what is rendered.
+    if (!(await isModuleEnabled("automotive"))) refuse("The automotive pack is switched off.");
     const quote = await prisma.quote.findUniqueOrThrow({ where: { id: quoteId } });
     const files = formData.getAll("files").filter(
       (file): file is File => typeof file === "object" && (file as File).size > 0
