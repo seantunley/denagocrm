@@ -1,3 +1,4 @@
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { TICKET_TYPES, PRIORITIES } from "@/lib/helpdesk-constants";
 import { createTicket } from "@/app/actions/helpdesk";
 
@@ -6,7 +7,7 @@ type Option = { id: string; label: string };
 /** Capture form for opening a ticket on a customer's behalf. Rendered inside a modal. */
 export function NewTicketForm({ contacts, mailboxes }: { contacts: Option[]; mailboxes: Option[] }) {
   return (
-    <form action={createTicket} className="card space-y-4">
+    <SaveForm action={createTicket} success="Ticket created" className="card space-y-4">
       <div>
         <label className="label" htmlFor="contactId">Customer *</label>
         <select id="contactId" name="contactId" required defaultValue="" className="input">
@@ -53,7 +54,7 @@ export function NewTicketForm({ contacts, mailboxes }: { contacts: Option[]; mai
         <input type="checkbox" name="assignToMe" defaultChecked /> Assign to me
       </label>
 
-      <button className="btn-primary w-full">Create ticket</button>
-    </form>
+      <SaveButton className="btn-primary w-full" pendingLabel="Creating…">Create ticket</SaveButton>
+    </SaveForm>
   );
 }
