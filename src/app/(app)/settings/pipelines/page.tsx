@@ -1,4 +1,5 @@
 import { Plus, Zap } from "lucide-react";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { requirePermission } from "@/lib/permissions";
 import { listSalesPipelines, listPipelineStages } from "@/lib/pipelines";
 import {
@@ -51,7 +52,7 @@ export default async function PipelineSettingsPage() {
           title="Create pipeline"
           buttonClass={buttonVariants({ size: "sm" })}
         >
-          <form action={createSalesPipeline} className="space-y-4">
+          <SaveForm success="Pipeline created" action={createSalesPipeline} className="space-y-4">
             <div>
               <label className="label">Name</label>
               <input name="name" className="input" required autoFocus placeholder="Fleet / B2B Sales" />
@@ -74,8 +75,8 @@ export default async function PipelineSettingsPage() {
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
               <input type="checkbox" name="isDefault" className="h-4 w-4" /> Make this the default pipeline
             </label>
-            <button className="btn-primary w-full">Create pipeline</button>
-          </form>
+            <SaveButton className="btn-primary w-full">Create pipeline</SaveButton>
+          </SaveForm>
         </ModalTrigger>
       }
     >
@@ -111,7 +112,7 @@ export default async function PipelineSettingsPage() {
 
             <details className="rounded-lg border border-border p-3">
               <summary className="cursor-pointer text-sm font-medium text-primary">Edit pipeline</summary>
-              <form action={editSalesPipeline.bind(null, pipeline.id)} className="grid md:grid-cols-5 gap-3 mt-4 items-end">
+              <SaveForm success="Pipeline updated" resetOnSuccess={false} action={editSalesPipeline.bind(null, pipeline.id)} className="grid md:grid-cols-5 gap-3 mt-4 items-end">
                 <label className="space-y-1 md:col-span-2">
                   <span className="text-xs text-muted-foreground">Name</span>
                   <input name="name" className="input" required defaultValue={pipeline.name} />
@@ -130,8 +131,8 @@ export default async function PipelineSettingsPage() {
                   <span className="text-xs text-muted-foreground">Description</span>
                   <input name="description" className="input" defaultValue={pipeline.description ?? ""} />
                 </label>
-                <button className="btn-primary">Save</button>
-              </form>
+                <SaveButton className="btn-primary">Save</SaveButton>
+              </SaveForm>
             </details>
 
             <div>
@@ -140,12 +141,12 @@ export default async function PipelineSettingsPage() {
                 {stages.map((stage, i) => (
                   <div key={stage.id} className="flex items-stretch gap-1.5">
                     <div className="flex flex-col justify-center gap-1">
-                      <form action={moveStage.bind(null, pipeline.id, stage.id, "up")}>
-                        <button disabled={i === 0} title="Move up" aria-label={`Move ${stage.name} up`} className="flex size-6 items-center justify-center rounded-md border border-border text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-25 disabled:hover:border-border disabled:hover:text-muted-foreground">↑</button>
-                      </form>
-                      <form action={moveStage.bind(null, pipeline.id, stage.id, "down")}>
-                        <button disabled={i === stages.length - 1} title="Move down" aria-label={`Move ${stage.name} down`} className="flex size-6 items-center justify-center rounded-md border border-border text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-25 disabled:hover:border-border disabled:hover:text-muted-foreground">↓</button>
-                      </form>
+                      <SaveForm success="Stage reordered" resetOnSuccess={false} action={moveStage.bind(null, pipeline.id, stage.id, "up")}>
+                        <SaveButton disabled={i === 0} title="Move up" aria-label={`Move ${stage.name} up`} className="flex size-6 items-center justify-center rounded-md border border-border text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-25 disabled:hover:border-border disabled:hover:text-muted-foreground">↑</SaveButton>
+                      </SaveForm>
+                      <SaveForm success="Stage reordered" resetOnSuccess={false} action={moveStage.bind(null, pipeline.id, stage.id, "down")}>
+                        <SaveButton disabled={i === stages.length - 1} title="Move down" aria-label={`Move ${stage.name} down`} className="flex size-6 items-center justify-center rounded-md border border-border text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-25 disabled:hover:border-border disabled:hover:text-muted-foreground">↓</SaveButton>
+                      </SaveForm>
                     </div>
                     <details className="flex-1 rounded-lg border border-border p-3">
                     <summary className="cursor-pointer flex items-center gap-3 list-none">
@@ -170,7 +171,7 @@ export default async function PipelineSettingsPage() {
                         </span>
                       )}
                     </summary>
-                    <form action={editSalesPipelineStage.bind(null, stage.id)} className="grid md:grid-cols-6 gap-3 mt-4 items-end">
+                    <SaveForm success="Stage updated" resetOnSuccess={false} action={editSalesPipelineStage.bind(null, stage.id)} className="grid md:grid-cols-6 gap-3 mt-4 items-end">
                       <label className="space-y-1 md:col-span-2">
                         <span className="text-xs text-muted-foreground">Name</span>
                         <input name="name" className="input" required defaultValue={stage.name} />
@@ -187,7 +188,7 @@ export default async function PipelineSettingsPage() {
                         <span className="text-xs text-muted-foreground">Stale after days</span>
                         <input name="staleAfterDays" type="number" min="1" className="input" defaultValue={stage.staleAfterDays ?? ""} />
                       </label>
-                      <button className="btn-secondary">Save stage</button>
+                      <SaveButton className="btn-secondary">Save stage</SaveButton>
                       <label className="flex items-center gap-2 text-sm md:col-span-2">
                         <input type="checkbox" name="isClosed" defaultChecked={stage.isClosed} /> Closed stage
                       </label>
@@ -211,7 +212,7 @@ export default async function PipelineSettingsPage() {
                             : "The lead moves immediately; configurable automations can still run afterward."}
                         </span>
                       </label>
-                    </form>
+                    </SaveForm>
                     </details>
                   </div>
                 ))}
@@ -221,7 +222,7 @@ export default async function PipelineSettingsPage() {
 
             <details className="rounded-lg border border-dashed border-border p-3">
               <summary className="cursor-pointer text-sm font-medium">+ Add stage</summary>
-              <form action={createSalesPipelineStage.bind(null, pipeline.id)} className="grid md:grid-cols-6 gap-3 mt-4 items-end">
+              <SaveForm success="Stage added" action={createSalesPipelineStage.bind(null, pipeline.id)} className="grid md:grid-cols-6 gap-3 mt-4 items-end">
                 <label className="space-y-1 md:col-span-2">
                   <span className="text-xs text-muted-foreground">Name</span>
                   <input name="name" className="input" required />
@@ -238,7 +239,7 @@ export default async function PipelineSettingsPage() {
                   <span className="text-xs text-muted-foreground">Stale after days</span>
                   <input name="staleAfterDays" type="number" min="1" className="input" />
                 </label>
-                <button className="btn-primary">Add stage</button>
+                <SaveButton className="btn-primary">Add stage</SaveButton>
                 <label className="flex items-center gap-2 text-sm md:col-span-2">
                   <input type="checkbox" name="isClosed" /> Closed stage
                 </label>
@@ -260,7 +261,7 @@ export default async function PipelineSettingsPage() {
                     Required actions collect their details before the lead is moved.
                   </span>
                 </label>
-              </form>
+              </SaveForm>
             </details>
             </section>
           </details>

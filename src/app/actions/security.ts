@@ -1,5 +1,6 @@
 "use server";
 
+import { asActionResult } from "@/lib/actionResult";
 import bcrypt from "bcryptjs";
 import QRCode from "qrcode";
 import { revalidatePath } from "next/cache";
@@ -121,21 +122,23 @@ export async function setEmailOtp(enabled: boolean) {
 }
 
 export async function saveSessionPolicy(formData: FormData) {
-  const owner = await requireOwner();
-  const minutes = parseInt(String(formData.get("idleMinutes") ?? "60"), 10);
-  const safe = isNaN(minutes) || minutes < 5 ? 60 : Math.min(minutes, 1440);
-  await putSetting("SESSION_IDLE_MINUTES", String(safe));
-  await basePrisma.$executeRaw`UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1`;
-  await createSessionCookie(owner);
-  await logAuditStrict({
-    action: "security.policy_changed",
-    summary: `Idle-timeout policy set to ${safe} minutes; active sessions revoked`,
-    entityType: "SecurityPolicy",
-    entityId: "session",
-    user: owner,
-    after: { idleMinutes: safe },
+  return asActionResult(async () => {
+    const owner = await requireOwner();
+    const minutes = parseInt(String(formData.get("idleMinutes") ?? "60"), 10);
+    const safe = isNaN(minutes) || minutes < 5 ? 60 : Math.min(minutes, 1440);
+    await putSetting("SESSION_IDLE_MINUTES", String(safe));
+    await basePrisma.$executeRaw`UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1`;
+    await createSessionCookie(owner);
+    await logAuditStrict({
+      action: "security.policy_changed",
+      summary: `Idle-timeout policy set to ${safe} minutes; active sessions revoked`,
+      entityType: "SecurityPolicy",
+      entityId: "session",
+      user: owner,
+      after: { idleMinutes: safe },
+    });
+    revalidatePath("/settings");
   });
-  revalidatePath("/settings");
 }
 
 export async function setUserRole(userId: string, role: "owner" | "member") {

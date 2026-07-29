@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { FileText, Pencil, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { createTemplate, deleteTemplate, updateTemplate } from "@/app/actions/emails";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { EmptyState, SectionHeading, Surface } from "@/components/visual-system";
 
 type Template = { id: string; name: string; subject: string; body: string };
@@ -59,16 +60,20 @@ export default function TemplateManager({ templates }: { templates: Template[] }
             }
             className="mb-5"
           />
-          <form
+          <SaveForm
             action={
               selectedTemplate
                 ? updateTemplate.bind(null, selectedTemplate.id)
                 : createTemplate
             }
-            onSubmit={() => setTimeout(() => {
+            success={selectedTemplate ? "Template saved" : "Template created"}
+            // Was a 400ms setTimeout GUESSING when the action had finished, which
+            // closed the editor and refreshed whether or not the save had landed —
+            // and did both even when it failed. onSaved fires on actual success.
+            onSaved={() => {
               closeEditor();
               router.refresh();
-            }, 400)}
+            }}
             className="grid gap-4 lg:grid-cols-2"
           >
             <div>
@@ -111,14 +116,14 @@ export default function TemplateManager({ templates }: { templates: Template[] }
               </p>
             </div>
             <div className="flex flex-wrap gap-2 lg:col-span-2">
-              <button className="btn-primary">
+              <SaveButton className="btn-primary">
                 {selectedTemplate ? "Save template" : "Create template"}
-              </button>
+              </SaveButton>
               <button type="button" className="btn-secondary" onClick={closeEditor}>
                 Cancel
               </button>
             </div>
-          </form>
+          </SaveForm>
         </Surface>
       )}
 
@@ -171,15 +176,20 @@ export default function TemplateManager({ templates }: { templates: Template[] }
                   <Pencil className="size-3.5" />
                   Edit
                 </button>
-                <form
+                <SaveForm
                   action={deleteTemplate.bind(null, template.id)}
-                  onSubmit={() => setTimeout(() => router.refresh(), 400)}
+                  success={`“${template.name}” deleted`}
+                  onSaved={() => router.refresh()}
                 >
-                  <button className="btn-danger btn-sm" aria-label={`Delete ${template.name}`}>
+                  <SaveButton
+                    pendingLabel="Deleting…"
+                    className="btn-danger btn-sm"
+                    aria-label={`Delete ${template.name}`}
+                  >
                     <Trash2 className="size-3.5" />
                     Delete
-                  </button>
-                </form>
+                  </SaveButton>
+                </SaveForm>
               </div>
             </Surface>
           ))}

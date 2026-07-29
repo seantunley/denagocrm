@@ -1,5 +1,6 @@
 "use server";
 
+import { asActionResult, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { putSetting } from "@/lib/settings";
@@ -128,102 +129,116 @@ export async function sendTestEmail(
 // ---- SMTP settings ----
 
 export async function saveSmtpSettings(formData: FormData) {
-  await requireOwner();
-  const entries: Record<string, string> = {
-    SMTP_HOST: String(formData.get("host") ?? "").trim(),
-    SMTP_PORT: String(formData.get("port") ?? "587").trim(),
-    SMTP_SECURE: formData.get("secure") === "on" ? "true" : "false",
-    SMTP_USER: String(formData.get("user") ?? "").trim(),
-    SMTP_FROM: String(formData.get("from") ?? "").trim(),
-  };
-  // The password field renders blank (never echoes the stored secret), so a
-  // blank submit means "keep the saved password" — only overwrite when provided.
-  const pass = String(formData.get("pass") ?? "").trim();
-  if (pass) entries.SMTP_PASS = pass;
-  for (const [key, value] of Object.entries(entries)) {
-    await putSetting(key, value);
-  }
-  revalidatePath("/settings");
+  return asActionResult(async () => {
+    await requireOwner();
+    const entries: Record<string, string> = {
+      SMTP_HOST: String(formData.get("host") ?? "").trim(),
+      SMTP_PORT: String(formData.get("port") ?? "587").trim(),
+      SMTP_SECURE: formData.get("secure") === "on" ? "true" : "false",
+      SMTP_USER: String(formData.get("user") ?? "").trim(),
+      SMTP_FROM: String(formData.get("from") ?? "").trim(),
+    };
+    // The password field renders blank (never echoes the stored secret), so a
+    // blank submit means "keep the saved password" — only overwrite when provided.
+    const pass = String(formData.get("pass") ?? "").trim();
+    if (pass) entries.SMTP_PASS = pass;
+    for (const [key, value] of Object.entries(entries)) {
+      await putSetting(key, value);
+    }
+    revalidatePath("/settings");
+  });
 }
 
 export async function saveServiceReminderSettings(formData: FormData) {
-  await requireOwner();
-  const entries: Record<string, string> = {
-    SERVICE_REMINDER_ENABLED: formData.get("enabled") === "on" ? "true" : "false",
-    SERVICE_REMINDER_TEMPLATE_ID: String(formData.get("templateId") ?? "").trim(),
-  };
-  for (const [key, value] of Object.entries(entries)) {
-    await putSetting(key, value);
-  }
-  revalidatePath("/settings");
+  return asActionResult(async () => {
+    await requireOwner();
+    const entries: Record<string, string> = {
+      SERVICE_REMINDER_ENABLED: formData.get("enabled") === "on" ? "true" : "false",
+      SERVICE_REMINDER_TEMPLATE_ID: String(formData.get("templateId") ?? "").trim(),
+    };
+    for (const [key, value] of Object.entries(entries)) {
+      await putSetting(key, value);
+    }
+    revalidatePath("/settings");
+  });
 }
 
 export async function saveLifecycleSettings(formData: FormData) {
-  await requireOwner();
-  const entries: Record<string, string> = {
-    LIFECYCLE_ANNIVERSARY_ENABLED: formData.get("anniversary") === "on" ? "true" : "false",
-    LIFECYCLE_WINBACK_ENABLED: formData.get("winback") === "on" ? "true" : "false",
-  };
-  for (const [key, value] of Object.entries(entries)) {
-    await putSetting(key, value);
-  }
-  revalidatePath("/settings");
+  return asActionResult(async () => {
+    await requireOwner();
+    const entries: Record<string, string> = {
+      LIFECYCLE_ANNIVERSARY_ENABLED: formData.get("anniversary") === "on" ? "true" : "false",
+      LIFECYCLE_WINBACK_ENABLED: formData.get("winback") === "on" ? "true" : "false",
+    };
+    for (const [key, value] of Object.entries(entries)) {
+      await putSetting(key, value);
+    }
+    revalidatePath("/settings");
+  });
 }
 
 // ---- Email templates ----
 
 export async function createTemplate(formData: FormData) {
-  const user = await requireOwner();
-  const tenantId = await tenantIdFor(user.id);
-  if (!tenantId) return;
-  const name = String(formData.get("name") ?? "").trim();
-  const subject = String(formData.get("subject") ?? "").trim();
-  const body = String(formData.get("body") ?? "").trim();
-  if (!name || !subject || !body) return;
-  await prisma.emailTemplate.create({ data: { tenantId, name, subject, body } });
-  revalidatePath("/settings");
-  revalidatePath("/campaigns");
+  return asActionResult(async () => {
+    const user = await requireOwner();
+    const tenantId = await tenantIdFor(user.id);
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
+    const name = String(formData.get("name") ?? "").trim();
+    const subject = String(formData.get("subject") ?? "").trim();
+    const body = String(formData.get("body") ?? "").trim();
+    if (!name || !subject || !body) refuse("Name, subject and body are all required.");
+    await prisma.emailTemplate.create({ data: { tenantId, name, subject, body } });
+    revalidatePath("/settings");
+    revalidatePath("/campaigns");
+  });
 }
 
 export async function updateTemplate(id: string, formData: FormData) {
-  const user = await requireOwner();
-  const tenantId = await tenantIdFor(user.id);
-  if (!tenantId) return;
-  const name = String(formData.get("name") ?? "").trim();
-  const subject = String(formData.get("subject") ?? "").trim();
-  const body = String(formData.get("body") ?? "").trim();
-  if (!name || !subject || !body) return;
-  await prisma.emailTemplate.updateMany({
-    where: { id, tenantId },
-    data: { name, subject, body },
+  return asActionResult(async () => {
+    const user = await requireOwner();
+    const tenantId = await tenantIdFor(user.id);
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
+    const name = String(formData.get("name") ?? "").trim();
+    const subject = String(formData.get("subject") ?? "").trim();
+    const body = String(formData.get("body") ?? "").trim();
+    if (!name || !subject || !body) refuse("Name, subject and body are all required.");
+    await prisma.emailTemplate.updateMany({
+      where: { id, tenantId },
+      data: { name, subject, body },
+    });
+    revalidatePath("/settings");
+    revalidatePath("/campaigns");
   });
-  revalidatePath("/settings");
-  revalidatePath("/campaigns");
 }
 
 export async function deleteTemplate(id: string, formData: FormData) {
-  const user = await requireOwner();
-  const tenantId = await tenantIdFor(user.id);
-  if (!tenantId) return;
-  void formData;
-  await prisma.emailTemplate.deleteMany({ where: { id, tenantId } });
-  revalidatePath("/settings");
-  revalidatePath("/campaigns");
+  return asActionResult(async () => {
+    const user = await requireOwner();
+    const tenantId = await tenantIdFor(user.id);
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
+    void formData;
+    await prisma.emailTemplate.deleteMany({ where: { id, tenantId } });
+    revalidatePath("/settings");
+    revalidatePath("/campaigns");
+  });
 }
 
 /** Incoming-mail (IMAP) credentials — password encrypted at rest. */
 export async function saveImapSettings(formData: FormData) {
-  await requireOwner();
-  const entries: Record<string, string> = {
-    IMAP_HOST: String(formData.get("host") ?? "").trim(),
-    IMAP_PORT: String(formData.get("port") ?? "993").trim(),
-    IMAP_SECURE: formData.get("secure") === "on" ? "true" : "false",
-    IMAP_USER: String(formData.get("user") ?? "").trim(),
-  };
-  // Blank password submit = keep the saved one (the field never echoes it back).
-  const pass = String(formData.get("pass") ?? "").trim();
-  if (pass) entries.IMAP_PASS = pass;
-  for (const [key, value] of Object.entries(entries)) {
-    await putSetting(key, value);
-  }
+  return asActionResult(async () => {
+    await requireOwner();
+    const entries: Record<string, string> = {
+      IMAP_HOST: String(formData.get("host") ?? "").trim(),
+      IMAP_PORT: String(formData.get("port") ?? "993").trim(),
+      IMAP_SECURE: formData.get("secure") === "on" ? "true" : "false",
+      IMAP_USER: String(formData.get("user") ?? "").trim(),
+    };
+    // Blank password submit = keep the saved one (the field never echoes it back).
+    const pass = String(formData.get("pass") ?? "").trim();
+    if (pass) entries.IMAP_PASS = pass;
+    for (const [key, value] of Object.entries(entries)) {
+      await putSetting(key, value);
+    }
+  });
 }

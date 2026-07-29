@@ -1,5 +1,6 @@
 "use server";
 
+import { asActionResult, ActionRefusal, refuse, type ActionResult } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
@@ -23,55 +24,65 @@ import {
 // ---- Pipeline stages ----
 
 export async function createStage(formData: FormData) {
-  await requireOwner();
-  const name = String(formData.get("name") ?? "").trim();
-  if (!name) return;
-  const max = await prisma.pipelineStage.aggregate({ _max: { order: true } });
-  await prisma.pipelineStage.create({
-    data: {
-      name,
-      color: String(formData.get("color") ?? "#64748b"),
-      order: (max._max.order ?? -1) + 1,
-    },
+  return asActionResult(async () => {
+    await requireOwner();
+    const name = String(formData.get("name") ?? "").trim();
+    if (!name) refuse("Give the stage a name.");
+    const max = await prisma.pipelineStage.aggregate({ _max: { order: true } });
+    await prisma.pipelineStage.create({
+      data: {
+        name,
+        color: String(formData.get("color") ?? "#64748b"),
+        order: (max._max.order ?? -1) + 1,
+      },
+    });
+    revalidatePath("/settings");
+    revalidatePath("/leads");
   });
-  revalidatePath("/settings");
-  revalidatePath("/leads");
 }
 
 export async function renameStage(id: string, formData: FormData) {
-  await requireOwner();
-  const name = String(formData.get("name") ?? "").trim();
-  if (!name) return;
-  await prisma.pipelineStage.update({
-    where: { id },
-    data: { name, color: String(formData.get("color") ?? "#64748b") },
+  return asActionResult(async () => {
+    await requireOwner();
+    const name = String(formData.get("name") ?? "").trim();
+    if (!name) refuse("Give the stage a name.");
+    await prisma.pipelineStage.update({
+      where: { id },
+      data: { name, color: String(formData.get("color") ?? "#64748b") },
+    });
+    revalidatePath("/settings");
+    revalidatePath("/leads");
   });
-  revalidatePath("/settings");
-  revalidatePath("/leads");
 }
 
 export async function moveStage(id: string, direction: "up" | "down") {
-  await requireOwner();
-  const stages = await prisma.pipelineStage.findMany({ orderBy: { order: "asc" } });
-  const index = stages.findIndex((stage) => stage.id === id);
-  const swapWith = direction === "up" ? index - 1 : index + 1;
-  if (index < 0 || swapWith < 0 || swapWith >= stages.length) return;
-  await prisma.$transaction([
-    prisma.pipelineStage.update({ where: { id: stages[index].id }, data: { order: stages[swapWith].order } }),
-    prisma.pipelineStage.update({ where: { id: stages[swapWith].id }, data: { order: stages[index].order } }),
-  ]);
-  revalidatePath("/settings");
-  revalidatePath("/leads");
+  return asActionResult(async () => {
+    await requireOwner();
+    const stages = await prisma.pipelineStage.findMany({ orderBy: { order: "asc" } });
+    const index = stages.findIndex((stage) => stage.id === id);
+    const swapWith = direction === "up" ? index - 1 : index + 1;
+    if (index < 0) refuse("That stage no longer exists — reload the page.");
+    if (swapWith < 0 || swapWith >= stages.length) refuse("That stage is already at the end.");
+    await prisma.$transaction([
+      prisma.pipelineStage.update({ where: { id: stages[index].id }, data: { order: stages[swapWith].order } }),
+      prisma.pipelineStage.update({ where: { id: stages[swapWith].id }, data: { order: stages[index].order } }),
+    ]);
+    revalidatePath("/settings");
+    revalidatePath("/leads");
+  });
 }
 
-export async function deleteStage(id: string, formData: FormData): Promise<void> {
-  await requireOwner();
-  void formData;
-  const count = await prisma.lead.count({ where: { stageId: id } });
-  if (count > 0) return;
-  await prisma.pipelineStage.delete({ where: { id } });
-  revalidatePath("/settings");
-  revalidatePath("/leads");
+export async function deleteStage(id: string, formData: FormData): Promise<ActionResult> {
+  return asActionResult(async () => {
+    await requireOwner();
+    void formData;
+    const count = await prisma.lead.count({ where: { stageId: id } });
+    // Silently returning here reported "Deleted" for a stage that is still in use.
+    if (count > 0) refuse(`That stage still holds ${count} lead${count === 1 ? "" : "s"} — move them first.`);
+    await prisma.pipelineStage.delete({ where: { id } });
+    revalidatePath("/settings");
+    revalidatePath("/leads");
+  });
 }
 
 // ---- Users ----
@@ -183,27 +194,31 @@ export async function changeOwnPassword(
 }
 
 export async function saveQuoteDefaults(formData: FormData) {
-  await requireOwner();
-  const days = String(formData.get("validDays") ?? "").trim();
-  const terms = String(formData.get("terms") ?? "").trim();
-  await putSetting("QUOTE_VALID_DAYS", days || "7");
-  await putSetting("QUOTE_TERMS", terms);
-  revalidatePath("/settings");
+  return asActionResult(async () => {
+    await requireOwner();
+    const days = String(formData.get("validDays") ?? "").trim();
+    const terms = String(formData.get("terms") ?? "").trim();
+    await putSetting("QUOTE_VALID_DAYS", days || "7");
+    await putSetting("QUOTE_TERMS", terms);
+    revalidatePath("/settings");
+  });
 }
 
 export async function saveWorkshopSettings(formData: FormData) {
-  await requireOwner();
-  const days = formData.getAll("days").map(String).join(",");
-  const entries: Record<string, string> = {
-    BOOKING_SLOT_TIMES: String(formData.get("times") ?? "").trim() || "08:00,10:00,12:00,14:00",
-    BOOKING_DAYS: days || "1,2,3,4,5",
-    BOOKING_CAPACITY: String(formData.get("capacity") ?? "1").trim() || "1",
-    BOOKING_HORIZON_DAYS: String(formData.get("horizon") ?? "30").trim() || "30",
-  };
-  for (const [key, value] of Object.entries(entries)) {
-    await putSetting(key, value);
-  }
-  revalidatePath("/settings");
+  return asActionResult(async () => {
+    await requireOwner();
+    const days = formData.getAll("days").map(String).join(",");
+    const entries: Record<string, string> = {
+      BOOKING_SLOT_TIMES: String(formData.get("times") ?? "").trim() || "08:00,10:00,12:00,14:00",
+      BOOKING_DAYS: days || "1,2,3,4,5",
+      BOOKING_CAPACITY: String(formData.get("capacity") ?? "1").trim() || "1",
+      BOOKING_HORIZON_DAYS: String(formData.get("horizon") ?? "30").trim() || "30",
+    };
+    for (const [key, value] of Object.entries(entries)) {
+      await putSetting(key, value);
+    }
+    revalidatePath("/settings");
+  });
 }
 
 export async function saveNextStepScheduling(formData: FormData) {
@@ -369,25 +384,33 @@ export async function removeOwnAvatar(
 }
 
 export async function saveMyProfile(formData: FormData) {
-  const user = await requireUser();
-  const signatureHtml = String(formData.get("signatureHtml") ?? "").trim() || null;
-  await prisma.user.update({ where: { id: user.id }, data: { signatureHtml } });
-  revalidatePath("/settings");
+  return asActionResult(async () => {
+    const user = await requireUser();
+    const signatureHtml = String(formData.get("signatureHtml") ?? "").trim() || null;
+    await prisma.user.update({ where: { id: user.id }, data: { signatureHtml } });
+    revalidatePath("/settings");
+  });
 }
 
 // ---- Integration settings ----
 
 export async function saveSetting(formData: FormData) {
-  await requireOwner();
-  const key = String(formData.get("key") ?? "");
-  const value = String(formData.get("value") ?? "").trim();
-  if (!key) return;
-  // Secret fields render blank (never echo the stored value into the DOM) and
-  // pass keepIfBlank — a blank submit then means "leave the saved value alone"
-  // rather than wiping it. Clearing is a separate, explicit owner action.
-  if (keepBlankSubmit(value, Boolean(formData.get("keepIfBlank")))) return;
-  await putSetting(key, value);
-  revalidatePath("/settings");
+  return asActionResult(async () => {
+    await requireOwner();
+    const key = String(formData.get("key") ?? "");
+    const value = String(formData.get("value") ?? "").trim();
+    if (!key) refuse("Nothing to save — the setting key was missing.");
+    // Secret fields render blank (never echo the stored value into the DOM) and
+    // pass keepIfBlank — a blank submit then means "leave the saved value alone"
+    // rather than wiping it. Clearing is a separate, explicit owner action.
+    // A deliberate no-op: blank means "keep the saved secret". Say that rather
+    // than claim a save.
+    if (keepBlankSubmit(value, Boolean(formData.get("keepIfBlank")))) {
+      return { success: "Left blank — the saved value is unchanged" };
+    }
+    await putSetting(key, value);
+    revalidatePath("/settings");
+  });
 }
 
 /** Reveal a stored secret to the owner on demand — so the value is NEVER in the
@@ -410,19 +433,23 @@ export async function clearSecret(key: string, _formData?: FormData): Promise<vo
 }
 
 export async function regenerateSetting(key: string) {
-  await requireOwner();
-  // The key is a client-supplied bound arg — only allow secrets we actually
-  // generate, so this can't overwrite an externally-issued credential.
-  if (!isRegeneratable(key)) throw new Error("Not a regeneratable secret.");
-  const value = crypto.randomBytes(24).toString("hex");
-  await putSetting(key, value);
-  revalidatePath("/settings");
+  return asActionResult(async () => {
+    await requireOwner();
+    // The key is a client-supplied bound arg — only allow secrets we actually
+    // generate, so this can't overwrite an externally-issued credential.
+    if (!isRegeneratable(key)) throw new ActionRefusal("Not a regeneratable secret.");
+    const value = crypto.randomBytes(24).toString("hex");
+    await putSetting(key, value);
+    revalidatePath("/settings");
+  });
 }
 
 export async function saveNotificationPrefs(formData: FormData) {
-  await requireOwner();
-  const enabled = new Set(formData.getAll("kinds").map(String));
-  const disabled = PUSH_KINDS.map((kind) => kind.id).filter((id) => !enabled.has(id));
-  await putSetting("PUSH_DISABLED_KINDS", disabled.join(","));
-  revalidatePath("/settings");
+  return asActionResult(async () => {
+    await requireOwner();
+    const enabled = new Set(formData.getAll("kinds").map(String));
+    const disabled = PUSH_KINDS.map((kind) => kind.id).filter((id) => !enabled.has(id));
+    await putSetting("PUSH_DISABLED_KINDS", disabled.join(","));
+    revalidatePath("/settings");
+  });
 }

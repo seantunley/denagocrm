@@ -1,5 +1,6 @@
 "use server";
 
+import { asActionResult, refuse } from "@/lib/actionResult";
 import { prisma } from "@/lib/db";
 import { getActiveTenantId, requireOperational, requireOwner } from "@/lib/auth";
 import { requireLeadAccess, requireContactAccess, canAccessContact, hasPermission } from "@/lib/permissions";
@@ -95,14 +96,16 @@ export async function findPossibleDuplicates(input: {
  * right answer to one.
  */
 export async function clearErrorLog() {
-  await requireOwner();
-  const tenantId = await getActiveTenantId();
-  if (!tenantId) return;
-  await basePrisma.errorLog.deleteMany({ where: { tenantId } });
-  // Without this the Settings → System tab keeps rendering the cached (now
-  // deleted) rows, so the button looked like it did nothing.
-  const { revalidatePath } = await import("next/cache");
-  revalidatePath("/settings");
+  return asActionResult(async () => {
+    await requireOwner();
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
+    await basePrisma.errorLog.deleteMany({ where: { tenantId } });
+    // Without this the Settings → System tab keeps rendering the cached (now
+    // deleted) rows, so the button looked like it did nothing.
+    const { revalidatePath } = await import("next/cache");
+    revalidatePath("/settings");
+  });
 }
 
 export type ResearchState = { summary?: string; error?: string };

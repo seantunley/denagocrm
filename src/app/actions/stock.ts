@@ -1,5 +1,6 @@
 "use server";
 
+import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { Prisma } from "@prisma/client";
@@ -562,29 +563,33 @@ export async function deliverStockUnit(id: string, formData: FormData) {
 /* ── Organisational labels (distinct from lifecycle status) ─────────────── */
 
 export async function addStockLabel(formData: FormData) {
-  const user = await requirePermission("stock.manage");
-  const label = str(formData.get("label"));
-  const color = str(formData.get("color")) || "#64748b";
-  if (!label) return;
-  const slug = slugifyLabel(label);
-  if (!slug) throw new Error("Give the label a name");
-  const labels = await getStockLabels();
-  if (labels.some((l) => l.slug === slug)) return; // already exists
-  await saveStockLabels([...labels, { slug, label, color }]);
-  await logAudit({ action: "stock.label_added", summary: `Added stock label “${label}”`, user });
-  revalidatePath("/stock");
-  revalidatePath("/settings");
+  return asActionResult(async () => {
+    const user = await requirePermission("stock.manage");
+    const label = str(formData.get("label"));
+    const color = str(formData.get("color")) || "#64748b";
+    if (!label) refuse("Give the label a name.");
+    const slug = slugifyLabel(label);
+    if (!slug) throw new ActionRefusal("Give the label a name");
+    const labels = await getStockLabels();
+    if (labels.some((l) => l.slug === slug)) refuse("A label with that name already exists.");
+    await saveStockLabels([...labels, { slug, label, color }]);
+    await logAudit({ action: "stock.label_added", summary: `Added stock label “${label}”`, user });
+    revalidatePath("/stock");
+    revalidatePath("/settings");
+  });
 }
 
 export async function removeStockLabel(slug: string) {
-  const user = await requirePermission("stock.manage");
-  const labels = await getStockLabels();
-  await saveStockLabels(labels.filter((l) => l.slug !== slug));
-  // Clear the label from any units carrying it so none are left on a missing label.
-  await prisma.stockUnit.updateMany({ where: { label: slug }, data: { label: null } });
-  await logAudit({ action: "stock.label_removed", summary: `Removed stock label “${slug}”`, user });
-  revalidatePath("/stock");
-  revalidatePath("/settings");
+  return asActionResult(async () => {
+    const user = await requirePermission("stock.manage");
+    const labels = await getStockLabels();
+    await saveStockLabels(labels.filter((l) => l.slug !== slug));
+    // Clear the label from any units carrying it so none are left on a missing label.
+    await prisma.stockUnit.updateMany({ where: { label: slug }, data: { label: null } });
+    await logAudit({ action: "stock.label_removed", summary: `Removed stock label “${slug}”`, user });
+    revalidatePath("/stock");
+    revalidatePath("/settings");
+  });
 }
 
 export async function setStockUnitLabel(id: string, formData: FormData) {
