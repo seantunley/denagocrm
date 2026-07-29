@@ -192,3 +192,44 @@ test("ConfirmDelete owns its dialog and does not close an enclosing modal too", 
   assert.match(code, /closeModalOnSuccess=\{false\}/, "it closes its own dialog via onSaved");
   assert.match(code, /onSaved=\{\(\) => setOpen\(false\)\}/, "and must still close itself");
 });
+
+// ── Selected files must never be silently discarded ────────────────────────
+
+// The file is OPTIONAL on scheduleDelivery and markDelivered, but an oversized
+// one was skipped while the stage change went ahead — so the delivery was
+// scheduled, success was reported, the form disappeared, and the paperwork the
+// user picked never arrived.
+test("fulfilment: an oversized SELECTED file refuses before the stage changes", () => {
+  const code = src("src/app/actions/fulfilment.ts");
+  assert.doesNotMatch(
+    code,
+    /if \(file && file\.size <= MAX_FILE\)/,
+    "skipping an oversized file while proceeding hides the loss",
+  );
+  const refusals = code.match(/if \(file && file\.size > MAX_FILE\) refuse\(/g) ?? [];
+  assert.ok(refusals.length >= 2, "both optional-file stages must refuse an oversized selection");
+});
+
+test("uploadDeliveryPhotos: refuses an empty or wholly invalid selection", () => {
+  const code = src("src/app/actions/fulfilment.ts");
+  const fn = code.slice(code.indexOf("export async function uploadDeliveryPhotos"));
+  assert.match(fn, /files\.length === 0\) refuse\(/, "nothing selected is not a successful upload");
+  assert.match(fn, /accepted\.length === 0\)\s*\{?\s*refuse\(/, "all-invalid is not a successful upload");
+  assert.match(fn, /skipped > 0/, "a partial upload must say how many were dropped");
+});
+
+// ── Authorisation before disclosure ────────────────────────────────────────
+
+// Specific refusals are useful, but specificity BEFORE an authorisation check
+// turns the action into an oracle: an unauthorised session could probe ids and
+// read back whether each referral exists and what state it is in.
+test("redeemReferral: authorises before any state-revealing refusal", () => {
+  const code = src("src/app/actions/referrals.ts");
+  const gate = code.indexOf('requirePermission("referrals.manage")');
+  const existence = code.indexOf('refuse("That referral no longer exists.")');
+  const status = code.indexOf("refuse(`That referral is already");
+  const scoped = code.indexOf("requireContactAccess(");
+  assert.ok(gate > 0, "the capability must be checked");
+  assert.ok(gate < existence, "existence must not be revealed before the capability check");
+  assert.ok(scoped < status, "status must not be revealed before the contact-scoped check");
+});
