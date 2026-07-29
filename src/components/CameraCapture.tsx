@@ -1,5 +1,6 @@
 "use client";
 
+import type { ActionResult } from "@/lib/actionResultTypes";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -18,7 +19,10 @@ export function CameraCapture({
   action,
   label = "Use camera",
 }: {
-  action: (formData: FormData) => Promise<void>;
+  // Accepts converted actions too. CameraCapture invokes the action directly
+  // rather than through a form, so it has no SaveForm to report through — its
+  // own capture UI is the feedback here.
+  action: (formData: FormData) => Promise<ActionResult | void>;
   label?: string;
 }) {
   const router = useRouter();

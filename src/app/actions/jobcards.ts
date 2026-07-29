@@ -1,5 +1,6 @@
 "use server";
 
+import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { randomUUID } from "crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -21,39 +22,41 @@ import {
 } from "@/lib/permissions";
 
 export async function uploadJobCardPhotos(jobCardId: string, formData: FormData) {
-  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId } });
-  const files = formData
-    .getAll("files")
-    .filter((f): f is File => typeof f === "object" && (f as File).size > 0);
-  let saved = 0;
-  for (const file of files.slice(0, 12)) {
-    if (file.size > 4 * 1024 * 1024 || !file.type.startsWith("image/")) continue;
-    const buf = Buffer.from(await file.arrayBuffer());
-    const storedName = await saveFile(buf, file.name || "checkin.jpg", file.type);
-    await prisma.document.create({
-      data: {
-        fileName: `Check-in photo — job card #${jobCard.number} — ${file.name}`,
-        storedName,
-        mimeType: file.type,
-        sizeBytes: file.size,
+  return asActionResult(async () => {
+    const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId } });
+    const files = formData
+      .getAll("files")
+      .filter((f): f is File => typeof f === "object" && (f as File).size > 0);
+    let saved = 0;
+    for (const file of files.slice(0, 12)) {
+      if (file.size > 4 * 1024 * 1024 || !file.type.startsWith("image/")) continue;
+      const buf = Buffer.from(await file.arrayBuffer());
+      const storedName = await saveFile(buf, file.name || "checkin.jpg", file.type);
+      await prisma.document.create({
+        data: {
+          fileName: `Check-in photo — job card #${jobCard.number} — ${file.name}`,
+          storedName,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          contactId: jobCard.contactId,
+          jobCardId,
+          tag: "checkin-photo",
+          uploadedById: user.id,
+        },
+      });
+      saved++;
+    }
+    if (saved > 0) {
+      await logAudit({
+        action: "jobcard.photos",
+        summary: `${saved} check-in photo${saved !== 1 ? "s" : ""} added to job card #${jobCard.number} (pre-work condition)`,
         contactId: jobCard.contactId,
-        jobCardId,
-        tag: "checkin-photo",
-        uploadedById: user.id,
-      },
-    });
-    saved++;
-  }
-  if (saved > 0) {
-    await logAudit({
-      action: "jobcard.photos",
-      summary: `${saved} check-in photo${saved !== 1 ? "s" : ""} added to job card #${jobCard.number} (pre-work condition)`,
-      contactId: jobCard.contactId,
-      user,
-    });
-  }
-  revalidatePath(`/jobcards/${jobCardId}`);
+        user,
+      });
+    }
+    revalidatePath(`/jobcards/${jobCardId}`);
+  });
 }
 
 /**
@@ -181,382 +184,430 @@ async function claimPartStock(
 }
 
 export async function addJobCardItem(jobCardId: string, formData: FormData) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const description = String(formData.get("description") ?? "").trim();
-  if (!description) return;
-  const kind = String(formData.get("kind") ?? "part");
-  const partId = String(formData.get("partId") ?? "").trim() || null;
-  const unitPriceCents = parseRands(String(formData.get("unitPrice") ?? ""));
-  const isPart = Boolean(partId) && kind === "part";
-  // Reject invalid quantities instead of silently coercing them to 1 (a negative
-  // used to flow through and INCREASE stock). Parts must be WHOLE positive units;
-  // labour/other lines may be fractional but must still be positive.
-  const qtyRaw = parseFloat(String(formData.get("qty") ?? "1"));
-  const qty = isPart
-    ? (Number.isInteger(qtyRaw) && qtyRaw > 0 ? qtyRaw : null)
-    : (Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : null);
-  if (qty == null) throw new Error("Enter a valid quantity.");
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const description = String(formData.get("description") ?? "").trim();
+    if (!description) refuse("Give the line a description.");
+    const kind = String(formData.get("kind") ?? "part");
+    const partId = String(formData.get("partId") ?? "").trim() || null;
+    const unitPriceCents = parseRands(String(formData.get("unitPrice") ?? ""));
+    const isPart = Boolean(partId) && kind === "part";
+    // Reject invalid quantities instead of silently coercing them to 1 (a negative
+    // used to flow through and INCREASE stock). Parts must be WHOLE positive units;
+    // labour/other lines may be fractional but must still be positive.
+    const qtyRaw = parseFloat(String(formData.get("qty") ?? "1"));
+    const qty = isPart
+      ? (Number.isInteger(qtyRaw) && qtyRaw > 0 ? qtyRaw : null)
+      : (Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : null);
+    if (qty == null) throw new ActionRefusal("Enter a valid quantity.");
 
-  // Claim stock (locked, oversell-checked) and create the line in one transaction.
-  const outcome = await basePrisma.$transaction(async (tx) => {
-    if (isPart && partId) {
-      const claim = await claimPartStock(tx, partId, qty);
-      if (!claim.ok) return claim;
-    }
-    await tx.jobCardItem.create({ data: { jobCardId, kind, description, qty, unitPriceCents, partId } });
-    return { ok: true as const };
+    // Claim stock (locked, oversell-checked) and create the line in one transaction.
+    const outcome = await basePrisma.$transaction(async (tx) => {
+      if (isPart && partId) {
+        const claim = await claimPartStock(tx, partId, qty);
+        if (!claim.ok) return claim;
+      }
+      await tx.jobCardItem.create({ data: { jobCardId, kind, description, qty, unitPriceCents, partId } });
+      return { ok: true as const };
+    });
+    if (!outcome.ok) throw new ActionRefusal(`Only ${outcome.available} × ${outcome.name} in stock.`);
+    revalidatePath(`/jobcards/${jobCardId}`);
+    revalidatePath("/parts");
   });
-  if (!outcome.ok) throw new Error(`Only ${outcome.available} × ${outcome.name} in stock.`);
-  revalidatePath(`/jobcards/${jobCardId}`);
-  revalidatePath("/parts");
 }
 
 export async function deleteJobCardItem(id: string, jobCardId: string, formData: FormData) {
-  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
-  // Scope the child to the authorized job card — a caller with access to THIS
-  // job card must not be able to delete another job card's item by id. Delete the
-  // line AND restore its stock in ONE transaction so the two can't diverge (the
-  // old code did them separately and swallowed the restore's errors). updateMany
-  // won't throw if the part is gone, so a missing part doesn't block the delete.
-  const item = await basePrisma.$transaction(async (tx) => {
-    const owned = await tx.jobCardItem.findFirst({ where: { id, jobCardId } });
-    if (!owned) return null;
-    await tx.jobCardItem.delete({ where: { id: owned.id } });
-    if (owned.partId && owned.kind === "part") {
-      const inc = Math.round(owned.qty);
-      if (inc > 0) {
-        await tx.part.updateMany({ where: { id: owned.partId }, data: { stockQty: { increment: inc } } });
+  return asActionResult(async () => {
+    const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+    // Scope the child to the authorized job card — a caller with access to THIS
+    // job card must not be able to delete another job card's item by id. Delete the
+    // line AND restore its stock in ONE transaction so the two can't diverge (the
+    // old code did them separately and swallowed the restore's errors). updateMany
+    // won't throw if the part is gone, so a missing part doesn't block the delete.
+    const item = await basePrisma.$transaction(async (tx) => {
+      const owned = await tx.jobCardItem.findFirst({ where: { id, jobCardId } });
+      if (!owned) return null;
+      await tx.jobCardItem.delete({ where: { id: owned.id } });
+      if (owned.partId && owned.kind === "part") {
+        const inc = Math.round(owned.qty);
+        if (inc > 0) {
+          await tx.part.updateMany({ where: { id: owned.partId }, data: { stockQty: { increment: inc } } });
+        }
       }
-    }
-    return owned;
+      return owned;
+    });
+    if (!item) refuse("That line is no longer on this job card.");
+    const jobCard = await prisma.jobCard.findUnique({ where: { id: jobCardId } });
+    await logAudit({
+      action: "jobcard.item_deleted",
+      summary: `Removed “${item.description}” from job card #${jobCard?.number ?? "?"} — ${reason}`,
+      contactId: jobCard?.contactId,
+      user,
+    });
+    revalidatePath(`/jobcards/${jobCardId}`);
   });
-  if (!item) return;
-  const jobCard = await prisma.jobCard.findUnique({ where: { id: jobCardId } });
-  await logAudit({
-    action: "jobcard.item_deleted",
-    summary: `Removed “${item.description}” from job card #${jobCard?.number ?? "?"} — ${reason}`,
-    contactId: jobCard?.contactId,
-    user,
-  });
-  revalidatePath(`/jobcards/${jobCardId}`);
 }
 
 export async function setJobCardTechnician(jobCardId: string, formData: FormData) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const technicianId = String(formData.get("technicianId") ?? "").trim() || null;
-  await prisma.jobCard.update({ where: { id: jobCardId }, data: { technicianId } });
-  revalidatePath(`/jobcards/${jobCardId}`);
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const technicianId = String(formData.get("technicianId") ?? "").trim() || null;
+    await prisma.jobCard.update({ where: { id: jobCardId }, data: { technicianId } });
+    revalidatePath(`/jobcards/${jobCardId}`);
+  });
 }
 
 // Moving to any workflow stage (or cancelling / reopening). "collected" is
 // reserved for completeJobCard, which also creates the service record.
 export async function setJobCardStatus(jobCardId: string, status: string) {
-  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const allowed = new Set(STAGE_VALUES.filter((s) => s !== "collected"));
-  if (!allowed.has(status)) throw new Error("Invalid job card status");
-  const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId }, select: { number: true, contactId: true, status: true } });
-  await prisma.jobCard.update({
-    where: { id: jobCardId },
-    data: { status, completedAt: null },
+  return asActionResult(async () => {
+    const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const allowed = new Set(STAGE_VALUES.filter((s) => s !== "collected"));
+    if (!allowed.has(status)) throw new ActionRefusal("Invalid job card status");
+    const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId }, select: { number: true, contactId: true, status: true } });
+    await prisma.jobCard.update({
+      where: { id: jobCardId },
+      data: { status, completedAt: null },
+    });
+    await logAudit({
+      action: "jobcard.stage",
+      summary: `Job card #${jobCard.number}: ${stageMeta(jobCard.status).label} → ${stageMeta(status).label}`,
+      contactId: jobCard.contactId,
+      user,
+    });
+    revalidatePath("/jobcards");
+    revalidatePath(`/jobcards/${jobCardId}`);
   });
-  await logAudit({
-    action: "jobcard.stage",
-    summary: `Job card #${jobCard.number}: ${stageMeta(jobCard.status).label} → ${stageMeta(status).label}`,
-    contactId: jobCard.contactId,
-    user,
-  });
-  revalidatePath("/jobcards");
-  revalidatePath(`/jobcards/${jobCardId}`);
 }
 
 export async function setJobCardPriority(jobCardId: string, formData: FormData) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const priority = String(formData.get("priority") ?? "normal");
-  if (!PRIORITY_VALUES.includes(priority)) return;
-  await prisma.jobCard.update({ where: { id: jobCardId }, data: { priority } });
-  revalidatePath("/jobcards");
-  revalidatePath(`/jobcards/${jobCardId}`);
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const priority = String(formData.get("priority") ?? "normal");
+    if (!PRIORITY_VALUES.includes(priority)) refuse("Choose a valid priority.");
+    await prisma.jobCard.update({ where: { id: jobCardId }, data: { priority } });
+    revalidatePath("/jobcards");
+    revalidatePath(`/jobcards/${jobCardId}`);
+  });
 }
 
 export async function setJobCardBay(jobCardId: string, formData: FormData) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const bayId = String(formData.get("bayId") ?? "").trim() || null;
-  await prisma.jobCard.update({ where: { id: jobCardId }, data: { bayId } });
-  revalidatePath(`/jobcards/${jobCardId}`);
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const bayId = String(formData.get("bayId") ?? "").trim() || null;
+    await prisma.jobCard.update({ where: { id: jobCardId }, data: { bayId } });
+    revalidatePath(`/jobcards/${jobCardId}`);
+  });
 }
 
 export async function setJobCardEstimate(jobCardId: string, formData: FormData) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const hoursRaw = String(formData.get("estimatedHours") ?? "").trim();
-  const rateRaw = String(formData.get("labourRate") ?? "").trim();
-  const estimatedHours = hoursRaw === "" ? null : Math.max(0, parseFloat(hoursRaw) || 0);
-  const labourRateCents = rateRaw === "" ? null : parseRands(rateRaw);
-  await prisma.jobCard.update({
-    where: { id: jobCardId },
-    data: { estimatedHours, labourRateCents },
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const hoursRaw = String(formData.get("estimatedHours") ?? "").trim();
+    const rateRaw = String(formData.get("labourRate") ?? "").trim();
+    const estimatedHours = hoursRaw === "" ? null : Math.max(0, parseFloat(hoursRaw) || 0);
+    const labourRateCents = rateRaw === "" ? null : parseRands(rateRaw);
+    await prisma.jobCard.update({
+      where: { id: jobCardId },
+      data: { estimatedHours, labourRateCents },
+    });
+    revalidatePath(`/jobcards/${jobCardId}`);
   });
-  revalidatePath(`/jobcards/${jobCardId}`);
 }
 
 // ── Technician time clock ────────────────────────────────────────────────────
 // A technician has at most one running clock at a time. Starting one auto-stops
 // any other running entry they left open (on this or another job).
 export async function startTimeEntry(jobCardId: string, formData: FormData) {
-  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const note = String(formData.get("note") ?? "").trim() || null;
-  await prisma.jobCardTimeEntry.updateMany({
-    where: { technicianId: user.id, endedAt: null },
-    data: { endedAt: new Date() },
+  return asActionResult(async () => {
+    const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const note = String(formData.get("note") ?? "").trim() || null;
+    await prisma.jobCardTimeEntry.updateMany({
+      where: { technicianId: user.id, endedAt: null },
+      data: { endedAt: new Date() },
+    });
+    await prisma.jobCardTimeEntry.create({
+      data: { jobCardId, technicianId: user.id, note },
+    });
+    revalidatePath(`/jobcards/${jobCardId}`);
   });
-  await prisma.jobCardTimeEntry.create({
-    data: { jobCardId, technicianId: user.id, note },
-  });
-  revalidatePath(`/jobcards/${jobCardId}`);
 }
 
 export async function stopTimeEntry(jobCardId: string) {
-  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
-  await prisma.jobCardTimeEntry.updateMany({
-    where: { jobCardId, technicianId: user.id, endedAt: null },
-    data: { endedAt: new Date() },
+  return asActionResult(async () => {
+    const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+    await prisma.jobCardTimeEntry.updateMany({
+      where: { jobCardId, technicianId: user.id, endedAt: null },
+      data: { endedAt: new Date() },
+    });
+    revalidatePath(`/jobcards/${jobCardId}`);
   });
-  revalidatePath(`/jobcards/${jobCardId}`);
 }
 
 export async function deleteTimeEntry(entryId: string, jobCardId: string) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  // Scoped delete: only removes the entry if it belongs to the authorized job card.
-  await prisma.jobCardTimeEntry.deleteMany({ where: { id: entryId, jobCardId } });
-  revalidatePath(`/jobcards/${jobCardId}`);
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    // Scoped delete: only removes the entry if it belongs to the authorized job card.
+    await prisma.jobCardTimeEntry.deleteMany({ where: { id: entryId, jobCardId } });
+    revalidatePath(`/jobcards/${jobCardId}`);
+  });
 }
 
 export async function completeJobCard(jobCardId: string, formData: FormData) {
-  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const jobCard = await prisma.jobCard.findUniqueOrThrow({
-    where: { id: jobCardId },
-    include: { vehicle: true },
-  });
-
-  const str = (k: string) => {
-    const v = String(formData.get(k) ?? "").trim();
-    return v === "" ? null : v;
-  };
-  const kmRaw = str("km");
-  const km = kmRaw != null ? parseInt(kmRaw, 10) : jobCard.kmIn;
-  const summary = str("summary") ?? jobCard.description;
-
-  let nextDueKm = str("nextDueKm") != null ? parseInt(String(str("nextDueKm")), 10) : null;
-  let nextDueDate = str("nextDueDate") ? new Date(String(str("nextDueDate"))) : null;
-  if (nextDueKm == null && km != null && jobCard.vehicle.serviceIntervalKm) {
-    nextDueKm = km + jobCard.vehicle.serviceIntervalKm;
-  }
-  if (nextDueDate == null && jobCard.vehicle.serviceIntervalMonths) {
-    nextDueDate = addMonths(new Date(), jobCard.vehicle.serviceIntervalMonths);
-  }
-
-  await prisma.$transaction([
-    prisma.jobCard.update({
+  return asActionResult(async () => {
+    const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const jobCard = await prisma.jobCard.findUniqueOrThrow({
       where: { id: jobCardId },
-      data: { status: "collected", completedAt: new Date() },
-    }),
-    prisma.serviceRecord.create({
-      data: {
-        vehicleId: jobCard.vehicleId,
-        jobCardId,
-        summary,
-        details: str("details"),
-        km: km != null && !isNaN(km) ? km : null,
-        nextDueKm: nextDueKm != null && !isNaN(nextDueKm) ? nextDueKm : null,
-        nextDueDate,
-        performedById: user.id,
-      },
-    }),
-  ]);
-  if (km != null && !isNaN(km)) {
-    await prisma.mileageLog.create({
-      data: { vehicleId: jobCard.vehicleId, km, note: `Job card #${jobCard.number} completed` },
+      include: { vehicle: true },
     });
-  }
-  await logAudit({
-    action: "jobcard.completed",
-    summary: `Completed job card #${jobCard.number} on ${jobCard.vehicle.model}: ${summary}`,
-    contactId: jobCard.contactId,
-    user,
+
+    const str = (k: string) => {
+      const v = String(formData.get(k) ?? "").trim();
+      return v === "" ? null : v;
+    };
+    const kmRaw = str("km");
+    const km = kmRaw != null ? parseInt(kmRaw, 10) : jobCard.kmIn;
+    const summary = str("summary") ?? jobCard.description;
+
+    let nextDueKm = str("nextDueKm") != null ? parseInt(String(str("nextDueKm")), 10) : null;
+    let nextDueDate = str("nextDueDate") ? new Date(String(str("nextDueDate"))) : null;
+    if (nextDueKm == null && km != null && jobCard.vehicle.serviceIntervalKm) {
+      nextDueKm = km + jobCard.vehicle.serviceIntervalKm;
+    }
+    if (nextDueDate == null && jobCard.vehicle.serviceIntervalMonths) {
+      nextDueDate = addMonths(new Date(), jobCard.vehicle.serviceIntervalMonths);
+    }
+
+    await prisma.$transaction([
+      prisma.jobCard.update({
+        where: { id: jobCardId },
+        data: { status: "collected", completedAt: new Date() },
+      }),
+      prisma.serviceRecord.create({
+        data: {
+          vehicleId: jobCard.vehicleId,
+          jobCardId,
+          summary,
+          details: str("details"),
+          km: km != null && !isNaN(km) ? km : null,
+          nextDueKm: nextDueKm != null && !isNaN(nextDueKm) ? nextDueKm : null,
+          nextDueDate,
+          performedById: user.id,
+        },
+      }),
+    ]);
+    if (km != null && !isNaN(km)) {
+      await prisma.mileageLog.create({
+        data: { vehicleId: jobCard.vehicleId, km, note: `Job card #${jobCard.number} completed` },
+      });
+    }
+    await logAudit({
+      action: "jobcard.completed",
+      summary: `Completed job card #${jobCard.number} on ${jobCard.vehicle.model}: ${summary}`,
+      contactId: jobCard.contactId,
+      user,
+    });
+    await sendReviewRequest(
+      jobCard.contactId,
+      "service",
+      `the service on your ${jobCard.vehicle.model} (job card #${jobCard.number})`
+    ).catch(() => {});
+    await triggerSurvey("job_complete", {
+      contactId: jobCard.contactId,
+      jobCardId: jobCard.id,
+    });
+    revalidatePath("/jobcards");
+    revalidatePath(`/jobcards/${jobCardId}`);
+    revalidatePath(`/vehicles/${jobCard.vehicleId}`);
+    revalidatePath("/vehicles");
   });
-  await sendReviewRequest(
-    jobCard.contactId,
-    "service",
-    `the service on your ${jobCard.vehicle.model} (job card #${jobCard.number})`
-  ).catch(() => {});
-  await triggerSurvey("job_complete", {
-    contactId: jobCard.contactId,
-    jobCardId: jobCard.id,
-  });
-  revalidatePath("/jobcards");
-  revalidatePath(`/jobcards/${jobCardId}`);
-  revalidatePath(`/vehicles/${jobCard.vehicleId}`);
-  revalidatePath("/vehicles");
 }
 
 export async function deleteJobCard(id: string, formData: FormData) {
-  const user = await requireJobCardAccess(id, "jobcards.manage");
-  const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
-  // Void any live signing request AND soft-delete the job card in one locked
-  // transaction, so a trashed job card can't still be signed via a live link.
-  const jobCard = await basePrisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT id FROM "JobCard" WHERE id = ${id} FOR UPDATE`;
-    await tx.signatureRequest.updateMany({
-      where: { jobCardId: id, deletedAt: null, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
-      data: { status: "voided" },
+  return asActionResult(async () => {
+    const user = await requireJobCardAccess(id, "jobcards.manage");
+    const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+    // Void any live signing request AND soft-delete the job card in one locked
+    // transaction, so a trashed job card can't still be signed via a live link.
+    const jobCard = await basePrisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT id FROM "JobCard" WHERE id = ${id} FOR UPDATE`;
+      await tx.signatureRequest.updateMany({
+        where: { jobCardId: id, deletedAt: null, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
+        data: { status: "voided" },
+      });
+      return tx.jobCard.update({
+        where: { id },
+        data: { deletedAt: new Date(), deleteReason: reason, deletedByName: user.name },
+      });
     });
-    return tx.jobCard.update({
-      where: { id },
-      data: { deletedAt: new Date(), deleteReason: reason, deletedByName: user.name },
+    await logAudit({
+      action: "trash.deleted",
+      summary: `Moved job card #${jobCard.number} to trash — ${reason}`,
+      contactId: jobCard.contactId,
+      user,
     });
+    revalidatePath("/jobcards");
+    return { redirectTo: "/jobcards" };
   });
-  await logAudit({
-    action: "trash.deleted",
-    summary: `Moved job card #${jobCard.number} to trash — ${reason}`,
-    contactId: jobCard.contactId,
-    user,
-  });
-  revalidatePath("/jobcards");
-  redirect("/jobcards");
 }
 
 // ── Condition notes & check-out photos (phase 2) ──────────────────────────────
 export async function saveConditionNotes(jobCardId: string, formData: FormData) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const checkinNotes = String(formData.get("checkinNotes") ?? "").trim() || null;
-  const checkoutNotes = String(formData.get("checkoutNotes") ?? "").trim() || null;
-  await prisma.jobCard.update({ where: { id: jobCardId }, data: { checkinNotes, checkoutNotes } });
-  revalidatePath(`/jobcards/${jobCardId}`);
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const checkinNotes = String(formData.get("checkinNotes") ?? "").trim() || null;
+    const checkoutNotes = String(formData.get("checkoutNotes") ?? "").trim() || null;
+    await prisma.jobCard.update({ where: { id: jobCardId }, data: { checkinNotes, checkoutNotes } });
+    revalidatePath(`/jobcards/${jobCardId}`);
+  });
 }
 
 export async function uploadCheckoutPhotos(jobCardId: string, formData: FormData) {
-  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId } });
-  const files = formData.getAll("files").filter((f): f is File => typeof f === "object" && (f as File).size > 0);
-  let saved = 0;
-  for (const file of files.slice(0, 12)) {
-    if (file.size > 4 * 1024 * 1024 || !file.type.startsWith("image/")) continue;
-    const buf = Buffer.from(await file.arrayBuffer());
-    const storedName = await saveFile(buf, file.name || "checkout.jpg", file.type);
-    await prisma.document.create({
-      data: {
-        fileName: `Check-out photo — job card #${jobCard.number} — ${file.name}`,
-        storedName,
-        mimeType: file.type,
-        sizeBytes: file.size,
-        contactId: jobCard.contactId,
-        jobCardId,
-        tag: "checkout-photo",
-        uploadedById: user.id,
-      },
-    });
-    saved++;
-  }
-  if (saved > 0) {
-    await logAudit({ action: "jobcard.photos", summary: `${saved} check-out photo${saved !== 1 ? "s" : ""} added to job card #${jobCard.number} (post-work condition)`, contactId: jobCard.contactId, user });
-  }
-  revalidatePath(`/jobcards/${jobCardId}`);
+  return asActionResult(async () => {
+    const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId } });
+    const files = formData.getAll("files").filter((f): f is File => typeof f === "object" && (f as File).size > 0);
+    let saved = 0;
+    for (const file of files.slice(0, 12)) {
+      if (file.size > 4 * 1024 * 1024 || !file.type.startsWith("image/")) continue;
+      const buf = Buffer.from(await file.arrayBuffer());
+      const storedName = await saveFile(buf, file.name || "checkout.jpg", file.type);
+      await prisma.document.create({
+        data: {
+          fileName: `Check-out photo — job card #${jobCard.number} — ${file.name}`,
+          storedName,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          contactId: jobCard.contactId,
+          jobCardId,
+          tag: "checkout-photo",
+          uploadedById: user.id,
+        },
+      });
+      saved++;
+    }
+    if (saved > 0) {
+      await logAudit({ action: "jobcard.photos", summary: `${saved} check-out photo${saved !== 1 ? "s" : ""} added to job card #${jobCard.number} (post-work condition)`, contactId: jobCard.contactId, user });
+    }
+    revalidatePath(`/jobcards/${jobCardId}`);
+  });
 }
 
 // ── Inspection checklist (phase 2) ────────────────────────────────────────────
 export async function addInspectionItem(jobCardId: string, formData: FormData) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const label = String(formData.get("label") ?? "").trim();
-  if (!label) return;
-  const status = String(formData.get("status") ?? "ok");
-  const max = await prisma.jobCardInspectionItem.aggregate({ where: { jobCardId }, _max: { sortOrder: true } });
-  await prisma.jobCardInspectionItem.create({
-    data: { jobCardId, label, status, sortOrder: (max._max.sortOrder ?? 0) + 1 },
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const label = String(formData.get("label") ?? "").trim();
+    if (!label) refuse("Give the inspection item a label.");
+    const status = String(formData.get("status") ?? "ok");
+    const max = await prisma.jobCardInspectionItem.aggregate({ where: { jobCardId }, _max: { sortOrder: true } });
+    await prisma.jobCardInspectionItem.create({
+      data: { jobCardId, label, status, sortOrder: (max._max.sortOrder ?? 0) + 1 },
+    });
+    revalidatePath(`/jobcards/${jobCardId}`);
   });
-  revalidatePath(`/jobcards/${jobCardId}`);
 }
 
 export async function setInspectionItem(itemId: string, jobCardId: string, formData: FormData) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const status = String(formData.get("status") ?? "ok");
-  const notes = String(formData.get("notes") ?? "").trim() || null;
-  // Scoped update: only touches the item if it belongs to the authorized job card.
-  await prisma.jobCardInspectionItem.updateMany({ where: { id: itemId, jobCardId }, data: { status, notes } });
-  revalidatePath(`/jobcards/${jobCardId}`);
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const status = String(formData.get("status") ?? "ok");
+    const notes = String(formData.get("notes") ?? "").trim() || null;
+    // Scoped update: only touches the item if it belongs to the authorized job card.
+    await prisma.jobCardInspectionItem.updateMany({ where: { id: itemId, jobCardId }, data: { status, notes } });
+    revalidatePath(`/jobcards/${jobCardId}`);
+  });
 }
 
 export async function deleteInspectionItem(itemId: string, jobCardId: string) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  await prisma.jobCardInspectionItem.deleteMany({ where: { id: itemId, jobCardId } });
-  revalidatePath(`/jobcards/${jobCardId}`);
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    await prisma.jobCardInspectionItem.deleteMany({ where: { id: itemId, jobCardId } });
+    revalidatePath(`/jobcards/${jobCardId}`);
+  });
 }
 
 export async function uploadInspectionPhoto(itemId: string, jobCardId: string, formData: FormData) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  // Verify the item belongs to the authorized job card BEFORE saving a file, so a
-  // wrong item id can't attach a photo to another job card's inspection (or leave
-  // an orphaned blob).
-  const owned = await prisma.jobCardInspectionItem.findFirst({ where: { id: itemId, jobCardId }, select: { id: true } });
-  if (!owned) return;
-  const file = formData.get("file");
-  if (!(file instanceof File) || file.size === 0) return;
-  if (file.size > 4 * 1024 * 1024 || !file.type.startsWith("image/")) return;
-  const buf = Buffer.from(await file.arrayBuffer());
-  const storedName = await saveFile(buf, file.name || "inspection.jpg", file.type);
-  await prisma.jobCardInspectionItem.update({ where: { id: itemId }, data: { photoStoredName: storedName } });
-  revalidatePath(`/jobcards/${jobCardId}`);
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    // Verify the item belongs to the authorized job card BEFORE saving a file, so a
+    // wrong item id can't attach a photo to another job card's inspection (or leave
+    // an orphaned blob).
+    const owned = await prisma.jobCardInspectionItem.findFirst({ where: { id: itemId, jobCardId }, select: { id: true } });
+    if (!owned) refuse("That item is not on this job card — reload the page.");
+    const file = formData.get("file");
+    if (!(file instanceof File) || file.size === 0) refuse("Choose a photo to upload.");
+    // Silently discarding the upload and reporting success means the photo
+    // never arrives and nobody is told — the same failure as the delivery
+    // paperwork in the previous batch.
+    if (file.size > 4 * 1024 * 1024) refuse("That photo is larger than 4 MB.");
+    if (!file.type.startsWith("image/")) refuse("That file is not an image.");
+    const buf = Buffer.from(await file.arrayBuffer());
+    const storedName = await saveFile(buf, file.name || "inspection.jpg", file.type);
+    await prisma.jobCardInspectionItem.update({ where: { id: itemId }, data: { photoStoredName: storedName } });
+    revalidatePath(`/jobcards/${jobCardId}`);
+  });
 }
 
 // ── Additional-work approval (phase 2) ────────────────────────────────────────
 export async function requestAdditionalWork(jobCardId: string, formData: FormData) {
-  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const description = String(formData.get("description") ?? "").trim();
-  if (!description) return;
-  const amountCents = parseRands(String(formData.get("amount") ?? ""));
-  const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId }, select: { number: true, contactId: true } });
-  await prisma.jobCardApproval.create({
-    data: { jobCardId, description, amountCents, createdById: user.id },
+  return asActionResult(async () => {
+    const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const description = String(formData.get("description") ?? "").trim();
+    if (!description) refuse("Give the line a description.");
+    const amountCents = parseRands(String(formData.get("amount") ?? ""));
+    const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId }, select: { number: true, contactId: true } });
+    await prisma.jobCardApproval.create({
+      data: { jobCardId, description, amountCents, createdById: user.id },
+    });
+    // Notify the customer in their portal (PortalNotification is a raw-SQL table on this base).
+    await prisma.$executeRaw`
+      INSERT INTO "PortalNotification" ("id","contactId","title","body","href","kind")
+      VALUES (${randomUUID()}, ${jobCard.contactId}, ${"Additional work needs your approval"},
+        ${`Job card #${jobCard.number}: ${description}${amountCents ? ` — R${(amountCents / 100).toFixed(2)}` : ""}`},
+        ${"/portal/support"}, ${"jobcard"})`.catch(() => {});
+    await logAudit({ action: "jobcard.approval_requested", summary: `Requested approval for additional work on job card #${jobCard.number}: ${description}`, contactId: jobCard.contactId, user });
+    revalidatePath(`/jobcards/${jobCardId}`);
   });
-  // Notify the customer in their portal (PortalNotification is a raw-SQL table on this base).
-  await prisma.$executeRaw`
-    INSERT INTO "PortalNotification" ("id","contactId","title","body","href","kind")
-    VALUES (${randomUUID()}, ${jobCard.contactId}, ${"Additional work needs your approval"},
-      ${`Job card #${jobCard.number}: ${description}${amountCents ? ` — R${(amountCents / 100).toFixed(2)}` : ""}`},
-      ${"/portal/support"}, ${"jobcard"})`.catch(() => {});
-  await logAudit({ action: "jobcard.approval_requested", summary: `Requested approval for additional work on job card #${jobCard.number}: ${description}`, contactId: jobCard.contactId, user });
-  revalidatePath(`/jobcards/${jobCardId}`);
 }
 
 export async function decideApproval(approvalId: string, jobCardId: string, decision: "approved" | "declined", formData: FormData) {
-  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const decidedVia = String(formData.get("decidedVia") ?? "phone");
-  const notes = String(formData.get("notes") ?? "").trim() || null;
-  // Scope to the authorized job card so a caller can't decide another job's approval.
-  const owned = await prisma.jobCardApproval.findFirst({ where: { id: approvalId, jobCardId }, select: { id: true } });
-  if (!owned) return;
-  const approval = await prisma.jobCardApproval.update({
-    where: { id: approvalId },
-    data: { status: decision, decidedVia, decidedAt: new Date(), notes },
-    include: { jobCard: { select: { number: true, contactId: true } } },
+  return asActionResult(async () => {
+    const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const decidedVia = String(formData.get("decidedVia") ?? "phone");
+    const notes = String(formData.get("notes") ?? "").trim() || null;
+    // Scope to the authorized job card so a caller can't decide another job's approval.
+    const owned = await prisma.jobCardApproval.findFirst({ where: { id: approvalId, jobCardId }, select: { id: true } });
+    if (!owned) refuse("That item is not on this job card — reload the page.");
+    const approval = await prisma.jobCardApproval.update({
+      where: { id: approvalId },
+      data: { status: decision, decidedVia, decidedAt: new Date(), notes },
+      include: { jobCard: { select: { number: true, contactId: true } } },
+    });
+    await logAudit({ action: "jobcard.approval_decided", summary: `Additional work ${decision} (${decidedVia}) on job card #${approval.jobCard.number}: ${approval.description}`, contactId: approval.jobCard.contactId, user });
+    revalidatePath(`/jobcards/${jobCardId}`);
   });
-  await logAudit({ action: "jobcard.approval_decided", summary: `Additional work ${decision} (${decidedVia}) on job card #${approval.jobCard.number}: ${approval.description}`, contactId: approval.jobCard.contactId, user });
-  revalidatePath(`/jobcards/${jobCardId}`);
 }
 
 export async function deleteApproval(approvalId: string, jobCardId: string) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  await prisma.jobCardApproval.deleteMany({ where: { id: approvalId, jobCardId } });
-  revalidatePath(`/jobcards/${jobCardId}`);
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    await prisma.jobCardApproval.deleteMany({ where: { id: approvalId, jobCardId } });
+    revalidatePath(`/jobcards/${jobCardId}`);
+  });
 }
 
 // ── Subcontracting (phase 3) ──────────────────────────────────────────────────
 export async function saveSubcontract(jobCardId: string, formData: FormData) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const isSubcontracted = formData.get("isSubcontracted") === "on";
-  const subcontractor = String(formData.get("subcontractor") ?? "").trim() || null;
-  const subCostCents = parseRands(String(formData.get("subCost") ?? ""));
-  await prisma.jobCard.update({ where: { id: jobCardId }, data: { isSubcontracted, subcontractor, subCostCents } });
-  revalidatePath(`/jobcards/${jobCardId}`);
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const isSubcontracted = formData.get("isSubcontracted") === "on";
+    const subcontractor = String(formData.get("subcontractor") ?? "").trim() || null;
+    const subCostCents = parseRands(String(formData.get("subCost") ?? ""));
+    await prisma.jobCard.update({ where: { id: jobCardId }, data: { isSubcontracted, subcontractor, subCostCents } });
+    revalidatePath(`/jobcards/${jobCardId}`);
+  });
 }
 
 // ── Part reservations (phase 3) ───────────────────────────────────────────────
@@ -564,129 +615,141 @@ export async function saveSubcontract(jobCardId: string, formData: FormData) {
 // active reservations. Consuming turns a reservation into a job-card part line
 // and decrements stock.
 export async function reservePart(jobCardId: string, formData: FormData) {
-  const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const partId = String(formData.get("partId") ?? "").trim();
-  if (!partId) return;
-  const qty = Math.max(1, parseInt(String(formData.get("qty") ?? "1"), 10) || 1);
-  // Never reserve more than is actually available. Lock the part row so two
-  // concurrent reservations can't both pass the availability check (oversell).
-  const outcome = await prisma.$transaction(async (tx) => {
-    // Lock + fetch a LIVE part only — a trashed part must not be reservable by id.
-    await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${partId} AND "deletedAt" IS NULL FOR UPDATE`;
-    const part = await tx.part.findFirst({ where: { id: partId, deletedAt: null }, select: { name: true, stockQty: true } });
-    if (!part) return { ok: false as const };
-    const agg = await tx.partReservation.aggregate({ where: { partId, status: "active" }, _sum: { qty: true } });
-    const reserved = agg._sum.qty ?? 0;
-    if (reserved + qty > part.stockQty) {
-      return { ok: false as const, over: true, available: Math.max(0, part.stockQty - reserved), name: part.name };
+  return asActionResult(async () => {
+    const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const partId = String(formData.get("partId") ?? "").trim();
+    if (!partId) refuse("Choose a part to reserve.");
+    const qty = Math.max(1, parseInt(String(formData.get("qty") ?? "1"), 10) || 1);
+    // Never reserve more than is actually available. Lock the part row so two
+    // concurrent reservations can't both pass the availability check (oversell).
+    const outcome = await prisma.$transaction(async (tx) => {
+      // Lock + fetch a LIVE part only — a trashed part must not be reservable by id.
+      await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${partId} AND "deletedAt" IS NULL FOR UPDATE`;
+      const part = await tx.part.findFirst({ where: { id: partId, deletedAt: null }, select: { name: true, stockQty: true } });
+      if (!part) return { ok: false as const };
+      const agg = await tx.partReservation.aggregate({ where: { partId, status: "active" }, _sum: { qty: true } });
+      const reserved = agg._sum.qty ?? 0;
+      if (reserved + qty > part.stockQty) {
+        return { ok: false as const, over: true, available: Math.max(0, part.stockQty - reserved), name: part.name };
+      }
+      await tx.partReservation.create({ data: { jobCardId, partId, qty } });
+      return { ok: true as const, name: part.name };
+    });
+    if (!outcome.ok) {
+      if (outcome.over) throw new ActionRefusal(`Only ${outcome.available} × ${outcome.name} available to reserve.`);
+      refuse("That part is no longer available to reserve.");
     }
-    await tx.partReservation.create({ data: { jobCardId, partId, qty } });
-    return { ok: true as const, name: part.name };
+    const jobCard = await prisma.jobCard.findUnique({ where: { id: jobCardId }, select: { number: true, contactId: true } });
+    await logAudit({ action: "jobcard.part_reserved", summary: `Reserved ${qty}× ${outcome.name} for job card #${jobCard?.number ?? "?"}`, contactId: jobCard?.contactId, user });
+    revalidatePath(`/jobcards/${jobCardId}`);
+    revalidatePath("/parts");
   });
-  if (!outcome.ok) {
-    if (outcome.over) throw new Error(`Only ${outcome.available} × ${outcome.name} available to reserve.`);
-    return;
-  }
-  const jobCard = await prisma.jobCard.findUnique({ where: { id: jobCardId }, select: { number: true, contactId: true } });
-  await logAudit({ action: "jobcard.part_reserved", summary: `Reserved ${qty}× ${outcome.name} for job card #${jobCard?.number ?? "?"}`, contactId: jobCard?.contactId, user });
-  revalidatePath(`/jobcards/${jobCardId}`);
-  revalidatePath("/parts");
 }
 
 export async function releaseReservation(reservationId: string, jobCardId: string) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  // Require status "active" so a consumed reservation can't be flipped back to
-  // released (which would leave its stock decrement + job-card line in place and
-  // let it be consumed again).
-  await prisma.partReservation.updateMany({
-    where: { id: reservationId, jobCardId, status: "active" },
-    data: { status: "released" },
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    // Require status "active" so a consumed reservation can't be flipped back to
+    // released (which would leave its stock decrement + job-card line in place and
+    // let it be consumed again).
+    await prisma.partReservation.updateMany({
+      where: { id: reservationId, jobCardId, status: "active" },
+      data: { status: "released" },
+    });
+    revalidatePath(`/jobcards/${jobCardId}`);
+    revalidatePath("/parts");
   });
-  revalidatePath(`/jobcards/${jobCardId}`);
-  revalidatePath("/parts");
 }
 
 export async function consumeReservation(reservationId: string, jobCardId: string) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  // Lock the PART row FIRST (same ordering as claimPartStock), THEN claim the
-  // reservation and decrement — all in one transaction. The old code flipped the
-  // reservation active→consumed without ever locking the part, so a concurrent
-  // direct stock claim could lock the part, no longer see this (now-consumed)
-  // reservation in the availability calc, claim the "freed" stock, and both paths
-  // decrement into negative stock. Locking the part serializes the two.
-  await prisma.$transaction(async (tx) => {
-    const reservation = await tx.partReservation.findUnique({ where: { id: reservationId } });
-    if (!reservation || reservation.jobCardId !== jobCardId || reservation.status !== "active") return { ok: false as const };
-    await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${reservation.partId} AND "deletedAt" IS NULL FOR UPDATE`;
-    const part = await tx.part.findFirst({ where: { id: reservation.partId, deletedAt: null }, select: { name: true, priceCents: true, stockQty: true } });
-    if (!part) return { ok: false as const };
-    // Claim the reservation FIRST, under the part lock. Only the request that
-    // flips active→consumed proceeds — a second waiter (whose reservation was
-    // already consumed) exits harmlessly instead of throwing a false shortage
-    // against the now-reduced stock. Throwing after the claim rolls it back.
-    const claimed = await tx.partReservation.updateMany({
-      where: { id: reservationId, jobCardId, status: "active" },
-      data: { status: "consumed" },
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    // Lock the PART row FIRST (same ordering as claimPartStock), THEN claim the
+    // reservation and decrement — all in one transaction. The old code flipped the
+    // reservation active→consumed without ever locking the part, so a concurrent
+    // direct stock claim could lock the part, no longer see this (now-consumed)
+    // reservation in the availability calc, claim the "freed" stock, and both paths
+    // decrement into negative stock. Locking the part serializes the two.
+    await prisma.$transaction(async (tx) => {
+      const reservation = await tx.partReservation.findUnique({ where: { id: reservationId } });
+      if (!reservation || reservation.jobCardId !== jobCardId || reservation.status !== "active") return { ok: false as const };
+      await tx.$executeRaw`SELECT id FROM "Part" WHERE id = ${reservation.partId} AND "deletedAt" IS NULL FOR UPDATE`;
+      const part = await tx.part.findFirst({ where: { id: reservation.partId, deletedAt: null }, select: { name: true, priceCents: true, stockQty: true } });
+      if (!part) return { ok: false as const };
+      // Claim the reservation FIRST, under the part lock. Only the request that
+      // flips active→consumed proceeds — a second waiter (whose reservation was
+      // already consumed) exits harmlessly instead of throwing a false shortage
+      // against the now-reduced stock. Throwing after the claim rolls it back.
+      const claimed = await tx.partReservation.updateMany({
+        where: { id: reservationId, jobCardId, status: "active" },
+        data: { status: "consumed" },
+      });
+      if (claimed.count !== 1) return { ok: false as const };
+      if (part.stockQty < reservation.qty) {
+        // Throw (not return) so the reservation claim rolls back — otherwise it
+        // would commit as "consumed" with no job-card line or stock decrement.
+        throw new ActionRefusal(`Only ${Math.max(0, part.stockQty)} × ${part.name} physically in stock — can't consume ${reservation.qty}.`);
+      }
+      await tx.jobCardItem.create({
+        data: { jobCardId, kind: "part", description: part.name, qty: reservation.qty, unitPriceCents: part.priceCents, partId: reservation.partId },
+      });
+      await tx.part.update({ where: { id: reservation.partId }, data: { stockQty: { decrement: reservation.qty } } });
+      return { ok: true as const };
     });
-    if (claimed.count !== 1) return { ok: false as const };
-    if (part.stockQty < reservation.qty) {
-      // Throw (not return) so the reservation claim rolls back — otherwise it
-      // would commit as "consumed" with no job-card line or stock decrement.
-      throw new Error(`Only ${Math.max(0, part.stockQty)} × ${part.name} physically in stock — can't consume ${reservation.qty}.`);
-    }
-    await tx.jobCardItem.create({
-      data: { jobCardId, kind: "part", description: part.name, qty: reservation.qty, unitPriceCents: part.priceCents, partId: reservation.partId },
-    });
-    await tx.part.update({ where: { id: reservation.partId }, data: { stockQty: { decrement: reservation.qty } } });
-    return { ok: true as const };
+    revalidatePath(`/jobcards/${jobCardId}`);
+    revalidatePath("/parts");
   });
-  revalidatePath(`/jobcards/${jobCardId}`);
-  revalidatePath("/parts");
 }
 
 // ── Warranty recovery & comebacks (phase 4) ───────────────────────────────────
 export async function setJobWarranty(jobCardId: string, formData: FormData) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const underWarranty = formData.get("underWarranty") === "on";
-  const warrantyRecoveredCents = parseRands(String(formData.get("warrantyRecovered") ?? ""));
-  await prisma.jobCard.update({ where: { id: jobCardId }, data: { underWarranty, warrantyRecoveredCents } });
-  revalidatePath(`/jobcards/${jobCardId}`);
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const underWarranty = formData.get("underWarranty") === "on";
+    const warrantyRecoveredCents = parseRands(String(formData.get("warrantyRecovered") ?? ""));
+    await prisma.jobCard.update({ where: { id: jobCardId }, data: { underWarranty, warrantyRecoveredCents } });
+    revalidatePath(`/jobcards/${jobCardId}`);
+  });
 }
 
 export async function setComeback(jobCardId: string, formData: FormData) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const comebackOfId = String(formData.get("comebackOfId") ?? "").trim() || null;
-  await prisma.jobCard.update({ where: { id: jobCardId }, data: { comebackOfId } });
-  revalidatePath(`/jobcards/${jobCardId}`);
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const comebackOfId = String(formData.get("comebackOfId") ?? "").trim() || null;
+    await prisma.jobCard.update({ where: { id: jobCardId }, data: { comebackOfId } });
+    revalidatePath(`/jobcards/${jobCardId}`);
+  });
 }
 
 // ── Service packages (phase 3) ────────────────────────────────────────────────
 export async function applyServicePackage(jobCardId: string, formData: FormData) {
-  await requireJobCardAccess(jobCardId, "jobcards.manage");
-  const packageId = String(formData.get("packageId") ?? "").trim();
-  if (!packageId) return;
-  const pkg = await prisma.servicePackage.findUnique({ where: { id: packageId }, include: { items: true } });
-  if (!pkg) return;
-  // Apply every line + its stock claim in ONE transaction. Each part is claimed
-  // under a row lock with an availability check (stock minus active reservations),
-  // so the package can't oversell; insufficient stock on ANY part rolls the whole
-  // package back instead of leaving it half-applied or clamping stock to zero.
-  const outcome = await basePrisma.$transaction(async (tx) => {
-    for (const item of pkg.items) {
-      if (item.partId && item.kind === "part") {
-        const dec = Math.round(item.qty);
-        if (dec > 0) {
-          const claim = await claimPartStock(tx, item.partId, dec);
-          if (!claim.ok) return claim;
+  return asActionResult(async () => {
+    await requireJobCardAccess(jobCardId, "jobcards.manage");
+    const packageId = String(formData.get("packageId") ?? "").trim();
+    if (!packageId) refuse("Choose a service package.");
+    const pkg = await prisma.servicePackage.findUnique({ where: { id: packageId }, include: { items: true } });
+    if (!pkg) refuse("That service package no longer exists.");
+    // Apply every line + its stock claim in ONE transaction. Each part is claimed
+    // under a row lock with an availability check (stock minus active reservations),
+    // so the package can't oversell; insufficient stock on ANY part rolls the whole
+    // package back instead of leaving it half-applied or clamping stock to zero.
+    const outcome = await basePrisma.$transaction(async (tx) => {
+      for (const item of pkg.items) {
+        if (item.partId && item.kind === "part") {
+          const dec = Math.round(item.qty);
+          if (dec > 0) {
+            const claim = await claimPartStock(tx, item.partId, dec);
+            if (!claim.ok) return claim;
+          }
         }
+        await tx.jobCardItem.create({
+          data: { jobCardId, kind: item.kind, description: item.description, qty: item.qty, unitPriceCents: item.unitPriceCents, partId: item.partId },
+        });
       }
-      await tx.jobCardItem.create({
-        data: { jobCardId, kind: item.kind, description: item.description, qty: item.qty, unitPriceCents: item.unitPriceCents, partId: item.partId },
-      });
-    }
-    return { ok: true as const };
+      return { ok: true as const };
+    });
+    if (!outcome.ok) throw new ActionRefusal(`Not enough stock to apply this package — only ${outcome.available} × ${outcome.name} available.`);
+    revalidatePath(`/jobcards/${jobCardId}`);
+    revalidatePath("/parts");
   });
-  if (!outcome.ok) throw new Error(`Not enough stock to apply this package — only ${outcome.available} × ${outcome.name} available.`);
-  revalidatePath(`/jobcards/${jobCardId}`);
-  revalidatePath("/parts");
 }

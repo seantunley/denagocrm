@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import {
@@ -224,16 +225,16 @@ export default async function JobCardDetailPage({
           <Link href={`/jobcards/${jobCard.id}/print`} className={buttonVariants({ variant: "outline", size: "sm" })}><Printer />Print</Link>
           {jobCard.status === "collected" && <Link href={`/jobcards/${jobCard.id}/service-report`} className={buttonVariants({ variant: "outline", size: "sm" })} target="_blank"><ClipboardCheck />Service report</Link>}
           {builderDocs.length > 0 && currentUser.role === "owner" && (
-            <form action={generateDocEditorDocument} className="flex items-center gap-1">
+            <SaveForm success="Document generated" resetOnSuccess={false} action={generateDocEditorDocument} className="flex items-center gap-1">
               <input type="hidden" name="jobCardId" value={jobCard.id} />
               <select name="templateId" defaultValue={builderDocs[0].id} className="h-8 max-w-44 rounded-md border border-input bg-card px-2 text-xs text-foreground" title="Document template">
                 {builderDocs.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
-              <button className={buttonVariants({ variant: "outline", size: "sm" })}><FileText />Generate</button>
-            </form>
+              <SaveButton className={buttonVariants({ variant: "outline", size: "sm" })}><FileText />Generate</SaveButton>
+            </SaveForm>
           )}
-          {terminal && <form action={setJobCardStatus.bind(null, jobCard.id, "repair")}><button className={buttonVariants({ variant: "outline", size: "sm" })}>Reopen</button></form>}
-          {!terminal && <form action={setJobCardStatus.bind(null, jobCard.id, "cancelled")}><button className={buttonVariants({ variant: "outline", size: "sm" })}>Cancel job</button></form>}
+          {terminal && <SaveForm success="Status updated" resetOnSuccess={false} action={setJobCardStatus.bind(null, jobCard.id, "repair")}><SaveButton className={buttonVariants({ variant: "outline", size: "sm" })}>Reopen</SaveButton></SaveForm>}
+          {!terminal && <SaveForm success="Status updated" resetOnSuccess={false} action={setJobCardStatus.bind(null, jobCard.id, "cancelled")}><SaveButton className={buttonVariants({ variant: "outline", size: "sm" })}>Cancel job</SaveButton></SaveForm>}
           <ConfirmDelete action={deleteJobCard.bind(null, jobCard.id)} title={`Delete job card #${jobCard.number}?`} description="The job card moves to Trash and can be restored for 60 days." triggerClass="btn-danger btn-sm" />
         </div>
       </div>
@@ -245,12 +246,12 @@ export default async function JobCardDetailPage({
             const complete = index < progressIndex;
             const current = index === progressIndex && !terminal;
             return (
-              <form key={stage.value} action={setJobCardStatus.bind(null, jobCard.id, stage.value)}>
-                <button className={cn("flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left transition-colors", complete ? "border-emerald-400/20 bg-emerald-400/[0.06]" : current ? "border-primary/25 bg-primary/[0.07]" : "border-border bg-muted/15 hover:border-primary/30")}>
+              <SaveForm key={stage.value} success="Status updated" resetOnSuccess={false} action={setJobCardStatus.bind(null, jobCard.id, stage.value)}>
+                <SaveButton className={cn("flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left transition-colors", complete ? "border-emerald-400/20 bg-emerald-400/[0.06]" : current ? "border-primary/25 bg-primary/[0.07]" : "border-border bg-muted/15 hover:border-primary/30")}>
                   <span className={cn("grid size-6 shrink-0 place-items-center rounded-lg border text-[10px] font-semibold", complete ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : current ? "border-primary/20 bg-primary/10 text-primary" : "border-border bg-muted/30 text-muted-foreground")}>{complete ? <Check className="size-3.5" /> : index + 1}</span>
                   <span className="min-w-0 truncate text-xs font-medium">{stage.label}</span>
-                </button>
-              </form>
+                </SaveButton>
+              </SaveForm>
             );
           })}
         </div>
@@ -275,40 +276,40 @@ export default async function JobCardDetailPage({
                 <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-primary">Work requested</p>
                 <p className="mt-3 whitespace-pre-wrap text-base leading-7 text-foreground">{jobCard.description}</p>
               </div>
-              <form action={setJobCardTechnician.bind(null, jobCard.id)} className="rounded-xl border border-border bg-muted/20 p-3">
+              <SaveForm success="Technician assigned" resetOnSuccess={false} action={setJobCardTechnician.bind(null, jobCard.id)} className="rounded-xl border border-border bg-muted/20 p-3">
                 <label className="label" htmlFor="job-technician">Technician</label>
                 <select id="job-technician" name="technicianId" className="input" defaultValue={jobCard.technicianId ?? ""}>
                   <option value="">Unassigned</option>
                   {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </select>
-                <button className="btn-secondary btn-sm mt-2 w-full">Update assignment</button>
-              </form>
+                <SaveButton className="btn-secondary btn-sm mt-2 w-full">Update assignment</SaveButton>
+              </SaveForm>
             </div>
           </Surface>
           <div className="grid gap-4 md:grid-cols-3">
-            <form action={setJobCardBay.bind(null, jobCard.id)} className="card space-y-2">
+            <SaveForm success="Bay assigned" resetOnSuccess={false} action={setJobCardBay.bind(null, jobCard.id)} className="card space-y-2">
               <label className="label" htmlFor="bayId">Workshop bay</label>
               <select id="bayId" name="bayId" className="input" defaultValue={jobCard.bayId ?? ""}>
                 <option value="">Unassigned</option>
                 {bays.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
               </select>
-              <button className="btn-secondary btn-sm">Set bay</button>
-            </form>
-            <form action={setJobCardPriority.bind(null, jobCard.id)} className="card space-y-2">
+              <SaveButton className="btn-secondary btn-sm">Set bay</SaveButton>
+            </SaveForm>
+            <SaveForm success="Priority updated" resetOnSuccess={false} action={setJobCardPriority.bind(null, jobCard.id)} className="card space-y-2">
               <label className="label" htmlFor="priority">Priority</label>
               <select id="priority" name="priority" className="input" defaultValue={jobCard.priority}>
                 {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
               </select>
-              <button className="btn-secondary btn-sm">Set priority</button>
-            </form>
-            <form action={setJobCardEstimate.bind(null, jobCard.id)} className="card space-y-2">
+              <SaveButton className="btn-secondary btn-sm">Set priority</SaveButton>
+            </SaveForm>
+            <SaveForm success="Estimate saved" resetOnSuccess={false} action={setJobCardEstimate.bind(null, jobCard.id)} className="card space-y-2">
               <label className="label">Labour estimate</label>
               <div className="grid grid-cols-2 gap-2">
                 <input name="estimatedHours" inputMode="decimal" className="input tabular-nums" placeholder="Hours" defaultValue={jobCard.estimatedHours ?? ""} />
                 <input name="labourRate" inputMode="decimal" className="input tabular-nums" placeholder={`R${(defaultRateCents / 100).toFixed(0)}/h`} defaultValue={jobCard.labourRateCents != null ? (jobCard.labourRateCents / 100).toFixed(2) : ""} />
               </div>
-              <button className="btn-secondary btn-sm">Save estimate</button>
-            </form>
+              <SaveButton className="btn-secondary btn-sm">Save estimate</SaveButton>
+            </SaveForm>
           </div>
         </StageSection>
 
@@ -325,10 +326,10 @@ export default async function JobCardDetailPage({
               </div>
               <div className="flex items-center gap-2 flex-wrap">
                 <CameraCapture action={uploadJobCardPhotos.bind(null, jobCard.id)} />
-                <form action={uploadJobCardPhotos.bind(null, jobCard.id)} className="flex items-center gap-2">
+                <SaveForm success="Photos uploaded" resetOnSuccess={false} action={uploadJobCardPhotos.bind(null, jobCard.id)} className="flex items-center gap-2">
                   <input type="file" name="files" multiple required accept="image/*" capture="environment" className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-                  <button className="btn-primary btn-sm">Upload</button>
-                </form>
+                  <SaveButton className="btn-primary btn-sm">Upload</SaveButton>
+                </SaveForm>
               </div>
             </div>
             {jobCard.documents.filter((d) => d.tag === "checkin-photo").length === 0 ? (
@@ -351,7 +352,7 @@ export default async function JobCardDetailPage({
               </div>
             )}
           </div>
-          <form action={saveConditionNotes.bind(null, jobCard.id)} className="card space-y-2">
+          <SaveForm success="Condition notes saved" resetOnSuccess={false} action={saveConditionNotes.bind(null, jobCard.id)} className="card space-y-2">
             <h2 className="font-semibold">Condition notes</h2>
             <div>
               <label className="label" htmlFor="checkinNotes">At check-in</label>
@@ -361,8 +362,8 @@ export default async function JobCardDetailPage({
               <label className="label" htmlFor="checkoutNotes">At check-out</label>
               <textarea id="checkoutNotes" name="checkoutNotes" rows={2} className="input" defaultValue={jobCard.checkoutNotes ?? ""} placeholder="Final condition, what was handed back…" />
             </div>
-            <button className="btn-secondary btn-sm">Save condition notes</button>
-          </form>
+            <SaveButton className="btn-secondary btn-sm">Save condition notes</SaveButton>
+          </SaveForm>
         </StageSection>
 
         {/* 3 · Diagnosis ─────────────────────────────────────────────────── */}
@@ -379,13 +380,13 @@ export default async function JobCardDetailPage({
                   return (
                     <div key={item.id} className="flex flex-wrap items-center gap-3 py-2">
                       <span className="min-w-40 flex-1 font-medium">{item.label}</span>
-                      <form action={setInspectionItem.bind(null, item.id, jobCard.id)} className="flex items-center gap-2">
+                      <SaveForm success="Inspection updated" resetOnSuccess={false} action={setInspectionItem.bind(null, item.id, jobCard.id)} className="flex items-center gap-2">
                         <select name="status" defaultValue={item.status} className="input h-8 py-0 text-xs w-32">
                           {INSPECTION_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
                         <input name="notes" defaultValue={item.notes ?? ""} placeholder="Note" className="input h-8 py-0 text-xs w-40" />
-                        <button className="btn-secondary btn-sm">Save</button>
-                      </form>
+                        <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+                      </SaveForm>
                       <StatusPill tone={meta.tone}>{meta.label}</StatusPill>
                       {item.photoStoredName ? (
                         <a href={item.photoStoredName} target="_blank">
@@ -393,20 +394,20 @@ export default async function JobCardDetailPage({
                           <img src={item.photoStoredName} alt={item.label} className="h-8 w-8 rounded object-cover border border-slate-700" />
                         </a>
                       ) : (
-                        <form action={uploadInspectionPhoto.bind(null, item.id, jobCard.id)} className="flex items-center gap-1">
+                        <SaveForm success="Photo uploaded" resetOnSuccess={false} action={uploadInspectionPhoto.bind(null, item.id, jobCard.id)} className="flex items-center gap-1">
                           <input type="file" name="file" accept="image/*" className="block w-28 text-[10px] text-slate-500 file:btn-secondary file:btn-sm file:mr-1 file:border-0" />
-                          <button className="text-xs text-slate-500 hover:text-foreground">📎</button>
-                        </form>
+                          <SaveButton className="text-xs text-slate-500 hover:text-foreground">📎</SaveButton>
+                        </SaveForm>
                       )}
-                      <form action={deleteInspectionItem.bind(null, item.id, jobCard.id)}>
-                        <button className="text-xs text-slate-600 hover:text-red-500">✕</button>
-                      </form>
+                      <SaveForm success="Inspection item removed" resetOnSuccess={false} action={deleteInspectionItem.bind(null, item.id, jobCard.id)}>
+                        <SaveButton className="text-xs text-slate-600 hover:text-red-500">✕</SaveButton>
+                      </SaveForm>
                     </div>
                   );
                 })}
               </div>
             )}
-            <form action={addInspectionItem.bind(null, jobCard.id)} className="flex flex-wrap items-end gap-2">
+            <SaveForm success="Inspection item added" action={addInspectionItem.bind(null, jobCard.id)} className="flex flex-wrap items-end gap-2">
               <div className="flex-1 min-w-48">
                 <label className="label" htmlFor="ins-label">Add check</label>
                 <input id="ins-label" name="label" required className="input" placeholder="e.g. Brakes · Tyres · Lights · Battery terminals" />
@@ -414,8 +415,8 @@ export default async function JobCardDetailPage({
               <select name="status" defaultValue="ok" className="input w-32">
                 {INSPECTION_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
               </select>
-              <button className="btn-secondary">Add</button>
-            </form>
+              <SaveButton className="btn-secondary">Add</SaveButton>
+            </SaveForm>
           </div>
         </StageSection>
 
@@ -441,25 +442,25 @@ export default async function JobCardDetailPage({
                     <StatusPill tone={APPROVAL_STATUS_TONE[a.status] ?? "neutral"}>{a.status}</StatusPill>
                     {a.status === "pending" && (
                       <div className="flex items-center gap-1.5">
-                        <form action={decideApproval.bind(null, a.id, jobCard.id, "approved")} className="flex items-center gap-1">
+                        <SaveForm success="Approval recorded" resetOnSuccess={false} action={decideApproval.bind(null, a.id, jobCard.id, "approved")} className="flex items-center gap-1">
                           <input type="hidden" name="decidedVia" value="phone" />
-                          <button className="btn-secondary btn-sm text-emerald-400">Approve</button>
-                        </form>
-                        <form action={decideApproval.bind(null, a.id, jobCard.id, "declined")} className="flex items-center gap-1">
+                          <SaveButton className="btn-secondary btn-sm text-emerald-400">Approve</SaveButton>
+                        </SaveForm>
+                        <SaveForm success="Approval recorded" resetOnSuccess={false} action={decideApproval.bind(null, a.id, jobCard.id, "declined")} className="flex items-center gap-1">
                           <input type="hidden" name="decidedVia" value="phone" />
-                          <button className="btn-secondary btn-sm text-red-400">Decline</button>
-                        </form>
+                          <SaveButton className="btn-secondary btn-sm text-red-400">Decline</SaveButton>
+                        </SaveForm>
                       </div>
                     )}
-                    <form action={deleteApproval.bind(null, a.id, jobCard.id)}>
-                      <button className="text-xs text-slate-600 hover:text-red-500">✕</button>
-                    </form>
+                    <SaveForm success="Approval removed" resetOnSuccess={false} action={deleteApproval.bind(null, a.id, jobCard.id)}>
+                      <SaveButton className="text-xs text-slate-600 hover:text-red-500">✕</SaveButton>
+                    </SaveForm>
                   </div>
                 ))}
               </div>
             )}
             {!terminal && (
-              <form action={requestAdditionalWork.bind(null, jobCard.id)} className="flex flex-wrap items-end gap-2">
+              <SaveForm success="Approval requested" action={requestAdditionalWork.bind(null, jobCard.id)} className="flex flex-wrap items-end gap-2">
                 <div className="flex-1 min-w-48">
                   <label className="label" htmlFor="aw-desc">Additional work</label>
                   <input id="aw-desc" name="description" required className="input" placeholder="e.g. Replace worn brake pads" />
@@ -468,8 +469,8 @@ export default async function JobCardDetailPage({
                   <label className="label" htmlFor="aw-amount">Est. cost (R)</label>
                   <input id="aw-amount" name="amount" inputMode="decimal" className="input tabular-nums" placeholder="0.00" />
                 </div>
-                <button className="btn-primary">Request approval</button>
-              </form>
+                <SaveButton className="btn-primary">Request approval</SaveButton>
+              </SaveForm>
             )}
           </div>
 
@@ -577,13 +578,13 @@ export default async function JobCardDetailPage({
               </div>
               {!terminal &&
                 (myRunning ? (
-                  <form action={stopTimeEntry.bind(null, jobCard.id)}>
-                    <button className="btn bg-red-600 text-white hover:bg-red-700">■ Stop my clock</button>
-                  </form>
+                  <SaveForm success="Timer stopped" resetOnSuccess={false} action={stopTimeEntry.bind(null, jobCard.id)}>
+                    <SaveButton className="btn bg-red-600 text-white hover:bg-red-700">■ Stop my clock</SaveButton>
+                  </SaveForm>
                 ) : (
-                  <form action={startTimeEntry.bind(null, jobCard.id)}>
-                    <button className="btn bg-emerald-700 text-white hover:bg-emerald-600">▶ Start my clock</button>
-                  </form>
+                  <SaveForm success="Timer started" resetOnSuccess={false} action={startTimeEntry.bind(null, jobCard.id)}>
+                    <SaveButton className="btn bg-emerald-700 text-white hover:bg-emerald-600">▶ Start my clock</SaveButton>
+                  </SaveForm>
                 ))}
             </div>
             {jobCard.timeEntries.length === 0 ? (
@@ -601,9 +602,9 @@ export default async function JobCardDetailPage({
                       ) : (
                         <span className="text-emerald-400">running…</span>
                       )}
-                      <form action={deleteTimeEntry.bind(null, e.id, jobCard.id)}>
-                        <button className="text-xs text-slate-600 hover:text-red-500">✕</button>
-                      </form>
+                      <SaveForm success="Time entry removed" resetOnSuccess={false} action={deleteTimeEntry.bind(null, e.id, jobCard.id)}>
+                        <SaveButton className="text-xs text-slate-600 hover:text-red-500">✕</SaveButton>
+                      </SaveForm>
                     </span>
                   </div>
                 ))}
@@ -623,19 +624,19 @@ export default async function JobCardDetailPage({
                     <div key={r.id} className="flex items-center justify-between gap-3 py-1.5">
                       <span className="min-w-0 truncate">{r.qty}× {r.part.name}</span>
                       <span className="flex items-center gap-2 shrink-0">
-                        <form action={consumeReservation.bind(null, r.id, jobCard.id)}>
-                          <button className="btn-secondary btn-sm text-emerald-400">Consume</button>
-                        </form>
-                        <form action={releaseReservation.bind(null, r.id, jobCard.id)}>
-                          <button className="text-xs text-slate-600 hover:text-red-500">Release</button>
-                        </form>
+                        <SaveForm success="Part consumed" resetOnSuccess={false} action={consumeReservation.bind(null, r.id, jobCard.id)}>
+                          <SaveButton className="btn-secondary btn-sm text-emerald-400">Consume</SaveButton>
+                        </SaveForm>
+                        <SaveForm success="Reservation released" resetOnSuccess={false} action={releaseReservation.bind(null, r.id, jobCard.id)}>
+                          <SaveButton className="text-xs text-slate-600 hover:text-red-500">Release</SaveButton>
+                        </SaveForm>
                       </span>
                     </div>
                   ))}
                 </div>
               )}
               {!terminal && (
-                <form action={reservePart.bind(null, jobCard.id)} className="flex flex-wrap items-end gap-2">
+                <SaveForm success="Part reserved" action={reservePart.bind(null, jobCard.id)} className="flex flex-wrap items-end gap-2">
                   <div className="flex-1 min-w-40">
                     <label className="label" htmlFor="res-part">Part</label>
                     <select id="res-part" name="partId" required className="input">
@@ -647,14 +648,14 @@ export default async function JobCardDetailPage({
                     <label className="label" htmlFor="res-qty">Qty</label>
                     <input id="res-qty" name="qty" type="number" min={1} defaultValue={1} className="input tabular-nums" />
                   </div>
-                  <button className="btn-secondary">Reserve</button>
-                </form>
+                  <SaveButton className="btn-secondary">Reserve</SaveButton>
+                </SaveForm>
               )}
             </div>
 
             <div className="space-y-4">
               {servicePackages.length > 0 && !terminal && (
-                <form action={applyServicePackage.bind(null, jobCard.id)} className="card space-y-2">
+                <SaveForm success="Service package applied" resetOnSuccess={false} action={applyServicePackage.bind(null, jobCard.id)} className="card space-y-2">
                   <h2 className="font-semibold">🧰 Apply service package</h2>
                   <p className="text-xs text-slate-400">Drop a preset bundle of parts &amp; labour onto this job.</p>
                   <div className="flex items-end gap-2">
@@ -662,11 +663,11 @@ export default async function JobCardDetailPage({
                       <option value="">Select package…</option>
                       {servicePackages.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
-                    <button className="btn-secondary">Apply</button>
+                    <SaveButton className="btn-secondary">Apply</SaveButton>
                   </div>
-                </form>
+                </SaveForm>
               )}
-              <form action={saveSubcontract.bind(null, jobCard.id)} className="card space-y-2">
+              <SaveForm success="Subcontract saved" resetOnSuccess={false} action={saveSubcontract.bind(null, jobCard.id)} className="card space-y-2">
                 <h2 className="font-semibold">🏭 Subcontracted work</h2>
                 <label className="flex items-center gap-2 text-sm text-slate-300">
                   <input type="checkbox" name="isSubcontracted" defaultChecked={jobCard.isSubcontracted} className="h-4 w-4" />
@@ -676,8 +677,8 @@ export default async function JobCardDetailPage({
                   <input name="subcontractor" defaultValue={jobCard.subcontractor ?? ""} placeholder="Subcontractor" className="input" />
                   <input name="subCost" inputMode="decimal" defaultValue={jobCard.subCostCents ? (jobCard.subCostCents / 100).toFixed(2) : ""} placeholder="Cost (R)" className="input tabular-nums" />
                 </div>
-                <button className="btn-secondary btn-sm">Save</button>
-              </form>
+                <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+              </SaveForm>
             </div>
           </div>
         </StageSection>
@@ -692,10 +693,10 @@ export default async function JobCardDetailPage({
               </div>
               <div className="flex items-center gap-2 flex-wrap">
                 <CameraCapture action={uploadCheckoutPhotos.bind(null, jobCard.id)} />
-                <form action={uploadCheckoutPhotos.bind(null, jobCard.id)} className="flex items-center gap-2">
+                <SaveForm success="Photos uploaded" resetOnSuccess={false} action={uploadCheckoutPhotos.bind(null, jobCard.id)} className="flex items-center gap-2">
                   <input type="file" name="files" multiple required accept="image/*" capture="environment" className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-                  <button className="btn-primary btn-sm">Upload</button>
-                </form>
+                  <SaveButton className="btn-primary btn-sm">Upload</SaveButton>
+                </SaveForm>
               </div>
             </div>
             {jobCard.documents.filter((d) => d.tag === "checkout-photo").length === 0 ? (
@@ -727,7 +728,7 @@ export default async function JobCardDetailPage({
                 Completing writes a service record on the vehicle. Next-due values default to the
                 vehicle&apos;s service intervals if left blank.
               </p>
-              <form action={completeJobCard.bind(null, jobCard.id)} className="space-y-3">
+              <SaveForm success="Job card completed" resetOnSuccess={false} action={completeJobCard.bind(null, jobCard.id)} className="space-y-3">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div>
                     <label className="label">Mileage (km)</label>
@@ -750,10 +751,10 @@ export default async function JobCardDetailPage({
                     <textarea name="details" className="input" rows={2} />
                   </div>
                 </div>
-                <button className="btn bg-emerald-700 text-white hover:bg-emerald-600">
+                <SaveButton className="btn bg-emerald-700 text-white hover:bg-emerald-600">
                   ✓ Complete &amp; write service record
-                </button>
-              </form>
+                </SaveButton>
+              </SaveForm>
             </div>
           ) : (
             jobCard.serviceRecord && (
@@ -769,7 +770,7 @@ export default async function JobCardDetailPage({
               </div>
             )
           )}
-          <form action={setJobWarranty.bind(null, jobCard.id)} className="card space-y-2">
+          <SaveForm success="Warranty updated" resetOnSuccess={false} action={setJobWarranty.bind(null, jobCard.id)} className="card space-y-2">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Warranty recovery</p>
             <label className="flex items-center gap-2 text-sm text-slate-300">
               <input type="checkbox" name="underWarranty" defaultChecked={jobCard.underWarranty} className="h-4 w-4" />
@@ -779,17 +780,17 @@ export default async function JobCardDetailPage({
               <label className="label" htmlFor="warrantyRecovered">Recovered (R)</label>
               <input id="warrantyRecovered" name="warrantyRecovered" inputMode="decimal" className="input tabular-nums" defaultValue={jobCard.warrantyRecoveredCents ? (jobCard.warrantyRecoveredCents / 100).toFixed(2) : ""} placeholder="Labour + parts recovered" />
             </div>
-            <button className="btn-secondary btn-sm">Save</button>
-          </form>
-          <form action={setComeback.bind(null, jobCard.id)} className="card space-y-2">
+            <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+          </SaveForm>
+          <SaveForm success="Comeback recorded" resetOnSuccess={false} action={setComeback.bind(null, jobCard.id)} className="card space-y-2">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Comeback / repeat repair</p>
             <p className="text-xs text-muted-foreground">Link this job to the earlier one it&apos;s a repeat of, on the same vehicle.</p>
             <select name="comebackOfId" defaultValue={jobCard.comebackOfId ?? ""} className="input">
               <option value="">Not a comeback</option>
               {siblingJobs.map((s) => <option key={s.id} value={s.id}>#{s.number} · {s.description.slice(0, 40)}</option>)}
             </select>
-            <button className="btn-secondary btn-sm">Save</button>
-          </form>
+            <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+          </SaveForm>
         </StageSection>
       </div>
 
