@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { markDelivered } from "@/app/actions/fulfilment";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 
 const CHECKLIST = [
   "Battery fully charged",
@@ -70,7 +71,12 @@ export default function ProofOfDelivery({ quoteId }: { quoteId: string }) {
               </button>
             </div>
 
-            <form action={markDelivered.bind(null, quoteId)} className="space-y-4">
+            <SaveForm
+              action={markDelivered.bind(null, quoteId)}
+              success="Delivery confirmed"
+              resetOnSuccess={false}
+              className="space-y-4"
+            >
               <div>
                 <label className="label">Delivered by (driver)</label>
                 <input name="deliveredByName" className="input" placeholder="Who handed it over" />
@@ -154,10 +160,13 @@ export default function ProofOfDelivery({ quoteId }: { quoteId: string }) {
                 />
               </div>
 
-              <button className="btn bg-emerald-700 text-white hover:bg-emerald-600 w-full">
+              <SaveButton
+                pendingLabel="Confirming…"
+                className="btn bg-emerald-700 text-white hover:bg-emerald-600 w-full"
+              >
                 ✓ Confirm delivery → register vehicle
-              </button>
-            </form>
+              </SaveButton>
+            </SaveForm>
           </div>
         </div>
       )}
