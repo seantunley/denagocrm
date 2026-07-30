@@ -117,6 +117,37 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   if (!req || isRequestClosed(req.status)) return;
   const doc = parseDocument(req.snapshotJson);
   if (!doc) return;
+
+  // Resolve who owns the signed Document UP FRONT — before rendering or storing
+  // anything. Document.uploadedById is a required FK, so with nobody to
+  // attribute it to the sealed PDF ends up filed against no Document row: the
+  // quote reads as signed and accepted while the contract itself appears on no
+  // Documents tab and in no deliveries chip.
+  //
+  // No creator recorded → a member of THIS request's tenant, never the global
+  // oldest user (resolveTenantActor).
+  //
+  // Resolving here, rather than just before the write, is deliberate. By the
+  // time we reach the write the recipient's signature is already committed by
+  // the caller and the sealed PDF is already in storage — so failing there
+  // strands a request nothing can re-drive (every signer has signed, so
+  // advanceAfterSignature is never called again and the signing endpoint just
+  // answers "Already signed"), and leaks the stored blob past the cleanup
+  // handler below. This costs one query and happens before any of that.
+  const uploaderId = req.createdById || (await resolveTenantActor())?.id || null;
+  if (!uploaderId) {
+    // And we still COMPLETE. The customer has signed — a legal fact that must
+    // not be undone by our own bookkeeping. The sealed PDF stays reachable on
+    // the request (signedPdfRef); what's missing is the Documents-tab entry.
+    // Server log, not logError: an operator-visible anomaly is not a reason to
+    // push an alert to someone's phone.
+    console.error(
+      `[signing] request ${requestId}: no user to attribute the signed document to. ` +
+        `Completing without a Document row — the sealed PDF is on the request (signedPdfRef) ` +
+        `but will not appear on the Documents tab or the deliveries board until it is refiled.`,
+    );
+  }
+
   const ctx = await bindCtx(req.quoteId, req.jobCardId);
 
   const rows: RecipientRow[] = [];
@@ -176,20 +207,6 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   const hash = crypto.createHash("sha256").update(pdf).digest("hex");
   const storedName = await saveFile(pdf, `${req.title} (signed).pdf`, "application/pdf");
 
-  // No creator recorded → attribute the signed Document to a member of THIS
-  // request's tenant, never the global oldest user (resolveTenantActor).
-  const uploaderId = req.createdById || (await resolveTenantActor())?.id;
-  // With no uploader the Document row was simply skipped, so the sealed PDF was
-  // filed against nothing: the quote showed as signed and accepted while the
-  // contract itself appeared on no Documents tab and in no deliveries chip.
-  // Refusing rolls the whole completion back and the customer can sign again —
-  // far better than an accepted quote with no retrievable contract. Both
-  // creation paths set createdById, so this is an invariant, not a code path.
-  if (!uploaderId) {
-    throw new Error(
-      `Cannot file the signed document for request ${requestId}: no user to attribute it to.`,
-    );
-  }
   const firstSigner = req.recipients.find((r) => r.status === "signed" && r.role !== "viewer");
   const signerName = firstSigner?.signedName || firstSigner?.name || "Customer";
 
@@ -213,18 +230,23 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       // other needed). Locking the source row up front makes the order consistent.
       if (req.quoteId) await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${req.quoteId} FOR UPDATE`;
       else if (req.jobCardId) await tx.$executeRaw`SELECT id FROM "JobCard" WHERE id = ${req.jobCardId} FOR UPDATE`;
-      const document = await tx.document.create({
-        data: {
-          fileName: `${req.title} (signed).pdf`, storedName, mimeType: "application/pdf", sizeBytes: pdf.length,
-          quoteId: req.quoteId, jobCardId: req.jobCardId, contactId: req.contactId, tag: "signed", uploadedById: uploaderId,
-        },
-      });
+      // Always created when an uploader exists (the normal path, and what makes
+      // the signed contract findable); null only in the logged anomaly above,
+      // where completing still beats stranding a signature.
+      const document = uploaderId
+        ? await tx.document.create({
+            data: {
+              fileName: `${req.title} (signed).pdf`, storedName, mimeType: "application/pdf", sizeBytes: pdf.length,
+              quoteId: req.quoteId, jobCardId: req.jobCardId, contactId: req.contactId, tag: "signed", uploadedById: uploaderId,
+            },
+          })
+        : null;
       const claimed = await tx.signatureRequest.updateMany({
         where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
-        data: { status: "completed", completedAt: new Date(), signedPdfRef: storedName, signedPdfHash: hash, signedDocId: document.id },
+        data: { status: "completed", completedAt: new Date(), signedPdfRef: storedName, signedPdfHash: hash, signedDocId: document?.id ?? null },
       });
       if (claimed.count === 0) throw new CompletionLost();
-      documentId = document.id;
+      documentId = document?.id ?? null;
 
       if (req.quoteId) {
         const signedQuote = await tx.quote.updateMany({

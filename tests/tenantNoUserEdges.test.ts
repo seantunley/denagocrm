@@ -93,6 +93,38 @@ for (const file of ACTOR_SITES) {
   });
 }
 
+// A missing uploader must never cost the customer their signature. The final
+// signer is committed by the caller BEFORE completion runs, so anything that
+// throws in here strands a request nothing can re-drive — every signer has
+// signed, so advanceAfterSignature is never called again and the signing
+// endpoint just answers "Already signed".
+test("src/lib/signing/complete.ts: the uploader is resolved before the PDF is stored", () => {
+  const code = src("src/lib/signing/complete.ts");
+  // The CALL, not the import at the top of the file — matching the import makes
+  // this assertion pass no matter where the resolution actually happens.
+  const resolvedAt = code.indexOf("(await resolveTenantActor())");
+  const storedAt = code.indexOf("await saveFile(");
+  assert.ok(resolvedAt > 0 && storedAt > 0, "both the actor pick and the file write must exist");
+  assert.ok(
+    resolvedAt < storedAt,
+    "resolve the uploader BEFORE saveFile — failing after it leaks the stored blob past the cleanup handler",
+  );
+});
+
+test("src/lib/signing/complete.ts: a missing uploader does not abort the completion", () => {
+  const code = src("src/lib/signing/complete.ts");
+  // The Document row is skipped and logged; the signature still completes.
+  assert.match(
+    code,
+    /uploaderId\s*\n?\s*\?\s*await tx\.document\.create/,
+    "the Document row must be conditional on an uploader, not assumed",
+  );
+  assert.match(code, /signedDocId: document\?\.id \?\? null/, "…and the request records that it has none");
+  const guard = code.slice(code.indexOf("if (!uploaderId)"), code.indexOf("const ctx = await bindCtx"));
+  assert.doesNotMatch(guard, /\bthrow\b/, "a bookkeeping gap must not undo a signature the customer already gave");
+  assert.match(guard, /console\.error/, "but it must be visible to an operator");
+});
+
 // Explicit STAFF assignees (approval steps) must be validated against current-tenant
 // membership, and the pickers that populate them scoped to the tenant — else a
 // workflow can persist another tenant's user id and notifyApprover emails them.
