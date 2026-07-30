@@ -10,7 +10,7 @@ import {
 } from "@/lib/competitors";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import { logError } from "@/lib/errorLog";
-import { withDbRetry } from "@/lib/dbRetry";
+import { warmUpForCron } from "@/lib/cronPreflight";
 import { runCronPerTenant, type CronSliceContext } from "@/lib/tenantCron";
 
 export const maxDuration = 300;
@@ -98,16 +98,18 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // maxDuration is 300s and the sweep budgets 270s, so only a FAST early
-  // connection failure has room to retry — which is exactly the case seen.
-  const deadlineAt = Date.now() + 285_000;
-  const runs = await withDbRetry(() => runCronPerTenant(async (_tenantId, budget) => runTenantWatch(budget), {
+  // Wake a suspended endpoint first; the sweep runs exactly once. See dbRetry.ts.
+  if (!(await warmUpForCron("competitor-watch"))) {
+    return NextResponse.json({ ok: false, skipped: "database-unreachable" }, { status: 503 });
+  }
+
+  const runs = await runCronPerTenant(async (_tenantId, budget) => runTenantWatch(budget), {
     maxRuntimeMs: 270_000,
     minStartBudgetMs: 45_000,
     concurrency: 2,
     rotationWindowMs: 24 * 60 * 60 * 1000,
     onError: (tenantId, error) => logError(`competitor-watch:${tenantId}`, error),
-  }), { deadlineAt, onRetry: (attempt, error) => logError("cron-db-retry", error, `competitor-watch attempt ${attempt}`) });
+  });
 
   const dormant = runs.length === 1 && runs[0].tenantId === null ? runs[0] : null;
   if (dormant?.status === "ok") {

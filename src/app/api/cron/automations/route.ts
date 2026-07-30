@@ -12,7 +12,7 @@ import { isAuthorizedCron } from "@/lib/cronAuth";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import type { ModuleId } from "@/lib/modules/registry";
 import { logError } from "@/lib/errorLog";
-import { withDbRetry } from "@/lib/dbRetry";
+import { warmUpForCron } from "@/lib/cronPreflight";
 import { runAutoResearch } from "@/lib/ai";
 import { runActivityReminders } from "@/lib/activityReminders";
 import { runSafeCampaignQueue } from "@/lib/marketingCampaignQueue";
@@ -96,27 +96,21 @@ async function runGlobalMaintenance() {
 export async function GET(req: NextRequest) {
   if (!isAuthorizedCron(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Leave room inside maxDuration (60s) for runGlobalMaintenance in the finally.
-  const deadlineAt = Date.now() + 50_000;
+  // Wake a suspended Neon endpoint BEFORE the sweep. The sweep sends emails and
+  // pushes, so it must run exactly once; only the harmless preflight retries.
+  if (!(await warmUpForCron("automations"))) {
+    return NextResponse.json({ ok: false, skipped: "database-unreachable" }, { status: 503 });
+  }
+
   let runs: Array<CronRun<OperationalResult>>;
   try {
-    // A cold Neon endpoint can refuse the first query of the run, which used to
-    // lose the entire 15-minute slot — every queue below it simply did not run.
-    // Only connection faults retry; anything else propagates on attempt one.
-    runs = await withDbRetry(
-      () =>
-        runCronPerTenant(async () => runOperationalQueues(), {
-          maxRuntimeMs: 45_000,
-          minStartBudgetMs: 8_000,
-          concurrency: 2,
-          rotationWindowMs: 15 * 60 * 1000,
-          onError: (tenantId, error) => logError(`automations-tenant:${tenantId}`, error),
-        }),
-      {
-        deadlineAt,
-        onRetry: (attempt, error) => logError("cron-db-retry", error, `automations attempt ${attempt}`),
-      },
-    );
+    runs = await runCronPerTenant(async () => runOperationalQueues(), {
+      maxRuntimeMs: 45_000,
+      minStartBudgetMs: 8_000,
+      concurrency: 2,
+      rotationWindowMs: 15 * 60 * 1000,
+      onError: (tenantId, error) => logError(`automations-tenant:${tenantId}`, error),
+    });
   } finally {
     await runGlobalMaintenance();
   }

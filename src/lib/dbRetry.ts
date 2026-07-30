@@ -1,34 +1,54 @@
 /**
- * Retries work that failed only because the database was briefly unreachable.
+ * Wakes the database before a cron sweep starts, and NOTHING else.
  *
- * Neon suspends idle compute and fronts it with a pooler, so the FIRST query of
- * a run can land while the endpoint is still waking and fail outright:
+ * Neon suspends idle compute behind a pooler, so the first query of a run can
+ * land while the endpoint is still waking and fail outright:
  *
  *   Can't reach database server at `…-pooler….neon.tech:5432`   (Prisma P1001)
  *
- * In a request that is fine — the person retries. In a cron it is not: the whole
- * 15-minute slot is lost, and the queues it drives (reminders, lead sync, review
- * sync) simply do not run until the next one. It cost three whole runs over two
- * days, always on the first query of the handler.
+ * That cost whole 15-minute slots of the automations cron: the error escaped
+ * before any queue ran, so reminders, lead sync and review sync simply did not
+ * happen until the next tick.
  *
- * Only genuinely transient CONNECTION faults are retried. A constraint
- * violation, a bad query or an application error is not retried and not
- * swallowed — it propagates on the first attempt exactly as before, because
- * repeating those neither helps nor is safe.
+ * WHY A PREFLIGHT AND NOT A RETRY AROUND THE SWEEP
+ *
+ * The obvious fix — retry the sweep — is wrong, and dangerously so:
+ *
+ *   - The sweep SENDS THINGS. Emails, pushes, WhatsApp messages, queue work. A
+ *     connection fault partway through would replay everything already done.
+ *     Re-sending a customer's reminder is far worse than skipping one slot.
+ *   - It would not even work where it was most needed: runCronPerTenant catches
+ *     per-tenant failures internally and reports them, so an outer retry never
+ *     sees them. Unsafe in one mode, ineffective in the other.
+ *   - A retry can only be time-bounded if you know what an attempt costs. A
+ *     sweep costs up to its whole budget (45s, or 270s for competitor-watch),
+ *     so "is there time for another attempt?" is unanswerable late in the run —
+ *     and getting it wrong means the platform kills the function MID-WRITE.
+ *
+ * `SELECT 1` has none of those problems. It sends nothing, costs milliseconds,
+ * and is safe to repeat. Warm the connection, then run the sweep exactly once.
  */
 
-/** Prisma's connection-level codes: unreachable, TLS failure, connection closed. */
+/**
+ * Prisma's connection-level codes: unreachable, TLS failure, connection closed.
+ * These are structural — an email or HTTP client cannot produce them.
+ */
 const TRANSIENT_CODES = new Set(["P1001", "P1002", "P1017"]);
 
-/** Postgres/driver text seen when the pooler drops or refuses a connection. */
+/**
+ * Text fallback for the same faults when the code is missing.
+ *
+ * DELIBERATELY NARROW. An earlier version matched bare "connection reset" and
+ * "ECONNRESET", which any email, HTTP or AI provider can raise — and the cron
+ * calls all three, so a provider hiccup would have been classified as a
+ * database fault. Every phrase below names the database or the Prisma pool.
+ */
 const TRANSIENT_TEXT = [
   "can't reach database server",
-  "connection closed",
-  "connection reset",
+  "cannot reach database server",
   "server has closed the connection",
-  "timed out fetching a new connection",
-  "econnrefused",
-  "econnreset",
+  "timed out fetching a new connection from the connection pool",
+  "error querying the database",
 ];
 
 export function isTransientDbError(error: unknown): boolean {
@@ -38,54 +58,44 @@ export function isTransientDbError(error: unknown): boolean {
   return TRANSIENT_TEXT.some((needle) => message.includes(needle));
 }
 
-export type DbRetryOptions = {
+export type WarmUpOptions = {
   /** Total attempts, including the first. */
   attempts?: number;
-  /** Base backoff; doubles each attempt. Generous enough to outlast a cold start. */
+  /** Base backoff; doubles each attempt. Enough to outlast a cold start. */
   baseDelayMs?: number;
   /** Called before each retry — for logging, never for control flow. */
   onRetry?: (attempt: number, error: unknown) => void;
   /** Injectable sleep, so tests do not actually wait. */
   sleep?: (ms: number) => Promise<void>;
-  /**
-   * Absolute epoch-ms ceiling for the whole thing. Cron handlers have a hard
-   * platform timeout, and a run that failed transiently 40 seconds in must NOT
-   * be retried into a timeout — a clean error is far more useful than the
-   * function being killed mid-write. When there is not enough time left for
-   * another attempt, the original error is rethrown immediately.
-   */
-  deadlineAt?: number;
-  /** Time an attempt is assumed to need; retries are skipped below this. */
-  minAttemptMs?: number;
-  /** Injectable clock, for tests. */
-  now?: () => number;
 };
 
-export async function withDbRetry<T>(run: () => Promise<T>, options: DbRetryOptions = {}): Promise<T> {
+/**
+ * Runs `ping` until it answers, retrying only genuinely transient connection
+ * faults. Anything else — a bad credential, a missing database — propagates on
+ * the first attempt, because repeating it neither helps nor is safe.
+ *
+ * Returns true when the database answered. Returns FALSE rather than throwing
+ * when every attempt hit a transient fault: a cold database is an operational
+ * condition, and the caller decides what to do about it.
+ */
+export async function warmUpDatabase(
+  ping: () => Promise<unknown>,
+  options: WarmUpOptions = {},
+): Promise<boolean> {
   const attempts = Math.max(1, options.attempts ?? 3);
-  const baseDelayMs = options.baseDelayMs ?? 1_500;
+  const baseDelayMs = options.baseDelayMs ?? 1_000;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const now = options.now ?? (() => Date.now());
-  const minAttemptMs = options.minAttemptMs ?? 5_000;
 
-  let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
-      return await run();
+      await ping();
+      return true;
     } catch (error) {
-      // Not transient, or out of attempts: surface it untouched. This helper
-      // exists to absorb a cold start, not to hide real failures.
-      if (!isTransientDbError(error) || attempt === attempts) throw error;
-      const delay = baseDelayMs * 2 ** (attempt - 1);
-      // No time for another go before the platform kills us — report honestly
-      // rather than being terminated mid-attempt.
-      if (options.deadlineAt !== undefined && now() + delay + minAttemptMs > options.deadlineAt) {
-        throw error;
-      }
-      lastError = error;
+      if (!isTransientDbError(error)) throw error;
+      if (attempt === attempts) return false;
       options.onRetry?.(attempt, error);
-      await sleep(delay);
+      await sleep(baseDelayMs * 2 ** (attempt - 1));
     }
   }
-  throw lastError;
+  return false;
 }
