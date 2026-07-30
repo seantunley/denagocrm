@@ -99,3 +99,46 @@ export function hoursBetween(start: Date | string, end: Date | string): number {
   const ms = new Date(end).getTime() - new Date(start).getTime();
   return Math.max(0, Math.round((ms / 3_600_000) * 100) / 100);
 }
+
+// ── Job card money ────────────────────────────────────────────────────────────
+
+export type JobCardLine = { kind: string; qty: number; unitPriceCents: number };
+
+/**
+ * One line's charge in cents. Labour quantities are fractional (1.5 hours), so
+ * a line can land on a half-cent — round once, here, so every document reaches
+ * the same figure instead of differing by a cent depending on where it rounded.
+ */
+export function jobLineCents(line: JobCardLine): number {
+  return Math.round(line.qty * line.unitPriceCents);
+}
+
+export type JobCardTotals = {
+  partsCents: number;
+  labourCents: number;
+  otherCents: number;
+  totalCents: number;
+};
+
+/**
+ * What the customer is charged for a job, and how it breaks down.
+ *
+ * `totalCents` counts EVERY line whatever its kind. `kind` is a free-text
+ * column with a default, and totalling only "part" + "labour" — which the
+ * record page, the printed job card, the builder documents and the profit
+ * report each did separately — silently drops any other line while the items
+ * table still prints it, leaving a document whose rows don't add up to its own
+ * total. `otherCents` keeps that remainder visible rather than losing it.
+ */
+export function jobCardTotals(lines: JobCardLine[]): JobCardTotals {
+  let partsCents = 0;
+  let labourCents = 0;
+  let otherCents = 0;
+  for (const line of lines) {
+    const cents = jobLineCents(line);
+    if (line.kind === "part") partsCents += cents;
+    else if (line.kind === "labour") labourCents += cents;
+    else otherCents += cents;
+  }
+  return { partsCents, labourCents, otherCents, totalCents: partsCents + labourCents + otherCents };
+}

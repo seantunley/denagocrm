@@ -17,7 +17,7 @@ export default async function QuotePrintPage({
   const { tpl } = await searchParams;
   const quote = await prisma.quote.findUnique({
     where: { id },
-    include: { items: true, lead: { include: { product: true } }, contact: true, createdBy: true },
+    include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, lead: { include: { product: true } }, contact: true, createdBy: true },
   });
   if (!quote) notFound();
 

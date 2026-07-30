@@ -20,6 +20,7 @@ import ModalTrigger from "@/components/Modal";
 import { buttonVariants } from "@/components/ui/button";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { formatZAR } from "@/lib/format";
+import { jobCardTotals } from "@/lib/workshop-constants";
 import { EmptyState, StatusPill } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
@@ -172,7 +173,9 @@ export default async function WorkshopSettingsPage() {
         ) : (
           <div className="space-y-3">
             {packages.map((pkg) => {
-              const total = pkg.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+              // A package's lines are copied onto a job card verbatim, so the
+              // price advertised here has to be the one the job card will show.
+              const total = jobCardTotals(pkg.items).totalCents;
               return (
                 <div key={pkg.id} className="card space-y-3">
                   <div className="flex items-center justify-between gap-3">

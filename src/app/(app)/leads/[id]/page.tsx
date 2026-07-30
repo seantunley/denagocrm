@@ -28,7 +28,7 @@ import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { requireUser } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
-import { quoteTotalCents } from "@/lib/pricing";
+import { quoteTotalCents, payableTotalCents } from "@/lib/pricing";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
@@ -57,7 +57,7 @@ export default async function LeadDetailPage({
       createdBy: true,
       communications: { include: { user: true }, orderBy: { occurredAt: "desc" } },
       activities: { include: { assignedTo: true }, orderBy: { dueDate: "asc" } },
-      quotes: { where: { deletedAt: null }, include: { items: true }, orderBy: { createdAt: "desc" } },
+      quotes: { where: { deletedAt: null }, include: { items: true, fees: { orderBy: { sortOrder: "asc" } } }, orderBy: { createdAt: "desc" } },
       researchNotes: { orderBy: { createdAt: "desc" } },
     },
   });
@@ -376,7 +376,7 @@ export default async function LeadDetailPage({
                     ) : (
                       <ul className="space-y-2">
                         {lead.quotes.map((q) => {
-                          const total = quoteTotalCents(q.items);
+                          const total = payableTotalCents(q);
                           return (
                             <li key={q.id} className="flex items-center gap-2 text-sm">
                               <Link href={`/quotes/${q.id}`} className="text-orange-400 hover:underline font-medium">

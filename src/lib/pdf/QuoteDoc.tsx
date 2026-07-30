@@ -1,6 +1,6 @@
 import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { lineNetCents, quoteTotalCents } from "@/lib/pricing";
+import { documentTotals, feeRows, includedLines, lineNetCents } from "@/lib/pricing";
 import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
 
 /**
@@ -81,7 +81,11 @@ const s = StyleSheet.create({
   cNum: { width: 70, textAlign: "right" },
 
   totalWrap: { flexDirection: "row", justifyContent: "flex-end", marginTop: 14 },
-  totalBand: { backgroundColor: accent, borderRadius: 4, flexDirection: "row", alignItems: "center", paddingVertical: 8, paddingHorizontal: 16, gap: 14 },
+  totalCol: { width: 230 },
+  totalRow: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 2 },
+  totalRowLabel: { fontSize: 9, color: slate500 },
+  totalRowAmount: { fontSize: 9, color: slate700 },
+  totalBand: { backgroundColor: accent, borderRadius: 4, flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 4, paddingVertical: 8, paddingHorizontal: 16, gap: 14 },
   totalLabel: { color: white, fontSize: 8, fontFamily: "Helvetica-Bold", letterSpacing: 1 },
   totalAmount: { color: white, fontSize: 15, fontFamily: "Helvetica-Bold" },
 
@@ -112,7 +116,13 @@ export type SignedInfo = { name: string; email: string; ip: string; date: string
 
 export default function QuoteDoc({ quote, signed }: { quote: QuoteForPrint; signed?: SignedInfo }) {
   const lineNet = lineNetCents;
-  const total = quoteTotalCents(quote.items);
+  // Fees and delivery are part of the quoted price — itemised as rows below as
+  // well as counted here, so the lines the customer reads add up to the total.
+  const fees = feeRows(quote.fees);
+  // Only the lines the total counts — an unselected optional add-on is not a charge.
+  const items = includedLines(quote.items);
+  // Subtotal + VAT lines appear only on a tax-exclusive quote — see documentTotals().
+  const totals = documentTotals(quote);
   const customerName = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
   const phone = quote.contact?.phone ?? quote.lead?.phone ?? "";
   const email = quote.contact?.email ?? quote.lead?.email ?? "";
@@ -121,7 +131,7 @@ export default function QuoteDoc({ quote, signed }: { quote: QuoteForPrint; sign
         .filter(Boolean)
         .join(", ")
     : "";
-  const vehicle = quote.lead?.product?.name ?? quote.items[0]?.description ?? "—";
+  const vehicle = quote.lead?.product?.name ?? items[0]?.description ?? "—";
   const terms = (quote.terms ?? "")
     .split(/\r?\n/)
     .map((l) => l.replace(/^[\s•\-*]+/, "").trim())
@@ -183,7 +193,7 @@ export default function QuoteDoc({ quote, signed }: { quote: QuoteForPrint; sign
           <Text style={[s.tHeadCell, s.cNum]}>UNIT PRICE</Text>
           <Text style={[s.tHeadCell, s.cNum]}>TOTAL</Text>
         </View>
-        {quote.items.map((i, idx) => (
+        {items.map((i, idx) => (
           <View key={i.id} style={idx % 2 === 1 ? [s.row, s.rowAlt] : s.row} wrap={false}>
             <Text style={[s.cell, s.cDesc]}>
               {i.colorPreference ? `${i.description} — ${i.colorPreference}` : i.description}
@@ -197,12 +207,36 @@ export default function QuoteDoc({ quote, signed }: { quote: QuoteForPrint; sign
             </Text>
           </View>
         ))}
+        {fees.map((fee, idx) => (
+          <View
+            key={`fee-${idx}`}
+            style={(items.length + idx) % 2 === 1 ? [s.row, s.rowAlt] : s.row}
+            wrap={false}
+          >
+            <Text style={[s.cell, s.cDesc]}>{fee.description}</Text>
+            <Text style={[s.cell, s.cNum]}>{fee.qty}</Text>
+            <Text style={[s.cell, s.cNum]}>{formatZAR(fee.unitPriceCents)}</Text>
+            <Text style={[s.cell, s.cNum, { fontFamily: "Helvetica-Bold" }]}>
+              {formatZAR(fee.unitPriceCents)}
+            </Text>
+          </View>
+        ))}
 
-        {/* Total */}
+        {/* Totals */}
         <View style={s.totalWrap} wrap={false}>
-          <View style={s.totalBand}>
-            <Text style={s.totalLabel}>TOTAL INCL. VAT</Text>
-            <Text style={s.totalAmount}>{formatZAR(Math.round(total))}</Text>
+          <View style={s.totalCol}>
+            {totals.filter((line) => !line.strong).map((line) => (
+              <View key={line.label} style={s.totalRow}>
+                <Text style={s.totalRowLabel}>{line.label}</Text>
+                <Text style={s.totalRowAmount}>{formatZAR(Math.round(line.amountCents))}</Text>
+              </View>
+            ))}
+            {totals.filter((line) => line.strong).map((line) => (
+              <View key={line.label} style={s.totalBand}>
+                <Text style={s.totalLabel}>{line.label.toUpperCase()}</Text>
+                <Text style={s.totalAmount}>{formatZAR(Math.round(line.amountCents))}</Text>
+              </View>
+            ))}
           </View>
         </View>
 

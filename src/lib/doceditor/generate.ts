@@ -68,7 +68,7 @@ async function resolve(templateId: string, quoteId?: string | null, jobCardId?: 
   if (quoteId) {
     const q = await prisma.quote.findUnique({
       where: { id: quoteId },
-      include: { items: true, lead: { include: { product: true } }, contact: true, createdBy: true },
+      include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, lead: { include: { product: true } }, contact: true, createdBy: true },
     });
     if (q) { ctx = buildQuoteContext(q); title = `${doc.title} — Q-${q.number}`; qId = q.id; contactId = q.contactId; }
   } else if (jobCardId) {

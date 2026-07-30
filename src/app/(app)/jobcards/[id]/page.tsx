@@ -71,6 +71,7 @@ import {
   inspectionStatusMeta,
   isTerminalStage,
   hoursBetween,
+  jobCardTotals,
   APPROVAL_STATUS_TONE,
 } from "@/lib/workshop-constants";
 import { getDefaultLabourRateCents, effectiveLabourRateCents, totalLoggedHours, jobProfit } from "@/lib/workshop";
@@ -178,13 +179,9 @@ export default async function JobCardDetailPage({
   const signingState = await activeRecordRequest({ jobCardId: jobCard.id });
   const path = `/jobcards/${jobCard.id}`;
 
-  const partsTotal = jobCard.items
-    .filter((i) => i.kind === "part")
-    .reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
-  const labourTotal = jobCard.items
-    .filter((i) => i.kind === "labour")
-    .reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
-  const grandTotal = partsTotal + labourTotal;
+  // One calculation, shared with the printed job card and the service report.
+  const { partsCents: partsTotal, labourCents: labourTotal, otherCents: otherTotal, totalCents: grandTotal } =
+    jobCardTotals(jobCard.items);
   const pm = priorityMeta(jobCard.priority);
   const progressIndex = jobCard.status === "collected"
     ? PIPELINE_STAGES.length
@@ -554,6 +551,12 @@ export default async function JobCardDetailPage({
                   <dt className="text-slate-400">Labour</dt>
                   <dd className="font-medium">{formatZAR(Math.round(labourTotal))}</dd>
                 </div>
+                {otherTotal !== 0 && (
+                  <div className="flex justify-between">
+                    <dt className="text-slate-400">Other</dt>
+                    <dd className="font-medium">{formatZAR(Math.round(otherTotal))}</dd>
+                  </div>
+                )}
                 <div className="flex justify-between border-t border-slate-800 pt-1">
                   <dt className="font-semibold">Total</dt>
                   <dd className="font-bold">{formatZAR(Math.round(grandTotal))}</dd>

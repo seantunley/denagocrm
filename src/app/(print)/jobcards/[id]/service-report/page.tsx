@@ -5,6 +5,7 @@ import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { contactName, formatDate } from "@/lib/format";
+import { jobCardTotals } from "@/lib/workshop-constants";
 
 export default async function ServiceReportPrintPage({
   params,
@@ -27,7 +28,7 @@ export default async function ServiceReportPrintPage({
   });
   if (!jobCard) notFound();
   const tpl = await getDocTemplate("service-report", tplId);
-  const total = jobCard.items.reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+  const total = jobCardTotals(jobCard.items).totalCents;
   const sr = jobCard.serviceRecord;
 
   return (

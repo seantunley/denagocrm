@@ -25,7 +25,7 @@ import {
   ResponsiveDataView,
 } from "@/components/responsive-patterns";
 import { cn } from "@/lib/utils";
-import { stageMeta, priorityMeta, isTerminalStage } from "@/lib/workshop-constants";
+import { stageMeta, priorityMeta, isTerminalStage, jobCardTotals } from "@/lib/workshop-constants";
 import {
   getAccessibleJobCardIds,
   getAccessibleVehicleIds,
@@ -81,10 +81,7 @@ export default async function JobCardsPage({
     ready: jobCards.filter((job) => job.status === "ready").length,
     unassigned: active.filter((job) => !job.technicianId).length,
   };
-  const wipCents = active.reduce(
-    (sum, job) => sum + job.items.reduce((itemSum, item) => itemSum + item.qty * item.unitPriceCents, 0),
-    0,
-  );
+  const wipCents = active.reduce((sum, job) => sum + jobCardTotals(job.items).totalCents, 0);
 
   const filteredJobs = jobCards.filter((job) => {
     if (activeStatus === "active" && isTerminalStage(job.status)) return false;
@@ -198,7 +195,7 @@ export default async function JobCardsPage({
             mobile={
               <MobileDataList className="rounded-none border-0">
                 {filteredJobs.map((job) => {
-                  const total = job.items.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
+                  const total = jobCardTotals(job.items).totalCents;
                   const sm = stageMeta(job.status);
                   return (
                     <RecordContextMenu
@@ -244,7 +241,7 @@ export default async function JobCardsPage({
                   </thead>
                   <tbody className="divide-y divide-border">
                     {filteredJobs.map((job) => {
-                      const total = job.items.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
+                      const total = jobCardTotals(job.items).totalCents;
                       const sm = stageMeta(job.status);
                       const pm = priorityMeta(job.priority);
                       return (

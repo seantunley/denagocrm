@@ -20,7 +20,7 @@ import { generateDocEditorDocument } from "@/app/actions/doceditor";
 import SigningBlock from "@/components/SigningBlock";
 import { activeRecordRequest, isLockedForSigning } from "@/lib/signing/record";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { lineNetCents, quoteTotalCents, quotePricing } from "@/lib/pricing";
+import { feeRows, isLineIncluded, lineNetCents, payableTotalCents, quotePricing } from "@/lib/pricing";
 import { addQuoteFee, deleteQuoteFee, setQuoteDeposit, setQuoteTaxMode } from "@/app/actions/cpq";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 
@@ -38,7 +38,20 @@ type FamilyQuote = {
   supersededAt: Date | null;
   declineReason: string | null;
   createdAt: Date;
-  items: { qty: number; unitPriceCents: number; description: string; colorPreference: string | null; discountPct: number }[];
+  items: {
+    qty: number;
+    unitPriceCents: number;
+    description: string;
+    colorPreference: string | null;
+    discountPct: number;
+    taxRatePct: number;
+    // Without these two, isLineIncluded() sees `undefined` and counts every
+    // line — so the history total silently disagreed with the quote's own.
+    optional: boolean;
+    selected: boolean;
+  }[];
+  fees: { label: string; kind: string; amountCents: number; taxRatePct: number }[];
+  taxInclusive: boolean;
 };
 
 /** All versions of a quote: walk up to the root, then collect descendants. */
@@ -69,7 +82,11 @@ async function getQuoteFamily(start: {
         supersededAt: true,
         declineReason: true,
         createdAt: true,
-        items: { select: { qty: true, unitPriceCents: true, description: true, colorPreference: true, discountPct: true } },
+        items: { select: { qty: true, unitPriceCents: true, description: true, colorPreference: true, discountPct: true, taxRatePct: true, optional: true, selected: true } },
+        // Each historical version is totalled the same way as the live quote —
+        // and label/kind so its fees can be shown as rows, not just counted.
+        fees: { select: { label: true, kind: true, amountCents: true, taxRatePct: true }, orderBy: { sortOrder: "asc" } },
+        taxInclusive: true,
         revisions: { select: { id: true } },
       },
       orderBy: { createdAt: "asc" },
@@ -110,7 +127,6 @@ export default async function QuoteDetailPage({
         })
       : [];
   const successor = quote.revisions[0] ?? null;
-  const total = quoteTotalCents(quote.items);
   const pricing = quotePricing(quote.items, quote.fees, {
     taxInclusive: quote.taxInclusive,
     depositType: quote.depositType,
@@ -275,13 +291,26 @@ export default async function QuoteDetailPage({
               superseded: Boolean(f.supersededAt),
               createdAt: formatDate(f.createdAt),
               declineReason: f.declineReason,
-              totalZAR: formatZAR(quoteTotalCents(f.items)),
-              items: f.items.map((i) => ({
-                qty: i.qty,
-                description: i.description,
-                colorPreference: i.colorPreference,
-                priceZAR: formatZAR(lineNetCents(i)),
-              })),
+              totalZAR: formatZAR(payableTotalCents(f)),
+              // Same treatment as the table above: an unselected option keeps
+              // its row but carries no amount, and the fees the total counts
+              // are listed — so the modal's rows reach the modal's total.
+              items: [
+                ...f.items.map((i) => ({
+                  qty: i.qty,
+                  description: i.description,
+                  colorPreference: i.colorPreference,
+                  priceZAR: isLineIncluded(i) ? formatZAR(lineNetCents(i)) : "—",
+                  included: isLineIncluded(i),
+                })),
+                ...feeRows(f.fees).map((fee) => ({
+                  qty: fee.qty,
+                  description: fee.description,
+                  colorPreference: null,
+                  priceZAR: formatZAR(fee.unitPriceCents),
+                  included: true,
+                })),
+              ],
             }))}
           />
         </div>
@@ -415,15 +444,22 @@ export default async function QuoteDetailPage({
                 </tr>
               )}
               {quote.items.map((i) => (
-                <tr key={i.id}>
+                <tr key={i.id} className={isLineIncluded(i) ? "" : "text-muted-foreground"}>
                   <td>
                     <span className="block">{i.description}</span>
                     {i.colorPreference && <span className="mt-1 block text-xs text-muted-foreground">Colour preference: {i.colorPreference}</span>}
+                    {/* Staff need to see what was offered, so an unselected
+                        option stays listed here — but without a line total, so
+                        the amounts still add up to the quote total above. The
+                        printed documents drop it entirely. */}
+                    {!isLineIncluded(i) && (
+                      <span className="mt-1 block text-xs">Optional — not selected</span>
+                    )}
                   </td>
                   <td className="text-right">{i.qty}</td>
                   <td className="text-right">{formatZAR(i.unitPriceCents)}</td>
                   <td className="text-right font-medium">
-                    {formatZAR(lineNetCents(i))}
+                    {isLineIncluded(i) ? formatZAR(lineNetCents(i)) : "—"}
                   </td>
                   <td className="text-right">
                     {editable && (
@@ -493,7 +529,15 @@ export default async function QuoteDetailPage({
           </div>
         </div>
 
-        {editable && (
+        {/*
+          The BREAKDOWN renders whether or not the quote is still editable.
+          Gating the whole card on `editable` meant that the moment a quote was
+          sent or signed, the fee list vanished and the totals showed only a
+          rolled-up "Fees & delivery" figure — so nobody could see what the
+          customer had actually been charged for. Only the controls need the
+          gate; reading what was agreed is not editing.
+        */}
+        {(editable || quote.fees.length > 0) && (
           <div className="card space-y-4">
             <h2 className="font-semibold">Fees, delivery &amp; deposit</h2>
             {quote.fees.length > 0 && (
@@ -503,12 +547,20 @@ export default async function QuoteDetailPage({
                     <span className="min-w-0 truncate text-muted-foreground"><span className="capitalize">{f.kind}</span> · {f.label}</span>
                     <span className="flex items-center gap-2 shrink-0">
                       <span className="tabular-nums">{formatZAR(f.amountCents)}</span>
-                      <SaveForm success="Fee removed" resetOnSuccess={false} action={deleteQuoteFee.bind(null, f.id, quote.id)}><SaveButton className="text-xs text-slate-600 hover:text-red-500">✕</SaveButton></SaveForm>
+                      {editable && (
+                        <SaveForm success="Fee removed" resetOnSuccess={false} action={deleteQuoteFee.bind(null, f.id, quote.id)}><SaveButton className="text-xs text-slate-600 hover:text-red-500">✕</SaveButton></SaveForm>
+                      )}
                     </span>
                   </div>
                 ))}
               </div>
             )}
+            {!editable && (
+              <p className="text-xs text-muted-foreground">
+                This quote is locked — showing what was agreed.
+              </p>
+            )}
+            {editable && (<>
             <SaveForm success="Fee added" action={addQuoteFee.bind(null, quote.id)} className="flex flex-wrap items-end gap-2">
               <select name="kind" defaultValue="fee" className="input w-28"><option value="fee">Fee</option><option value="delivery">Delivery</option></select>
               <input name="label" required placeholder="Label (e.g. Delivery to Cape Town)" className="input flex-1 min-w-40" />
@@ -540,6 +592,7 @@ export default async function QuoteDetailPage({
                 <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
               </SaveForm>
             </div>
+            </>)}
           </div>
         )}
 

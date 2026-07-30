@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import { quoteTotalCents } from "@/lib/pricing";
+import { payableTotalCents } from "@/lib/pricing";
 import { contactName } from "@/lib/format";
 import { listTenantStaff } from "@/lib/tenantActor";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
@@ -329,11 +329,14 @@ async function quoteWorkflowContext(
     where: { id: quoteId },
     include: {
       items: true,
+      fees: { orderBy: { sortOrder: "asc" } },
       lead: { include: { product: true } },
       contact: { include: { tags: true } },
     },
   });
-  const total = quoteTotalCents(quote?.items ?? []) / 100;
+  // Routing rules key off deal size; the subtotal understated it whenever a
+  // quote carried a delivery charge.
+  const total = (quote ? payableTotalCents(quote) : 0) / 100;
   const segment =
     (quote?.contact?.tags ?? []).map((tag) => tag.name).join(",") ||
     "retail";

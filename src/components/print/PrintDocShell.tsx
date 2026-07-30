@@ -1,6 +1,6 @@
 import type { DocTemplate } from "@/lib/docTemplates";
 import { formatZAR } from "@/lib/format";
-import { lineNetCents } from "@/lib/pricing";
+import { lineNetCents, type TotalLine } from "@/lib/pricing";
 
 /** Shared line-items table used by invoice / agreement / delivery / service report. */
 export function ItemsTable({
@@ -8,12 +8,22 @@ export function ItemsTable({
   showPrices,
   totalCents,
   totalLabel = "Total incl. VAT",
+  totals,
 }: {
   rows: { description: string; qty: number; unitPriceCents?: number; discountPct?: number | null }[];
   showPrices: boolean;
   totalCents?: number;
   totalLabel?: string;
+  /**
+   * Full totals block from `documentTotals()`. Prefer this for anything quoting
+   * a price: on a tax-EXCLUSIVE quote the rows are ex-VAT, so a lone
+   * "Total incl. VAT" doesn't reconcile with them. `totalCents` stays for the
+   * job card / service report, which have no tax mode.
+   */
+  totals?: TotalLine[];
 }) {
+  const lines: TotalLine[] =
+    totals ?? (totalCents !== undefined ? [{ label: totalLabel, amountCents: totalCents, strong: true }] : []);
   return (
     <>
       <table className="w-full border-collapse mb-2">
@@ -58,11 +68,24 @@ export function ItemsTable({
           ))}
         </tbody>
       </table>
-      {showPrices && totalCents !== undefined && (
+      {showPrices && lines.length > 0 && (
         <div className="flex justify-end mt-4 no-break">
-          <div className="rounded-lg bg-orange-600 text-white px-6 py-3 flex items-baseline gap-6">
-            <span className="text-[11px] font-bold uppercase tracking-widest">{totalLabel}</span>
-            <span className="text-2xl font-bold">{formatZAR(Math.round(totalCents))}</span>
+          <div className="w-72">
+            {lines.filter((line) => !line.strong).map((line) => (
+              <div key={line.label} className="flex justify-between px-6 py-1 text-sm text-slate-600">
+                <span>{line.label}</span>
+                <span className="tabular-nums">{formatZAR(Math.round(line.amountCents))}</span>
+              </div>
+            ))}
+            {lines.filter((line) => line.strong).map((line) => (
+              <div
+                key={line.label}
+                className="mt-1 flex items-baseline justify-between gap-6 rounded-lg bg-orange-600 px-6 py-3 text-white"
+              >
+                <span className="text-[11px] font-bold uppercase tracking-widest">{line.label}</span>
+                <span className="text-2xl font-bold tabular-nums">{formatZAR(Math.round(line.amountCents))}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}

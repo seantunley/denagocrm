@@ -16,7 +16,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 
   const quote = await prisma.quote.findUnique({
     where: { id },
-    include: { items: true, lead: { include: { product: true } }, contact: true, createdBy: true },
+    include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, lead: { include: { product: true } }, contact: true, createdBy: true },
   });
   if (!quote) return new Response("Quote not found", { status: 404 });
 

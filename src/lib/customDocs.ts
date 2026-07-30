@@ -1,7 +1,7 @@
 import "server-only";
 import { prisma } from "./db";
 import { contactName, formatDate, formatZAR } from "./format";
-import { quoteTotalCents } from "./pricing";
+import { payableTotalCents } from "./pricing";
 import { type MergeContext } from "./mergeFields";
 import { getCompanyProfile, companyTokens } from "./companyProfile";
 
@@ -21,14 +21,14 @@ export async function buildMergeContext(links: {
       ? prisma.lead.findUnique({ where: { id: links.leadId }, include: { product: true } })
       : null,
     links.quoteId
-      ? prisma.quote.findUnique({ where: { id: links.quoteId }, include: { items: true } })
+      ? prisma.quote.findUnique({ where: { id: links.quoteId }, include: { items: true, fees: { orderBy: { sortOrder: "asc" } } } })
       : null,
     getCompanyProfile(),
   ]);
 
   // Lead can stand in for a missing contact
   const custName = contact ? contactName(contact) : lead?.name ?? "";
-  const quoteTotal = quote ? quoteTotalCents(quote.items) : null;
+  const quoteTotal = quote ? payableTotalCents(quote) : null;
 
   return {
     ...companyTokens(company), // company.* now from the editable Company Profile

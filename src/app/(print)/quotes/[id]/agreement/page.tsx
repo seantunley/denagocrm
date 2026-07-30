@@ -5,7 +5,7 @@ import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { contactName, formatDate } from "@/lib/format";
-import { quoteTotalCents } from "@/lib/pricing";
+import { documentTotals, feeRows, includedLines } from "@/lib/pricing";
 
 export default async function AgreementPrintPage({
   params,
@@ -19,11 +19,14 @@ export default async function AgreementPrintPage({
   const { tpl: tplId } = await searchParams;
   const quote = await prisma.quote.findUnique({
     where: { id },
-    include: { items: true, contact: true, lead: { include: { product: true } } },
+    include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, contact: true, lead: { include: { product: true } } },
   });
   if (!quote) notFound();
   const tpl = await getDocTemplate("agreement", tplId);
-  const total = quoteTotalCents(quote.items);
+  // Fees and delivery are part of what the customer pays; the subtotal is not.
+  // The rows the customer can see must add up to the price they are agreeing
+  // to — in either tax mode. See documentTotals().
+  const totals = documentTotals(quote);
   const customer = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
   const address = quote.contact
     ? [quote.contact.address, quote.contact.suburb, quote.contact.city].filter(Boolean).join(", ")
@@ -62,7 +65,11 @@ export default async function AgreementPrintPage({
           />
         </div>
         {tpl.sections.items !== false && (
-          <ItemsTable rows={quote.items} showPrices totalCents={total} totalLabel="Purchase price" />
+          <ItemsTable
+            rows={[...includedLines(quote.items), ...feeRows(quote.fees)]}
+            showPrices
+            totals={totals.map((line) => (line.strong ? { ...line, label: "Purchase price" } : line))}
+          />
         )}
       </PrintDocShell>
     </>

@@ -28,6 +28,18 @@ export function isLineIncluded(line: PricedLine): boolean {
   return !line.optional || line.selected !== false;
 }
 
+/**
+ * The lines a document should PRINT — exactly the ones its total counts.
+ *
+ * An optional add-on the customer didn't take is excluded from the total by
+ * quotePricing, so printing it anyway put an apparently-charged line on the
+ * page that the total never included. Every renderer takes its rows from here,
+ * so the two can't drift apart again.
+ */
+export function includedLines<T extends PricedLine>(lines: T[]): T[] {
+  return lines.filter(isLineIncluded);
+}
+
 /** Sum of the discounted line amounts for the included lines, in cents. */
 export function quoteTotalCents(lines: PricedLine[]): number {
   return lines.reduce((sum, line) => (isLineIncluded(line) ? sum + lineNetCents(line) : sum), 0);
@@ -110,4 +122,85 @@ export function quotePricing(lines: PricedLine[], fees: FeeLine[] = [], opts: Pr
     depositCents,
     balanceCents: totalCents - depositCents,
   };
+}
+
+// ── One payable total, for every customer-facing surface ──────────────────────
+
+/**
+ * What the customer actually pays: line items PLUS fees and delivery.
+ *
+ * `quoteTotalCents(items)` is the line-items subtotal and is NOT this. Every
+ * customer-facing and legal surface — the printed quote, the sales agreement,
+ * the signing envelope, the audit trail — used the subtotal, so a quote carrying
+ * a R5 500 delivery charge showed R545 500 on the deliveries board while the
+ * document the customer signed said R540 000.
+ *
+ * Fees are not optional in the data model, so nothing that states a price to a
+ * customer should be computing it any other way. Use this.
+ */
+export function payableTotalCents(quote: {
+  items: PricedLine[];
+  fees?: FeeLine[] | null;
+  taxInclusive?: boolean | null;
+  depositType?: string | null;
+  depositValue?: number | null;
+}): number {
+  return quotePricing(quote.items, quote.fees ?? [], {
+    taxInclusive: quote.taxInclusive ?? undefined,
+    depositType: quote.depositType,
+    depositValue: quote.depositValue,
+  }).totalCents;
+}
+
+type QuoteMoney = {
+  items: PricedLine[];
+  fees?: FeeLine[] | null;
+  taxInclusive?: boolean | null;
+  depositType?: string | null;
+  depositValue?: number | null;
+};
+
+/** One line of a printed totals block. */
+export type TotalLine = { label: string; amountCents: number; strong?: boolean };
+
+/**
+ * The totals block for a printed document, built so the rows the customer can
+ * SEE always add up to the figure at the bottom.
+ *
+ * The two tax modes need different blocks, and that is the whole point:
+ *
+ *   inclusive (default) — row amounts already include VAT, so they sum to the
+ *     payable total. One line: "Total incl. VAT".
+ *   exclusive — row amounts are ex-VAT, so they sum to the SUBTOTAL. Printing
+ *     only "Total incl. VAT" against them showed rows of R110 under a total of
+ *     R126.50 with nothing explaining the gap. Three lines, and it reconciles.
+ */
+export function documentTotals(quote: QuoteMoney): TotalLine[] {
+  const pricing = quotePricing(quote.items, quote.fees ?? [], {
+    taxInclusive: quote.taxInclusive ?? undefined,
+    depositType: quote.depositType,
+    depositValue: quote.depositValue,
+  });
+  if (quote.taxInclusive !== false) {
+    return [{ label: "Total incl. VAT", amountCents: pricing.totalCents, strong: true }];
+  }
+  return [
+    { label: "Subtotal", amountCents: pricing.netCents },
+    { label: "VAT", amountCents: pricing.taxCents },
+    { label: "Total incl. VAT", amountCents: pricing.totalCents, strong: true },
+  ];
+}
+
+/**
+ * Fees rendered as line-item rows, so a printed document ITEMISES the delivery
+ * charge rather than folding it silently into the total.
+ */
+export function feeRows(
+  fees: { label: string; kind?: string | null; amountCents: number }[] = [],
+): { description: string; qty: number; unitPriceCents: number }[] {
+  return fees.map((fee) => ({
+    description: fee.kind === "delivery" ? `Delivery — ${fee.label}` : fee.label,
+    qty: 1,
+    unitPriceCents: fee.amountCents,
+  }));
 }

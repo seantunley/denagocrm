@@ -1,10 +1,10 @@
 import type { Prisma } from "@prisma/client";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { lineNetCents, quoteTotalCents } from "@/lib/pricing";
+import { documentTotals, feeRows, includedLines, lineNetCents } from "@/lib/pricing";
 import { defaultTemplate, type DocTemplate } from "@/lib/docTemplates";
 
 export type QuoteForPrint = Prisma.QuoteGetPayload<{
-  include: { items: true; lead: { include: { product: true } }; contact: true; createdBy: true };
+  include: { items: true; fees: true; lead: { include: { product: true } }; contact: true; createdBy: true };
 }>;
 
 /** The branded quotation document — used by the internal print page, the
@@ -19,7 +19,17 @@ export default function QuotePrintDoc({
 }) {
   const tpl = template ?? defaultTemplate("quote");
   const lineNet = lineNetCents;
-  const total = quoteTotalCents(quote.items);
+  // Fees and delivery are part of the price the customer is being quoted — so
+  // they are itemised as rows as well as counted in the total. A total that
+  // exceeds the sum of the visible lines is a quote the customer can't check.
+  const fees = feeRows(quote.fees);
+  // Only the lines the total counts — an optional add-on the customer didn't
+  // take is not a charge, so it isn't printed as one.
+  const items = includedLines(quote.items);
+  // On a tax-exclusive quote the row amounts are ex-VAT, so a lone "Total incl.
+  // VAT" band sat above rows that didn't add up to it. documentTotals() returns
+  // the subtotal/VAT lines in that mode and the single band in the other.
+  const totals = documentTotals(quote);
   const termsText = tpl.terms ?? quote.terms;
   const customerName = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
   const phone = quote.contact?.phone ?? quote.lead?.phone;
@@ -80,7 +90,7 @@ export default function QuotePrintDoc({
               Vehicle of interest
             </p>
             <p className="font-bold text-slate-900">
-              {quote.lead?.product?.name ?? quote.items[0]?.description ?? "—"}
+              {quote.lead?.product?.name ?? items[0]?.description ?? "—"}
             </p>
             {quote.lead?.color && <p className="text-slate-600">Colour: {quote.lead.color}</p>}
             <p className="text-slate-600 text-xs mt-1">
@@ -102,7 +112,7 @@ export default function QuotePrintDoc({
             </tr>
           </thead>
           <tbody>
-            {quote.items.map((i, idx) => (
+            {items.map((i, idx) => (
               <tr key={i.id} className={idx % 2 === 1 ? "bg-slate-50" : ""}>
                 <td className="py-2.5 px-3 border-b border-slate-200 font-medium text-slate-900">
                   <span className="block">{i.description}</span>
@@ -118,16 +128,36 @@ export default function QuotePrintDoc({
                 </td>
               </tr>
             ))}
+            {fees.map((fee, idx) => (
+              <tr key={`fee-${idx}`} className={(items.length + idx) % 2 === 1 ? "bg-slate-50" : ""}>
+                <td className="py-2.5 px-3 border-b border-slate-200 font-medium text-slate-900">{fee.description}</td>
+                <td className="py-2.5 px-3 border-b border-slate-200 text-right">{fee.qty}</td>
+                <td className="py-2.5 px-3 border-b border-slate-200 text-right">{formatZAR(fee.unitPriceCents)}</td>
+                <td className="py-2.5 px-3 border-b border-slate-200 text-right font-medium">{formatZAR(fee.unitPriceCents)}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
 
-        {/* Total band */}
+        {/* Totals — subtotal + VAT appear only on a tax-exclusive quote, where
+            the rows above are ex-VAT and would otherwise not reach the total. */}
         <div className="flex justify-end mt-4 mb-10 no-break">
-          <div className="rounded-lg bg-orange-600 text-white px-6 py-3 flex items-baseline gap-6">
-            <span className="text-[11px] font-bold uppercase tracking-widest">
-              Total incl. VAT
-            </span>
-            <span className="text-2xl font-bold">{formatZAR(Math.round(total))}</span>
+          <div className="w-72">
+            {totals.filter((line) => !line.strong).map((line) => (
+              <div key={line.label} className="flex justify-between px-6 py-1 text-sm text-slate-600">
+                <span>{line.label}</span>
+                <span className="tabular-nums">{formatZAR(Math.round(line.amountCents))}</span>
+              </div>
+            ))}
+            {totals.filter((line) => line.strong).map((line) => (
+              <div
+                key={line.label}
+                className="mt-1 flex items-baseline justify-between gap-6 rounded-lg bg-orange-600 px-6 py-3 text-white"
+              >
+                <span className="text-[11px] font-bold uppercase tracking-widest">{line.label}</span>
+                <span className="text-2xl font-bold tabular-nums">{formatZAR(Math.round(line.amountCents))}</span>
+              </div>
+            ))}
           </div>
         </div>
 
