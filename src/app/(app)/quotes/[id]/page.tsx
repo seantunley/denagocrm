@@ -20,7 +20,7 @@ import { generateDocEditorDocument } from "@/app/actions/doceditor";
 import SigningBlock from "@/components/SigningBlock";
 import { activeRecordRequest, isLockedForSigning } from "@/lib/signing/record";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { isLineIncluded, lineNetCents, payableTotalCents, quotePricing } from "@/lib/pricing";
+import { feeRows, isLineIncluded, lineNetCents, payableTotalCents, quotePricing } from "@/lib/pricing";
 import { addQuoteFee, deleteQuoteFee, setQuoteDeposit, setQuoteTaxMode } from "@/app/actions/cpq";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 
@@ -38,8 +38,19 @@ type FamilyQuote = {
   supersededAt: Date | null;
   declineReason: string | null;
   createdAt: Date;
-  items: { qty: number; unitPriceCents: number; description: string; colorPreference: string | null; discountPct: number; taxRatePct: number }[];
-  fees: { amountCents: number; taxRatePct: number }[];
+  items: {
+    qty: number;
+    unitPriceCents: number;
+    description: string;
+    colorPreference: string | null;
+    discountPct: number;
+    taxRatePct: number;
+    // Without these two, isLineIncluded() sees `undefined` and counts every
+    // line — so the history total silently disagreed with the quote's own.
+    optional: boolean;
+    selected: boolean;
+  }[];
+  fees: { label: string; kind: string; amountCents: number; taxRatePct: number }[];
   taxInclusive: boolean;
 };
 
@@ -71,9 +82,10 @@ async function getQuoteFamily(start: {
         supersededAt: true,
         declineReason: true,
         createdAt: true,
-        items: { select: { qty: true, unitPriceCents: true, description: true, colorPreference: true, discountPct: true, taxRatePct: true } },
-        // Each historical version is totalled the same way as the live quote.
-        fees: { select: { amountCents: true, taxRatePct: true }, orderBy: { sortOrder: "asc" } },
+        items: { select: { qty: true, unitPriceCents: true, description: true, colorPreference: true, discountPct: true, taxRatePct: true, optional: true, selected: true } },
+        // Each historical version is totalled the same way as the live quote —
+        // and label/kind so its fees can be shown as rows, not just counted.
+        fees: { select: { label: true, kind: true, amountCents: true, taxRatePct: true }, orderBy: { sortOrder: "asc" } },
         taxInclusive: true,
         revisions: { select: { id: true } },
       },
@@ -280,12 +292,25 @@ export default async function QuoteDetailPage({
               createdAt: formatDate(f.createdAt),
               declineReason: f.declineReason,
               totalZAR: formatZAR(payableTotalCents(f)),
-              items: f.items.map((i) => ({
-                qty: i.qty,
-                description: i.description,
-                colorPreference: i.colorPreference,
-                priceZAR: formatZAR(lineNetCents(i)),
-              })),
+              // Same treatment as the table above: an unselected option keeps
+              // its row but carries no amount, and the fees the total counts
+              // are listed — so the modal's rows reach the modal's total.
+              items: [
+                ...f.items.map((i) => ({
+                  qty: i.qty,
+                  description: i.description,
+                  colorPreference: i.colorPreference,
+                  priceZAR: isLineIncluded(i) ? formatZAR(lineNetCents(i)) : "—",
+                  included: isLineIncluded(i),
+                })),
+                ...feeRows(f.fees).map((fee) => ({
+                  qty: fee.qty,
+                  description: fee.description,
+                  colorPreference: null,
+                  priceZAR: formatZAR(fee.unitPriceCents),
+                  included: true,
+                })),
+              ],
             }))}
           />
         </div>

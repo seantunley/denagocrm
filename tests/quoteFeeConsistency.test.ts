@@ -241,6 +241,31 @@ test("the quote record page shows an unselected option without a line total", ()
   assert.match(code, /Optional — not selected/, "and it says why");
 });
 
+test("version history reconciles too — same rows, same total", () => {
+  // The last surface with the same defect. Two separate faults here: the
+  // version query never SELECTED optional/selected, so isLineIncluded saw
+  // undefined and the history total counted lines the live quote excluded; and
+  // the modal listed items only, while its total already counted fees.
+  const code = src("src/app/(app)/quotes/[id]/page.tsx");
+  assert.match(
+    code,
+    /optional: true, selected: true/,
+    "the version query must select optional/selected, or its total silently counts every line",
+  );
+  assert.match(
+    code,
+    /fees: \{ select: \{ label: true, kind: true/,
+    "…and label/kind, so the fees it counts can be shown as rows",
+  );
+  const history = code.slice(code.indexOf("versions={family.map("));
+  assert.match(
+    history,
+    /isLineIncluded\(i\) \? formatZAR\(lineNetCents\(i\)\) : "—"/,
+    "an unselected option carries no amount in the history either",
+  );
+  assert.match(history, /\.\.\.feeRows\(f\.fees\)/, "and the fees appear as rows");
+});
+
 test("every priced quote document builds its totals from documentTotals", () => {
   // Passing a bare payable total next to ex-VAT rows is what broke reconciliation.
   const priced = [

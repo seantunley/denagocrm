@@ -19,7 +19,10 @@ export type QuoteVersion = {
   createdAt: string; // pre-formatted
   declineReason: string | null;
   totalZAR: string; // pre-formatted
-  items: { qty: number; description: string; colorPreference: string | null; priceZAR: string }[];
+  /** `included: false` is an optional add-on the customer didn't take — still
+   *  shown, because it is part of this version's history, but with no amount,
+   *  so the column adds up to `totalZAR`. */
+  items: { qty: number; description: string; colorPreference: string | null; priceZAR: string; included?: boolean }[];
 };
 
 const STATUS_STYLE: Record<string, string> = {
@@ -119,10 +122,19 @@ export default function QuoteVersions({
                   </thead>
                   <tbody>
                     {viewing.items.map((it, i) => (
-                      <tr key={i} className="border-b border-border/60 last:border-0">
+                      <tr
+                        key={i}
+                        className={cn(
+                          "border-b border-border/60 last:border-0",
+                          it.included === false && "text-muted-foreground",
+                        )}
+                      >
                         <td className="px-3 py-2 text-foreground">
                           <span className="block">{it.description}</span>
                           {it.colorPreference && <span className="mt-0.5 block text-[11px] text-muted-foreground">Colour preference: {it.colorPreference}</span>}
+                          {it.included === false && (
+                            <span className="mt-0.5 block text-[11px] text-muted-foreground">Optional — not selected</span>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
                           {it.qty}
