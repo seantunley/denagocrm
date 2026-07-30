@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import { quoteTotalCents } from "@/lib/pricing";
+import { payableTotalCents } from "@/lib/pricing";
 import { logAudit } from "@/lib/audit";
 import { sendPushToAll } from "@/lib/push";
 import { formatZAR } from "@/lib/format";
@@ -47,11 +47,12 @@ export async function runPostCompletion(req: CompletedReq): Promise<void> {
 async function afterQuoteSigned(req: CompletedReq): Promise<void> {
   const quote = await prisma.quote.findUnique({
     where: { id: req.quoteId! },
-    include: { items: true },
+    include: { items: true, fees: { orderBy: { sortOrder: "asc" } } },
   });
   if (!quote) return;
   const name = req.signedByName || "Customer";
-  const total = quoteTotalCents(quote.items);
+  // What was actually signed for — fees included, matching the document.
+  const total = payableTotalCents(quote);
 
   if (req.wonLeadId) {
     await markReferralEarned(req.wonLeadId).catch(() => {});

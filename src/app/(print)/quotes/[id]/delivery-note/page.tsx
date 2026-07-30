@@ -5,7 +5,7 @@ import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { contactName, formatDate } from "@/lib/format";
-import { quoteTotalCents } from "@/lib/pricing";
+import { payableTotalCents } from "@/lib/pricing";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 
 export default async function DeliveryNotePrintPage({
@@ -24,11 +24,12 @@ export default async function DeliveryNotePrintPage({
   const { tpl: tplId } = await searchParams;
   const quote = await prisma.quote.findUnique({
     where: { id },
-    include: { items: true, contact: true, lead: true },
+    include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, contact: true, lead: true },
   });
   if (!quote) notFound();
   const tpl = await getDocTemplate("delivery", tplId);
-  const total = quoteTotalCents(quote.items);
+  // Fees and delivery are part of what the customer pays; the subtotal is not.
+  const total = payableTotalCents(quote);
   const customer = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
   const address = quote.contact
     ? [quote.contact.address, quote.contact.suburb, quote.contact.city].filter(Boolean).join(", ")

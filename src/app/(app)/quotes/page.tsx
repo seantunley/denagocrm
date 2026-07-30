@@ -3,7 +3,7 @@ import { FileText, Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireAnyPermission, getAccessibleQuoteIds } from "@/lib/permissions";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { quoteTotalCents } from "@/lib/pricing";
+import { payableTotalCents } from "@/lib/pricing";
 import { getSetting } from "@/lib/settings";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
@@ -195,7 +195,7 @@ export default async function QuotesPage({
             mobile={
               <MobileDataList>
                 {quotes.map((quote) => {
-                  const total = quoteTotalCents(quote.items);
+                  const total = payableTotalCents(quote);
                   return (
                     <RecordContextMenu
                       key={quote.id}
@@ -251,7 +251,7 @@ export default async function QuotesPage({
                   </thead>
                   <tbody>
                     {quotes.map((quote) => {
-                      const total = quoteTotalCents(quote.items);
+                      const total = payableTotalCents(quote);
                       return (
                         <RecordContextMenu
                           key={quote.id}

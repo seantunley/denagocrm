@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -68,4 +68,51 @@ test("the editor has one name for one destination", () => {
   );
   const recordLinks = (code.match(/Open full record/g) ?? []).length;
   assert.ok(recordLinks >= 2, "both links to the record page should now say the same thing");
+});
+
+test("nothing outside pricing.ts states a quote total without fees", () => {
+  // The real defence. Fixing the surfaces one by one is how they diverged in the
+  // first place: quoteTotalCents(items) is the LINE-ITEMS SUBTOTAL, and every
+  // customer-facing, legal and reporting surface had quietly adopted it.
+  const walk = (dir: string, out: string[] = []): string[] => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "node_modules" && entry.name !== ".next") walk(full, out);
+      } else if (/\.tsx?$/.test(entry.name)) out.push(full);
+    }
+    return out;
+  };
+
+  const offenders = walk(path.join(root, "src"))
+    .filter((file) => !file.endsWith(path.join("lib", "pricing.ts")))
+    .filter((file) => /quoteTotalCents\s*\(/.test(readFileSync(file, "utf8")))
+    .map((file) => path.relative(root, file).split(path.sep).join("/"));
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `these state a quote total that excludes fees — use payableTotalCents():\n  ${offenders.join("\n  ")}`,
+  );
+});
+
+test("every surface that renders a quote loads its fees", () => {
+  // Loading `items` without `fees` is the other half of the same bug: the total
+  // silently drops the delivery charge because the data was never fetched.
+  const surfaces = [
+    "src/app/(print)/quotes/[id]/print/page.tsx",
+    "src/app/(print)/quotes/[id]/invoice/page.tsx",
+    "src/app/(print)/quotes/[id]/agreement/page.tsx",
+    "src/app/(print)/quotes/[id]/delivery-note/page.tsx",
+    "src/app/api/pdf/quote/[id]/route.tsx",
+    "src/lib/signing/render.ts",
+    "src/lib/signing/autoEnvelope.ts",
+    "src/lib/signing/postComplete.ts",
+    "src/lib/doceditor/generate.ts",
+    "src/lib/customDocs.ts",
+    "src/app/(app)/deliveries/page.tsx",
+  ];
+  for (const rel of surfaces) {
+    assert.match(src(rel), /fees:/, `${rel} renders a quote total but never loads its fees`);
+  }
 });

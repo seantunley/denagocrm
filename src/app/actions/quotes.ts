@@ -6,7 +6,7 @@ import { revalidatePath } from "next/cache";
 import { addDays } from "date-fns";
 import type { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "@/lib/db";
-import { quoteTotalCents } from "@/lib/pricing";
+import { quoteTotalCents, payableTotalCents } from "@/lib/pricing";
 import { logAudit } from "@/lib/audit";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
 import { getSetting } from "@/lib/settings";
@@ -634,7 +634,7 @@ export async function setQuoteStatus(quoteId: string, status: string) {
       throw new ActionRefusal("This quote is out for signature — void the signing request before changing its status.");
     }
     const { quote, wonLeadId, reopenedLead } = result;
-    const total = quoteTotalCents(quote.items);
+    const total = payableTotalCents(quote);
     const verb =
       status === "sent"
         ? "sent to the customer"

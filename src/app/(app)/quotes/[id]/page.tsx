@@ -20,7 +20,7 @@ import { generateDocEditorDocument } from "@/app/actions/doceditor";
 import SigningBlock from "@/components/SigningBlock";
 import { activeRecordRequest, isLockedForSigning } from "@/lib/signing/record";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { lineNetCents, quoteTotalCents, quotePricing } from "@/lib/pricing";
+import { lineNetCents, payableTotalCents, quotePricing } from "@/lib/pricing";
 import { addQuoteFee, deleteQuoteFee, setQuoteDeposit, setQuoteTaxMode } from "@/app/actions/cpq";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 
@@ -38,7 +38,9 @@ type FamilyQuote = {
   supersededAt: Date | null;
   declineReason: string | null;
   createdAt: Date;
-  items: { qty: number; unitPriceCents: number; description: string; colorPreference: string | null; discountPct: number }[];
+  items: { qty: number; unitPriceCents: number; description: string; colorPreference: string | null; discountPct: number; taxRatePct: number }[];
+  fees: { amountCents: number; taxRatePct: number }[];
+  taxInclusive: boolean;
 };
 
 /** All versions of a quote: walk up to the root, then collect descendants. */
@@ -69,7 +71,10 @@ async function getQuoteFamily(start: {
         supersededAt: true,
         declineReason: true,
         createdAt: true,
-        items: { select: { qty: true, unitPriceCents: true, description: true, colorPreference: true, discountPct: true } },
+        items: { select: { qty: true, unitPriceCents: true, description: true, colorPreference: true, discountPct: true, taxRatePct: true } },
+        // Each historical version is totalled the same way as the live quote.
+        fees: { select: { amountCents: true, taxRatePct: true }, orderBy: { sortOrder: "asc" } },
+        taxInclusive: true,
         revisions: { select: { id: true } },
       },
       orderBy: { createdAt: "asc" },
@@ -274,7 +279,7 @@ export default async function QuoteDetailPage({
               superseded: Boolean(f.supersededAt),
               createdAt: formatDate(f.createdAt),
               declineReason: f.declineReason,
-              totalZAR: formatZAR(quoteTotalCents(f.items)),
+              totalZAR: formatZAR(payableTotalCents(f)),
               items: f.items.map((i) => ({
                 qty: i.qty,
                 description: i.description,

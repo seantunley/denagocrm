@@ -111,3 +111,45 @@ export function quotePricing(lines: PricedLine[], fees: FeeLine[] = [], opts: Pr
     balanceCents: totalCents - depositCents,
   };
 }
+
+// ── One payable total, for every customer-facing surface ──────────────────────
+
+/**
+ * What the customer actually pays: line items PLUS fees and delivery.
+ *
+ * `quoteTotalCents(items)` is the line-items subtotal and is NOT this. Every
+ * customer-facing and legal surface — the printed quote, the sales agreement,
+ * the signing envelope, the audit trail — used the subtotal, so a quote carrying
+ * a R5 500 delivery charge showed R545 500 on the deliveries board while the
+ * document the customer signed said R540 000.
+ *
+ * Fees are not optional in the data model, so nothing that states a price to a
+ * customer should be computing it any other way. Use this.
+ */
+export function payableTotalCents(quote: {
+  items: PricedLine[];
+  fees?: FeeLine[] | null;
+  taxInclusive?: boolean | null;
+  depositType?: string | null;
+  depositValue?: number | null;
+}): number {
+  return quotePricing(quote.items, quote.fees ?? [], {
+    taxInclusive: quote.taxInclusive ?? undefined,
+    depositType: quote.depositType,
+    depositValue: quote.depositValue,
+  }).totalCents;
+}
+
+/**
+ * Fees rendered as line-item rows, so a printed document ITEMISES the delivery
+ * charge rather than folding it silently into the total.
+ */
+export function feeRows(
+  fees: { label: string; kind?: string | null; amountCents: number }[] = [],
+): { description: string; qty: number; unitPriceCents: number }[] {
+  return fees.map((fee) => ({
+    description: fee.kind === "delivery" ? `Delivery — ${fee.label}` : fee.label,
+    qty: 1,
+    unitPriceCents: fee.amountCents,
+  }));
+}

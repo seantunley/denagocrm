@@ -5,7 +5,7 @@ import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { contactName, formatDate } from "@/lib/format";
-import { quoteTotalCents } from "@/lib/pricing";
+import { feeRows, payableTotalCents } from "@/lib/pricing";
 
 export default async function InvoicePrintPage({
   params,
@@ -19,11 +19,12 @@ export default async function InvoicePrintPage({
   const { tpl: tplId } = await searchParams;
   const quote = await prisma.quote.findUnique({
     where: { id },
-    include: { items: true, contact: true, lead: true },
+    include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, contact: true, lead: true },
   });
   if (!quote) notFound();
   const tpl = await getDocTemplate("invoice", tplId);
-  const total = quoteTotalCents(quote.items);
+  // Fees and delivery are part of what the customer pays; the subtotal is not.
+  const total = payableTotalCents(quote);
   const customer = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
 
   return (
@@ -57,7 +58,7 @@ export default async function InvoicePrintPage({
             lines={[`Invoice INV-${quote.number}`, `Quote Q-${quote.number}`, `Status: ${quote.status}`]}
           />
         </div>
-        <ItemsTable rows={quote.items} showPrices totalCents={total} />
+        <ItemsTable rows={[...quote.items, ...feeRows(quote.fees)]} showPrices totalCents={total} />
         {tpl.sections.terms !== false && tpl.terms && (
           <div className="rounded-lg bg-slate-50 px-4 py-3 mt-6 no-break">
             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1.5">

@@ -1,10 +1,10 @@
 import type { Prisma } from "@prisma/client";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { lineNetCents, quoteTotalCents } from "@/lib/pricing";
+import { lineNetCents, payableTotalCents } from "@/lib/pricing";
 import { defaultTemplate, type DocTemplate } from "@/lib/docTemplates";
 
 export type QuoteForPrint = Prisma.QuoteGetPayload<{
-  include: { items: true; lead: { include: { product: true } }; contact: true; createdBy: true };
+  include: { items: true; fees: true; lead: { include: { product: true } }; contact: true; createdBy: true };
 }>;
 
 /** The branded quotation document — used by the internal print page, the
@@ -19,7 +19,8 @@ export default function QuotePrintDoc({
 }) {
   const tpl = template ?? defaultTemplate("quote");
   const lineNet = lineNetCents;
-  const total = quoteTotalCents(quote.items);
+  // Fees and delivery are part of the price the customer is being quoted.
+  const total = payableTotalCents(quote);
   const termsText = tpl.terms ?? quote.terms;
   const customerName = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
   const phone = quote.contact?.phone ?? quote.lead?.phone;

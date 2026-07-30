@@ -1,6 +1,6 @@
 import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { lineNetCents, quoteTotalCents } from "@/lib/pricing";
+import { lineNetCents, payableTotalCents } from "@/lib/pricing";
 import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
 
 /**
@@ -112,7 +112,8 @@ export type SignedInfo = { name: string; email: string; ip: string; date: string
 
 export default function QuoteDoc({ quote, signed }: { quote: QuoteForPrint; signed?: SignedInfo }) {
   const lineNet = lineNetCents;
-  const total = quoteTotalCents(quote.items);
+  // Fees and delivery are part of the quoted price.
+  const total = payableTotalCents(quote);
   const customerName = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
   const phone = quote.contact?.phone ?? quote.lead?.phone ?? "";
   const email = quote.contact?.email ?? quote.lead?.email ?? "";

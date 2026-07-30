@@ -35,7 +35,7 @@ export async function bindCtx(quoteId: string | null, jobCardId: string | null):
   if (quoteId) {
     const q = await prisma.quote.findUnique({
       where: { id: quoteId },
-      include: { items: true, lead: { include: { product: true } }, contact: true, createdBy: true },
+      include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, lead: { include: { product: true } }, contact: true, createdBy: true },
     });
     if (q) return withCompany(buildQuoteContext(q));
   } else if (jobCardId) {
