@@ -179,6 +179,17 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   // No creator recorded → attribute the signed Document to a member of THIS
   // request's tenant, never the global oldest user (resolveTenantActor).
   const uploaderId = req.createdById || (await resolveTenantActor())?.id;
+  // With no uploader the Document row was simply skipped, so the sealed PDF was
+  // filed against nothing: the quote showed as signed and accepted while the
+  // contract itself appeared on no Documents tab and in no deliveries chip.
+  // Refusing rolls the whole completion back and the customer can sign again —
+  // far better than an accepted quote with no retrievable contract. Both
+  // creation paths set createdById, so this is an invariant, not a code path.
+  if (!uploaderId) {
+    throw new Error(
+      `Cannot file the signed document for request ${requestId}: no user to attribute it to.`,
+    );
+  }
   const firstSigner = req.recipients.find((r) => r.status === "signed" && r.role !== "viewer");
   const signerName = firstSigner?.signedName || firstSigner?.name || "Customer";
 
@@ -202,20 +213,18 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       // other needed). Locking the source row up front makes the order consistent.
       if (req.quoteId) await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${req.quoteId} FOR UPDATE`;
       else if (req.jobCardId) await tx.$executeRaw`SELECT id FROM "JobCard" WHERE id = ${req.jobCardId} FOR UPDATE`;
-      const document = uploaderId
-        ? await tx.document.create({
-            data: {
-              fileName: `${req.title} (signed).pdf`, storedName, mimeType: "application/pdf", sizeBytes: pdf.length,
-              quoteId: req.quoteId, jobCardId: req.jobCardId, contactId: req.contactId, tag: "signed", uploadedById: uploaderId,
-            },
-          })
-        : null;
+      const document = await tx.document.create({
+        data: {
+          fileName: `${req.title} (signed).pdf`, storedName, mimeType: "application/pdf", sizeBytes: pdf.length,
+          quoteId: req.quoteId, jobCardId: req.jobCardId, contactId: req.contactId, tag: "signed", uploadedById: uploaderId,
+        },
+      });
       const claimed = await tx.signatureRequest.updateMany({
         where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
-        data: { status: "completed", completedAt: new Date(), signedPdfRef: storedName, signedPdfHash: hash, signedDocId: document?.id ?? null },
+        data: { status: "completed", completedAt: new Date(), signedPdfRef: storedName, signedPdfHash: hash, signedDocId: document.id },
       });
       if (claimed.count === 0) throw new CompletionLost();
-      documentId = document?.id ?? null;
+      documentId = document.id;
 
       if (req.quoteId) {
         const signedQuote = await tx.quote.updateMany({
