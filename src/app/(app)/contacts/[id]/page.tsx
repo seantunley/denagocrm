@@ -26,6 +26,7 @@ import { recordConsent, anonymizeContact } from "@/app/actions/privacy";
 import { CONSENT_TYPES } from "@/lib/consent";
 import { isSmtpConfigured, renderTemplate, contactVars } from "@/lib/email";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { quotePricing } from "@/lib/pricing";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
@@ -51,6 +52,15 @@ export default async function ContactDetailPage({
       leads: { where: { deletedAt: null }, include: { stage: true, product: true }, orderBy: { createdAt: "desc" } },
       communications: { include: { user: true }, orderBy: { occurredAt: "desc" } },
       documents: { where: { deletedAt: null }, include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
+      // Quotes are shown ALONGSIDE the files in the Documents tab. Previously the
+      // tab listed only Document rows, so a quote only appeared once somebody had
+      // generated or uploaded a PDF for it — and an accepted, signed quote with no
+      // generated PDF looked as though it had disappeared.
+      quotes: {
+        where: { deletedAt: null },
+        include: { items: true, fees: { orderBy: { sortOrder: "asc" } } },
+        orderBy: { createdAt: "desc" },
+      },
       activities: { include: { assignedTo: true }, orderBy: { dueDate: "asc" } },
       consentRecords: { orderBy: { createdAt: "desc" } },
       researchNotes: { orderBy: { createdAt: "desc" } },
@@ -60,6 +70,42 @@ export default async function ContactDetailPage({
     },
   });
   if (!contact) notFound();
+  // Document.quoteId is a bare column with no Prisma relation, so the quote's
+  // paperwork has to be fetched separately — the same way the deliveries board
+  // does it. Fetching BY QUOTE rather than by contact matters: a signed PDF or an
+  // uploaded invoice is always linked to its quote, but not always to the
+  // contact, so a contact-only query silently misses them.
+  const quoteDocuments = contact.quotes.length
+    ? await prisma.document.findMany({
+        where: { quoteId: { in: contact.quotes.map((quote) => quote.id) }, deletedAt: null },
+        include: { uploadedBy: true },
+        orderBy: { createdAt: "desc" },
+      })
+    : [];
+  // Every quote becomes a heading; its paperwork nests underneath. The quote is
+  // listed even with nothing filed against it, because "no PDF yet" is not the
+  // same as "no quote" — which is how an accepted quote came to look deleted.
+  const quoteGroups = contact.quotes.map((quote) => ({
+    id: quote.id,
+    number: quote.number,
+    status: quote.status,
+    signed: quote.signedAt != null,
+    superseded: quote.supersededAt != null,
+    // What the customer actually pays — fees and delivery included, which is
+    // why the query above loads them. #261 wraps this exact call as
+    // payableTotalCents(); collapse this to that helper once it lands.
+    totalCents: quotePricing(quote.items, quote.fees, {
+      taxInclusive: quote.taxInclusive,
+      depositType: quote.depositType,
+      depositValue: quote.depositValue,
+    }).totalCents,
+    createdAt: quote.createdAt,
+    documents: quoteDocuments.filter((document) => document.quoteId === quote.id),
+  }));
+  // Anything filed against a quote is shown under that quote, so it must not be
+  // listed a second time here — fulfilment uploads carry BOTH quoteId and
+  // contactId.
+  const looseDocuments = contact.documents.filter((document) => document.quoteId == null);
   const [users, templates, smtpConfigured, waConfigured, history, libraryDocuments] = await Promise.all([
     prisma.user.findMany({ orderBy: { name: "asc" } }),
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
@@ -125,7 +171,7 @@ export default async function ContactDetailPage({
         ...(automotiveOn ? [{ label: "Vehicles", value: contact.vehicles.length }] : []),
         { label: "Open leads", value: contact.leads.filter((lead) => lead.status === "open").length },
         { label: "Activities", value: contact.activities.filter((activity) => activity.status === "planned").length },
-        { label: "Documents", value: contact.documents.length },
+        { label: "Documents", value: looseDocuments.length + quoteDocuments.length },
       ]}
       actions={<>
           <Link href={`/contacts/${contact.id}/edit`} className="btn-secondary">
@@ -473,10 +519,11 @@ export default async function ContactDetailPage({
               {
                 key: "documents",
                 label: "Documents",
-                count: contact.documents.length,
+                count: looseDocuments.length + quoteDocuments.length,
                 content: (
                   <DocumentsPanel
-                    documents={contact.documents}
+                    documents={looseDocuments}
+                    quoteGroups={quoteGroups}
                     contactId={contact.id}
                     revalidate={path}
                   />
