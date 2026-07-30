@@ -867,7 +867,14 @@ export function QuoteEditorDialog({
                     <div className="mt-6 flex flex-col gap-3 sm:flex-row">
                       {editable ? <Button type="button" onClick={() => save("sent")} disabled={isPending}><Send />{isPending ? "Saving…" : "Save & mark sent"}</Button> : <div className="flex items-center gap-2 text-sm text-muted-foreground"><LockKeyhole className="size-4" />This version is already frozen.</div>}
                       {savedQuote && <Button asChild variant="outline"><a href={`/quotes/${savedQuote.id}/print`} target="_blank" rel="noreferrer"><Eye />Open PDF preview</a></Button>}
-                      {savedQuote && <Button asChild variant="ghost"><Link href={`/quotes/${savedQuote.id}`}>Signing & delivery <ExternalLink /></Link></Button>}
+                      {/*
+                        Was "Signing & delivery", which promised a screen that
+                        does not exist — it is the same destination as "Open
+                        full record" at the bottom of the dialog, and "delivery"
+                        there meant delivery FEES, which that page only itemises.
+                        One destination, one name.
+                      */}
+                      {savedQuote && <Button asChild variant="ghost"><Link href={`/quotes/${savedQuote.id}`}>Open full record <ExternalLink /></Link></Button>}
                     </div>
                   </section>
                   <FeedbackBanner tone="info" title="Secure customer signatures stay protected">

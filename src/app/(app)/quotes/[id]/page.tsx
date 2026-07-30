@@ -110,7 +110,6 @@ export default async function QuoteDetailPage({
         })
       : [];
   const successor = quote.revisions[0] ?? null;
-  const total = quoteTotalCents(quote.items);
   const pricing = quotePricing(quote.items, quote.fees, {
     taxInclusive: quote.taxInclusive,
     depositType: quote.depositType,
@@ -493,7 +492,15 @@ export default async function QuoteDetailPage({
           </div>
         </div>
 
-        {editable && (
+        {/*
+          The BREAKDOWN renders whether or not the quote is still editable.
+          Gating the whole card on `editable` meant that the moment a quote was
+          sent or signed, the fee list vanished and the totals showed only a
+          rolled-up "Fees & delivery" figure — so nobody could see what the
+          customer had actually been charged for. Only the controls need the
+          gate; reading what was agreed is not editing.
+        */}
+        {(editable || quote.fees.length > 0) && (
           <div className="card space-y-4">
             <h2 className="font-semibold">Fees, delivery &amp; deposit</h2>
             {quote.fees.length > 0 && (
@@ -503,12 +510,20 @@ export default async function QuoteDetailPage({
                     <span className="min-w-0 truncate text-muted-foreground"><span className="capitalize">{f.kind}</span> · {f.label}</span>
                     <span className="flex items-center gap-2 shrink-0">
                       <span className="tabular-nums">{formatZAR(f.amountCents)}</span>
-                      <SaveForm success="Fee removed" resetOnSuccess={false} action={deleteQuoteFee.bind(null, f.id, quote.id)}><SaveButton className="text-xs text-slate-600 hover:text-red-500">✕</SaveButton></SaveForm>
+                      {editable && (
+                        <SaveForm success="Fee removed" resetOnSuccess={false} action={deleteQuoteFee.bind(null, f.id, quote.id)}><SaveButton className="text-xs text-slate-600 hover:text-red-500">✕</SaveButton></SaveForm>
+                      )}
                     </span>
                   </div>
                 ))}
               </div>
             )}
+            {!editable && (
+              <p className="text-xs text-muted-foreground">
+                This quote is locked — showing what was agreed.
+              </p>
+            )}
+            {editable && (<>
             <SaveForm success="Fee added" action={addQuoteFee.bind(null, quote.id)} className="flex flex-wrap items-end gap-2">
               <select name="kind" defaultValue="fee" className="input w-28"><option value="fee">Fee</option><option value="delivery">Delivery</option></select>
               <input name="label" required placeholder="Label (e.g. Delivery to Cape Town)" className="input flex-1 min-w-40" />
@@ -540,6 +555,7 @@ export default async function QuoteDetailPage({
                 <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
               </SaveForm>
             </div>
+            </>)}
           </div>
         )}
 

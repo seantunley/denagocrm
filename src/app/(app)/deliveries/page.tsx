@@ -10,7 +10,7 @@ import {
 } from "@/app/actions/fulfilment";
 import ProofOfDelivery from "@/components/ProofOfDelivery";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { quoteTotalCents } from "@/lib/pricing";
+import { quotePricing } from "@/lib/pricing";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import {
   getAccessibleQuoteIds,
@@ -48,7 +48,9 @@ export default async function DeliveriesPage() {
       supersededAt: null,
       ...(quoteIds === null ? {} : { id: { in: quoteIds } }),
     },
-    include: { contact: true, lead: { include: { product: true } }, items: true },
+    // fees included: the board showed the line-items subtotal, so a quote with a
+    // delivery charge appeared here for LESS than the customer was quoted.
+    include: { contact: true, lead: { include: { product: true } }, items: true, fees: true },
     orderBy: { updatedAt: "asc" },
   });
   const docs = await prisma.document.findMany({
@@ -92,7 +94,13 @@ export default async function DeliveriesPage() {
     !quote.invoicedAt ? "invoice" : !quote.depositPaidAt ? "deposit" : !quote.deliveryScheduledFor ? "schedule" : "deliver";
 
   const count = (key: Col) => quotes.filter((quote) => colOf(quote) === key).length;
-  const pipelineValue = quotes.reduce((sum, quote) => sum + quoteTotalCents(quote.items), 0);
+  const quoteTotal = (quote: (typeof quotes)[number]) =>
+    quotePricing(quote.items, quote.fees, {
+      taxInclusive: quote.taxInclusive,
+      depositType: quote.depositType,
+      depositValue: quote.depositValue,
+    }).totalCents;
+  const pipelineValue = quotes.reduce((sum, quote) => sum + quoteTotal(quote), 0);
 
   const chip = "inline-flex items-center gap-1 rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground";
 
@@ -165,7 +173,7 @@ export default async function DeliveriesPage() {
                     <p className="px-1 py-6 text-center text-xs text-muted-foreground/50">Nothing here.</p>
                   )}
                   {cards.map((quote) => {
-                    const total = quoteTotalCents(quote.items);
+                    const total = quoteTotal(quote);
                     const model = quote.lead?.product?.name ?? quote.items[0]?.description ?? "—";
                     const who = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "—";
                     const photos = photoCount(quote.id);
