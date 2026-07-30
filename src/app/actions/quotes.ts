@@ -120,16 +120,21 @@ async function createQuoteFromLeadRecord(leadId: string) {
   return quote;
 }
 
+/**
+ * Creates the quote and opens the DRAFT EDITOR.
+ *
+ * Every route to a new quote now lands in the same place. Creating from a lead
+ * used to drop you on the read-only record page while the quotes list and the
+ * lead's own "next step" prompt opened the modal — the same intent, from the
+ * same lead, in two different UIs depending on which button was pressed. The
+ * record page is unchanged and still reachable from the editor's "Open full
+ * record" link.
+ */
 export async function createQuoteFromLead(leadId: string) {
   return asActionResult(async () => {
     const quote = await createQuoteFromLeadRecord(leadId);
-    return { redirectTo: `/quotes/${quote.id}` };
+    return { redirectTo: `/quotes?edit=${quote.id}` };
   });
-}
-
-export async function createQuoteFromLeadInEditor(leadId: string) {
-  const quote = await createQuoteFromLeadRecord(leadId);
-  redirect(`/quotes?edit=${quote.id}`);
 }
 
 /** Creates a quote directly for an existing customer (no lead needed). */
@@ -180,7 +185,12 @@ export async function createQuoteForContact(formData: FormData) {
     user,
   });
   revalidatePath("/quotes");
-  redirect(`/quotes/${quote.id}`);
+  // Lands in the editor like every other route to a new quote. NOTE: nothing in
+  // the UI calls this today, and it differs from createQuoteFromLead in ways
+  // that would surprise whoever wires it up — it prices at the product's base
+  // price rather than the lead's agreed value, and links no lead. Decide those
+  // before giving it a button.
+  redirect(`/quotes?edit=${quote.id}`);
 }
 
 /**
