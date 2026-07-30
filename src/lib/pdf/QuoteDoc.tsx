@@ -1,6 +1,6 @@
 import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { lineNetCents, payableTotalCents } from "@/lib/pricing";
+import { feeRows, lineNetCents, payableTotalCents } from "@/lib/pricing";
 import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
 
 /**
@@ -112,7 +112,9 @@ export type SignedInfo = { name: string; email: string; ip: string; date: string
 
 export default function QuoteDoc({ quote, signed }: { quote: QuoteForPrint; signed?: SignedInfo }) {
   const lineNet = lineNetCents;
-  // Fees and delivery are part of the quoted price.
+  // Fees and delivery are part of the quoted price — itemised as rows below as
+  // well as counted here, so the lines the customer reads add up to the total.
+  const fees = feeRows(quote.fees);
   const total = payableTotalCents(quote);
   const customerName = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
   const phone = quote.contact?.phone ?? quote.lead?.phone ?? "";
@@ -195,6 +197,20 @@ export default function QuoteDoc({ quote, signed }: { quote: QuoteForPrint; sign
             </Text>
             <Text style={[s.cell, s.cNum, { fontFamily: "Helvetica-Bold" }]}>
               {formatZAR(lineNet(i))}
+            </Text>
+          </View>
+        ))}
+        {fees.map((fee, idx) => (
+          <View
+            key={`fee-${idx}`}
+            style={(quote.items.length + idx) % 2 === 1 ? [s.row, s.rowAlt] : s.row}
+            wrap={false}
+          >
+            <Text style={[s.cell, s.cDesc]}>{fee.description}</Text>
+            <Text style={[s.cell, s.cNum]}>{fee.qty}</Text>
+            <Text style={[s.cell, s.cNum]}>{formatZAR(fee.unitPriceCents)}</Text>
+            <Text style={[s.cell, s.cNum, { fontFamily: "Helvetica-Bold" }]}>
+              {formatZAR(fee.unitPriceCents)}
             </Text>
           </View>
         ))}

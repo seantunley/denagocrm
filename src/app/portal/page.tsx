@@ -10,6 +10,7 @@ import ServiceRequestForm from "@/components/ServiceRequestForm";
 import { computeDue, dueLabels, dueColors } from "@/lib/serviceDue";
 import { computeWarranty, warrantyLabels, warrantyColors } from "@/lib/warranty";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
+import { payableTotalCents } from "@/lib/pricing";
 import { Button } from "@/components/ui/button";
 import { Eyebrow, MetricCard } from "@/components/visual-system";
 
@@ -77,7 +78,7 @@ export default async function PortalHome() {
     }),
     prisma.quote.findMany({
       where: { contactId: { in: scope.contactIds }, deletedAt: null, supersededAt: null },
-      include: { items: true },
+      include: { items: true, fees: true },
       orderBy: { createdAt: "desc" },
       take: 30,
     }),
@@ -261,7 +262,10 @@ export default async function PortalHome() {
         <div><Eyebrow>Purchases</Eyebrow><h2 className="mt-1 text-lg font-semibold">Quotes and delivery</h2></div>
           <div className="card p-0 divide-y divide-border">
             {quotes.map((quote) => {
-              const total = quote.items.reduce((sum, item) => sum + item.qty * item.unitPriceCents, 0);
+              // The customer's own view of their quote — it has to agree with the
+              // document they signed, so it uses the same calculation (discounts,
+              // fees and delivery included) rather than summing the raw lines.
+              const total = payableTotalCents(quote);
               const signToken = signTokenByQuote.get(quote.id);
               return (
                 <div key={quote.id} className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">

@@ -5,7 +5,7 @@ import { requireJobCardReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { getDocTemplate } from "@/lib/docTemplateStore";
-import { stageMeta } from "@/lib/workshop-constants";
+import { stageMeta, jobCardTotals, jobLineCents } from "@/lib/workshop-constants";
 
 export default async function JobCardPrintPage({
   params,
@@ -38,12 +38,10 @@ export default async function JobCardPrintPage({
     ? `/jobcards/${id}/print${tplId ? `?tpl=${tplId}` : ""}`
     : `/jobcards/${id}/print?photos=1${tplId ? `&tpl=${tplId}` : ""}`;
 
-  const partsTotal = jobCard.items
-    .filter((i) => i.kind === "part")
-    .reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
-  const labourTotal = jobCard.items
-    .filter((i) => i.kind === "labour")
-    .reduce((s, i) => s + i.qty * i.unitPriceCents, 0);
+  // Same calculation as the job card record and the service report — the
+  // customer's copy must not disagree with the screen it was printed from.
+  const { partsCents: partsTotal, labourCents: labourTotal, otherCents: otherTotal, totalCents: grandTotal } =
+    jobCardTotals(jobCard.items);
 
   const address = [
     jobCard.contact.address,
@@ -165,7 +163,7 @@ export default async function JobCardPrintPage({
                 <td className="py-1.5 pr-2">{i.description}</td>
                 <td className="py-1.5 pr-2 text-right">{i.qty}</td>
                 <td className="py-1.5 pr-2 text-right">{formatZAR(i.unitPriceCents)}</td>
-                <td className="py-1.5 text-right">{formatZAR(Math.round(i.qty * i.unitPriceCents))}</td>
+                <td className="py-1.5 text-right">{formatZAR(jobLineCents(i))}</td>
               </tr>
             ))}
           </tbody>
@@ -181,9 +179,15 @@ export default async function JobCardPrintPage({
               <span className="text-slate-600">Labour</span>
               <span>{formatZAR(Math.round(labourTotal))}</span>
             </div>
+            {otherTotal !== 0 && (
+              <div className="flex justify-between">
+                <span className="text-slate-600">Other</span>
+                <span>{formatZAR(Math.round(otherTotal))}</span>
+              </div>
+            )}
             <div className="flex justify-between border-t-2 border-slate-900 pt-1 font-bold">
               <span>Total</span>
-              <span>{formatZAR(Math.round(partsTotal + labourTotal))}</span>
+              <span>{formatZAR(Math.round(grandTotal))}</span>
             </div>
           </div>
         </div>

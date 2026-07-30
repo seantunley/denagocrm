@@ -1,6 +1,6 @@
 import "server-only";
 import { getSetting } from "@/lib/settings";
-import { DEFAULT_LABOUR_RATE_CENTS, hoursBetween } from "@/lib/workshop-constants";
+import { DEFAULT_LABOUR_RATE_CENTS, hoursBetween, jobCardTotals } from "@/lib/workshop-constants";
 
 export const LABOUR_RATE_SETTING = "WORKSHOP_LABOUR_RATE_CENTS";
 
@@ -32,6 +32,7 @@ type ProfitItem = { kind: string; qty: number; unitPriceCents: number; part: { c
 export type JobProfit = {
   partsRevenueCents: number;
   labourRevenueCents: number;
+  otherRevenueCents: number;
   revenueCents: number;
   partsCostCents: number;
   subCostCents: number;
@@ -42,14 +43,26 @@ export type JobProfit = {
 
 /** Job profitability: labour is the shop's value-add, parts are costed at cost. */
 export function jobProfit(items: ProfitItem[], subCostCents: number): JobProfit {
-  const parts = items.filter((i) => i.kind === "part");
-  const labour = items.filter((i) => i.kind === "labour");
-  const partsRevenueCents = parts.reduce((s, i) => s + Math.round(i.qty * i.unitPriceCents), 0);
-  const labourRevenueCents = labour.reduce((s, i) => s + Math.round(i.qty * i.unitPriceCents), 0);
-  const revenueCents = partsRevenueCents + labourRevenueCents;
-  const partsCostCents = parts.reduce((s, i) => s + Math.round(i.qty * (i.part?.costCents ?? 0)), 0);
+  // Revenue is what the customer is billed, so it comes from the same helper the
+  // job card and its printed documents use — including lines whose kind is
+  // neither part nor labour, which the old parts+labour sum dropped and so
+  // reported a margin the job never earned.
+  const { partsCents, labourCents, otherCents, totalCents } = jobCardTotals(items);
+  const partsCostCents = items
+    .filter((i) => i.kind === "part")
+    .reduce((s, i) => s + Math.round(i.qty * (i.part?.costCents ?? 0)), 0);
   const costCents = partsCostCents + subCostCents;
-  const profitCents = revenueCents - costCents;
-  const marginPct = revenueCents > 0 ? Math.round((profitCents / revenueCents) * 100) : 0;
-  return { partsRevenueCents, labourRevenueCents, revenueCents, partsCostCents, subCostCents, costCents, profitCents, marginPct };
+  const profitCents = totalCents - costCents;
+  const marginPct = totalCents > 0 ? Math.round((profitCents / totalCents) * 100) : 0;
+  return {
+    partsRevenueCents: partsCents,
+    labourRevenueCents: labourCents,
+    otherRevenueCents: otherCents,
+    revenueCents: totalCents,
+    partsCostCents,
+    subCostCents,
+    costCents,
+    profitCents,
+    marginPct,
+  };
 }

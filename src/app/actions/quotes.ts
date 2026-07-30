@@ -374,10 +374,9 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     };
   }
 
-  const total = normalizedItems.reduce(
-    (sum, item) => sum + item.qty * item.unitPriceCents * (1 - item.discountPct / 100),
-    0,
-  );
+  // The figure that lands in the audit trail as the value of this quote — so it
+  // is the payable total, fees and delivery included, not the line subtotal.
+  const total = payableTotalCents({ items: normalizedItems, fees: normalizedFees, ...cpqQuoteData });
   await logAudit({
     action: data.intent === "sent" ? "quote.sent" : data.id ? "quote.updated" : "quote.created",
     summary:
@@ -607,7 +606,10 @@ export async function setQuoteStatus(quoteId: string, status: string) {
       const updated = await tx.quote.update({
         where: { id: quoteId },
         data: { status },
-        include: { items: true, lead: true },
+        // `fees` is not optional here: payableTotalCents() below writes the
+        // figure into the audit trail, and without them it silently records
+        // the line-items subtotal as the value of the sale.
+        include: { items: true, fees: true, lead: true },
       });
       // Win the lead in the SAME transaction, locked, so a concurrent accept/decline
       // can't leave quote and lead status diverged (e.g. quote declined, lead won).

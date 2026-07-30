@@ -111,8 +111,62 @@ test("every surface that renders a quote loads its fees", () => {
     "src/lib/doceditor/generate.ts",
     "src/lib/customDocs.ts",
     "src/app/(app)/deliveries/page.tsx",
+    // The customer's own copy of their quote — it has to agree with the one
+    // they signed.
+    "src/app/portal/page.tsx",
+    // setQuoteStatus() writes the value of the sale into the audit trail.
+    "src/app/actions/quotes.ts",
   ];
   for (const rel of surfaces) {
     assert.match(src(rel), /fees:/, `${rel} renders a quote total but never loads its fees`);
+  }
+});
+
+test("no quote total is summed by hand", () => {
+  // The `quoteTotalCents` ban only catches surfaces that reached for the WRONG
+  // helper. These reached for no helper at all — a local `.reduce` over the
+  // items — so they dropped fees, discounts, per-line VAT rates, or all three:
+  //   buildQuoteContext()  → every signing/builder document
+  //   saveQuote()          → the audit record of the sale
+  //   the customer portal  → the customer's own view of their quote
+  const walk = (dir: string, out: string[] = []): string[] => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "node_modules" && entry.name !== ".next") walk(full, out);
+      } else if (/\.tsx?$/.test(entry.name)) out.push(full);
+    }
+    return out;
+  };
+  // `[^;]` keeps the match inside one statement — otherwise it spans from an
+  // unrelated `.reduce` to the next mention of unitPriceCents and cries wolf.
+  const offenders = walk(path.join(root, "src"))
+    .filter((file) => /\.reduce\([^;]{0,220}?unitPriceCents/.test(readFileSync(file, "utf8")))
+    .map((file) => path.relative(root, file).split(path.sep).join("/"));
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `these total money by hand instead of through a pricing helper:\n  ${offenders.join("\n  ")}`,
+  );
+});
+
+test("a quote that charges for delivery says so on the document", () => {
+  // Counting fees in the total but rendering only `items` is a quote whose
+  // visible lines do not add up to its own total — the customer has no way to
+  // see what the extra money is for.
+  const renderers = [
+    "src/components/print/QuotePrintDoc.tsx", // the branded quotation + signed PDF
+    "src/lib/pdf/QuoteDoc.tsx", // the React-PDF quotation
+    "src/app/(print)/quotes/[id]/agreement/page.tsx",
+    "src/app/(print)/quotes/[id]/invoice/page.tsx",
+    "src/lib/docbuilder/merge.ts", // {{merge}} documents and the signing envelope
+  ];
+  for (const rel of renderers) {
+    assert.match(
+      src(rel),
+      /feeRows\(/,
+      `${rel} counts fees in the total but never itemises them`,
+    );
   }
 });

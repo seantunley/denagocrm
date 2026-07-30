@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { lineNetCents, payableTotalCents } from "@/lib/pricing";
+import { feeRows, lineNetCents, payableTotalCents } from "@/lib/pricing";
 import { defaultTemplate, type DocTemplate } from "@/lib/docTemplates";
 
 export type QuoteForPrint = Prisma.QuoteGetPayload<{
@@ -19,7 +19,10 @@ export default function QuotePrintDoc({
 }) {
   const tpl = template ?? defaultTemplate("quote");
   const lineNet = lineNetCents;
-  // Fees and delivery are part of the price the customer is being quoted.
+  // Fees and delivery are part of the price the customer is being quoted — so
+  // they are itemised as rows as well as counted in the total. A total that
+  // exceeds the sum of the visible lines is a quote the customer can't check.
+  const fees = feeRows(quote.fees);
   const total = payableTotalCents(quote);
   const termsText = tpl.terms ?? quote.terms;
   const customerName = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
@@ -117,6 +120,14 @@ export default function QuotePrintDoc({
                 <td className="py-2.5 px-3 border-b border-slate-200 text-right font-medium">
                   {formatZAR(lineNet(i))}
                 </td>
+              </tr>
+            ))}
+            {fees.map((fee, idx) => (
+              <tr key={`fee-${idx}`} className={(quote.items.length + idx) % 2 === 1 ? "bg-slate-50" : ""}>
+                <td className="py-2.5 px-3 border-b border-slate-200 font-medium text-slate-900">{fee.description}</td>
+                <td className="py-2.5 px-3 border-b border-slate-200 text-right">{fee.qty}</td>
+                <td className="py-2.5 px-3 border-b border-slate-200 text-right">{formatZAR(fee.unitPriceCents)}</td>
+                <td className="py-2.5 px-3 border-b border-slate-200 text-right font-medium">{formatZAR(fee.unitPriceCents)}</td>
               </tr>
             ))}
           </tbody>
