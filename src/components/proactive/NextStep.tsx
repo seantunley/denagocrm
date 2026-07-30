@@ -15,6 +15,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useRouter, unstable_rethrow } from "next/navigation";
 import {
   completeActivityAssess,
   rescheduleActivity,
@@ -22,7 +23,7 @@ import {
 } from "@/app/actions/activities";
 import { markWon, markLost } from "@/app/actions/leads";
 import { fireConfetti } from "@/lib/confetti";
-import { createQuoteFromLeadInEditor } from "@/app/actions/quotes";
+import { createQuoteFromLead } from "@/app/actions/quotes";
 import {
   Dialog,
   ResponsiveDialogContent,
@@ -60,6 +61,7 @@ export function NextStepDialog({
   const [lostReason, setLostReason] = useState("");
   const [shake, setShake] = useState(false);
   const [pending, start] = useTransition();
+  const router = useRouter();
 
   function reset() {
     setMode("choose");
@@ -108,8 +110,21 @@ export function NextStepDialog({
               disabled={pending}
               onClick={() =>
                 start(async () => {
-                  toast.success("Creating a quote…");
-                  await createQuoteFromLeadInEditor(leadId);
+                  // This used to toast SUCCESS before the action ran, so a
+                  // failure still read as "quote created". Report what actually
+                  // happened, then follow the editor link the action returns.
+                  try {
+                    const result = await createQuoteFromLead(leadId);
+                    if (result?.error) {
+                      toast.error(result.error);
+                      return;
+                    }
+                    toast.success(result?.success ?? "Quote created");
+                    if (result?.redirectTo) router.push(result.redirectTo);
+                  } catch (error) {
+                    unstable_rethrow(error);
+                    toast.error("Something went wrong. Please try again.");
+                  }
                 })
               }
             >
