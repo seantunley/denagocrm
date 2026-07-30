@@ -7,6 +7,10 @@ import {
   hashJourneyKey,
   jsonObject,
 } from "./journeyEngineShared";
+import { NEVER_STOP, type StopSignal } from "./stopSignal";
+
+/** One event can enrol into several journeys, each of which may send. */
+const EVENT_RESERVE_MS = 4_000;
 
 const MAX_EVENT_ATTEMPTS = 3;
 
@@ -56,7 +60,7 @@ export async function recoverStaleJourneyEvents() {
   });
 }
 
-export async function processJourneyEvents(limit = 50) {
+export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_STOP) {
   const events = await prisma.journeyEvent.findMany({
     where: { status: "pending", availableAt: { lte: new Date() } },
     orderBy: { createdAt: "asc" },
@@ -65,6 +69,7 @@ export async function processJourneyEvents(limit = 50) {
   let enrolled = 0;
 
   for (const event of events) {
+    if (stop.shouldStop(EVENT_RESERVE_MS)) break;
     const claimed = await prisma.journeyEvent.updateMany({
       where: { id: event.id, status: "pending" },
       data: { status: "processing", attempts: { increment: 1 }, error: null },

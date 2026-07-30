@@ -4,9 +4,13 @@ import { logAudit } from "./audit";
 import { executeJourneyStep } from "./journeyStepExecutor";
 import { loadJourneyContext, type JourneyEntityType, type JourneyContext } from "./journeyContext";
 import { parseJourneyDefinition, stepById } from "./journeyTypes";
+import { NEVER_STOP, type StopSignal } from "./stopSignal";
+import { budgetStopUpdate } from "./journeyRunState";
 
 const MAX_RUN_ATTEMPTS = 3;
 const MAX_STEPS_PER_TICK = 20;
+/** A single step can send an email or a WhatsApp message. */
+const STEP_RESERVE_MS = 4_000;
 
 async function updateStepLog(args: {
   runId: string;
@@ -44,7 +48,7 @@ export async function recoverStaleJourneyRuns() {
   });
 }
 
-async function processOneRun(runId: string) {
+async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
   const run = await prisma.journeyRun.findUnique({
     where: { id: runId },
     include: { journey: true, journeyVersion: true },
@@ -68,6 +72,25 @@ async function processOneRun(runId: string) {
 
   try {
     for (let count = 0; count < MAX_STEPS_PER_TICK; count++) {
+      // Budget spent: park the run exactly where it is and RETURN.
+      //
+      // `break` here was wrong and actively harmful: falling out of the loop
+      // lands on the "exceeded MAX_STEPS_PER_TICK" throw below, whose catch
+      // marks the not-yet-executed step FAILED, increments attempts, and after
+      // MAX_RUN_ATTEMPTS budget stops fails the journey permanently. Running out
+      // of time is not an error and must not consume a retry.
+      //
+      // The run was claimed as "running", so it has to be put back to "queued"
+      // explicitly — leaving it running would strand it until the stale-run
+      // recovery sweep. attempts is deliberately untouched: a budget stop is not
+      // an attempt, and any genuine earlier failures keep their count.
+      if (stop.shouldStop(STEP_RESERVE_MS)) {
+        await prisma.journeyRun.update({
+          where: { id: run.id },
+          data: budgetStopUpdate(currentStepId, context as Prisma.InputJsonValue),
+        });
+        return false;
+      }
       const step = stepById(definition, currentStepId);
       if (!step) {
         await prisma.journeyRun.update({
@@ -181,7 +204,7 @@ async function processOneRun(runId: string) {
   }
 }
 
-export async function processJourneyRuns(limit = 40) {
+export async function processJourneyRuns(limit = 40, stop: StopSignal = NEVER_STOP) {
   const runs = await prisma.journeyRun.findMany({
     where: {
       status: { in: ["queued", "waiting"] },
@@ -192,6 +215,9 @@ export async function processJourneyRuns(limit = 40) {
     select: { id: true },
   });
   let processed = 0;
-  for (const run of runs) if (await processOneRun(run.id)) processed++;
+  for (const run of runs) {
+    if (stop.shouldStop(STEP_RESERVE_MS)) break;
+    if (await processOneRun(run.id, stop)) processed++;
+  }
   return processed;
 }

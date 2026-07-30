@@ -1,3 +1,4 @@
+import { NEVER_STOP, type StopSignal } from "./stopSignal";
 import {
   processJourneyEvents,
   recoverStaleJourneyEvents,
@@ -15,14 +16,24 @@ export { emitJourneyEvent, processJourneyEvents } from "./journeyEvents";
 export { processJourneyRuns } from "./journeyRuns";
 export { enrollJourneyNow, runScheduledJourneyEnrollments } from "./journeyScheduling";
 
-export async function runJourneyEngine() {
+/**
+ * `stop` is how the caller bounds this. The engine schedules up to 1000 records,
+ * processes 50 events and 40 runs of up to 20 steps each — all sequentially — so
+ * a fixed "is there probably enough time?" check before starting is not a bound
+ * at all. It sends email and WhatsApp, so being killed partway through is a
+ * half-delivered campaign rather than a retryable no-op.
+ *
+ * Every phase and every unit inside it checks the signal, and everything it
+ * leaves undone is picked up by the next tick.
+ */
+export async function runJourneyEngine(stop: StopSignal = NEVER_STOP) {
   const [recoveredEvents, recoveredRuns] = await Promise.all([
     recoverStaleJourneyEvents(),
     recoverStaleJourneyRuns(),
   ]);
-  const scheduled = await runScheduledJourneyEnrollments();
-  const events = await processJourneyEvents();
-  const runs = await processJourneyRuns();
+  const scheduled = await runScheduledJourneyEnrollments(stop);
+  const events = await processJourneyEvents(50, stop);
+  const runs = await processJourneyRuns(40, stop);
   return {
     recoveredEvents: recoveredEvents.count,
     recoveredRuns: recoveredRuns.count,
@@ -30,5 +41,8 @@ export async function runJourneyEngine() {
     eventsProcessed: events.processed,
     enrolled: events.enrolled,
     runsProcessed: runs,
+    // Visible in the cron response, so a run cut short by the budget is
+    // diagnosable rather than looking like a quiet tick with nothing to do.
+    stoppedEarly: stop.shouldStop(),
   };
 }

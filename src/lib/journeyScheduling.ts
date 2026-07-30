@@ -26,7 +26,7 @@ type SchedulableJourney = {
   }>;
 };
 
-async function scheduleJourney(journey: SchedulableJourney) {
+async function scheduleJourney(journey: SchedulableJourney, stop: StopSignal) {
   const version = getActiveVersion(journey);
   if (!version) return 0;
   const config = jsonObject(version.triggerConfig);
@@ -40,6 +40,7 @@ async function scheduleJourney(journey: SchedulableJourney) {
       take: 1000,
     });
     for (const lead of leads) {
+      if (stop.shouldStop(ENROL_RESERVE_MS)) break;
       if (await emitJourneyEvent({
         type: version.trigger,
         entityType: "lead",
@@ -65,6 +66,7 @@ async function scheduleJourney(journey: SchedulableJourney) {
     const contacts = await resolveContacts(segment.tenantId, criteria, "any");
     const window = recurrenceWindow(config.repeat);
     for (const contact of contacts) {
+      if (stop.shouldStop(ENROL_RESERVE_MS)) break;
       if (await emitJourneyEvent({
         type: version.trigger,
         entityType: "contact",
@@ -83,6 +85,7 @@ async function scheduleJourney(journey: SchedulableJourney) {
       select: { id: true, contactId: true, model: true, purchaseDate: true },
     });
     for (const vehicle of vehicles) {
+      if (stop.shouldStop(ENROL_RESERVE_MS)) break;
       const purchased = vehicle.purchaseDate!;
       if (purchased.getMonth() !== now.getMonth() || purchased.getDate() !== now.getDate()) continue;
       const years = now.getFullYear() - purchased.getFullYear();
@@ -115,6 +118,7 @@ async function scheduleJourney(journey: SchedulableJourney) {
     const window = `${now.getFullYear()}-${Math.floor(now.getMonth() / 6) + 1}`;
     const seen = new Set<string>();
     for (const vehicle of vehicles) {
+      if (stop.shouldStop(ENROL_RESERVE_MS)) break;
       const contact = vehicle.contact;
       if (seen.has(contact.id) || contact.marketingOptOut) continue;
       const baseline = vehicle.serviceRecords[0]?.serviceDate ?? vehicle.purchaseDate;
@@ -136,13 +140,16 @@ async function scheduleJourney(journey: SchedulableJourney) {
   return created;
 }
 
-export async function runScheduledJourneyEnrollments() {
+export async function runScheduledJourneyEnrollments(stop: StopSignal = NEVER_STOP) {
   const journeys = await prisma.journey.findMany({
     where: { status: "active" },
     include: { versions: { where: { state: "published" } } },
   });
   let created = 0;
-  for (const journey of journeys) created += await scheduleJourney(journey);
+  for (const journey of journeys) {
+    if (stop.shouldStop(ENROL_RESERVE_MS)) break;
+    created += await scheduleJourney(journey, stop);
+  }
   return created;
 }
 
@@ -152,5 +159,12 @@ export async function enrollJourneyNow(journeyId: string) {
     include: { versions: { where: { state: "published" } } },
   });
   if (!journey || journey.status !== "active") throw new Error("Journey must be active before it can run");
-  return scheduleJourney(journey);
+  return scheduleJourney(journey, NEVER_STOP);
 }
+import { NEVER_STOP, type StopSignal } from "./stopSignal";
+
+/**
+ * Time to keep in hand before enrolling one more record. Each enrolment writes
+ * and can start a journey run, which sends.
+ */
+const ENROL_RESERVE_MS = 3_000;

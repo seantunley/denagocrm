@@ -25,7 +25,15 @@ test("tenant cron fan-out has fair bounded scheduling and an explicit deadline",
 
 test("competitor watch cooperates with the shared execution budget", () => {
   const code = src("src/app/api/cron/competitor-watch/route.ts");
-  assert.match(code, /maxRuntimeMs:\s*270_000/, "route must reserve time below the platform maximum");
+  // The reservation below the 300s platform maximum now lives on the route
+  // budget, which the database warm-up spends from before the sweep starts —
+  // the sweep itself gets whatever survived, so it can no longer be a literal.
+  assert.match(code, /routeBudgetMs:\s*270_000/, "route must reserve time below the platform maximum");
+  assert.match(
+    code,
+    /maxRuntimeMs:\s*\w*[Bb]udget\.remainingMs/,
+    "the sweep must run on the budget left after the warm-up",
+  );
   assert.match(code, /concurrency:\s*2/, "route must bound tenant concurrency");
   assert.match(code, /budget\.shouldStop\(/, "expensive phases must check the remaining route budget");
 });

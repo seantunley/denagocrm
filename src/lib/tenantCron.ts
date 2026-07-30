@@ -94,6 +94,14 @@ export async function runCronPerTenant<T>(
   const now = options.now ?? Date.now;
   if (!tenantEnforcing()) {
     const startedAt = now();
+    // A REAL deadline, not null.
+    //
+    // This path used to hand the slice `deadlineAt: null`, which made
+    // shouldStop() permanently false and timeRemainingMs() infinite — so
+    // maxRuntimeMs was silently ignored in the mode every deployment actually
+    // runs in. A slice could then keep working past the platform limit and be
+    // killed mid-write, which is precisely what the budget exists to prevent.
+    const dormantDeadlineAt = startedAt + Math.max(1, options.maxRuntimeMs ?? DEFAULT_MAX_RUNTIME_MS);
     // Bind the FOUNDING tenant's scope even while enforcement is dormant.
     //
     // This path used to run the slice with no scope established at all, which
@@ -113,7 +121,7 @@ export async function runCronPerTenant<T>(
     // `tenantId` in the returned CronRun stays null: it reports the ENFORCEMENT
     // shape (one unscoped sweep), and callers key their "dormant" branch off it.
     const result = await runInTenantScope({ tenantId: DEFAULT_TENANT_ID, system: false }, () =>
-      slice(null, sliceContext(null, null, now)),
+      slice(null, sliceContext(null, dormantDeadlineAt, now)),
     );
     return [{ tenantId: null, status: "ok", result, durationMs: Math.max(0, now() - startedAt) }];
   }
