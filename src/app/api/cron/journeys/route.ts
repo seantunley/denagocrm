@@ -8,6 +8,13 @@ import { runCronPerTenant } from "@/lib/tenantCron";
 
 export const maxDuration = 60;
 
+/**
+ * Budget the journey engine needs in hand before it is allowed to start. It
+ * sends email and WhatsApp and has no internal stop point, so admitting it with
+ * seconds left is how a send gets cut in half.
+ */
+const JOURNEY_RESERVE_MS = 10_000;
+
 export async function GET(req: NextRequest) {
   if (!isAuthorizedCron(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -15,25 +22,31 @@ export async function GET(req: NextRequest) {
   // exactly once. Waking costs real wall-clock, so it comes out of the same
   // budget rather than being added on top of it. See lib/dbRetry.ts.
   const MIN_START_BUDGET_MS = 8_000;
-  const budget = await warmUpForCron("journeys", {
+  const routeBudget = await warmUpForCron("journeys", {
     routeBudgetMs: 50_000,
     minStartBudgetMs: MIN_START_BUDGET_MS,
   });
-  if (!budget.ok) {
-    return NextResponse.json({ ok: false, skipped: budget.reason }, { status: 503 });
+  if (!routeBudget.ok) {
+    return NextResponse.json({ ok: false, skipped: routeBudget.reason }, { status: 503 });
   }
 
   try {
     // Journeys are a per-tenant business queue. The helper rotates the starting
     // tenant, bounds concurrency, stops admitting work at the route deadline, and
     // records one tenant's failure without starving every tenant behind it.
-    const runs = await runCronPerTenant(async () => {
+    const runs = await runCronPerTenant(async (_tenantId, budget) => {
       if (!(await getEnabledModuleIds()).has("marketing")) {
         return { skipped: "marketing-disabled" as const };
       }
+      // The engine sends messages and cannot be interrupted once started, so the
+      // only safe control is to DECLINE it when too little budget remains. The
+      // next tick is fifteen minutes away and picks the work up.
+      if (budget.shouldStop(JOURNEY_RESERVE_MS)) {
+        return { skipped: "insufficient-budget" as const };
+      }
       return runJourneyEngine();
     }, {
-      maxRuntimeMs: budget.remainingMs,
+      maxRuntimeMs: routeBudget.remainingMs,
       minStartBudgetMs: MIN_START_BUDGET_MS,
       concurrency: 2,
       rotationWindowMs: 15 * 60 * 1000,

@@ -18,9 +18,12 @@ test("portal signing links are limited to the authenticated contact email", () =
 });
 
 test("automation cron runs SignatureRequest reminders", () => {
+  // Invoked through the budget-aware phase() helper rather than called inline,
+  // so this now asserts BOTH that the cron runs it and that it is subject to the
+  // route deadline like every other side-effecting queue.
   assert.match(
     cronSource,
-    /runSignatureRequestReminders\(\)/,
+    /phase\(\s*"signature-request-reminders",\s*runSignatureRequestReminders/,
   );
 });
 

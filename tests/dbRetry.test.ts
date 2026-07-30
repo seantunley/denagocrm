@@ -146,6 +146,44 @@ test("every cron gives the sweep only the budget that survived the warm-up", () 
   }
 });
 
+test("dormant mode gets a REAL deadline, not an infinite one", () => {
+  // Dormant is the mode every deployment actually runs in. It used to hand the
+  // slice `deadlineAt: null`, so shouldStop() was permanently false and
+  // maxRuntimeMs was silently ignored — the budget existed on paper only.
+  const body = readFileSync(path.join(root, "src/lib/tenantCron.ts"), "utf8");
+  assert.match(body, /dormantDeadlineAt/, "dormant mode must compute a deadline");
+  assert.doesNotMatch(
+    body,
+    /slice\(null, sliceContext\(null, null,/,
+    "dormant mode must not pass a null deadline",
+  );
+  assert.match(
+    body,
+    /sliceContext\(null, dormantDeadlineAt,/,
+    "the dormant slice must receive that deadline",
+  );
+});
+
+test("every side-effecting cron slice can stop cooperatively", () => {
+  // The runner cannot cancel work already in flight, so a slice that ignores its
+  // context cannot respect the deadline at all — it just runs until the platform
+  // kills it, possibly mid-send.
+  for (const { name, file } of cronRoutes()) {
+    const body = readFileSync(file, "utf8");
+    if (!body.includes("runCronPerTenant(")) continue;
+    assert.match(
+      body,
+      /runCronPerTenant\(async \([^)]*budget[^)]*\)/,
+      `${name} discards the slice context, so its queues cannot stop`,
+    );
+    assert.match(
+      body,
+      /budget\.shouldStop\(/,
+      `${name} never checks the remaining budget between phases`,
+    );
+  }
+});
+
 test("a warm-up that succeeds too late skips the sweep rather than racing the timeout", () => {
   const body = readFileSync(path.join(root, "src/lib/cronPreflight.ts"), "utf8");
   assert.match(body, /insufficient-budget/, "there must be a distinct too-late outcome");
