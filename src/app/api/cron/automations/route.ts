@@ -98,15 +98,24 @@ export async function GET(req: NextRequest) {
 
   // Wake a suspended Neon endpoint BEFORE the sweep. The sweep sends emails and
   // pushes, so it must run exactly once; only the harmless preflight retries.
-  if (!(await warmUpForCron("automations"))) {
-    return NextResponse.json({ ok: false, skipped: "database-unreachable" }, { status: 503 });
+  //
+  // 45s of the 60s maxDuration, leaving room for runGlobalMaintenance in the
+  // finally. Whatever waking the database costs comes OUT of that, so the sweep
+  // can never start a full-length run on a budget that has already been spent.
+  const MIN_START_BUDGET_MS = 8_000;
+  const budget = await warmUpForCron("automations", {
+    routeBudgetMs: 45_000,
+    minStartBudgetMs: MIN_START_BUDGET_MS,
+  });
+  if (!budget.ok) {
+    return NextResponse.json({ ok: false, skipped: budget.reason }, { status: 503 });
   }
 
   let runs: Array<CronRun<OperationalResult>>;
   try {
     runs = await runCronPerTenant(async () => runOperationalQueues(), {
-      maxRuntimeMs: 45_000,
-      minStartBudgetMs: 8_000,
+      maxRuntimeMs: budget.remainingMs,
+      minStartBudgetMs: MIN_START_BUDGET_MS,
       concurrency: 2,
       rotationWindowMs: 15 * 60 * 1000,
       onError: (tenantId, error) => logError(`automations-tenant:${tenantId}`, error),

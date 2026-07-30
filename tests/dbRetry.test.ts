@@ -105,8 +105,55 @@ test("every per-tenant cron warms the database up first, and honours the result"
   for (const { name, file } of perTenant) {
     const body = readFileSync(file, "utf8");
     assert.match(body, /warmUpForCron\(/, `${name} does not warm the database up before sweeping`);
-    assert.match(body, /if \(!\(await warmUpForCron\(/, `${name} ignores the warm-up result`);
+    assert.match(body, /if \(!\w*[Bb]udget\.ok\)/, `${name} ignores the warm-up result`);
   }
+});
+
+test("the warm-up stops retrying when its own deadline is spent", async () => {
+  // A connection attempt does NOT fail instantly — a P1002 TLS timeout can hang
+  // for seconds. Three attempts plus backoff must not eat the sweep's budget.
+  let clock = 1_000_000;
+  let pings = 0;
+  const awake = await warmUpDatabase(
+    async () => {
+      pings++;
+      clock += 9_000; // each attempt hangs for nine seconds before failing
+      throw unreachable();
+    },
+    {
+      deadlineAt: clock + 15_000,
+      now: () => clock,
+      sleep: async (ms: number) => { clock += ms; },
+    },
+  );
+  assert.equal(awake, false);
+  assert.equal(pings, 2, "stopped once another ping would exceed the warm-up budget");
+});
+
+test("every cron gives the sweep only the budget that survived the warm-up", () => {
+  for (const { name, file } of cronRoutes()) {
+    const body = readFileSync(file, "utf8");
+    if (!body.includes("runCronPerTenant(")) continue;
+    // The sweep must be handed the REMAINING budget, never a fresh constant —
+    // warm-up time is real wall-clock inside the same platform limit.
+    assert.match(
+      body,
+      /maxRuntimeMs: \w*[Bb]udget\.remainingMs/,
+      `${name} starts a full-length sweep regardless of how long waking the database took`,
+    );
+    assert.match(body, /routeBudgetMs:/, `${name} declares no route budget for the warm-up to spend from`);
+    assert.doesNotMatch(body, /maxRuntimeMs: \d/, `${name} still passes a hard-coded sweep budget`);
+  }
+});
+
+test("a warm-up that succeeds too late skips the sweep rather than racing the timeout", () => {
+  const body = readFileSync(path.join(root, "src/lib/cronPreflight.ts"), "utf8");
+  assert.match(body, /insufficient-budget/, "there must be a distinct too-late outcome");
+  assert.match(
+    body,
+    /remainingMs < options\.minStartBudgetMs/,
+    "and it must be decided on the remaining budget",
+  );
 });
 
 test("the preflight itself only ever runs SELECT 1", () => {

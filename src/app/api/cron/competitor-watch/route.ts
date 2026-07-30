@@ -98,14 +98,23 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Wake a suspended endpoint first; the sweep runs exactly once. See dbRetry.ts.
-  if (!(await warmUpForCron("competitor-watch"))) {
-    return NextResponse.json({ ok: false, skipped: "database-unreachable" }, { status: 503 });
+  // Wake a suspended endpoint first; the sweep runs exactly once, on whatever
+  // budget survives the warm-up. See dbRetry.ts.
+  //
+  // `routeBudget`, not `budget` — the slice callback below already binds a
+  // per-slice budget of its own.
+  const MIN_START_BUDGET_MS = 45_000;
+  const routeBudget = await warmUpForCron("competitor-watch", {
+    routeBudgetMs: 270_000,
+    minStartBudgetMs: MIN_START_BUDGET_MS,
+  });
+  if (!routeBudget.ok) {
+    return NextResponse.json({ ok: false, skipped: routeBudget.reason }, { status: 503 });
   }
 
   const runs = await runCronPerTenant(async (_tenantId, budget) => runTenantWatch(budget), {
-    maxRuntimeMs: 270_000,
-    minStartBudgetMs: 45_000,
+    maxRuntimeMs: routeBudget.remainingMs,
+    minStartBudgetMs: MIN_START_BUDGET_MS,
     concurrency: 2,
     rotationWindowMs: 24 * 60 * 60 * 1000,
     onError: (tenantId, error) => logError(`competitor-watch:${tenantId}`, error),

@@ -12,9 +12,15 @@ export async function GET(req: NextRequest) {
   if (!isAuthorizedCron(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   // Wake a suspended endpoint first; the sweep itself sends messages and runs
-  // exactly once. See lib/dbRetry.ts.
-  if (!(await warmUpForCron("journeys"))) {
-    return NextResponse.json({ ok: false, skipped: "database-unreachable" }, { status: 503 });
+  // exactly once. Waking costs real wall-clock, so it comes out of the same
+  // budget rather than being added on top of it. See lib/dbRetry.ts.
+  const MIN_START_BUDGET_MS = 8_000;
+  const budget = await warmUpForCron("journeys", {
+    routeBudgetMs: 50_000,
+    minStartBudgetMs: MIN_START_BUDGET_MS,
+  });
+  if (!budget.ok) {
+    return NextResponse.json({ ok: false, skipped: budget.reason }, { status: 503 });
   }
 
   try {
@@ -27,8 +33,8 @@ export async function GET(req: NextRequest) {
       }
       return runJourneyEngine();
     }, {
-      maxRuntimeMs: 50_000,
-      minStartBudgetMs: 8_000,
+      maxRuntimeMs: budget.remainingMs,
+      minStartBudgetMs: MIN_START_BUDGET_MS,
       concurrency: 2,
       rotationWindowMs: 15 * 60 * 1000,
       onError: (tenantId, error) => logError(`journey-engine:${tenantId}`, error),

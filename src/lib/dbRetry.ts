@@ -67,6 +67,15 @@ export type WarmUpOptions = {
   onRetry?: (attempt: number, error: unknown) => void;
   /** Injectable sleep, so tests do not actually wait. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Absolute epoch-ms ceiling for the warm-up. A connection attempt does not
+   * fail instantly — a P1002 TLS timeout can hang for many seconds — so three
+   * attempts plus backoff could otherwise eat most of the route's wall clock
+   * before the sweep even starts, leaving it to be killed mid-write.
+   */
+  deadlineAt?: number;
+  /** Injectable clock, for tests. */
+  now?: () => number;
 };
 
 /**
@@ -85,6 +94,7 @@ export async function warmUpDatabase(
   const attempts = Math.max(1, options.attempts ?? 3);
   const baseDelayMs = options.baseDelayMs ?? 1_000;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const now = options.now ?? (() => Date.now());
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
@@ -93,8 +103,12 @@ export async function warmUpDatabase(
     } catch (error) {
       if (!isTransientDbError(error)) throw error;
       if (attempt === attempts) return false;
+      const delay = baseDelayMs * 2 ** (attempt - 1);
+      // Out of warm-up time: give the remaining budget to the sweep rather than
+      // spending it on another ping.
+      if (options.deadlineAt !== undefined && now() + delay >= options.deadlineAt) return false;
       options.onRetry?.(attempt, error);
-      await sleep(baseDelayMs * 2 ** (attempt - 1));
+      await sleep(delay);
     }
   }
   return false;
