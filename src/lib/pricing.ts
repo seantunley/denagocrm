@@ -140,6 +140,45 @@ export function payableTotalCents(quote: {
   }).totalCents;
 }
 
+type QuoteMoney = {
+  items: PricedLine[];
+  fees?: FeeLine[] | null;
+  taxInclusive?: boolean | null;
+  depositType?: string | null;
+  depositValue?: number | null;
+};
+
+/** One line of a printed totals block. */
+export type TotalLine = { label: string; amountCents: number; strong?: boolean };
+
+/**
+ * The totals block for a printed document, built so the rows the customer can
+ * SEE always add up to the figure at the bottom.
+ *
+ * The two tax modes need different blocks, and that is the whole point:
+ *
+ *   inclusive (default) — row amounts already include VAT, so they sum to the
+ *     payable total. One line: "Total incl. VAT".
+ *   exclusive — row amounts are ex-VAT, so they sum to the SUBTOTAL. Printing
+ *     only "Total incl. VAT" against them showed rows of R110 under a total of
+ *     R126.50 with nothing explaining the gap. Three lines, and it reconciles.
+ */
+export function documentTotals(quote: QuoteMoney): TotalLine[] {
+  const pricing = quotePricing(quote.items, quote.fees ?? [], {
+    taxInclusive: quote.taxInclusive ?? undefined,
+    depositType: quote.depositType,
+    depositValue: quote.depositValue,
+  });
+  if (quote.taxInclusive !== false) {
+    return [{ label: "Total incl. VAT", amountCents: pricing.totalCents, strong: true }];
+  }
+  return [
+    { label: "Subtotal", amountCents: pricing.netCents },
+    { label: "VAT", amountCents: pricing.taxCents },
+    { label: "Total incl. VAT", amountCents: pricing.totalCents, strong: true },
+  ];
+}
+
 /**
  * Fees rendered as line-item rows, so a printed document ITEMISES the delivery
  * charge rather than folding it silently into the total.

@@ -1,6 +1,6 @@
 import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { feeRows, lineNetCents, payableTotalCents } from "@/lib/pricing";
+import { documentTotals, feeRows, lineNetCents } from "@/lib/pricing";
 import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
 
 /**
@@ -81,7 +81,11 @@ const s = StyleSheet.create({
   cNum: { width: 70, textAlign: "right" },
 
   totalWrap: { flexDirection: "row", justifyContent: "flex-end", marginTop: 14 },
-  totalBand: { backgroundColor: accent, borderRadius: 4, flexDirection: "row", alignItems: "center", paddingVertical: 8, paddingHorizontal: 16, gap: 14 },
+  totalCol: { width: 230 },
+  totalRow: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 2 },
+  totalRowLabel: { fontSize: 9, color: slate500 },
+  totalRowAmount: { fontSize: 9, color: slate700 },
+  totalBand: { backgroundColor: accent, borderRadius: 4, flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 4, paddingVertical: 8, paddingHorizontal: 16, gap: 14 },
   totalLabel: { color: white, fontSize: 8, fontFamily: "Helvetica-Bold", letterSpacing: 1 },
   totalAmount: { color: white, fontSize: 15, fontFamily: "Helvetica-Bold" },
 
@@ -115,7 +119,8 @@ export default function QuoteDoc({ quote, signed }: { quote: QuoteForPrint; sign
   // Fees and delivery are part of the quoted price — itemised as rows below as
   // well as counted here, so the lines the customer reads add up to the total.
   const fees = feeRows(quote.fees);
-  const total = payableTotalCents(quote);
+  // Subtotal + VAT lines appear only on a tax-exclusive quote — see documentTotals().
+  const totals = documentTotals(quote);
   const customerName = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
   const phone = quote.contact?.phone ?? quote.lead?.phone ?? "";
   const email = quote.contact?.email ?? quote.lead?.email ?? "";
@@ -215,11 +220,21 @@ export default function QuoteDoc({ quote, signed }: { quote: QuoteForPrint; sign
           </View>
         ))}
 
-        {/* Total */}
+        {/* Totals */}
         <View style={s.totalWrap} wrap={false}>
-          <View style={s.totalBand}>
-            <Text style={s.totalLabel}>TOTAL INCL. VAT</Text>
-            <Text style={s.totalAmount}>{formatZAR(Math.round(total))}</Text>
+          <View style={s.totalCol}>
+            {totals.filter((line) => !line.strong).map((line) => (
+              <View key={line.label} style={s.totalRow}>
+                <Text style={s.totalRowLabel}>{line.label}</Text>
+                <Text style={s.totalRowAmount}>{formatZAR(Math.round(line.amountCents))}</Text>
+              </View>
+            ))}
+            {totals.filter((line) => line.strong).map((line) => (
+              <View key={line.label} style={s.totalBand}>
+                <Text style={s.totalLabel}>{line.label.toUpperCase()}</Text>
+                <Text style={s.totalAmount}>{formatZAR(Math.round(line.amountCents))}</Text>
+              </View>
+            ))}
           </View>
         </View>
 

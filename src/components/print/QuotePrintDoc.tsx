@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { feeRows, lineNetCents, payableTotalCents } from "@/lib/pricing";
+import { documentTotals, feeRows, lineNetCents } from "@/lib/pricing";
 import { defaultTemplate, type DocTemplate } from "@/lib/docTemplates";
 
 export type QuoteForPrint = Prisma.QuoteGetPayload<{
@@ -23,7 +23,10 @@ export default function QuotePrintDoc({
   // they are itemised as rows as well as counted in the total. A total that
   // exceeds the sum of the visible lines is a quote the customer can't check.
   const fees = feeRows(quote.fees);
-  const total = payableTotalCents(quote);
+  // On a tax-exclusive quote the row amounts are ex-VAT, so a lone "Total incl.
+  // VAT" band sat above rows that didn't add up to it. documentTotals() returns
+  // the subtotal/VAT lines in that mode and the single band in the other.
+  const totals = documentTotals(quote);
   const termsText = tpl.terms ?? quote.terms;
   const customerName = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
   const phone = quote.contact?.phone ?? quote.lead?.phone;
@@ -133,13 +136,25 @@ export default function QuotePrintDoc({
           </tbody>
         </table>
 
-        {/* Total band */}
+        {/* Totals — subtotal + VAT appear only on a tax-exclusive quote, where
+            the rows above are ex-VAT and would otherwise not reach the total. */}
         <div className="flex justify-end mt-4 mb-10 no-break">
-          <div className="rounded-lg bg-orange-600 text-white px-6 py-3 flex items-baseline gap-6">
-            <span className="text-[11px] font-bold uppercase tracking-widest">
-              Total incl. VAT
-            </span>
-            <span className="text-2xl font-bold">{formatZAR(Math.round(total))}</span>
+          <div className="w-72">
+            {totals.filter((line) => !line.strong).map((line) => (
+              <div key={line.label} className="flex justify-between px-6 py-1 text-sm text-slate-600">
+                <span>{line.label}</span>
+                <span className="tabular-nums">{formatZAR(Math.round(line.amountCents))}</span>
+              </div>
+            ))}
+            {totals.filter((line) => line.strong).map((line) => (
+              <div
+                key={line.label}
+                className="mt-1 flex items-baseline justify-between gap-6 rounded-lg bg-orange-600 px-6 py-3 text-white"
+              >
+                <span className="text-[11px] font-bold uppercase tracking-widest">{line.label}</span>
+                <span className="text-2xl font-bold tabular-nums">{formatZAR(Math.round(line.amountCents))}</span>
+              </div>
+            ))}
           </div>
         </div>
 

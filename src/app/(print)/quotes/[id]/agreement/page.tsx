@@ -5,7 +5,7 @@ import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { contactName, formatDate } from "@/lib/format";
-import { feeRows, payableTotalCents } from "@/lib/pricing";
+import { documentTotals, feeRows } from "@/lib/pricing";
 
 export default async function AgreementPrintPage({
   params,
@@ -24,7 +24,9 @@ export default async function AgreementPrintPage({
   if (!quote) notFound();
   const tpl = await getDocTemplate("agreement", tplId);
   // Fees and delivery are part of what the customer pays; the subtotal is not.
-  const total = payableTotalCents(quote);
+  // The rows the customer can see must add up to the price they are agreeing
+  // to — in either tax mode. See documentTotals().
+  const totals = documentTotals(quote);
   const customer = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
   const address = quote.contact
     ? [quote.contact.address, quote.contact.suburb, quote.contact.city].filter(Boolean).join(", ")
@@ -63,7 +65,11 @@ export default async function AgreementPrintPage({
           />
         </div>
         {tpl.sections.items !== false && (
-          <ItemsTable rows={[...quote.items, ...feeRows(quote.fees)]} showPrices totalCents={total} totalLabel="Purchase price" />
+          <ItemsTable
+            rows={[...quote.items, ...feeRows(quote.fees)]}
+            showPrices
+            totals={totals.map((line) => (line.strong ? { ...line, label: "Purchase price" } : line))}
+          />
         )}
       </PrintDocShell>
     </>

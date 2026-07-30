@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { quotePricing, quoteTotalCents } from "../src/lib/pricing";
+import { documentTotals, lineNetCents, quotePricing, quoteTotalCents } from "../src/lib/pricing";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -148,6 +148,74 @@ test("no quote total is summed by hand", () => {
     offenders,
     [],
     `these total money by hand instead of through a pricing helper:\n  ${offenders.join("\n  ")}`,
+  );
+});
+
+test("the rows a customer can see add up to the total, in BOTH tax modes", () => {
+  // The invariant every printed document has to hold: whatever a reader totals
+  // up from the table equals the FIRST line of the totals block. Tax-inclusive
+  // rows are gross and reach the payable total directly; tax-exclusive rows are
+  // ex-VAT and reach the subtotal, with VAT shown separately to bridge the gap.
+  for (const taxInclusive of [true, false]) {
+    const lines = documentTotals({ items, fees, taxInclusive });
+    const visible =
+      items.reduce((sum, item) => sum + lineNetCents(item), 0) +
+      fees.reduce((sum, fee) => sum + fee.amountCents, 0);
+    assert.equal(
+      lines[0].amountCents,
+      visible,
+      `taxInclusive=${taxInclusive}: the first totals line must equal the sum of the printed rows`,
+    );
+    const payable = quotePricing(items, fees, { taxInclusive }).totalCents;
+    assert.equal(lines[lines.length - 1].amountCents, payable, "the bottom line is what the customer pays");
+    assert.equal(lines[lines.length - 1].strong, true, "the payable total is the emphasised line");
+  }
+});
+
+test("a tax-exclusive document shows the VAT that bridges rows to total", () => {
+  // The reported case: rows totalling R110 printed under "Total incl. VAT
+  // R126.50" with nothing in between to explain the R16.50.
+  const exclusiveItems = [{ qty: 1, unitPriceCents: 11_000, discountPct: 0, taxRatePct: 15 }];
+  const lines = documentTotals({ items: exclusiveItems, fees: [], taxInclusive: false });
+  assert.deepEqual(
+    lines.map((line) => [line.label, line.amountCents]),
+    [
+      ["Subtotal", 11_000],
+      ["VAT", 1_650],
+      ["Total incl. VAT", 12_650],
+    ],
+  );
+  assert.equal(lines[0].amountCents + lines[1].amountCents, lines[2].amountCents, "…and it reconciles");
+});
+
+test("a tax-inclusive document does not invent a subtotal it cannot show", () => {
+  const lines = documentTotals({ items, fees, taxInclusive: true });
+  assert.equal(lines.length, 1, "the rows already include VAT — one band, matching them");
+  assert.equal(lines[0].label, "Total incl. VAT");
+});
+
+test("every priced quote document builds its totals from documentTotals", () => {
+  // Passing a bare payable total next to ex-VAT rows is what broke reconciliation.
+  const priced = [
+    "src/components/print/QuotePrintDoc.tsx",
+    "src/lib/pdf/QuoteDoc.tsx",
+    "src/app/(print)/quotes/[id]/agreement/page.tsx",
+    "src/app/(print)/quotes/[id]/invoice/page.tsx",
+    "src/app/(print)/quotes/[id]/delivery-note/page.tsx",
+  ];
+  for (const rel of priced) {
+    assert.match(src(rel), /documentTotals\(/, `${rel} prints a price without a reconciling totals block`);
+  }
+});
+
+test("a priced delivery note itemises the fees it is charging for", () => {
+  // It used the fee-inclusive payable total but passed only quote.items to the
+  // table, so switching "Show prices" on produced rows that didn't add up.
+  const code = src("src/app/(print)/quotes/[id]/delivery-note/page.tsx");
+  assert.match(
+    code,
+    /prices === true \? \[\.\.\.quote\.items, \.\.\.feeRows\(quote\.fees\)\]/,
+    "a priced delivery note must list the fee rows counted in its total",
   );
 });
 
