@@ -1,7 +1,7 @@
 import "server-only";
 import type { Prisma } from "@prisma/client";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { feeRows, lineNetCents, quotePricing } from "@/lib/pricing";
+import { feeRows, includedLines, lineNetCents, quotePricing } from "@/lib/pricing";
 import { jobCardTotals, jobLineCents } from "@/lib/workshop-constants";
 import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
 import type { BuilderData, TableRow } from "./blocks";
@@ -40,6 +40,9 @@ export function buildQuoteContext(quote: QuoteForPrint): MergeContext {
   const subtotal = pricing.netCents;
   const vat = pricing.taxCents;
   const fees = feeRows(quote.fees);
+  // Only the lines the pricing above counts — an unselected optional add-on is
+  // excluded from {{quote.total}}, so it must not appear as a charged row either.
+  const lines = includedLines(quote.items);
   const address = quote.contact
     ? [quote.contact.address, quote.contact.suburb, quote.contact.city, quote.contact.province, quote.contact.postalCode].filter(Boolean).join(", ")
     : "";
@@ -55,11 +58,11 @@ export function buildQuoteContext(quote: QuoteForPrint): MergeContext {
     "quote.vat": formatZAR(vat),
     "quote.fees": formatZAR(pricing.feesTotalCents),
     "quote.total": formatZAR(Math.round(total)),
-    vehicle: quote.lead?.product?.name ?? quote.items[0]?.description ?? "—",
+    vehicle: quote.lead?.product?.name ?? lines[0]?.description ?? "—",
     preparedBy: quote.createdBy?.name ?? "—",
   };
   const items: TableRow[] = [
-    ...quote.items.map((i) => ({
+    ...lines.map((i) => ({
       cells: [
         { value: i.colorPreference ? `${i.description} — ${i.colorPreference}` : i.description },
         { value: String(i.qty) },
@@ -92,7 +95,7 @@ export function buildQuoteContext(quote: QuoteForPrint): MergeContext {
     vat: vat / 100,
     feesTotal: pricing.feesTotalCents / 100,
     lines: [
-      ...quote.items.map((i) => ({
+      ...lines.map((i) => ({
         description: i.description,
         qty: i.qty,
         price: i.unitPriceCents / 100,

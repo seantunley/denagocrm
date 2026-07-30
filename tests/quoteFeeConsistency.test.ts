@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { documentTotals, lineNetCents, quotePricing, quoteTotalCents } from "../src/lib/pricing";
+import { documentTotals, includedLines, lineNetCents, quotePricing, quoteTotalCents } from "../src/lib/pricing";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -194,6 +194,53 @@ test("a tax-inclusive document does not invent a subtotal it cannot show", () =>
   assert.equal(lines[0].label, "Total incl. VAT");
 });
 
+test("an unselected optional add-on is not printed as a charge", () => {
+  // quotePricing excludes it from the total, but every renderer still printed
+  // it — so the page showed a priced line the total had never counted.
+  const withOption = [
+    { qty: 1, unitPriceCents: 54_000_000, discountPct: 0, taxRatePct: 15 },
+    { qty: 1, unitPriceCents: 900_000, discountPct: 0, taxRatePct: 15, optional: true, selected: false },
+    { qty: 1, unitPriceCents: 400_000, discountPct: 0, taxRatePct: 15, optional: true, selected: true },
+  ];
+  const printed = includedLines(withOption);
+  assert.equal(printed.length, 2, "the unselected option is not a row");
+  assert.ok(!printed.includes(withOption[1]), "…specifically that one");
+  assert.ok(printed.includes(withOption[2]), "a SELECTED option is still charged and still printed");
+
+  // The invariant again: printed rows reach the first totals line.
+  const lines = documentTotals({ items: withOption, fees: [], taxInclusive: true });
+  const visible = printed.reduce((sum, line) => sum + lineNetCents(line), 0);
+  assert.equal(lines[0].amountCents, visible);
+  assert.equal(lines[0].amountCents, 54_400_000, "R900 000 of unselected extra is not charged");
+});
+
+test("every quote document takes its rows from includedLines", () => {
+  const renderers = [
+    "src/components/print/QuotePrintDoc.tsx",
+    "src/lib/pdf/QuoteDoc.tsx",
+    "src/app/(print)/quotes/[id]/agreement/page.tsx",
+    "src/app/(print)/quotes/[id]/invoice/page.tsx",
+    "src/app/(print)/quotes/[id]/delivery-note/page.tsx",
+    "src/lib/docbuilder/merge.ts",
+  ];
+  for (const rel of renderers) {
+    assert.match(src(rel), /includedLines\(/, `${rel} prints rows its own total may not count`);
+    assert.doesNotMatch(
+      src(rel),
+      /\{quote\.items\.map\(|\.\.\.quote\.items,/,
+      `${rel} still renders the raw item list`,
+    );
+  }
+});
+
+test("the quote record page shows an unselected option without a line total", () => {
+  // Internal, so it keeps the row — staff need to see what was offered — but
+  // with no amount, so the column still adds up to the total above it.
+  const code = src("src/app/(app)/quotes/[id]/page.tsx");
+  assert.match(code, /isLineIncluded\(i\) \? formatZAR\(lineNetCents\(i\)\) : "—"/, "no amount on a line the total excludes");
+  assert.match(code, /Optional — not selected/, "and it says why");
+});
+
 test("every priced quote document builds its totals from documentTotals", () => {
   // Passing a bare payable total next to ex-VAT rows is what broke reconciliation.
   const priced = [
@@ -214,7 +261,7 @@ test("a priced delivery note itemises the fees it is charging for", () => {
   const code = src("src/app/(print)/quotes/[id]/delivery-note/page.tsx");
   assert.match(
     code,
-    /prices === true \? \[\.\.\.quote\.items, \.\.\.feeRows\(quote\.fees\)\]/,
+    /prices === true\s*\?\s*\[\.\.\.includedLines\(quote\.items\), \.\.\.feeRows\(quote\.fees\)\]/,
     "a priced delivery note must list the fee rows counted in its total",
   );
 });

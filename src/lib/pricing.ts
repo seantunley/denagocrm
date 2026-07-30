@@ -28,6 +28,18 @@ export function isLineIncluded(line: PricedLine): boolean {
   return !line.optional || line.selected !== false;
 }
 
+/**
+ * The lines a document should PRINT — exactly the ones its total counts.
+ *
+ * An optional add-on the customer didn't take is excluded from the total by
+ * quotePricing, so printing it anyway put an apparently-charged line on the
+ * page that the total never included. Every renderer takes its rows from here,
+ * so the two can't drift apart again.
+ */
+export function includedLines<T extends PricedLine>(lines: T[]): T[] {
+  return lines.filter(isLineIncluded);
+}
+
 /** Sum of the discounted line amounts for the included lines, in cents. */
 export function quoteTotalCents(lines: PricedLine[]): number {
   return lines.reduce((sum, line) => (isLineIncluded(line) ? sum + lineNetCents(line) : sum), 0);

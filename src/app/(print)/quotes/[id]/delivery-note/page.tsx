@@ -5,7 +5,7 @@ import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { contactName, formatDate } from "@/lib/format";
-import { documentTotals, feeRows } from "@/lib/pricing";
+import { documentTotals, feeRows, includedLines } from "@/lib/pricing";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 
 export default async function DeliveryNotePrintPage({
@@ -69,7 +69,7 @@ export default async function DeliveryNotePrintPage({
             // them, so leaving them out gave a priced delivery note whose rows
             // didn't add up. With prices off the table is a packing list, and a
             // delivery charge is not a thing being delivered.
-            rows={tpl.sections.prices === true ? [...quote.items, ...feeRows(quote.fees)] : quote.items}
+            rows={tpl.sections.prices === true ? [...includedLines(quote.items), ...feeRows(quote.fees)] : includedLines(quote.items)}
             showPrices={tpl.sections.prices === true}
             totals={tpl.sections.prices === true ? totals : undefined}
           />

@@ -5,7 +5,7 @@ import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { contactName, formatDate } from "@/lib/format";
-import { documentTotals, feeRows } from "@/lib/pricing";
+import { documentTotals, feeRows, includedLines } from "@/lib/pricing";
 
 export default async function AgreementPrintPage({
   params,
@@ -66,7 +66,7 @@ export default async function AgreementPrintPage({
         </div>
         {tpl.sections.items !== false && (
           <ItemsTable
-            rows={[...quote.items, ...feeRows(quote.fees)]}
+            rows={[...includedLines(quote.items), ...feeRows(quote.fees)]}
             showPrices
             totals={totals.map((line) => (line.strong ? { ...line, label: "Purchase price" } : line))}
           />

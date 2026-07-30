@@ -1,6 +1,6 @@
 import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { documentTotals, feeRows, lineNetCents } from "@/lib/pricing";
+import { documentTotals, feeRows, includedLines, lineNetCents } from "@/lib/pricing";
 import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
 
 /**
@@ -119,6 +119,8 @@ export default function QuoteDoc({ quote, signed }: { quote: QuoteForPrint; sign
   // Fees and delivery are part of the quoted price — itemised as rows below as
   // well as counted here, so the lines the customer reads add up to the total.
   const fees = feeRows(quote.fees);
+  // Only the lines the total counts — an unselected optional add-on is not a charge.
+  const items = includedLines(quote.items);
   // Subtotal + VAT lines appear only on a tax-exclusive quote — see documentTotals().
   const totals = documentTotals(quote);
   const customerName = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
@@ -129,7 +131,7 @@ export default function QuoteDoc({ quote, signed }: { quote: QuoteForPrint; sign
         .filter(Boolean)
         .join(", ")
     : "";
-  const vehicle = quote.lead?.product?.name ?? quote.items[0]?.description ?? "—";
+  const vehicle = quote.lead?.product?.name ?? items[0]?.description ?? "—";
   const terms = (quote.terms ?? "")
     .split(/\r?\n/)
     .map((l) => l.replace(/^[\s•\-*]+/, "").trim())
@@ -191,7 +193,7 @@ export default function QuoteDoc({ quote, signed }: { quote: QuoteForPrint; sign
           <Text style={[s.tHeadCell, s.cNum]}>UNIT PRICE</Text>
           <Text style={[s.tHeadCell, s.cNum]}>TOTAL</Text>
         </View>
-        {quote.items.map((i, idx) => (
+        {items.map((i, idx) => (
           <View key={i.id} style={idx % 2 === 1 ? [s.row, s.rowAlt] : s.row} wrap={false}>
             <Text style={[s.cell, s.cDesc]}>
               {i.colorPreference ? `${i.description} — ${i.colorPreference}` : i.description}
@@ -208,7 +210,7 @@ export default function QuoteDoc({ quote, signed }: { quote: QuoteForPrint; sign
         {fees.map((fee, idx) => (
           <View
             key={`fee-${idx}`}
-            style={(quote.items.length + idx) % 2 === 1 ? [s.row, s.rowAlt] : s.row}
+            style={(items.length + idx) % 2 === 1 ? [s.row, s.rowAlt] : s.row}
             wrap={false}
           >
             <Text style={[s.cell, s.cDesc]}>{fee.description}</Text>

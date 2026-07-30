@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { documentTotals, feeRows, lineNetCents } from "@/lib/pricing";
+import { documentTotals, feeRows, includedLines, lineNetCents } from "@/lib/pricing";
 import { defaultTemplate, type DocTemplate } from "@/lib/docTemplates";
 
 export type QuoteForPrint = Prisma.QuoteGetPayload<{
@@ -23,6 +23,9 @@ export default function QuotePrintDoc({
   // they are itemised as rows as well as counted in the total. A total that
   // exceeds the sum of the visible lines is a quote the customer can't check.
   const fees = feeRows(quote.fees);
+  // Only the lines the total counts — an optional add-on the customer didn't
+  // take is not a charge, so it isn't printed as one.
+  const items = includedLines(quote.items);
   // On a tax-exclusive quote the row amounts are ex-VAT, so a lone "Total incl.
   // VAT" band sat above rows that didn't add up to it. documentTotals() returns
   // the subtotal/VAT lines in that mode and the single band in the other.
@@ -87,7 +90,7 @@ export default function QuotePrintDoc({
               Vehicle of interest
             </p>
             <p className="font-bold text-slate-900">
-              {quote.lead?.product?.name ?? quote.items[0]?.description ?? "—"}
+              {quote.lead?.product?.name ?? items[0]?.description ?? "—"}
             </p>
             {quote.lead?.color && <p className="text-slate-600">Colour: {quote.lead.color}</p>}
             <p className="text-slate-600 text-xs mt-1">
@@ -109,7 +112,7 @@ export default function QuotePrintDoc({
             </tr>
           </thead>
           <tbody>
-            {quote.items.map((i, idx) => (
+            {items.map((i, idx) => (
               <tr key={i.id} className={idx % 2 === 1 ? "bg-slate-50" : ""}>
                 <td className="py-2.5 px-3 border-b border-slate-200 font-medium text-slate-900">
                   <span className="block">{i.description}</span>
@@ -126,7 +129,7 @@ export default function QuotePrintDoc({
               </tr>
             ))}
             {fees.map((fee, idx) => (
-              <tr key={`fee-${idx}`} className={(quote.items.length + idx) % 2 === 1 ? "bg-slate-50" : ""}>
+              <tr key={`fee-${idx}`} className={(items.length + idx) % 2 === 1 ? "bg-slate-50" : ""}>
                 <td className="py-2.5 px-3 border-b border-slate-200 font-medium text-slate-900">{fee.description}</td>
                 <td className="py-2.5 px-3 border-b border-slate-200 text-right">{fee.qty}</td>
                 <td className="py-2.5 px-3 border-b border-slate-200 text-right">{formatZAR(fee.unitPriceCents)}</td>

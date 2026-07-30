@@ -5,7 +5,7 @@ import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { contactName, formatDate } from "@/lib/format";
-import { documentTotals, feeRows } from "@/lib/pricing";
+import { documentTotals, feeRows, includedLines } from "@/lib/pricing";
 
 export default async function InvoicePrintPage({
   params,
@@ -58,7 +58,7 @@ export default async function InvoicePrintPage({
             lines={[`Invoice INV-${quote.number}`, `Quote Q-${quote.number}`, `Status: ${quote.status}`]}
           />
         </div>
-        <ItemsTable rows={[...quote.items, ...feeRows(quote.fees)]} showPrices totals={totals} />
+        <ItemsTable rows={[...includedLines(quote.items), ...feeRows(quote.fees)]} showPrices totals={totals} />
         {tpl.sections.terms !== false && tpl.terms && (
           <div className="rounded-lg bg-slate-50 px-4 py-3 mt-6 no-break">
             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1.5">

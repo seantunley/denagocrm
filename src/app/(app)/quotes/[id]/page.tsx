@@ -20,7 +20,7 @@ import { generateDocEditorDocument } from "@/app/actions/doceditor";
 import SigningBlock from "@/components/SigningBlock";
 import { activeRecordRequest, isLockedForSigning } from "@/lib/signing/record";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { lineNetCents, payableTotalCents, quotePricing } from "@/lib/pricing";
+import { isLineIncluded, lineNetCents, payableTotalCents, quotePricing } from "@/lib/pricing";
 import { addQuoteFee, deleteQuoteFee, setQuoteDeposit, setQuoteTaxMode } from "@/app/actions/cpq";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 
@@ -419,15 +419,22 @@ export default async function QuoteDetailPage({
                 </tr>
               )}
               {quote.items.map((i) => (
-                <tr key={i.id}>
+                <tr key={i.id} className={isLineIncluded(i) ? "" : "text-muted-foreground"}>
                   <td>
                     <span className="block">{i.description}</span>
                     {i.colorPreference && <span className="mt-1 block text-xs text-muted-foreground">Colour preference: {i.colorPreference}</span>}
+                    {/* Staff need to see what was offered, so an unselected
+                        option stays listed here — but without a line total, so
+                        the amounts still add up to the quote total above. The
+                        printed documents drop it entirely. */}
+                    {!isLineIncluded(i) && (
+                      <span className="mt-1 block text-xs">Optional — not selected</span>
+                    )}
                   </td>
                   <td className="text-right">{i.qty}</td>
                   <td className="text-right">{formatZAR(i.unitPriceCents)}</td>
                   <td className="text-right font-medium">
-                    {formatZAR(lineNetCents(i))}
+                    {isLineIncluded(i) ? formatZAR(lineNetCents(i)) : "—"}
                   </td>
                   <td className="text-right">
                     {editable && (
