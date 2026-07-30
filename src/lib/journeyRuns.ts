@@ -1,3 +1,7 @@
+import { NEVER_STOP, type StopSignal } from "./stopSignal";
+
+/** A single step can send an email or a WhatsApp message. */
+const STEP_RESERVE_MS = 4_000;
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { logAudit } from "./audit";
@@ -44,7 +48,7 @@ export async function recoverStaleJourneyRuns() {
   });
 }
 
-async function processOneRun(runId: string) {
+async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
   const run = await prisma.journeyRun.findUnique({
     where: { id: runId },
     include: { journey: true, journeyVersion: true },
@@ -68,6 +72,10 @@ async function processOneRun(runId: string) {
 
   try {
     for (let count = 0; count < MAX_STEPS_PER_TICK; count++) {
+      // A run is resumable: leaving it queued with nextRunAt set means the next
+      // tick picks it up exactly where it stopped. Being KILLED here instead
+      // would strand it mid-step, having already sent.
+      if (stop.shouldStop(STEP_RESERVE_MS)) break;
       const step = stepById(definition, currentStepId);
       if (!step) {
         await prisma.journeyRun.update({
@@ -181,7 +189,7 @@ async function processOneRun(runId: string) {
   }
 }
 
-export async function processJourneyRuns(limit = 40) {
+export async function processJourneyRuns(limit = 40, stop: StopSignal = NEVER_STOP) {
   const runs = await prisma.journeyRun.findMany({
     where: {
       status: { in: ["queued", "waiting"] },
@@ -192,6 +200,9 @@ export async function processJourneyRuns(limit = 40) {
     select: { id: true },
   });
   let processed = 0;
-  for (const run of runs) if (await processOneRun(run.id)) processed++;
+  for (const run of runs) {
+    if (stop.shouldStop(STEP_RESERVE_MS)) break;
+    if (await processOneRun(run.id, stop)) processed++;
+  }
   return processed;
 }

@@ -38,13 +38,15 @@ export async function GET(req: NextRequest) {
       if (!(await getEnabledModuleIds()).has("marketing")) {
         return { skipped: "marketing-disabled" as const };
       }
-      // The engine sends messages and cannot be interrupted once started, so the
-      // only safe control is to DECLINE it when too little budget remains. The
-      // next tick is fifteen minutes away and picks the work up.
+      // Decline outright when there is not even time for one unit of work…
       if (budget.shouldStop(JOURNEY_RESERVE_MS)) {
         return { skipped: "insufficient-budget" as const };
       }
-      return runJourneyEngine();
+      // …and hand the deadline DOWN, so the engine stops between records,
+      // events, runs and steps rather than running to completion regardless of
+      // the clock. A fixed admission reserve cannot bound work that can span
+      // 1000 records, 50 events and 40 runs of up to 20 steps.
+      return runJourneyEngine(budget);
     }, {
       maxRuntimeMs: routeBudget.remainingMs,
       minStartBudgetMs: MIN_START_BUDGET_MS,
