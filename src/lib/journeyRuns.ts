@@ -1,16 +1,16 @@
-import { NEVER_STOP, type StopSignal } from "./stopSignal";
-
-/** A single step can send an email or a WhatsApp message. */
-const STEP_RESERVE_MS = 4_000;
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { logAudit } from "./audit";
 import { executeJourneyStep } from "./journeyStepExecutor";
 import { loadJourneyContext, type JourneyEntityType, type JourneyContext } from "./journeyContext";
 import { parseJourneyDefinition, stepById } from "./journeyTypes";
+import { NEVER_STOP, type StopSignal } from "./stopSignal";
+import { budgetStopUpdate } from "./journeyRunState";
 
 const MAX_RUN_ATTEMPTS = 3;
 const MAX_STEPS_PER_TICK = 20;
+/** A single step can send an email or a WhatsApp message. */
+const STEP_RESERVE_MS = 4_000;
 
 async function updateStepLog(args: {
   runId: string;
@@ -72,10 +72,25 @@ async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
 
   try {
     for (let count = 0; count < MAX_STEPS_PER_TICK; count++) {
-      // A run is resumable: leaving it queued with nextRunAt set means the next
-      // tick picks it up exactly where it stopped. Being KILLED here instead
-      // would strand it mid-step, having already sent.
-      if (stop.shouldStop(STEP_RESERVE_MS)) break;
+      // Budget spent: park the run exactly where it is and RETURN.
+      //
+      // `break` here was wrong and actively harmful: falling out of the loop
+      // lands on the "exceeded MAX_STEPS_PER_TICK" throw below, whose catch
+      // marks the not-yet-executed step FAILED, increments attempts, and after
+      // MAX_RUN_ATTEMPTS budget stops fails the journey permanently. Running out
+      // of time is not an error and must not consume a retry.
+      //
+      // The run was claimed as "running", so it has to be put back to "queued"
+      // explicitly — leaving it running would strand it until the stale-run
+      // recovery sweep. attempts is deliberately untouched: a budget stop is not
+      // an attempt, and any genuine earlier failures keep their count.
+      if (stop.shouldStop(STEP_RESERVE_MS)) {
+        await prisma.journeyRun.update({
+          where: { id: run.id },
+          data: budgetStopUpdate(currentStepId, context as Prisma.InputJsonValue),
+        });
+        return false;
+      }
       const step = stepById(definition, currentStepId);
       if (!step) {
         await prisma.journeyRun.update({

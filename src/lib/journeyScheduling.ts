@@ -1,10 +1,3 @@
-import { NEVER_STOP, type StopSignal } from "./stopSignal";
-
-/**
- * Time to keep in hand before enrolling one more record. Each enrolment writes
- * and can start a journey run, which sends.
- */
-const ENROL_RESERVE_MS = 3_000;
 import { differenceInCalendarMonths, subDays } from "date-fns";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
@@ -168,3 +161,10 @@ export async function enrollJourneyNow(journeyId: string) {
   if (!journey || journey.status !== "active") throw new Error("Journey must be active before it can run");
   return scheduleJourney(journey, NEVER_STOP);
 }
+import { NEVER_STOP, type StopSignal } from "./stopSignal";
+
+/**
+ * Time to keep in hand before enrolling one more record. Each enrolment writes
+ * and can start a journey run, which sends.
+ */
+const ENROL_RESERVE_MS = 3_000;

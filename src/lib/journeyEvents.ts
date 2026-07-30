@@ -1,7 +1,3 @@
-import { NEVER_STOP, type StopSignal } from "./stopSignal";
-
-/** One event can enrol into several journeys, each of which may send. */
-const EVENT_RESERVE_MS = 4_000;
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { loadJourneyContext, type JourneyEntityType } from "./journeyContext";
@@ -11,6 +7,10 @@ import {
   hashJourneyKey,
   jsonObject,
 } from "./journeyEngineShared";
+import { NEVER_STOP, type StopSignal } from "./stopSignal";
+
+/** One event can enrol into several journeys, each of which may send. */
+const EVENT_RESERVE_MS = 4_000;
 
 const MAX_EVENT_ATTEMPTS = 3;
 

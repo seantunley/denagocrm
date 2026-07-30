@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { NEVER_STOP, type StopSignal } from "../src/lib/stopSignal";
+import { budgetStopUpdate } from "../src/lib/journeyRunState";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -39,10 +40,16 @@ test("every sequential loop in the engine can stop", () => {
     /for \(const run of runs\) \{\s*\n\s*if \(stop\.shouldStop\(/,
     "the run loop must check the budget before each run",
   );
-  assert.match(
-    runs,
-    /for \(let count = 0; count < MAX_STEPS_PER_TICK[^)]*\) \{[\s\S]{0,300}?stop\.shouldStop\(/,
-    "the STEP loop must check the budget — a run is up to 20 sends",
+  // The step loop's guard must come before any step is executed. Measured by
+  // position rather than a fixed character window, so explaining the guard in a
+  // comment cannot break the assertion.
+  const stepLoopAt = runs.indexOf("for (let count = 0; count < MAX_STEPS_PER_TICK");
+  const stepStopAt = runs.indexOf("stop.shouldStop(", stepLoopAt);
+  const firstExecuteAt = runs.indexOf("executeJourneyStep(", stepLoopAt);
+  assert.ok(stepLoopAt > 0, "the step loop must exist");
+  assert.ok(
+    stepStopAt > stepLoopAt && stepStopAt < firstExecuteAt,
+    "the STEP loop must check the budget before executing a step — a run is up to 20 sends",
   );
 });
 
@@ -85,6 +92,52 @@ test("a signal that says stop halts a loop immediately", () => {
     all.push(n);
   }
   assert.deepEqual(all, [1, 2, 3]);
+});
+
+test("a budget stop parks the run — it does not fail it", () => {
+  // The first attempt at this simply `break`ed out of the step loop, which fell
+  // through to the "exceeded MAX_STEPS_PER_TICK" throw. Its catch marked the
+  // NOT-YET-EXECUTED step failed, incremented attempts, and after three budget
+  // stops failed the journey permanently. Running out of time is not an error.
+  const update = budgetStopUpdate("step-7", { some: "context" });
+
+  assert.equal(update.status, "queued", "the run was claimed as running and must be released");
+  assert.equal(update.currentStepId, "step-7", "it must resume on the SAME step, not skip it");
+  assert.deepEqual(update.context, { some: "context" }, "the context must survive the stop");
+  assert.ok(update.nextRunAt instanceof Date, "it must be eligible again");
+
+  // The two fields whose presence would corrupt the run.
+  assert.ok(!("attempts" in update), "a budget stop must not consume a retry attempt");
+  assert.ok(!("lastError" in update), "a budget stop is not an error");
+  assert.notEqual(update.status, "failed");
+});
+
+test("the stop branch returns instead of falling through to the failure path", () => {
+  const runs = src("src/lib/journeyRuns.ts");
+  const loopAt = runs.indexOf("for (let count = 0; count < MAX_STEPS_PER_TICK");
+  const throwAt = runs.indexOf("Journey exceeded", loopAt);
+  assert.ok(loopAt > 0 && throwAt > loopAt, "the step loop and its overflow throw must both exist");
+  const loopBody = runs.slice(loopAt, throwAt);
+
+  const stopAt = loopBody.indexOf("stop.shouldStop(");
+  assert.ok(stopAt > 0, "the step loop must check the budget");
+  const stopBranch = loopBody.slice(stopAt, stopAt + 400);
+  assert.match(stopBranch, /budgetStopUpdate\(/, "the stop branch must persist the parked state");
+  assert.match(stopBranch, /return false;/, "the stop branch must RETURN, not break into the throw");
+  assert.doesNotMatch(
+    loopBody.slice(stopAt, stopAt + 120),
+    /\bbreak;/,
+    "breaking here reaches the overflow throw and fails the run",
+  );
+});
+
+test("the outer loops break only where nothing has been claimed", () => {
+  // Breaking is safe when no row has been moved out of its pending state.
+  const events = src("src/lib/journeyEvents.ts");
+  const loopAt = events.indexOf("for (const event of events) {");
+  const claimAt = events.indexOf("journeyEvent.updateMany", loopAt);
+  const stopAt = events.indexOf("stop.shouldStop(", loopAt);
+  assert.ok(stopAt > loopAt && stopAt < claimAt, "the event budget check must precede the claim");
 });
 
 test("a truncated run is visible rather than looking like a quiet tick", () => {
