@@ -3,6 +3,7 @@ import { getSetting } from "@/lib/settings";
 import { runTelegramFlow, tgAnswerCallback } from "@/lib/telegram";
 import { logError } from "@/lib/errorLog";
 import { withSystemScope } from "@/lib/tenantScope";
+import { secretEquals } from "@/lib/secretCompare";
 
 export async function POST(req: NextRequest) {
   // Telegram echoes back the secret we set on the webhook. Fail CLOSED: without
@@ -15,7 +16,8 @@ export async function POST(req: NextRequest) {
     await logError("telegram-webhook", "POST received but TELEGRAM_WEBHOOK_SECRET is not set — rejecting").catch(() => {});
     return NextResponse.json({ error: "Webhook not configured" }, { status: 503 });
   }
-  if (req.headers.get("x-telegram-bot-api-secret-token") !== secret) {
+  // Constant-time: every other secret check here already was.
+  if (!secretEquals(req.headers.get("x-telegram-bot-api-secret-token"), secret)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   let update: {

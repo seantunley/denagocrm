@@ -38,6 +38,20 @@ export const OTP_VERIFY_POLICY: RateLimitPolicy = {
   blockMs: 15 * 60 * 1000,
 };
 
+/**
+ * Public signing endpoints. The token is high-entropy, so this is not a
+ * brute-force guard — it bounds ABUSE by someone who legitimately holds (or
+ * intercepted) a link: each accepted signature can trigger a Chromium PDF
+ * render, a PKCS#7 seal and an email fan-out. Signing is a once-per-document
+ * human action, so a real signer never comes close to the limit even after a
+ * few validation failures.
+ */
+export const SIGNING_POLICY: RateLimitPolicy = {
+  limit: 10,
+  windowMs: 5 * 60 * 1000,
+  blockMs: 15 * 60 * 1000,
+};
+
 function retryAfter(blockedUntil: Date | null, now: Date): number {
   if (!blockedUntil) return 0;
   return Math.max(0, Math.ceil((blockedUntil.getTime() - now.getTime()) / 1000));

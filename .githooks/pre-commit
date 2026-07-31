@@ -1,0 +1,19 @@
+#!/bin/sh
+# Local fast-feedback secret scan. Enable with: npm run hooks:install
+#
+# Optional by design: it runs gitleaks only if gitleaks is on PATH, and exits 0
+# otherwise. The authoritative gate is .github/workflows/secret-scan.yml, which
+# needs nothing installed locally — a hook that hard-failed on a machine without
+# gitleaks would just teach people to pass --no-verify.
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  exit 0
+fi
+
+if ! gitleaks protect --staged --redact --config .gitleaks.toml; then
+  echo ""
+  echo "gitleaks found a secret in the staged changes — commit blocked."
+  echo "Rotate it, remove it from the diff, then commit again."
+  echo "If it is a false positive, add it to [allowlist] in .gitleaks.toml."
+  exit 1
+fi

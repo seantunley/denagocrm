@@ -4,8 +4,7 @@ import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { feeRows, includedLines, lineNetCents, quotePricing } from "@/lib/pricing";
 import { jobCardTotals, jobLineCents } from "@/lib/workshop-constants";
 import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
-import type { BuilderData, TableRow } from "./blocks";
-import { evaluateCondition } from "./expr";
+import type { TableRow } from "./blocks";
 
 export type JobCardForDoc = Prisma.JobCardGetPayload<{
   include: { items: true; vehicle: true; contact: true; technician: true };
@@ -179,48 +178,4 @@ export function buildJobCardContext(jc: JobCardForDoc): MergeContext {
     vehicle: { model: jc.vehicle.model, vin: jc.vehicle.vin ?? "", reg: jc.vehicle.regNumber ?? "" },
   };
   return { tokens, items, vars };
-}
-
-/** Block arrays that live inside a block's props (Puck slot fields). */
-const SLOT_KEYS = ["left", "right", "content"];
-type Block = { type: string; props: Record<string, unknown> };
-
-/**
- * Walk the block tree: drop Conditional blocks whose expression is false, recurse
- * into every slot, and inject the record's line-items into LineItems blocks —
- * wherever they sit (top level, a column, inside a surviving conditional).
- */
-function processBlocks(blocks: unknown, ctx: MergeContext): Block[] {
-  const arr = Array.isArray(blocks) ? (blocks as Block[]) : [];
-  const out: Block[] = [];
-  for (const b of arr) {
-    if (!b || typeof b !== "object") continue;
-    const props = (b.props ?? {}) as Record<string, unknown>;
-    if (b.type === "Conditional") {
-      if (!evaluateCondition(String(props.when ?? ""), ctx.vars)) continue; // prune
-    }
-    for (const key of SLOT_KEYS) {
-      if (Array.isArray(props[key])) props[key] = processBlocks(props[key], ctx);
-    }
-    if (b.type === "LineItems") props.rows = ctx.items;
-    out.push(b);
-  }
-  return out;
-}
-
-export function resolveBuilderData(data: BuilderData, ctx: MergeContext): BuilderData {
-  const replace = (str: string) => str.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k: string) => ctx.tokens[k] ?? "");
-  const walk = (v: unknown): unknown => {
-    if (typeof v === "string") return replace(v);
-    if (Array.isArray(v)) return v.map(walk);
-    if (v && typeof v === "object") {
-      const out: Record<string, unknown> = {};
-      for (const [k, val] of Object.entries(v)) out[k] = walk(val);
-      return out;
-    }
-    return v;
-  };
-  const cloned = walk(data) as BuilderData;
-  cloned.content = processBlocks(cloned.content, ctx) as BuilderData["content"];
-  return cloned;
 }

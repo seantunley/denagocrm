@@ -6,6 +6,7 @@ import { isRequestClosed } from "@/lib/signing/status";
 import { notifyCreatorDeclined } from "@/lib/signing/notify";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
+import { rateLimitSigning } from "@/lib/signing/throttle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +16,9 @@ const bodySchema = z.object({ reason: z.string().max(2000).default("") });
 export async function POST(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
   if (!isValidSignToken(token)) return new Response("Invalid link", { status: 400 });
+  // Throttle before any database work — same policy as the sign endpoint.
+  const throttled = await rateLimitSigning(token);
+  if (throttled) return throttled;
   // Phase C no-user edge: derive the document's tenant first, then run the guarded
   // decline inside that scope (dormant no-op when off; fails closed under enforcement).
   return withTokenTenantScope(
