@@ -2,6 +2,7 @@ import { ImapFlow } from "imapflow";
 import { simpleParser, type ParsedMail } from "mailparser";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
+import { ciExactIdFilter, ciExactIds } from "./ciExact";
 import { resolveTenantActor } from "./tenantActor";
 import { getSetting, putSetting, resolveIntegrationBundle } from "./settings";
 import { currentTenantScope } from "./tenantScope";
@@ -154,7 +155,19 @@ async function fileSupportEmail(mailbox: Mailbox, parsed: ParsedMail, fromEmail:
       // (released on commit/rollback) and held on the tx's own connection.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`contact:${fromEmail}`}))`;
 
-      let contact = await tx.contact.findFirst({ where: { email: { equals: fromEmail, mode: "insensitive" } } });
+      // Exact (case-folded) sender match. `mode: "insensitive"` compiled to an
+      // unescaped ILIKE against a From header, which nothing validates — a message
+      // claiming to be from `%@%` filed itself onto an arbitrary real customer's
+      // record. `client: tx` keeps the lookup inside the advisory lock above; on
+      // its own pooled connection it would not see the row a concurrent run is
+      // about to commit, which is the duplicate the lock exists to prevent.
+      const senderContactIds = await ciExactIds("contactEmail", fromEmail, { client: tx });
+      let contact = senderContactIds.length
+        ? await tx.contact.findFirst({
+            where: { id: { in: senderContactIds } },
+            orderBy: { createdAt: "asc" },
+          })
+        : null;
       if (!contact) {
         const fromName = parsed.from?.value?.[0]?.name?.trim() || fromEmail.split("@")[0];
         const [first, ...rest] = fromName.split(/\s+/);
@@ -238,10 +251,18 @@ async function fileTimelineEmail(parsed: ParsedMail, fromEmail: string, transpor
   const seen = await prisma.communication.findFirst({ where: { dedupeKey } });
   if (seen) return false; // already filed on a previous run
 
-  const contact = await prisma.contact.findFirst({ where: { email: { equals: fromEmail, mode: "insensitive" } } });
+  // Exact (case-folded) sender match — see fileSupportEmail. Under the old ILIKE
+  // a crafted From header filed an inbound email onto someone else's timeline.
+  const contact = await prisma.contact.findFirst({
+    where: await ciExactIdFilter("contactEmail", fromEmail),
+    orderBy: { createdAt: "asc" },
+  });
   const lead = contact
     ? null
-    : await prisma.lead.findFirst({ where: { email: { equals: fromEmail, mode: "insensitive" }, status: "open" } });
+    : await prisma.lead.findFirst({
+        where: { AND: [await ciExactIdFilter("leadEmail", fromEmail), { status: "open" }] },
+        orderBy: { createdAt: "asc" },
+      });
   if (!contact && !lead) return false; // unknown sender — leave in the mailbox
 
   const firstUser = await resolveTenantActor();
