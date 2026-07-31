@@ -45,9 +45,13 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
             Something went wrong
           </h1>
 
+          {/* Deliberately does NOT promise nothing was saved. This boundary runs
+              after rendering failed, and a server action may have committed
+              before that — a quote, an upload, a status change. Telling someone
+              their data is safe invites the retry that duplicates it. */}
           <p style={{ margin: "0 0 20px", color: "#94a3b8", fontSize: "0.95rem" }}>
-            Denago CRM hit an error it couldn&apos;t recover from. Your data is safe — nothing was
-            saved from the page you were on.
+            Denago CRM hit an error it couldn&apos;t recover from. Your last action may have
+            completed — check the record before trying it again.
           </p>
 
           <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "20px" }}>

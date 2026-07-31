@@ -136,6 +136,43 @@ test("the root layout forces dynamic rendering — nonces need it", () => {
   assert.match(layout, /Nonce-based CSP requires dynamic rendering/, "and the reason is written down");
 });
 
+/**
+ * Source with comments stripped and whitespace collapsed.
+ *
+ * Both, for reasons I hit writing these: matching the whole file made the tests
+ * below fail on the very comments justifying them, and JSX wraps prose across
+ * lines, so `/may have completed/` misses "may have\n    completed".
+ */
+const shippedText = (rel: string) =>
+  src(rel)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, "")
+    .replace(/^\s*\/\/.*$/gm, "")
+    .replace(/\s+/g, " ");
+
+test("the global error page needs no JavaScript", () => {
+  // Its scripts are ALWAYS un-nonced: global-error replaces the root layout, so
+  // it cannot inherit force-dynamic and the build prerenders it. Anything
+  // interactive here is a control that silently does nothing.
+  const page = shippedText("src/app/global-error.tsx");
+  assert.doesNotMatch(page, /onClick|useState|useEffect/, "no handler will ever fire on this page");
+  assert.doesNotMatch(page, /\breset\b/, "a reset() button would be a button that never responds");
+  assert.match(page, /href="\/"/, "recovery has to be a plain link");
+});
+
+test("the global error page does not promise the write was rolled back", () => {
+  // It cannot know. This boundary runs AFTER rendering failed, and a server
+  // action may have committed before that — a quote, an upload, a status
+  // change. "Your data is safe" invites exactly the retry that duplicates it.
+  const page = shippedText("src/app/global-error.tsx");
+  assert.doesNotMatch(
+    page,
+    /data is safe|nothing was saved|no changes were made|was not saved/i,
+    "the error boundary has no way to know whether the mutation committed",
+  );
+  assert.match(page, /may have completed/, "say what is actually true, and tell them to check");
+});
+
 test("only one place sets Content-Security-Policy", () => {
   // Two enforced policies intersect: the static one has no nonce, so it would
   // block every script the proxy just authorised.
