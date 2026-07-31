@@ -81,7 +81,58 @@ export async function saveFile(
   return storedName;
 }
 
-const isBlobRef = (ref: string) => ref.startsWith("https://");
+/**
+ * A storage ref is EITHER a Vercel Blob URL we wrote, OR a bare local filename
+ * that saveFile generated. Nothing else, ever.
+ *
+ * This used to be `ref.startsWith("https://")`, with everything else handed to
+ * `path.join(UPLOAD_DIR, ref)` and every https ref handed to `fetch`. Both
+ * branches trusted the ref completely, which was fine while every ref came from
+ * saveFile — and stopped being fine the moment one caller stored a
+ * client-supplied URL (registerLibraryDocuments). That turned a ref into two
+ * primitives: `../../../../proc/self/environ` read any file the function could
+ * see, and `https://anything` made the server fetch it and hand back the body.
+ *
+ * Validating at the read/delete boundary rather than only at that one caller is
+ * deliberate: it protects the next caller too, and there are twenty write sites.
+ */
+const BLOB_HOST = /(^|\.)blob\.vercel-storage\.com$/i;
+
+/** A URL on the Blob store we own. Anything else is not ours to fetch. */
+function isTrustedBlobRef(ref: string): boolean {
+  try {
+    const url = new URL(ref);
+    return url.protocol === "https:" && BLOB_HOST.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** A bare filename — no directory component, no traversal, not absolute. */
+function isLocalRef(ref: string): boolean {
+  return (
+    ref.length > 0 &&
+    !ref.includes("/") &&
+    !ref.includes("\\") &&
+    !ref.includes("\0") &&
+    ref !== "." &&
+    ref !== ".." &&
+    !path.isAbsolute(ref)
+  );
+}
+
+/**
+ * Classify a ref, or refuse it. Throwing beats returning a boolean here: a
+ * caller that forgets to check would otherwise fall through to the local
+ * branch, which is the dangerous one.
+ */
+function classifyRef(ref: string): "blob" | "local" {
+  if (isTrustedBlobRef(ref)) return "blob";
+  if (isLocalRef(ref)) return "local";
+  throw new Error("Refusing an unrecognised storage reference");
+}
+
+const isBlobRef = (ref: string) => classifyRef(ref) === "blob";
 
 async function streamToBuffer(stream: ReadableStream<Uint8Array>): Promise<Buffer> {
   const reader = stream.getReader();

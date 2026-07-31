@@ -14,12 +14,37 @@ export type UploadedFileMeta = {
   sizeBytes: number;
 };
 
+/**
+ * `url` arrives as a server-action argument, so it is whatever the caller sent —
+ * the browser uploads straight to Blob storage and then tells us where it put
+ * the file. Every OTHER storedName in this codebase is a saveFile() return
+ * value; this is the one that comes from outside, and it was stored unchecked.
+ *
+ * That made it a file path and a fetch target: readFile() handed a non-https
+ * ref to path.join(UPLOAD_DIR, ref) and an https one to fetch(). storage.ts now
+ * refuses both shapes at the boundary, but this is where the bad value would
+ * have entered, so it is refused here too — a bad ref should never reach the
+ * database, not merely fail on the way out.
+ */
+function assertBlobUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("Upload reference is not a valid URL");
+  }
+  if (parsed.protocol !== "https:" || !/(^|\.)blob\.vercel-storage\.com$/i.test(parsed.hostname)) {
+    throw new Error("Upload reference must point at Blob storage");
+  }
+}
+
 export async function registerLibraryDocuments(
   category: string | null,
   nameOverride: string | null,
   files: UploadedFileMeta[]
 ) {
   const user = await requirePermission("library.manage");
+  for (const file of files) assertBlobUrl(file.url);
   if (files.length === 0) return;
   const added: string[] = [];
   for (const file of files) {
@@ -63,6 +88,7 @@ export async function registerLibraryVersion(
   file: UploadedFileMeta
 ) {
   const user = await requirePermission("library.manage");
+  assertBlobUrl(file.url);
   const document = await prisma.libraryDocument.findUniqueOrThrow({
     where: { id: documentId },
     include: { versions: { orderBy: { version: "desc" }, take: 1 } },
