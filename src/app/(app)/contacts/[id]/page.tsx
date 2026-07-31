@@ -26,7 +26,7 @@ import { recordConsent, anonymizeContact } from "@/app/actions/privacy";
 import { CONSENT_TYPES } from "@/lib/consent";
 import { isSmtpConfigured, renderTemplate, contactVars } from "@/lib/email";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
-import { quotePricing } from "@/lib/pricing";
+import { payableTotalCents } from "@/lib/pricing";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
@@ -92,13 +92,8 @@ export default async function ContactDetailPage({
     signed: quote.signedAt != null,
     superseded: quote.supersededAt != null,
     // What the customer actually pays — fees and delivery included, which is
-    // why the query above loads them. #261 wraps this exact call as
-    // payableTotalCents(); collapse this to that helper once it lands.
-    totalCents: quotePricing(quote.items, quote.fees, {
-      taxInclusive: quote.taxInclusive,
-      depositType: quote.depositType,
-      depositValue: quote.depositValue,
-    }).totalCents,
+    // why the query above loads them.
+    totalCents: payableTotalCents(quote),
     createdAt: quote.createdAt,
     documents: quoteDocuments.filter((document) => document.quoteId === quote.id),
   }));
