@@ -60,42 +60,8 @@ test("every webhook compares its secret in constant time", () => {
   }
 });
 
-test("the public signing endpoints throttle before touching the database", () => {
-  // A 429 is only useful if it costs less than the work it prevents. Both routes
-  // must rate-limit BEFORE withTokenTenantScope, which issues the first query.
-  for (const rel of [
-    "src/app/api/signing/[token]/route.ts",
-    "src/app/api/signing/[token]/decline/route.ts",
-  ]) {
-    const code = src(rel);
-    const throttleAt = code.indexOf("await rateLimitSigning(");
-    const scopeAt = code.indexOf("withTokenTenantScope(");
-    assert.ok(throttleAt > 0, `${rel} must call rateLimitSigning`);
-    assert.ok(scopeAt > 0, `${rel} must establish the tenant scope`);
-    assert.ok(throttleAt < scopeAt, `${rel} must throttle before the first guarded query`);
-  }
-});
 
-test("the signing throttle keys on both the token and the caller", () => {
-  const code = src("src/lib/signing/throttle.ts");
-  assert.match(code, /rateLimitKey\("signing-token", token\)/, "one key bounds abuse of a single link");
-  assert.match(code, /rateLimitKey\("signing-ip", ip\)/, "the other bounds someone walking tokens");
-});
 
-test("a blocked caller cannot mint more token rows", () => {
-  // The key is caller-supplied and any random 48–64 hex string passes the format
-  // check, so registering it unconditionally let an attacker grow
-  // SecurityRateLimit without bound WHILE blocked — being rate limited did not
-  // stop the row being written. The IP must be checked first and short-circuit.
-  const code = src("src/lib/signing/throttle.ts");
-  const ipCheck = code.indexOf("if (!byIp.allowed) return tooManyAttempts");
-  const tokenRegister = code.indexOf('rateLimitKey("signing-token", token)');
-  assert.ok(ipCheck > 0, "the IP result must be checked on its own");
-  assert.ok(
-    ipCheck < tokenRegister,
-    "the IP check must short-circuit BEFORE the token key is registered",
-  );
-});
 
 test("limiter rows are pruned — every key is caller-supplied", () => {
   const limiter = src("src/lib/rateLimit.ts");

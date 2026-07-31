@@ -52,6 +52,29 @@ export const SIGNING_POLICY: RateLimitPolicy = {
   blockMs: 15 * 60 * 1000,
 };
 
+/**
+ * Token-gated public actions that MUTATE: approving or rejecting a signing
+ * workflow, submitting a survey response. Same shape as signing — a real
+ * person does these once, so the limit is only ever reached by a machine.
+ */
+export const PUBLIC_ACTION_POLICY: RateLimitPolicy = {
+  limit: 10,
+  windowMs: 5 * 60 * 1000,
+  blockMs: 15 * 60 * 1000,
+};
+
+/**
+ * API-key endpoints (intake, bookings, service lookup). Far more generous:
+ * these are machine-to-machine and a busy website can legitimately post a
+ * burst of leads. The point is not to police normal traffic — it is that a
+ * LEAKED key should not mean unlimited writes until someone notices.
+ */
+export const API_KEY_POLICY: RateLimitPolicy = {
+  limit: 120,
+  windowMs: 5 * 60 * 1000,
+  blockMs: 5 * 60 * 1000,
+};
+
 function retryAfter(blockedUntil: Date | null, now: Date): number {
   if (!blockedUntil) return 0;
   return Math.max(0, Math.ceil((blockedUntil.getTime() - now.getTime()) / 1000));

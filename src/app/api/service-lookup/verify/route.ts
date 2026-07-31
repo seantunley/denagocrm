@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma, basePrisma } from "@/lib/db";
 import { authenticateIntakeKey } from "@/lib/apiKeys";
+import { throttlePublic } from "@/lib/publicThrottle";
+import { API_KEY_POLICY } from "@/lib/rateLimit";
 import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
 import { serviceOtpKey } from "@/lib/serviceOtp";
 import { isModuleEnabled } from "@/lib/modules/enabled";
@@ -30,6 +32,13 @@ export async function OPTIONS() {
  */
 export async function POST(req: NextRequest) {
   // Authenticate + establish the caller's tenant scope BEFORE any guarded read.
+  // Throttled BEFORE the key is checked, so guessing keys is bounded too;
+  // keyed on the presented key (HMACed by rateLimitKey) so a LEAKED key cannot
+  // write without limit. See API_KEY_POLICY — generous, aimed at abuse not use.
+  {
+    const throttled = await throttlePublic("api-service-lookup-verify", req.headers.get("x-api-key"), API_KEY_POLICY);
+    if (throttled) return throttled;
+  }
   const auth = await authenticateIntakeKey(req.headers.get("x-api-key"), "service-lookup");
   if (!auth) {
     return NextResponse.json({ error: "Invalid API key" }, { status: 401, headers: corsHeaders });
