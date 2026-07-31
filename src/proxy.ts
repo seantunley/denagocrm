@@ -6,6 +6,7 @@ import {
   SESSION_COOKIE,
   sessionCookieOptions,
 } from "@/lib/session";
+import { buildCsp, newCspNonce } from "@/lib/csp";
 
 // /api/cron authenticates itself with the intake API key
 const PUBLIC_PATHS = [
@@ -46,17 +47,41 @@ const PUBLIC_PATHS = [
 // Forward the pathname to server components (the (app) layout reads it to block
 // routes that belong to a disabled module — a check middleware can't do itself
 // because the enabled-module set lives in the database).
-function allow(req: NextRequest): NextResponse {
+//
+// Also carries the CSP nonce. Next extracts it from the Content-Security-Policy
+// REQUEST header during rendering and stamps it onto its own script tags, so
+// that header is not redundant with the response one — without it the scripts
+// go out un-nonced and the page is blocked by its own policy.
+function allow(req: NextRequest, csp: Csp): NextResponse {
   const requestHeaders = new Headers(req.headers);
   requestHeaders.set("x-pathname", req.nextUrl.pathname);
-  return NextResponse.next({ request: { headers: requestHeaders } });
+  requestHeaders.set("x-nonce", csp.nonce);
+  requestHeaders.set("Content-Security-Policy", csp.value);
+  const res = NextResponse.next({ request: { headers: requestHeaders } });
+  res.headers.set("Content-Security-Policy", csp.value);
+  return res;
 }
+
+/** CSP on a response that renders no React (redirects, JSON errors). */
+function withCsp<T extends NextResponse>(res: T, csp: Csp): T {
+  res.headers.set("Content-Security-Policy", csp.value);
+  return res;
+}
+
+type Csp = { nonce: string; value: string };
 
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
+  // A fresh nonce per request, before anything can return early — the public
+  // signing and portal pages need it as much as the authenticated app does.
+  const nonce = newCspNonce();
+  const csp: Csp = {
+    nonce,
+    value: buildCsp({ nonce, dev: process.env.NODE_ENV === "development" }),
+  };
 
   if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
-    return NextResponse.next();
+    return allow(req, csp);
   }
 
   const token = req.cookies.get(SESSION_COOKIE)?.value;
@@ -64,13 +89,13 @@ export async function proxy(req: NextRequest) {
 
   if (result.status !== "ok") {
     if (pathname.startsWith("/api/")) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return withCsp(NextResponse.json({ error: "Unauthorized" }, { status: 401 }), csp);
     }
     const url = req.nextUrl.clone();
     url.pathname = "/login";
     // Signal an idle/absolute timeout so the login page can explain the sign-out
     if (result.status === "expired" && token) url.searchParams.set("timeout", "1");
-    const res = NextResponse.redirect(url);
+    const res = withCsp(NextResponse.redirect(url), csp);
     res.cookies.delete(SESSION_COOKIE);
     return res;
   }
@@ -83,25 +108,25 @@ export async function proxy(req: NextRequest) {
     })
   ) {
     if (pathname.startsWith("/api/")) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      return withCsp(NextResponse.json({ error: "Forbidden" }, { status: 403 }), csp);
     }
     const url = req.nextUrl.clone();
     url.pathname = "/";
-    return NextResponse.redirect(url);
+    return withCsp(NextResponse.redirect(url), csp);
   }
 
   // Roll the session's last-active forward on activity (idle window slides,
   // absolute 72h cap does not).
   if (result.needsRefresh) {
     const fresh = await refreshSession(result.payload);
-    const res = allow(req);
+    const res = allow(req, csp);
     // Match the cookie lifetime to the token — PWA sessions get the 7-day maxAge,
     // otherwise a refresh would shrink an installed app's cookie back to 72h.
     res.cookies.set(SESSION_COOKIE, fresh, sessionCookieOptions(Boolean(result.payload.pwa)));
     return res;
   }
 
-  return allow(req);
+  return allow(req, csp);
 }
 
 export const config = {

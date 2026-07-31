@@ -88,14 +88,19 @@ test("the signing throttle keys on both the token and the caller", () => {
   assert.ok(ipAt < returnAt && tokenAt < returnAt, "both attempts must register before the early return");
 });
 
-test("the enforced CSP carries only non-breaking directives", () => {
-  // script-src/style-src belong in the report-only policy until the app is
-  // verified against them — an enforced one would break Next's inline bootstrap.
+// The CSP itself moved to src/lib/csp.ts + src/proxy.ts when it gained a
+// per-request nonce — see tests/cspNonce.test.ts. What belongs here is only
+// that the OTHER security headers survived that move.
+test("next.config.ts still carries the static security headers", () => {
   const code = src("next.config.ts");
-  const enforced = code.slice(code.indexOf("const CSP_ENFORCED"), code.indexOf("const CSP_REPORT_ONLY"));
-  for (const directive of ["base-uri 'self'", "object-src 'none'", "frame-ancestors 'self'", "form-action 'self'"]) {
-    assert.ok(enforced.includes(directive), `the enforced CSP must include ${directive}`);
+  for (const header of [
+    "X-Frame-Options",
+    "X-Content-Type-Options",
+    "Referrer-Policy",
+    "Permissions-Policy",
+    "Strict-Transport-Security",
+    "Cross-Origin-Opener-Policy",
+  ]) {
+    assert.ok(code.includes(header), `${header} must stay in next.config.ts`);
   }
-  assert.doesNotMatch(enforced, /script-src|style-src|default-src/, "those would break the app — report-only first");
-  assert.match(code, /Content-Security-Policy-Report-Only/, "the strict policy ships as report-only");
 });
