@@ -1,51 +1,81 @@
 /**
- * Nonce-based Content-Security-Policy.
+ * Nonce-based Content-Security-Policy, in two headers.
  *
- * The previous policy kept `'unsafe-inline'` in script-src, because Next inlines
- * its hydration bootstrap — which meant the CSP could not stop an injected
- * script, only stop it phoning home. A per-request nonce closes that: Next
- * stamps the nonce onto its own scripts, the browser runs those, and an
- * injected `<script>` without the nonce does not execute.
+ * ENFORCED — what is proven to work and closes the hole that mattered:
+ *   script-src is nonce-gated with no 'unsafe-inline', so an injected <script>
+ *   does not execute. That is the whole reason for the nonce.
  *
- * Two deliberate relaxations, both load-bearing:
+ * REPORT-ONLY — the resource directives (default-src / connect-src / img-src /
+ *   font-src). These were briefly ENFORCED and that was a mistake: this app
+ *   legitimately talks to Open-Meteo, the Google Maps JS API and Vercel Blob
+ *   from the browser, and `connect-src 'self'` would have broken all three in
+ *   production. The origins below are inventoried from source, but inventory is
+ *   not the same as exercising them, so they report first.
  *
- * `style-src 'unsafe-inline'` stays. CSP governs React's `style={{…}}` props
- * through style-src-attr, which falls back to style-src — and there are ~205 of
- * them across 41 files here, plus the signing surface and every print document
- * injecting a `<style>` block. Nonces cannot cover a style ATTRIBUTE at all, so
- * the strict alternative is not "add a nonce", it is "rewrite 41 files". The
- * trade is worth naming: CSS-based exfiltration of attribute values is a real
- * technique, but it is a far smaller prize than script execution, which is what
- * this now blocks.
- *
- * `'strict-dynamic'` lets a nonced script load further scripts — Next's runtime
- * loads chunks that way, so without it the app boots and then dies. It also
- * means host allowlists in script-src are IGNORED by supporting browsers; the
- * nonce is the whole gate. That is the intent.
+ * Promote by moving RESOURCE_DIRECTIVES into the enforced policy once a preview
+ * deploy has been walked with the console open — the weather widget, an address
+ * autocomplete, and a library upload are the three that matter.
  */
 export type CspOptions = { nonce: string; dev: boolean };
 
-export function buildCsp({ nonce, dev }: CspOptions): string {
+/**
+ * External origins the BROWSER reaches directly. Server-side fetches (Anthropic,
+ * OpenAI, BulkSMS, Telegram, Meta Graph) are not subject to CSP and are not
+ * listed — adding them would widen the policy for no reason.
+ */
+const OPEN_METEO = "https://api.open-meteo.com"; // ClockWeather, TestDriveWeather
+const GOOGLE_MAPS = "https://maps.googleapis.com"; // LocationAutocomplete (Places)
+const GOOGLE_STATIC = "https://maps.gstatic.com https://*.gstatic.com https://*.googleapis.com";
+const GOOGLE_FONTS_CSS = "https://fonts.googleapis.com";
+const GOOGLE_FONTS_FILES = "https://fonts.gstatic.com";
+const VERCEL_BLOB = "https://*.vercel-storage.com"; // LibraryUploader uploads direct
+
+/** Directives that govern where content may be LOADED FROM. Report-only for now. */
+function resourceDirectives(): string[] {
   return [
     "default-src 'self'",
-    // React uses eval in development to reconstruct server error stacks. Next's
-    // own guidance: required in dev, never in production.
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${dev ? " 'unsafe-eval'" : ""}`,
-    // See the note above — this is the one directive that stays permissive.
-    "style-src 'self' 'unsafe-inline'",
-    // data: for logos and signature images stamped into documents; blob: for the
+    `connect-src 'self' ${OPEN_METEO} ${GOOGLE_MAPS} ${VERCEL_BLOB}`,
+    // data: for logos and signatures stamped into documents; blob: for the
     // signature pad's canvas capture.
-    "img-src 'self' data: blob:",
-    "font-src 'self' data:",
-    "connect-src 'self'",
-    // The document studio previews our own print pages in an iframe.
-    "frame-src 'self' blob:",
+    `img-src 'self' data: blob: ${GOOGLE_STATIC} ${VERCEL_BLOB}`,
+    `font-src 'self' data: ${GOOGLE_FONTS_FILES}`,
+  ];
+}
+
+/** Directives that are safe to enforce today. */
+function enforcedDirectives({ nonce, dev }: CspOptions): string[] {
+  return [
+    // The XSS control. React uses eval in development to reconstruct server
+    // error stacks; Next's own guidance is that production needs neither.
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${dev ? " 'unsafe-eval'" : ""}`,
+    // Explicit, NOT left to fall back to script-src. CSP3 resolves worker-src
+    // through child-src → script-src, and 'strict-dynamic' there would block
+    // the PWA service worker at /sw.js, which no nonce can reach.
+    "worker-src 'self'",
+    // Stays permissive, deliberately. CSP governs React's style={{…}} props via
+    // style-src-attr, which falls back to style-src — and there are ~205 of them
+    // across 41 files, plus the signing surface and every print document
+    // injecting a <style>. A nonce cannot cover a style ATTRIBUTE at all, so the
+    // strict alternative is not "add a nonce", it is "rewrite 41 files". CSS
+    // exfiltration is real but a far smaller prize than script execution.
+    `style-src 'self' 'unsafe-inline' ${GOOGLE_FONTS_CSS}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
     "frame-ancestors 'self'",
+    // The document studio previews our own print pages in an iframe.
+    "frame-src 'self' blob:",
     "upgrade-insecure-requests",
-  ].join("; ");
+  ];
+}
+
+export function buildCsp(options: CspOptions): string {
+  return enforcedDirectives(options).join("; ");
+}
+
+/** The policy we intend to enforce next: everything above, plus the resource rules. */
+export function buildCspReportOnly(options: CspOptions): string {
+  return [...resourceDirectives(), ...enforcedDirectives(options)].join("; ");
 }
 
 /**

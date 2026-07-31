@@ -135,6 +135,33 @@ export async function registerRateLimitAttempt(
   });
 }
 
+/**
+ * Delete limiter rows that can no longer affect a decision.
+ *
+ * Every key here is derived from caller-supplied input — an IP, or a signing
+ * token — so the table grows with traffic and never shrank. Nothing reads a row
+ * once its window has passed and its block has lapsed: registerRateLimitAttempt
+ * treats an expired window as absent and starts a fresh count. Retention is
+ * therefore for forensics only, and a day is generous against the longest
+ * policy in play (a 15-minute window plus a 30-minute block).
+ *
+ * Rows still inside a block are never touched, expired or not — deleting one
+ * would hand a blocked caller a clean slate.
+ */
+export async function pruneRateLimits(retainHours = 24): Promise<number> {
+  try {
+    const cutoff = new Date(Date.now() - retainHours * 60 * 60 * 1000);
+    return await basePrisma.$executeRaw`
+      DELETE FROM "SecurityRateLimit"
+      WHERE ("blockedUntil" IS NULL OR "blockedUntil" < NOW())
+        AND "updatedAt" < ${cutoff}
+    `;
+  } catch {
+    // Housekeeping must never take a cron down with it.
+    return 0;
+  }
+}
+
 export async function clearRateLimit(key: string): Promise<void> {
   try {
     await basePrisma.$executeRaw`DELETE FROM "SecurityRateLimit" WHERE "key" = ${key}`;

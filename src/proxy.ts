@@ -6,7 +6,7 @@ import {
   SESSION_COOKIE,
   sessionCookieOptions,
 } from "@/lib/session";
-import { buildCsp, newCspNonce } from "@/lib/csp";
+import { buildCsp, buildCspReportOnly, newCspNonce } from "@/lib/csp";
 
 // /api/cron authenticates itself with the intake API key
 const PUBLIC_PATHS = [
@@ -59,6 +59,9 @@ function allow(req: NextRequest, csp: Csp): NextResponse {
   requestHeaders.set("Content-Security-Policy", csp.value);
   const res = NextResponse.next({ request: { headers: requestHeaders } });
   res.headers.set("Content-Security-Policy", csp.value);
+  // The resource directives ride along as report-only until a preview deploy
+  // has exercised the weather widget, address autocomplete and library upload.
+  res.headers.set("Content-Security-Policy-Report-Only", csp.reportOnly);
   return res;
 }
 
@@ -68,16 +71,18 @@ function withCsp<T extends NextResponse>(res: T, csp: Csp): T {
   return res;
 }
 
-type Csp = { nonce: string; value: string };
+type Csp = { nonce: string; value: string; reportOnly: string };
 
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   // A fresh nonce per request, before anything can return early — the public
   // signing and portal pages need it as much as the authenticated app does.
   const nonce = newCspNonce();
+  const dev = process.env.NODE_ENV === "development";
   const csp: Csp = {
     nonce,
-    value: buildCsp({ nonce, dev: process.env.NODE_ENV === "development" }),
+    value: buildCsp({ nonce, dev }),
+    reportOnly: buildCspReportOnly({ nonce, dev }),
   };
 
   if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {

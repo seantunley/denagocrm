@@ -4,13 +4,14 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { buildCsp } from "../src/lib/csp";
+import { buildCsp, buildCspReportOnly } from "../src/lib/csp";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 
 const prod = buildCsp({ nonce: "TESTNONCE", dev: false });
 const dev = buildCsp({ nonce: "TESTNONCE", dev: true });
+const reportOnly = buildCspReportOnly({ nonce: "TESTNONCE", dev: false });
 
 test("production script-src is nonce-gated with no inline escape hatch", () => {
   // The whole point of the nonce: without this, an injected <script> runs.
@@ -43,7 +44,7 @@ test("style-src stays permissive, deliberately", () => {
   // style-src-attr, which a nonce cannot cover at all — the strict alternative
   // is not "add a nonce", it is "rewrite 41 files". Documented, not forgotten.
   assert.match(prod, /style-src 'self' 'unsafe-inline'/);
-  assert.match(src("src/lib/csp.ts"), /style-src 'unsafe-inline'`? stays/, "and the reason is written down");
+  assert.match(src("src/lib/csp.ts"), /Stays permissive, deliberately/, "and the reason is written down");
 });
 
 test("a fresh nonce reaches the policy every time", () => {
@@ -54,20 +55,52 @@ test("a fresh nonce reaches the policy every time", () => {
   assert.match(b, /'nonce-BBB'/);
 });
 
-test("the directives that survived the previous policy are still enforced", () => {
+test("the structural directives are enforced", () => {
   for (const directive of [
-    "default-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
     "frame-ancestors 'self'",
-    "connect-src 'self'",
     "upgrade-insecure-requests",
   ]) {
     assert.ok(prod.includes(directive), `the nonce rollout must not drop ${directive}`);
   }
-  // Documents stamp data-URI logos and signatures; the signature pad emits blob:.
-  assert.match(prod, /img-src 'self' data: blob:/);
+});
+
+test("worker-src is explicit, or strict-dynamic kills the service worker", () => {
+  // CSP3 resolves worker-src through child-src → script-src. Falling back to a
+  // strict-dynamic script-src would block /sw.js, and no nonce can reach a
+  // worker script. This is the kind of thing that only breaks the installed PWA.
+  assert.match(prod, /worker-src 'self'/);
+});
+
+test("resource directives are REPORT-ONLY, not enforced", () => {
+  // They were briefly enforced and that was wrong: this app talks to Open-Meteo,
+  // the Google Maps JS API and Vercel Blob straight from the browser, so
+  // `connect-src 'self'` would have broken the weather widget, address
+  // autocomplete and library uploads in production.
+  for (const directive of ["default-src", "connect-src", "img-src", "font-src"]) {
+    assert.ok(!prod.includes(directive), `${directive} must not be enforced until it has been exercised`);
+    assert.ok(reportOnly.includes(directive), `${directive} belongs in the report-only policy`);
+  }
+});
+
+test("the report-only policy allows every origin the browser actually reaches", () => {
+  // Inventoried from source, not assumed. Each of these is a real client-side
+  // dependency; server-side fetches are not subject to CSP and are absent on
+  // purpose.
+  const required: [string, string][] = [
+    ["https://api.open-meteo.com", "ClockWeather / TestDriveWeather"],
+    ["https://maps.googleapis.com", "LocationAutocomplete loads the Places SDK"],
+    ["https://*.vercel-storage.com", "LibraryUploader uploads direct to Blob"],
+    ["https://fonts.gstatic.com", "fonts pulled in by the Maps SDK"],
+  ];
+  for (const [origin, why] of required) {
+    assert.ok(reportOnly.includes(origin), `${origin} must be allowed — ${why}`);
+  }
+  // Still restrictive where it counts.
+  assert.match(reportOnly, /connect-src 'self'/);
+  assert.match(reportOnly, /img-src 'self' data: blob:/);
 });
 
 test("the proxy sets the nonce on the REQUEST as well as the response", () => {
