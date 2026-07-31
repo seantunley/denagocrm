@@ -114,23 +114,26 @@ export default async function PortalHome() {
         orderBy: { createdAt: "desc" },
         select: {
           quoteId: true,
+          // The signer match is done in JS below, NOT here. `equals` with
+          // `mode: "insensitive"` compiles to an unescaped ILIKE, so `_` and
+          // `%` in the stored address act as wildcards — and plenty of real
+          // addresses contain an underscore. A viewer whose own email is
+          // `john_smith@…` would be handed the signing token belonging to
+          // `john.smith@…` on the same quote, and could sign as them.
           recipients: {
-            where: {
-              role: "signer",
-              status: { notIn: ["signed", "declined"] },
-              email: { equals: contactEmail, mode: "insensitive" },
-            },
+            where: { role: "signer", status: { notIn: ["signed", "declined"] } },
             orderBy: { order: "asc" },
-            take: 1,
-            select: { token: true },
+            select: { token: true, email: true },
           },
         },
       })
     : [];
   const signTokenByQuote = new Map<string, string>();
+  const viewerEmail = contactEmail?.toLowerCase() ?? null;
   for (const request of openRequests) {
     if (!request.quoteId || signTokenByQuote.has(request.quoteId)) continue;
-    const recipient = request.recipients[0];
+    // Exact, case-insensitive — a signing token goes to the person it names.
+    const recipient = request.recipients.find((r) => r.email?.toLowerCase() === viewerEmail);
     if (recipient) signTokenByQuote.set(request.quoteId, recipient.token);
   }
 

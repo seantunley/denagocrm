@@ -29,6 +29,41 @@ import {
 export type PortalAuthState = { ok?: boolean; sent?: boolean; error?: string };
 const str = (value: FormDataEntryValue | null) => String(value ?? "").trim();
 const normEmail = (email: string) => email.trim().toLowerCase();
+
+/**
+ * Resolve a portal contact by email — case-insensitively, but EXACTLY.
+ *
+ * This was `{ email: { equals, mode: "insensitive" } }`, which Prisma compiles
+ * to `ILIKE` with the value bound UNESCAPED. `_` and `%` in the submitted
+ * string are therefore LIKE wildcards. Confirmed against a real database: a
+ * login attempt for `probe_victim@example.invalid` resolved to the contact
+ * `probe.victim@example.invalid`.
+ *
+ * That is an account-takeover primitive, not a curiosity, because the code is
+ * emailed to the SUBMITTED address while the session is minted for the MATCHED
+ * contact. Register `john_smith@outlook.com` (an underscore is a legal local
+ * part), request a portal code, receive it in your own inbox, enter it — and
+ * you are signed in as `john.smith@outlook.com`. No prior access needed.
+ *
+ * Backslash-escaping the metacharacters does not fix it; I tested that, and the
+ * escape does not survive Prisma's ILIKE. So the comparison has to stop being a
+ * LIKE at all. LOWER() rather than a plain `=` because production has a contact
+ * whose stored address is mixed-case, and they must keep being able to log in.
+ *
+ * ORDER BY is deterministic so that two contacts differing only in case can
+ * never resolve to different rows on the request and verify legs of one login.
+ */
+async function findPortalContactByEmail(email: string): Promise<{ id: string } | null> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "Contact"
+    WHERE LOWER("email") = ${email}
+      AND "deletedAt" IS NULL
+      AND "tenantId" = ${DEFAULT_TENANT_ID}
+    ORDER BY "createdAt" ASC, "id" ASC
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
+}
 const MAX_UPLOAD = 10 * 1024 * 1024;
 const ALLOWED_UPLOADS = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp", "text/plain"]);
 
@@ -66,9 +101,7 @@ export async function requestPortalOtp(
   ]);
   if (!accountLimit.allowed || !ipLimit.allowed) return generic;
 
-  const contact = await prisma.contact.findFirst({
-    where: { email: { equals: email, mode: "insensitive" }, deletedAt: null, tenantId: DEFAULT_TENANT_ID },
-  });
+  const contact = await findPortalContactByEmail(email);
   if (!contact) return generic;
 
   const code = crypto.randomInt(100000, 1000000).toString();
@@ -138,9 +171,7 @@ export async function verifyPortalOtp(
     return { error: "That code isn't right — check and try again." };
   }
 
-  const contact = await prisma.contact.findFirst({
-    where: { email: { equals: email, mode: "insensitive" }, deletedAt: null, tenantId: DEFAULT_TENANT_ID },
-  });
+  const contact = await findPortalContactByEmail(email);
   if (!contact) return { error: "We couldn't find your account." };
 
   // Atomically CONSUME the challenge before creating any session: only the
