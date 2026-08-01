@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { configuredPdfImageHosts, pdfImageHostAllowed } from "../src/lib/pdfImageHosts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -59,9 +60,12 @@ test("the PDF renderer's subresource guard is an allowlist, not a denylist", () 
   // Chromium resolves DNS afterwards — so a name that A-records to
   // 169.254.169.254 went straight through, as did metadata.google.internal.
   const code = shipped("src/lib/customDocs.ts");
-  assert.match(code, /function pdfImageHostAllowed/);
-  assert.doesNotMatch(code, /function isBlockedHost/, "the denylist must be gone, not merely unused");
-  assert.match(code, /if \(!pdfImageHostAllowed\(u\.hostname\)\) return void r\.abort\(\)/);
+  assert.doesNotMatch(code, /isBlockedHost/, "the denylist must be gone, not merely unused");
+  assert.match(
+    code,
+    /if \(!pdfImageHostAllowed\(u\.hostname,[\s\S]{0,140}?\)\) return void r\.abort\(\)/,
+    "the interceptor must consult the allowlist",
+  );
   assert.match(code, /u\.protocol !== "https:" \|\| u\.username \|\| u\.password/, "https only, and no userinfo");
 });
 
@@ -113,9 +117,12 @@ test("every SERVER-SIDE outbound fetch is bounded", () => {
     return out;
   };
 
-  const exempt = new Map<string, string>([
-    ["src/lib/storage.ts", "blob reads are bounded in the storage-ref PR, which owns that line"],
-  ]);
+  // No exemptions. There WAS one for storage.ts, on the grounds that the
+  // storage-ref PR bounded that read — it does not: it adds a streamed SIZE cap,
+  // which is a different property. A size cap does nothing for a host that
+  // accepts the connection and never sends a byte. An exemption resting on a
+  // claim nobody re-checked is worse than no test, because it reads as coverage.
+  const exempt = new Map<string, string>();
 
   const offenders: string[] = [];
   for (const file of walk("src")) {
@@ -133,6 +140,59 @@ test("every SERVER-SIDE outbound fetch is bounded", () => {
     [],
     `these outbound requests have no timeout — add signal: AbortSignal.timeout(ms):\n  ${offenders.join("\n  ")}`,
   );
+});
+
+test("the blob read is bounded in TIME, not only in size", () => {
+  // Review finding: the first version of this suite exempted storage.ts on the
+  // grounds that the storage-ref PR bounded that read. It does not — it adds a
+  // streamed SIZE cap, which says nothing about a host that accepts the
+  // connection and then never sends a byte. Two different properties, and the
+  // exemption quietly asserted the wrong one.
+  const code = shipped("src/lib/storage.ts");
+  assert.match(code, /const BLOB_FETCH_TIMEOUT_MS = \d/);
+  assert.match(code, /fetch\(ref, \{ signal: AbortSignal\.timeout\(BLOB_FETCH_TIMEOUT_MS\) \}\)/);
+});
+
+test("only vouched hosts may be loaded while rendering a template", () => {
+  for (const host of [
+    "169.254.169.254",
+    "2852039166",
+    "metadata.google.internal",
+    "rebind.evil.example",
+    "evil.example",
+    "blob.vercel-storage.com.evil.example",
+    "127.0.0.1",
+  ]) {
+    assert.equal(pdfImageHostAllowed(host), false, `${host} must not be loadable`);
+  }
+  assert.equal(pdfImageHostAllowed("crm.denagocpt.co.za"), true, "our own origin");
+  assert.equal(pdfImageHostAllowed("abc123.public.blob.vercel-storage.com"), true, "our blob store");
+});
+
+test("the PDF_IMAGE_HOSTS escape hatch cannot be pointed back inside", () => {
+  // An allowlist is only as good as its config, and this is trusted config. The
+  // entries below can only ever be a mistake, so they are dropped rather than
+  // honoured — which does NOT remove the need for entries to be narrowly scoped.
+  for (const bad of [
+    "localhost",
+    "cdn.internal",
+    "assets.local",
+    "10.0.0.5",
+    "::1",
+    "*",
+    "*.example.com",
+    "intranet", // single label
+  ]) {
+    assert.deepEqual(configuredPdfImageHosts(bad), [], `${bad} must be dropped`);
+    assert.equal(pdfImageHostAllowed(bad.replace(/^\*\./, "a."), { configured: bad }), false);
+  }
+  // …while a genuine CDN entry works, including the suffix form
+  assert.deepEqual(configuredPdfImageHosts("cdn.example.com, .assets.example.org"), [
+    "cdn.example.com",
+    ".assets.example.org",
+  ]);
+  assert.equal(pdfImageHostAllowed("cdn.example.com", { configured: "cdn.example.com" }), true);
+  assert.equal(pdfImageHostAllowed("eu.assets.example.org", { configured: ".assets.example.org" }), true);
 });
 
 test("an inbound attachment is capped before it is in memory, not after", () => {
