@@ -64,6 +64,14 @@ const APPROVED_GUARDS = [
   "requireTestDriveManageAccess", "canAccessTestDriveBooking",
   "requirePlatformAdminAction", "requirePlatformAdmin",
   "requirePortalScope", "getPortalContact", "getPortalScope",
+  // Signature-request access. resolveSignatureRequestAccess calls
+  // requirePermission itself and THEN adds a record check, so an action using it
+  // is more strictly guarded than one calling requirePermission directly — but
+  // the delegation walk below only follows calls into sibling ACTION modules,
+  // not into src/lib, so it cannot see that for itself. Listing them here is the
+  // fix; widening the walk to all of src/lib would make an approved-guard list
+  // meaningless, since almost everything eventually reaches an auth helper.
+  "resolveSignatureRequestAccess", "canAccessSignatureRequest", "canAccessRecipient",
 ];
 const GUARD_CALL = new RegExp(`\\b(?:${APPROVED_GUARDS.join("|")})\\s*\\(`);
 
