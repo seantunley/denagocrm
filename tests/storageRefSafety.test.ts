@@ -55,12 +55,55 @@ test("the library actions refuse a bad ref before it reaches the database", () =
   const code = src("src/app/actions/library.ts");
   assert.match(code, /function assertBlobUrl/);
   assert.match(code, /blob\\\.vercel-storage\\\.com\$/i);
-  // Both writers must call it. registerLibraryDocuments takes an array,
-  // registerLibraryVersion a single file.
-  assert.match(code, /for \(const file of files\) assertBlobUrl\(file\.url\)/, "the bulk register must check every file");
-  assert.match(code, /\n  assertBlobUrl\(file\.url\);/, "the single-version register must check its file");
-  // Every storedName write is covered.
+  // Every storedName write must go through resolveUpload, which does the shape
+  // check AND the ownership check. Both writers, spelled out — a count would
+  // miss that the bulk path passes the function by reference to .map().
+  assert.match(
+    code,
+    /await Promise\.all\(files\.map\(resolveUpload\)\)/,
+    "the bulk register must resolve every file, and before it writes any of them",
+  );
+  assert.match(code, /const meta = await resolveUpload\(file\);/, "the single-version register too");
   const writes = (code.match(/storedName: file\.url/g) ?? []).length;
-  const checks = (code.match(/assertBlobUrl\(/g) ?? []).length - 1; // minus the definition
-  assert.equal(checks, writes, "every storedName write site needs a matching check");
+  assert.equal(writes, 2, "two writers — add a resolveUpload assertion if a third appears");
+});
+
+test("a hostname match is not an ownership claim", () => {
+  // `*.blob.vercel-storage.com` is EVERY Vercel customer's store. A library
+  // manager could register a stranger's object and the server would fetch it.
+  // Ownership has to be decided by asking our own store with our own token.
+  const code = src("src/lib/storage.ts");
+  assert.match(code, /export async function assertOwnedBlob/);
+  const owned = code.slice(code.indexOf("export async function assertOwnedBlob"), code.indexOf("function isLocalRef"));
+  assert.match(owned, /head\(ref, \{ token \}\)/, "ownership is proven by resolving through our token");
+  assert.match(owned, /privateToken\(\), publicToken\(\)/, "both configured stores count as ours");
+  assert.match(owned, /Refusing a Blob URL that is not in our store/);
+});
+
+test("stored size and content type come from the store, never from the caller", () => {
+  // sizeBytes and mimeType arrived from the browser next to the URL, so the
+  // declared size bore no relation to what would actually be downloaded.
+  const code = src("src/app/actions/library.ts");
+  assert.doesNotMatch(code, /sizeBytes: file\.sizeBytes/, "the caller's size must not be persisted");
+  assert.match(code, /sizeBytes: meta\.sizeBytes/);
+  assert.match(code, /sizeBytes: owned\.size/, "the persisted size is the store's number");
+  assert.match(code, /mimeType: owned\.contentType/);
+});
+
+test("a blob read is bounded, twice", () => {
+  // arrayBuffer() buffered whatever arrived. The declared size is a claim, so it
+  // is checked before fetching AND enforced per chunk while reading.
+  const code = src("src/lib/storage.ts");
+  assert.doesNotMatch(code, /await res\.arrayBuffer\(\)/, "an unbounded buffer is a memory-exhaustion lever");
+  assert.match(code, /export const MAX_BLOB_BYTES/);
+  assert.match(code, /if \(meta\.size > MAX_BLOB_BYTES\)/, "refuse before fetching a byte");
+  assert.match(code, /if \(total > cap\)/, "and while reading, because a header is only a claim");
+  assert.match(code, /reader\.cancel\(\)/, "stop pulling once the cap is hit");
+});
+
+test("the size cap is not mistaken for a private-store miss", () => {
+  // The private branch swallows errors so it can fall back to the public path.
+  // Swallowing the cap there would re-download the same oversized object.
+  const code = src("src/lib/storage.ts");
+  assert.match(code, /if \(error instanceof BlobTooLargeError\) throw error/);
 });

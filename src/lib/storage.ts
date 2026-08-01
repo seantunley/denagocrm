@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import crypto from "crypto";
-import { put, del, get, list } from "@vercel/blob";
+import { put, del, get, head, list } from "@vercel/blob";
 import {
   activeStoreToken,
   activeWriteTokenPresent,
@@ -98,7 +98,12 @@ export async function saveFile(
  */
 const BLOB_HOST = /(^|\.)blob\.vercel-storage\.com$/i;
 
-/** A URL on the Blob store we own. Anything else is not ours to fetch. */
+/**
+ * Shape check only: an https URL on the Vercel Blob service. It does NOT say the
+ * object is ours — every Vercel customer's store lives under this suffix, so a
+ * hostname match proves the vendor and nothing else. Ownership is decided by
+ * {@link assertOwnedBlob}, which asks OUR store.
+ */
 function isTrustedBlobRef(ref: string): boolean {
   try {
     const url = new URL(ref);
@@ -106,6 +111,44 @@ function isTrustedBlobRef(ref: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Largest object we will pull into memory. Enforced twice, deliberately: against
+ * the size the store reports, and again while reading, because a Content-Length
+ * is a claim and a stream is a fact.
+ */
+export const MAX_BLOB_BYTES = Number(process.env.MAX_BLOB_READ_BYTES ?? 64 * 1024 * 1024);
+
+/** Thrown by the cap so the private-store fallback can tell it from a miss. */
+export class BlobTooLargeError extends Error {}
+
+export type OwnedBlob = { size: number; contentType: string; pathname: string };
+
+/**
+ * Prove a Blob URL is in a store we hold a token for, and return the size and
+ * content type the STORE reports.
+ *
+ * A hostname allowlist cannot do this. `*.blob.vercel-storage.com` is every
+ * Vercel customer's store, so `registerLibraryDocuments` — which takes the URL
+ * and its size/type from the client — could point a library document at a
+ * stranger's bucket with any metadata it liked, and the server would later fetch
+ * it. `head()` resolves through OUR token, so an object in another store is a
+ * miss, and the size it returns is the server's number rather than the caller's.
+ */
+export async function assertOwnedBlob(ref: string): Promise<OwnedBlob> {
+  if (!isTrustedBlobRef(ref)) throw new Error("Refusing a storage reference that is not a Blob URL");
+  const tokens = [privateToken(), publicToken()].filter((t): t is string => Boolean(t));
+  if (tokens.length === 0) throw new Error("Blob storage is not configured");
+  for (const token of tokens) {
+    try {
+      const meta = await head(ref, { token });
+      return { size: meta.size, contentType: meta.contentType, pathname: meta.pathname };
+    } catch {
+      // Not in this store — try the other one, then refuse.
+    }
+  }
+  throw new Error("Refusing a Blob URL that is not in our store");
 }
 
 /** A bare filename — no directory component, no traversal, not absolute. */
@@ -134,35 +177,61 @@ function classifyRef(ref: string): "blob" | "local" {
 
 const isBlobRef = (ref: string) => classifyRef(ref) === "blob";
 
-async function streamToBuffer(stream: ReadableStream<Uint8Array>): Promise<Buffer> {
+/**
+ * Read a stream into memory, refusing to exceed `cap`.
+ *
+ * The cap is checked per chunk rather than from a header: `arrayBuffer()` (what
+ * this replaces) buffers whatever arrives, so a large or unbounded object was an
+ * out-of-memory lever on a route any authenticated caller could trigger.
+ */
+async function streamToBuffer(stream: ReadableStream<Uint8Array>, cap = MAX_BLOB_BYTES): Promise<Buffer> {
   const reader = stream.getReader();
   const chunks: Buffer[] = [];
+  let total = 0;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    if (value) chunks.push(Buffer.from(value));
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > cap) {
+      await reader.cancel().catch(() => {});
+      throw new BlobTooLargeError(`Refusing to read more than ${cap} bytes from Blob storage`);
+    }
+    chunks.push(Buffer.from(value));
   }
   return Buffer.concat(chunks);
 }
 
 export async function readFile(ref: string): Promise<Buffer> {
-  if (isBlobRef(ref)) {
-    // Authenticated read from the private store first (blobs written there); fall
-    // back to a public fetch for legacy public blobs.
-    if (privateToken()) {
-      try {
-        const pathname = new URL(ref).pathname.replace(/^\/+/, "");
-        const result = await get(pathname, { access: "private", token: privateToken() });
-        if (result?.stream) return await streamToBuffer(result.stream);
-      } catch {
-        // Not in the private store (or unavailable) → try the public path.
-      }
+  if (!isBlobRef(ref)) return fs.readFile(path.join(UPLOAD_DIR, ref));
+
+  // Authenticated read from the private store first (blobs written there); fall
+  // back to a public fetch for legacy public blobs. Reaching the private store
+  // with our own token is itself proof of ownership.
+  if (privateToken()) {
+    try {
+      const pathname = new URL(ref).pathname.replace(/^\/+/, "");
+      const result = await get(pathname, { access: "private", token: privateToken() });
+      if (result?.stream) return await streamToBuffer(result.stream);
+    } catch (error) {
+      // A miss means "try the public path". The cap is NOT a miss — swallowing it
+      // here would re-download the same oversized object over the public route.
+      if (error instanceof BlobTooLargeError) throw error;
     }
-    const res = await fetch(ref);
-    if (!res.ok) throw new Error(`Blob fetch failed: ${res.status}`);
-    return Buffer.from(await res.arrayBuffer());
   }
-  return fs.readFile(path.join(UPLOAD_DIR, ref));
+
+  // Public path: ask OUR store first. This both proves the object is ours — a
+  // hostname match does not, every Vercel store shares that suffix — and yields
+  // an authoritative size, so an oversized object is refused before a byte of it
+  // is fetched rather than after it is already in memory.
+  const meta = await assertOwnedBlob(ref);
+  if (meta.size > MAX_BLOB_BYTES) {
+    throw new BlobTooLargeError(`Blob is ${meta.size} bytes, over the ${MAX_BLOB_BYTES}-byte read limit`);
+  }
+  const res = await fetch(ref);
+  if (!res.ok) throw new Error(`Blob fetch failed: ${res.status}`);
+  if (!res.body) return Buffer.alloc(0);
+  return streamToBuffer(res.body);
 }
 
 export async function deleteFile(ref: string): Promise<void> {

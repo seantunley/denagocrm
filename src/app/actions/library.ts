@@ -6,6 +6,7 @@ import { withTenantWrite } from "@/lib/tenantWrite";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
+import { MAX_BLOB_BYTES, assertOwnedBlob } from "@/lib/storage";
 
 export type UploadedFileMeta = {
   url: string;
@@ -38,16 +39,44 @@ function assertBlobUrl(url: string): void {
   }
 }
 
+/**
+ * Resolve the upload through OUR Blob store and take the metadata FROM THE
+ * STORE.
+ *
+ * The hostname check above proves the vendor, not the owner —
+ * `*.blob.vercel-storage.com` is every Vercel customer's store. And `sizeBytes`
+ * and `mimeType` arrived from the browser alongside the URL, so a library
+ * manager could register a stranger's object, declare it 1 KB of text/plain, and
+ * have the server fetch whatever it actually was on the next download.
+ *
+ * assertOwnedBlob answers both: an object outside our store is a miss, and the
+ * size and content type it returns are the store's numbers, not the caller's.
+ */
+async function resolveUpload(file: UploadedFileMeta) {
+  assertBlobUrl(file.url);
+  const owned = await assertOwnedBlob(file.url);
+  if (owned.size > MAX_BLOB_BYTES) {
+    throw new Error(`That file is too large to store (limit ${Math.floor(MAX_BLOB_BYTES / (1024 * 1024))} MB).`);
+  }
+  return {
+    sizeBytes: owned.size,
+    mimeType: owned.contentType || file.mimeType || "application/octet-stream",
+  };
+}
+
 export async function registerLibraryDocuments(
   category: string | null,
   nameOverride: string | null,
   files: UploadedFileMeta[]
 ) {
   const user = await requirePermission("library.manage");
-  for (const file of files) assertBlobUrl(file.url);
   if (files.length === 0) return;
+  // Resolve every upload through our own store BEFORE writing any of them, so a
+  // batch containing one foreign URL registers nothing rather than half of it.
+  const resolved = await Promise.all(files.map(resolveUpload));
   const added: string[] = [];
-  for (const file of files) {
+  for (const [index, file] of files.entries()) {
+    const meta = resolved[index];
     const name = files.length === 1 && nameOverride
       ? nameOverride
       : file.fileName.replace(/\.[^.]+$/, "");
@@ -63,8 +92,8 @@ export async function registerLibraryDocuments(
           version: 1,
           fileName: file.fileName,
           storedName: file.url,
-          mimeType: file.mimeType || "application/octet-stream",
-          sizeBytes: file.sizeBytes,
+          mimeType: meta.mimeType,
+          sizeBytes: meta.sizeBytes,
           uploadedById: user.id,
           tenantId,
         },
@@ -88,7 +117,7 @@ export async function registerLibraryVersion(
   file: UploadedFileMeta
 ) {
   const user = await requirePermission("library.manage");
-  assertBlobUrl(file.url);
+  const meta = await resolveUpload(file);
   const document = await prisma.libraryDocument.findUniqueOrThrow({
     where: { id: documentId },
     include: { versions: { orderBy: { version: "desc" }, take: 1 } },
@@ -103,8 +132,8 @@ export async function registerLibraryVersion(
         version: nextVersion,
         fileName: file.fileName,
         storedName: file.url,
-        mimeType: file.mimeType || "application/octet-stream",
-        sizeBytes: file.sizeBytes,
+        mimeType: meta.mimeType,
+        sizeBytes: meta.sizeBytes,
         note,
         uploadedById: user.id,
         tenantId,
