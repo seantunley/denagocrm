@@ -9,6 +9,26 @@
  * validated on load and save); TS types are inferred from them.
  */
 import { z } from "zod";
+import { isSafeCssColor } from "./css";
+
+/**
+ * A colour a template author supplies, normalised to the default when it is not
+ * one.
+ *
+ * These were plain `z.string()`, and the serializer splices them into
+ * `style="..."` by concatenation — so `#fff" onmouseover="alert(1)" x="` closed
+ * the attribute and added an event handler, on the PUBLIC signing page. See
+ * ./css.ts for the full account; `fontFamily` and `align` were never affected
+ * because they are `z.enum`, which is exactly the argument for constraining
+ * these too.
+ *
+ * Normalised rather than REJECTED on purpose. Failing the parse would make a
+ * template with one odd colour stop rendering altogether, and every stored
+ * template already in the database has to keep working. The bad value is
+ * dropped, not repaired — nothing here tries to salvage part of a payload.
+ */
+const colorField = (fallback: string) =>
+  z.string().default(fallback).transform((value) => (isSafeCssColor(value) ? value : fallback));
 
 export const PAGE_SIZES = {
   A4: { w: 794, h: 1123 }, // px @ 96dpi
@@ -60,7 +80,7 @@ export const imageBlockSchema = z.object({
   src: z.string().default(""), alt: z.string().default(""), widthPct: z.number().default(100), rounded: z.boolean().default(false),
 });
 export const dividerBlockSchema = z.object({
-  ...base, type: z.literal("divider"), color: z.string().default("#e2e8f0"), thickness: z.number().default(1),
+  ...base, type: z.literal("divider"), color: colorField("#e2e8f0"), thickness: z.number().default(1),
 });
 export const spacerBlockSchema = z.object({ ...base, type: z.literal("spacer"), height: z.number().default(16) });
 export const pageBreakBlockSchema = z.object({ ...base, type: z.literal("pageBreak") });
@@ -86,14 +106,14 @@ export const pricingBlockSchema = z.object({
   lines: z.array(pricingLineSchema).default([]),
   showTax: z.boolean().default(true),
   showDiscount: z.boolean().default(true),
-  accent: z.string().default("#ea580c"),
+  accent: colorField("#ea580c"),
 });
 
 export const tableBlockSchema = z.object({
   ...base, type: z.literal("table"),
   columns: z.array(z.object({ header: z.string(), align: z.enum(["left", "center", "right"]).default("left"), widthPct: z.number().default(25) })).default([]),
   rows: z.array(z.object({ cells: z.array(z.object({ value: z.string() })) })).default([]),
-  headerBg: z.string().default("#020617"), headerColor: z.string().default("#ffffff"),
+  headerBg: colorField("#020617"), headerColor: colorField("#ffffff"),
 });
 
 // ── branded blocks (match the print templates) ──────────────────────
@@ -101,8 +121,8 @@ export const bannerBlockSchema = z.object({
   ...base, type: z.literal("banner"),
   title: z.string().default("QUOTATION"),
   docNumber: z.string().default("{{quote.number}}"),
-  bg: z.string().default("#020617"),
-  accent: z.string().default("#ea580c"),
+  bg: colorField("#020617"),
+  accent: colorField("#ea580c"),
   showLogo: z.boolean().default(true),
 });
 export const infoCardBlockSchema = z.object({
@@ -110,7 +130,7 @@ export const infoCardBlockSchema = z.object({
   label: z.string().default("PREPARED FOR"),
   name: z.string().default("{{customer.name}}"),
   lines: z.string().default("{{customer.phone}}\n{{customer.email}}"),
-  accent: z.string().default("#ea580c"),
+  accent: colorField("#ea580c"),
 });
 export const lineItemColKeys = ["description", "qty", "unitPrice", "unitPriceExVat", "vat", "subtotal", "total"] as const;
 export const lineItemColumnSchema = z.object({
@@ -121,8 +141,8 @@ export const lineItemColumnSchema = z.object({
 });
 export const lineItemsBlockSchema = z.object({
   ...base, type: z.literal("lineItems"),
-  headerBg: z.string().default("#020617"),
-  headerColor: z.string().default("#ffffff"),
+  headerBg: colorField("#020617"),
+  headerColor: colorField("#ffffff"),
   vatRate: z.number().default(15),   // used by a "vat" column (prices are VAT-inclusive)
   columns: z.array(lineItemColumnSchema).default([
     { key: "description", header: "Description", align: "left", showIf: "" },
@@ -136,7 +156,7 @@ export const totalBandBlockSchema = z.object({
   ...base, type: z.literal("totalBand"),
   label: z.string().default("TOTAL INCL. VAT"),
   amount: z.string().default("{{quote.total}}"),
-  color: z.string().default("#ea580c"),
+  color: colorField("#ea580c"),
 });
 export const termsBlockSchema = z.object({
   ...base, type: z.literal("terms"),
@@ -148,7 +168,7 @@ export const footerBlockSchema = z.object({
   // "brand" renders the two-column company footer (name/tagline, contact, socials)
   // from the Company Profile; "simple" renders the free-text `lines` below.
   variant: z.enum(["brand", "simple"]).default("brand"),
-  accent: z.string().default("#ea580c"),
+  accent: colorField("#ea580c"),
   lines: z.array(z.object({ text: z.string() })).default([]),
 });
 
@@ -245,7 +265,7 @@ export const recipientSchema = z.object({
   name: z.string().default(""),
   email: z.string().default(""),
   role: z.enum(["signer", "viewer", "approver"]).default("signer"),
-  color: z.string().default("#2563eb"),
+  color: colorField("#2563eb"),
 });
 export type Recipient = z.infer<typeof recipientSchema>;
 
@@ -273,8 +293,8 @@ export const docStyleSchema = z.object({
   fontFamily: z.enum(["sans", "serif", "mono"]).default("sans"),
   pageSize: z.enum(["A4", "Letter"]).default("A4"),
   margin: z.number().default(48), // px
-  accent: z.string().default("#ea580c"),
-  ink: z.string().default("#020617"),
+  accent: colorField("#ea580c"),
+  ink: colorField("#020617"),
 }).default({ fontFamily: "sans", pageSize: "A4", margin: 48, accent: "#ea580c", ink: "#020617" });
 export type DocStyle = z.infer<typeof docStyleSchema>;
 
