@@ -8,6 +8,16 @@ import { currentTenantScope } from "./tenantScope";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
+/**
+ * Every outbound Graph/CDN call is bounded. Without a signal these inherit
+ * Node fetch's default of no timeout, so one unresponsive Meta endpoint holds a
+ * webhook handler or a cron sweep open until the platform kills it.
+ */
+const OUTBOUND_TIMEOUT_MS = 15_000;
+
+/** Largest inbound DM attachment we will pull into memory. */
+const ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
+
 export type DmPlatform = "messenger" | "instagram";
 
 /** The tenant a Meta page-token lookup should prefer, or null (global). */
@@ -30,7 +40,7 @@ async function getPageToken(): Promise<string | null> {
   try {
     const res = await fetch(
       `${GRAPH}/me/accounts?fields=id,access_token&access_token=${encodeURIComponent(sysToken)}`,
-      { cache: "no-store" }
+      { cache: "no-store", signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS) }
     );
     if (!res.ok) return null;
     const json = await res.json();
@@ -52,6 +62,7 @@ export async function sendDirectMessage(
   const token = await getPageToken();
   if (!token) return { ok: false, error: "Meta page token is not configured (Settings → Integrations)." };
   const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
+    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -83,6 +94,7 @@ export async function sendDirectQuickReplies(
   const token = await getPageToken();
   if (!token) return { ok: false, error: "Meta page token is not configured." };
   const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
+    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -114,6 +126,7 @@ export async function sendDirectAttachment(
   const token = await getPageToken();
   if (!token) return { ok: false, error: "Meta page token is not configured (Settings → Integrations)." };
   const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
+    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -148,10 +161,30 @@ async function persistAttachment(
   att: InboundAttachment
 ): Promise<{ url: string; type: string } | null> {
   try {
-    const res = await fetch(att.url, { cache: "no-store" });
+    const res = await fetch(att.url, { cache: "no-store", signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS) });
     if (!res.ok) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > 20 * 1024 * 1024) return null; // 20MB cap
+    // The 20MB cap used to be applied AFTER arrayBuffer(), i.e. after the whole
+    // response was already resident — which is not a cap, it is a report. Check
+    // the declared length first, then enforce it per chunk while reading, because
+    // a Content-Length is a claim and a stream is a fact.
+    const declared = Number(res.headers.get("content-length") ?? "");
+    if (Number.isFinite(declared) && declared > ATTACHMENT_MAX_BYTES) return null;
+    if (!res.body) return null;
+    const chunks: Buffer[] = [];
+    let total = 0;
+    const reader = res.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > ATTACHMENT_MAX_BYTES) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(Buffer.from(value));
+    }
+    const buf = Buffer.concat(chunks);
     const kind = ["image", "audio", "video", "file"].includes(att.type) ? att.type : "file";
     const contentType = res.headers.get("content-type") ?? "application/octet-stream";
     const url = await saveFile(buf, `dm-${kind}${ATTACHMENT_EXT[kind]}`, contentType);
@@ -168,7 +201,7 @@ async function fetchProfileName(platform: DmPlatform, userId: string): Promise<s
     const fields = platform === "instagram" ? "name,username" : "first_name,last_name";
     const res = await fetch(
       `${GRAPH}/${userId}?fields=${fields}&access_token=${encodeURIComponent(token)}`,
-      { cache: "no-store" }
+      { cache: "no-store", signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS) }
     );
     if (!res.ok) return null;
     const j = await res.json();

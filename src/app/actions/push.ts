@@ -3,12 +3,21 @@
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { sendPushToAll } from "@/lib/push";
+import { isAllowedPushEndpoint } from "@/lib/pushEndpoint";
 
 export async function savePushSubscription(sub: {
   endpoint: string;
   keys: { p256dh: string; auth: string };
 }) {
   const user = await requireUser();
+  // The endpoint comes from the browser and was stored verbatim, so any
+  // authenticated user could make the server POST to a URL of their choosing —
+  // and sendPushToAll fires those requests on ordinary app events. Refuse at the
+  // write, so a bad endpoint never reaches the database; lib/push.ts checks
+  // again at the send, for rows that predate this.
+  if (!isAllowedPushEndpoint(sub.endpoint)) {
+    throw new Error("That push endpoint is not a recognised push service.");
+  }
   await prisma.pushSubscription.upsert({
     where: { endpoint: sub.endpoint },
     update: { p256dh: sub.keys.p256dh, auth: sub.keys.auth, userId: user.id, userName: user.name },

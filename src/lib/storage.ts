@@ -26,6 +26,9 @@ import {
 
 const UPLOAD_DIR = path.join(process.cwd(), "storage", "uploads");
 
+/** How long a Blob read may take. Node fetch has no default timeout. */
+const BLOB_FETCH_TIMEOUT_MS = 20_000;
+
 const privateMode = () => process.env.BLOB_PRIVATE === "true";
 const publicToken = () => process.env.BLOB_READ_WRITE_TOKEN;
 const privateToken = () => process.env.BLOB_PRIVATE_READ_WRITE_TOKEN;
@@ -107,7 +110,11 @@ export async function readFile(ref: string): Promise<Buffer> {
         // Not in the private store (or unavailable) → try the public path.
       }
     }
-    const res = await fetch(ref);
+    // Bounded like every other server-side call. The storage-ref PR adds a
+    // streamed SIZE cap to this read, which is a different property — a size cap
+    // does nothing for a host that accepts the connection and then never sends a
+    // byte, and this runs inside routes that have their own deadline.
+    const res = await fetch(ref, { signal: AbortSignal.timeout(BLOB_FETCH_TIMEOUT_MS) });
     if (!res.ok) throw new Error(`Blob fetch failed: ${res.status}`);
     return Buffer.from(await res.arrayBuffer());
   }

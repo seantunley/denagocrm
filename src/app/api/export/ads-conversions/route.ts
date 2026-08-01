@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
+import { csvRow } from "@/lib/csv";
 import { leadAttribution } from "@/lib/attribution";
 
 /**
@@ -47,7 +48,11 @@ export async function GET(req: NextRequest) {
     if (!gclid) return [];
     const when = wonAt.get(lead.id) ?? lead.updatedAt;
     const value = lead.valueCents > 0 ? (lead.valueCents / 100).toFixed(2) : "";
-    return [[gclid, conversionName, sastTime(when), value, value ? "ZAR" : ""].map(csvField).join(",")];
+    // Shared csvCell (via csvRow): `gclid` is whatever the public intake form
+    // recorded and `conversionName` comes straight off `?name=`, so both are
+    // attacker-supplied text landing in a spreadsheet. It also quotes correctly,
+    // which the old local helper did not — it left a lone CR unquoted.
+    return [csvRow([gclid, conversionName, sastTime(when), value, value ? "ZAR" : ""])];
   });
 
   const csv = [
@@ -77,8 +82,4 @@ function sastTime(date: Date): string {
     .toISOString()
     .slice(0, 19)
     .replace("T", " ");
-}
-
-function csvField(value: string): string {
-  return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }

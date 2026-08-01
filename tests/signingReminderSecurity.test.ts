@@ -7,9 +7,21 @@ const cronSource = readFileSync("src/app/api/cron/automations/route.ts", "utf8")
 const reminderSource = readFileSync("src/lib/signingReminders.ts", "utf8");
 
 test("portal signing links are limited to the authenticated contact email", () => {
-  assert.match(
+  // The property this test protects is unchanged; the implementation it pinned
+  // was itself the hole. `equals` + `mode: "insensitive"` compiles to an
+  // unescaped ILIKE, so `_`/`%` in the viewer's own stored address matched a
+  // DIFFERENT signer on the same quote and handed over their signing token —
+  // and plenty of real addresses contain an underscore. The match is now exact
+  // and case-folded in JS, which is strictly narrower than what this asserted.
+  assert.doesNotMatch(
     portalSource,
     /email:\s*\{\s*equals:\s*contactEmail,\s*mode:\s*"insensitive"\s*\}/,
+    "a LIKE match on a signing recipient can hand out someone else's token",
+  );
+  assert.match(
+    portalSource,
+    /r\.email\?\.toLowerCase\(\)\s*===\s*viewerEmail/,
+    "the signer must be matched exactly",
   );
   assert.doesNotMatch(
     portalSource,

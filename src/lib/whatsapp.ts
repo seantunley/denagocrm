@@ -6,6 +6,13 @@ import { topPosition } from "./leadPos";
 import { resolveTenantActor } from "./tenantActor";
 import { currentTenantScope } from "./tenantScope";
 
+/**
+ * Every outbound call is bounded. Node fetch has NO default timeout, so an
+ * unresponsive provider holds a webhook handler or a cron sweep open until the
+ * platform kills the whole invocation.
+ */
+const OUTBOUND_TIMEOUT_MS = 15_000;
+
 const GRAPH = "https://graph.facebook.com/v21.0";
 
 /** The tenant a WhatsApp credential lookup should prefer, or null (global). */
@@ -65,6 +72,7 @@ export async function sendWhatsAppText(
     return { ok: false, error: "WhatsApp is not configured (Settings → Integrations)." };
   }
   const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
+    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({
@@ -90,6 +98,7 @@ export async function sendWhatsAppImage(toDigits: string, url: string, caption?:
   const [phoneNumberId, token] = await waCredentials();
   if (!phoneNumberId || !token) return { ok: false, error: "WhatsApp is not configured." };
   const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
+    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ messaging_product: "whatsapp", to: toDigits, type: "image", image: { link: url, ...(caption ? { caption } : {}) } }),
@@ -118,6 +127,7 @@ export async function uploadWhatsAppMedia(
   form.append("type", contentType);
   form.append("file", new Blob([new Uint8Array(buffer)], { type: contentType }), filename);
   const res = await fetch(`${GRAPH}/${phoneNumberId}/media`, {
+    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { Authorization: `Bearer ${token}` }, // fetch sets the multipart boundary
     body: form,
@@ -135,6 +145,7 @@ export async function sendWhatsAppAudioId(toDigits: string, mediaId: string): Pr
   const [phoneNumberId, token] = await waCredentials();
   if (!phoneNumberId || !token) return { ok: false, error: "WhatsApp is not configured." };
   const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
+    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ messaging_product: "whatsapp", to: toDigits, type: "audio", audio: { id: mediaId } }),
@@ -150,6 +161,7 @@ async function sendInteractive(toDigits: string, interactive: unknown): Promise<
   const [phoneNumberId, token] = await waCredentials();
   if (!phoneNumberId || !token) return { ok: false, error: "WhatsApp is not configured." };
   const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
+    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ messaging_product: "whatsapp", to: toDigits, type: "interactive", interactive }),
