@@ -188,3 +188,29 @@ test("only one place sets Content-Security-Policy", () => {
     assert.ok(config.includes(header), `${header} should remain in next.config.ts`);
   }
 });
+
+test("the report-only policy omits directives browsers ignore there", async () => {
+  // CSP3 §3.1: upgrade-insecure-requests, frame-ancestors and sandbox describe
+  // how to CHANGE a request, and report-only changes nothing — so a browser
+  // drops them and warns. Chromium said exactly that on every page load:
+  //   "The Content Security Policy directive 'upgrade-insecure-requests' is
+  //    ignored when delivered in a report-only policy."
+  // A console that cries wolf on every load is a console nobody reads, and this
+  // policy exists so its reports GET read.
+  const { buildCsp, buildCspReportOnly } = await import("../src/lib/csp");
+  const opts = { nonce: "test-nonce", dev: false };
+  const reportOnly = buildCspReportOnly(opts);
+  const enforced = buildCsp(opts);
+
+  for (const directive of ["upgrade-insecure-requests", "frame-ancestors", "sandbox"]) {
+    assert.ok(
+      !new RegExp(`(^|;\s*)${directive}\b`).test(reportOnly),
+      `${directive} is ignored in a report-only policy — it only produces a console warning`,
+    );
+  }
+  // …and they must still be doing their job where they are honoured.
+  assert.match(enforced, /(^|;\s*)upgrade-insecure-requests\b/);
+  assert.match(enforced, /(^|;\s*)frame-ancestors\b/);
+  // the report-only policy still carries what it exists for: the resource rules
+  assert.match(reportOnly, /(^|;\s*)connect-src\b/, "the resource directives are the point of it");
+});
