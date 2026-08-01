@@ -1,9 +1,18 @@
 import webpush from "web-push";
 import { prisma, basePrisma } from "./db";
 import { getSetting } from "./settings";
+import { isAllowedPushEndpoint } from "./pushEndpoint";
 import { currentScopeClass } from "./tenantWrite";
 
 type PushRecipient = { id: string; endpoint: string; p256dh: string; auth: string };
+
+/**
+ * How long a single push may take. web-push passes this through to the HTTP
+ * request; without it the request inherits Node's default, which is no timeout
+ * at all — so one unresponsive endpoint could hold a cron sweep or a server
+ * action open indefinitely.
+ */
+const PUSH_TIMEOUT_MS = 10_000;
 
 /**
  * The device subscriptions a push may be delivered to for the CURRENT tenant scope.
@@ -99,10 +108,24 @@ export async function sendPushToAll(
   let sent = 0;
   await Promise.all(
     subs.map(async (sub) => {
+      // Checked at the WRITE too (actions/push.ts), but re-checked here because
+      // this is the line that actually makes the request, and rows stored before
+      // that check existed are still in the table. A row that is not a push
+      // service is dropped rather than skipped — it can only have got there by
+      // predating the guard or by a write path that forgot it.
+      if (!isAllowedPushEndpoint(sub.endpoint)) {
+        await prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {});
+        return;
+      }
       try {
         await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          JSON.stringify(payload)
+          JSON.stringify(payload),
+          // Without this the request inherits Node's default (no timeout), so a
+          // push service that accepts the connection and never answers holds the
+          // request open — and sendPushToAll is awaited inside cron and action
+          // paths that have their own deadlines.
+          { timeout: PUSH_TIMEOUT_MS }
         );
         sent++;
       } catch (err) {
