@@ -9,6 +9,12 @@ import { dispatchRequest, notifyRecipient } from "@/lib/signing/dispatch";
 import { logSignEvent } from "@/lib/signing/events";
 import { approveStep, rejectStep, canActOnStep } from "@/lib/signing/approvals";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "@/lib/signing/status";
+import {
+  REQUEST_BINDING_SELECT,
+  canAccessRecipient,
+  canAccessSignatureRequest,
+  resolveSignatureRequestAccess,
+} from "@/lib/signing/access";
 
 /** Approve or reject a pending approval step from inside the app (hub queue). */
 export async function decideApproval(stepId: string, decision: "approve" | "reject", reason?: string): Promise<{ ok: boolean; error?: string }> {
@@ -26,9 +32,12 @@ export async function decideApproval(stepId: string, decision: "approve" | "reje
 }
 
 export async function sendRequest(requestId: string): Promise<{ ok: boolean; notified?: number; error?: string }> {
-  const user = await requirePermission("signing.manage");
-  const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } });
-  if (!req || req.deletedAt) return { ok: false, error: "Not found" };
+  const access = await resolveSignatureRequestAccess(() =>
+    prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } }),
+  );
+  if (!access) return { ok: false, error: "Not found" };
+  const { user, request: req } = access;
+  if (req.deletedAt) return { ok: false, error: "Not found" };
   if (isRequestClosed(req.status)) return { ok: false, error: "This request is closed." };
   const reachable = req.recipients.filter((r) => r.role !== "viewer" && (r.email || r.phone));
   if (reachable.length === 0) return { ok: false, error: "Add an email or phone to at least one signer first." };
@@ -59,9 +68,12 @@ export async function sendRequest(requestId: string): Promise<{ ok: boolean; not
  * actually went out. Mirrors the already-correct resendRecordSigning.
  */
 export async function resendRequest(requestId: string): Promise<{ ok: boolean; notified?: number; error?: string }> {
-  const user = await requirePermission("signing.manage");
-  const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } });
-  if (!req || req.deletedAt) return { ok: false, error: "Not found" };
+  const access = await resolveSignatureRequestAccess(() =>
+    prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } }),
+  );
+  if (!access) return { ok: false, error: "Not found" };
+  const { user, request: req } = access;
+  if (req.deletedAt) return { ok: false, error: "Not found" };
   if (req.status === "draft") return { ok: false, error: "This request hasn't been sent yet." };
   if (isRequestClosed(req.status)) return { ok: false, error: "This request is closed." };
   const reachable = req.recipients.filter((r) => r.role !== "viewer" && (r.email || r.phone));
@@ -77,7 +89,10 @@ export async function resendRequest(requestId: string): Promise<{ ok: boolean; n
 export async function remindRecipient(recipientId: string): Promise<{ ok: boolean }> {
   const user = await requirePermission("signing.manage");
   const r = await prisma.signatureRecipient.findUnique({ where: { id: recipientId } });
-  if (!r) return { ok: false };
+  // Addressed by recipient id, so the record this ultimately touches is one hop
+  // away — and that hop is where the authorization was missing. A reminder
+  // re-delivers the signing link, so it must be gated like the send itself.
+  if (!r || !(await canAccessRecipient(user, recipientId))) return { ok: false };
   const outcome = await notifyRecipient(recipientId, { reminder: true });
   revalidatePath(`/signatures/${r.requestId}`);
   if (!outcome.delivered) return { ok: false };
@@ -86,9 +101,11 @@ export async function remindRecipient(recipientId: string): Promise<{ ok: boolea
 }
 
 export async function voidRequest(requestId: string, reason?: string): Promise<{ ok: boolean }> {
-  const user = await requirePermission("signing.manage");
-  const req = await prisma.signatureRequest.findUnique({ where: { id: requestId } });
-  if (!req) return { ok: false };
+  const access = await resolveSignatureRequestAccess(() =>
+    prisma.signatureRequest.findUnique({ where: { id: requestId } }),
+  );
+  if (!access) return { ok: false };
+  const { user, request: req } = access;
   // CONDITIONAL void — only an OPEN request. An unconditional update would
   // overwrite a request a concurrent signer just completed / declined (or a
   // workflow rejection), silently discarding that terminal state.
@@ -104,14 +121,36 @@ export async function voidRequest(requestId: string, reason?: string): Promise<{
   return { ok: true };
 }
 
-/** Update recipient contact details before sending (from the dashboard). */
+/**
+ * Update recipient contact details before sending (from the dashboard).
+ *
+ * The most sensitive mutation in this file: it decides WHERE a signing link is
+ * delivered. Rewrite the email, resend, and the token arrives in the attacker's
+ * inbox for a document they were never entitled to see — so it needs the record
+ * check, and it needs to leave a trace. It previously did neither: no access
+ * check beyond the capability, and no audit entry at all, so a redirected
+ * recipient was invisible after the fact.
+ */
 export async function updateRecipientContact(recipientId: string, patch: { email?: string; phone?: string }): Promise<{ ok: boolean }> {
-  await requirePermission("signing.manage");
-  const r = await prisma.signatureRecipient.findUnique({ where: { id: recipientId }, include: { request: { select: { status: true, deletedAt: true } } } });
+  const user = await requirePermission("signing.manage");
+  const r = await prisma.signatureRecipient.findUnique({ where: { id: recipientId }, include: { request: { select: { status: true, deletedAt: true, ...REQUEST_BINDING_SELECT } } } });
   if (!r) return { ok: false };
+  if (!(await canAccessSignatureRequest(user, r.request))) return { ok: false };
   // Don't edit recipients on a closed/trashed request.
   if (r.request.deletedAt || isRequestClosed(r.request.status)) return { ok: false };
-  await prisma.signatureRecipient.update({ where: { id: recipientId }, data: { email: patch.email ?? r.email, phone: patch.phone ?? r.phone } });
+  const next = { email: patch.email ?? r.email, phone: patch.phone ?? r.phone };
+  await prisma.signatureRecipient.update({ where: { id: recipientId }, data: next });
+  if (next.email !== r.email || next.phone !== r.phone) {
+    await logAudit({
+      action: "signing.recipient_contact_changed",
+      summary: `Changed where “${r.name}” receives their signing link`,
+      entityType: "SignatureRecipient",
+      entityId: recipientId,
+      user,
+      before: { email: r.email, phone: r.phone },
+      after: next,
+    });
+  }
   revalidatePath(`/signatures/${r.requestId}`);
   return { ok: true };
 }

@@ -11,5 +11,12 @@ export async function onRequestError(
   const digest = (err as { digest?: string })?.digest ?? "";
   if (digest.startsWith("NEXT_")) return;
   const { logError } = await import("@/lib/errorLog");
-  await logError("unhandled", err, `${request.method} ${request.path}`);
+  // `request.path` is the resource path INCLUDING the query string, and the
+  // public /signing, /approvals, /s and /api/track routes carry a working
+  // credential in it. The System Log is read by workspace owners and platform
+  // admins, so the raw path must never be persisted. redactUrl keeps the route
+  // shape and drops the token. `logError` redacts again — this is the first of
+  // two passes, not the only one.
+  const { redactUrl } = await import("@/lib/redactUrl");
+  await logError("unhandled", err, `${request.method} ${redactUrl(request.path)}`);
 }

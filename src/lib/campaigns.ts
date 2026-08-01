@@ -6,6 +6,7 @@ import { htmlToText } from "./signature";
 import { computeDue } from "./serviceDue";
 import { contactName } from "./format";
 import { currentTenantScope } from "./tenantScope";
+import { trackedLinkPattern } from "./trackRedirect";
 
 export type SegmentCriteria = {
   source?: string;
@@ -111,8 +112,10 @@ You received this because you're a Denago Cape Town customer.
  *  tracking, and append the open-tracking pixel + unsubscribe footer. */
 export function buildTrackedEmail(personalizedHtml: string, token: string) {
   const base = appBaseUrl();
+  // Same pattern the click route reads the campaign's vouched-for hosts with, so
+  // the set of links rewritten here and the set accepted there cannot drift.
   const rewritten = personalizedHtml.replace(
-    /href="(https?:\/\/[^\"]+)"/g,
+    trackedLinkPattern(),
     (_m, url) => `href="${base}/api/track/c/${token}?u=${encodeURIComponent(url)}"`,
   );
   const pixel = `<img src="${base}/api/track/o/${token}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;overflow:hidden;">`;

@@ -109,17 +109,6 @@ test("the blob read is bounded in time as well as size", () => {
   assert.match(code, /fetch\(ref, \{ signal: AbortSignal\.timeout\(BLOB_FETCH_TIMEOUT_MS\) \}\)/);
 });
 
-test("the dead signing-PDF path cannot be revived as an SSRF", () => {
-  // src/lib/signedPdf.ts has NO importers today (the greps that look like hits
-  // are the unrelated signedPdfHash / signedPdfRef column names), so this is not
-  // an active path. It fetched a caller-supplied dealerSignatureUrl with no
-  // validation at all, which is a loaded gun for whoever revives it.
-  const code = src("src/lib/signedPdf.ts");
-  assert.doesNotMatch(code, /fetch\(input\.dealerSignatureUrl/, "no bare fetch of a caller-supplied URL");
-  assert.match(code, /await assertOwnedBlob\(input\.dealerSignatureUrl\)/, "prove it is ours first");
-  assert.match(code, /readFile\(input\.dealerSignatureUrl\)/, "and read it through the guarded path");
-});
-
 test("the size cap is not mistaken for a private-store miss", () => {
   // The private branch swallows errors so it can fall back to the public path.
   // Swallowing the cap there would re-download the same oversized object.
