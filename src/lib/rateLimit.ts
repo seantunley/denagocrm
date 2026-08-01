@@ -38,6 +38,20 @@ export const OTP_VERIFY_POLICY: RateLimitPolicy = {
   blockMs: 15 * 60 * 1000,
 };
 
+/**
+ * Public signing endpoints. The token is high-entropy, so this is not a
+ * brute-force guard — it bounds ABUSE by someone who legitimately holds (or
+ * intercepted) a link: each accepted signature can trigger a Chromium PDF
+ * render, a PKCS#7 seal and an email fan-out. Signing is a once-per-document
+ * human action, so a real signer never comes close to the limit even after a
+ * few validation failures.
+ */
+export const SIGNING_POLICY: RateLimitPolicy = {
+  limit: 10,
+  windowMs: 5 * 60 * 1000,
+  blockMs: 15 * 60 * 1000,
+};
+
 function retryAfter(blockedUntil: Date | null, now: Date): number {
   if (!blockedUntil) return 0;
   return Math.max(0, Math.ceil((blockedUntil.getTime() - now.getTime()) / 1000));
@@ -119,6 +133,33 @@ export async function registerRateLimitAttempt(
       retryAfterSeconds: retryAfter(blockedUntil, now),
     };
   });
+}
+
+/**
+ * Delete limiter rows that can no longer affect a decision.
+ *
+ * Every key here is derived from caller-supplied input — an IP, or a signing
+ * token — so the table grows with traffic and never shrank. Nothing reads a row
+ * once its window has passed and its block has lapsed: registerRateLimitAttempt
+ * treats an expired window as absent and starts a fresh count. Retention is
+ * therefore for forensics only, and a day is generous against the longest
+ * policy in play (a 15-minute window plus a 30-minute block).
+ *
+ * Rows still inside a block are never touched, expired or not — deleting one
+ * would hand a blocked caller a clean slate.
+ */
+export async function pruneRateLimits(retainHours = 24): Promise<number> {
+  try {
+    const cutoff = new Date(Date.now() - retainHours * 60 * 60 * 1000);
+    return await basePrisma.$executeRaw`
+      DELETE FROM "SecurityRateLimit"
+      WHERE ("blockedUntil" IS NULL OR "blockedUntil" < NOW())
+        AND "updatedAt" < ${cutoff}
+    `;
+  } catch {
+    // Housekeeping must never take a cron down with it.
+    return 0;
+  }
 }
 
 export async function clearRateLimit(key: string): Promise<void> {

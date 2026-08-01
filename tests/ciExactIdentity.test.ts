@@ -56,6 +56,29 @@ test("no source file matches identity with an ILIKE", () => {
   );
 });
 
+test("both banned patterns live in ONE no-restricted-syntax block", async () => {
+  // Flat config MERGES config objects by key: a second object setting
+  // `rules: { "no-restricted-syntax": [...] }` REPLACES this array for any file
+  // both match — it does not add to it. Two blocks would silently disable one
+  // rule while both still appeared present in the file. That nearly shipped:
+  // the secret-comparison rule and this one arrived in different PRs, each
+  // adding its own block, and the merge conflict is the only reason it was
+  // noticed. Assert on BEHAVIOUR, since the failure mode is a rule that is
+  // present and inert.
+  const { ESLint } = await import("eslint");
+  const eslint = new ESLint({ cwd: root });
+  const sample = [
+    `const webhookSecret = "x"; const provided = "y";`,
+    `export const a = provided === webhookSecret;`,
+    `export const b = { email: { equals: provided, mode: "insensitive" as const } };`,
+  ].join("\n");
+  const [result] = await eslint.lintText(sample, { filePath: path.join(root, "src/lib/__bothRulesProbe.ts") });
+  const messages = result.messages.filter((m) => m.ruleId === "no-restricted-syntax").map((m) => m.message);
+  assert.equal(messages.length, 2, `both rules must fire, got: ${JSON.stringify(messages)}`);
+  assert.ok(messages.some((m) => /constant time/.test(m)), "the secret-comparison rule is still live");
+  assert.ok(messages.some((m) => /unescaped ILIKE/.test(m)), "the ILIKE rule is still live");
+});
+
 test("the eslint rule that bans the pattern is actually wired up", () => {
   // A convention nobody enforces is a convention that comes back. This asserts
   // the selector is present AND that it targets the equality operators only.

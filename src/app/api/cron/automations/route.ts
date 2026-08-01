@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { pruneRateLimits } from "@/lib/rateLimit";
 
 export const maxDuration = 60;
 import { runIdleAutomations } from "@/lib/automations";
@@ -108,6 +109,10 @@ async function runGlobalMaintenance() {
     await basePrisma.errorLog
       .deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } } })
       .catch(() => {});
+    // SecurityRateLimit keys come from caller-supplied input (IPs, signing
+    // tokens), so the table grows with traffic — including hostile traffic —
+    // and nothing else ever removed a row.
+    await pruneRateLimits().catch(() => {});
   });
 }
 

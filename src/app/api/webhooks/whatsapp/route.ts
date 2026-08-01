@@ -7,6 +7,7 @@ import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 import { logError } from "@/lib/errorLog";
+import { secretEquals } from "@/lib/secretCompare";
 
 /** Meta webhook verification handshake (same flow as Lead Ads). */
 export async function GET(req: NextRequest) {
@@ -17,7 +18,7 @@ export async function GET(req: NextRequest) {
   // known — under enforcement it must go through a trusted system scope, or the guard
   // throws on this tenant-scoped AppSetting read and verification never completes.
   const verifyToken = await validateInSystemScope(() => getSetting("META_VERIFY_TOKEN"));
-  if (params.get("hub.mode") === "subscribe" && token === verifyToken && challenge) {
+  if (params.get("hub.mode") === "subscribe" && secretEquals(token, verifyToken) && challenge) {
     return new NextResponse(challenge, { status: 200 });
   }
   return new NextResponse("Verification failed", { status: 403 });

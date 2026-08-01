@@ -8,6 +8,7 @@ import { parseLeadFields, metaSource } from "@/lib/metaLead";
 import { recordInboundDm, recordDmEcho, type DmPlatform } from "@/lib/messenger";
 import { runDmFlow } from "@/lib/flowDm";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
+import { secretEquals } from "@/lib/secretCompare";
 
 /** Meta webhook verification handshake. */
 export async function GET(req: NextRequest) {
@@ -19,7 +20,7 @@ export async function GET(req: NextRequest) {
   // Install-global verification token, read before any tenant is known → system scope
   // (else the guard throws on this tenant-scoped AppSetting read under enforcement).
   const verifyToken = await validateInSystemScope(() => getSetting("META_VERIFY_TOKEN"));
-  if (mode === "subscribe" && token && token === verifyToken && challenge) {
+  if (mode === "subscribe" && secretEquals(token, verifyToken) && challenge) {
     return new NextResponse(challenge, { status: 200 });
   }
   return new NextResponse("Verification failed", { status: 403 });

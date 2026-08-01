@@ -9,6 +9,7 @@ import { missingRequiredForRecipient } from "@/lib/signing/fieldValidation";
 import { logAudit } from "@/lib/audit";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
+import { rateLimitSigning } from "@/lib/signing/throttle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,6 +31,11 @@ const bodySchema = z.object({
 export async function POST(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
   if (!isValidSignToken(token)) return new Response("Invalid link", { status: 400 });
+  // Throttle before ANY database work. Keyed on both the token and the caller's
+  // IP: the token bounds abuse of one link, the IP bounds someone walking
+  // well-formed tokens. See SIGNING_POLICY — a real signer never reaches it.
+  const throttled = await rateLimitSigning(token);
+  if (throttled) return throttled;
   // Phase C no-user edge: this public token route carries no staff session. Derive
   // the document's tenant from a narrow trusted lookup FIRST, then run the whole
   // guarded operation inside that scope — a guarded read before the scope exists

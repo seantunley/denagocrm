@@ -1,0 +1,34 @@
+# gitleaks configuration — see .github/workflows/secret-scan.yml
+#
+# Extends the maintained default ruleset rather than replacing it, so new
+# provider patterns arrive with gitleaks upgrades instead of rotting here.
+[extend]
+useDefault = true
+
+# Two credentials this project actually handles, which the default rules do not
+# cover specifically: Neon's Postgres role passwords and any pasted connection
+# string. Both are the exact shapes that leaked into a chat transcript.
+[[rules]]
+id = "neon-postgres-password"
+description = "Neon Postgres role password (npg_ prefix)"
+regex = '''npg_[A-Za-z0-9]{16,}'''
+tags = ["database", "neon"]
+
+[[rules]]
+id = "postgres-connection-string"
+description = "Postgres connection string with inline credentials"
+regex = '''postgres(?:ql)?://[^\s:@/]+:[^\s:@/]+@[^\s/]+'''
+tags = ["database"]
+
+[allowlist]
+description = "Paths that legitimately contain credential-shaped text"
+paths = [
+  # Lockfiles carry integrity hashes that trip entropy rules.
+  '''package-lock\.json''',
+  '''pnpm-lock\.yaml''',
+]
+regexes = [
+  # Documented placeholders, not secrets.
+  '''postgres(?:ql)?://(?:user|username|USER|<[^>]+>):(?:pass|password|PASSWORD|<[^>]+>)@''',
+  '''(?i)(example|placeholder|redacted|your[-_]?(key|token|secret))''',
+]
