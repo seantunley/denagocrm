@@ -6,6 +6,7 @@
  * print CSS and explicit page-break handling. Optionally binds to a CRM record
  * (resolves inline variables, prunes conditionals, fills bound pricing tables).
  */
+import { cssColor } from "./css";
 import type {
   DocumentModel, DocumentBlock, DocumentColumn, DocumentRow, DocumentPage,
   PricingBlock, PricingLine, TableBlock, OverlayField, DocStyle,
@@ -71,7 +72,7 @@ function pricingHtml(block: PricingBlock, ctx: RenderCtx): string {
   const { rows, subtotal, taxTotal, total } = computePricing(b);
   const cur = b.currency;
   const cols = ["Item", "Qty", "Unit", b.showDiscount ? "Disc" : null, b.showTax ? "Tax" : null, "Amount"].filter(Boolean) as string[];
-  const head = cols.map((c, i) => `<th style="text-align:${i === 0 ? "left" : "right"};background:${b.accent};color:#fff;padding:7px 9px;font-size:8pt;letter-spacing:.5px;text-transform:uppercase">${esc(c)}</th>`).join("");
+  const head = cols.map((c, i) => `<th style="text-align:${i === 0 ? "left" : "right"};background:${cssColor(b.accent, "#ea580c")};color:#fff;padding:7px 9px;font-size:8pt;letter-spacing:.5px;text-transform:uppercase">${esc(c)}</th>`).join("");
   const body = rows.map((r, i) => {
     const cells = [
       `<td style="padding:7px 9px;border-bottom:.5px solid #e2e8f0"><div style="font-weight:600;color:#020617">${esc(r.line.name)}</div>${r.line.description ? `<div style="font-size:8pt;color:#64748b">${esc(r.line.description)}</div>` : ""}</td>`,
@@ -88,7 +89,7 @@ function pricingHtml(block: PricingBlock, ctx: RenderCtx): string {
       <table style="font-size:10pt">
         <tr><td style="padding:2px 10px;color:#64748b">Subtotal</td><td style="padding:2px 0;text-align:right">${money(subtotal, cur)}</td></tr>
         ${b.showTax ? `<tr><td style="padding:2px 10px;color:#64748b">Tax</td><td style="padding:2px 0;text-align:right">${money(taxTotal, cur)}</td></tr>` : ""}
-        <tr><td style="padding:6px 10px;font-weight:700;color:${b.accent}">Total</td><td style="padding:6px 0;text-align:right;font-weight:700;font-size:12pt;color:${b.accent}">${money(total, cur)}</td></tr>
+        <tr><td style="padding:6px 10px;font-weight:700;color:${cssColor(b.accent, "#ea580c")}">Total</td><td style="padding:6px 0;text-align:right;font-weight:700;font-size:12pt;color:${cssColor(b.accent, "#ea580c")}">${money(total, cur)}</td></tr>
       </table>
     </div>`;
   return `<div style="margin:6px 0"><table style="width:100%;border-collapse:collapse"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>${totals}</div>`;
@@ -121,7 +122,7 @@ function lineItemCell(key: string, row: { cells: { value: string }[] }, vatRate:
 }
 
 function tableHtml(b: TableBlock): string {
-  const head = b.columns.map((c) => `<th style="text-align:${c.align};background:${b.headerBg};color:${b.headerColor};padding:6px 8px;font-size:8pt;width:${c.widthPct}%">${esc(c.header)}</th>`).join("");
+  const head = b.columns.map((c) => `<th style="text-align:${c.align};background:${cssColor(b.headerBg, "#020617")};color:${cssColor(b.headerColor, "#ffffff")};padding:6px 8px;font-size:8pt;width:${c.widthPct}%">${esc(c.header)}</th>`).join("");
   const body = b.rows.map((r, i) => `<tr style="background:${i % 2 ? "#f8fafc" : "#fff"}">${b.columns.map((c, ci) => `<td style="text-align:${c.align};padding:6px 8px;border-bottom:.5px solid #e2e8f0;font-size:10pt">${esc(r.cells[ci]?.value ?? "")}</td>`).join("")}</tr>`).join("");
   return `<table style="width:100%;border-collapse:collapse;margin:6px 0"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
@@ -141,7 +142,7 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       return wrap(`<img src="${esc(src)}" alt="${esc(block.alt)}" style="width:${Math.max(5, Math.min(100, block.widthPct))}%;height:auto;${block.rounded ? "border-radius:8px;" : ""}"/>`);
     }
     case "divider":
-      return `<hr style="border:none;border-top:${block.thickness}px solid ${block.color};margin:10px 0"/>`;
+      return `<hr style="border:none;border-top:${block.thickness}px solid ${cssColor(block.color, "#ea580c")};margin:10px 0"/>`;
     case "spacer":
       return `<div style="height:${block.height}px"></div>`;
     case "pageBreak":
@@ -154,15 +155,15 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       const logo = block.showLogo && logoDataUri
         ? `<img src="${logoDataUri}" alt="Denago" style="height:34px;width:auto"/>`
         : `<span style="color:#fff;font-weight:800;font-size:15pt;letter-spacing:1px">DENAGO</span>`;
-      return `<div style="background:${block.bg};border-radius:8px;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;margin:2px 0">
+      return `<div style="background:${cssColor(block.bg, "#020617")};border-radius:8px;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;margin:2px 0">
         <div>${logo}</div>
-        <div style="text-align:right"><div style="color:#fff;font-weight:800;font-size:17pt;letter-spacing:1px">${esc(tok(block.title, ctx))}</div><div style="color:${block.accent};font-weight:800;font-size:12pt">${esc(tok(block.docNumber, ctx))}</div></div>
+        <div style="text-align:right"><div style="color:#fff;font-weight:800;font-size:17pt;letter-spacing:1px">${esc(tok(block.title, ctx))}</div><div style="color:${cssColor(block.accent, "#ea580c")};font-weight:800;font-size:12pt">${esc(tok(block.docNumber, ctx))}</div></div>
       </div>`;
     }
     case "infoCard":
-      return `<div style="background:#f8fafc;border-left:3px solid ${block.accent};border-radius:6px;padding:12px 14px">
-        <div style="font-size:8pt;font-weight:700;letter-spacing:1px;color:${block.accent}">${esc(block.label)}</div>
-        <div style="font-size:12pt;font-weight:700;color:${style.ink};margin:3px 0">${esc(tok(block.name, ctx))}</div>
+      return `<div style="background:#f8fafc;border-left:3px solid ${cssColor(block.accent, "#ea580c")};border-radius:6px;padding:12px 14px">
+        <div style="font-size:8pt;font-weight:700;letter-spacing:1px;color:${cssColor(block.accent, "#ea580c")}">${esc(block.label)}</div>
+        <div style="font-size:12pt;font-weight:700;color:${cssColor(style.ink, "#020617")};margin:3px 0">${esc(tok(block.name, ctx))}</div>
         <div style="font-size:9pt;color:#64748b">${nl2br(tok(block.lines, ctx))}</div>
       </div>`;
     case "lineItems": {
@@ -170,19 +171,19 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       // Conditional columns: only when bound to a record, drop columns whose condition
       // is false. An unbound (globals-only) preview keeps all columns as a placeholder.
       const cols = ctx?.bound ? block.columns.filter((c) => evaluateCondition(c.showIf, ctx.vars)) : block.columns;
-      const head = `<tr>${cols.map((c) => `<th style="text-align:${c.align};background:${block.headerBg};color:${block.headerColor};padding:7px 9px;font-size:8pt;letter-spacing:.5px;text-transform:uppercase">${esc(c.header)}</th>`).join("")}</tr>`;
+      const head = `<tr>${cols.map((c) => `<th style="text-align:${c.align};background:${cssColor(block.headerBg, "#020617")};color:${cssColor(block.headerColor, "#ffffff")};padding:7px 9px;font-size:8pt;letter-spacing:.5px;text-transform:uppercase">${esc(c.header)}</th>`).join("")}</tr>`;
       const body = rows.length
         ? rows.map((r, i) => `<tr style="background:${i % 2 ? "#f8fafc" : "#fff"}">${cols.map((c) => `<td style="text-align:${c.align};padding:7px 9px;border-bottom:.5px solid #e2e8f0">${esc(lineItemCell(c.key, r, block.vatRate))}</td>`).join("")}</tr>`).join("")
         : `<tr><td colspan="${cols.length}" style="padding:7px 9px;color:#94a3b8">Line items appear here when linked to a record</td></tr>`;
       return `<table style="width:100%;border-collapse:collapse;margin:6px 0"><thead>${head}</thead><tbody>${body}</tbody></table>`;
     }
     case "totalBand":
-      return `<div style="display:flex;justify-content:flex-end;margin:6px 0"><div style="background:${block.color};color:#fff;border-radius:6px;padding:10px 20px;display:flex;gap:16px;align-items:center"><span style="font-size:9pt;font-weight:700;letter-spacing:1px">${esc(block.label)}</span><span style="font-size:16pt;font-weight:800">${esc(tok(block.amount, ctx))}</span></div></div>`;
+      return `<div style="display:flex;justify-content:flex-end;margin:6px 0"><div style="background:${cssColor(block.color, "#ea580c")};color:#fff;border-radius:6px;padding:10px 20px;display:flex;gap:16px;align-items:center"><span style="font-size:9pt;font-weight:700;letter-spacing:1px">${esc(block.label)}</span><span style="font-size:16pt;font-weight:800">${esc(tok(block.amount, ctx))}</span></div></div>`;
     case "terms":
       return `<div style="background:#f8fafc;border-radius:6px;padding:12px 14px;margin:4px 0">${block.title ? `<div style="font-size:8pt;font-weight:700;letter-spacing:1px;color:#64748b;margin-bottom:6px">${esc(block.title)}</div>` : ""}${block.items.map((it) => `<div style="font-size:9pt;color:#64748b;margin-bottom:3px">• ${esc(it.text)}</div>`).join("")}</div>`;
     case "footer": {
       if (block.variant === "simple") {
-        return `<div style="border-top:1.5px solid ${block.accent};padding-top:8px;margin:6px 0;text-align:center">${block.lines.map((l, i) => `<div style="font-size:${i === 0 ? 9 : 8}pt;font-weight:${i === 0 ? 700 : 400};color:${i === 0 ? "#334155" : "#64748b"}">${esc(tok(l.text, ctx))}</div>`).join("")}</div>`;
+        return `<div style="border-top:1.5px solid ${cssColor(block.accent, "#ea580c")};padding-top:8px;margin:6px 0;text-align:center">${block.lines.map((l, i) => `<div style="font-size:${i === 0 ? 9 : 8}pt;font-weight:${i === 0 ? 700 : 400};color:${i === 0 ? "#334155" : "#64748b"}">${esc(tok(l.text, ctx))}</div>`).join("")}</div>`;
       }
       const f = brandFooterContent((k) => ctx?.tokens?.[`company.${k}`] ?? "");
       const icon = (net: "facebook" | "instagram", color: string) =>
@@ -236,7 +237,7 @@ function overlayFieldHtml(f: OverlayField, recipientColor: string, margin: numbe
   // Only page-anchored fields get an absolute position in the flowed PDF.
   if (f.anchor.mode !== "page") return "";
   // Editor coords are from the sheet edge; the PDF content box is inset by margin.
-  return `<div style="position:absolute;left:${f.anchor.x - margin}px;top:${f.anchor.y - margin}px;width:${f.width}px;height:${f.height}px;border:1.5px dashed ${recipientColor};border-radius:4px;background:${recipientColor}14;display:flex;align-items:center;justify-content:center;font-size:9pt;color:${recipientColor};font-weight:600">${esc(label)}</div>`;
+  return `<div style="position:absolute;left:${f.anchor.x - margin}px;top:${f.anchor.y - margin}px;width:${f.width}px;height:${f.height}px;border:1.5px dashed ${cssColor(recipientColor, "#2563eb")};border-radius:4px;background:${cssColor(recipientColor, "#2563eb")}14;display:flex;align-items:center;justify-content:center;font-size:9pt;color:${cssColor(recipientColor, "#2563eb")};font-weight:600">${esc(label)}</div>`;
 }
 
 /** A signed field to stamp into the finished PDF at its exact placed position. */
@@ -321,13 +322,13 @@ export function renderSigningSheets(doc: DocumentModel, ctx: RenderCtx, logoData
   const css = `
     .sg-sheet { font-family:${font}; font-size:11pt; line-height:1.5; color:#1e293b; }
     .sg-sheet * { box-sizing:border-box; }
-    .sg-sheet h1 { font-size:20pt; margin:0 0 8px; color:${doc.style.ink}; }
-    .sg-sheet h2 { font-size:15pt; margin:12px 0 6px; color:${doc.style.ink}; }
-    .sg-sheet h3 { font-size:12pt; margin:10px 0 4px; color:${doc.style.ink}; }
+    .sg-sheet h1 { font-size:20pt; margin:0 0 8px; color:${cssColor(doc.style.ink, "#020617")}; }
+    .sg-sheet h2 { font-size:15pt; margin:12px 0 6px; color:${cssColor(doc.style.ink, "#020617")}; }
+    .sg-sheet h3 { font-size:12pt; margin:10px 0 4px; color:${cssColor(doc.style.ink, "#020617")}; }
     .sg-sheet p { margin:0 0 8px; }
-    .sg-sheet a { color:${doc.style.accent}; }
+    .sg-sheet a { color:${cssColor(doc.style.accent, "#ea580c")}; }
     .sg-sheet strong { font-weight:700; }
-    .sg-sheet blockquote { border-left:3px solid ${doc.style.accent}; margin:8px 0; padding:4px 12px; color:#475569; background:#f8fafc; }
+    .sg-sheet blockquote { border-left:3px solid ${cssColor(doc.style.accent, "#ea580c")}; margin:8px 0; padding:4px 12px; color:#475569; background:#f8fafc; }
     .sg-sheet ul, .sg-sheet ol { margin:0 0 8px 20px; }`;
   return { width: size.w, height: size.h, margin: m, css, pages };
 }
@@ -345,13 +346,13 @@ export function renderDocumentHtml(doc: DocumentModel, ctx: RenderCtx, logoDataU
     @page { size: ${pageCss}; margin: ${m}px; }
     * { box-sizing: border-box; }
     body { font-family: ${font}; font-size: 11pt; line-height: 1.5; color: #1e293b; margin: 0; }
-    h1 { font-size: 20pt; margin: 0 0 8px; color: ${doc.style.ink}; }
-    h2 { font-size: 15pt; margin: 12px 0 6px; color: ${doc.style.ink}; }
-    h3 { font-size: 12pt; margin: 10px 0 4px; color: ${doc.style.ink}; }
+    h1 { font-size: 20pt; margin: 0 0 8px; color: ${cssColor(doc.style.ink, "#020617")}; }
+    h2 { font-size: 15pt; margin: 12px 0 6px; color: ${cssColor(doc.style.ink, "#020617")}; }
+    h3 { font-size: 12pt; margin: 10px 0 4px; color: ${cssColor(doc.style.ink, "#020617")}; }
     p { margin: 0 0 8px; }
-    a { color: ${doc.style.accent}; }
+    a { color: ${cssColor(doc.style.accent, "#ea580c")}; }
     strong { font-weight: 700; }
-    blockquote { border-left: 3px solid ${doc.style.accent}; margin: 8px 0; padding: 4px 12px; color: #475569; background: #f8fafc; }
+    blockquote { border-left: 3px solid ${cssColor(doc.style.accent, "#ea580c")}; margin: 8px 0; padding: 4px 12px; color: #475569; background: #f8fafc; }
     ul, ol { margin: 0 0 8px 20px; }
     ${header ? `.doc-header { position: fixed; top: -${m - 8}px; left: 0; right: 0; }` : ""}
     ${footer ? `.doc-footer { position: fixed; bottom: -${m - 8}px; left: 0; right: 0; }` : ""}
