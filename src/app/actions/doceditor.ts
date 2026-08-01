@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { requirePermission } from "@/lib/permissions";
+import { canAccessJobCard, canAccessQuote, requirePermission, type PermissionUser } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { documentSchema, parseDocument } from "@/lib/doceditor/model";
 import { blankDocument, standardQuoteTemplate } from "@/lib/doceditor/factory";
@@ -39,7 +39,20 @@ function legacyRecord(formData: FormData): {
   return null;
 }
 
+/**
+ * Validate the template/record pairing AND the caller's access to that record.
+ *
+ * The kind check was already here; the access check was not. `docbuilder.manage`
+ * is a capability — "this person may generate documents" — and the record id came
+ * straight off the form, so a holder could render any quote's or job card's data
+ * (pricing, customer details, line items) into a PDF and file it, whether or not
+ * they may open that record. `sendDocForSigning` goes further and mails it.
+ *
+ * Mirrors `requireRecordSigningAccess` in recordSigning.ts: access to the
+ * specific record, plus the permission that matches what is being done to it.
+ */
 async function validatedBinding(
+  user: PermissionUser,
   templateId: string,
   record: { kind: BuilderRecordKind; id: string } | null,
 ) {
@@ -51,6 +64,16 @@ async function validatedBinding(
         ? `The “${template.name}” template requires a job card record.`
         : `The “${template.name}” template requires a quote record.`,
     );
+  }
+  if (record) {
+    const permitted =
+      record.kind === "quote"
+        ? await canAccessQuote(user, record.id)
+        : await canAccessJobCard(user, record.id);
+    // Same message either way — "you may not" and "it does not exist" must not
+    // be distinguishable, or this becomes an existence oracle for records the
+    // caller cannot see.
+    if (!permitted) throw new ActionRefusal("That record isn't available.");
   }
   return {
     template,
@@ -99,7 +122,7 @@ export async function generateDocEditorDocument(formData: FormData) {
       : legacyRecord(formData);
     if (submittedRecord && !record) throw new ActionRefusal("Choose a valid record.");
 
-    const { quoteId, jobCardId } = await validatedBinding(templateId, record);
+    const { quoteId, jobCardId } = await validatedBinding(user, templateId, record);
     const result = await generateDocEditorPdf({
       templateId,
       quoteId,
@@ -160,7 +183,7 @@ export async function sendDocForSigning(
       : null;
   let binding;
   try {
-    binding = await validatedBinding(templateId, record);
+    binding = await validatedBinding(user, templateId, record);
   } catch (error) {
     return {
       ok: false,

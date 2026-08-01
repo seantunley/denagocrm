@@ -55,8 +55,15 @@ export async function deleteFaq(id: string) {
   revalidatePath("/settings");
 }
 
-/** Whether a Whisper key is stored (for the settings UI, without revealing it). */
+/**
+ * Whether a Whisper key is stored (for the settings UI, without revealing it).
+ * Owner-only: a server action is a POST endpoint anyone who learns its id can
+ * call, and "is an OpenAI key configured?" is integration reconnaissance. The
+ * only caller is the owner-gated /chatbot page, and requireOwner() reuses the
+ * request-cached session, so this costs nothing.
+ */
 export async function whisperConfigured(): Promise<boolean> {
+  await requireOwner();
   return Boolean(await getSetting("OPENAI_API_KEY"));
 }
 
@@ -87,7 +94,10 @@ export async function disconnectTelegram() {
   revalidatePath("/settings");
 }
 
+/** Owner-only for the same reason as whisperConfigured: it reports whether a
+ *  Telegram bot token is stored and whether the bot is live. */
 export async function telegramStatus(): Promise<{ connected: boolean; enabled: boolean }> {
+  await requireOwner();
   return {
     connected: Boolean(await getSetting("TELEGRAM_BOT_TOKEN")),
     enabled: (await getSetting("BOT_TG_ENABLED")) === "true",

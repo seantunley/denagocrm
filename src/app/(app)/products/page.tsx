@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Boxes, Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
+import { requireOwner } from "@/lib/auth";
 import ModalTrigger from "@/components/Modal";
 import ProductForm from "@/components/ProductForm";
 import { formatZAR } from "@/lib/format";
@@ -18,6 +19,15 @@ import { EmptyState, StatusPill } from "@/components/visual-system";
 import RecordContextMenu from "@/components/RecordContextMenu";
 
 export default async function ProductsPage() {
+  // Owner-only catalogue MANAGEMENT surface (ROUTE_GATES marks /products
+  // "admin"). Before this line the owner check for /products lived ONLY in the
+  // proxy — the (app) layout supplies requireUser(), i.e. authentication, but
+  // nothing here checked the role. The proxy matches on the request URL and
+  // trusts the role claim in the JWT, so it is an optimistic pre-filter, not
+  // the boundary (see next/docs 01-app/02-guides/authentication.md). Product
+  // records themselves are read app-wide by non-owners (leads, quotes, stock,
+  // vehicles); it is the create/edit/delete surface here that is restricted.
+  await requireOwner();
   const products = await prisma.product.findMany({
     orderBy: [{ active: "desc" }, { name: "asc" }],
     include: { colors: true, _count: { select: { leads: true, vehicles: true } } },

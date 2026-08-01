@@ -1,4 +1,5 @@
 import { basePrisma } from "./db";
+import { redactUrl } from "./redactUrl";
 import { currentTenantScope } from "./tenantScope";
 
 /**
@@ -64,9 +65,16 @@ export async function logError(
   context?: string
 ): Promise<void> {
   try {
-    const message =
+    // EVERY string that lands in ErrorLog goes through redactUrl first. The
+    // System Log is rendered to workspace owners and to platform admins, and a
+    // /signing, /approvals, /s or /api/track URL is a working credential — so it
+    // must be stripped at the write, not at each of the ~25 logError call sites.
+    // Message and stack are swept too: a failing fetch or a Prisma error commonly
+    // quotes the URL it was handed.
+    const raw =
       err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err);
-    const stack = err instanceof Error ? err.stack?.slice(0, 4000) : undefined;
+    const message = redactUrl(raw);
+    const stack = err instanceof Error && err.stack ? redactUrl(err.stack).slice(0, 4000) : undefined;
     const tenantId = await tenantForError();
 
     await basePrisma.errorLog.create({
@@ -74,7 +82,7 @@ export async function logError(
         scope,
         message: message.slice(0, 1000),
         stack,
-        context: context?.slice(0, 1000),
+        context: context ? redactUrl(context).slice(0, 1000) : context,
         tenantId,
       },
     });
