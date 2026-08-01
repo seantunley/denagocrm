@@ -65,35 +65,35 @@ test("the eslint rule that bans the pattern is actually wired up", () => {
   assert.match(config, /key\.name="mode"/);
 });
 
-test("the eslint selector matches the vulnerable shape and not the safe one", async () => {
-  // Pin the SELECTOR's behaviour, not just its presence. Written against the
-  // same esquery ESLint uses, so a selector that silently stops matching (the
-  // failure mode that makes a lint rule worthless) fails here.
-  const { parse } = await import("@typescript-eslint/parser");
-  const esquery = (await import("esquery")).default;
+test("the eslint rule flags the vulnerable shape and not the safe one", async () => {
+  // Runs the REAL rule through ESLint's own API against the project's own
+  // config, rather than poking the selector through esquery directly. Two
+  // reasons: esquery is a transitive dependency that ships no type declarations
+  // (tsc fails on it in CI even though a local run passed), and going through
+  // ESLint proves the rule is actually wired up and firing — not merely that a
+  // selector string matches when handed to a matcher by hand.
+  const { ESLint } = await import("eslint");
+  const eslint = new ESLint({ cwd: root });
 
-  const config = read("eslint.config.mjs");
-  const selector = config.match(/selector:\s*\n?\s*'([^']+)'/)?.[1];
-  assert.ok(selector, "could not extract the selector from eslint.config.mjs");
+  const sample = [
+    `const vulnerable = { email: { equals: v, mode: "insensitive" } };`,
+    `const vulnerableAsConst = { email: { equals: v, mode: "insensitive" as const } };`,
+    `const vulnerablePrefix = { serial: { startsWith: v, mode: "insensitive" } };`,
+    `const safeContains = { email: { contains: v, mode: "insensitive" } };`,
+    `const safeSplit = { firstName: { contains: q, mode: "insensitive" }, id: { equals: v } };`,
+    `const safeExact = { email: { equals: v } };`,
+    `export { vulnerable, vulnerableAsConst, vulnerablePrefix, safeContains, safeSplit, safeExact };`,
+  ].join("\n");
 
-  const sample = `
-    const vulnerable = { email: { equals: v, mode: "insensitive" } };
-    const vulnerableAsConst = { email: { equals: v, mode: "insensitive" as const } };
-    const vulnerablePrefix = { serial: { startsWith: v, mode: "insensitive" } };
-    const safeContains = { email: { contains: v, mode: "insensitive" } };
-    const safeSplit = { firstName: { contains: q, mode: "insensitive" }, id: { equals: v } };
-    const safeExact = { email: { equals: v } };
-  `;
-  const ast = parse(sample, { range: true, loc: true });
-  const lines = sample.split("\n");
-  const flagged = esquery(ast, selector).map((node) =>
-    (lines[node.loc.start.line - 1].match(/const (\w+)/) ?? [])[1],
-  );
+  const [result] = await eslint.lintText(sample, { filePath: path.join(root, "src/lib/__ciExactProbe.ts") });
+  const flagged = result.messages
+    .filter((m) => m.ruleId === "no-restricted-syntax")
+    .map((m) => (sample.split("\n")[m.line - 1].match(/const (\w+)/) ?? [])[1]);
 
   assert.deepEqual(
     flagged.sort(),
     ["vulnerable", "vulnerableAsConst", "vulnerablePrefix"].sort(),
-    "the selector must flag equals/startsWith + insensitive (including `as const`) and nothing else",
+    "the rule must flag equals/startsWith + insensitive (including `as const`) and nothing else",
   );
 });
 
