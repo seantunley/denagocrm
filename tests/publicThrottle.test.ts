@@ -131,3 +131,16 @@ test("open-tracking and unsubscribe are deliberately NOT throttled", () => {
   const note = src("src/lib/publicThrottle.ts");
   assert.match(note, /NOT throttled on purpose/, "the exclusions must be written down where the helper is");
 });
+
+test("the throttle degrades when there is no request to read an IP from", () => {
+  // headers() THROWS outside a request scope. Once the public endpoints started
+  // throttling, that turned "we cannot see who this is" into "the route
+  // explodes" — the tenant-guard suite invokes route handlers directly and the
+  // whole CI run died on it. A rate limiter must never be the thing that fails
+  // a request.
+  const code = src("src/lib/rateLimit.ts").replace(/\/\*[\s\S]*?\*\//g, "");
+  const fn = code.slice(code.indexOf("export async function getRequestIp"));
+  const body = fn.slice(0, fn.indexOf("\n}") + 2);
+  assert.match(body, /try \{/, "reading the IP must not be able to throw");
+  assert.match(body, /catch \{\s*return "unknown";\s*\}/, "…it degrades to the shared unknown bucket");
+});

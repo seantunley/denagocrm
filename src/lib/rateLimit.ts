@@ -85,10 +85,28 @@ export function rateLimitKey(scope: string, identifier: string): string {
   return `${scope}:${crypto.createHmac("sha256", pepper).update(identifier).digest("hex")}`;
 }
 
+/**
+ * The caller's IP, or a sentinel when there is no request to read it from.
+ *
+ * `headers()` THROWS outside a request scope, and once the public endpoints
+ * started throttling, that turned "we cannot see who this is" into "the route
+ * explodes". The tenant-guard suite invokes route handlers directly, which is a
+ * legitimate way to test a chokepoint end to end, and it took the whole run
+ * down (CI caught it; a local `npm run test:unit` does not exercise those
+ * routes).
+ *
+ * A rate limiter has no business being the thing that fails a request. It
+ * degrades instead: an unidentifiable caller shares the "unknown" bucket, which
+ * is the same bucket a request with no forwarding headers already got.
+ */
 export async function getRequestIp(): Promise<string> {
-  const incoming = await headers();
-  const forwarded = incoming.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwarded || incoming.get("x-real-ip") || "unknown";
+  try {
+    const incoming = await headers();
+    const forwarded = incoming.get("x-forwarded-for")?.split(",")[0]?.trim();
+    return forwarded || incoming.get("x-real-ip") || "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 export async function checkRateLimit(key: string): Promise<RateLimitResult> {
