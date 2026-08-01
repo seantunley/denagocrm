@@ -26,6 +26,13 @@ const SECRET_KEYS = new Set([
   "ANTHROPIC_API_KEY",
   "INTAKE_API_KEY",
   "OPENAI_API_KEY",
+  // ElevenLabs shipped as a plain AppSetting while every sibling provider key was
+  // encrypted, so it sat in the DB (and in every backup) as clear text. Adding it
+  // here is safe for values already stored in the clear: `decryptValue` returns
+  // any value without the `enc:v1:` prefix verbatim — the same legacy-tolerant
+  // read that carried the ORIGINAL rollout of this feature — so the next read
+  // still works and the next write encrypts it.
+  "ELEVENLABS_API_KEY",
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_WEBHOOK_SECRET",
 ]);
@@ -63,6 +70,16 @@ export function encryptValue(plain: string): string {
   return `${PREFIX}${iv.toString("base64")}:${cipher.getAuthTag().toString("base64")}:${enc.toString("base64")}`;
 }
 
+/**
+ * Reads a stored value back.
+ *
+ * A value WITHOUT the `enc:v1:` prefix is returned verbatim. That is the
+ * legacy-plaintext path: it is what let credential keys be added to
+ * {@link SECRET_KEYS} one at a time without a migration, and it is why adding a
+ * key to that set is a lossless upgrade — an already-stored clear-text value
+ * keeps reading correctly and is encrypted by the next {@link putSetting}.
+ * {@link storedSettingValue} is the write half of that contract.
+ */
 export function decryptValue(stored: string): string {
   if (!stored.startsWith(PREFIX)) return stored;
   const key = requireEncryptionKey();
@@ -100,6 +117,20 @@ export function decryptBytes(stored: Buffer): Buffer {
 
 export function isSecretSettingKey(key: string): boolean {
   return SECRET_KEYS.has(key);
+}
+
+/**
+ * What actually goes in the `value` column for `key`. The single write-side rule
+ * shared by {@link putSetting} and {@link putTenantCredential}, so a credential
+ * key can never be encrypted on one write path and stored in the clear on the
+ * other. Pure — no DB, no scope — which is what makes the
+ * clear-text→ciphertext upgrade unit-testable.
+ *
+ * An empty value is stored as-is: encrypting "" would turn "unset" into a
+ * non-empty ciphertext that every `if (!value)` check would then read as set.
+ */
+export function storedSettingValue(key: string, value: string): string {
+  return value && isSecretSettingKey(key) ? encryptValue(value) : value;
 }
 
 /**
@@ -153,7 +184,7 @@ export async function getSetting(key: string): Promise<string | null> {
 export type SettingsTx = Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0];
 
 export async function putSetting(key: string, value: string, tx?: SettingsTx): Promise<void> {
-  const stored = value && isSecretSettingKey(key) ? encryptValue(value) : value;
+  const stored = storedSettingValue(key, value);
   const tenantId = settingsOwnerTenantId();
   await (tx ?? basePrisma).appSetting.upsert({
     where: { tenantId_key: { tenantId, key } },
@@ -228,7 +259,7 @@ export async function resolveTenantCredential(
  * row — a tenant override lives entirely in `TenantIntegrationCredential`.
  */
 export async function putTenantCredential(tenantId: string, key: string, value: string): Promise<void> {
-  const stored = value && isSecretSettingKey(key) ? encryptValue(value) : value;
+  const stored = storedSettingValue(key, value);
   await basePrisma.tenantIntegrationCredential.upsert({
     where: { tenantId_key: { tenantId, key } },
     update: { value: stored },
