@@ -52,9 +52,18 @@ const normEmail = (email: string) => email.trim().toLowerCase();
  *
  * ORDER BY is deterministic so that two contacts differing only in case can
  * never resolve to different rows on the request and verify legs of one login.
+ *
+ * Runs on `basePrisma`, the explicit trusted/bypass client, NOT on `prisma`.
+ * The scoped client's extension only intercepts MODEL operations, so a raw query
+ * issued through it never gets its `SET LOCAL app.current_tenant` /
+ * `app.bypass_rls` — it works today only because the application role still has
+ * rolbypassrls, and would return zero rows (breaking portal login outright)
+ * under the restricted role the RLS work is heading for. basePrisma sets
+ * app.bypass_rls explicitly, which is the correct posture for a PRE-auth lookup
+ * that cannot have a tenant scope yet and pins the tenant in its own WHERE.
  */
 async function findPortalContactByEmail(email: string): Promise<{ id: string } | null> {
-  const rows = await prisma.$queryRaw<{ id: string }[]>`
+  const rows = await basePrisma.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "Contact"
     WHERE LOWER("email") = ${email}
       AND "deletedAt" IS NULL

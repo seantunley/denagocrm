@@ -39,6 +39,19 @@ test("the login lookup stays case-insensitive — a real customer depends on it"
   assert.match(code, /LOWER\("email"\)/, "must fold case rather than compare raw");
 });
 
+test("the pre-auth lookup uses the explicit bypass client, not the scoped one", () => {
+  // The scoped client's extension intercepts MODEL operations only, so a raw
+  // query issued through `prisma` never gets its SET LOCAL GUC. That works only
+  // while the app role has rolbypassrls; under the restricted role the RLS work
+  // is heading for it would return zero rows and break portal login outright.
+  // basePrisma sets app.bypass_rls explicitly — correct for a pre-auth lookup
+  // that cannot have a tenant scope yet and pins the tenant in its own WHERE.
+  const code = src("src/app/actions/portal.ts");
+  const fn = code.slice(code.indexOf("async function findPortalContactByEmail"));
+  assert.match(fn.slice(0, 400), /basePrisma\.\$queryRaw/, "must not run on the scoped client");
+  assert.match(fn.slice(0, 800), /"tenantId" = /, "and must pin the tenant itself");
+});
+
 test("the login lookup is deterministic", () => {
   // findFirst with no ORDER BY left it unspecified which of two matching rows
   // you got — so the request and verify legs of one login could disagree.
