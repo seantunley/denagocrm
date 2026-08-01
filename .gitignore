@@ -52,3 +52,4 @@ prisma/dev.db-journal
 data-export.json
 backups/
 .poll-fb2.mjs
+.claude/worktrees/
