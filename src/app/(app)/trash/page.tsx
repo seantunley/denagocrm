@@ -1,7 +1,7 @@
 import { differenceInCalendarDays, addDays } from "date-fns";
 import { ArchiveRestore, Trash2 } from "lucide-react";
 import { basePrisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireOwner } from "@/lib/auth";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { restoreFromTrash } from "@/app/actions/trash";
 import { TRASH_RETENTION_DAYS, type TrashModel } from "@/lib/trash";
@@ -28,7 +28,15 @@ type Row = {
 };
 
 export default async function TrashPage() {
-  await requireUser();
+  // Owner-only. This previously called requireUser(), which is weaker than the
+  // policy the app states for this route: ROUTE_GATES lists /trash as "admin",
+  // so any authenticated non-owner reaching this page without the proxy in the
+  // request path saw everything below. That matters more here than elsewhere —
+  // the page reads every soft-deleted contact, lead, vehicle, job card,
+  // document, product, library document and quote through basePrisma, which
+  // sets app.bypass_rls and is not soft-delete filtered. The proxy stays as the
+  // pre-filter (nicer redirect); requireOwner() is the actual boundary.
+  await requireOwner();
   const notNull = { deletedAt: { not: null } } as const;
   const [automotiveOn, commerceOn] = await Promise.all([
     isModuleEnabled("automotive"),

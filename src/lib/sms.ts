@@ -37,6 +37,7 @@ export async function sendSms(to: string, body: string): Promise<{ ok: boolean; 
   if (!intl) return { ok: false, error: "Invalid phone number" };
   try {
     const res = await fetch("https://api.bulksms.com/v1/messages", {
+      signal: AbortSignal.timeout(15_000),
       method: "POST",
       headers: {
         "Content-Type": "application/json",

@@ -43,7 +43,7 @@ export async function buildSignedPdf(input: SignedDocInput): Promise<Buffer> {
   // Dark brand banner
   page.drawRectangle({ x: M, y: y - 64, width: W, height: 64, color: DARK });
   try {
-    const logoBytes = await fetch(`${SITE}/branding/denago-logo-email.png`).then((r) =>
+    const logoBytes = await fetch(`${SITE}/branding/denago-logo-email.png`, { signal: AbortSignal.timeout(10_000) }).then((r) =>
       r.arrayBuffer()
     );
     const logo = await pdf.embedPng(logoBytes);
@@ -162,7 +162,7 @@ export async function buildSignedPdf(input: SignedDocInput): Promise<Buffer> {
     let dy = y + 12; // top of the customer's signature line
     if (input.dealerSignatureUrl) {
       try {
-        const bytes = await fetch(input.dealerSignatureUrl).then((r) => r.arrayBuffer());
+        const bytes = await fetch(input.dealerSignatureUrl, { signal: AbortSignal.timeout(10_000) }).then((r) => r.arrayBuffer());
         const sig = await pdf.embedPng(bytes);
         const sh = 44;
         const sw = Math.min((sig.width / sig.height) * sh, 180);
