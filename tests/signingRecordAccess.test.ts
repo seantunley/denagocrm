@@ -90,12 +90,48 @@ test("the access decision is by source record", () => {
   }
 });
 
+test("ONE authoritative binding decides, not whichever one the caller can reach", async () => {
+  // The first version of this module asked every binding and allowed if ANY
+  // said yes. Most requests carry several at once — the one in production
+  // carries a quote, a contact AND a document — so that rule let a role with
+  // signing.manage plus documents.view_all (or merely access to the customer)
+  // act on a request for a quote it cannot open. Precedence closes it: the
+  // document is GENERATED from the quote and the contact is merely its
+  // customer, so neither is evidence of access to the deal.
+  const { governingBinding } = await import("../src/lib/signing/binding");
+  const none = { quoteId: null, jobCardId: null, documentId: null, contactId: null, createdById: null };
+
+  assert.deepEqual(
+    governingBinding({ ...none, quoteId: "q1", jobCardId: "j1", documentId: "d1", contactId: "c1" }),
+    { kind: "quote", id: "q1" },
+    "a quote outranks every other binding",
+  );
+  assert.deepEqual(
+    governingBinding({ ...none, jobCardId: "j1", documentId: "d1", contactId: "c1" }),
+    { kind: "jobcard", id: "j1" },
+  );
+  assert.deepEqual(
+    governingBinding({ ...none, documentId: "d1", contactId: "c1" }),
+    { kind: "document", id: "d1" },
+  );
+  assert.deepEqual(governingBinding({ ...none, contactId: "c1" }), { kind: "contact", id: "c1" });
+  assert.equal(governingBinding(none), null, "an unbound request has no governing record");
+});
+
+test("the decision never widens by asking several bindings at once", () => {
+  // Structural backstop for the behavioural test above: the shape that caused
+  // the bug was collecting checks and OR-ing them.
+  const access = shipped("src/lib/signing/access.ts");
+  assert.doesNotMatch(access, /\.some\(Boolean\)/, "an any-binding rule is a bypass, not a convenience");
+  assert.doesNotMatch(access, /Promise\.all\(checks\)/);
+});
+
 test("an unbound request fails safe rather than throwing or allowing", () => {
   // A request with no quote/jobcard/contact/document has no record to decide
   // from. Production has none today; this pins the fallback so a future one
   // cannot silently become open to every signing.manage holder.
   const access = shipped("src/lib/signing/access.ts");
-  assert.match(access, /if \(checks\.length === 0\)/);
+  assert.match(access, /const binding = resolveBinding\(request\)/);
   assert.match(access, /createdById === user\.id/, "the creator keeps access");
   assert.match(
     access,

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { governingBinding as resolveBinding, type RequestBinding } from "./binding";
 import {
   canAccessContact,
   canAccessDocument,
@@ -30,40 +31,48 @@ import {
  * allowed to see.
  *
  * The check is by SOURCE RECORD, because that is what a signature request is
- * about. A request carries any of quoteId / jobCardId / contactId / documentId;
- * access to ANY of the records it is bound to grants access to the request,
- * which matches how it is reachable in the UI in the first place.
+ * about. A request carries any of quoteId / jobCardId / documentId / contactId,
+ * and the decision is made against the FIRST one present in that order — not
+ * against whichever happens to be reachable.
+ *
+ * That precedence is load-bearing, and getting it wrong reopens the hole. Most
+ * requests carry SEVERAL bindings at once (the one in production carries a
+ * quote, a contact and a document). An "access to any binding is enough" rule
+ * therefore lets a role holding signing.manage plus documents.view_all — or
+ * merely access to the customer — modify and resend a request for a quote it
+ * cannot open, which is exactly the escalation this module exists to stop.
+ *
+ * Quote and job card are the authoritative sources: the document is GENERATED
+ * from one of them and the contact is merely its customer, so neither is
+ * evidence of access to the underlying deal.
  */
 
-type RequestBinding = {
-  quoteId: string | null;
-  jobCardId: string | null;
-  contactId: string | null;
-  documentId: string | null;
-  createdById: string | null;
-};
+export type { RequestBinding, GoverningBinding } from "./binding";
+export { governingBinding } from "./binding";
 
 export async function canAccessSignatureRequest(
   user: PermissionUser,
   request: RequestBinding,
 ): Promise<boolean> {
-  const checks: Array<Promise<boolean>> = [];
-  if (request.quoteId) checks.push(canAccessQuote(user, request.quoteId));
-  if (request.jobCardId) checks.push(canAccessJobCard(user, request.jobCardId));
-  if (request.documentId) checks.push(canAccessDocument(user, request.documentId));
-  if (request.contactId) checks.push(canAccessContact(user, request.contactId));
-
-  if (checks.length === 0) {
-    // Bound to nothing — there is no record to derive a decision from, so fall
-    // back to the two people who can't be wrong: whoever created it, and anyone
-    // whose scope is unrestricted anyway (getAccessibleQuoteIds returns null for
-    // owners and quotes.view_all). Production currently has no such request;
-    // this exists so an unbound one fails safe rather than throwing.
-    if (request.createdById && request.createdById === user.id) return true;
-    return (await getAccessibleQuoteIds(user)) === null;
+  const binding = resolveBinding(request);
+  switch (binding?.kind) {
+    case "quote":
+      return canAccessQuote(user, binding.id);
+    case "jobcard":
+      return canAccessJobCard(user, binding.id);
+    case "document":
+      return canAccessDocument(user, binding.id);
+    case "contact":
+      return canAccessContact(user, binding.id);
   }
 
-  return (await Promise.all(checks)).some(Boolean);
+  // Bound to nothing — there is no record to derive a decision from, so fall
+  // back to the two people who can't be wrong: whoever created it, and anyone
+  // whose scope is unrestricted anyway (getAccessibleQuoteIds returns null for
+  // owners and quotes.view_all). Production currently has no such request; this
+  // exists so an unbound one fails safe rather than throwing.
+  if (request.createdById && request.createdById === user.id) return true;
+  return (await getAccessibleQuoteIds(user)) === null;
 }
 
 /**
