@@ -192,10 +192,79 @@ test("unsupported legacy data is distinguishable from an empty row", () => {
   const unsupported = { ...PRODUCTION_ROW, content: [...PRODUCTION_ROW.content, { type: "Carousel", props: { id: "x1" } }] };
   assert.equal(readTemplateDocument(unsupported).status, "unsupported");
 
-  // Not a document at all — nothing stored to lose, so a blank canvas is fine.
   for (const notATemplate of [null, undefined, {}, { schemaVersion: 9 }, { pages: "no" }]) {
     assert.equal(readTemplateDocument(notATemplate).status, "unreadable");
   }
+});
+
+test("an unreadable row is not treated as an empty one", () => {
+  // `saveBuilderData` wrote `data: unknown` to this column with NO validation
+  // before it was removed, so an unreadable row can hold anything somebody
+  // saved. And a current-format document with one bad field lands here too —
+  // that is a nearly-complete template, not junk.
+  const almostValid = { ...standardQuoteTemplate(), recipients: "not-an-array" };
+  assert.equal(readTemplateDocument(almostValid).status, "unreadable");
+  assert.ok(
+    JSON.stringify(almostValid).includes("Quote valid for 14 days."),
+    "…and its pages still hold every term, which is what a blank canvas would have replaced",
+  );
+
+  // Only `ok` may be acted on. Neither failure may reach a fallback.
+  const editor = read("src/app/doc-editor/[id]/page.tsx");
+  assert.match(editor, /if \(read\.status !== "ok"\)/, "the editor must refuse on ANY non-ok status");
+  assert.doesNotMatch(editor, /blankDocument/, "the editor must have no blank fallback left at all");
+
+  const envelope = read("src/lib/signing/autoEnvelope.ts");
+  assert.match(envelope, /if \(read\.status !== "ok"\) return null;/);
+  assert.match(envelope, /if \(!template\) return null;/, "a chosen template that is gone must stop too");
+
+  const send = read("src/app/actions/doceditor.ts");
+  assert.match(send, /if \(read\.status !== "ok"\)/, "sendDocForSigning must refuse on ANY non-ok status");
+});
+
+test("malformed stored JSON fails safely instead of throwing", () => {
+  // A stored table can hold a null column or row. Reading `col.header` off it
+  // threw, which on the editor route is a 500 rather than a refusal a caller
+  // can handle.
+  const malformed: unknown[] = [
+    { root: {}, zones: {}, content: [{ type: "Table", props: { id: "t", columns: [null], rows: [] } }] },
+    { root: {}, zones: {}, content: [{ type: "Table", props: { id: "t", columns: [], rows: [null] } }] },
+    { root: {}, zones: {}, content: [{ type: "Table", props: { id: "t", columns: ["x", 3], rows: [{ cells: [null, 7] }] } }] },
+    { root: {}, zones: {}, content: [{ type: "Terms", props: { id: "t", items: [null, 5] } }] },
+    { root: {}, zones: {}, content: [{ type: "Footer", props: { id: "f", lines: [null] } }] },
+    { root: {}, zones: {}, content: [{ type: "Banner", props: null }] },
+    { root: {}, zones: {}, content: [{ type: "Spacer", props: "nope" }] },
+    { root: {}, zones: {}, content: [null] },
+    { root: {}, zones: {}, content: [{ type: "Conditional", props: { id: "c", content: [null] } }] },
+    { content: [{ type: "RichText", props: { id: "r", value: [null, "x"] } }] },
+  ];
+  // "Safely" means it returns a status a caller can act on. A null column
+  // degrading to a defaulted one is fine and deliberate — the rest of the table
+  // survives, which is the whole policy of this module. Throwing is not.
+  for (const input of malformed) {
+    let status: string | undefined;
+    assert.doesNotThrow(() => { status = readTemplateDocument(input).status; }, `threw on ${JSON.stringify(input)}`);
+    assert.ok(["ok", "unsupported", "unreadable"].includes(status!));
+  }
+
+  // Prove the guard is load-bearing rather than the null being skipped: the
+  // null column arrives as a real, defaulted column. Reading `.header` off it
+  // is what used to throw.
+  const withNullColumn = legacyToDocument({
+    root: {}, zones: {},
+    content: [{ type: "Table", props: { id: "t", columns: [null, { header: "Qty", width: 20 }], rows: [] } }],
+  });
+  assert.ok(withNullColumn);
+  const table = withNullColumn.pages[0].rows[0].columns[0].blocks[0];
+  assert.equal(table.type, "table");
+  assert.deepEqual(
+    table.type === "table" && table.columns.map((c) => c.header),
+    ["", "Qty"],
+    "the null column must survive as an empty one, not vanish",
+  );
+
+  // The backstop exists as well as the guards, for the case nobody thought of.
+  assert.match(read("src/lib/doceditor/legacy.ts"), /\} catch \{\s*return \{ status: "unsupported" \};/);
 });
 
 test("nested side-by-side layout refuses rather than flattening", () => {
@@ -233,23 +302,16 @@ test("no caller falls back to a substitute on unsupported legacy data", () => {
   // (the editor autosaves) or swaps in a different document (autoEnvelope sends
   // it for signature).
   const editor = read("src/app/doc-editor/[id]/page.tsx");
-  assert.match(editor, /status === "unsupported"/, "the editor must handle unsupported explicitly");
-  assert.doesNotMatch(
-    editor,
-    /readTemplateDocument\([^)]*\)[\s\S]{0,40}\?\?\s*blankDocument/,
-    "the editor must not fall straight through to a blank autosaving canvas",
-  );
   assert.ok(
-    editor.indexOf('status === "unsupported"') < editor.indexOf("<DocEditor"),
+    editor.indexOf('read.status !== "ok"') < editor.indexOf("<DocEditor"),
     "the refusal must come before the editor is mounted",
   );
 
   const envelope = read("src/lib/signing/autoEnvelope.ts");
   assert.ok(
-    envelope.indexOf('read.status === "unsupported"') < envelope.indexOf("standardQuoteTemplate()"),
+    envelope.indexOf('read.status !== "ok"') < envelope.indexOf("standardQuoteTemplate()"),
     "autoEnvelope must return before it can substitute the standard template",
   );
-  assert.match(envelope, /if \(read\.status === "unsupported"\) return null;/);
 });
 
 test("signed snapshots are still parsed strictly", () => {

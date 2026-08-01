@@ -6,7 +6,6 @@ import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import { requiredRecordKind } from "@/lib/docbuilder/recordBinding";
 import Link from "next/link";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
-import { blankDocument } from "@/lib/doceditor/factory";
 import { DocEditor } from "@/components/doceditor/DocEditor";
 
 export const dynamic = "force-dynamic";
@@ -23,28 +22,35 @@ export default async function DocEditorPage({
 
   const read = readTemplateDocument(template.data, template.name);
 
-  // THIS EDITOR AUTOSAVES. Mounting it means the stored document is one
-  // keystroke from being replaced by whatever is on screen, so it may only be
-  // mounted on content we fully understand.
+  // THIS EDITOR AUTOSAVES. Mounting it means the stored row is one keystroke
+  // from being replaced by whatever is on screen, so it may only ever be
+  // mounted on content that parsed — never on a fallback.
   //
-  // "unsupported" is a legacy template the converter declined — refusing to
-  // convert it is worth nothing if the next line then opens it blank and lets
-  // autosave finish the job.
-  if (read.status === "unsupported") {
+  // Both failures are refusals, not just "unsupported". An "unreadable" row is
+  // not a blank row: `saveBuilderData` used to write `data: unknown` to this
+  // column with no validation, and a current-format document with one bad field
+  // lands there too. Opening either blank is how the stored content would be
+  // lost — the same failure this whole change exists to stop, one status over.
+  //
+  // A blank document is created explicitly, by createDocEditorTemplate, as a
+  // validated DocumentModel. It is never something an editor load falls into.
+  if (read.status !== "ok") {
     return (
       <div className="mx-auto max-w-lg space-y-3 p-8">
         <h1 className="text-lg font-semibold text-foreground">
           “{template.name}” can’t be opened in the editor
         </h1>
         <p className="text-sm text-muted-foreground">
-          It was built in the previous document builder and uses a layout this
-          editor can’t represent yet. Nothing has been changed — the template is
-          stored exactly as it was, and it is not being opened here because
-          saving over it would lose that layout.
+          {read.status === "unsupported"
+            ? "It was built in the previous document builder and uses a layout this editor can’t represent yet."
+            : "Its saved content isn’t in a format this editor recognises."}{" "}
+          Nothing has been changed — the template is stored exactly as it was,
+          and it is not being opened here because saving over it would lose
+          whatever it holds.
         </p>
         <p className="text-sm text-muted-foreground">
           Create a new document to replace it, or send this template name to
-          support so the missing layout can be added.
+          support so the content can be recovered.
         </p>
         <Link href="/settings/documents/builder" className="inline-block text-sm text-primary hover:underline">
           Back to Document Builder
@@ -53,9 +59,7 @@ export default async function DocEditorPage({
     );
   }
 
-  // A row that is not a document at all — never written by this app, so there
-  // is no stored layout to lose. A blank canvas is the useful answer.
-  const initialDoc = read.status === "ok" ? read.doc : blankDocument(template.name);
+  const initialDoc = read.doc;
   const required = requiredRecordKind(template.key);
   const [quotes, jobCards] = await Promise.all([
     required === "jobcard" || required === null

@@ -60,8 +60,12 @@ const num = (v: unknown, fallback: number): number => (typeof v === "number" && 
 const bool = (v: unknown, fallback: boolean): boolean => (typeof v === "boolean" ? v : fallback);
 const align = (v: unknown): Align => (v === "center" || v === "right" ? v : "left");
 const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+/** Property bag for anything, so a null or a string in an array of objects
+ *  reads as "no properties" instead of throwing on member access. */
+const obj = (v: unknown): Record<string, unknown> =>
+  v && typeof v === "object" ? (v as Record<string, unknown>) : {};
 const textItems = (v: unknown): { text: string }[] =>
-  list(v).map((item) => ({ text: str((item as { text?: unknown })?.text) }));
+  list(v).map((item) => ({ text: str(obj(item).text) }));
 
 const layout = { settings: {}, locked: false, hidden: false } as const;
 
@@ -116,7 +120,7 @@ function textBlock(id: string, value: Record<string, unknown>[]): DocumentBlock 
  * being dropped — the point of this converter is that nothing is lost.
  */
 function blocksFor(block: LegacyBlock, id: string): DocumentBlock[] | null {
-  const p = block.props ?? {};
+  const p = obj(block.props);
 
   switch (block.type) {
     case "Banner": {
@@ -167,21 +171,18 @@ function blocksFor(block: LegacyBlock, id: string): DocumentBlock[] | null {
         id, type: "table", ...layout,
         headerBg: str(p.headerBg, "#020617"),
         headerColor: str(p.headerColor, "#ffffff"),
-        columns: list(p.columns).map((c) => {
-          const col = c as Record<string, unknown>;
-          return {
-            header: str(col.header),
-            // legacy `align` is left|center|right and the model's table column
-            // agrees, so this is a straight carry-over.
-            align: align(col.align),
-            // legacy `width`, model `widthPct` — both percentages.
-            widthPct: num(col.width, 25),
-          };
-        }),
+        // obj() throughout: a stored table can hold a null column or row, and a
+        // cast alone would let `col.header` throw on it.
+        columns: list(p.columns).map((c) => ({
+          header: str(obj(c).header),
+          // legacy `align` is left|center|right and the model's table column
+          // agrees, so this is a straight carry-over.
+          align: align(obj(c).align),
+          // legacy `width`, model `widthPct` — both percentages.
+          widthPct: num(obj(c).width, 25),
+        })),
         rows: list(p.rows).map((r) => ({
-          cells: list((r as Record<string, unknown>).cells).map((cell) => ({
-            value: str((cell as { value?: unknown })?.value),
-          })),
+          cells: list(obj(r).cells).map((cell) => ({ value: str(obj(cell).value) })),
         })),
       }];
 
@@ -325,7 +326,7 @@ function signatureColumns(p: Record<string, unknown>, id: string): DocumentColum
 
 /** One legacy block → the rows it occupied, or null when the type is unrecognised. */
 function rowsFor(block: LegacyBlock, id: string): DocumentRow[] | null {
-  const p = block.props ?? {};
+  const p = obj(block.props);
 
   if (block.type === "TwoColumn") {
     const [left, right] = infoCards(p, id);
@@ -408,26 +409,38 @@ export function legacyToDocument(input: unknown, title = "Untitled proposal"): D
 }
 
 /**
- * The three outcomes of reading a stored template, kept DISTINCT on purpose.
+ * The outcome of reading a stored template.
  *
- * A single `DocumentModel | null` collapsed two very different situations into
- * the same answer, and every caller then treated that answer as "empty":
+ * A single `DocumentModel | null` collapsed several very different situations
+ * into one answer, and every caller then treated that answer as "empty":
  *
  *   • the editor mounted a blank document over it — and it autosaves;
  *   • autoEnvelope substituted the standard template, which would have SENT a
  *     different document than the one that was picked;
  *   • seeding cloned a replacement next to it.
  *
- * For a genuinely empty row that is reasonable. For a legacy template this
- * converter declined to convert, it is the exact data loss the refusal was
- * meant to prevent. `unsupported` is what lets a caller tell them apart and
- * stop instead.
+ * ONLY `ok` is safe to act on. Both failures name a row that holds SOMETHING
+ * this code could not turn into a document, and neither says that something is
+ * worthless:
+ *
+ *   unsupported — legacy data this converter declined, e.g. a block type it
+ *     does not know or a populated `zones`. Content is definitely present.
+ *   unreadable — not the legacy shape and not a valid DocumentModel. Tempting
+ *     to treat as junk, and that is wrong: the removed `saveBuilderData` action
+ *     wrote `data: unknown` to this column with NO validation, so an unreadable
+ *     row can hold anything someone saved. A current-format document with one
+ *     invalid field lands here too, and that is a nearly-complete template.
+ *
+ * Callers that would REPLACE the stored row (the autosaving editor) or send it
+ * onward (signing) must therefore refuse on anything but `ok`. The distinction
+ * survives so those refusals can explain themselves accurately, not so one of
+ * them can be treated as recoverable.
  */
 export type TemplateRead =
   | { status: "ok"; doc: DocumentModel }
   /** Legacy data this converter will not convert faithfully. Do not fall back — STOP. */
   | { status: "unsupported" }
-  /** Not a document at all: absent, empty, or some other shape entirely. */
+  /** Neither format. Unknown content, NOT known-empty. Do not fall back — STOP. */
   | { status: "unreadable" };
 
 /**
@@ -437,11 +450,21 @@ export type TemplateRead =
  * is loaded. Use `parseDocument` directly for signed snapshots.
  */
 export function readTemplateDocument(input: unknown, title?: string): TemplateRead {
-  const current = parseDocument(input);
-  if (current) return { status: "ok", doc: current };
+  // Stored JSON is untrusted and arbitrarily shaped, so this whole read is
+  // fail-safe by construction rather than by having guarded every access
+  // correctly. A malformed row must come back as a refusal a caller can handle,
+  // never as a throw that becomes a 500 on the editor route. (The guards are
+  // still there — `obj()` on every member access — this is the backstop for the
+  // case nobody thought of.)
+  try {
+    const current = parseDocument(input);
+    if (current) return { status: "ok", doc: current };
 
-  if (!isLegacyBuilderData(input)) return { status: "unreadable" };
+    if (!isLegacyBuilderData(input)) return { status: "unreadable" };
 
-  const converted = legacyToDocument(input, title);
-  return converted ? { status: "ok", doc: converted } : { status: "unsupported" };
+    const converted = legacyToDocument(input, title);
+    return converted ? { status: "ok", doc: converted } : { status: "unsupported" };
+  } catch {
+    return { status: "unsupported" };
+  }
 }

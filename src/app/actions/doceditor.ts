@@ -192,14 +192,18 @@ export async function sendDocForSigning(
     };
   }
 
+  // Neither failure may fall through: this path mails the document to a
+  // customer to sign.
   const read = readTemplateDocument(binding.template.data, binding.template.name);
-  if (read.status === "unsupported") {
+  if (read.status !== "ok") {
     return {
       ok: false,
-      message: "This template was built in the previous document builder and can't be sent for signing. Create a new document to replace it.",
+      message:
+        read.status === "unsupported"
+          ? "This template was built in the previous document builder and can't be sent for signing. Create a new document to replace it."
+          : "This template's saved content isn't in a format we recognise, so it can't be sent for signing. Create a new document to replace it.",
     };
   }
-  if (read.status !== "ok") return { ok: false, message: "This document is empty." };
   const documentModel = read.doc;
   if (documentModel.recipients.length === 0) {
     return {

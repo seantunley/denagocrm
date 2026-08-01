@@ -410,21 +410,20 @@ export async function resolveEnvelope(opts: {
 
   let doc: DocumentModel | null = null;
   if (templateId) {
+    // A CHOSEN template that cannot be loaded and read must STOP the envelope,
+    // whatever the reason — missing row, legacy data we declined, or content in
+    // neither format. This document gets rendered, mailed and signed, so
+    // falling through to the standard layout would have the customer sign
+    // something other than what was selected, with nothing on screen to say so.
+    // resolveEnvelope's null already surfaces as "Could not prepare the
+    // document." in recordSigning.
     const template = await getBuilderTemplate(templateId);
-    if (template) {
-      const read = readTemplateDocument(template.data, template.name);
-      // A CHOSEN template that cannot be read faithfully must stop the
-      // envelope, not fall through to the standard layout below. This document
-      // gets rendered, mailed and signed: quietly substituting a different one
-      // means the customer signs something other than what was selected.
-      // resolveEnvelope's null already surfaces as "Could not prepare the
-      // document."
-      if (read.status === "unsupported") return null;
-      doc = read.status === "ok" ? read.doc : null;
-    }
+    if (!template) return null;
+    const read = readTemplateDocument(template.data, template.name);
+    if (read.status !== "ok") return null;
+    doc = read.doc;
   }
-  // Reached only when no template was chosen, or the chosen row is gone —
-  // never as a stand-in for one we failed to read.
+  // Reached only when NO template was chosen at all.
   if (!doc) doc = quoteId ? standardQuoteTemplate() : standardJobCardTemplate();
   doc.title = customer.title;
   const templateHasReadyRecipients = hasSendReadyRecipients(doc);
