@@ -7,7 +7,8 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { canAccessJobCard, canAccessQuote, requirePermission, type PermissionUser } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
-import { documentSchema, parseDocument } from "@/lib/doceditor/model";
+import { documentSchema } from "@/lib/doceditor/model";
+import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import { blankDocument, standardQuoteTemplate } from "@/lib/doceditor/factory";
 import { generateDocEditorPdf, resolveDocEditorContent, renderResolvedToPdf } from "@/lib/doceditor/generate";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
@@ -191,8 +192,19 @@ export async function sendDocForSigning(
     };
   }
 
-  const documentModel = parseDocument(binding.template.data);
-  if (!documentModel) return { ok: false, message: "This document is empty." };
+  // Neither failure may fall through: this path mails the document to a
+  // customer to sign.
+  const read = readTemplateDocument(binding.template.data, binding.template.name);
+  if (read.status !== "ok") {
+    return {
+      ok: false,
+      message:
+        read.status === "unsupported"
+          ? "This template was built in the previous document builder and can't be sent for signing. Create a new document to replace it."
+          : "This template's saved content isn't in a format we recognise, so it can't be sent for signing. Create a new document to replace it.",
+    };
+  }
+  const documentModel = read.doc;
   if (documentModel.recipients.length === 0) {
     return {
       ok: false,

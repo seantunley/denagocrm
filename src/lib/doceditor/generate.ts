@@ -6,7 +6,8 @@ import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import { htmlToPdf } from "@/lib/customDocs";
-import { parseDocument, type DocumentModel } from "./model";
+import { type DocumentModel } from "./model";
+import { readTemplateDocument } from "./legacy";
 import { renderDocumentHtml, renderEmailHtml, type RenderCtx } from "./serialize";
 
 /**
@@ -60,8 +61,12 @@ export async function renderResolvedToPdf(r: Resolved): Promise<{ buffer: Buffer
 async function resolve(templateId: string, quoteId?: string | null, jobCardId?: string | null): Promise<Resolved | null> {
   const tpl = await getBuilderTemplate(templateId);
   if (!tpl) return null;
-  const doc = parseDocument(tpl.data);
-  if (!doc) return null;
+  // Either failure ends the same way here — no PDF, a 404 from the route. This
+  // path only reads, so there is nothing to protect beyond not rendering a
+  // document we could not fully understand.
+  const read = readTemplateDocument(tpl.data, tpl.name);
+  if (read.status !== "ok") return null;
+  const doc = read.doc;
   let ctx: RenderCtx = null;
   let title = doc.title || tpl.name;
   let qId: string | null = null, jId: string | null = null, contactId: string | null = null;

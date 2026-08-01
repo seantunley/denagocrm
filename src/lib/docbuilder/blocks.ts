@@ -1,10 +1,18 @@
 /**
- * Shared block contract for the document builder. TYPE-ONLY + plain data so it
- * can be imported by both the client editor (Puck) and the server renderer
- * (react-pdf) without either pulling the other's heavy graph.
+ * The RETIRED Puck builder's block contract, kept as the reference for reading
+ * templates saved in that format.
  *
- * Each block type has a props shape here, an editor definition in
- * ./puckConfig (Puck fields + HTML render) and a PDF renderer in ./renderPdf.
+ * The editor (./puckConfig) and its renderer (./renderPdf) are gone, replaced by
+ * @/lib/doceditor. What survived them is stored data: `DocBuilderTemplate.data`
+ * and `DocBuilderVersion.data` rows written before the switch still hold
+ * `{ root, zones, content }` trees whose blocks have these prop shapes.
+ *
+ * So this file is now TYPES ONLY, and it has exactly one consumer:
+ * @/lib/doceditor/legacy, which converts those trees to the current
+ * DocumentModel on read. Nothing writes this format any more — the factory that
+ * did (`starterTemplate`) was removed with the actions that called it.
+ *
+ * Do not add to it. A new block type belongs in @/lib/doceditor/model.
  */
 
 export type Align = "left" | "center" | "right";
@@ -68,58 +76,3 @@ export type BuilderData = {
   zones?: Record<string, unknown>;
 };
 
-// Brand palette (matches the rest of the app / the react-pdf spike).
-export const INK = "#020617";
-export const ACCENT = "#ea580c";
-export const SLATE = "#64748b";
-
-/** Starter layout for a new template — a real quote-shaped document, not blank. */
-export function starterTemplate(): BuilderData {
-  return {
-    root: { props: {} },
-    content: [
-      { type: "Banner", props: { id: "b1", title: "QUOTATION", subtitle: "Authorized Denago EV Dealer", docNumber: "{{quote.number}}", bg: INK, accent: ACCENT, showLogo: true, logoWidth: 72, titleAlign: "left", titleSize: 16, titleFont: "default" } },
-      { type: "Spacer", props: { id: "s1", height: 10 } },
-      {
-        type: "TwoColumn",
-        props: {
-          id: "tc1",
-          leftLabel: "PREPARED FOR", leftName: "{{customer.name}}", leftLines: "{{customer.phone}} · {{customer.email}}\n{{customer.address}}",
-          rightLabel: "VEHICLE OF INTEREST", rightName: "{{vehicle}}", rightLines: "Prepared by {{preparedBy}} · Valid until {{quote.validUntil}}",
-          accentLeft: true,
-        },
-      },
-      { type: "Spacer", props: { id: "s2", height: 8 } },
-      {
-        type: "RichText",
-        props: {
-          id: "rt1",
-          value: [
-            { type: "p", children: [{ text: "Thank you for choosing to go electric. Please find your quotation below — reach out any time with questions." }] },
-          ],
-        },
-      },
-      { type: "Spacer", props: { id: "s2b", height: 6 } },
-      { type: "LineItems", props: { id: "li1", headerBg: INK, headerColor: "#ffffff" } },
-      { type: "TotalBand", props: { id: "tb1", label: "TOTAL INCL. VAT", amount: "{{quote.total}}", color: ACCENT } },
-      { type: "Spacer", props: { id: "s3", height: 12 } },
-      {
-        type: "Terms",
-        props: {
-          id: "tm1", title: "TERMS",
-          items: [
-            { text: "Quote valid for 14 days." },
-            { text: "50% deposit to secure build slot; balance on delivery." },
-            { text: "12-month limited warranty; battery 24 months." },
-            { text: "Prices include 15% VAT." },
-          ],
-        },
-      },
-      { type: "Spacer", props: { id: "s4", height: 20 } },
-      { type: "Signature", props: { id: "sig1", leftLabel: "Accepted — customer signature & date", rightLabel: "For Denago Cape Town & date", showRight: true } },
-      { type: "Spacer", props: { id: "s5", height: 16 } },
-      { type: "Footer", props: { id: "f1", accent: ACCENT, lines: [{ text: "Denago Cape Town — Authorized Denago EV Dealer" }, { text: "Unit 55, M5 Freeway Business Park, Maitland · sales@denagocpt.co.za · denagocpt.co.za" }] } },
-    ],
-    zones: {},
-  };
-}

@@ -4,11 +4,8 @@ import { payableTotalCents } from "@/lib/pricing";
 import { contactName } from "@/lib/format";
 import { listTenantStaff } from "@/lib/tenantActor";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
-import {
-  parseDocument,
-  type DocumentModel,
-  type Recipient,
-} from "@/lib/doceditor/model";
+import { type DocumentModel, type Recipient } from "@/lib/doceditor/model";
+import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import {
   standardQuoteTemplate,
   newBlock,
@@ -413,9 +410,20 @@ export async function resolveEnvelope(opts: {
 
   let doc: DocumentModel | null = null;
   if (templateId) {
+    // A CHOSEN template that cannot be loaded and read must STOP the envelope,
+    // whatever the reason — missing row, legacy data we declined, or content in
+    // neither format. This document gets rendered, mailed and signed, so
+    // falling through to the standard layout would have the customer sign
+    // something other than what was selected, with nothing on screen to say so.
+    // resolveEnvelope's null already surfaces as "Could not prepare the
+    // document." in recordSigning.
     const template = await getBuilderTemplate(templateId);
-    if (template) doc = parseDocument(template.data);
+    if (!template) return null;
+    const read = readTemplateDocument(template.data, template.name);
+    if (read.status !== "ok") return null;
+    doc = read.doc;
   }
+  // Reached only when NO template was chosen at all.
   if (!doc) doc = quoteId ? standardQuoteTemplate() : standardJobCardTemplate();
   doc.title = customer.title;
   const templateHasReadyRecipients = hasSendReadyRecipients(doc);
