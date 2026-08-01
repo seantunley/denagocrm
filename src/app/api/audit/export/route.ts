@@ -3,6 +3,7 @@ import { basePrisma } from "@/lib/db";
 import { getCurrentUser, getActiveTenantId } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { logAuditStrict } from "@/lib/audit";
+import { csvCell, csvRow } from "@/lib/csv";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
 
 export const dynamic = "force-dynamic";
@@ -20,17 +21,6 @@ type AuditExportRow = {
   ipAddress: string | null;
   correlationId: string | null;
 };
-
-function csvCell(value: unknown) {
-  const text = value == null
-    ? ""
-    : typeof value === "string"
-    ? value
-    : value instanceof Date
-    ? value.toISOString()
-    : JSON.stringify(value);
-  return `"${text.replace(/"/g, '""')}"`;
-}
 
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
@@ -89,9 +79,12 @@ export async function GET(request: NextRequest) {
     "ip_address",
     "correlation_id",
   ];
+  // Every cell goes through the shared csvCell: an audit `summary` is free text
+  // an attacker can plant (record names, notes), and a reviewer opening this file
+  // is exactly the high-privilege target a CSV-formula payload is aiming at.
   const csv = [
     headers.map(csvCell).join(","),
-    ...rows.map((row) => [
+    ...rows.map((row) => csvRow([
       row.createdAt,
       row.actorName,
       row.actorType,
@@ -103,7 +96,7 @@ export async function GET(request: NextRequest) {
       row.source,
       row.ipAddress,
       row.correlationId,
-    ].map(csvCell).join(",")),
+    ])),
   ].join("\n");
 
   await logAuditStrict({
