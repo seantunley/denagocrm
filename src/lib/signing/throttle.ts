@@ -1,5 +1,6 @@
 import "server-only";
-import { getRequestIp, rateLimitKey, registerRateLimitAttempt, SIGNING_POLICY } from "@/lib/rateLimit";
+import { SIGNING_POLICY } from "@/lib/rateLimit";
+import { throttlePublic } from "@/lib/publicThrottle";
 
 /**
  * Rate limit for the public signing endpoints (sign + decline).
@@ -28,19 +29,5 @@ import { getRequestIp, rateLimitKey, registerRateLimitAttempt, SIGNING_POLICY } 
  * relies on them living forever.
  */
 export async function rateLimitSigning(token: string): Promise<Response | null> {
-  const ip = await getRequestIp();
-  const byIp = await registerRateLimitAttempt(rateLimitKey("signing-ip", ip), SIGNING_POLICY);
-  if (!byIp.allowed) return tooManyAttempts(byIp.retryAfterSeconds);
-
-  const byToken = await registerRateLimitAttempt(rateLimitKey("signing-token", token), SIGNING_POLICY);
-  if (!byToken.allowed) return tooManyAttempts(byToken.retryAfterSeconds);
-
-  return null;
-}
-
-function tooManyAttempts(retryAfterSeconds: number): Response {
-  return new Response("Too many attempts. Try again shortly.", {
-    status: 429,
-    headers: retryAfterSeconds > 0 ? { "Retry-After": String(retryAfterSeconds) } : undefined,
-  });
+  return throttlePublic("signing", token, SIGNING_POLICY);
 }

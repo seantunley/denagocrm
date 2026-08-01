@@ -52,6 +52,29 @@ export const SIGNING_POLICY: RateLimitPolicy = {
   blockMs: 15 * 60 * 1000,
 };
 
+/**
+ * Token-gated public actions that MUTATE: approving or rejecting a signing
+ * workflow, submitting a survey response. Same shape as signing — a real
+ * person does these once, so the limit is only ever reached by a machine.
+ */
+export const PUBLIC_ACTION_POLICY: RateLimitPolicy = {
+  limit: 10,
+  windowMs: 5 * 60 * 1000,
+  blockMs: 15 * 60 * 1000,
+};
+
+/**
+ * API-key endpoints (intake, bookings, service lookup). Far more generous:
+ * these are machine-to-machine and a busy website can legitimately post a
+ * burst of leads. The point is not to police normal traffic — it is that a
+ * LEAKED key should not mean unlimited writes until someone notices.
+ */
+export const API_KEY_POLICY: RateLimitPolicy = {
+  limit: 120,
+  windowMs: 5 * 60 * 1000,
+  blockMs: 5 * 60 * 1000,
+};
+
 function retryAfter(blockedUntil: Date | null, now: Date): number {
   if (!blockedUntil) return 0;
   return Math.max(0, Math.ceil((blockedUntil.getTime() - now.getTime()) / 1000));
@@ -62,10 +85,28 @@ export function rateLimitKey(scope: string, identifier: string): string {
   return `${scope}:${crypto.createHmac("sha256", pepper).update(identifier).digest("hex")}`;
 }
 
+/**
+ * The caller's IP, or a sentinel when there is no request to read it from.
+ *
+ * `headers()` THROWS outside a request scope, and once the public endpoints
+ * started throttling, that turned "we cannot see who this is" into "the route
+ * explodes". The tenant-guard suite invokes route handlers directly, which is a
+ * legitimate way to test a chokepoint end to end, and it took the whole run
+ * down (CI caught it; a local `npm run test:unit` does not exercise those
+ * routes).
+ *
+ * A rate limiter has no business being the thing that fails a request. It
+ * degrades instead: an unidentifiable caller shares the "unknown" bucket, which
+ * is the same bucket a request with no forwarding headers already got.
+ */
 export async function getRequestIp(): Promise<string> {
-  const incoming = await headers();
-  const forwarded = incoming.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwarded || incoming.get("x-real-ip") || "unknown";
+  try {
+    const incoming = await headers();
+    const forwarded = incoming.get("x-forwarded-for")?.split(",")[0]?.trim();
+    return forwarded || incoming.get("x-real-ip") || "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 export async function checkRateLimit(key: string): Promise<RateLimitResult> {

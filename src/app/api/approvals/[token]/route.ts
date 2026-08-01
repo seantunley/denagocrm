@@ -5,6 +5,8 @@ import { approveStep, rejectStep } from "@/lib/signing/approvals";
 import { reqMeta } from "@/lib/signing/events";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveApprovalStepTenant } from "@/lib/tokenTenant";
+import { throttlePublic } from "@/lib/publicThrottle";
+import { PUBLIC_ACTION_POLICY } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +21,11 @@ const bodySchema = z.object({
 export async function POST(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
   if (!isValidSignToken(token)) return new Response("Invalid link", { status: 400 });
+  // Throttle before any database work. This endpoint APPROVES or REJECTS a
+  // signing workflow on a bare token, so it is the most consequential of the
+  // token-gated public routes.
+  const throttled = await throttlePublic("approvals", token, PUBLIC_ACTION_POLICY);
+  if (throttled) return throttled;
   // Phase C no-user edge: derive the approval's tenant first, then run the guarded
   // decision inside that scope (dormant no-op when off; fails closed under enforcement).
   return withTokenTenantScope(

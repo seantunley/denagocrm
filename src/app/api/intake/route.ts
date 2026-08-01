@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authenticateIntakeKey } from "@/lib/apiKeys";
+import { throttlePublic } from "@/lib/publicThrottle";
+import { API_KEY_POLICY } from "@/lib/rateLimit";
 import { establishTenantScopeFromId } from "@/lib/tenantScopeEntry";
 import { createIntakeLead } from "@/lib/leadIntake";
 import { recordReferral } from "@/lib/referrals";
@@ -28,6 +30,13 @@ export async function OPTIONS() {
 
 /** Website / landing-page lead intake. Authenticate with the X-Api-Key header. */
 export async function POST(req: NextRequest) {
+  // Throttled BEFORE the key is checked, so guessing keys is bounded too;
+  // keyed on the presented key (HMACed by rateLimitKey) so a LEAKED key cannot
+  // write without limit. See API_KEY_POLICY — generous, aimed at abuse not use.
+  {
+    const throttled = await throttlePublic("api-intake", req.headers.get("x-api-key"), API_KEY_POLICY);
+    if (throttled) return throttled;
+  }
   const auth = await authenticateIntakeKey(req.headers.get("x-api-key"), "intake");
   if (!auth) {
     return NextResponse.json(

@@ -8,6 +8,8 @@ import { getActiveTenantId } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sendSurvey } from "@/lib/surveys";
 import { submitFrozenSurveyResponse } from "@/lib/governedSurveyRuntime";
+import { checkPublicThrottle } from "@/lib/publicThrottle";
+import { PUBLIC_ACTION_POLICY } from "@/lib/rateLimit";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveSurveyResponseTenant } from "@/lib/tokenTenant";
 import {
@@ -87,6 +89,10 @@ export async function sendToAudience(_prev: SendResult, formData: FormData): Pro
 }
 
 export async function submitSurveyResponse(token: string, answers: Record<string, unknown>) {
+  // Public, token-gated, and it WRITES a response. Throttle before the tenant
+  // scope so a blocked call costs no query. A real respondent submits once.
+  const throttle = await checkPublicThrottle("survey-submit", token, PUBLIC_ACTION_POLICY);
+  if (!throttle.allowed) return { ok: false as const, error: "rate_limited" as const };
   return withTokenTenantScope(
     () => resolveSurveyResponseTenant(token),
     () => submitFrozenSurveyResponse(token, answers),

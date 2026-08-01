@@ -47,6 +47,9 @@ export default function SurveyForm({
     try {
       const res = await submitSurveyResponse(token, answers);
       if (res.ok || res.error === "done") setDone(true);
+      // A throttled respondent has a perfectly valid link — telling them it is
+      // dead would make them give up on a survey they were willing to finish.
+      else if (res.error === "rate_limited") setError("Too many attempts just now. Wait a moment and try again.");
       else setError("This survey link is no longer valid.");
     } catch {
       setError("Something went wrong. Please try again.");
