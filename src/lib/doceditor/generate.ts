@@ -6,7 +6,8 @@ import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import { buildQuoteContext, buildJobCardContext } from "@/lib/docbuilder/merge";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import { htmlToPdf } from "@/lib/customDocs";
-import { parseDocument, type DocumentModel } from "./model";
+import { type DocumentModel } from "./model";
+import { parseTemplateDocument } from "./legacy";
 import { renderDocumentHtml, renderEmailHtml, type RenderCtx } from "./serialize";
 
 /**
@@ -60,7 +61,7 @@ export async function renderResolvedToPdf(r: Resolved): Promise<{ buffer: Buffer
 async function resolve(templateId: string, quoteId?: string | null, jobCardId?: string | null): Promise<Resolved | null> {
   const tpl = await getBuilderTemplate(templateId);
   if (!tpl) return null;
-  const doc = parseDocument(tpl.data);
+  const doc = parseTemplateDocument(tpl.data, tpl.name);
   if (!doc) return null;
   let ctx: RenderCtx = null;
   let title = doc.title || tpl.name;

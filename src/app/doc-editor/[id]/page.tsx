@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import { requiredRecordKind } from "@/lib/docbuilder/recordBinding";
-import { parseDocument } from "@/lib/doceditor/model";
+import { parseTemplateDocument } from "@/lib/doceditor/legacy";
 import { blankDocument } from "@/lib/doceditor/factory";
 import { DocEditor } from "@/components/doceditor/DocEditor";
 
@@ -20,8 +20,12 @@ export default async function DocEditorPage({
   const template = await getBuilderTemplate(id);
   if (!template) notFound();
 
+  // The blank fallback is a last resort, not a migration path: the editor
+  // autosaves, so opening a template blank is one keystroke away from
+  // overwriting it. Legacy Puck rows convert here instead of landing on it.
   const initialDoc =
-    parseDocument(template.data) ?? blankDocument(template.name);
+    parseTemplateDocument(template.data, template.name) ??
+    blankDocument(template.name);
   const required = requiredRecordKind(template.key);
   const [quotes, jobCards] = await Promise.all([
     required === "jobcard" || required === null

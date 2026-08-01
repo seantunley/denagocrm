@@ -6,46 +6,26 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requirePermission, requireAnyPermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
-import { starterTemplate } from "@/lib/docbuilder/blocks";
 import { listBuilderVersions } from "@/lib/docbuilder/store";
 
 const BASE = "/settings/documents/builder";
 
-export async function createBuilderTemplate(formData: FormData) {
-  const user = await requirePermission("docbuilder.manage");
-  const name = String(formData.get("name") ?? "").trim();
-  const key = String(formData.get("key") ?? "custom").trim() || "custom";
-  if (!name) return;
-  const created = await prisma.docBuilderTemplate.create({
-    data: { name, key, data: starterTemplate() as object, createdById: user.id },
-  });
-  await logAudit({
-    action: "docbuilder.create",
-    summary: `Created document “${name}” (${key})`,
-    entityType: "DocBuilderTemplate",
-    entityId: created.id,
-    user,
-  });
-  revalidatePath(BASE);
-  redirect(`/doc-editor/${created.id}`);
-}
-
-/** Persist the Puck document tree from the editor. */
-export async function saveBuilderData(id: string, data: unknown): Promise<{ ok: boolean }> {
-  const user = await requirePermission("docbuilder.manage");
-  const existing = await prisma.docBuilderTemplate.findUnique({ where: { id } });
-  if (!existing || existing.deletedAt) return { ok: false };
-  await prisma.docBuilderTemplate.update({ where: { id }, data: { data: data as object } });
-  await logAudit({
-    action: "docbuilder.save",
-    summary: `Saved layout for document “${existing.name}”`,
-    entityType: "DocBuilderTemplate",
-    entityId: id,
-    user,
-  });
-  revalidatePath(`${BASE}/${id}`);
-  return { ok: true };
-}
+/*
+ * `createBuilderTemplate` and `saveBuilderData` used to live here and are gone.
+ *
+ * Both belonged to the retired Puck editor: create seeded `starterTemplate()`
+ * (legacy `{root, zones, content}`), and save wrote its `data: unknown`
+ * straight to the column with no schema validation at all. Nothing had
+ * referenced either since the doc-editor replaced that editor — the builder
+ * page creates through `createDocEditorTemplate` and the canvas saves through
+ * `saveDocEditor`, which validates against `documentSchema` before it writes.
+ *
+ * Unreferenced is not unreachable: an exported "use server" function is a live
+ * POST endpoint addressed by action id, not by whether any page renders a form
+ * for it. Leaving them meant a `docbuilder.manage` holder could still write
+ * arbitrary JSON into a template, and could still mint rows in the legacy
+ * format — the exact shape ../lib/doceditor/legacy.ts now exists to read back.
+ */
 
 export async function renameBuilderTemplate(id: string, formData: FormData) {
   const user = await requirePermission("docbuilder.manage");

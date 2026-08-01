@@ -7,7 +7,8 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { canAccessJobCard, canAccessQuote, requirePermission, type PermissionUser } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
-import { documentSchema, parseDocument } from "@/lib/doceditor/model";
+import { documentSchema } from "@/lib/doceditor/model";
+import { parseTemplateDocument } from "@/lib/doceditor/legacy";
 import { blankDocument, standardQuoteTemplate } from "@/lib/doceditor/factory";
 import { generateDocEditorPdf, resolveDocEditorContent, renderResolvedToPdf } from "@/lib/doceditor/generate";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
@@ -191,7 +192,7 @@ export async function sendDocForSigning(
     };
   }
 
-  const documentModel = parseDocument(binding.template.data);
+  const documentModel = parseTemplateDocument(binding.template.data, binding.template.name);
   if (!documentModel) return { ok: false, message: "This document is empty." };
   if (documentModel.recipients.length === 0) {
     return {

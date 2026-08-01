@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import { parseDocument } from "@/lib/doceditor/model";
+import { parseTemplateDocument } from "@/lib/doceditor/legacy";
 import {
   STANDARD_TEMPLATE_KEYS,
   STANDARD_TEMPLATE_NAMES,
@@ -24,9 +24,13 @@ export async function ensureBuilderSeeded(): Promise<void> {
           isDefault: true,
         },
       });
+      // "Valid" means the app can RENDER it, which now includes the legacy Puck
+      // format — otherwise a legacy row is treated as broken and gets a
+      // replacement cloned next to it, which is how "Quotation" came to appear
+      // twice in the builder list.
       const parsed = rows.map((row) => ({
         ...row,
-        valid: parseDocument(row.data) !== null,
+        valid: parseTemplateDocument(row.data) !== null,
       }));
       const validSystem = parsed.filter(
         (row) => row.createdById === null && row.valid,
@@ -91,7 +95,7 @@ export async function defaultBuilderTemplateId(
       orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
       select: { id: true, data: true },
     });
-    return rows.find((row) => parseDocument(row.data) !== null)?.id ?? null;
+    return rows.find((row) => parseTemplateDocument(row.data) !== null)?.id ?? null;
   } catch (error) {
     console.error(`Could not resolve default builder template "${key}"`, error);
     return null;

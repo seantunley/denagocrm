@@ -4,11 +4,8 @@ import { payableTotalCents } from "@/lib/pricing";
 import { contactName } from "@/lib/format";
 import { listTenantStaff } from "@/lib/tenantActor";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
-import {
-  parseDocument,
-  type DocumentModel,
-  type Recipient,
-} from "@/lib/doceditor/model";
+import { type DocumentModel, type Recipient } from "@/lib/doceditor/model";
+import { parseTemplateDocument } from "@/lib/doceditor/legacy";
 import {
   standardQuoteTemplate,
   newBlock,
@@ -414,7 +411,7 @@ export async function resolveEnvelope(opts: {
   let doc: DocumentModel | null = null;
   if (templateId) {
     const template = await getBuilderTemplate(templateId);
-    if (template) doc = parseDocument(template.data);
+    if (template) doc = parseTemplateDocument(template.data, template.name);
   }
   if (!doc) doc = quoteId ? standardQuoteTemplate() : standardJobCardTemplate();
   doc.title = customer.title;
