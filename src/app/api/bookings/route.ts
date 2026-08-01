@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma, basePrisma } from "@/lib/db";
+import { ciExactIdFilter } from "@/lib/ciExact";
 import { authenticateIntakeKey } from "@/lib/apiKeys";
 import { throttlePublic } from "@/lib/publicThrottle";
 import { API_KEY_POLICY } from "@/lib/rateLimit";
@@ -89,15 +90,21 @@ export async function POST(req: NextRequest) {
   }
 
   const digits = b.phone.replace(/\D/g, "").slice(-9);
+  // Exact (case-folded) email match. `mode: "insensitive"` compiled to an
+  // unescaped ILIKE, and `_`/`%` are legal in an email local part that Zod's
+  // `.email()` accepts — so a booking submitted with `%@%` attached itself to an
+  // arbitrary existing customer, taking their vehicle list with it. Ordered so
+  // the same submission always resolves to the same contact.
   const contact = await prisma.contact.findFirst({
     where: {
       OR: [
-        { email: { equals: b.email, mode: "insensitive" } },
+        await ciExactIdFilter("contactEmail", b.email),
         { phone: { contains: digits } },
         { whatsapp: { contains: digits } },
       ],
     },
     include: { vehicles: true },
+    orderBy: { createdAt: "asc" },
   });
 
   // The booking's system actor — a member of THIS tenant, never a global user.

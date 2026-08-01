@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma, basePrisma } from "@/lib/db";
+import { ciExactIdFilter } from "@/lib/ciExact";
 import { authenticateIntakeKey } from "@/lib/apiKeys";
 import { throttlePublic } from "@/lib/publicThrottle";
 import { API_KEY_POLICY } from "@/lib/rateLimit";
@@ -99,8 +100,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Exact (case-folded), not `mode: "insensitive"`. Not exploitable here today —
+  // normalizeVin() above strips everything outside [a-zA-Z0-9], so `_` and `%`
+  // never reach the query — but that makes an ILIKE on a public VIN lookup safe
+  // only by a side effect of an unrelated function. Sixteen underscores would
+  // otherwise return the first 17-character VIN on file, with the owner's contact
+  // row attached. The comparison should not depend on that.
   const vehicle = await prisma.vehicle.findFirst({
-    where: { vin: { equals: vin, mode: "insensitive" } },
+    where: await ciExactIdFilter("vehicleVin", vin),
     include: { contact: true },
   });
   if (!vehicle || vehicle.contact.deletedAt) return notFound;

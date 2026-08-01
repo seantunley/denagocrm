@@ -4,6 +4,7 @@ import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { ciExactIdFilter } from "@/lib/ciExact";
 import { requireLeadAccess, requirePermission, requireQuoteAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import {
@@ -47,14 +48,22 @@ async function activeUnit(id: string) {
   return unit;
 }
 
-/** Case-insensitive active-serial guard (mirrors the UPPER(serial) partial unique index). */
+/**
+ * Case-insensitive active-serial guard (mirrors the UPPER(serial) partial unique
+ * index). Matched through ciExactIds, not `mode: "insensitive"` — that compiles to
+ * an unescaped ILIKE, so a serial containing `_` or `%` was compared as a pattern
+ * and reported a clash against unrelated units. The DB index is the real guard;
+ * this is the check that produces a usable message, and it has to agree with it.
+ */
 async function assertUniqueSerial(serial: string | null, exceptId?: string) {
   if (!serial) return;
   const clash = await prisma.stockUnit.findFirst({
     where: {
-      serial: { equals: serial, mode: "insensitive" },
+      AND: [
+        await ciExactIdFilter("stockUnitSerial", serial),
+        ...(exceptId ? [{ id: { not: exceptId } }] : []),
+      ],
       deletedAt: null,
-      ...(exceptId ? { id: { not: exceptId } } : {}),
     },
     select: { id: true },
   });

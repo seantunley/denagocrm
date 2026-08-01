@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { basePrisma, prisma } from "@/lib/db";
+import { ciExactIdFilter } from "@/lib/ciExact";
 import { createSessionCookie, requireUser, requireOwner } from "@/lib/auth";
 import { putSetting, getSetting } from "@/lib/settings";
 import { isManagedSecret, isRegeneratable, keepBlankSubmit } from "@/lib/settingsSecrets";
@@ -282,8 +283,12 @@ export async function updateOwnEmail(
   if (email === user.email.toLowerCase()) {
     return { ok: "Your sign-in email is already up to date." };
   }
+  // Exact (case-folded) match, not `mode: "insensitive"`. That compiled to an
+  // unescaped ILIKE, which made this clash check a user-enumeration oracle: the
+  // address is only regex-validated, so `a%@x.co` passes and "already in use"
+  // then answers "does any staff email start with a", one character at a time.
   const existing = await prisma.user.findFirst({
-    where: { email: { equals: email, mode: "insensitive" }, id: { not: user.id } },
+    where: { AND: [await ciExactIdFilter("userEmail", email), { id: { not: user.id } }] },
     select: { id: true },
   });
   if (existing) return { error: "That email address is already in use." };

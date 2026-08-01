@@ -2,6 +2,7 @@
 
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { prisma } from "@/lib/db";
+import { ciExactIdFilter } from "@/lib/ciExact";
 import { getActiveTenantId, requireOperational, requireOwner } from "@/lib/auth";
 import { requireLeadAccess, requireContactAccess, canAccessContact, hasPermission } from "@/lib/permissions";
 import { aiCheckDraft, aiResearch } from "@/lib/ai";
@@ -52,7 +53,11 @@ export async function findPossibleDuplicates(input: {
   const matches = await prisma.contact.findMany({
     where: {
       OR: [
-        ...(email ? [{ email: { equals: email, mode: "insensitive" as const } }] : []),
+        // Exact (case-folded), not `mode: "insensitive"` — that compiled to an
+        // unescaped ILIKE, so submitting `%@%` to this duplicate-checker returned
+        // arbitrary contacts with their email and phone. `contains` below is a
+        // deliberate substring search and stays as it is.
+        ...(email ? [await ciExactIdFilter("contactEmail", email)] : []),
         ...(digits.length >= 9
           ? [{ phone: { contains: digits } }, { whatsapp: { contains: digits } }]
           : []),

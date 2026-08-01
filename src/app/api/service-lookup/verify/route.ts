@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma, basePrisma } from "@/lib/db";
+import { ciExactIdFilter } from "@/lib/ciExact";
 import { authenticateIntakeKey } from "@/lib/apiKeys";
 import { throttlePublic } from "@/lib/publicThrottle";
 import { API_KEY_POLICY } from "@/lib/rateLimit";
@@ -109,8 +110,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Exact (case-folded) — see the sibling route. The VIN is stripped to
+  // [a-zA-Z0-9] on line 55, so the wildcards can't reach the query today; the
+  // match is made exact so that stays true if the normalisation ever moves.
   const vehicle = await prisma.vehicle.findFirst({
-    where: { vin: { equals: vin, mode: "insensitive" } },
+    where: await ciExactIdFilter("vehicleVin", vin),
     include: { contact: true, serviceRecords: { orderBy: { serviceDate: "desc" }, take: 1 } },
   });
   if (!vehicle || vehicle.contact.deletedAt) {

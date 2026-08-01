@@ -1,6 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/db";
+import { ciExactIdFilter } from "@/lib/ciExact";
 import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { revalidatePath } from "next/cache";
@@ -80,8 +81,12 @@ export async function importContacts(
     }
     if (!firstName) { skippedEmpty++; continue; }
 
+    // Exact (case-folded) email match. Under `mode: "insensitive"` this was an
+    // unescaped ILIKE, so a CSV row whose email contained `_` or `%` matched an
+    // unrelated contact and the row was silently dropped as a duplicate — the
+    // import reported a clean run while quietly discarding real records.
     const matchers = [
-      ...(rec.email ? [{ email: { equals: rec.email, mode: "insensitive" as const } }] : []),
+      ...(rec.email ? [await ciExactIdFilter("contactEmail", rec.email)] : []),
       ...(rec.phone ? [{ phone: rec.phone }] : []),
     ];
     if (matchers.length > 0) {

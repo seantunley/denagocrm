@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma, basePrisma } from "@/lib/db";
+import { ciExactIdFilter } from "@/lib/ciExact";
 import { writeTenantId, withTenantWrite } from "@/lib/tenantWrite";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { logAudit } from "@/lib/audit";
@@ -374,7 +375,12 @@ export async function saveMailbox(formData: FormData): Promise<ActionResult> {
     // Check cross-tenant for email uniqueness — the inbound address routes mail globally.
     if (email) {
       const clash = await basePrisma.supportMailbox.findFirst({
-        where: { email: { equals: email, mode: "insensitive" }, ...(id ? { id: { not: id } } : {}) },
+        where: {
+          AND: [
+            await ciExactIdFilter("supportMailboxEmail", email),
+            ...(id ? [{ id: { not: id } }] : []),
+          ],
+        },
         select: { name: true },
       });
       if (clash) throw new ActionRefusal(`That inbox address is already used by the "${clash.name}" mailbox.`);
