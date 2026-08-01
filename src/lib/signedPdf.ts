@@ -1,5 +1,6 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { formatZAR, formatDate } from "./format";
+import { assertOwnedBlob, readFile } from "./storage";
 
 const ORANGE = rgb(0.917, 0.345, 0.047);
 const DARK = rgb(0.008, 0.024, 0.09);
@@ -162,8 +163,18 @@ export async function buildSignedPdf(input: SignedDocInput): Promise<Buffer> {
     let dy = y + 12; // top of the customer's signature line
     if (input.dealerSignatureUrl) {
       try {
-        const bytes = await fetch(input.dealerSignatureUrl).then((r) => r.arrayBuffer());
-        const sig = await pdf.embedPng(bytes);
+        // dealerSignatureUrl arrives as a caller argument, and this line makes
+        // the server fetch it. assertOwnedBlob resolves it through OUR store
+        // token, so a URL outside our store is a miss and never requested — a
+        // hostname check would not do, since every Vercel customer's store
+        // shares that suffix. Bounded in time too: Node fetch has no default.
+        //
+        // This module currently has no importers, so it is not an active path.
+        // Hardened rather than left as a loaded gun for whoever revives it.
+        await assertOwnedBlob(input.dealerSignatureUrl);
+        // readFile rather than a bare fetch: it re-validates the ref, applies the
+        // size cap and carries the timeout, so this path inherits all three.
+        const sig = await pdf.embedPng(await readFile(input.dealerSignatureUrl));
         const sh = 44;
         const sw = Math.min((sig.width / sig.height) * sh, 180);
         page.drawImage(sig, { x: dx, y: dy + 4, width: sw, height: sh });

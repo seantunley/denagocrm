@@ -26,6 +26,10 @@ import {
 
 const UPLOAD_DIR = path.join(process.cwd(), "storage", "uploads");
 
+/** How long a Blob read may take. Node fetch has no default timeout, and a size
+ *  cap says nothing about a host that connects and then never sends a byte. */
+const BLOB_FETCH_TIMEOUT_MS = 20_000;
+
 const privateMode = () => process.env.BLOB_PRIVATE === "true";
 const publicToken = () => process.env.BLOB_READ_WRITE_TOKEN;
 const privateToken = () => process.env.BLOB_PRIVATE_READ_WRITE_TOKEN;
@@ -228,7 +232,7 @@ export async function readFile(ref: string): Promise<Buffer> {
   if (meta.size > MAX_BLOB_BYTES) {
     throw new BlobTooLargeError(`Blob is ${meta.size} bytes, over the ${MAX_BLOB_BYTES}-byte read limit`);
   }
-  const res = await fetch(ref);
+  const res = await fetch(ref, { signal: AbortSignal.timeout(BLOB_FETCH_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`Blob fetch failed: ${res.status}`);
   if (!res.body) return Buffer.alloc(0);
   return streamToBuffer(res.body);
