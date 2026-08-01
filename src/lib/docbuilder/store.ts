@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import { parseTemplateDocument } from "@/lib/doceditor/legacy";
+import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import {
   STANDARD_TEMPLATE_KEYS,
   STANDARD_TEMPLATE_NAMES,
@@ -30,7 +30,7 @@ export async function ensureBuilderSeeded(): Promise<void> {
       // twice in the builder list.
       const parsed = rows.map((row) => ({
         ...row,
-        valid: parseTemplateDocument(row.data) !== null,
+        valid: readTemplateDocument(row.data).status === "ok",
       }));
       const validSystem = parsed.filter(
         (row) => row.createdById === null && row.valid,
@@ -95,7 +95,7 @@ export async function defaultBuilderTemplateId(
       orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
       select: { id: true, data: true },
     });
-    return rows.find((row) => parseTemplateDocument(row.data) !== null)?.id ?? null;
+    return rows.find((row) => readTemplateDocument(row.data).status === "ok")?.id ?? null;
   } catch (error) {
     console.error(`Could not resolve default builder template "${key}"`, error);
     return null;

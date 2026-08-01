@@ -8,7 +8,7 @@ import { prisma } from "@/lib/db";
 import { canAccessJobCard, canAccessQuote, requirePermission, type PermissionUser } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { documentSchema } from "@/lib/doceditor/model";
-import { parseTemplateDocument } from "@/lib/doceditor/legacy";
+import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import { blankDocument, standardQuoteTemplate } from "@/lib/doceditor/factory";
 import { generateDocEditorPdf, resolveDocEditorContent, renderResolvedToPdf } from "@/lib/doceditor/generate";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
@@ -192,8 +192,15 @@ export async function sendDocForSigning(
     };
   }
 
-  const documentModel = parseTemplateDocument(binding.template.data, binding.template.name);
-  if (!documentModel) return { ok: false, message: "This document is empty." };
+  const read = readTemplateDocument(binding.template.data, binding.template.name);
+  if (read.status === "unsupported") {
+    return {
+      ok: false,
+      message: "This template was built in the previous document builder and can't be sent for signing. Create a new document to replace it.",
+    };
+  }
+  if (read.status !== "ok") return { ok: false, message: "This document is empty." };
+  const documentModel = read.doc;
   if (documentModel.recipients.length === 0) {
     return {
       ok: false,

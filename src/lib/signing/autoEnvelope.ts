@@ -5,7 +5,7 @@ import { contactName } from "@/lib/format";
 import { listTenantStaff } from "@/lib/tenantActor";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import { type DocumentModel, type Recipient } from "@/lib/doceditor/model";
-import { parseTemplateDocument } from "@/lib/doceditor/legacy";
+import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import {
   standardQuoteTemplate,
   newBlock,
@@ -411,8 +411,20 @@ export async function resolveEnvelope(opts: {
   let doc: DocumentModel | null = null;
   if (templateId) {
     const template = await getBuilderTemplate(templateId);
-    if (template) doc = parseTemplateDocument(template.data, template.name);
+    if (template) {
+      const read = readTemplateDocument(template.data, template.name);
+      // A CHOSEN template that cannot be read faithfully must stop the
+      // envelope, not fall through to the standard layout below. This document
+      // gets rendered, mailed and signed: quietly substituting a different one
+      // means the customer signs something other than what was selected.
+      // resolveEnvelope's null already surfaces as "Could not prepare the
+      // document."
+      if (read.status === "unsupported") return null;
+      doc = read.status === "ok" ? read.doc : null;
+    }
   }
+  // Reached only when no template was chosen, or the chosen row is gone —
+  // never as a stand-in for one we failed to read.
   if (!doc) doc = quoteId ? standardQuoteTemplate() : standardJobCardTemplate();
   doc.title = customer.title;
   const templateHasReadyRecipients = hasSendReadyRecipients(doc);

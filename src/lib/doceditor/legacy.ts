@@ -246,22 +246,19 @@ function blocksFor(block: LegacyBlock, id: string): DocumentBlock[] | null {
       return [{ id, type: "conditional", ...layout, when: str(p.when), blocks: inner }];
     }
 
-    // TwoColumn / Columns / Signature are LAYOUT: they become rows with several
-    // columns, which a block list cannot express. Nested inside another slot
-    // they degrade to their content in sequence — see rowsFor for the top-level
-    // (and only observed) case.
+    // TwoColumn / Columns / Signature are LAYOUT: side-by-side columns, which a
+    // block LIST cannot express. `rowsFor` converts them at the top level, where
+    // they become a row. Reached from here they are nested inside another
+    // block's slot, and the current model has no nested row — so this refuses
+    // rather than flattening them into a sequence.
+    //
+    // Flattening would "succeed" with the columns stacked, and the editor's
+    // autosave would then store that altered layout permanently. A refusal
+    // leaves the row untouched. No template in this database nests them.
     case "TwoColumn":
-      return infoCards(p, id);
-
-    case "Columns": {
-      const left = slotBlocks(p.left, `${id}-l`);
-      const right = slotBlocks(p.right, `${id}-r`);
-      if (left === null || right === null) return null;
-      return [...left, ...right];
-    }
-
+    case "Columns":
     case "Signature":
-      return signatureColumns(p, id).flatMap((col) => col.blocks);
+      return null;
 
     default:
       return null;
@@ -411,11 +408,40 @@ export function legacyToDocument(input: unknown, title = "Untitled proposal"): D
 }
 
 /**
- * Parse stored TEMPLATE JSON in either format.
+ * The three outcomes of reading a stored template, kept DISTINCT on purpose.
+ *
+ * A single `DocumentModel | null` collapsed two very different situations into
+ * the same answer, and every caller then treated that answer as "empty":
+ *
+ *   • the editor mounted a blank document over it — and it autosaves;
+ *   • autoEnvelope substituted the standard template, which would have SENT a
+ *     different document than the one that was picked;
+ *   • seeding cloned a replacement next to it.
+ *
+ * For a genuinely empty row that is reasonable. For a legacy template this
+ * converter declined to convert, it is the exact data loss the refusal was
+ * meant to prevent. `unsupported` is what lets a caller tell them apart and
+ * stop instead.
+ */
+export type TemplateRead =
+  | { status: "ok"; doc: DocumentModel }
+  /** Legacy data this converter will not convert faithfully. Do not fall back — STOP. */
+  | { status: "unsupported" }
+  /** Not a document at all: absent, empty, or some other shape entirely. */
+  | { status: "unreadable" };
+
+/**
+ * Read stored TEMPLATE JSON in either format.
  *
  * Use this wherever a `DocBuilderTemplate.data` / `DocBuilderVersion.data` blob
  * is loaded. Use `parseDocument` directly for signed snapshots.
  */
-export function parseTemplateDocument(input: unknown, title?: string): DocumentModel | null {
-  return parseDocument(input) ?? legacyToDocument(input, title);
+export function readTemplateDocument(input: unknown, title?: string): TemplateRead {
+  const current = parseDocument(input);
+  if (current) return { status: "ok", doc: current };
+
+  if (!isLegacyBuilderData(input)) return { status: "unreadable" };
+
+  const converted = legacyToDocument(input, title);
+  return converted ? { status: "ok", doc: converted } : { status: "unsupported" };
 }

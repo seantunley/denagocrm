@@ -6,7 +6,7 @@ import path from "node:path";
 import {
   isLegacyBuilderData,
   legacyToDocument,
-  parseTemplateDocument,
+  readTemplateDocument,
 } from "../src/lib/doceditor/legacy";
 import { parseDocument } from "../src/lib/doceditor/model";
 import { blankDocument, standardQuoteTemplate } from "../src/lib/doceditor/factory";
@@ -63,7 +63,7 @@ function allBlocks(doc: NonNullable<ReturnType<typeof legacyToDocument>>) {
 test("the production Quotation row no longer parses as empty", () => {
   assert.equal(parseDocument(PRODUCTION_ROW), null, "precondition: the strict parser still rejects it");
   assert.ok(isLegacyBuilderData(PRODUCTION_ROW));
-  assert.ok(parseTemplateDocument(PRODUCTION_ROW, "Quotation"), "the template parser must accept it");
+  assert.equal(readTemplateDocument(PRODUCTION_ROW, "Quotation").status, "ok");
 });
 
 test("every piece of the production row's content survives conversion", () => {
@@ -171,15 +171,85 @@ test("every legacy block type is handled", () => {
 });
 
 test("a current-format document is passed through untouched", () => {
-  // parseTemplateDocument must not reshape documents that already parse — the
+  // readTemplateDocument must not reshape documents that already parse — the
   // converter is a fallback, not a normaliser.
   for (const doc of [standardQuoteTemplate(), blankDocument("x")]) {
-    assert.deepEqual(parseTemplateDocument(doc), parseDocument(doc));
+    const read = readTemplateDocument(doc);
+    assert.equal(read.status, "ok");
+    assert.deepEqual(read.status === "ok" && read.doc, parseDocument(doc));
   }
   assert.equal(isLegacyBuilderData(standardQuoteTemplate()), false);
   for (const notATemplate of [null, undefined, 42, "x", {}, { content: "nope" }]) {
     assert.equal(legacyToDocument(notATemplate), null);
   }
+});
+
+test("unsupported legacy data is distinguishable from an empty row", () => {
+  // The whole point of refusing to convert is that callers then STOP. A single
+  // `DocumentModel | null` made "we declined to convert this" and "there is
+  // nothing here" the same answer, and every caller reads the second one as
+  // permission to substitute something else.
+  const unsupported = { ...PRODUCTION_ROW, content: [...PRODUCTION_ROW.content, { type: "Carousel", props: { id: "x1" } }] };
+  assert.equal(readTemplateDocument(unsupported).status, "unsupported");
+
+  // Not a document at all — nothing stored to lose, so a blank canvas is fine.
+  for (const notATemplate of [null, undefined, {}, { schemaVersion: 9 }, { pages: "no" }]) {
+    assert.equal(readTemplateDocument(notATemplate).status, "unreadable");
+  }
+});
+
+test("nested side-by-side layout refuses rather than flattening", () => {
+  // TwoColumn / Columns / Signature are columns. The current model has no
+  // nested row, so inside another block's slot they could only be stacked —
+  // a conversion that "succeeds" with the layout altered, which autosave then
+  // stores permanently. Each must refuse instead.
+  for (const nested of ["TwoColumn", "Columns", "Signature"]) {
+    const doc = legacyToDocument({
+      root: { props: {} }, zones: {},
+      content: [{
+        type: "Conditional",
+        props: { id: "c1", when: "true", content: [{ type: nested, props: { id: "n1", ratio: "50", left: [], right: [] } }] },
+      }],
+    });
+    assert.equal(doc, null, `${nested} nested in a conditional must refuse, not flatten`);
+  }
+
+  // Inside a Columns slot too, not just a conditional.
+  assert.equal(legacyToDocument({
+    root: { props: {} }, zones: {},
+    content: [{ type: "Columns", props: { id: "c1", ratio: "50", left: [{ type: "TwoColumn", props: { id: "t1" } }], right: [] } }],
+  }), null);
+
+  // …but at the TOP level, where they become a real row, they still convert.
+  for (const top of ["TwoColumn", "Signature"]) {
+    const doc = legacyToDocument({ root: { props: {} }, zones: {}, content: [{ type: top, props: { id: "t1" } }] });
+    assert.ok(doc, `${top} must still convert at the top level`);
+    assert.ok(doc.pages[0].rows[0].columns.length >= 2, `${top} must convert to side-by-side columns`);
+  }
+});
+
+test("no caller falls back to a substitute on unsupported legacy data", () => {
+  // Refusing to convert buys nothing if the next line opens the template blank
+  // (the editor autosaves) or swaps in a different document (autoEnvelope sends
+  // it for signature).
+  const editor = read("src/app/doc-editor/[id]/page.tsx");
+  assert.match(editor, /status === "unsupported"/, "the editor must handle unsupported explicitly");
+  assert.doesNotMatch(
+    editor,
+    /readTemplateDocument\([^)]*\)[\s\S]{0,40}\?\?\s*blankDocument/,
+    "the editor must not fall straight through to a blank autosaving canvas",
+  );
+  assert.ok(
+    editor.indexOf('status === "unsupported"') < editor.indexOf("<DocEditor"),
+    "the refusal must come before the editor is mounted",
+  );
+
+  const envelope = read("src/lib/signing/autoEnvelope.ts");
+  assert.ok(
+    envelope.indexOf('read.status === "unsupported"') < envelope.indexOf("standardQuoteTemplate()"),
+    "autoEnvelope must return before it can substitute the standard template",
+  );
+  assert.match(envelope, /if \(read\.status === "unsupported"\) return null;/);
 });
 
 test("signed snapshots are still parsed strictly", () => {
@@ -212,11 +282,11 @@ test("nothing writes the legacy format any more", () => {
 test("the template loaders all accept both formats", () => {
   // A single missed call site is a template that still opens blank.
   for (const [file, pattern] of [
-    ["src/app/doc-editor/[id]/page.tsx", /parseTemplateDocument\(template\.data/],
-    ["src/lib/doceditor/generate.ts", /parseTemplateDocument\(tpl\.data/],
-    ["src/lib/signing/autoEnvelope.ts", /parseTemplateDocument\(template\.data/],
-    ["src/app/actions/doceditor.ts", /parseTemplateDocument\(binding\.template\.data/],
-    ["src/lib/docbuilder/store.ts", /parseTemplateDocument\(row\.data\)/],
+    ["src/app/doc-editor/[id]/page.tsx", /readTemplateDocument\(template\.data/],
+    ["src/lib/doceditor/generate.ts", /readTemplateDocument\(tpl\.data/],
+    ["src/lib/signing/autoEnvelope.ts", /readTemplateDocument\(template\.data/],
+    ["src/app/actions/doceditor.ts", /readTemplateDocument\(binding\.template\.data/],
+    ["src/lib/docbuilder/store.ts", /readTemplateDocument\(row\.data\)/],
   ] as const) {
     assert.match(read(file), pattern, `${file} still loads templates with the strict parser`);
   }
