@@ -44,6 +44,11 @@ const nextConfig: NextConfig = {
           },
           { key: "X-Robots-Tag", value: "noindex, nofollow" },
           { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+          // Content-Security-Policy is NOT set here. It needs a per-request
+          // nonce, so it is built in src/proxy.ts (see src/lib/csp.ts). Setting
+          // it in both places would send two enforced policies, and a browser
+          // applies the INTERSECTION — the static one, having no nonce, would
+          // block every script the proxy had just authorised.
         ],
       },
     ];

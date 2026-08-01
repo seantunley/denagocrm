@@ -12,6 +12,24 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+/**
+ * Nonce-based CSP requires dynamic rendering everywhere.
+ *
+ * Next stamps the per-request nonce onto its scripts during server rendering.
+ * A statically prerendered page's HTML is built once, before any request
+ * exists, so its scripts carry no nonce — and `strict-dynamic` then blocks
+ * them. The page renders and never hydrates.
+ *
+ * Without this the build prerendered /login and /platform/login, so the fix
+ * would have shipped a CSP that stopped anyone signing in. Root layout rather
+ * than per-page because both are "use client" files, where route segment
+ * config does not apply.
+ *
+ * The cost is small here: every other page already reads cookies or the
+ * database and was dynamic regardless.
+ */
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "Denago CRM",
   description: "CRM and EV service management for Denago Cape Town",
