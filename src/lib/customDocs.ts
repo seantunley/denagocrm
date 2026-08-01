@@ -120,13 +120,48 @@ export type HtmlPdfOptions = {
 };
 
 /** Block localhost + private / link-local IP literals to prevent SSRF from image URLs. */
-function isBlockedHost(host: string): boolean {
-  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
-  if (h === "localhost" || h === "::1" || h.endsWith(".localhost")) return true;
-  if (/^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h)) return true;
-  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(h)) return true;
-  if (/^(0\.|::$|fc|fd)/.test(h)) return true; // 0.0.0.0, unspecified, unique-local IPv6
-  return false;
+/**
+ * Hosts headless Chromium may load a subresource from while rendering a
+ * template.
+ *
+ * This replaces a DENYLIST of private ranges, which could not work. Two reasons,
+ * both demonstrated against the old function before it was removed:
+ *
+ *  - It matched on the HOSTNAME STRING, and DNS is resolved by Chromium
+ *    afterwards. A name that A-records to 169.254.169.254 sailed through, as did
+ *    `metadata.google.internal`. No amount of regex fixes that.
+ *  - Even as a string matcher it missed every alternative IP encoding —
+ *    `2852039166`, `0xA9FEA9FE`, `0251.0376.0251.0376` and
+ *    `[::ffff:169.254.169.254]` are all 169.254.169.254 to Chromium and none
+ *    matched. It also missed 100.64.0.0/10 and fe80::, while wrongly blocking
+ *    any public host beginning "fc"/"fd" (fda.example.com).
+ *
+ * An allowlist has no DNS problem, because the permitted NAMES are not
+ * attacker-influenced. Templates are authored by docbuilder.manage holders and
+ * their images are meant to be the company logo or an uploaded asset — verified
+ * that no template in the database references any external image at all, so this
+ * takes nothing away that is in use.
+ */
+function pdfImageHostAllowed(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  const allowed = [
+    // our own origin (the logo and any /branding asset)
+    (() => {
+      try {
+        return new URL(process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za").hostname;
+      } catch {
+        return "crm.denagocpt.co.za";
+      }
+    })(),
+    // uploaded assets live in Vercel Blob
+    ".blob.vercel-storage.com",
+    // operator escape hatch — a CDN the company actually uses
+    ...(process.env.PDF_IMAGE_HOSTS ?? "")
+      .split(",")
+      .map((h) => h.trim().toLowerCase())
+      .filter(Boolean),
+  ];
+  return allowed.some((entry) => (entry.startsWith(".") ? host.endsWith(entry) : host === entry));
 }
 
 /** HTML → PDF buffer. Serverless Chromium on Vercel, local Chrome in dev. */
@@ -155,8 +190,9 @@ export async function htmlToPdf(html: string, opts?: HtmlPdfOptions): Promise<Bu
   }
   try {
     const page = await browser.newPage();
-    // Harden: templates are untrusted content. No scripting, and only allow
-    // data: URIs and https to public hosts (blocks SSRF to internal addresses).
+    // Harden: templates are untrusted content. No scripting, and https only to a
+    // host we have vouched for — see pdfImageHostAllowed for why this is an
+    // allowlist and not a denylist of private ranges.
     await page.setJavaScriptEnabled(false);
     await page.setRequestInterception(true);
     page.on("request", (r) => {
@@ -164,7 +200,8 @@ export async function htmlToPdf(html: string, opts?: HtmlPdfOptions): Promise<Bu
       if (url.startsWith("data:")) return void r.continue();
       try {
         const u = new URL(url);
-        if (u.protocol !== "https:" || isBlockedHost(u.hostname)) return void r.abort();
+        if (u.protocol !== "https:" || u.username || u.password) return void r.abort();
+        if (!pdfImageHostAllowed(u.hostname)) return void r.abort();
         return void r.continue();
       } catch { return void r.abort(); }
     });

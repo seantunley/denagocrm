@@ -6,6 +6,13 @@ import { sendPushToAll } from "./push";
 import { advanceFlow, greetingVars } from "./flowSession";
 import { crmActions } from "./flowActions";
 
+/**
+ * Every outbound call is bounded. Node fetch has NO default timeout, so an
+ * unresponsive provider holds a webhook handler or a cron sweep open until the
+ * platform kills the whole invocation.
+ */
+const OUTBOUND_TIMEOUT_MS = 15_000;
+
 const api = (token: string, method: string) => `https://api.telegram.org/bot${token}/${method}`;
 
 // Telegram has no ChannelIdentity mapping (no per-bot → tenant routing) yet, so
@@ -24,10 +31,10 @@ export async function tgSend(chatId: number | string, text: string, options?: { 
     body.reply_markup = { inline_keyboard: options.map((o) => [{ text: o.label, callback_data: o.id.slice(0, 64) }]) };
   }
   await fetch(api(t, "sendMessage"), {
+    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(10000),
   }).catch(() => {});
 }
 
@@ -35,10 +42,10 @@ export async function tgSendPhoto(chatId: number | string, url: string, caption?
   const t = await token();
   if (!t) return;
   await fetch(api(t, "sendPhoto"), {
+    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: chatId, photo: url, ...(caption ? { caption } : {}) }),
-    signal: AbortSignal.timeout(10000),
   }).catch(() => {});
 }
 
@@ -46,6 +53,7 @@ export async function tgAnswerCallback(id: string) {
   const t = await token();
   if (!t) return;
   await fetch(api(t, "answerCallbackQuery"), {
+    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ callback_query_id: id }),
@@ -57,6 +65,7 @@ export async function setTelegramWebhook(url: string, secret: string): Promise<{
   if (!t) return { ok: false, error: "No bot token saved." };
   try {
     const res = await fetch(api(t, "setWebhook"), {
+      signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url, secret_token: secret, allowed_updates: ["message", "callback_query"] }),
@@ -71,7 +80,7 @@ export async function setTelegramWebhook(url: string, secret: string): Promise<{
 export async function deleteTelegramWebhook() {
   const t = await token();
   if (!t) return;
-  await fetch(api(t, "deleteWebhook"), { method: "POST" }).catch(() => {});
+  await fetch(api(t, "deleteWebhook"), { method: "POST", signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS) }).catch(() => {});
 }
 
 async function tgBotEnabled(): Promise<boolean> {
