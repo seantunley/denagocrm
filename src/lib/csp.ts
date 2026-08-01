@@ -73,9 +73,30 @@ export function buildCsp(options: CspOptions): string {
   return enforcedDirectives(options).join("; ");
 }
 
+/**
+ * Directives a browser IGNORES in a report-only policy, per CSP3 §3.1 — they
+ * describe how to CHANGE a request, and report-only changes nothing.
+ *
+ * Sending them anyway is not harmful, just noisy, and Chromium says so on every
+ * page load:
+ *
+ *   The Content Security Policy directive 'upgrade-insecure-requests' is
+ *   ignored when delivered in a report-only policy.
+ *
+ * Found by actually opening the console on a deployed page, which is the only
+ * way to find it — no test can see a header a browser silently drops. Worth
+ * fixing because a console that cries wolf on every load is a console nobody
+ * reads, and this policy exists precisely so its reports get read.
+ *
+ * All three remain in the ENFORCED policy, where they work.
+ */
+const IGNORED_IN_REPORT_ONLY = ["upgrade-insecure-requests", "frame-ancestors", "sandbox"];
+
 /** The policy we intend to enforce next: everything above, plus the resource rules. */
 export function buildCspReportOnly(options: CspOptions): string {
-  return [...resourceDirectives(), ...enforcedDirectives(options)].join("; ");
+  return [...resourceDirectives(), ...enforcedDirectives(options)]
+    .filter((directive) => !IGNORED_IN_REPORT_ONLY.includes(directive.split(/\s+/)[0]))
+    .join("; ");
 }
 
 /**
