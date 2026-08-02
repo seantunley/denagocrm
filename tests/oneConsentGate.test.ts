@@ -67,17 +67,29 @@ test("the one gate checks every rule the four used to check between them", () =>
 });
 
 test("every outbound marketing path goes through it", () => {
+  // lifecycleJourneys.ts and automations.ts were on this list and are now
+  // RETIRED — the Journey engine is the only automation engine, and anniversary
+  // / win-back mail comes from journeyScheduling. Their consent obligation did
+  // not disappear with them: it moved to journeyStepExecutor, which is on this
+  // list and is where a converted rule's email now goes. The guard below proves
+  // they are gone rather than silently dropped from the list.
   for (const [rel, why] of [
     ["src/lib/marketingCampaignQueue.ts", "campaigns"],
     ["src/lib/surveyDistributionQueue.ts", "surveys"],
-    ["src/lib/lifecycleJourneys.ts", "anniversary / win-back"],
-    ["src/lib/journeyStepExecutor.ts", "journey email and SMS steps"],
-    ["src/lib/automations.ts", "automation rule emails"],
+    ["src/lib/journeyStepExecutor.ts", "journey email and SMS steps — including converted automation rules"],
   ] as const) {
     assert.match(
       shipped(rel),
       /canContactPerson\(/,
       `${rel} sends marketing (${why}) and must ask the one gate first`,
+    );
+  }
+
+  // Retired, not merely unlisted. If either returns, it returns unguarded.
+  for (const gone of ["src/lib/lifecycleJourneys.ts", "src/lib/automations.ts"]) {
+    assert.throws(
+      () => src(gone),
+      `${gone} is back — it sent marketing and must be re-added to the list above`,
     );
   }
 });
@@ -127,39 +139,23 @@ test("the tenant comes from the contact ROW, not the journey snapshot", () => {
   assert.doesNotMatch(body, /tenantId/, "if compactContact starts carrying tenantId, revisit — the row is still safer");
 });
 
-test("an unresolvable contact blocks the send in BOTH engines", () => {
-  // The journey path returned "no contact record to check consent against" and
-  // skipped, while the legacy path gated inside `if (consentContactId)` and
-  // sent anyway — the same bypass one level down. Two engines, two answers to
-  // "may we mail someone we cannot check".
+test("an unresolvable contact blocks the send", () => {
+  // Both engines used to answer this differently: the journey path returned
+  // "no contact record to check consent against" and skipped, while the legacy
+  // automation path gated inside `if (consentContactId)` and sent anyway. Only
+  // one engine remains, and it fail-closes — a contact we cannot identify is a
+  // contact whose opt-out we cannot see.
   assert.match(
     shipped("src/lib/journeyStepExecutor.ts"),
     /if \(!contactId\) return \{ kind: "blocked"/,
-    "the journey engine fail-closes",
+    "the journey engine must fail closed",
   );
-  const automations = shipped("src/lib/automations.ts");
-  assert.match(
-    automations,
-    /if \(!consentContactId\) \{\s*return "skipped: no contact record to check consent against";/,
-    "…and so must the legacy engine, until it is retired",
-  );
-  assert.doesNotMatch(automations, /if \(consentContactId\) \{/, "the skippable shape must be gone");
 });
 
-test("an unlinked lead cannot slip past the automation gate", () => {
-  // Gating on `lead.contactId` left the gate skippable: a lead with an email
-  // and no contact row bypassed it completely — which is most freshly-captured
-  // leads, and the population most likely to have unsubscribed under another.
-  const code = shipped("src/lib/automations.ts");
-  assert.match(code, /const consentContactId =\s*lead\.contactId \?\?/, "an unlinked lead must still be resolved");
-  assert.match(code, /contact\.findFirst\(\{\s*where: \{ email: lead\.email, deletedAt: null \}/);
-  assert.doesNotMatch(code, /if \(lead\.contactId\) \{\s*const verdict/, "the old skippable shape must be gone");
-});
-
-test("an automation email is gated before it is sent", () => {
-  const code = shipped("src/lib/automations.ts");
-  const gate = code.indexOf("canContactPerson(");
+test("a journey email is gated before it is sent", () => {
+  const code = shipped("src/lib/journeyStepExecutor.ts");
+  const gate = code.indexOf("marketingVerdict(");
   const send = code.indexOf("await sendEmail(");
-  assert.ok(gate !== -1, "the automation send path must consult the gate");
+  assert.ok(gate !== -1, "the send path must consult the gate");
   assert.ok(gate < send, `the gate must precede the send (gate ${gate}, send ${send})`);
 });
