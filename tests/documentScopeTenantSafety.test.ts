@@ -83,6 +83,25 @@ test("EVERY soft delete and restore is tenant-scoped, not just documents", () =>
   }
 });
 
+test("the Trash page reads within the tenant too", () => {
+  // The WRITE side was scoped first, which blocked restoring another tenant's
+  // row — but the page still LISTED them. requireOwner() answers "is this
+  // person an owner", never "whose data may they see", so an owner of one
+  // tenant read every other tenant's deleted contacts, leads, quotes,
+  // documents and vehicles: names, addresses, phone numbers, prices. Blocking
+  // the restore while still rendering the PII is the wrong half to fix.
+  const page = shipped("src/app/(app)/trash/page.tsx");
+  assert.match(page, /basePrisma\./, "still the basePrisma page this guards");
+  assert.match(page, /tenantId: currentTenantScope\(\)\?\.tenantId \?\? null/, "the shared predicate must carry the tenant");
+
+  // Every query must go through that one predicate — a `where:` built inline
+  // would silently opt out of it.
+  const wheres = page.match(/where: [^,\n]+/g) ?? [];
+  for (const where of wheres) {
+    assert.match(where, /notNull/, `a trash query builds its own where clause: ${where}`);
+  }
+});
+
 test("no caller announces a delete or restore that did not happen", () => {
   // Every one of these dereferenced the returned row immediately. With the
   // write now able to match nothing, logging first would audit a phantom

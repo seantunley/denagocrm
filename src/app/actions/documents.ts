@@ -5,7 +5,6 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
-import { currentTenantScope } from "@/lib/tenantScope";
 import { saveFile } from "@/lib/storage";
 import { DOC_DEFS, defaultTemplate, mergeTemplate, isDocKey } from "@/lib/docTemplates";
 import {

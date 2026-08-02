@@ -1,6 +1,7 @@
 import { differenceInCalendarDays, addDays } from "date-fns";
 import { ArchiveRestore, Trash2 } from "lucide-react";
 import { basePrisma } from "@/lib/db";
+import { currentTenantScope } from "@/lib/tenantScope";
 import { requireOwner } from "@/lib/auth";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { restoreFromTrash } from "@/app/actions/trash";
@@ -37,7 +38,17 @@ export default async function TrashPage() {
   // sets app.bypass_rls and is not soft-delete filtered. The proxy stays as the
   // pre-filter (nicer redirect); requireOwner() is the actual boundary.
   await requireOwner();
-  const notNull = { deletedAt: { not: null } } as const;
+  // …and owner of WHICH tenant. requireOwner() answers "is this person an
+  // owner", never "whose data may they see", so on its own it let an owner of
+  // one tenant read every other tenant's deleted contacts, leads, quotes,
+  // documents and vehicles — names, addresses, phone numbers, prices. The
+  // deletion path was tenant-scoped first (see lib/trash.ts); this is the read
+  // side of the same hole, and the more serious half: restoring was already
+  // blocked, but the PII was still on screen.
+  const notNull = {
+    deletedAt: { not: null },
+    tenantId: currentTenantScope()?.tenantId ?? null,
+  } as const;
   const [automotiveOn, commerceOn] = await Promise.all([
     isModuleEnabled("automotive"),
     isModuleEnabled("commerce"),
