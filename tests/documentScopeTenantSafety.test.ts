@@ -40,7 +40,7 @@ test("the document scope query names its tenant", () => {
   assert.ok(body.length > 0, "the slice ran backwards");
   assert.match(body, /basePrisma\.document\.findMany/, "still the basePrisma query this guards");
   assert.match(body, /documentTenantWhere\(\)/, "a basePrisma query must carry an explicit tenant predicate");
-  assert.match(shipped("src/lib/permissions.ts"), /tenantId: currentTenantScope\(\)\?\.tenantId \?\? null/);
+  assert.match(shipped("src/lib/permissions.ts"), /if \(!scope\) return \{\};/);
 });
 
 test("access to ONE document is decided by resolving that document", () => {
@@ -71,7 +71,7 @@ test("EVERY soft delete and restore is tenant-scoped, not just documents", () =>
   const trash = shipped("src/lib/trash.ts");
   assert.doesNotMatch(trash, /opts\?:/, "an optional tenant is one a caller can forget");
   assert.match(trash, /function activeTenantWhere\(\)/);
-  assert.match(trash, /tenantId: currentTenantScope\(\)\?\.tenantId \?\? null/);
+  assert.match(trash, /if \(!scope\) return \{\};/);
 
   for (const fn of ["softDeleteRecord", "restoreRecord"]) {
     const start = trash.indexOf(`export async function ${fn}(`);
@@ -92,13 +92,51 @@ test("the Trash page reads within the tenant too", () => {
   // the restore while still rendering the PII is the wrong half to fix.
   const page = shipped("src/app/(app)/trash/page.tsx");
   assert.match(page, /basePrisma\./, "still the basePrisma page this guards");
-  assert.match(page, /tenantId: currentTenantScope\(\)\?\.tenantId \?\? null/, "the shared predicate must carry the tenant");
+  assert.match(page, /\.\.\.\(scope \? \{ tenantId: scope\.tenantId \} : \{\}\)/, "the shared predicate must carry the tenant");
 
   // Every query must go through that one predicate — a `where:` built inline
   // would silently opt out of it.
   const wheres = page.match(/where: [^,\n]+/g) ?? [];
   for (const where of wheres) {
     assert.match(where, /notNull/, `a trash query builds its own where clause: ${where}`);
+  }
+});
+
+test("a missing scope is not treated as the untenanted tenant", () => {
+  // THE REGRESSION THIS EXISTS FOR. `currentTenantScope()?.tenantId ?? null`
+  // reads as harmless and breaks the app in its DEFAULT mode:
+  // establishStaffTenantScope enters NO scope at all unless
+  // TENANT_ENFORCEMENT=enforce, and off/monitor are the documented default and
+  // rollback modes. So the predicate became `tenantId: null` — the legacy
+  // untenanted value — and every migrated record, which carries a real tenant
+  // id, stopped matching. Document reads returned nothing, soft deletes matched
+  // no rows and became silent no-ops, and the Trash page rendered empty.
+  //
+  // No scope means "we were never told which tenant", which is not a filter.
+  // Scoped to the helpers this PR added. permissions.ts also has a PRE-EXISTING
+  // `?? null` in getUserPermissions' raw SQL, and that one is correct: it feeds
+  // `IS NOT DISTINCT FROM`, which matches NULL to NULL, and the whole query is
+  // already branched on tenantEnforcing(). A file-wide ban would flag it and
+  // teach the next reader that the guard cries wolf.
+  const helpers: [string, string, string][] = [
+    ["src/lib/trash.ts", "function activeTenantWhere(", "\n}"],
+    ["src/lib/permissions.ts", "function documentTenantWhere(", "\n}"],
+    ["src/app/(app)/trash/page.tsx", "const scope = currentTenantScope()", "] as const"],
+  ];
+  for (const [rel, from, to] of helpers) {
+    const code = shipped(rel);
+    const start = code.indexOf(from);
+    assert.notEqual(start, -1, `${rel}: '${from}' is gone — was it renamed?`);
+    // End search bounded FROM the start: an unbounded indexOf finds an earlier
+    // occurrence and slices backwards to an empty string that passes anything.
+    const body = code.slice(start, code.indexOf(to, start));
+    assert.ok(body.length > 0, `${rel}: the slice ran backwards`);
+    assert.doesNotMatch(
+      body,
+      /\?\?\s*null/,
+      `${rel}: '?? null' turns "no scope" into "the untenanted tenant" and matches nothing once records are migrated`,
+    );
+    assert.match(body, /if \(!scope\)|scope \?/, `${rel}: a missing scope must be handled explicitly`);
   }
 });
 

@@ -45,9 +45,15 @@ export default async function TrashPage() {
   // deletion path was tenant-scoped first (see lib/trash.ts); this is the read
   // side of the same hole, and the more serious half: restoring was already
   // blocked, but the PII was still on screen.
+  // NO SCOPE and a scope carrying null are different facts: no scope means
+  // enforcement is off (the documented default) and the request was never told
+  // which tenant it belongs to, so there is nothing to filter on. `?? null`
+  // would filter on the legacy untenanted value and show an empty Trash page
+  // to every migrated tenant.
+  const scope = currentTenantScope();
   const notNull = {
     deletedAt: { not: null },
-    tenantId: currentTenantScope()?.tenantId ?? null,
+    ...(scope ? { tenantId: scope.tenantId } : {}),
   } as const;
   const [automotiveOn, commerceOn] = await Promise.all([
     isModuleEnabled("automotive"),

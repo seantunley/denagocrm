@@ -436,9 +436,19 @@ export async function getAccessibleDocumentIds(user: PermissionUser): Promise<st
   return rows.map((row) => row.id);
 }
 
-/** The active tenant, as an explicit predicate for a basePrisma document query. */
-function documentTenantWhere() {
-  return { tenantId: currentTenantScope()?.tenantId ?? null };
+/**
+ * The active tenant, as an explicit predicate for a basePrisma document query.
+ *
+ * NO SCOPE and a scope whose tenantId is null are different facts. Collapsing
+ * them with `?? null` filters on the legacy untenanted value, and since
+ * establishStaffTenantScope enters no scope at all unless
+ * TENANT_ENFORCEMENT=enforce — while off/monitor are the documented default and
+ * rollback modes — every migrated document would have stopped matching.
+ */
+function documentTenantWhere(): { tenantId?: string | null } {
+  const scope = currentTenantScope();
+  if (!scope) return {};
+  return { tenantId: scope.tenantId };
 }
 
 /**
