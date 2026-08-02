@@ -153,3 +153,40 @@ test("signing still resolves its own template, independently", () => {
   assert.match(signing, /defaultBuilderTemplateId\("quote"\)/);
   assert.ok(!signing.includes("generateDocEditorDocument"), "signing must not depend on the removed control");
 });
+
+/**
+ * `docbuilder.manage` is a CAPABILITY, not an access decision — the same
+ * distinction the signing hub was fixed on (tests/signingRecordAccess.test.ts).
+ * The Builder's record selector listed quote numbers with customer names, and
+ * job card numbers with customers and vehicles, straight from the table. The
+ * generate action checks canAccessQuote/canAccessJobCard before it builds
+ * anything, but by then the metadata has already been read out of a dropdown.
+ */
+test("the Builder's record selector is scoped to what the caller may see", () => {
+  const page = src("src/app/(app)/settings/documents/builder/page.tsx");
+  assert.match(page, /getAccessibleQuoteIds\(user\)/, "quotes must be RBAC-scoped");
+  assert.match(page, /getAccessibleJobCardIds\(user\)/, "job cards must be too");
+  assert.match(page, /ids === null \? \{\} : \{ id: \{ in: ids \} \}/, "null means unrestricted, not 'no filter needed'");
+
+  // Both queries must actually apply it — importing the helper is not using it.
+  const quoteQuery = page.slice(page.indexOf("prisma.quote.findMany"), page.indexOf("prisma.jobCard.findMany"));
+  const jobQuery = page.slice(page.indexOf("prisma.jobCard.findMany"));
+  assert.match(quoteQuery, /\.\.\.scoped\(quoteIds\)/);
+  assert.match(jobQuery.slice(0, jobQuery.indexOf("]")), /\.\.\.scoped\(jobCardIds\)/);
+});
+
+/**
+ * Removing the record-level shortcuts left this selector as the only route to
+ * generating a document against a record — and it stopped at the newest 100,
+ * so anything older had no route at all.
+ */
+test("any accessible record can be reached, not just the newest hundred", () => {
+  const page = src("src/app/(app)/settings/documents/builder/page.tsx");
+  assert.match(page, /name="q"/, "the selector must be searchable");
+  assert.match(page, /searchParams/, "…server-side, so the scoped query does the filtering");
+  // Searchable by the two things someone actually knows: the number, and who it is for.
+  assert.match(page, /number \? \[\{ number \}\] : \[\]/, "search by quote or job number");
+  assert.match(page, /contact: contactMatch/, "…and by customer");
+  assert.match(page, /vehicle: \{ model: nameLike \}/, "job cards by vehicle too");
+  assert.match(page, /capped &&/, "and it must say when the list is truncated rather than look complete");
+});
