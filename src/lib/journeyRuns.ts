@@ -180,7 +180,9 @@ async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
       data: {
         status: "completed",
         currentStepId: null,
-        cursor: Prisma.JsonNull,
+        // DbNull, not JsonNull: this must CLEAR the column, not store the JSON
+        // literal `null` in it. A finished run has no position.
+        cursor: Prisma.DbNull,
         stepsExecuted,
         completedAt: new Date(),
         attempts: 0,
