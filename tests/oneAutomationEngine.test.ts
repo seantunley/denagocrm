@@ -94,13 +94,39 @@ test("the AutomationRule tables have no reader left", () => {
  * which is the exact failure mode this whole change exists to fix.
  */
 const WRITE_PATHS: Array<[string, string[]]> = [
-  ["src/app/actions/leads.ts", ["lead_created", "stage_entered", "lead_won", "lead_lost"]],
-  ["src/lib/leadIntake.ts", ["lead_created"]],
+  // `lead_created` is emitted by the ONE lead creator (lib/leadCreate.ts), which
+  // every channel now goes through — the staff form, the intake API, WhatsApp,
+  // Messenger and the bot. Asserting it per-call-site would demand the emit be
+  // duplicated back out to five places, which is the thing that was fixed:
+  // three of those five never fired an automation at all.
+  ["src/lib/leadCreate.ts", ["lead_created"]],
+  ["src/app/actions/leads.ts", ["stage_entered", "lead_won", "lead_lost"]],
   ["src/app/actions/quotes.ts", ["lead_won", "quote_declined"]],
   ["src/lib/signing/postComplete.ts", ["lead_won", "quote_signed"]],
   ["src/app/actions/fulfilment.ts", ["delivered"]],
   ["src/lib/referrals.ts", ["referral_earned"]],
 ];
+
+/**
+ * …and every channel must actually reach that creator, or its lead silently
+ * stops enrolling. This is the other half of the guarantee the per-site list
+ * above used to carry for `lead_created`.
+ */
+test("every lead channel reaches the one creator", () => {
+  for (const [rel, what] of [
+    ["src/lib/leadIntake.ts", "website / Lead Ads intake"],
+    ["src/app/actions/leads.ts", "the staff form"],
+    ["src/lib/whatsapp.ts", "inbound WhatsApp"],
+    ["src/lib/messenger.ts", "Facebook / Instagram DMs"],
+    ["src/lib/flowActions.ts", "the chatbot"],
+  ] as const) {
+    assert.match(
+      shipped(rel),
+      /createLeadRecord(IfPipelineReady)?\(/,
+      `${what} (${rel}) must create through lib/leadCreate.ts, or its lead never emits lead_created`,
+    );
+  }
+});
 
 for (const [rel, triggers] of WRITE_PATHS) {
   test(`${rel} emits its lead events into the journey engine`, () => {

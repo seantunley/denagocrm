@@ -90,7 +90,10 @@ test("every inbound channel goes through the one creator", () => {
 test("the creator owns everything a new lead owes the workspace", () => {
   // If any of these moves back out to the call sites, the sources diverge again.
   const core = shipped(HOME);
-  assert.match(core, /runLeadAutomations\("lead_created", lead\.id\)/, "the automation trigger");
+  // The Journey engine is the one surviving automation engine; runLeadAutomations
+  // and the AutomationRule engine behind it are retired.
+  assert.match(core, /emitLeadJourneyEvent\("lead_created", lead\.id/, "the automation trigger");
+  assert.doesNotMatch(core, /runLeadAutomations/, "the retired engine must not come back");
   assert.match(core, /sendPushToAll\(/, "the push");
   assert.match(core, /logAuditStrict\(entry\)/, "a strict audit for staff-facing paths");
   assert.match(core, /logAudit\(entry\)/, "…and a best-effort one for webhooks");
