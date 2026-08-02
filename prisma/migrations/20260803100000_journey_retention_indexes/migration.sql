@@ -1,5 +1,12 @@
 -- Indexes for the journey trace retention sweep (src/lib/journeyRetention.ts).
 --
+-- TIMESTAMP-PREFIXED, and it has to be. scripts/apply-migrations.mjs orders by
+-- `Number.parseInt(name, 10)`, NOT lexicographically, so every timestamped
+-- migration runs after every numerically-prefixed one. The journey tables are
+-- created in 20260712160000_add_marketing_journeys; a `81_`-style name would
+-- sort as 81, run long before that, and fail with `relation "JourneyEvent" does
+-- not exist`. Anything touching a journey table must be timestamped.
+--
 -- The sweep's first act is an early-out: "is there anything old enough to
 -- delete?". That question is asked once PER TENANT on every journey cron tick
 -- (runCronPerTenant establishes a scope and calls runJourneyEngine inside it),

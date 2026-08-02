@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -81,11 +81,45 @@ test("the sweep makes progress instead of re-examining protected runs", () => {
   assert.match(query, /orderBy: \{ createdAt: "asc" \}/, "candidates must be oldest-first");
 });
 
+test("a migration touching a journey table sorts AFTER the one that creates it", () => {
+  // CI caught this on the first push and it is worth a permanent guard, because
+  // the trap is invisible from the filename.
+  //
+  // scripts/apply-migrations.mjs orders by `Number.parseInt(name, 10)`, NOT
+  // lexicographically. So `81_foo` sorts as 81 and every timestamped migration
+  // sorts as a 14-digit number — meaning EVERY timestamped migration runs after
+  // EVERY numeric one. The journey tables are created in a timestamped
+  // migration, so a numerically-prefixed migration touching them runs long
+  // before they exist and dies with `relation "JourneyEvent" does not exist`.
+  const dir = path.join(root, "prisma/migrations");
+  const order = (name: string) => Number.parseInt(name, 10);
+  const names = readdirSync(dir).filter((n) => existsSync(path.join(dir, n, "migration.sql")));
+
+  const creator = names.find((n) =>
+    /CREATE TABLE[^;]*"JourneyRun"/.test(readFileSync(path.join(dir, n, "migration.sql"), "utf8")),
+  );
+  assert.ok(creator, "no migration creates JourneyRun — has the schema been reorganised?");
+
+  const tables = /"(JourneyRun|JourneyEvent|JourneyStepLog|JourneyVersion)"/;
+  const tooEarly = names.filter(
+    (n) =>
+      n !== creator &&
+      order(n) < order(creator!) &&
+      tables.test(readFileSync(path.join(dir, n, "migration.sql"), "utf8")),
+  );
+  assert.deepEqual(
+    tooEarly,
+    [],
+    `these migrations touch a journey table but sort before ${creator} creates it — ` +
+      "apply-migrations.mjs sorts by parseInt, so they need a timestamp prefix",
+  );
+});
+
 test("the early-out query has an index to use", () => {
   // Without it the early-out is a sequential scan of the largest tables in the
   // schema, once per tenant per tick, to find nothing.
   const schema = src("prisma/journeys.prisma");
-  const migration = src("prisma/migrations/81_journey_retention_indexes/migration.sql");
+  const migration = src("prisma/migrations/20260803100000_journey_retention_indexes/migration.sql");
   for (const table of ["JourneyEvent", "JourneyRun"]) {
     assert.match(
       migration,
