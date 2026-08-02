@@ -114,3 +114,42 @@ test("duplicate inserts a copy with a new id right after", () => {
   const ids = col.blocks.map((b) => b.id);
   assert.equal(new Set(ids).size, ids.length); // all ids unique
 });
+
+// ── Where generating a document belongs ──────────────────────────────────────
+
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
+
+/**
+ * Generating a builder document against a record used to hang off the RECORD
+ * screens — a template dropdown and a Generate button in the header of a quote,
+ * and the same again on a job card. Choosing a document template is not part of
+ * working the record, and it put a settings-shaped control where the work is.
+ * Both are gone; Settings → Documents → Builder is the surface built for it.
+ */
+test("record screens do not offer a document-template picker", () => {
+  for (const rel of ["src/app/(app)/jobcards/[id]/page.tsx", "src/app/(app)/quotes/[id]/page.tsx"]) {
+    const code = src(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+    assert.ok(!code.includes("generateDocEditorDocument"), `${rel} still generates documents from a record header`);
+    assert.ok(!code.includes("listBuilderTemplates"), `${rel} still loads templates it has no use for`);
+  }
+});
+
+test("…and the settings surface that owns it still does", () => {
+  // The action itself is not being removed — only the record-level shortcuts.
+  const settings = src("src/app/(app)/settings/documents/builder/page.tsx");
+  assert.match(settings, /action=\{generateDocEditorDocument\}/, "the builder page must keep generating");
+  assert.match(src("src/app/actions/doceditor.ts"), /export async function generateDocEditorDocument/);
+});
+
+test("signing still resolves its own template, independently", () => {
+  // Envelopes render a builder document through defaultBuilderTemplateId, not
+  // through the shortcut — so removing the shortcut cannot break signing.
+  const signing = src("src/app/actions/recordSigning.ts");
+  assert.match(signing, /defaultBuilderTemplateId\("quote"\)/);
+  assert.ok(!signing.includes("generateDocEditorDocument"), "signing must not depend on the removed control");
+});
