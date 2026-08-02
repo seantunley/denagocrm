@@ -10,6 +10,7 @@ import {
 // enrollJourneyNow was imported here and never called — line 17 re-exports it
 // from the same module, which is what callers actually use.
 import { runScheduledJourneyEnrollments } from "./journeyScheduling";
+import { pruneJourneyTraces } from "./journeyRetention";
 
 export { emitJourneyEvent, processJourneyEvents } from "./journeyEvents";
 export { processJourneyRuns } from "./journeyRuns";
@@ -33,6 +34,10 @@ export async function runJourneyEngine(stop: StopSignal = NEVER_STOP) {
   const scheduled = await runScheduledJourneyEnrollments(stop);
   const events = await processJourneyEvents(50, stop);
   const runs = await processJourneyRuns(40, stop);
+  // Pruning LAST and only with budget left: it is housekeeping, and a tick that
+  // spent its time deleting instead of sending would be the wrong trade every
+  // time. Whatever it does not reach, the next tick does.
+  const pruned = stop.shouldStop() ? { events: 0, runs: 0 } : await pruneJourneyTraces();
   return {
     recoveredEvents: recoveredEvents.count,
     recoveredRuns: recoveredRuns.count,
@@ -40,6 +45,8 @@ export async function runJourneyEngine(stop: StopSignal = NEVER_STOP) {
     eventsProcessed: events.processed,
     enrolled: events.enrolled,
     runsProcessed: runs,
+    prunedEvents: pruned.events,
+    prunedRuns: pruned.runs,
     // Visible in the cron response, so a run cut short by the budget is
     // diagnosable rather than looking like a quiet tick with nothing to do.
     stoppedEarly: stop.shouldStop(),
