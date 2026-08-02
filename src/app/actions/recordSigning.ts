@@ -22,7 +22,7 @@ import { createSignatureRequestFromDoc } from "@/lib/signing/service";
 import { dispatchRequest, notifyRecipient } from "@/lib/signing/dispatch";
 import { logSignEvent } from "@/lib/signing/events";
 import { activeRecordRequest, isLockedForSigning, type QuoteSigningView } from "@/lib/signing/record";
-import { advanceWorkflow, repairWorkflow } from "@/lib/signflow/runtime";
+import { advanceWorkflow, repairWorkflow, pendingApprovalNode } from "@/lib/signflow/runtime";
 import { countersignWithSavedSignature } from "@/lib/signing/countersign";
 import { renderRequestSigningSheets, signedFieldStamps } from "@/lib/signing/render";
 import type { StampField } from "@/lib/doceditor/serialize";
@@ -532,6 +532,12 @@ export type SignedDocView = {
   stamps: StampField[];
   /** Who may act next, and whether that is the caller. */
   next: { id: string; name: string; email: string | null; isMe: boolean } | null;
+  /**
+   * The graph is parked on an internal approval gate. It has no recipient, so
+   * `next` is null for it — without this the card would call that "fully signed"
+   * and show no button at all, stranding the request.
+   */
+  approval: { label: string; raised: boolean } | null;
   /** The request has already gone out — the send button becomes a resend. */
   sent: boolean;
   hasSavedSignature: boolean;
@@ -563,12 +569,13 @@ export async function signedRecordDoc(kind: Kind, id: string): Promise<SignedDoc
   const req = await prisma.signatureRequest.findUnique({ where: { id: state.requestId } });
   if (!req || req.deletedAt) return null;
 
-  const [sheets, stamps, recipient] = await Promise.all([
+  const [sheets, stamps, recipient, approval] = await Promise.all([
     renderRequestSigningSheets(req),
     // No exclusion — this view is nobody's turn to fill anything in, so every
     // completed field is shown as it will print.
     signedFieldStamps(req.id, ""),
     nextSigner(req.id),
+    pendingApprovalNode(req.id),
   ]);
 
   return {
@@ -579,6 +586,7 @@ export async function signedRecordDoc(kind: Kind, id: string): Promise<SignedDoc
     next: recipient
       ? { id: recipient.id, name: recipient.name, email: recipient.email, isMe: sameParty(recipient.email, user.email) }
       : null,
+    approval: approval ? { label: approval.label, raised: approval.raised } : null,
     sent: Boolean(req.sentAt),
     hasSavedSignature: Boolean(user.drawnSignatureRef),
   };
@@ -597,7 +605,31 @@ export async function sendRecordSigning(kind: Kind, id: string): Promise<Result>
   if (!state || isRequestClosed(state.status)) return { ok: false, error: "No open document to send." };
 
   const recipient = await nextSigner(state.requestId);
-  if (!recipient) return { ok: false, error: "Everyone has already signed." };
+  if (!recipient) {
+    // An internal approval gate has no recipient row, so nextSigner() reports
+    // nobody — but the workflow is very much waiting on someone. materialise()
+    // now honours notify:false for approvals (it used to email the approver
+    // straight off the countersign, before anyone had seen the document), so
+    // raising the gate is the SEND's job, exactly as it is for a signer.
+    // advanceWorkflow re-enters materialise with notify, whose createMany +
+    // skipDuplicates makes the approver's email at-most-once however many times
+    // this button is pressed.
+    const gate = await pendingApprovalNode(state.requestId);
+    if (!gate) return { ok: false, error: "Everyone has already signed." };
+    if (gate.raised) {
+      return { ok: false, error: `Waiting on “${gate.label}” — the approver has already been asked.` };
+    }
+    await advanceWorkflow(state.requestId);
+    await logAudit({
+      action: "signing.send",
+      summary: `Sent “${state.title}” for approval (${gate.label})`,
+      entityType: "SignatureRequest",
+      entityId: state.requestId,
+      user,
+    });
+    revalidatePath(recordPath(kind, id));
+    return { ok: true, requestId: state.requestId };
+  }
   if (sameParty(recipient.email, user.email)) {
     return { ok: false, error: "Countersign it first — you are next in the signing order." };
   }
@@ -651,7 +683,31 @@ export async function resendRecordSigning(
   }
   // A resend deliberately re-notifies already-"sent" recipients — pass reminder so
   // notifyRecipient's at-most-once first-send claim doesn't skip them.
-  const { notified, unreachable } = await dispatchRequest(state.requestId, { reminder: true });
+  //
+  // WHICH recipients, though. dispatchRequest picks its targets by recipient
+  // ORDER, and a branched workflow pre-creates a recipient for EVERY path — so
+  // the lowest unsigned order is routinely someone on a branch the condition
+  // never took. Resending then nudged a party who is not up (and never will be)
+  // with a live signing link, while the person actually holding up the deal
+  // heard nothing. sendRecordSigning was fixed to send to nextSigner(); the
+  // resend behind the very same document has to reach the very same person.
+  // Order-based dispatch is kept for a plain sequential/parallel envelope, where
+  // it is correct and also resends to ALL live signers in the parallel case.
+  const workflow = await prisma.signatureRequest.findUnique({
+    where: { id: state.requestId },
+    select: { workflowGraphJson: true },
+  });
+  let notified: number;
+  let unreachable: number;
+  if (workflow?.workflowGraphJson) {
+    const recipient = await nextSigner(state.requestId);
+    if (!recipient) return { ok: false, error: "No active request to resend." };
+    const outcome = await notifyRecipient(recipient.id, { reminder: true });
+    notified = outcome.delivered ? 1 : 0;
+    unreachable = outcome.reachable ? 0 : 1;
+  } else {
+    ({ notified, unreachable } = await dispatchRequest(state.requestId, { reminder: true }));
+  }
   revalidatePath(recordPath(kind, id));
   // Truthful reporting: only log a resend once a provider actually accepted at
   // least one message — a request whose recipients were all unreachable or

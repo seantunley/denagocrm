@@ -50,6 +50,34 @@ function walkToActionable(graph: WorkflowGraph, fromId: string | undefined, vars
   return { kind: "dead" };
 }
 
+/**
+ * The DECISION-approval gate the graph is currently parked on, if any.
+ *
+ * A decision approval has no SignatureRecipient row — only an ApprovalStep — so
+ * nextSigner() rightly answers "nobody is up" for it, and the record card would
+ * read that as fully signed and offer no button. Since materialise() now honours
+ * `notify: false` for approvals too, a request can sit on an approval gate that
+ * has not been raised yet; this is what the send path asks so it can raise it
+ * rather than strand the workflow.
+ *
+ * `raised` is whether the ApprovalStep already exists (the approver has been
+ * emailed); a decided step reports null because the graph moves on its own.
+ */
+export async function pendingApprovalNode(
+  requestId: string,
+): Promise<{ nodeId: string; label: string; raised: boolean } | null> {
+  const req = await prisma.signatureRequest.findUnique({
+    where: { id: requestId },
+    select: { status: true, currentNodeId: true, workflowGraphJson: true },
+  });
+  if (!req?.workflowGraphJson || !req.currentNodeId || isRequestClosed(req.status)) return null;
+  const node = parseFrozen(req.workflowGraphJson)?.graph.nodes[req.currentNodeId];
+  if (!node || node.type !== "approval" || node.mode === "signature") return null;
+  const step = await prisma.approvalStep.findFirst({ where: { requestId, nodeId: node.id } });
+  if (step && step.status !== "pending") return null;
+  return { nodeId: node.id, label: node.label || "Approval", raised: Boolean(step) };
+}
+
 /** Signer + signature-mode approval nodes need a recipient + doc block; decision approvals don't. */
 export function docSignerNodes(graph: WorkflowGraph): SignNode[] {
   return Object.values(graph.nodes).filter(
@@ -75,6 +103,18 @@ async function materialise(requestId: string, node: SignNode, notify: boolean): 
     return;
   }
   if (node.type === "approval") {
+    // A DECISION approval contacts a human exactly as a signer node does — it
+    // emails the approver a token that opens the document. `notify: false` means
+    // "advance the graph without contacting anyone", so it must stop here too;
+    // it used to only gate the signer branch, so a workflow with an approval gate
+    // mailed the approver from the start/countersign path while the sender was
+    // still on the review screen. Returning BEFORE createMany (rather than after)
+    // keeps the createMany + skipDuplicates contract intact: exactly one row is
+    // ever inserted, and the caller that inserts it is the one that notifies.
+    // Nothing is stranded — the node stays un-materialised, and the explicit send
+    // (sendRecordSigning) re-enters here with notify:true, which materialises and
+    // notifies it once.
+    if (!notify) return;
     // Re-check the parent request is still open — a void/decline could have closed
     // it between the transition claim and here, and we must not create + notify an
     // approval step for a dead request.

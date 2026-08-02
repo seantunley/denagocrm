@@ -18,6 +18,7 @@ export default function SignedDocPreview({
   note,
   onCountersign,
   onSend,
+  onRequestApproval,
   onClose,
 }: {
   view: SignedDocView;
@@ -26,6 +27,7 @@ export default function SignedDocPreview({
   note: string | null;
   onCountersign: () => void;
   onSend: () => void;
+  onRequestApproval: () => void;
   onClose: () => void;
 }) {
   const [scale, setScale] = useState(1);
@@ -48,8 +50,15 @@ export default function SignedDocPreview({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // "Countersign as Denago" is offered ONLY when the document says the caller is
+  // who it is waiting for. On a workflow whose next node is the customer this is
+  // false, and the card offers to send instead of to sign in their name.
   const awaitingMe = view.next?.isMe ?? false;
   const recipient = view.next;
+  // An internal approval gate has no recipient at all, so `next` is null for it.
+  // Without this branch the footer read "Everyone has signed" over a request
+  // nobody could move.
+  const approval = !recipient ? view.approval : null;
 
   return (
     <div className="fixed inset-0 z-[60] flex flex-col bg-slate-950/85 p-3 sm:p-6" onClick={onClose}>
@@ -67,7 +76,11 @@ export default function SignedDocPreview({
                   ? view.sent
                     ? `Sent to ${recipient.name} — awaiting their signature`
                     : `Ready to send to ${recipient.name}`
-                  : "Fully signed"}
+                  : approval
+                    ? approval.raised
+                      ? `Awaiting internal approval — ${approval.label}`
+                      : `Ready to send for approval — ${approval.label}`
+                    : "Fully signed"}
             </p>
           </div>
           <button onClick={onClose} className="shrink-0 rounded-md bg-slate-700 px-3 py-1.5 text-xs text-white hover:bg-slate-600">
@@ -130,13 +143,21 @@ export default function SignedDocPreview({
                     ? `✉️ Resend to ${recipient.name}`
                     : `✉️ Send to ${recipient.name}`}
               </button>
+            ) : approval && !approval.raised ? (
+              <button className="btn-primary" disabled={busy !== null} onClick={onRequestApproval}>
+                {busy === "approval" ? "Sending…" : `✉️ Send for approval`}
+              </button>
             ) : null}
             <span className="text-[11px] text-slate-500">
               {awaitingMe
                 ? "Your saved signature is applied to this document — the customer is not contacted yet."
                 : recipient
                   ? `${recipient.email || "No email on file"} · they sign on their phone, no printing needed.`
-                  : "Everyone has signed. The sealed PDF is filed in the customer's documents."}
+                  : approval
+                    ? approval.raised
+                      ? "The approver has the document — the flow continues once they decide."
+                      : "Nobody has been contacted yet. Sending asks the approver to review it."
+                    : "Everyone has signed. The sealed PDF is filed in the customer's documents."}
             </span>
           </div>
         </div>

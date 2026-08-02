@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { getBuilderTemplate, defaultBuilderTemplateId } from "@/lib/docbuilder/store";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
+import { parseDocument } from "@/lib/doceditor/model";
 import { renderDocumentHtml } from "@/lib/doceditor/serialize";
 import { bindCtx, logoDataUri, signedFieldStamps } from "@/lib/signing/render";
 
@@ -26,6 +27,43 @@ export async function renderQuotePrintHtml(opts: {
   templateId?: string | null;
   toolbarHtml?: string;
 }): Promise<string | null> {
+  const ctx = await bindCtx(opts.quoteId, null);
+
+  // A signed quote prints what was actually signed: the signatures land at the
+  // field positions the SNAPSHOT placed, from the completed request. An unsigned
+  // one hides the empty dashed boxes — they are a signing affordance, and there
+  // is nothing to tap on paper.
+  const request = await prisma.signatureRequest.findFirst({
+    where: { quoteId: opts.quoteId, deletedAt: null, status: "completed" },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, snapshotJson: true },
+  });
+
+  // The signed quote prints its own frozen document, NOT the current default
+  // template. Resolving the live template here meant that editing the quote
+  // layout in Document Studio retroactively changed every already-signed quote:
+  // the customer was handed terms, branding and clauses they had never seen,
+  // while the stamped signatures still sat at coordinates the OLD layout chose —
+  // so the signatures could land in the middle of text that moved under them.
+  // SignatureRequest.snapshotJson is the document the signature is evidence of;
+  // renderRequestDocHtml() already prints from it for the signing hub.
+  //
+  // ?tpl= still wins: that is Document Studio previewing a LAYOUT against real
+  // data, and it must show the layout that was asked for.
+  if (!opts.templateId && request) {
+    const signedDoc = parseDocument(request.snapshotJson);
+    if (signedDoc) {
+      const stamps = await signedFieldStamps(request.id, "");
+      return renderDocumentHtml(signedDoc, ctx, logoDataUri(), {
+        hideOverlays: !stamps.length,
+        stampedFields: stamps.length ? stamps : undefined,
+        toolbarHtml: opts.toolbarHtml,
+      });
+    }
+    // An unparseable snapshot falls through to the template below rather than
+    // returning nothing — a printable quote beats a 404.
+  }
+
   const templateId = opts.templateId ?? (await defaultBuilderTemplateId("quote"));
   if (!templateId) return null;
   const template = await getBuilderTemplate(templateId);
@@ -35,17 +73,6 @@ export async function renderQuotePrintHtml(opts: {
   const read = readTemplateDocument(template.data, template.name);
   if (read.status !== "ok") return null;
 
-  const ctx = await bindCtx(opts.quoteId, null);
-
-  // A signed quote prints what was actually signed: the signatures land at the
-  // field positions the template placed, from the completed request. An unsigned
-  // one hides the empty dashed boxes — they are a signing affordance, and there
-  // is nothing to tap on paper.
-  const request = await prisma.signatureRequest.findFirst({
-    where: { quoteId: opts.quoteId, deletedAt: null, status: "completed" },
-    orderBy: { createdAt: "desc" },
-    select: { id: true },
-  });
   const stampedFields = request ? await signedFieldStamps(request.id, "") : undefined;
 
   return renderDocumentHtml(read.doc, ctx, logoDataUri(), {

@@ -321,6 +321,116 @@ test("one destination for the printable quote keeps one name", () => {
   assert.match(editor, /\/print`/, "and it must point at the printable document");
 });
 
+/**
+ * Second review pass. Four more, three of which were real.
+ */
+
+test("a signed quote prints what was signed, not the template as it stands today", () => {
+  // renderQuotePrintHtml resolved the CURRENT default builder template and drew
+  // the completed request's signatures onto it. Edit the quote layout in
+  // Document Studio afterwards — reword the terms, move the totals block — and
+  // every already-signed quote reprinted with the new wording under the old
+  // signature, at coordinates the old layout chose. SignatureRequest.snapshotJson
+  // is the document the signature is evidence of.
+  const source = shipped("src/lib/quotePrintDocument.ts");
+  const start = source.indexOf("export async function renderQuotePrintHtml(");
+  assert.notEqual(start, -1, "renderQuotePrintHtml not found — was it renamed?");
+  // Bound the end search FROM `start`: printToolbarHtml is declared after it, and
+  // an unbounded indexOf would happily slice backwards into nothing.
+  const end = source.indexOf("\nexport function printToolbarHtml", start);
+  assert.notEqual(end, -1, "printToolbarHtml not found — the slice would run to EOF");
+  const body = source.slice(start, end);
+
+  assert.match(body, /parseDocument\(request\.snapshotJson\)/, "the frozen signed document must be what prints");
+  const snapshot = body.search(/parseDocument\(request\.snapshotJson\)/);
+  const template = body.search(/defaultBuilderTemplateId\("quote"\)/);
+  assert.notEqual(template, -1, "the live template must remain the fallback for an UNSIGNED quote");
+  assert.ok(snapshot < template, `the snapshot must be resolved first (snapshot ${snapshot}, template ${template})`);
+  // ?tpl= is Document Studio previewing a LAYOUT against real data — that one
+  // asked for the template and must get it.
+  assert.match(body, /if \(!opts\.templateId && request\)/, "an explicit layout preview still wins");
+  assert.match(body, /status: "completed"/, "only a COMPLETED request has a signed document to print");
+});
+
+test("an approval gate is not raised before the document is reviewed either", () => {
+  // materialise() gated notify on the SIGNER branch only. A workflow with an
+  // internal approval gate therefore emailed the approver the moment the graph
+  // reached it — off the start path, or off the countersign — while the sender
+  // was still looking at the review screen. Exactly the defect notify:false was
+  // added to fix, on the branch it was not applied to.
+  const runtime = shipped("src/lib/signflow/runtime.ts");
+  const start = runtime.indexOf("async function materialise(");
+  assert.notEqual(start, -1, "materialise not found — was it renamed?");
+  const end = runtime.indexOf("\nexport async function advanceWorkflow", start);
+  assert.notEqual(end, -1, "advanceWorkflow not found — the slice would run to EOF");
+  const branchAt = runtime.indexOf('if (node.type === "approval") {', start);
+  assert.ok(branchAt !== -1 && branchAt < end, "the decision-approval branch not found");
+  const branch = runtime.slice(branchAt, end);
+
+  const gate = branch.search(/if \(!notify\) return;/);
+  const create = branch.search(/approvalStep\.createMany/);
+  assert.notEqual(gate, -1, "the decision-approval branch must honour notify too");
+  assert.notEqual(create, -1, "the step is still materialised by createMany");
+  assert.ok(gate < create, `notify must be honoured BEFORE the row is inserted (gate ${gate}, create ${create})`);
+  // Returning before the insert is what keeps the idempotency contract whole:
+  // one row per node, and whoever inserted it is whoever notifies.
+  assert.match(branch, /skipDuplicates: true/);
+  assert.match(branch, /if \(created\.count === 0\) return;/, "only the inserting caller may notify");
+
+  // Deferring must not strand the approver — the explicit send raises the gate.
+  const send = actionBody(shipped("src/app/actions/recordSigning.ts"), "sendRecordSigning");
+  assert.match(send, /pendingApprovalNode\(state\.requestId\)/, "the send must see a gate nextSigner() cannot");
+  assert.match(send, /await advanceWorkflow\(state\.requestId\);/, "…and raise it WITH notification");
+});
+
+test("a resend reaches the recipient the graph is waiting on", () => {
+  // dispatchRequest picks its targets by recipient ORDER. A branched graph
+  // pre-creates a recipient for every path, so the lowest unsigned order is
+  // routinely on a branch the condition never took — the resend nudged them with
+  // a live signing link while the party actually holding up the deal heard
+  // nothing. sendRecordSigning was fixed to use nextSigner(); the resend behind
+  // the same document has to reach the same person.
+  const body = actionBody(shipped("src/app/actions/recordSigning.ts"), "resendRecordSigning");
+  assert.match(body, /nextSigner\(state\.requestId\)/, "a workflow resend must resolve through the live node");
+  assert.match(body, /notifyRecipient\(recipient\.id, \{ reminder: true \}\)/, "…and remind exactly them");
+
+  const workflow = body.search(/workflowGraphJson/);
+  const dispatch = body.search(/dispatchRequest\(state\.requestId, \{ reminder: true \}\)/);
+  assert.notEqual(workflow, -1, "a workflow envelope must be recognised");
+  assert.notEqual(dispatch, -1, "a plain envelope keeps order-based dispatch — parallel resends need every signer");
+  assert.ok(workflow < dispatch, `order-based dispatch must be the non-workflow branch (workflow ${workflow}, dispatch ${dispatch})`);
+});
+
+test("the start button never offers to countersign someone else's node", () => {
+  // countersignRecord itself is safe — it refuses cleanly, and has its own test
+  // above. The CARD was not: it fired countersignRecord after every successful
+  // start, so a workflow whose first node is the customer answered "…signs next
+  // — this is not yours to sign", and because run() bails on a failed result the
+  // document never opened. The quote sat locked behind a request the card would
+  // not show.
+  const card = shipped("src/components/SigningBlock.tsx");
+  const start = card.indexOf("const started = await startRecordSigning(");
+  assert.notEqual(start, -1, "the start handler not found — was it rewritten?");
+  const end = card.indexOf("})}", start);
+  assert.notEqual(end, -1, "the handler's end not found — the slice would run to EOF");
+  const handler = card.slice(start, end);
+
+  const check = handler.search(/view\?\.next\?\.isMe/);
+  const sign = handler.search(/countersignRecord\(kind, id\)/);
+  assert.notEqual(check, -1, "who is up must decide whether to countersign");
+  assert.notEqual(sign, -1, "the one-click countersign must survive for the built-in flow");
+  assert.ok(check < sign, `the check must gate the countersign (check ${check}, sign ${sign})`);
+
+  // And the review card offers the right button in that state.
+  const preview = shipped("src/components/signing/SignedDocPreview.tsx");
+  assert.match(preview, /const awaitingMe = view\.next\?\.isMe \?\? false;/);
+  const guard = preview.indexOf("{awaitingMe ?");
+  const offer = preview.indexOf("Countersign as Denago", guard === -1 ? 0 : guard);
+  assert.notEqual(guard, -1, "the footer must branch on awaitingMe");
+  assert.notEqual(offer, -1, "the countersign button not found");
+  assert.ok(guard < offer, "the countersign button must sit inside the awaitingMe branch");
+});
+
 test("the editor does not freeze a quote just for opening the signature card", () => {
   // "Send for signature" saves a DRAFT. Freezing is the dispatch's job — it
   // marks the quote sent when the customer's link actually goes out. Saving as

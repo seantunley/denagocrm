@@ -247,7 +247,18 @@ export default function SigningBlock({
               // The built-in quote flow is countersign-then-send, so do the
               // countersignature in the same click rather than making it a
               // separate button the user has to find.
-              if (started.ok && started.preview) return countersignRecord(kind, id);
+              //
+              // But only when the caller is ACTUALLY the next signer. A workflow
+              // can put the customer — or another staff member — at the first
+              // node, and countersignRecord refuses to sign in their name. Asking
+              // regardless turned a perfectly started request into the flat error
+              // "<customer> signs next — this is not yours to sign", and because
+              // run() bails on a failed result the document never opened: the
+              // quote was left locked behind a request the card would not show.
+              // Ask the document who is up, then act as them or hand over.
+              if (!started.ok || !started.preview) return started;
+              const view = await signedRecordDoc(kind, id);
+              if (view?.next?.isMe) return countersignRecord(kind, id);
               return started;
             })}
           >
@@ -276,6 +287,10 @@ export default function SigningBlock({
           error={err}
           note={note}
           onCountersign={() => run("countersign", () => countersignRecord(kind, id))}
+          // Raising an internal approval gate is a first send, never a resend —
+          // the approver has not been asked yet (that is what `raised: false`
+          // means), and sendRecordSigning is the path that materialises the step.
+          onRequestApproval={() => run("approval", () => sendRecordSigning(kind, id))}
           // A button labelled "Resend" must take the resend path. sendRecordSigning
           // is the FIRST send: dispatchRequest's claim excludes an already-"sent"
           // request, so it would have reported a delivery failure every time.
