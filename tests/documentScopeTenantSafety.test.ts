@@ -40,7 +40,7 @@ test("the document scope query names its tenant", () => {
   assert.ok(body.length > 0, "the slice ran backwards");
   assert.match(body, /basePrisma\.document\.findMany/, "still the basePrisma query this guards");
   assert.match(body, /documentTenantWhere\(\)/, "a basePrisma query must carry an explicit tenant predicate");
-  assert.match(shipped("src/lib/permissions.ts"), /if \(!scope\) return \{\};/);
+  assert.match(shipped("src/lib/permissions.ts"), /activeTenantPredicate\("document scope"\)/);
 });
 
 test("access to ONE document is decided by resolving that document", () => {
@@ -71,7 +71,7 @@ test("EVERY soft delete and restore is tenant-scoped, not just documents", () =>
   const trash = shipped("src/lib/trash.ts");
   assert.doesNotMatch(trash, /opts\?:/, "an optional tenant is one a caller can forget");
   assert.match(trash, /function activeTenantWhere\(\)/);
-  assert.match(trash, /if \(!scope\) return \{\};/);
+  assert.match(trash, /activeTenantPredicate\(/);
 
   for (const fn of ["softDeleteRecord", "restoreRecord"]) {
     const start = trash.indexOf(`export async function ${fn}(`);
@@ -92,13 +92,58 @@ test("the Trash page reads within the tenant too", () => {
   // the restore while still rendering the PII is the wrong half to fix.
   const page = shipped("src/app/(app)/trash/page.tsx");
   assert.match(page, /basePrisma\./, "still the basePrisma page this guards");
-  assert.match(page, /\.\.\.\(scope \? \{ tenantId: scope\.tenantId \} : \{\}\)/, "the shared predicate must carry the tenant");
+  assert.match(page, /\.\.\.activeTenantPredicate\("Trash page"\)/, "the shared predicate must carry the tenant");
 
   // Every query must go through that one predicate — a `where:` built inline
   // would silently opt out of it.
   const wheres = page.match(/where: [^,\n]+/g) ?? [];
   for (const where of wheres) {
     assert.match(where, /notNull/, `a trash query builds its own where clause: ${where}`);
+  }
+});
+
+test("under enforcement, a scopeless request is refused rather than unscoped", async () => {
+  // THE OWNER ESCAPE HATCH. Under enforcement establishStaffTenantScope
+  // deliberately lets a GLOBAL OWNER continue with NO scope when tenant
+  // resolution fails, so the platform console still works. The (app) layout
+  // redirects that owner — but server actions execute independently of any
+  // layout and gate only on requireOwner()/requirePermission().
+  //
+  // So "no scope" cannot simply mean "no predicate": under enforcement it would
+  // hand that owner every tenant's documents, and let them soft-delete or
+  // restore another tenant's records by id. Off/monitor still means no
+  // predicate, because nothing has established a tenant to filter on.
+  const { activeTenantPredicate } = await import("../src/lib/tenantPredicate");
+  const { __setTenantEnforcingForTests } = await import("../src/lib/tenantEnforcement");
+  const { TenantScopeError } = await import("../src/lib/tenantGuard");
+
+  try {
+    __setTenantEnforcingForTests(false);
+    assert.deepEqual(activeTenantPredicate("test"), {}, "off/monitor with no scope adds no predicate");
+
+    __setTenantEnforcingForTests(true);
+    assert.throws(
+      () => activeTenantPredicate("test"),
+      TenantScopeError,
+      "enforce with no scope must refuse, not run unscoped",
+    );
+  } finally {
+    __setTenantEnforcingForTests(null);
+  }
+});
+
+test("all three call sites share the one predicate", () => {
+  // Three separate copies is how one of them ends up with a different rule.
+  for (const rel of [
+    "src/lib/trash.ts",
+    "src/lib/permissions.ts",
+    "src/app/(app)/trash/page.tsx",
+  ]) {
+    assert.match(
+      shipped(rel),
+      /activeTenantPredicate\(/,
+      `${rel} must resolve the tenant through the shared predicate`,
+    );
   }
 });
 
@@ -118,26 +163,20 @@ test("a missing scope is not treated as the untenanted tenant", () => {
   // `IS NOT DISTINCT FROM`, which matches NULL to NULL, and the whole query is
   // already branched on tenantEnforcing(). A file-wide ban would flag it and
   // teach the next reader that the guard cries wolf.
-  const helpers: [string, string, string][] = [
-    ["src/lib/trash.ts", "function activeTenantWhere(", "\n}"],
-    ["src/lib/permissions.ts", "function documentTenantWhere(", "\n}"],
-    ["src/app/(app)/trash/page.tsx", "const scope = currentTenantScope()", "] as const"],
-  ];
-  for (const [rel, from, to] of helpers) {
-    const code = shipped(rel);
-    const start = code.indexOf(from);
-    assert.notEqual(start, -1, `${rel}: '${from}' is gone — was it renamed?`);
-    // End search bounded FROM the start: an unbounded indexOf finds an earlier
-    // occurrence and slices backwards to an empty string that passes anything.
-    const body = code.slice(start, code.indexOf(to, start));
-    assert.ok(body.length > 0, `${rel}: the slice ran backwards`);
-    assert.doesNotMatch(
-      body,
-      /\?\?\s*null/,
-      `${rel}: '?? null' turns "no scope" into "the untenanted tenant" and matches nothing once records are migrated`,
-    );
-    assert.match(body, /if \(!scope\)|scope \?/, `${rel}: a missing scope must be handled explicitly`);
-  }
+  // The rule lives in ONE place now, so this checks that place. permissions.ts
+  // also has a PRE-EXISTING `?? null` in getUserPermissions' raw SQL, and that
+  // one is correct: it feeds `IS NOT DISTINCT FROM`, which matches NULL to
+  // NULL, and the query is already branched on tenantEnforcing(). A file-wide
+  // ban would flag it and teach the next reader that the guard cries wolf.
+  const predicate = shipped("src/lib/tenantPredicate.ts");
+  assert.doesNotMatch(
+    predicate,
+    /\?\?\s*null/,
+    "'?? null' turns \"no scope\" into \"the untenanted tenant\" and matches nothing once records are migrated",
+  );
+  assert.match(predicate, /if \(scope\) return \{ tenantId: scope\.tenantId \}/, "a real scope filters on it");
+  assert.match(predicate, /if \(tenantEnforcing\(\)\)/, "…and enforcement decides what a MISSING scope means");
+  assert.match(predicate, /return \{\};/, "off\\/monitor adds no predicate");
 });
 
 test("no caller announces a delete or restore that did not happen", () => {

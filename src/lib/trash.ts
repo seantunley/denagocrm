@@ -1,7 +1,7 @@
 import { subDays } from "date-fns";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
-import { currentTenantScope } from "./tenantScope";
+import { activeTenantPredicate } from "./tenantPredicate";
 import { deleteFile } from "./storage";
 import { type CustomEntity } from "./customFields";
 
@@ -44,22 +44,7 @@ function delegate(model: TrashModel): any {
  * tenancy. Taking the decision away from them is the fix.
  */
 function activeTenantWhere(): { tenantId?: string | null } {
-  const scope = currentTenantScope();
-  // NO SCOPE and a scope whose tenantId is null are different facts, and
-  // collapsing them with `?? null` breaks the app in its DEFAULT mode.
-  //
-  // establishStaffTenantScope returns early without entering any scope unless
-  // TENANT_ENFORCEMENT=enforce, and the documented default and rollback modes
-  // are off/monitor. So `?? null` filtered on `tenantId: null` — the legacy
-  // untenanted value — and every migrated record, which carries a real tenant
-  // id, stopped matching. Deletes became silent no-ops.
-  //
-  // No scope means the request was never told which tenant it belongs to, so
-  // there is nothing to filter on and this adds no predicate — exactly the
-  // behaviour before this change, and the same posture the RLS extension takes
-  // when dormant. A scope that genuinely carries null still filters on null.
-  if (!scope) return {};
-  return { tenantId: scope.tenantId };
+  return activeTenantPredicate("softDeleteRecord/restoreRecord");
 }
 
 /**

@@ -4,6 +4,7 @@ import { requireUser } from "./auth";
 import { requireModuleEnabled } from "./modules/enabled";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { currentTenantScope } from "./tenantScope";
+import { activeTenantPredicate } from "./tenantPredicate";
 
 export const PERMISSIONS = [
   "pipelines.view", "pipelines.manage", "forecast.view", "forecast.manage",
@@ -446,9 +447,7 @@ export async function getAccessibleDocumentIds(user: PermissionUser): Promise<st
  * rollback modes — every migrated document would have stopped matching.
  */
 function documentTenantWhere(): { tenantId?: string | null } {
-  const scope = currentTenantScope();
-  if (!scope) return {};
-  return { tenantId: scope.tenantId };
+  return activeTenantPredicate("document scope");
 }
 
 /**

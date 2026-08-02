@@ -1,7 +1,7 @@
 import { differenceInCalendarDays, addDays } from "date-fns";
 import { ArchiveRestore, Trash2 } from "lucide-react";
 import { basePrisma } from "@/lib/db";
-import { currentTenantScope } from "@/lib/tenantScope";
+import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { requireOwner } from "@/lib/auth";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { restoreFromTrash } from "@/app/actions/trash";
@@ -50,10 +50,9 @@ export default async function TrashPage() {
   // which tenant it belongs to, so there is nothing to filter on. `?? null`
   // would filter on the legacy untenanted value and show an empty Trash page
   // to every migrated tenant.
-  const scope = currentTenantScope();
   const notNull = {
     deletedAt: { not: null },
-    ...(scope ? { tenantId: scope.tenantId } : {}),
+    ...activeTenantPredicate("Trash page"),
   } as const;
   const [automotiveOn, commerceOn] = await Promise.all([
     isModuleEnabled("automotive"),
