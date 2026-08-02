@@ -6,10 +6,10 @@ import { isModuleEnabled } from "@/lib/modules/enabled";
 import { AUTOMOTIVE_DELIVERY_TAGS } from "@/lib/modules/registry";
 import { contactName, formatZAR } from "@/lib/format";
 import { isCustomEntity, type CustomEntity } from "@/lib/customFields";
-import { getAccessibleDocumentIds } from "@/lib/documentAccess";
 import {
   getAccessibleCaseIds,
   getAccessibleContactIds,
+  getAccessibleDocumentIds,
   getAccessibleJobCardIds,
   getAccessibleLeadIds,
   getAccessibleQuoteIds,

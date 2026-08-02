@@ -2,9 +2,9 @@ import Link from "next/link";
 import { FileText, Search, Settings2, Upload } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { contactName, formatDate } from "@/lib/format";
-import { getAccessibleDocumentIds } from "@/lib/documentAccess";
 import {
   getAccessibleContactIds,
+  getAccessibleDocumentIds,
   getAccessibleQuoteIds,
   getAccessibleVehicleIds,
   hasPermission,

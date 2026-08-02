@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
-import { canAccessDocument } from "@/lib/documentAccess";
+import { canAccessDocument } from "@/lib/permissions";
 import { portalCanAccessDocument } from "@/lib/portalAccess";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { isAutomotiveOwnedDocument } from "@/lib/modules/registry";
