@@ -714,33 +714,13 @@ model EmailTemplate {
   @@unique([tenantId, id])
 }
 
-model AutomationRule {
-  id     String  @id @default(cuid())
-  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
-  name   String
-  active Boolean @default(true)
-
-  trigger        String // lead_created | stage_entered | lead_idle | lead_won | lead_lost | quote_signed | quote_declined | delivered | referral_earned
-  triggerStageId String? // for stage_entered
-  idleDays       Int? // for lead_idle
-
-  // Optional conditions - rule only fires when they hold
-  conditionSources String? // csv of lead sources, empty = any
-  minValueCents    Int? // minimum lead value
-
-  action          String // create_activity | send_email | move_stage | assign_user
-  activityType    String?
-  activitySummary String?
-  activityDueDays Int?
-  emailTemplateId String?
-  targetStageId   String?
-  assignToId      String?
-  pushMessage     String? // for send_push
-
-  createdAt DateTime @default(now())
-  @@index([tenantId])
-  @@unique([tenantId, id])
-}
+// AutomationRule and AutomationLog were dropped in migration
+// 20260802120000_retire_automation_rules. They were the storage for one of THREE
+// engines that all did "when X happens to a lead, send an email / create an
+// activity / move a stage". The Journey engine (prisma/journeys.prisma) is the
+// one that survives; that migration converted every rule into a
+// Journey/JourneyVersion, and JourneyRun/JourneyStepLog replaces AutomationLog
+// as the run history.
 
 model Quote {
   id         String    @id @default(cuid())
@@ -895,18 +875,6 @@ model AuditLog {
   @@index([contactId, createdAt])
   @@index([leadId, createdAt])
   @@index([tenantId, createdAt])
-}
-
-model AutomationLog {
-  id        String   @id @default(cuid())
-  tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
-  ruleId    String
-  leadId    String
-  note      String?
-  createdAt DateTime @default(now())
-
-  @@index([ruleId, leadId])
-  @@index([tenantId])
 }
 
 model Communication {

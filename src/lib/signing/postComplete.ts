@@ -5,7 +5,7 @@ import { logAudit } from "@/lib/audit";
 import { sendPushToAll } from "@/lib/push";
 import { formatZAR } from "@/lib/format";
 import { markReferralEarned } from "@/lib/referrals";
-import { runLeadAutomations } from "@/lib/automations";
+import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 
 /**
  * Fire the EXTERNAL side-effects of a signed document once the hub has completed
@@ -56,7 +56,13 @@ async function afterQuoteSigned(req: CompletedReq): Promise<void> {
 
   if (req.wonLeadId) {
     await markReferralEarned(req.wonLeadId).catch(() => {});
-    await runLeadAutomations("lead_won", req.wonLeadId).catch(() => {});
+    // Keyed on the signature request, not the lead's updatedAt: the win was
+    // committed inside completeSignatureRequest's transaction, which this
+    // function only fans out from, so the lead row may have been touched since.
+    await emitLeadJourneyEvent("lead_won", req.wonLeadId, {
+      occurrence: `signature-request:${req.id}`,
+      payload: { signatureRequestId: req.id, quoteId: req.quoteId },
+    });
   }
   await logAudit({
     action: "quote.signed",
@@ -65,7 +71,13 @@ async function afterQuoteSigned(req: CompletedReq): Promise<void> {
     leadId: quote.leadId,
     userName: name,
   });
-  if (quote.leadId) await runLeadAutomations("quote_signed", quote.leadId).catch(() => {});
+  // A quote is signed once, so the quote id alone is the occurrence.
+  if (quote.leadId) {
+    await emitLeadJourneyEvent("quote_signed", quote.leadId, {
+      occurrence: `quote:${quote.id}:signed`,
+      payload: { quoteId: quote.id, quoteNumber: quote.number, signatureRequestId: req.id },
+    });
+  }
   await sendPushToAll(
     { title: "Quote signed 🎉", body: `Q-${quote.number} — ${name} · ${formatZAR(Math.round(total))}`, url: `/quotes/${quote.id}` },
     "quote_signed"

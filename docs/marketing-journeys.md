@@ -59,19 +59,18 @@ After deployment:
 6. Test a delayed journey with a short wait before using day-based production delays.
 7. Confirm marketing opt-out suppresses email and SMS at execution time.
 
-## Legacy lifecycle migration
+## Legacy lifecycle migration — done
 
-The old anniversary and win-back jobs remain supported during rollout. Before activating equivalent advanced journeys, disable these settings to avoid duplicate messages:
+The old anniversary and win-back jobs are gone. `src/lib/lifecycleJourneys.ts` reimplemented what `journeyScheduling.ts` already does field for field, both crons ran every 15 minutes, and their dedupe stores could not see one another — so a tenant with `LIFECYCLE_ANNIVERSARY_ENABLED` set and an active anniversary journey received two of every email.
 
-- `LIFECYCLE_ANNIVERSARY_ENABLED`
-- `LIFECYCLE_WINBACK_ENABLED`
+Migration `20260802120000_retire_automation_rules` converts whichever of those settings was on into a real journey (skipping any tenant that already had one on that trigger, which is exactly the duplicate it is ending) and pre-seeds the journey engine's dedupe store for anyone the old engine already emailed, so the switchover cannot double-send. Both settings are then set to `false`; nothing reads or writes them any more.
 
-The journeys page displays a warning while either legacy setting remains enabled.
+The same migration converts every `AutomationRule` into a `Journey`. `/automations` is a redirect to `/journeys`.
 
 ## Recommended initial rollout
 
 1. Publish **New lead speed-to-contact** first because it only creates internal actions.
 2. Test **Won-customer welcome** with an internal/test contact.
-3. Disable the matching legacy lifecycle toggle before publishing **Purchase anniversary** or **Service win-back**.
+3. Check for an existing **Purchase anniversary** / **Service win-back** journey before publishing another — two active journeys on the same trigger send twice, and nothing prevents that.
 4. Start segment journeys with a small, purpose-built saved segment.
 5. Monitor failed runs and provider delivery logs during the first week.

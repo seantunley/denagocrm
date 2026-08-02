@@ -51,7 +51,9 @@ test("lead card actions share the required-action stage gate", () => {
 
 test("rescheduling a test drive updates the planned activity without replaying stage automations", () => {
   assert.match(leadActionsSource, /findFirst\(\{[\s\S]+type: "test_drive", status: "planned"/);
-  assert.match(leadActionsSource, /if \(changingStage\) await runLeadAutomations\("stage_entered", leadId\)/);
+  // runLeadAutomations is retired; the Journey engine is the one automation
+  // engine now and emitLeadJourneyEvent is how a write path reaches it.
+  assert.match(leadActionsSource, /if \(changingStage\) await emitLeadJourneyEvent\("stage_entered", leadId\)/);
 });
 
 test("needs-attention filtering includes overdue work", () => {

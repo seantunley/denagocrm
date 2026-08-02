@@ -42,12 +42,18 @@ export async function emitJourneyEvent(args: {
 function triggerMatches(
   trigger: string,
   config: Record<string, unknown>,
-  context: Awaited<ReturnType<typeof loadJourneyContext>>
+  context: Awaited<ReturnType<typeof loadJourneyContext>>,
+  payload: Record<string, unknown> = {}
 ) {
   if (!context) return false;
   if (trigger === "stage_entered") {
     const lead = (context.lead ?? {}) as Record<string, unknown>;
-    return !config.stageId || config.stageId === lead.stageId;
+    // Prefer the stage recorded ON THE EVENT over the lead's stage now. Events
+    // are drained by a cron that runs every 15 minutes, so a rep who moves a
+    // lead Qualified → Quoted inside that window would otherwise have the
+    // Qualified event judged against "Quoted" and silently match nothing.
+    const entered = typeof payload.stageId === "string" ? payload.stageId : lead.stageId;
+    return !config.stageId || config.stageId === entered;
   }
   return true;
 }
@@ -96,7 +102,7 @@ export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_
       for (const journey of journeys) {
         const version = getActiveVersion(journey);
         if (!version || version.trigger !== event.type) continue;
-        if (!triggerMatches(version.trigger, jsonObject(version.triggerConfig), context)) continue;
+        if (!triggerMatches(version.trigger, jsonObject(version.triggerConfig), context, eventPayload)) continue;
         if (await enqueueJourneyRun({
           journey,
           version,

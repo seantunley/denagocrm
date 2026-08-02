@@ -126,7 +126,10 @@ export function buildNav(
   if (workshopLinks.length) groups.push({ key: "workshop", label: "Workshop", links: workshopLinks });
 
   const automationLinks: NavLink[] = [];
-  if (can("journeys.manage")) automationLinks.push({ href: "/automations", label: "Automations", icon: Zap });
+  // /automations is now a redirect to /journeys (the AutomationRule engine is
+  // retired) — link the survivor directly rather than sending every click
+  // through a bounce.
+  if (can("journeys.manage")) automationLinks.push({ href: "/journeys", label: "Journeys", icon: Zap });
   if (isAdmin) {
     automationLinks.push({ href: "/chatbot", label: "Chatbot", icon: Bot });
     automationLinks.push({ href: "/bot-builder", label: "Flow builder", icon: Network });

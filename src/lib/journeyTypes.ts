@@ -1,4 +1,13 @@
-export const JOURNEY_TRIGGERS = [
+/**
+ * Triggers that only ever arrive as a JourneyEvent written by an application
+ * write path (`emitLeadJourneyEvent`). Split out from the scheduled triggers
+ * because they are the ones that silently enrolled NOBODY: the builder offered
+ * every one of them, `emitJourneyEvent` was called from no write path at all,
+ * and a journey built on one of them activated cleanly and then did nothing
+ * forever. tests/oneAutomationEngine.test.ts now asserts, per trigger in this
+ * list, that some write path emits it.
+ */
+export const JOURNEY_EVENT_TRIGGERS = [
   "lead_created",
   "stage_entered",
   "lead_won",
@@ -7,12 +16,23 @@ export const JOURNEY_TRIGGERS = [
   "quote_declined",
   "delivered",
   "referral_earned",
+] as const;
+
+/** Triggers the cron enrols for by sweeping records (journeyScheduling.ts). */
+export const JOURNEY_SCHEDULED_TRIGGERS = [
   "lead_idle",
   "contact_segment",
   "purchase_anniversary",
   "win_back",
 ] as const;
 
+export const JOURNEY_TRIGGERS = [
+  ...JOURNEY_EVENT_TRIGGERS,
+  ...JOURNEY_SCHEDULED_TRIGGERS,
+] as const;
+
+export type JourneyEventTrigger = (typeof JOURNEY_EVENT_TRIGGERS)[number];
+export type JourneyScheduledTrigger = (typeof JOURNEY_SCHEDULED_TRIGGERS)[number];
 export type JourneyTrigger = (typeof JOURNEY_TRIGGERS)[number];
 
 export const JOURNEY_STEP_TYPES = [

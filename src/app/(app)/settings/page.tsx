@@ -18,7 +18,6 @@ import { AddUserForm, ChangePasswordForm } from "@/components/TeamForms";
 import {
   saveSmtpSettings,
   saveServiceReminderSettings,
-  saveLifecycleSettings,
   createTemplate,
   updateTemplate,
   deleteTemplate,
@@ -40,7 +39,9 @@ import { formatDateTime } from "@/lib/format";
 import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { decryptValue } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
-import AutomationsPage from "../automations/page";
+import Link from "next/link";
+import { getNextStepScheduling } from "@/lib/nextStepConfig";
+import { saveNextStepScheduling } from "@/app/actions/settings";
 import ProductsPage from "../products/page";
 import { addStockLabel, removeStockLabel } from "@/app/actions/stock";
 import { getStockLabels } from "@/lib/stockLabels";
@@ -90,6 +91,7 @@ export default async function SettingsPage({
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
   ]);
   const stockLabels = await getStockLabels();
+  const nextStepScheduling = await getNextStepScheduling();
   const setting = (key: string) => {
     const raw = settings.find((s) => s.key === key)?.value ?? "";
     try {
@@ -755,46 +757,15 @@ export default async function SettingsPage({
             </Row>
             )}
 
-            {marketingOn && (
-            <Row
-              title="Lifecycle journeys"
-              status={
-                setting("LIFECYCLE_ANNIVERSARY_ENABLED") === "true" ||
-                setting("LIFECYCLE_WINBACK_ENABLED") === "true" ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">On</span>
-                ) : (
-                  <span className="badge bg-muted text-muted-foreground">Off</span>
-                )
-              }
-            >
-              <p className="text-xs text-muted-foreground mb-4">
-                Automatic, self-throttled emails to cart owners. Anniversary wishes go out on the
-                purchase date each year; win-back reaches owners who haven&apos;t serviced or been in
-                touch for over a year. Requires SMTP.
-              </p>
-              <SaveForm success="Lifecycle settings saved" resetOnSuccess={false} action={saveLifecycleSettings} className="flex items-center gap-6 flex-wrap">
-                <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    name="anniversary"
-                    defaultChecked={setting("LIFECYCLE_ANNIVERSARY_ENABLED") === "true"}
-                    className="h-4 w-4"
-                  />
-                  Purchase anniversary
-                </label>
-                <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    name="winback"
-                    defaultChecked={setting("LIFECYCLE_WINBACK_ENABLED") === "true"}
-                    className="h-4 w-4"
-                  />
-                  Win-back lapsed owners
-                </label>
-                <SaveButton className="btn-primary">Save</SaveButton>
-              </SaveForm>
-            </Row>
-            )}
+            {/* The "Lifecycle journeys" toggles (LIFECYCLE_ANNIVERSARY_ENABLED /
+                LIFECYCLE_WINBACK_ENABLED) were removed here. They drove a
+                hardcoded second copy of anniversary and win-back email — the
+                journey scheduler reimplements both field for field — and with
+                both switched on a customer got two of each, because the two
+                dedupe stores could not see one another. The migration
+                20260802120000_retire_automation_rules turns whichever toggles
+                were on into real journeys on /journeys, where the copy is
+                editable. */}
 
             <Row
               title="Email templates"
@@ -995,7 +966,64 @@ export default async function SettingsPage({
         </div>
       )}
 
-      {tab === "automations" && marketingOn && <AutomationsPage />}
+      {/* This tab used to render the whole /automations page inline. That page is
+          now a redirect (the AutomationRule engine is retired in favour of
+          journeys), and a redirect cannot be embedded — so the one setting the
+          page owned that is NOT a rule, next-step scheduling, lives here now.
+          It still has a reader: the journey create_activity step. */}
+      {tab === "automations" && marketingOn && (
+        <div className="max-w-3xl space-y-4">
+          <Row
+            title="Automation journeys"
+            status={
+              <Link href="/journeys" className="badge bg-primary/15 text-primary hover:underline">
+                Open journeys
+              </Link>
+            }
+          >
+            <p className="text-xs text-muted-foreground">
+              Triggers, conditions and actions all live in the journey builder — versioned,
+              multi-step, with waits, branches and a full run history.
+            </p>
+          </Row>
+
+          <Row title="Next-step scheduling">
+            <p className="text-xs text-muted-foreground mb-4">
+              Controls when a journey&apos;s auto-created follow-up task is due.
+            </p>
+            <SaveForm
+              success="Next-step scheduling saved"
+              resetOnSuccess={false}
+              action={saveNextStepScheduling}
+              className="grid gap-4"
+            >
+              <div>
+                <label className="label" htmlFor="nss-hour">Work-hour for follow-ups</label>
+                <select
+                  id="nss-hour"
+                  name="hour"
+                  className="input"
+                  defaultValue={String(nextStepScheduling.hour)}
+                >
+                  {Array.from({ length: 24 }, (_, h) => (
+                    <option key={h} value={h}>{`${String(h).padStart(2, "0")}:00`}</option>
+                  ))}
+                </select>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                <input
+                  type="checkbox"
+                  name="skipWeekends"
+                  defaultChecked={nextStepScheduling.skipWeekends}
+                  className="h-4 w-4"
+                />
+                Skip weekends (roll to Monday)
+              </label>
+              <SaveButton className="btn-primary">Save scheduling</SaveButton>
+            </SaveForm>
+          </Row>
+        </div>
+      )}
       {tab === "stock" && commerceOn && (
         <div className="max-w-3xl space-y-4">
           <div className="card">

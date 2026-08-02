@@ -79,8 +79,9 @@ async function main() {
   for (const a of raw.activities) await prisma.activity.create({ data: dates(a, ["dueDate", "doneAt", "createdAt"]) });
   for (const d of raw.documents) await prisma.document.create({ data: dates(d, ["createdAt"]) });
   for (const t of raw.emailTemplates) await prisma.emailTemplate.create({ data: dates(t, ["createdAt"]) });
-  for (const r of raw.automationRules) await prisma.automationRule.create({ data: dates(r, ["createdAt"]) });
-  for (const l of raw.automationLogs) await prisma.automationLog.create({ data: dates(l, ["createdAt"]) });
+  // automationRules / automationLogs are gone — the AutomationRule engine was
+  // retired and its tables dropped (20260802120000_retire_automation_rules). An
+  // older export file still carrying those keys imports fine; they are ignored.
 
   console.log("Import complete.");
 }

@@ -17,7 +17,7 @@ import {
   runJourneyNowAction,
 } from "@/app/actions/journeyRuns";
 import { PageHeader } from "@/components/page-header";
-import { EmptyState, FeedbackBanner, StatusPill } from "@/components/visual-system";
+import { EmptyState, StatusPill } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
 
@@ -70,7 +70,7 @@ function statusTone(status: string) {
 
 export default async function JourneysPage() {
   await requireOwner();
-  const [journeys, stages, users, templates, tags, segments, recentRuns, lifecycleSettings] = await Promise.all([
+  const [journeys, stages, users, templates, tags, segments, recentRuns] = await Promise.all([
     prisma.journey.findMany({
       where: { status: { not: "archived" } },
       orderBy: { updatedAt: "desc" },
@@ -89,19 +89,11 @@ export default async function JourneysPage() {
       take: 30,
       include: { journey: true, journeyVersion: true },
     }),
-    prisma.appSetting.findMany({
-      where: { key: { in: ["LIFECYCLE_ANNIVERSARY_ENABLED", "LIFECYCLE_WINBACK_ENABLED"] } },
-    }),
   ]);
   const options = { stages, users, templates, tags, segments };
-  const legacyLifecycleEnabled = lifecycleSettings.some((setting) => setting.value === "true");
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Link href="/automations" className="transition-colors hover:text-primary">Automations</Link>
-        <span>/</span><span>Journeys</span>
-      </div>
       <PageHeader
         title="Marketing journeys & advanced automations"
         description="Versioned multi-step workflows with safe conditions, waits, messaging, CRM actions, segment enrolment and execution history."
@@ -110,13 +102,6 @@ export default async function JourneysPage() {
           <button className="btn-secondary">Install recommended drafts</button>
         </form>
       </PageHeader>
-
-      {legacyLifecycleEnabled && (
-        <FeedbackBanner tone="warning" title="Legacy lifecycle emails are still enabled">
-            Disable the old anniversary and win-back toggles in Settings before activating equivalent
-            advanced journeys, otherwise customers could receive both versions.
-        </FeedbackBanner>
-      )}
 
       <details className="card" open={journeys.length === 0}>
         <summary className="font-semibold cursor-pointer">+ Create a journey</summary>

@@ -14,7 +14,7 @@ import { markReferralEarned } from "@/lib/referrals";
 import { hasOpenSignatureRequest } from "@/lib/quoteLock";
 import { nextQuoteNumber } from "@/lib/numbering";
 import { feeRowsFor, itemRowsFor, priorById } from "@/lib/quoteRows";
-import { runLeadAutomations } from "@/lib/automations";
+import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { formatZAR, contactName } from "@/lib/format";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
@@ -694,13 +694,26 @@ export async function setQuoteStatus(quoteId: string, status: string) {
     // fires exactly once and never for a quote that didn't actually win the lead.
     if (wonLeadId) {
       await markReferralEarned(wonLeadId).catch(() => {});
-      await runLeadAutomations("lead_won", wonLeadId);
+      await emitLeadJourneyEvent("lead_won", wonLeadId);
       await logAudit({
         action: "lead.won",
         summary: `Lead “${quote.lead?.title ?? ""}” won via accepted quote Q-${quote.number} 🎉`,
         leadId: wonLeadId,
         contactId: quote.contactId,
         user,
+      });
+    }
+    // "Quote declined" is offered as an enrolment trigger in the journey
+    // builder, and was offered by the retired automations builder before it,
+    // and NEITHER engine ever fired it: nothing in the codebase called
+    // runLeadAutomations("quote_declined", …) either. A rule or journey built on
+    // it could never run. This is the only place a quote becomes declined.
+    if (status === "declined" && quote.leadId) {
+      await emitLeadJourneyEvent("quote_declined", quote.leadId, {
+        // Keyed on the quote: declining does not touch the lead row, and a quote
+        // can go declined → draft → declined again, which must enrol twice.
+        occurrence: `quote:${quoteId}:declined:${quote.updatedAt.toISOString()}`,
+        payload: { quoteId, quoteNumber: quote.number },
       });
     }
     if (reopenedLead && quote.leadId) {

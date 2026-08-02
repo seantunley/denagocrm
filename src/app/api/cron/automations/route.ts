@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { pruneRateLimits } from "@/lib/rateLimit";
 
 export const maxDuration = 60;
-import { runIdleAutomations } from "@/lib/automations";
 import { runServiceReminders } from "@/lib/serviceReminders";
 import { runSignatureRequestReminders } from "@/lib/signingReminders";
 import { recoverStaleSigningClaims } from "@/lib/signing/dispatch";
@@ -18,7 +17,6 @@ import { runAutoResearch } from "@/lib/ai";
 import { runActivityReminders } from "@/lib/activityReminders";
 import { runSafeCampaignQueue } from "@/lib/marketingCampaignQueue";
 import { runSafeSurveyDistributionQueue } from "@/lib/surveyDistributionQueue";
-import { runLifecycleJourneys } from "@/lib/lifecycleJourneys";
 import { runAiHealthIfDue, runBackupWatchdog } from "@/lib/systemHealth";
 import { basePrisma } from "@/lib/db";
 import { expireReservations } from "@/lib/stockPlatform";
@@ -58,7 +56,13 @@ async function runOperationalQueues(budget: CronSliceContext) {
     });
   };
 
-  const fired = await phase("idle-automations", runIdleAutomations, -1);
+  // "idle-automations" and "lifecycle-journeys" used to run here. Both are
+  // retired: idle-lead nudges and the anniversary / win-back emails are now
+  // Journey triggers (lead_idle, purchase_anniversary, win_back) enrolled by
+  // runScheduledJourneyEnrollments on /api/cron/journeys. Running them here as
+  // well is exactly how a tenant got TWO anniversary emails — the three dedupe
+  // stores (AutomationLog, JourneyEvent.dedupeKey, Communication.subject LIKE)
+  // could not see each other.
   const remindersSent = on("automotive") ? await phase("service-reminders", runServiceReminders, -1) : null;
   const signingReminders = await phase("signature-request-reminders", runSignatureRequestReminders, -1);
   const staleSigningClaims = await phase("stale-signing-claims", recoverStaleSigningClaims, null);
@@ -71,7 +75,6 @@ async function runOperationalQueues(budget: CronSliceContext) {
   const surveyQueue = on("marketing")
     ? await phase("survey-distribution-queue", runSafeSurveyDistributionQueue, -1)
     : null;
-  const lifecycleSent = on("marketing") ? await phase("lifecycle-journeys", runLifecycleJourneys, -1) : null;
   const stockActor = on("commerce")
     ? await phase("stock-actor", () => resolveTenantActor({ ownerOnly: true }), null)
     : null;
@@ -81,7 +84,6 @@ async function runOperationalQueues(budget: CronSliceContext) {
       ? await phase("stock-reservation-expiry", () => expireReservations(stockActor), -1)
       : 0;
   return {
-    fired,
     remindersSent,
     signingReminders,
     staleSigningClaims,
@@ -91,7 +93,6 @@ async function runOperationalQueues(budget: CronSliceContext) {
     aiResearch,
     campaignSent,
     surveyQueue,
-    lifecycleSent,
     activityReminders,
     stockReservationsExpired,
     // Visible in the response so a truncated run is diagnosable rather than

@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireQuoteAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
-import { runLeadAutomations } from "@/lib/automations";
+import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { saveFile } from "@/lib/storage";
 import { contactName } from "@/lib/format";
 import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
@@ -260,7 +260,14 @@ export async function markDelivered(quoteId: string, formData: FormData): Promis
       where: { id: quoteId },
       data: { deliveredAt: new Date(), deliveredByName, deliveryChecklist, deliverySignatureRef },
     });
-    if (quote.leadId) await runLeadAutomations("delivered", quote.leadId).catch(() => {});
+    // Keyed on the quote — delivery writes `Quote.deliveredAt`, not the lead —
+    // and `deliveredAt` is set once, so the quote id alone is the occurrence.
+    if (quote.leadId) {
+      await emitLeadJourneyEvent("delivered", quote.leadId, {
+        occurrence: `quote:${quoteId}:delivered`,
+        payload: { quoteId, quoteNumber: quote.number },
+      });
+    }
     await logAudit({
       action: "fulfilment.delivered",
       summary: `Q-${quote.number} delivered 🎉 — register the vehicle to start its service life`,

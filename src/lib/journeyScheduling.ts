@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { resolveContacts, type SegmentCriteria } from "./campaigns";
 import { emitJourneyEvent } from "./journeyEvents";
+import { leadHasGoneQuiet } from "./leadIdle";
 import { getActiveVersion, jsonObject } from "./journeyEngineShared";
 
 function recurrenceWindow(repeat: unknown, now = new Date()) {
@@ -34,13 +35,21 @@ async function scheduleJourney(journey: SchedulableJourney, stop: StopSignal) {
 
   if (version.trigger === "lead_idle") {
     const days = Math.max(1, Number(config.idleDays ?? 3));
+    const now = new Date();
+    // Narrow to leads whose own row is already stale; a lead touched more
+    // recently than the cutoff is engaged by definition and can't be idle.
     const leads = await prisma.lead.findMany({
-      where: { status: "open", updatedAt: { lt: subDays(new Date(), days) } },
-      select: { id: true },
+      where: { status: "open", updatedAt: { lt: subDays(now, days) } },
+      select: { id: true, contactId: true, updatedAt: true },
       take: 1000,
     });
     for (const lead of leads) {
       if (stop.shouldStop(ENROL_RESERVE_MS)) break;
+      // The row timestamp alone is NOT the test — see lib/leadIdle.ts. This
+      // check came from the retired AutomationRule engine; without it, retiring
+      // that engine would have started nudging customers who are mid-decision on
+      // a quote we sent, or who have a follow-up call already booked.
+      if (!(await leadHasGoneQuiet(lead, days, now))) continue;
       if (await emitJourneyEvent({
         type: version.trigger,
         entityType: "lead",

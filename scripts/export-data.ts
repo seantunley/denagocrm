@@ -19,8 +19,6 @@ async function main() {
     activities: await prisma.activity.findMany(),
     documents: await prisma.document.findMany(),
     emailTemplates: await prisma.emailTemplate.findMany(),
-    automationRules: await prisma.automationRule.findMany(),
-    automationLogs: await prisma.automationLog.findMany(),
   };
   fs.writeFileSync("data-export.json", JSON.stringify(data, null, 2));
   const counts = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, (v as unknown[]).length]));
