@@ -1,9 +1,15 @@
 import Link from "next/link";
 import { FileText, Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { requireAnyPermission, getAccessibleQuoteIds } from "@/lib/permissions";
+import { requireAnyPermission, getAccessibleQuoteIds, hasPermission } from "@/lib/permissions";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { payableTotalCents } from "@/lib/pricing";
+import {
+  QUOTE_EDITOR_INCLUDE,
+  QUOTE_VERSION_SELECT,
+  buildQuoteEditorRecord,
+  quoteVersionIndex,
+} from "@/lib/quoteEditorRecord";
 import { getSetting } from "@/lib/settings";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
@@ -45,7 +51,7 @@ export default async function QuotesPage({
       // from the editor's version history and the full record. RBAC-scoped.
       where: { supersededAt: null, ...(accessibleQuoteIds ? { id: { in: accessibleQuoteIds } } : {}) },
       orderBy: { createdAt: "desc" },
-      include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, lead: true, contact: true, createdBy: true },
+      include: QUOTE_EDITOR_INCLUDE,
       take: 200,
     }),
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
@@ -63,85 +69,22 @@ export default async function QuotesPage({
     }),
     prisma.quote.findMany({
       orderBy: { createdAt: "asc" },
-      select: {
-        id: true,
-        number: true,
-        status: true,
-        createdAt: true,
-        supersededAt: true,
-        revisionOfId: true,
-      },
+      select: QUOTE_VERSION_SELECT,
       take: 2_000,
     }),
     getSetting("QUOTE_VALID_DAYS"),
     getSetting("QUOTE_TERMS"),
   ]);
 
-  const versionById = new Map(allVersions.map((version) => [version.id, version]));
-  const rootFor = (id: string) => {
-    let current = versionById.get(id);
-    const seen = new Set<string>();
-    while (current?.revisionOfId && !seen.has(current.id)) {
-      seen.add(current.id);
-      current = versionById.get(current.revisionOfId) ?? current;
-      if (!current.revisionOfId) break;
-    }
-    return current?.id ?? id;
-  };
-  const versionsByRoot = new Map<string, typeof allVersions>();
-  for (const version of allVersions) {
-    const root = rootFor(version.id);
-    versionsByRoot.set(root, [...(versionsByRoot.get(root) ?? []), version]);
-  }
+  // Shared with quoteEditorRecord(), the action that loads ONE quote for the
+  // editor — a revision, or a deep link to a quote older than this list's cap.
+  const versionIndex = quoteVersionIndex(allVersions);
+  const records: QuoteEditorRecord[] = quotes.map((quote) => buildQuoteEditorRecord(quote, versionIndex));
 
-  const records: QuoteEditorRecord[] = quotes.map((quote) => {
-    const lockedReason = quote.signToken
-      ? "A signing link is active. Revoke it from the full quote record before editing."
-      : quote.signedAt
-        ? "This quote has been signed and is permanently read-only."
-        : quote.supersededAt
-          ? "This version has been superseded and is permanently read-only."
-          : quote.status !== "draft"
-            ? "This version has already been customer-facing. Create a revision from the full quote record to change it."
-            : null;
-    const family = versionsByRoot.get(rootFor(quote.id)) ?? [];
-    return {
-      id: quote.id,
-      number: quote.number,
-      status: quote.status,
-      contactId: quote.contactId,
-      contactLabel: quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "Unlinked quote",
-      leadLabel: quote.lead?.title ?? null,
-      validUntil: quote.validUntil?.toISOString().slice(0, 10) ?? "",
-      terms: quote.terms ?? "",
-      createdAt: formatDate(quote.createdAt),
-      editable: lockedReason === null,
-      lockedReason,
-      items: quote.items.map((item) => ({
-        id: item.id,
-        description: item.description,
-        qty: item.qty,
-        unitPriceCents: item.unitPriceCents,
-        productId: item.productId,
-        colorPreference: item.colorPreference,
-        discountPct: item.discountPct,
-      })),
-      taxInclusive: quote.taxInclusive,
-      depositType: quote.depositType,
-      depositValue: quote.depositValue,
-      fees: quote.fees.map((fee) => ({ id: fee.id, label: fee.label, kind: fee.kind, amountCents: fee.amountCents })),
-      versions: family
-        .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-        .map((version) => ({
-          id: version.id,
-          number: version.number,
-          status: version.status,
-          createdAt: formatDate(version.createdAt),
-          superseded: Boolean(version.supersededAt),
-          current: version.id === quote.id,
-        })),
-    };
-  });
+  // Every quote here is already RBAC-scoped by getAccessibleQuoteIds, so the
+  // per-quote half of deleteQuote()'s check is satisfied by the query and only
+  // the permission is left to ask — once, not per row.
+  const canDelete = await hasPermission(user, "quotes.delete");
 
   const validDays = Number.parseInt(validDaysRaw ?? "7", 10);
   const defaults = {
@@ -226,7 +169,7 @@ export default async function QuotesPage({
                         <MobileDataField label="Created">{formatDate(quote.createdAt)}</MobileDataField>
                       </MobileDataFields>
                       <div className="mt-2 flex justify-end">
-                        <ConfirmDelete action={deleteQuote.bind(null, quote.id)} title={`Delete quote Q-${quote.number}?`} description="Moves the quote to Trash (restorable for 60 days)." trigger="Delete quote" triggerClass="text-xs text-slate-500 hover:text-red-400" />
+                        <ConfirmDelete action={deleteQuote.bind(null, quote.id)} title={`Delete quote Q-${quote.number}?`} description="Moves the quote to Trash (restorable for 60 days)." trigger="Delete quote" triggerClass="text-xs text-slate-500 hover:text-red-400" disabled={!canDelete} disabledReason="Your role can't delete quotes." />
                       </div>
                     </MobileDataCard>
                     </RecordContextMenu>
@@ -280,7 +223,7 @@ export default async function QuotesPage({
                           <td className="text-slate-400">{formatDate(quote.validUntil)}</td>
                           <td className="text-slate-400">{formatDate(quote.createdAt)}{quote.createdBy ? ` · ${quote.createdBy.name}` : ""}</td>
                           <td className="text-right">
-                            <ConfirmDelete action={deleteQuote.bind(null, quote.id)} title={`Delete quote Q-${quote.number}?`} description="Moves the quote to Trash (restorable for 60 days)." trigger="Delete" triggerClass="text-xs text-slate-500 hover:text-red-400" />
+                            <ConfirmDelete action={deleteQuote.bind(null, quote.id)} title={`Delete quote Q-${quote.number}?`} description="Moves the quote to Trash (restorable for 60 days)." trigger="Delete" triggerClass="text-xs text-slate-500 hover:text-red-400" disabled={!canDelete} disabledReason="Your role can't delete quotes." />
                           </td>
                         </tr>
                         </RecordContextMenu>

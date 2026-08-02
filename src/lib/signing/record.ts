@@ -55,6 +55,33 @@ export async function activeRecordRequest(opts: { quoteId?: string | null; jobCa
   };
 }
 
+/**
+ * Everything the signature card needs for one quote, gathered in a single call.
+ *
+ * The card only ever lived on the quote record page — a server component that
+ * could read all of this inline. Embedding the same card in the quote EDITOR
+ * means a client dialog needs the same facts on demand, and needs them again
+ * after every signing action, so they are resolved here instead of assembled
+ * twice in two different ways.
+ */
+export type QuoteSigningView = {
+  status: string;
+  /**
+   * A request is in flight, so the quote must not be edited. Computed here
+   * because isRequestClosed() is server-only and the editor is a client
+   * component — it cannot work this out for itself.
+   */
+  locked: boolean;
+  signedAt: Date | null;
+  signedByName: string | null;
+  signedPdfHash: string | null;
+  dealerSignedAt: Date | null;
+  dealerSignedByName: string | null;
+  hasSavedSignature: boolean;
+  workflows: { id: string; name: string }[];
+  state: RecordSigningState;
+};
+
 /** True when the record has an open request that should lock it against edits. */
 export function isLockedForSigning(state: RecordSigningState): boolean {
   // Any CLOSED request (completed/declined/voided/expired/rejected) leaves the

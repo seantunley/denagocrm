@@ -43,6 +43,7 @@ export default function SigningBlock({
   hasSavedSignature,
   state,
   workflows = [],
+  onChanged,
 }: {
   kind: "quote" | "jobcard";
   id: string;
@@ -55,6 +56,14 @@ export default function SigningBlock({
   hasSavedSignature?: boolean;
   state: SigningState;
   workflows?: { id: string; name: string }[];
+  /**
+   * Called whenever this card changes the record's signing state. On a page,
+   * router.refresh() re-reads the props and that is enough. Inside the quote
+   * editor the props come from an on-demand fetch that a route refresh cannot
+   * reach, so the embedder refetches here — without it the card would keep
+   * showing the countersign pad after you had already countersigned.
+   */
+  onChanged?: () => void;
 }) {
   const router = useRouter();
   const [workflowId, setWorkflowId] = useState("");
@@ -62,6 +71,12 @@ export default function SigningBlock({
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [modalUrl, setModalUrl] = useState<string | null>(null);
+
+  /** Re-read the record everywhere this card is mounted — route and embedder. */
+  const refresh = () => {
+    router.refresh();
+    onChanged?.();
+  };
 
   // Record already signed (via the hub or the historic legacy flow).
   if (signedAt) {
@@ -103,7 +118,7 @@ export default function SigningBlock({
               : "Request ready, but the notification could not be delivered — retry from the Signatures hub.",
         );
       }
-      router.refresh();
+      refresh();
     } catch { setErr("Something went wrong. Please try again."); }
     finally { setBusy(null); }
   }
@@ -132,7 +147,7 @@ export default function SigningBlock({
       )}
 
       {needsDealerSignature ? (
-        <DealerSignPad quoteId={id} hasSaved={Boolean(hasSavedSignature)} />
+        <DealerSignPad quoteId={id} hasSaved={Boolean(hasSavedSignature)} onSigned={refresh} />
       ) : active && state ? (
         <div className="space-y-3">
           {state.recipients.map((r) => (
@@ -193,11 +208,11 @@ export default function SigningBlock({
       {note && <p className="text-xs text-emerald-400 mt-2">{note}</p>}
 
       {modalUrl && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-slate-950/80 p-3 sm:p-6" onClick={() => { setModalUrl(null); router.refresh(); }}>
+        <div className="fixed inset-0 z-50 flex flex-col bg-slate-950/80 p-3 sm:p-6" onClick={() => { setModalUrl(null); refresh(); }}>
           <div className="mx-auto flex h-full w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-900" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-slate-700 px-4 py-2">
               <span className="text-sm font-semibold text-white">Your signature</span>
-              <button onClick={() => { setModalUrl(null); router.refresh(); }} className="rounded-md bg-slate-700 px-3 py-1 text-xs text-white hover:bg-slate-600">Done ✕</button>
+              <button onClick={() => { setModalUrl(null); refresh(); }} className="rounded-md bg-slate-700 px-3 py-1 text-xs text-white hover:bg-slate-600">Done ✕</button>
             </div>
             <iframe title="Sign" src={modalUrl} className="flex-1 w-full bg-slate-900" />
           </div>

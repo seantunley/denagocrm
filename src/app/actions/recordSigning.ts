@@ -2,7 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma, basePrisma } from "@/lib/db";
-import { requireQuoteAccess, requireJobCardAccess, type PermissionUser } from "@/lib/permissions";
+import { getCurrentUser } from "@/lib/auth";
+import {
+  requireQuoteAccess,
+  requireJobCardAccess,
+  canAccessQuote,
+  hasPermission,
+  type PermissionUser,
+} from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { saveFile, deleteFile } from "@/lib/storage";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "@/lib/signing/status";
@@ -13,7 +20,7 @@ import { renderEnvelopePdf } from "@/lib/signing/render";
 import { createSignatureRequestFromDoc } from "@/lib/signing/service";
 import { dispatchRequest } from "@/lib/signing/dispatch";
 import { logSignEvent } from "@/lib/signing/events";
-import { activeRecordRequest } from "@/lib/signing/record";
+import { activeRecordRequest, isLockedForSigning, type QuoteSigningView } from "@/lib/signing/record";
 import { advanceWorkflow, repairWorkflow } from "@/lib/signflow/runtime";
 
 type Kind = "quote" | "jobcard";
@@ -44,6 +51,66 @@ function requireRecordSigningAccess(kind: Kind, id: string): Promise<PermissionU
   return kind === "quote"
     ? requireQuoteAccess(id, "quotes.change_status")
     : requireJobCardAccess(id, "jobcards.manage");
+}
+
+/**
+ * The signing state for one quote, for a surface that cannot read it
+ * server-side — the quote editor dialog, which embeds the same signature card
+ * the record page renders.
+ *
+ * Returns null rather than redirecting: this is a read for a panel, and a
+ * caller who may not act on signing should simply not see the panel. Read
+ * access is gated on the SAME permission as starting a request, because the
+ * payload carries each recipient's secure signing link — a token that lets its
+ * holder sign. requireQuoteAccess() is deliberately not used here; it calls
+ * redirect(), which would throw NEXT_REDIRECT out of a data fetch.
+ */
+export async function quoteSigningView(id: string): Promise<QuoteSigningView | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  if (!(await hasPermission(user, "quotes.change_status"))) return null;
+  if (!(await canAccessQuote(user, id))) return null;
+
+  const quote = await prisma.quote.findUnique({
+    where: { id },
+    select: {
+      status: true,
+      deletedAt: true,
+      supersededAt: true,
+      signToken: true,
+      signedAt: true,
+      signedByName: true,
+      signedPdfHash: true,
+      dealerSignedAt: true,
+      dealerSignedByName: true,
+    },
+  });
+  // A superseded version is not signable and the record page hides the card for
+  // it — findUnique is not soft-delete filtered, hence the explicit check.
+  if (!quote || quote.deletedAt || quote.supersededAt) return null;
+
+  const [state, workflows] = await Promise.all([
+    activeRecordRequest({ quoteId: id }),
+    prisma.signWorkflow.findMany({
+      where: { isArchived: false },
+      select: { id: true, name: true },
+      orderBy: { updatedAt: "desc" },
+    }),
+  ]);
+
+  return {
+    status: quote.status,
+    // Both lock paths: a hub request in flight, and the historic signToken link.
+    locked: isLockedForSigning(state) || (Boolean(quote.signToken) && !quote.signedAt),
+    signedAt: quote.signedAt,
+    signedByName: quote.signedByName,
+    signedPdfHash: quote.signedPdfHash,
+    dealerSignedAt: quote.dealerSignedAt,
+    dealerSignedByName: quote.dealerSignedByName,
+    hasSavedSignature: Boolean(user.drawnSignatureRef),
+    workflows,
+    state,
+  };
 }
 
 /**

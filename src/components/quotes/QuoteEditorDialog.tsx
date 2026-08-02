@@ -4,13 +4,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   createContext,
+  useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   useTransition,
   type ReactNode,
 } from "react";
 import {
+  Ban,
   Check,
   Clock3,
   ExternalLink,
@@ -20,15 +23,35 @@ import {
   History,
   Loader2,
   LockKeyhole,
+  MessageSquareWarning,
   PackageOpen,
+  RefreshCw,
+  Undo2,
+  PenLine,
   Plus,
+  Printer,
   Save,
   Send,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { saveQuoteDraft, type QuoteDraftInput } from "@/app/actions/quotes";
-import { quotePricing } from "@/lib/pricing";
+import {
+  canDeleteQuote,
+  createQuoteRevision,
+  deleteQuote,
+  quoteEditorRecord,
+  saveQuoteDraft,
+  setQuoteStatus,
+  type QuoteDraftInput,
+} from "@/app/actions/quotes";
+import { recordCustomFields, saveCustomFieldValues } from "@/app/actions/customFields";
+import type { FieldWithValue } from "@/lib/customFields-helpers";
+import ConfirmDelete from "@/components/ConfirmDelete";
+import CustomFieldsForm from "@/components/custom-fields/CustomFieldsForm";
+import { quoteSigningView } from "@/app/actions/recordSigning";
+import type { QuoteSigningView } from "@/lib/signing/record";
+import { feeRows, quotePricing } from "@/lib/pricing";
+import SigningBlock from "@/components/SigningBlock";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -74,12 +97,21 @@ export type QuoteEditorRecord = {
   status: string;
   contactId: string | null;
   contactLabel: string;
+  leadId: string | null;
   leadLabel: string | null;
   validUntil: string;
   terms: string;
   createdAt: string;
+  createdByName: string | null;
   editable: boolean;
   lockedReason: string | null;
+  /** Set once a revision supersedes this version — links to the one that did. */
+  supersededAt: string | null;
+  supersededById: string | null;
+  supersededByNumber: number | null;
+  /** The customer asked for changes from the signing page rather than signing. */
+  changeRequestedAt: string | null;
+  changeRequestNote: string | null;
   items: Array<{
     id: string;
     description: string;
@@ -88,6 +120,14 @@ export type QuoteEditorRecord = {
     productId: string | null;
     colorPreference: string | null;
     discountPct: number;
+    /** Unit cost basis. No surface edits it, but the margin figure needs it and
+     *  a save must not reset it — see saveQuoteDraft's carry-forward. */
+    costCents: number;
+    /** A customer-selectable add-on, and whether they took it. Also unedited
+     *  anywhere, but an unselected one is NOT charged, so pricing it as a normal
+     *  line would print an amount the total never counted. */
+    optional: boolean;
+    selected: boolean;
   }>;
   taxInclusive: boolean;
   depositType: string | null;
@@ -103,6 +143,12 @@ export type QuoteEditorDefaults = {
 
 type DraftLine = {
   key: string;
+  /**
+   * The QuoteItem row this line edits, or null when it is a new line. Sent back
+   * on save so the server can carry across the CPQ columns no surface edits —
+   * cost basis, optional/selected, per-line VAT — instead of resetting them.
+   */
+  id: string | null;
   kind: "catalogue" | "custom";
   description: string;
   qty: string;
@@ -110,10 +156,16 @@ type DraftLine = {
   discount: string;
   productId: string | null;
   colorPreference: string;
+  /** Carried, not edited — the margin figure is computed from it. */
+  costCents: number;
+  /** Carried, not edited — an unselected add-on is offered but not charged. */
+  optional: boolean;
+  selected: boolean;
 };
 
 type DraftFee = {
   key: string;
+  id: string | null;
   label: string;
   kind: "fee" | "delivery";
   amount: string;
@@ -192,6 +244,7 @@ function createDraft(
     terms: record.terms,
     fees: record.fees.map((fee) => ({
       key: fee.id,
+      id: fee.id,
       label: fee.label,
       kind: fee.kind === "delivery" ? "delivery" : "fee",
       amount: (fee.amountCents / 100).toFixed(2),
@@ -205,6 +258,7 @@ function createDraft(
         : products.find((product) => product.name.trim().toLowerCase() === item.description.trim().toLowerCase());
       return {
         key: item.id,
+        id: item.id,
         kind: item.productId || matchingProduct ? "catalogue" : "custom",
         description: item.description,
         qty: String(item.qty),
@@ -212,6 +266,9 @@ function createDraft(
         discount: item.discountPct ? String(item.discountPct) : "",
         productId: item.productId ?? matchingProduct?.id ?? null,
         colorPreference: item.colorPreference ?? "",
+        costCents: item.costCents,
+        optional: item.optional,
+        selected: item.selected,
       };
     }),
   } satisfies DraftState;
@@ -264,6 +321,7 @@ export function QuoteEditorDialog({
   defaults,
   record = null,
   initialContactId,
+  onOpenQuote,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -273,6 +331,13 @@ export function QuoteEditorDialog({
   defaults: QuoteEditorDefaults;
   record?: QuoteEditorRecord | null;
   initialContactId?: string;
+  /**
+   * Switch the editor to a different quote. Creating a revision produces a new
+   * quote, and pushing `/quotes?edit=<id>` cannot open it from here — the
+   * provider reads that param once, on mount, so a soft navigation within
+   * /quotes changes the URL and nothing else.
+   */
+  onOpenQuote?: (quoteId: string) => void;
 }) {
   const router = useRouter();
   const [draft, setDraft] = useState<DraftState>(() => createDraft(record, defaults, initialContactId, products));
@@ -283,12 +348,96 @@ export function QuoteEditorDialog({
   const [activeTab, setActiveTab] = useState("build");
   const [error, setError] = useState<string | null>(null);
   const [discardOpen, setDiscardOpen] = useState(false);
+  /** Set when the discard prompt was raised by switching versions, not closing. */
+  const [pendingVersionId, setPendingVersionId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  /**
+   * Signing state for the Send tab's signature card.
+   *
+   * It cannot ride in on `record`: the editor can CREATE the quote it is about
+   * to send, so at open time there may be no record at all — and once the card
+   * acts, router.refresh() re-renders the page underneath the dialog without
+   * ever reaching these props. So it is fetched for whichever quote currently
+   * exists and refetched whenever the card changes something.
+   */
+  const [signingNonce, setSigningNonce] = useState(0);
+  const reloadSigning = useCallback(() => setSigningNonce((nonce) => nonce + 1), []);
+  const signingQuoteId = savedQuote?.id ?? null;
+  // The fetch carries the id it answered for, so which quote the state belongs
+  // to is derived at render rather than reset through the effect — a refetch
+  // then keeps showing the last good card instead of flashing a spinner.
+  const [signingFetch, setSigningFetch] = useState<{ quoteId: string; view: QuoteSigningView | null; canDelete: boolean; customFields: FieldWithValue[] } | null>(null);
+  const signing = signingFetch?.quoteId === signingQuoteId ? signingFetch.view : null;
+  const signingReady = !signingQuoteId || signingFetch?.quoteId === signingQuoteId;
+  // Until the answer arrives, assume NOT permitted: a control that starts
+  // enabled and greys out a moment later invites the click it is meant to stop.
+  const canDelete = signingFetch?.quoteId === signingQuoteId && signingFetch.canDelete;
+  const customFields = signingFetch?.quoteId === signingQuoteId ? signingFetch.customFields : [];
+
+  useEffect(() => {
+    if (!signingQuoteId) return;
+    let live = true;
+    // Two questions about the same quote, asked together. They are separate
+    // actions because they enforce separate permissions — signing state is
+    // gated on quotes.change_status, deleting on quotes.delete — and each
+    // belongs with the rules it mirrors.
+    Promise.all([
+      quoteSigningView(signingQuoteId),
+      canDeleteQuote(signingQuoteId),
+      recordCustomFields("quote", signingQuoteId),
+    ])
+      .then(([view, deletable, customFields]) => {
+        if (!live) return;
+        setSigningFetch({ quoteId: signingQuoteId, view, canDelete: deletable, customFields });
+        // Signing moves the quote's own status server-side — dispatch marks it
+        // sent once the link is out, voiding puts it back to draft. Adopt it,
+        // or the header keeps showing whatever the dialog opened with.
+        if (view) {
+          setSavedQuote((current) =>
+            current && current.id === signingQuoteId && current.status !== view.status
+              ? { ...current, status: view.status }
+              : current,
+          );
+        }
+      })
+      .catch(() => {
+        if (live) setSigningFetch({ quoteId: signingQuoteId, view: null, canDelete: false, customFields: [] });
+      });
+    return () => {
+      live = false;
+    };
+  }, [signingQuoteId, signingNonce]);
 
   const currentSnapshot = useMemo(() => draftSnapshot(draft), [draft]);
   const dirty = currentSnapshot !== initialSnapshot;
   const currentStatus = savedQuote?.status ?? record?.status ?? "draft";
-  const editable = (record?.editable ?? true) && currentStatus === "draft";
+  // A live signing request locks the quote. `record.lockedReason` is computed
+  // when the list page renders, so it knows nothing about a request started
+  // from this dialog a moment ago — the fetched state does.
+  const editable = (record?.editable ?? true) && currentStatus === "draft" && !signing?.locked;
+  const lockedReason = signing?.locked
+    ? "A signing request is out with the customer. Void it in the Send tab before making changes."
+    : record?.lockedReason ?? "Create a revision from the full quote record to make changes.";
+  // Lifecycle gates, matching the record page exactly: a signed or superseded
+  // version is permanently read-only, only a sent quote can be decided, only an
+  // already-decided one can go back to draft, and a revision may be cut from a
+  // quote the customer has seen. The server re-checks all of it.
+  const permanentlyReadOnly = Boolean(signing?.signedAt || record?.supersededAt);
+  const canDecide = !permanentlyReadOnly && currentStatus === "sent";
+  const canReopen = !permanentlyReadOnly && (currentStatus === "accepted" || currentStatus === "declined");
+  const canRevise = !permanentlyReadOnly && (currentStatus === "sent" || currentStatus === "declined");
+  // What deleting actually does, beyond moving it to Trash. deleteQuote() voids
+  // any live signing request and reopens the lead behind an accepted quote —
+  // both worth knowing BEFORE confirming, and especially here, where the link
+  // to the customer may have gone out moments ago in the tab next door.
+  const deleteConsequences = [
+    "The quote moves to the Trash and can be restored for 60 days.",
+    signing?.locked ? "The signing request out with the customer is voided immediately." : null,
+    currentStatus === "accepted" ? "Its lead reopens, because the sale stops counting." : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
   const customerLabel = contacts.find((contact) => contact.id === draft.contactId)?.label ?? "Customer not selected";
 
   const calculated = useMemo(() => {
@@ -297,9 +446,22 @@ export function QuoteEditorDialog({
       unitPriceCents: centsFromInput(line.unitPrice) || 0,
       discountPct: Number(line.discount.replace(",", ".")) || 0,
       taxRatePct: 15,
+      costCents: line.costCents,
+      // An add-on the customer declined is offered, not charged — quotePricing
+      // leaves it out of the total, so it must not be priced as a normal row.
+      optional: line.optional,
+      selected: line.selected,
     }));
+    // Built in the same shape — and with the same label fallback and zero
+    // filter — as the save path, so the preview itemises exactly the fees the
+    // saved quote will charge for.
     const fees = draft.fees
-      .map((fee) => ({ amountCents: centsFromInput(fee.amount) || 0, taxRatePct: 15 }))
+      .map((fee) => ({
+        label: fee.label.trim() || (fee.kind === "delivery" ? "Delivery" : "Fee"),
+        kind: fee.kind,
+        amountCents: centsFromInput(fee.amount) || 0,
+        taxRatePct: 15,
+      }))
       .filter((fee) => fee.amountCents !== 0);
     const p = quotePricing(lines, fees, {
       taxInclusive: draft.taxInclusive,
@@ -313,6 +475,15 @@ export function QuoteEditorDialog({
       total: p.totalCents,
       deposit: p.depositCents,
       balance: p.balanceCents,
+      // Line net less cost. Shown only when a cost basis exists — nothing in the
+      // app sets one today, so a zero-cost quote would otherwise report 100%.
+      margin: p.marginCents,
+      marginPct: p.marginPct,
+      hasCost: p.costCents > 0,
+      // Fees and delivery are counted in the total, so the preview prints them
+      // as rows too — a total that exceeds the visible lines is a quote the
+      // customer can't check. Same helper the printed document uses.
+      feeLines: feeRows(fees),
     };
   }, [draft.lines, draft.fees, draft.taxInclusive, draft.depositType, draft.depositValue]);
 
@@ -331,6 +502,10 @@ export function QuoteEditorDialog({
         ...current.lines,
         {
           key: lineKey(),
+          id: null,
+          costCents: 0,
+          optional: false,
+          selected: true,
           kind: "catalogue",
           description: "",
           qty: "1",
@@ -371,6 +546,10 @@ export function QuoteEditorDialog({
         ...current.lines,
         {
           key: lineKey(),
+          id: null,
+          costCents: 0,
+          optional: false,
+          selected: true,
           kind: "custom",
           description: "",
           qty: "1",
@@ -392,7 +571,7 @@ export function QuoteEditorDialog({
     if (!editable) return;
     setDraft((current) => ({
       ...current,
-      fees: [...current.fees, { key: feeKey(), label: kind === "delivery" ? "Delivery" : "", kind, amount: "0.00" }],
+      fees: [...current.fees, { key: feeKey(), id: null, label: kind === "delivery" ? "Delivery" : "", kind, amount: "0.00" }],
     }));
   }
 
@@ -413,12 +592,88 @@ export function QuoteEditorDialog({
     onOpenChange(nextOpen);
   }
 
+  /**
+   * Switch the editor to another version of this quote.
+   *
+   * "Open" used to be a Link to /quotes/<id>. From inside an open modal that
+   * navigated the page UNDERNEATH the overlay — the route changed and the
+   * dialog stayed put, so the button did nothing you could see. Swapping the
+   * editor over keeps it in one place, and works the same for a superseded
+   * version as for the current one.
+   */
+  function requestOpenVersion(quoteId: string) {
+    if (!onOpenQuote || quoteId === savedQuote?.id) return;
+    if (dirty && !isPending) {
+      setPendingVersionId(quoteId);
+      setDiscardOpen(true);
+      return;
+    }
+    onOpenQuote(quoteId);
+  }
+
   function discardAndClose() {
     setDiscardOpen(false);
+    // The same prompt guards both exits — leaving the editor, and leaving this
+    // version for another one. Only the destination differs.
+    if (pendingVersionId) {
+      const target = pendingVersionId;
+      setPendingVersionId(null);
+      onOpenQuote?.(target);
+      return;
+    }
     onOpenChange(false);
   }
 
-  function save(intent: "draft" | "sent") {
+  /**
+   * The lifecycle moves that used to live only on the record page: accept,
+   * decline, back to draft, and revise.
+   *
+   * Each is the same server action that page called, and each returns a refusal
+   * as a VALUE — "out for signature, void the request first", "can no longer be
+   * changed" — so a blocked transition explains itself in the banner instead of
+   * appearing to do nothing.
+   */
+  function runLifecycle(
+    done: string,
+    run: () => Promise<{ error?: string; redirectTo?: string } | void>,
+  ) {
+    setError(null);
+    startTransition(async () => {
+      try {
+        const result = await run();
+        if (result?.error) {
+          // Toast AND banner: these buttons live in the header, so the click can
+          // come from any tab — and Preview and Versions have nowhere to put a
+          // banner. The banner still carries it for Build and Send.
+          setError(result.error);
+          toast.error(result.error);
+          return;
+        }
+        toast.success(done);
+        if (result?.redirectTo) {
+          // A revision is a different quote. Hand the id to the provider so the
+          // editor swaps to it in place; only fall back to navigating when the
+          // dialog has no provider to tell (Quick Create).
+          const revisionId = result.redirectTo.split("edit=")[1];
+          if (onOpenQuote && revisionId) {
+            onOpenQuote(revisionId);
+            // The list underneath is now wrong in two ways — the revision is
+            // missing and the quote it superseded is still shown as current.
+            router.refresh();
+          } else {
+            router.push(result.redirectTo);
+          }
+          return;
+        }
+        reloadSigning();
+        router.refresh();
+      } catch {
+        setError("That change could not be applied. Please try again.");
+      }
+    });
+  }
+
+  function save(intent: "draft" | "sent", opts?: { thenSign?: boolean }) {
     setError(null);
     if (!draft.contactId) {
       setError("Select a customer before saving the quote.");
@@ -458,6 +713,9 @@ export function QuoteEditorDialog({
         return;
       }
       items.push({
+        // Identifies the row being edited, so the server keeps the CPQ columns
+        // this editor never shows rather than resetting them to defaults.
+        id: line.id,
         description,
         qty,
         unitPriceCents,
@@ -469,6 +727,7 @@ export function QuoteEditorDialog({
 
     const fees = draft.fees
       .map((fee) => ({
+        id: fee.id,
         label: fee.label.trim() || (fee.kind === "delivery" ? "Delivery" : "Fee"),
         kind: fee.kind,
         amountCents: centsFromInput(fee.amount),
@@ -497,6 +756,10 @@ export function QuoteEditorDialog({
         setSavedQuote(result.quote);
         setInitialSnapshot(currentSnapshot);
         setError(null);
+        // The quote may have just come into existence, or its lifecycle may have
+        // moved — either way the signature card is now looking at stale facts.
+        reloadSigning();
+        if (opts?.thenSign) setActiveTab("send");
         toast.success(intent === "sent" ? `Quote Q-${result.quote.number} marked sent` : `Quote Q-${result.quote.number} saved`);
         router.refresh();
       } catch {
@@ -525,10 +788,55 @@ export function QuoteEditorDialog({
                   </DialogTitle>
                   <StatusPill tone={statusTone(currentStatus)}>{currentStatus}</StatusPill>
                 </div>
+                {/*
+                  The customer and lead were plain text, so the editor was a
+                  dead end for "who is this and where did it come from" — the
+                  record page's links were the only way through.
+                */}
                 <DialogDescription className="mt-1 truncate">
-                  {customerLabel}{record?.leadLabel ? ` · ${record.leadLabel}` : ""}
+                  {record?.contactId ? (
+                    <Link href={`/contacts/${record.contactId}`} className="text-primary hover:underline">{customerLabel}</Link>
+                  ) : (
+                    customerLabel
+                  )}
+                  {record?.leadLabel && (
+                    <>
+                      {" · "}
+                      {record.leadId ? (
+                        <Link href={`/leads/${record.leadId}`} className="text-primary hover:underline">{record.leadLabel}</Link>
+                      ) : (
+                        record.leadLabel
+                      )}
+                    </>
+                  )}
+                  {record?.createdByName && <span className="text-muted-foreground"> · by {record.createdByName}</span>}
                 </DialogDescription>
               </div>
+              {/*
+                What happened next: accept, decline, reopen, revise.
+
+                In the header rather than inside a tab, because that is where
+                the record page kept them and because they are not "sending" —
+                they describe the deal, and you reach for them from whichever
+                tab you happen to be on. Buried one tab deep, they read as
+                missing.
+              */}
+              {savedQuote && (canDecide || canReopen || canRevise) && (
+                <div className="flex flex-wrap items-center gap-2">
+                  {canDecide && (
+                    <>
+                      <Button type="button" size="sm" variant="outline" disabled={isPending} title="Records the sale and wins the linked lead. A quote out for signature must have its request voided first." onClick={() => runLifecycle(`Quote Q-${savedQuote.number} accepted 🎉`, () => setQuoteStatus(savedQuote.id, "accepted"))}><Check />Accepted</Button>
+                      <Button type="button" size="sm" variant="outline" disabled={isPending} title="Marks the quote declined by the customer." onClick={() => runLifecycle(`Quote Q-${savedQuote.number} declined`, () => setQuoteStatus(savedQuote.id, "declined"))}><Ban />Declined</Button>
+                    </>
+                  )}
+                  {canReopen && (
+                    <Button type="button" size="sm" variant="outline" disabled={isPending} title="Reopens this version for editing." onClick={() => runLifecycle(`Quote Q-${savedQuote.number} back to draft`, () => setQuoteStatus(savedQuote.id, "draft"))}><Undo2 />Back to draft</Button>
+                  )}
+                  {canRevise && (
+                    <Button type="button" size="sm" variant="outline" disabled={isPending} title="Copies everything into a fresh draft and supersedes this version. The editor switches to the revision." onClick={() => runLifecycle("Revision created", () => createQuoteRevision(savedQuote.id))}><RefreshCw />Revise</Button>
+                  )}
+                </div>
+              )}
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 {isPending ? <Loader2 className="size-3.5 animate-spin text-primary" /> : dirty ? <Clock3 className="size-3.5 text-amber-300" /> : <Check className="size-3.5 text-emerald-400" />}
                 <span>{isPending ? "Saving…" : dirty ? "Unsaved changes" : "All changes saved"}</span>
@@ -553,7 +861,37 @@ export function QuoteEditorDialog({
                     {error && <FeedbackBanner tone="danger" title="Quote not saved">{error}</FeedbackBanner>}
                     {!editable && (
                       <FeedbackBanner tone="warning" title="This quote is read-only">
-                        {record?.lockedReason ?? "Create a revision from the full quote record to make changes."}
+                        {lockedReason}
+                        {/* A superseded version is a dead end without this — it
+                            says it is old but not which quote replaced it. */}
+                        {record?.supersededById && (
+                          <>
+                            {" "}
+                            <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => onOpenQuote?.(record.supersededById!)}>
+                              Open Q-{record.supersededByNumber} instead
+                            </button>
+                          </>
+                        )}
+                      </FeedbackBanner>
+                    )}
+                    {/*
+                      The customer asked for changes from the signing page
+                      instead of signing. Without this the request was invisible
+                      in the editor — you saw an unsigned quote and no reason.
+                    */}
+                    {record?.changeRequestedAt && !record.supersededAt && !signing?.signedAt && (
+                      <FeedbackBanner tone="info" title={`Customer requested changes on ${record.changeRequestedAt}`}>
+                        <span className="flex flex-col gap-2">
+                          <span className="flex items-start gap-2">
+                            <MessageSquareWarning className="mt-0.5 size-4 shrink-0" />
+                            <span>{record.changeRequestNote || "No note was left — follow up with the customer."}</span>
+                          </span>
+                          {canRevise && savedQuote && (
+                            <Button type="button" size="sm" variant="outline" className="self-start" onClick={() => runLifecycle("Revision created", () => createQuoteRevision(savedQuote.id))} disabled={isPending}>
+                              <RefreshCw />Create revision
+                            </Button>
+                          )}
+                        </span>
                       </FeedbackBanner>
                     )}
 
@@ -651,6 +989,13 @@ export function QuoteEditorDialog({
                                 ) : (
                                   <input id={`${line.key}-description`} className="input" value={line.description} disabled={!editable} onChange={(event) => updateLine(line.key, { description: event.target.value })} />
                                 )}
+                                {/* Staff need to see what was offered, so a
+                                    declined add-on stays listed here — the
+                                    customer's copy drops it, and the total has
+                                    never counted it. */}
+                                {line.optional && !line.selected && (
+                                  <p className="mt-2 text-xs text-amber-300/80">Optional — not selected, so it isn&apos;t charged.</p>
+                                )}
                                 {selectedProduct && selectedProduct.colors.length > 0 && (
                                   <div className="mt-3 rounded-xl border border-primary/15 bg-primary/[0.045] p-3">
                                     <div className="flex items-center justify-between gap-3">
@@ -745,6 +1090,9 @@ export function QuoteEditorDialog({
                         <div className="flex justify-between gap-3 text-muted-foreground"><span>Subtotal (excl. VAT)</span><span className="tabular-nums">{rands(calculated.subtotal)}</span></div>
                         <div className="flex justify-between gap-3 text-muted-foreground"><span>VAT</span><span className="tabular-nums">{rands(calculated.vat)}</span></div>
                         {calculated.fees > 0 && <div className="flex justify-between gap-3 text-muted-foreground"><span>Fees &amp; delivery</span><span className="tabular-nums">{rands(calculated.fees)}</span></div>}
+                        {/* Internal only, and only when a cost basis exists —
+                            without one the margin is trivially 100%. */}
+                        {calculated.hasCost && <div className="flex justify-between gap-3 text-muted-foreground"><span>Margin<span className="ml-1 text-[10px] uppercase tracking-wider text-muted-foreground/70">internal</span></span><span className="tabular-nums">{rands(calculated.margin)} · {calculated.marginPct}%</span></div>}
                         <div className="mt-3 flex justify-between gap-3 border-t border-primary/15 pt-3 text-lg font-semibold"><span>Total</span><span className="tabular-nums text-primary">{rands(calculated.total)}</span></div>
                         {calculated.deposit > 0 && (
                           <>
@@ -788,6 +1136,23 @@ export function QuoteEditorDialog({
                         </div>
                       </div>
                     </section>
+
+                    {/*
+                      The workspace's own fields for a quote. They had no
+                      surface here at all, so anything a business had added —
+                      finance house, fleet number, PO reference — was invisible
+                      and uneditable from the screen where quotes are built.
+                      Saved on their own, by the same action the record page
+                      used; the draft above is unaffected by that save.
+                    */}
+                    {savedQuote && customFields.length > 0 && (
+                      <CustomFieldsForm
+                        fields={customFields}
+                        action={saveCustomFieldValues.bind(null, "quote", savedQuote.id)}
+                        readOnly={!editable}
+                        className="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4 sm:p-5"
+                      />
+                    )}
                   </aside>
                 </div>
               </TabsContent>
@@ -817,16 +1182,26 @@ export function QuoteEditorDialog({
                           const price = centsFromInput(line.unitPrice) || 0;
                           const discount = Math.min(100, Math.max(0, Number(line.discount.replace(",", ".")) || 0));
                           const lineTotal = Math.round(qty * price * (1 - discount / 100));
+                          // The customer's document drops a declined add-on
+                          // entirely — printing it would show a charge that
+                          // isn't in the total.
+                          if (line.optional && !line.selected) return null;
                           return <tr key={line.key} className="border-b border-slate-100"><td className="py-4 pr-4"><span className="block">{line.description || "Untitled line"}</span>{line.colorPreference && <span className="mt-1 block text-xs text-slate-500">Colour preference: {line.colorPreference}</span>}</td><td className="py-4 text-right tabular-nums">{qty}</td><td className="py-4 text-right tabular-nums">{rands(price)}</td><td className="py-4 text-right tabular-nums text-slate-500">{discount ? `${discount}%` : "—"}</td><td className="py-4 text-right font-medium tabular-nums">{rands(lineTotal)}</td></tr>;
                         })}
-                        {draft.lines.length === 0 && <tr><td colSpan={5} className="py-12 text-center text-slate-400">No line items added.</td></tr>}
+                        {calculated.feeLines.map((fee) => (
+                          <tr key={fee.description} className="border-b border-slate-100"><td className="py-4 pr-4">{fee.description}</td><td className="py-4 text-right tabular-nums">{fee.qty}</td><td className="py-4 text-right tabular-nums">{rands(fee.unitPriceCents)}</td><td className="py-4 text-right tabular-nums text-slate-500">—</td><td className="py-4 text-right font-medium tabular-nums">{rands(fee.unitPriceCents)}</td></tr>
+                        ))}
+                        {draft.lines.length === 0 && calculated.feeLines.length === 0 && <tr><td colSpan={5} className="py-12 text-center text-slate-400">No line items added.</td></tr>}
                       </tbody>
                     </table>
                   </div>
                   <div className="ml-auto mt-8 w-full max-w-xs space-y-2 text-sm">
-                    <div className="flex justify-between text-slate-500"><span>Subtotal</span><span>{rands(calculated.subtotal)}</span></div>
-                    <div className="flex justify-between text-slate-500"><span>VAT included</span><span>{rands(calculated.vat)}</span></div>
-                    <div className="flex justify-between border-t-2 border-slate-900 pt-3 text-lg font-bold"><span>Total</span><span>{rands(calculated.total)}</span></div>
+                    {/* "VAT included" was printed in both tax modes — on a
+                        tax-exclusive quote the rows above are ex-VAT, so it
+                        stated the opposite of what the customer would pay. */}
+                    <div className="flex justify-between text-slate-500"><span>{draft.taxInclusive ? "Subtotal (excl. VAT)" : "Subtotal"}</span><span>{rands(calculated.subtotal)}</span></div>
+                    <div className="flex justify-between text-slate-500"><span>{draft.taxInclusive ? "VAT included" : "VAT"}</span><span>{rands(calculated.vat)}</span></div>
+                    <div className="flex justify-between border-t-2 border-slate-900 pt-3 text-lg font-bold"><span>Total incl. VAT</span><span>{rands(calculated.total)}</span></div>
                   </div>
                   {draft.terms && <div className="mt-12 border-t border-slate-200 pt-6"><p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">Terms</p><p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-slate-600">{draft.terms}</p></div>}
                 </div>
@@ -843,7 +1218,13 @@ export function QuoteEditorDialog({
                         <div key={version.id} className={cn("flex items-center gap-4 rounded-2xl border p-4", version.current ? "border-primary/30 bg-primary/[0.06]" : "border-white/[0.08] bg-white/[0.025]")}>
                           <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-white/[0.08] bg-black/20 text-sm font-semibold">Q</span>
                           <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><p className="font-semibold">Q-{version.number}</p>{version.current && <StatusPill tone="info">Current</StatusPill>}<StatusPill tone={statusTone(version.status)}>{version.superseded ? "superseded" : version.status}</StatusPill></div><p className="mt-1 text-xs text-muted-foreground">Created {version.createdAt}</p></div>
-                          <Button asChild variant="ghost" size="sm"><Link href={`/quotes/${version.id}`}>Open <ExternalLink /></Link></Button>
+                          {version.current ? (
+                            <span className="shrink-0 px-3 text-xs text-muted-foreground">Open here</span>
+                          ) : onOpenQuote ? (
+                            <Button type="button" variant="ghost" size="sm" onClick={() => requestOpenVersion(version.id)}>Open</Button>
+                          ) : (
+                            <Button asChild variant="ghost" size="sm"><Link href={`/quotes/${version.id}`}>Open <ExternalLink /></Link></Button>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -864,9 +1245,31 @@ export function QuoteEditorDialog({
                       <div className="rounded-xl border border-white/[0.07] bg-black/15 p-4"><p className="text-[10px] uppercase tracking-wider text-muted-foreground">Line items</p><p className="mt-2 text-sm font-semibold">{draft.lines.length}</p></div>
                       <div className="rounded-xl border border-primary/20 bg-primary/[0.06] p-4"><p className="text-[10px] uppercase tracking-wider text-primary">Total incl. VAT</p><p className="mt-2 text-sm font-semibold text-primary">{rands(calculated.total)}</p></div>
                     </div>
-                    <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-                      {editable ? <Button type="button" onClick={() => save("sent")} disabled={isPending}><Send />{isPending ? "Saving…" : "Save & mark sent"}</Button> : <div className="flex items-center gap-2 text-sm text-muted-foreground"><LockKeyhole className="size-4" />This version is already frozen.</div>}
-                      {savedQuote && <Button asChild variant="outline"><a href={`/quotes/${savedQuote.id}/print`} target="_blank" rel="noreferrer"><Eye />Open PDF preview</a></Button>}
+                    <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+                      {editable ? (
+                        <>
+                          <Button type="button" onClick={() => save("sent")} disabled={isPending}><Send />{isPending ? "Saving…" : "Save & mark sent"}</Button>
+                          {/*
+                            Saves as a DRAFT and drops you on the signature card
+                            below. Freezing is left to the dispatch, which marks
+                            the quote sent the moment the customer's link
+                            actually goes out — so getting as far as the
+                            countersign pad and stopping doesn't cost a revision.
+                          */}
+                          <Button type="button" variant="outline" onClick={() => save("draft", { thenSign: true })} disabled={isPending}><PenLine />Send for signature</Button>
+                        </>
+                      ) : (
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><LockKeyhole className="size-4" />{signing?.locked ? "Out for signature — void the request below to edit." : "This version is already frozen."}</div>
+                      )}
+                      {/*
+                        The record page calls this destination "Print / PDF" —
+                        the printable document, with the browser's own
+                        print-to-PDF. Calling it "Open PDF preview" here made it
+                        read as a different, lesser thing, so the button people
+                        were looking for seemed to be missing from the tab whose
+                        job is sending the quote out.
+                      */}
+                      {savedQuote && <Button asChild variant="outline"><a href={`/quotes/${savedQuote.id}/print`} target="_blank" rel="noreferrer"><Printer />Print / PDF</a></Button>}
                       {/*
                         Was "Signing & delivery", which promised a screen that
                         does not exist — it is the same destination as "Open
@@ -876,10 +1279,45 @@ export function QuoteEditorDialog({
                       */}
                       {savedQuote && <Button asChild variant="ghost"><Link href={`/quotes/${savedQuote.id}`}>Open full record <ExternalLink /></Link></Button>}
                     </div>
+
                   </section>
-                  <FeedbackBanner tone="info" title="Secure customer signatures stay protected">
-                    Generate and manage the secure signing link from the full quote record after saving. The editor never bypasses signing locks or overwrites a customer-facing version.
-                  </FeedbackBanner>
+
+                  {/*
+                    The signature card, in the tab that sends the quote. It used
+                    to live only on the full record, so countersigning and
+                    sending the secure link meant leaving a half-finished quote
+                    for a different screen. Same component, same server actions
+                    — it just refetches through onChanged, because a route
+                    refresh cannot reach props inside a dialog.
+                  */}
+                  {!savedQuote ? (
+                    <FeedbackBanner tone="info" title="Save the quote to send it for signature">
+                      The signature card appears here the moment the quote exists — countersign, send the secure link and watch it land, without leaving the editor.
+                    </FeedbackBanner>
+                  ) : signing ? (
+                    <SigningBlock
+                      kind="quote"
+                      id={savedQuote.id}
+                      refLabel={`Q-${savedQuote.number}`}
+                      signedAt={signing.signedAt}
+                      signedByName={signing.signedByName}
+                      signedPdfHash={signing.signedPdfHash}
+                      dealerSignedAt={signing.dealerSignedAt}
+                      dealerSignedByName={signing.dealerSignedByName}
+                      hasSavedSignature={signing.hasSavedSignature}
+                      state={signing.state}
+                      workflows={signing.workflows}
+                      onChanged={reloadSigning}
+                    />
+                  ) : signingReady ? (
+                    <FeedbackBanner tone="info" title="This version can't be signed from here">
+                      It may have been superseded by a revision, or your role may not include sending quotes for signature. The full record shows where it stands.
+                    </FeedbackBanner>
+                  ) : (
+                    <div className="flex items-center gap-2 rounded-2xl border border-white/[0.08] bg-white/[0.025] px-5 py-6 text-sm text-muted-foreground">
+                      <Loader2 className="size-4 animate-spin" />Checking signature status…
+                    </div>
+                  )}
                 </div>
               </TabsContent>
             </div>
@@ -889,6 +1327,32 @@ export function QuoteEditorDialog({
             <div className="flex min-w-0 items-center gap-3 text-xs text-muted-foreground">
               {record?.createdAt && <span className="truncate">Created {record.createdAt}</span>}
               {savedQuote && <Link href={`/quotes/${savedQuote.id}`} className="inline-flex shrink-0 items-center gap-1 text-primary hover:underline">Open full record <ExternalLink className="size-3" /></Link>}
+              {/*
+                The same ConfirmDelete and the same deleteQuote action as the
+                record page and the list, so the reason field is required here
+                too and the server-side rules — quotes.delete on THIS quote,
+                voiding a live signing request, reopening the lead behind an
+                accepted quote — hold identically. Bound to the action rather
+                than reimplemented, so they cannot drift apart.
+
+                onOpenChange, not requestOpenChange: the discard prompt asks
+                about saving edits to a quote that no longer exists.
+              */}
+              {savedQuote && (
+                <ConfirmDelete
+                  action={deleteQuote.bind(null, savedQuote.id)}
+                  title={`Delete quote Q-${savedQuote.number}?`}
+                  description={deleteConsequences}
+                  trigger="Delete quote"
+                  triggerClass="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-red-400"
+                  confirmLabel="Delete quote"
+                  success={`Quote Q-${savedQuote.number} moved to Trash`}
+                  contentClassName="z-[110]"
+                  onDeleted={() => onOpenChange(false)}
+                  disabled={!canDelete}
+                  disabledReason="Your role can't delete quotes."
+                />
+              )}
             </div>
             <div className="flex gap-2">
               <Button type="button" variant="outline" className="flex-1 sm:flex-none" onClick={() => requestOpenChange(false)}>Close</Button>
@@ -898,15 +1362,21 @@ export function QuoteEditorDialog({
         </ResponsiveDialogContent>
       </Dialog>
 
-      <Dialog open={discardOpen} onOpenChange={setDiscardOpen}>
+      {/* Dismissing the prompt must also forget where it was heading, or a
+          later Close would switch versions instead of closing. */}
+      <Dialog open={discardOpen} onOpenChange={(next) => { setDiscardOpen(next); if (!next) setPendingVersionId(null); }}>
         <ResponsiveDialogContent className="z-[110] sm:max-w-md">
           <DialogHeader className="text-left">
             <DialogTitle>Discard unsaved changes?</DialogTitle>
-            <DialogDescription>Your latest quote edits have not been saved.</DialogDescription>
+            <DialogDescription>
+              {pendingVersionId
+                ? "Your latest quote edits have not been saved. Opening another version leaves them behind."
+                : "Your latest quote edits have not been saved."}
+            </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-            <Button type="button" variant="outline" onClick={() => setDiscardOpen(false)}>Keep editing</Button>
-            <Button type="button" variant="destructive" onClick={discardAndClose}>Discard changes</Button>
+            <Button type="button" variant="outline" onClick={() => { setDiscardOpen(false); setPendingVersionId(null); }}>Keep editing</Button>
+            <Button type="button" variant="destructive" onClick={discardAndClose}>{pendingVersionId ? "Discard and open" : "Discard changes"}</Button>
           </div>
         </ResponsiveDialogContent>
       </Dialog>
@@ -940,13 +1410,42 @@ export function QuoteEditorProvider({
   const [selection, setSelection] = useState<{ quoteId?: string; initialContactId?: string } | null>(
     initialQuoteId ? { quoteId: initialQuoteId } : null,
   );
-  const record = selection?.quoteId ? records.find((item) => item.id === selection.quoteId) ?? null : null;
+  /**
+   * `records` is what the PAGE rendered — the newest 200 quotes at the time it
+   * loaded. Anything else has to be fetched: a revision has an id that did not
+   * exist when the page rendered, and a deep link can name a quote older than
+   * the cap. Both used to open the editor completely blank, because a missing
+   * record is indistinguishable from "new quote".
+   */
+  const [fetched, setFetched] = useState<QuoteEditorRecord | null>(null);
+  const listed = selection?.quoteId ? records.find((item) => item.id === selection.quoteId) ?? null : null;
+  const record = listed ?? (fetched && fetched.id === selection?.quoteId ? fetched : null);
+  const awaitingRecord = Boolean(selection?.quoteId) && !record;
+
+  useEffect(() => {
+    const quoteId = selection?.quoteId;
+    if (!quoteId || listed) return;
+    let live = true;
+    quoteEditorRecord(quoteId).then((loaded) => {
+      if (live && loaded) setFetched(loaded);
+    });
+    return () => {
+      live = false;
+    };
+  }, [selection?.quoteId, listed]);
 
   return (
     <QuoteEditorContext.Provider value={{ openEditor: (quoteId, initialContactId) => setSelection({ quoteId, initialContactId }) }}>
       {children}
-      {selection && (
+      {/* Not until the record is in hand: the draft is built ONCE, at mount,
+          so mounting early against a null record produces an empty quote that
+          no later arrival can fix. */}
+      {selection && !awaitingRecord && (
         <QuoteEditorDialog
+          // Remount when the target quote changes: the draft is built from
+          // `record` once, on mount, so swapping to a revision without this
+          // would show the previous quote's lines against the new record.
+          key={selection.quoteId ?? "new"}
           open
           onOpenChange={(next) => !next && setSelection(null)}
           contacts={contacts}
@@ -955,6 +1454,7 @@ export function QuoteEditorProvider({
           defaults={defaults}
           record={record}
           initialContactId={selection.initialContactId}
+          onOpenQuote={(quoteId) => setSelection({ quoteId })}
         />
       )}
     </QuoteEditorContext.Provider>

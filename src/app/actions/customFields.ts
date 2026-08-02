@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
+import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
 import { prisma, basePrisma } from "@/lib/db";
 import { withEditableQuote } from "@/lib/quoteLock";
 import { requireOwner } from "@/lib/auth";
@@ -18,8 +19,10 @@ import {
   isFieldType,
   slugifyKey,
   getFieldDefs,
+  getFieldsWithValues,
   parseFieldValue,
   type CustomEntity,
+  type FieldWithValue,
 } from "@/lib/customFields";
 
 const str = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
@@ -108,10 +111,44 @@ async function requireEntityEdit(entity: CustomEntity, recordId: string): Promis
 }
 
 /**
+ * Custom fields + current values for one record, for a client surface that
+ * cannot read them itself — the quote editor dialog. Gated on the same access
+ * as EDITING the record, because that is the only thing the caller can do with
+ * them; a caller without it gets an empty list and no card.
+ */
+export async function recordCustomFields(
+  entity: string,
+  recordId: string,
+): Promise<FieldWithValue[]> {
+  if (!isCustomEntity(entity)) return [];
+  try {
+    await requireEntityEdit(entity, recordId);
+  } catch {
+    return [];
+  }
+  return getFieldsWithValues(entity, recordId);
+}
+
+/**
  * Save custom-field values for one record. Reads `cf_<defId>` inputs from the
  * form. Authorised with the same boundary as editing that record itself.
+ *
+ * Refusals travel as values. They used to be `throw new Error(...)`, which in
+ * production reaches the browser as an opaque digest — so "Finance house is
+ * required" arrived as `aBc123` and could only be shown as a generic apology.
+ * It also hit the error boundary, which was survivable on a detail PAGE and is
+ * not in the quote editor: a dialog replaced mid-edit takes the unsaved draft
+ * with it.
  */
 export async function saveCustomFieldValues(
+  entity: string,
+  recordId: string,
+  formData: FormData,
+): Promise<ActionResult> {
+  return asActionResult(async () => saveCustomFieldValuesBody(entity, recordId, formData));
+}
+
+async function saveCustomFieldValuesBody(
   entity: string,
   recordId: string,
   formData: FormData,
@@ -146,7 +183,7 @@ export async function saveCustomFieldValues(
     }
     mutations.push({ defId: def.id, value: parsed.value });
   }
-  if (errors.length > 0) throw new Error(errors.join(" "));
+  if (errors.length > 0) refuse(errors.join(" "));
 
   // Apply all upserts/deletes atomically. For a quote, hold the editability lock
   // FOR UPDATE across the writes and re-check editability inside it, so a
@@ -167,7 +204,7 @@ export async function saveCustomFieldValues(
   };
   if (entity === "quote") {
     const outcome = await withEditableQuote(recordId, applyValues);
-    if (!outcome.ok) throw new Error("This quote is locked and can no longer be edited.");
+    if (!outcome.ok) refuse("This quote is locked and can no longer be edited.");
   } else {
     await basePrisma.$transaction(applyValues);
   }
