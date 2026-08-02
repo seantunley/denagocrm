@@ -164,13 +164,9 @@ test("one destination for the printable quote keeps one name", () => {
   // same URL "Print / PDF", so the button people looked for read as missing
   // from the tab whose whole job is sending the quote out.
   const editor = shipped("src/components/quotes/QuoteEditorDialog.tsx");
-  const record = shipped("src/app/(app)/quotes/[id]/page.tsx");
-  assert.match(editor, /Print \/ PDF<\/a>/, "the editor must use the name the rest of the app uses");
+  assert.match(editor, /Print \/ PDF<\/a>/, "the editor must use the name the rest of the app used");
   assert.doesNotMatch(editor, /Open PDF preview/, "the old name is what made it unrecognisable");
-  for (const [rel, code] of [["editor", editor], ["record page", record]] as const) {
-    assert.match(code, /\/print`/, `the ${rel} must point at the printable document`);
-  }
-  assert.match(record, /🖨 Print \/ PDF/, "…and the record page keeps saying the same thing");
+  assert.match(editor, /\/print`/, "and it must point at the printable document");
 });
 
 test("the editor does not freeze a quote just for opening the signature card", () => {

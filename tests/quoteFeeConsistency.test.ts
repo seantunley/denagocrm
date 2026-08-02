@@ -9,6 +9,13 @@ import { documentTotals, includedLines, lineNetCents, quotePricing, quoteTotalCe
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 
+/** Source with comments stripped — a naive regex otherwise matches the very
+ *  comment that documents the fix. */
+const shipped = (rel: string) =>
+  src(rel)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
 /**
  * There are two totals for a quote and they are NOT interchangeable:
  *
@@ -42,32 +49,40 @@ test("the deliveries board shows what the customer pays, not the subtotal", () =
 });
 
 test("a locked quote still shows what the fees were", () => {
-  // The whole card used to be behind `editable`, so the breakdown vanished the
-  // moment a quote was sent — leaving only a rolled-up figure with no way to
-  // see what the customer had been charged for.
-  const code = src("src/app/(app)/quotes/[id]/page.tsx");
-  const cardAt = code.indexOf("Fees, delivery &amp; deposit");
+  // The breakdown used to sit behind `editable`, so it vanished the moment a
+  // quote was sent — leaving a rolled-up figure with no way to see what the
+  // customer had been charged for. The surface moved to the editor when the
+  // record page was retired; the property did not.
+  const code = src("src/components/quotes/QuoteEditorDialog.tsx");
+  const cardAt = code.indexOf("Fees &amp; delivery");
   assert.ok(cardAt > 0, "the fees card must exist");
-  const gate = code.slice(Math.max(0, cardAt - 400), cardAt);
+  // The rows render from `draft.fees` unconditionally — only the INPUTS are
+  // disabled — so a frozen quote still shows every fee it is charging for.
+  assert.match(code, /\{draft\.fees\.map\(\(fee\) => \(/, "the fee rows must not be gated on editability");
+  assert.match(code, /disabled=\{!editable\}/, "…they are read-only, not absent");
   assert.doesNotMatch(
-    gate,
-    /\{editable && \(\s*<div className="card space-y-4">\s*$/,
-    "the fee BREAKDOWN must not be gated on editability",
+    code,
+    /\{editable && draft\.fees\.map/,
+    "gating the BREAKDOWN on editability is the bug this guards",
   );
-  assert.match(code, /editable \|\| quote\.fees\.length > 0/, "a locked quote with fees must still render them");
 });
 
-test("the editor has one name for one destination", () => {
+test("the editor promises no screen that isn't there", () => {
   const code = src("src/components/quotes/QuoteEditorDialog.tsx");
   // The rendered LABEL, not prose about it — the comment explaining the rename
   // legitimately contains the old wording.
   assert.doesNotMatch(
     code,
     />\s*Signing & delivery\s*</,
-    "that label promised a screen that does not exist — it is the full record page",
+    "that label promised a screen that does not exist",
   );
-  const recordLinks = (code.match(/Open full record/g) ?? []).length;
-  assert.ok(recordLinks >= 2, "both links to the record page should now say the same thing");
+  // This once required BOTH links to the record page to share one name. There is
+  // no record page now — its URL redirects to this editor — so the links are
+  // gone entirely, which settles the question the rule was asking.
+  assert.ok(
+    !shipped("src/components/quotes/QuoteEditorDialog.tsx").includes("Open full record"),
+    "a link that redirects back to the editor you are already in is not a destination",
+  );
 });
 
 test("nothing outside pricing.ts states a quote total without fees", () => {
@@ -233,37 +248,39 @@ test("every quote document takes its rows from includedLines", () => {
   }
 });
 
-test("the quote record page shows an unselected option without a line total", () => {
-  // Internal, so it keeps the row — staff need to see what was offered — but
-  // with no amount, so the column still adds up to the total above it.
-  const code = src("src/app/(app)/quotes/[id]/page.tsx");
-  assert.match(code, /isLineIncluded\(i\) \? formatZAR\(lineNetCents\(i\)\) : "—"/, "no amount on a line the total excludes");
-  assert.match(code, /Optional — not selected/, "and it says why");
+test("the editor shows an unselected option without pricing it", () => {
+  // Internal, so the row stays — staff need to see what was offered — but the
+  // total has never counted it, so it must not be priced as a normal line.
+  // Carried over from the record page when that was retired; the editor is now
+  // the only surface where staff see a declined add-on at all.
+  const code = src("src/components/quotes/QuoteEditorDialog.tsx");
+  assert.match(code, /Optional — not selected/, "the row must say why it isn't charged");
+  assert.match(
+    code,
+    /optional: line\.optional,\s*\n\s*selected: line\.selected,/,
+    "and pricing must be told, or quotePricing counts a line the customer declined",
+  );
+  // The customer's copy drops it entirely — printing it would show a charge the
+  // total does not include.
+  assert.match(code, /if \(line\.optional && !line\.selected\) return null;/, "the Preview must not print it");
 });
 
-test("version history reconciles too — same rows, same total", () => {
-  // The last surface with the same defect. Two separate faults here: the
-  // version query never SELECTED optional/selected, so isLineIncluded saw
-  // undefined and the history total counted lines the live quote excluded; and
-  // the modal listed items only, while its total already counted fees.
-  const code = src("src/app/(app)/quotes/[id]/page.tsx");
+test("a declined add-on survives a save instead of being silently re-included", () => {
+  // The editor edits none of these columns, and saveQuoteDraft replaces every
+  // row — so a save used to flip `selected` back to the schema default and
+  // quietly charge for something the customer had turned down. The inheritance
+  // itself is exercised directly in quoteRowInheritance.test.ts, including the
+  // consecutive-save case that made it work only once; this pins the wiring.
+  const code = src("src/app/actions/quotes.ts");
   assert.match(
     code,
-    /optional: true, selected: true/,
-    "the version query must select optional/selected, or its total silently counts every line",
+    /itemRowsFor\(normalizedItems, priorById\(existing\.items\)\)/,
+    "an update must inherit from the rows it is replacing",
   );
-  assert.match(
-    code,
-    /fees: \{ select: \{ label: true, kind: true/,
-    "…and label/kind, so the fees it counts can be shown as rows",
-  );
-  const history = code.slice(code.indexOf("versions={family.map("));
-  assert.match(
-    history,
-    /isLineIncluded\(i\) \? formatZAR\(lineNetCents\(i\)\) : "—"/,
-    "an unselected option carries no amount in the history either",
-  );
-  assert.match(history, /\.\.\.feeRows\(f\.fees\)/, "and the fees appear as rows");
+  assert.match(code, /feeRowsFor\(normalizedFees, priorById\(existing\.fees\)\)/);
+  const rows = src("src/lib/quoteRows.ts");
+  assert.match(rows, /optional: previous\?\.optional \?\? false/);
+  assert.match(rows, /selected: previous\?\.selected \?\? true/);
 });
 
 test("every priced quote document builds its totals from documentTotals", () => {
