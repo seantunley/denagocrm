@@ -3,6 +3,7 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { hasPermission } from "@/lib/permissions";
 import {
   addQuoteItem,
   deleteQuoteItem,
@@ -138,6 +139,10 @@ export default async function QuoteDetailPage({
   const readOnly = Boolean(quote.signedAt || quote.supersededAt);
   const editable = quote.status === "draft" && !lockedBySigning && !readOnly;
   const canRevise = !readOnly && (quote.status === "sent" || quote.status === "declined");
+  // Access to the quote is already established by the page's own guard, so the
+  // permission is all that's left of what deleteQuote() enforces. Asked here so
+  // the control greys out rather than refusing after a reason has been typed.
+  const canDelete = await hasPermission(currentUser, "quotes.delete");
 
   return (
     <div className="space-y-6">
@@ -243,6 +248,8 @@ export default async function QuoteDetailPage({
             action={deleteQuote.bind(null, quote.id)}
             title={`Delete quote Q-${quote.number}?`}
             description="The quote moves to the Trash and can be restored for 60 days."
+            disabled={!canDelete}
+            disabledReason="Your role can't delete quotes."
           />
         </div>
       </div>

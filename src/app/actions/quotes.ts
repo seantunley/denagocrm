@@ -13,15 +13,27 @@ import { getSetting } from "@/lib/settings";
 import { markReferralEarned } from "@/lib/referrals";
 import { withEditableQuote, hasOpenSignatureRequest } from "@/lib/quoteLock";
 import { nextQuoteNumber } from "@/lib/numbering";
+import { feeRowsFor, itemRowsFor, priorById } from "@/lib/quoteRows";
 import { runLeadAutomations } from "@/lib/automations";
 import { parseRands, formatZAR, contactName } from "@/lib/format";
 import { z } from "zod";
+import { getCurrentUser } from "@/lib/auth";
 import {
   requireLeadAccess,
   requireContactAccess,
   requireQuoteAccess,
+  canAccessQuote,
+  hasPermission,
+  hasAnyPermission,
   type PermissionUser,
 } from "@/lib/permissions";
+import {
+  QUOTE_EDITOR_INCLUDE,
+  QUOTE_VERSION_SELECT,
+  buildQuoteEditorRecord,
+  quoteVersionIndex,
+} from "@/lib/quoteEditorRecord";
+import type { QuoteEditorRecord } from "@/components/quotes/QuoteEditorDialog";
 
 const quoteDraftSchema = z.object({
   id: z.string().trim().min(1).optional(),
@@ -32,6 +44,11 @@ const quoteDraftSchema = z.object({
   intent: z.enum(["draft", "sent"]),
   items: z.array(
     z.object({
+      // The row this line came from, when it is an edit rather than an addition.
+      // saveQuoteDraft replaces every row, so without it the CPQ columns the
+      // editor does not show — kind, costCents, optional, selected, per-line
+      // VAT — would silently revert to schema defaults on every save.
+      id: z.string().trim().min(1).nullable().optional(),
       description: z.string().trim().min(1, "Every line needs a description.").max(500),
       qty: z.number().finite().positive().max(100_000),
       unitPriceCents: z.number().int().min(0).max(100_000_000_000),
@@ -47,6 +64,7 @@ const quoteDraftSchema = z.object({
   depositValue: z.number().finite().min(0).nullable().optional(),
   fees: z.array(
     z.object({
+      id: z.string().trim().min(1).nullable().optional(),
       label: z.string().trim().min(1).max(120),
       kind: z.enum(["fee", "delivery"]).optional(),
       amountCents: z.number().int(),
@@ -222,20 +240,23 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     : [];
   const productsById = new Map(products.map((product) => [product.id, product]));
   const normalizedItems: Array<{
+    id?: string | null;
     description: string;
     qty: number;
     unitPriceCents: number;
     productId: string | null;
     colorPreference: string | null;
     discountPct: number;
-    taxRatePct: number;
+    taxRatePct: number | null;
   }> = [];
   for (const item of data.items) {
     const productId = item.productId || null;
     const requestedColor = item.colorPreference?.trim() || null;
     // Clamp discount to a sane 0–100 range; the schema already validates it.
     const discountPct = Math.min(100, Math.max(0, item.discountPct ?? 0));
-    const taxRatePct = Math.min(100, Math.max(0, item.taxRatePct ?? 15));
+    // null means "the caller didn't say" — the row's existing rate is carried
+    // forward below, and only a genuinely new line falls back to the default.
+    const taxRatePct = item.taxRatePct == null ? null : Math.min(100, Math.max(0, item.taxRatePct));
     if (!productId) {
       if (requestedColor) {
         return { ok: false, error: "A colour preference requires a catalogue product." };
@@ -256,10 +277,11 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
   }
 
   const normalizedFees = (data.fees ?? []).map((fee) => ({
+    id: fee.id ?? null,
     label: fee.label.trim(),
     kind: fee.kind === "delivery" ? "delivery" : "fee",
     amountCents: Math.round(fee.amountCents),
-    taxRatePct: Math.min(100, Math.max(0, fee.taxRatePct ?? 15)),
+    taxRatePct: fee.taxRatePct == null ? null : Math.min(100, Math.max(0, fee.taxRatePct)),
   }));
   const cpqQuoteData = {
     taxInclusive: data.taxInclusive ?? true,
@@ -307,7 +329,21 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       // signing-start / revision can't turn it non-editable between the read and
       // the header+items+fees rewrite below.
       await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${data.id} FOR UPDATE`;
-      const existing = await tx.quote.findUnique({ where: { id: data.id } });
+      // The existing rows ride along with the editability check rather than
+      // costing two more round trips. Every row is replaced below, so anything
+      // the editor does not send is lost unless it is carried across — kind,
+      // cost basis, optional/selected, per-line VAT have no UI on any surface,
+      // and a save was silently resetting the cost the margin is computed from
+      // and re-including optional add-ons the customer had declined.
+      //
+      // Fetched HERE, in a query that was already being made: as two separate
+      // queries inside the transaction they pushed it past Prisma's 5s
+      // interactive-transaction budget on a high-latency database, and the save
+      // failed with P2028 instead of committing.
+      const existing = await tx.quote.findUnique({
+        where: { id: data.id },
+        include: { items: true, fees: true },
+      });
       if (
         !existing ||
         existing.deletedAt ||
@@ -339,19 +375,25 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
           ...cpqQuoteData,
         },
       });
+      // Inherit the hidden columns by row id, and KEEP that id — see quoteRows.
+      const itemRows = itemRowsFor(normalizedItems, priorById(existing.items));
+      const feeRows = feeRowsFor(normalizedFees, priorById(existing.fees));
       await tx.quoteItem.deleteMany({ where: { quoteId: existing.id } });
-      if (normalizedItems.length > 0) {
-        await tx.quoteItem.createMany({
-          data: normalizedItems.map((item) => ({ ...item, quoteId: existing.id })),
-        });
+      if (itemRows.length > 0) {
+        await tx.quoteItem.createMany({ data: itemRows.map((row) => ({ ...row, quoteId: existing.id })) });
       }
       await tx.quoteFee.deleteMany({ where: { quoteId: existing.id } });
-      if (normalizedFees.length > 0) {
-        await tx.quoteFee.createMany({
-          data: normalizedFees.map((fee, index) => ({ ...fee, sortOrder: index, quoteId: existing.id })),
-        });
+      if (feeRows.length > 0) {
+        await tx.quoteFee.createMany({ data: feeRows.map((row) => ({ ...row, quoteId: existing.id })) });
       }
-      return tx.quote.findUniqueOrThrow({ where: { id: existing.id } });
+      // The rows as PERSISTED, so the audit figure below is the one the database
+      // and every screen agree on. Built from normalizedItems it silently
+      // counted a declined add-on that nothing else charges for.
+      return {
+        quote: await tx.quote.findUniqueOrThrow({ where: { id: existing.id } }),
+        itemRows,
+        feeRows,
+      };
     }
 
     const number = await nextQuoteNumber(tx); // advisory-locked allocation (#11)
@@ -361,20 +403,28 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       createDefaults?.[1] ||
       "Prices include VAT. Delivery arranged on acceptance. E&OE.";
 
-    return tx.quote.create({
-      data: {
-        number,
-        contactId: data.contactId,
-        leadId: linkedLeadId,
-        createdById: user.id,
-        validUntil: validUntil ?? addDays(new Date(), Number.isNaN(validDays) ? 7 : validDays),
-        terms: data.terms || defaultTerms,
-        status: data.intent,
-        ...cpqQuoteData,
-        items: normalizedItems.length > 0 ? { create: normalizedItems } : undefined,
-        fees: normalizedFees.length > 0 ? { create: normalizedFees.map((fee, index) => ({ ...fee, sortOrder: index })) } : undefined,
-      },
-    });
+    // Same builders, with NOTHING to inherit from — so a client-supplied id
+    // finds no prior row and is dropped rather than choosing a primary key.
+    const itemRows = itemRowsFor(normalizedItems, new Map());
+    const feeRows = feeRowsFor(normalizedFees, new Map());
+    return {
+      quote: await tx.quote.create({
+        data: {
+          number,
+          contactId: data.contactId,
+          leadId: linkedLeadId,
+          createdById: user.id,
+          validUntil: validUntil ?? addDays(new Date(), Number.isNaN(validDays) ? 7 : validDays),
+          terms: data.terms || defaultTerms,
+          status: data.intent,
+          ...cpqQuoteData,
+          items: itemRows.length > 0 ? { create: itemRows } : undefined,
+          fees: feeRows.length > 0 ? { create: feeRows } : undefined,
+        },
+      }),
+      itemRows,
+      feeRows,
+    };
   });
 
   if (!result) {
@@ -384,29 +434,35 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     };
   }
 
+  const { quote: saved, itemRows, feeRows } = result;
   // The figure that lands in the audit trail as the value of this quote — so it
   // is the payable total, fees and delivery included, not the line subtotal.
-  const total = payableTotalCents({ items: normalizedItems, fees: normalizedFees, ...cpqQuoteData });
+  //
+  // Computed from the rows as PERSISTED, not from the request. `normalizedItems`
+  // carries no optional/selected, so quotePricing counted every line: a quote
+  // with an add-on the customer had declined recorded a sale worth more than
+  // the database, the preview and the printed document all say it is.
+  const total = payableTotalCents({ items: itemRows, fees: feeRows, ...cpqQuoteData });
   await logAudit({
     action: data.intent === "sent" ? "quote.sent" : data.id ? "quote.updated" : "quote.created",
     summary:
       data.intent === "sent"
-        ? `Quote Q-${result.number} (${formatZAR(Math.round(total))}) marked sent to the customer`
-        : `${data.id ? "Updated" : "Created"} quote Q-${result.number} for ${contactName(contact)}`,
-    leadId: result.leadId,
+        ? `Quote Q-${saved.number} (${formatZAR(Math.round(total))}) marked sent to the customer`
+        : `${data.id ? "Updated" : "Created"} quote Q-${saved.number} for ${contactName(contact)}`,
+    leadId: saved.leadId,
     contactId: data.contactId,
     user,
   });
 
   revalidatePath("/quotes");
-  revalidatePath(`/quotes/${result.id}`);
+  revalidatePath(`/quotes/${saved.id}`);
   return {
     ok: true,
     quote: {
-      id: result.id,
-      number: result.number,
-      status: result.status,
-      updatedAt: result.updatedAt.toISOString(),
+      id: saved.id,
+      number: saved.number,
+      status: saved.status,
+      updatedAt: saved.updatedAt.toISOString(),
     },
   };
 }
@@ -507,7 +563,10 @@ export async function createQuoteRevision(quoteId: string) {
     });
     revalidatePath("/quotes");
     revalidatePath(`/quotes/${quoteId}`);
-    return { redirectTo: `/quotes/${revision.id}` };
+    // A revision is a fresh DRAFT, and the point of making one is to change it.
+    // Landing on the read-only record meant a second navigation before any work
+    // could start — the same reason createQuoteFromLead opens the editor.
+    return { redirectTo: `/quotes?edit=${revision.id}` };
   });
 }
 
@@ -682,6 +741,53 @@ export async function setQuoteStatus(quoteId: string, status: string) {
     revalidatePath(`/quotes/${quoteId}`);
     if (quote.leadId) revalidatePath(`/leads/${quote.leadId}`);
   });
+}
+
+/**
+ * One quote, in the shape the editor opens.
+ *
+ * The editor could only ever open a quote the quotes LIST had already rendered,
+ * which was fine while a row click was the only way in. A revision creates an id
+ * that by definition is not in that list yet, so the editor opened it blank; the
+ * list is also capped at 200, so a deep link to an older quote did the same.
+ *
+ * Read access only — every mutation the editor offers re-checks its own
+ * permission. Returns null rather than redirecting: this feeds a dialog, not a
+ * page, and requireQuoteReadAccess() throws NEXT_REDIRECT.
+ */
+export async function quoteEditorRecord(id: string): Promise<QuoteEditorRecord | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  if (!(await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"))) return null;
+  if (!(await canAccessQuote(user, id))) return null;
+
+  const quote = await prisma.quote.findUnique({ where: { id }, include: QUOTE_EDITOR_INCLUDE });
+  if (!quote || quote.deletedAt) return null;
+
+  // The version family: every revision reachable from this one, so the Versions
+  // tab and the superseded-successor link work the same as from the list.
+  const versions = await prisma.quote.findMany({
+    orderBy: { createdAt: "asc" },
+    select: QUOTE_VERSION_SELECT,
+    take: 2_000,
+  });
+  return buildQuoteEditorRecord(quote, quoteVersionIndex(versions));
+}
+
+/**
+ * May the caller trash THIS quote?
+ *
+ * Exactly the pair deleteQuote() enforces — the `quotes.delete` permission AND
+ * access to this specific quote — asked ahead of the click so the control can
+ * be greyed out instead of failing on use. It decides nothing: deleteQuote()
+ * still runs the same check, and this returning true would not make a refused
+ * delete succeed.
+ */
+export async function canDeleteQuote(id: string): Promise<boolean> {
+  const user = await getCurrentUser();
+  if (!user) return false;
+  if (!(await hasPermission(user, "quotes.delete"))) return false;
+  return canAccessQuote(user, id);
 }
 
 export async function deleteQuote(id: string, formData: FormData) {

@@ -186,7 +186,12 @@ test("deleteStage refuses rather than silently doing nothing when leads remain",
 test("ConfirmDelete owns its dialog and does not close an enclosing modal too", () => {
   const code = src("src/components/ConfirmDelete.tsx");
   assert.match(code, /closeModalOnSuccess=\{false\}/, "it closes its own dialog via onSaved");
-  assert.match(code, /onSaved=\{\(\) => setOpen\(false\)\}/, "and must still close itself");
+  // Behaviour, not formatting: onSaved gained a second statement when the quote
+  // editor embedded this, and pinning the old one-liner failed a change that
+  // kept the property intact.
+  const onSaved = code.slice(code.indexOf("onSaved={"), code.indexOf("className=\"space-y-4\""));
+  assert.match(onSaved, /setOpen\(false\)/, "it must still close itself");
+  assert.match(onSaved, /onDeleted\?\.\(\)/, "…and tell an embedder that is a view of the deleted record");
 });
 
 // ── Selected files must never be silently discarded ────────────────────────

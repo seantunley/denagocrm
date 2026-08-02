@@ -301,6 +301,11 @@ test("a quote that charges for delivery says so on the document", () => {
     "src/app/(print)/quotes/[id]/agreement/page.tsx",
     "src/app/(print)/quotes/[id]/invoice/page.tsx",
     "src/lib/docbuilder/merge.ts", // {{merge}} documents and the signing envelope
+    // The editor's own Preview tab — the last surface with the defect, and the
+    // one a rep actually looks at before sending. Its total came from
+    // quotePricing(lines, fees, …) while its table listed only draft.lines, so
+    // a R2 750 delivery charge landed in the total with no row to explain it.
+    "src/components/quotes/QuoteEditorDialog.tsx",
   ];
   for (const rel of renderers) {
     assert.match(
@@ -309,4 +314,19 @@ test("a quote that charges for delivery says so on the document", () => {
       `${rel} counts fees in the total but never itemises them`,
     );
   }
+});
+
+test("the editor preview prices its fee rows off the same fees it totals", () => {
+  // feeRows() being present is not enough — it has to be fed the SAME list
+  // quotePricing() charges for, including the label fallback the save path
+  // applies, or the preview shows rows the saved quote won't have.
+  const code = src("src/components/quotes/QuoteEditorDialog.tsx");
+  const memo = code.slice(code.indexOf("const calculated = useMemo("), code.indexOf("function updateLine("));
+  assert.match(memo, /quotePricing\(lines, fees,/, "the total counts `fees`");
+  assert.match(memo, /feeRows\(fees\)/, "…and the rows must itemise that same `fees`");
+  assert.match(
+    memo,
+    /fee\.kind === "delivery" \? "Delivery" : "Fee"/,
+    "an unlabelled fee must preview under the name it will save under",
+  );
 });

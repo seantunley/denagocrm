@@ -182,6 +182,25 @@ function classifyRef(ref: string): "blob" | "local" {
 const isBlobRef = (ref: string) => classifyRef(ref) === "blob";
 
 /**
+ * A URL the BROWSER can load for itself, or null when the bytes have to be
+ * proxied through us.
+ *
+ * Only a legacy PUBLIC Blob object qualifies: a private blob needs our token,
+ * and a local filename is not addressable from outside at all. Rendering an
+ * <img> is the use — readFile() would otherwise pull the whole object through
+ * the server for no reason, and fail outright in an environment with no Blob
+ * token configured, which is every local checkout.
+ *
+ * Deciding it HERE rather than in the caller keeps the ref-shape rules in the
+ * one module that owns them; a caller doing `ref.startsWith("http")` is exactly
+ * the check this module's comments explain the cost of.
+ */
+export function directReadUrl(ref: string): string | null {
+  if (!isTrustedBlobRef(ref) || isPrivateBlobRef(ref)) return null;
+  return ref;
+}
+
+/**
  * Read a stream into memory, refusing to exceed `cap`.
  *
  * The cap is checked per chunk rather than from a header: `arrayBuffer()` (what

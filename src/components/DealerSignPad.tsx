@@ -8,15 +8,26 @@ import { signAsDealer } from "@/app/actions/signing";
 export default function DealerSignPad({
   quoteId,
   hasSaved,
+  onSigned,
 }: {
   quoteId: string;
   hasSaved: boolean;
+  /** See SigningBlock's `onChanged` — an embedder whose props do not come from
+   *  the route needs telling, or the pad stays up after a successful sign. */
+  onSigned?: () => void;
 }) {
   const router = useRouter();
+  const signed = () => {
+    router.refresh();
+    onSigned?.();
+  };
   const [padOpen, setPadOpen] = useState(false);
   const [save, setSave] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // A ref can outlive its bytes (storage wiped, restored backup). Drop the
+  // preview rather than leave a broken-image frame next to a sign button.
+  const [previewFailed, setPreviewFailed] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
   const hasInk = useRef(false);
@@ -34,7 +45,7 @@ export default function DealerSignPad({
     setError("");
     const r = await signAsDealer(quoteId, null, false);
     if (r.error) setError(r.error);
-    else router.refresh();
+    else signed();
     setBusy(false);
   }
 
@@ -57,13 +68,28 @@ export default function DealerSignPad({
     if (r.error) setError(r.error);
     else {
       setPadOpen(false);
-      router.refresh();
+      signed();
     }
     setBusy(false);
   }
 
   return (
     <div className="space-y-3">
+      {/* What "Sign as Denago" will actually stamp on the quote. The button
+          committed a signature the signer had no way to look at first — and it
+          goes onto a customer-facing document. */}
+      {hasSaved && !previewFailed && (
+        <figure className="inline-flex flex-col gap-1">
+          <figcaption className="text-[11px] uppercase tracking-wide text-slate-400">Your saved signature</figcaption>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/api/me/signature"
+            alt="Your saved signature"
+            onError={() => setPreviewFailed(true)}
+            className="h-14 w-auto max-w-full rounded-md border border-input bg-white px-2 py-1"
+          />
+        </figure>
+      )}
       <div className="flex gap-2 flex-wrap">
         {hasSaved && (
           <button onClick={useSaved} disabled={busy} className="btn-primary">
