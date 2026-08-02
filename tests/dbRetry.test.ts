@@ -202,3 +202,35 @@ test("the preflight itself only ever runs SELECT 1", () => {
     assert.ok(!body.includes(forbidden), `the preflight must have no side effects (found ${forbidden})`);
   }
 });
+
+/**
+ * Prisma's interactive-transaction defaults (maxWait 2s, timeout 5s) assume the
+ * database is next door. Against the hosted one a round trip is 300–700ms, and
+ * the business transactions take 7–10 of them — so createQuoteRevision and
+ * saveQuoteDraft failed with P2028 intermittently, AFTER the user had done the
+ * work. Set once on the client, so every transaction in the app benefits rather
+ * than the two that happened to be reported.
+ */
+test("interactive transactions are given a ceiling this database can meet", () => {
+  const db = readFileSync(path.join(root, "src/lib/db.ts"), "utf8");
+  const at = db.indexOf("new PrismaClient({");
+  assert.ok(at > 0, "the client must configure transactions, not take the 5s default");
+  const ctor = db.slice(at, db.indexOf("});", at));
+  assert.match(ctor, /transactionOptions:/);
+  assert.match(ctor, /maxWait: txMs\("PRISMA_TX_MAX_WAIT_MS", 10_000\)/);
+  assert.match(ctor, /timeout: txMs\("PRISMA_TX_TIMEOUT_MS", 20_000\)/);
+
+  // One construction point, so both the scoped and bypass clients inherit it —
+  // configuring only one would leave half the app on the old default.
+  assert.equal((db.match(/new PrismaClient\(/g) ?? []).length, 1, "there must be exactly one client construction");
+  assert.match(db, /buildBypassClient\(_rawPrisma\)/);
+  assert.match(db, /buildClient\(_rawPrisma\)/);
+});
+
+test("a bad override falls back rather than disabling the ceiling", () => {
+  // An unset, empty, zero or non-numeric env var must not produce NaN — Prisma
+  // would take that as "no timeout at all".
+  const db = readFileSync(path.join(root, "src/lib/db.ts"), "utf8");
+  const fn = db.slice(db.indexOf("const txMs ="), db.indexOf("const _rawPrisma"));
+  assert.match(fn, /Number\.isFinite\(raw\) && raw > 0 \? raw : fallback/);
+});

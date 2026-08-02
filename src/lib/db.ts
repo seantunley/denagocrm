@@ -323,7 +323,37 @@ function buildClient(raw: PrismaClient) {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-const _rawPrisma = globalForPrisma._rawPrisma ?? new PrismaClient();
+/**
+ * Interactive transactions get longer than Prisma's defaults (maxWait 2s,
+ * timeout 5s), because those defaults assume a database next door.
+ *
+ * This one is not. Measured against the hosted database, a single round trip
+ * runs 300–700ms, and the business transactions here are not short: each takes
+ * a `SELECT … FOR UPDATE`, re-reads the row to re-check its state under the
+ * lock, does its writes, and — on the RLS-scoped client — spends a further
+ * round trip on `SET LOCAL` before any of that. createQuoteRevision and
+ * saveQuoteDraft are ~7-10 trips, which lands either side of 5s depending on
+ * the day, and a transaction that overruns fails with P2028 AFTER the user has
+ * done the work rather than rolling back cheaply.
+ *
+ * The cost of a longer ceiling is a row lock held longer when something hangs.
+ * These lock a single quote / lead / job-card row and contention is low, so
+ * losing a revision to a stopwatch is much the worse trade. Overridable for a
+ * deployment sitting closer to its database.
+ */
+const txMs = (name: string, fallback: number) => {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+};
+
+const _rawPrisma =
+  globalForPrisma._rawPrisma ??
+  new PrismaClient({
+    transactionOptions: {
+      maxWait: txMs("PRISMA_TX_MAX_WAIT_MS", 10_000),
+      timeout: txMs("PRISMA_TX_TIMEOUT_MS", 20_000),
+    },
+  });
 
 /**
  * Build the trusted BYPASS client over `raw` — the `basePrisma` factory. Every
