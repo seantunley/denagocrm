@@ -10,13 +10,11 @@ import { logAudit } from "./audit";
 import { emitJourneyEvent } from "./journeyEvents";
 import { canContactPerson, nextCommunicationWindow } from "./communicationPolicy";
 import { JourneyContext, journeyTemplateVars } from "./journeyContext";
-import { AbortJourney, ConditionFailed, StopJourney } from "./journeyControlFlow";
-import {
-  evaluateConditions,
-  explainConditions,
-  parseConditionGroup,
-  type JourneyStep,
-} from "./journeyTypes";
+import { AbortJourney } from "./journeyControlFlow";
+import { conditionStepOutcome, stopStepOutcome } from "./journeyStepControl";
+import { type JourneyStep } from "./journeyTypes";
+
+export { resolveTopLevelNext } from "./journeyStepControl";
 
 export type StepResult = {
   status: "completed" | "skipped" | "waiting";
@@ -37,14 +35,6 @@ export type StepResult = {
   nextRunAt?: Date;
   output?: Record<string, unknown>;
 };
-
-/**
- * Where a TOP-LEVEL step goes next. Pure, and exported because the distinction
- * it encodes is the one that used to be wrong.
- */
-export function resolveTopLevelNext(step: JourneyStep, result: StepResult): string | null {
-  return result.branch ? result.branch.stepId : step.nextStepId ?? null;
-}
 
 function stringConfig(step: JourneyStep, key: string): string | null {
   const value = step.config[key];
@@ -202,55 +192,14 @@ export async function executeJourneyStep(args: {
       return { status: "waiting", note: `Waiting ${amount} ${unit}`, nextRunAt };
     }
 
-    case "condition": {
-      const condition = parseConditionGroup(step.config.condition);
-      const passed = evaluateConditions(condition, context);
-      // WHICH clause decided it, not just the verdict. "Condition did not match"
-      // sends someone re-reading every clause by hand against a lead that has
-      // since changed; the per-clause result is the answer they were going to
-      // reconstruct. It feeds the step timeline in the activity trace.
-      const clauses = explainConditions(condition, context);
+    // Both are PURE decisions, so they live in journeyStepControl.ts where a
+    // test can import them without dragging the database, the mail provider and
+    // `server-only` along with them.
+    case "condition":
+      return conditionStepOutcome(step, context, inSequence);
 
-      if (inSequence) {
-        // Home Assistant's semantics, and the reason _ConditionFail exists: a
-        // bare `condition` inside a sequence is a GATE, and failing it ends the
-        // run. There is nowhere else for it to go — a sequence runs in order and
-        // has no ids to branch to, which is why the parser rejects
-        // trueStepId/falseStepId here. Use `choose` when you want an else.
-        if (!passed) throw new ConditionFailed("Condition did not match");
-        return { status: "completed", note: "Condition matched", output: { passed, clauses } };
-      }
-
-      const configured = passed ? step.config.trueStepId : step.config.falseStepId;
-      const taken = typeof configured === "string" && configured ? configured : step.nextStepId ?? null;
-      return {
-        status: "completed",
-        note: passed ? "Condition matched" : "Condition did not match",
-        branch: { stepId: taken },
-        output: {
-          passed,
-          // `branchTaken` names the step, so a trace reader can follow the path
-          // without re-deriving it from trueStepId/falseStepId themselves.
-          branchTaken: taken,
-          branch: passed ? "true" : "false",
-          clauses,
-        },
-      };
-    }
-
-    case "stop": {
-      // Raised, not returned. `nextStepId: null` used to say this, and it was
-      // the same value a branch with no successor produced — so the trace could
-      // not tell "the author stopped it here" from "it ran out of steps".
-      // Unwinding also matters now: a stop three sequences deep has to leave all
-      // three, and an exception does that without every level re-propagating it.
-      const reason = stringConfig(step, "reason") ?? "Journey stopped";
-      // HA's `stop` takes `error: true` to end the script as a failure. Ours
-      // marks the run failed WITHOUT retrying — an author-declared stop is
-      // deterministic, so three attempts would fail three times.
-      if (step.config.error === true) throw new AbortJourney(reason);
-      throw new StopJourney(reason);
-    }
+    case "stop":
+      return stopStepOutcome(step);
 
     case "send_email": {
       if (category === "marketing") {
