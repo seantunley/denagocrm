@@ -418,6 +418,11 @@ export async function getAccessibleDocumentIds(user: PermissionUser): Promise<st
   const rows = await basePrisma.document.findMany({
     where: {
       deletedAt: null,
+      // basePrisma BYPASSES the RLS extension, so the tenant predicate has to be
+      // written by hand. Without it the `{ not: null }` arms below — reached
+      // whenever a linked-record scope is unrestricted — select every
+      // contact-linked document in EVERY tenant.
+      ...documentTenantWhere(),
       OR: [
         { uploadedById: user.id },
         ...(contactIds === null ? [{ contactId: { not: null } }] : contactIds.length ? [{ contactId: { in: contactIds } }] : []),
@@ -431,7 +436,28 @@ export async function getAccessibleDocumentIds(user: PermissionUser): Promise<st
   return rows.map((row) => row.id);
 }
 
+/** The active tenant, as an explicit predicate for a basePrisma document query. */
+function documentTenantWhere() {
+  return { tenantId: currentTenantScope()?.tenantId ?? null };
+}
+
+/**
+ * May this user reach THIS document?
+ *
+ * Resolves the document itself rather than answering from the id list. The list
+ * returns `null` for an unrestricted scope, and `ids === null || ...` turned
+ * that into "true for any id at all" — including an id belonging to another
+ * tenant. Read surfaces mostly re-query through the scoped client and so were
+ * protected by RLS, but `deleteDocument` writes through the trash helper on
+ * `basePrisma`: a documents.manage holder could pass another tenant's document
+ * id and soft-delete it. "Unrestricted within my tenant" is never "unrestricted".
+ */
 export async function canAccessDocument(user: PermissionUser, documentId: string): Promise<boolean> {
+  const document = await basePrisma.document.findFirst({
+    where: { id: documentId, ...documentTenantWhere() },
+    select: { id: true },
+  });
+  if (!document) return false;
   const ids = await getAccessibleDocumentIds(user);
   return ids === null || ids.includes(documentId);
 }

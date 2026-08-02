@@ -33,16 +33,32 @@ function delegate(model: TrashModel): any {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
+/**
+ * Soft-delete one record.
+ *
+ * `tenantId` is REQUIRED for models that carry one. delegate() runs on
+ * basePrisma, which bypasses the RLS extension, so `where: { id }` alone is a
+ * cross-tenant write waiting for a caller whose authorization check answers
+ * "yes" without looking at the tenant — which is exactly what canAccessDocument
+ * did for a documents.view_all holder. The predicate goes here, at the write,
+ * so no future caller can forget it.
+ *
+ * Returns null when nothing matched: a caller that assumed a row came back now
+ * has to handle the miss rather than logging a deletion that never happened.
+ */
 export async function softDeleteRecord(
   model: TrashModel,
   id: string,
   reason: string,
-  userName: string
+  userName: string,
+  opts?: { tenantId?: string | null }
 ) {
-  return delegate(model).update({
-    where: { id },
+  const rows = await delegate(model).updateMany({
+    where: { id, ...(opts && "tenantId" in opts ? { tenantId: opts.tenantId ?? null } : {}) },
     data: { deletedAt: new Date(), deleteReason: reason, deletedByName: userName },
   });
+  if (rows.count === 0) return null;
+  return delegate(model).findUnique({ where: { id } });
 }
 
 export async function restoreRecord(model: TrashModel, id: string) {

@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
+import { currentTenantScope } from "@/lib/tenantScope";
 import { saveFile } from "@/lib/storage";
 import { DOC_DEFS, defaultTemplate, mergeTemplate, isDocKey } from "@/lib/docTemplates";
 import {
@@ -90,7 +91,17 @@ export async function uploadDocument(formData: FormData) {
 export async function deleteDocument(id: string, revalidate: string, formData: FormData) {
   const user = await requireDocumentAccess(id, "documents.manage");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
-  const doc = await softDeleteRecord("document", id, reason, user.name);
+  // Tenant-scoped at the WRITE as well as at the gate. softDeleteRecord runs on
+  // basePrisma (RLS bypassed), so this is the predicate that makes another
+  // tenant's document id a no-op rather than a deletion.
+  const doc = await softDeleteRecord("document", id, reason, user.name, {
+    tenantId: currentTenantScope()?.tenantId ?? null,
+  });
+  // Nothing matched: the id belongs to another tenant, or it is already gone.
+  // Same destination requireDocumentAccess uses when its own gate refuses, so
+  // the two failure modes look identical from outside — and, critically, no
+  // audit entry is written for a deletion that did not happen.
+  if (!doc) redirect("/documents");
   await logAudit({
     action: "trash.deleted",
     summary: `Moved document “${doc.fileName}” to trash — ${reason}`,
