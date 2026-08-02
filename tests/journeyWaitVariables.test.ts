@@ -551,13 +551,18 @@ test("an event found on a LATE tick beats an already-expired deadline", () => {
 
 test("a poll never sleeps past the deadline it is racing", () => {
   const now = new Date("2026-08-03T09:00:00.000Z");
-  const short = armWaitState("hold", { triggers: ["lead_won"], timeoutMinutes: 1, continueOnTimeout: true }, now);
-  // One minute of timeout is shorter than the poll interval; overshooting would
-  // report the timeout a whole interval late.
-  assert.equal(waitPollAt(short, now).toISOString(), short.until);
+  const wait = armWaitState("hold", { triggers: ["lead_won"], timeoutMinutes: 10, continueOnTimeout: true }, now);
 
-  const long = armWaitState("hold", { triggers: ["lead_won"], timeoutMinutes: 600, continueOnTimeout: true }, now);
-  assert.equal(waitPollAt(long, now).getTime(), now.getTime() + WAIT_POLL_INTERVAL_MS);
+  // Mid-wait: a whole interval, because the deadline is further away than that.
+  assert.equal(waitPollAt(wait, now).getTime(), now.getTime() + WAIT_POLL_INTERVAL_MS);
+
+  // The LAST poll has to land ON the deadline. Sleeping a full interval from
+  // here would overshoot it, and the timeout would be reported up to a minute
+  // late — which for a `continue_on_timeout: false` wait means the run stays
+  // open past the point the author said to give up.
+  const nearEnd = new Date(Date.parse(wait.until) - 15_000);
+  assert.equal(waitPollAt(wait, nearEnd).toISOString(), wait.until);
+  assert.ok(waitPollAt(wait, nearEnd).getTime() < nearEnd.getTime() + WAIT_POLL_INTERVAL_MS);
 });
 
 /* ══ 3. waiting INSIDE a repeat — the frame question ════════════════════════ */
@@ -635,17 +640,41 @@ test("the two iterations' waits are separate rows in the trace", () => {
   );
 });
 
-test("a stale wait left on the cursor is dropped rather than honoured", () => {
-  // A hand-edited cursor, or one whose definition changed under a parked run.
-  // Left in place it would let a later arrival at that path believe it had been
-  // listening since then, and wake on an event that predates it.
+test("a wait armed at a DIFFERENT position is dropped, not inherited", () => {
+  // A wait belongs to ONE position, named by its trace path. Honouring one
+  // armed elsewhere — a hand-edited cursor, or a definition changed under a
+  // parked run — means arriving at a wait that believes it has been listening
+  // since before it was reached, and waking on an event it never waited for.
+  const engine = new Engine({
+    startStepId: "hold",
+    steps: [waitStep("hold", { nextStepId: null, timeoutMinutes: 10 })],
+  });
+  const stale = new Date(engine.now.getTime() - 3_600_000);
+  engine.cursor = {
+    ...engine.cursor,
+    wait: { path: "some/other/position", since: stale.toISOString(), until: stale.toISOString() },
+  };
+  // An event from half an hour ago: after the STALE watermark, well before this
+  // position was ever reached.
+  engine.emit("quote_signed", new Date(engine.now.getTime() - 1_800_000));
+
+  const outcome = engine.tick();
+  assert.equal(outcome.kind, "waiting", "it must arm a FRESH wait, not resolve the stale one");
+  assert.equal(engine.cursor.wait?.path, "hold");
+  assert.ok(
+    Date.parse(engine.cursor.wait!.since) > Date.parse(stale.toISOString()),
+    "…with a watermark that starts here, leaving the old event behind it",
+  );
+});
+
+test("a stale wait on a step that is not a wait at all is dropped", () => {
   const engine = new Engine({
     startStepId: "first",
     steps: [push("first", { nextStepId: null })],
   });
   engine.cursor = {
     ...engine.cursor,
-    wait: { path: "somewhere_else", since: engine.now.toISOString(), until: engine.now.toISOString() },
+    wait: { path: "first", since: engine.now.toISOString(), until: engine.now.toISOString() },
   };
   engine.tick();
   assert.equal(engine.cursor.wait, undefined, "the stale wait must be gone");
@@ -1082,6 +1111,24 @@ test("the wake query is not gated on the event's processing status", () => {
   assert.doesNotMatch(query, /status:/, "the waiter must not care whether the event has been drained");
   assert.match(query, /createdAt: \{ gte: since \}/, "gt would lose an event written in the same millisecond");
   assert.match(query, /orderBy: \[\{ createdAt: "asc" \}, \{ id: "asc" \}\]/, "two events in a tick need a tie-break");
+});
+
+test("the runner carries the variables bag across its context refresh", () => {
+  // The behavioural test above drives a model of the loop; this pins the real
+  // runner, because the model is only faithful if the carry is actually there.
+  // A bare `context = refreshed` erases every variable on the very next step.
+  const runner = shipped("src/lib/journeyRuns.ts");
+  const refreshAt = runner.indexOf("const refreshed = await loadJourneyContext(");
+  assert.ok(refreshAt > 0, "the per-step context refresh must exist");
+  const endAt = runner.indexOf("await persistPosition(", refreshAt);
+  assert.ok(endAt > refreshAt, "…and be followed by the persist");
+  const slice = runner.slice(refreshAt, endAt);
+  assert.ok(slice.length > 0);
+  assert.match(
+    slice,
+    /if \(refreshed\) context = withJourneyVars\(refreshed, journeyVars\(context\)\);/,
+    "loadJourneyContext returns only { event, lead, contact } — the bag has to be carried",
+  );
 });
 
 test("the poll index exists, and is not created CONCURRENTLY", () => {
