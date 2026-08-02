@@ -1,6 +1,6 @@
 import { prisma } from "./db";
 import { getSetting } from "./settings";
-import { formatZAR, contactName } from "./format";
+import { formatZAR } from "./format";
 import {
   matchByPhone,
   sendWhatsAppText,

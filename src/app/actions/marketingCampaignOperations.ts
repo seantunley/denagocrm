@@ -91,7 +91,12 @@ export async function retryCampaignRecipients(id: string, recipientIds: string[]
   if (uniqueIds.length === 0 || uniqueIds.length > 100) throw new Error("Choose between 1 and 100 recipients");
   await campaignOrThrow(id, tenantId);
 
-  const { allowedIds, permanent } = await basePrisma.$transaction(async (tx) => {
+  // Only allowedIds is read. The permanently-failed count is still computed and
+  // used INSIDE the transaction, where it decrements the campaign's failedCount
+  // — it was the returned copy that nothing consumed. If that number was meant
+  // to reach the audit entry below, that is a change of behaviour, not a
+  // cleanup, so it is left alone rather than quietly wired in here.
+  const { allowedIds } = await basePrisma.$transaction(async (tx) => {
     // Lock the campaign FIRST, inside the same transaction as every write below
     // — the previous SELECT ... FOR UPDATE ran outside any transaction, so
     // Postgres auto-committed it immediately and the "lock" was released

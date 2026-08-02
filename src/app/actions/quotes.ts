@@ -6,16 +6,16 @@ import { revalidatePath } from "next/cache";
 import { addDays } from "date-fns";
 import type { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "@/lib/db";
-import { quoteTotalCents, payableTotalCents } from "@/lib/pricing";
+import { payableTotalCents } from "@/lib/pricing";
 import { logAudit } from "@/lib/audit";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
 import { getSetting } from "@/lib/settings";
 import { markReferralEarned } from "@/lib/referrals";
-import { withEditableQuote, hasOpenSignatureRequest } from "@/lib/quoteLock";
+import { hasOpenSignatureRequest } from "@/lib/quoteLock";
 import { nextQuoteNumber } from "@/lib/numbering";
 import { feeRowsFor, itemRowsFor, priorById } from "@/lib/quoteRows";
 import { runLeadAutomations } from "@/lib/automations";
-import { parseRands, formatZAR, contactName } from "@/lib/format";
+import { formatZAR, contactName } from "@/lib/format";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import {
@@ -570,49 +570,18 @@ export async function createQuoteRevision(quoteId: string) {
   });
 }
 
-export async function addQuoteItem(quoteId: string, formData: FormData) {
-  return asActionResult(async () => {
-    await requireQuoteAccess(quoteId, "quotes.edit");
-    const description = String(formData.get("description") ?? "").trim();
-    if (!description) refuse("Give the line item a description.");
-    const qty = parseFloat(String(formData.get("qty") ?? "1")) || 1;
-    const unitPriceCents = parseRands(String(formData.get("unitPrice") ?? ""));
-    // Lock the quote FOR UPDATE and re-check editability inside the transaction —
-    // a preflight-only check let a concurrent send/sign edit a locked quote.
-    await withEditableQuote(quoteId, async (tx) => {
-      await tx.quoteItem.create({ data: { quoteId, description, qty, unitPriceCents } });
-    });
-    revalidatePath(`/quotes/${quoteId}`);
-  });
-}
-
-export async function deleteQuoteItem(id: string, quoteId: string, formData: FormData) {
-  return asActionResult(async () => {
-    await requireQuoteAccess(quoteId, "quotes.edit");
-    void formData;
-    // Scope to the authorized quote — deleting by item id alone let a user with
-    // edit access to their quote delete a line off another quote — under the lock.
-    await withEditableQuote(quoteId, async (tx) => {
-      await tx.quoteItem.deleteMany({ where: { id, quoteId } });
-    });
-    revalidatePath(`/quotes/${quoteId}`);
-  });
-}
-
-export async function updateQuoteMeta(quoteId: string, formData: FormData) {
-  return asActionResult(async () => {
-    await requireQuoteAccess(quoteId, "quotes.edit");
-    const validUntilRaw = String(formData.get("validUntil") ?? "").trim();
-    const terms = String(formData.get("terms") ?? "").trim() || null;
-    await withEditableQuote(quoteId, async (tx) => {
-      await tx.quote.update({
-        where: { id: quoteId },
-        data: { validUntil: validUntilRaw ? new Date(validUntilRaw) : null, terms },
-      });
-    });
-    revalidatePath(`/quotes/${quoteId}`);
-  });
-}
+/*
+ * addQuoteItem, deleteQuoteItem and updateQuoteMeta lived here, alongside
+ * actions/cpq.ts (addQuoteFee, deleteQuoteFee, setQuoteDeposit,
+ * setQuoteTaxMode). All seven had exactly one caller: the quote record page.
+ * That page is a redirect now, and the editor does the same work through
+ * saveQuoteDraft, which writes the header, lines and fees in one locked
+ * transaction rather than a request per field.
+ *
+ * Removed rather than left: a server action is a reachable endpoint, so an
+ * unused one is not merely dead code but surface — permission-gated, but
+ * untested and unexercised, which is how a guard rots without anyone noticing.
+ */
 
 /**
  * Reopen a won lead when the quote that won it stops being accepted — run INSIDE

@@ -204,7 +204,11 @@ test("the report-only policy omits directives browsers ignore there", async () =
 
   for (const directive of ["upgrade-insecure-requests", "frame-ancestors", "sandbox"]) {
     assert.ok(
-      !new RegExp(`(^|;\s*)${directive}\b`).test(reportOnly),
+      // String.raw, because `\s` and `\b` in a plain template literal are not
+      // escapes — `\b` is a backspace character. This assertion was
+      // `!neverMatches`, so it passed no matter what the policy contained. The
+      // regex LITERALS below were always right; only the built one was not.
+      !new RegExp(String.raw`(^|;\s*)${directive}\b`).test(reportOnly),
       `${directive} is ignored in a report-only policy — it only produces a console warning`,
     );
   }

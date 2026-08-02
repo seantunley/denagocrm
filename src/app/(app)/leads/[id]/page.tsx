@@ -28,7 +28,7 @@ import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { requireUser } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
-import { quoteTotalCents, payableTotalCents } from "@/lib/pricing";
+import { payableTotalCents } from "@/lib/pricing";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";

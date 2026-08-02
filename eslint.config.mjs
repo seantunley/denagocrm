@@ -23,6 +23,20 @@ const eslintConfig = defineConfig([
       "react-hooks/set-state-in-effect": "warn",
       "react-hooks/static-components": "warn",
       "react-hooks/purity": "warn",
+      // A leading underscore means "required here, deliberately unused" — the
+      // `prevState` a useActionState action must accept whether or not it reads
+      // it, and a destructured key discarded on purpose. Flagging those buries
+      // the genuinely dead ones, which is how a dozen real unused imports sat
+      // unnoticed among them.
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+          destructuredArrayIgnorePattern: "^_",
+        },
+      ],
     },
   },
   {
