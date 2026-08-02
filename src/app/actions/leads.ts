@@ -4,7 +4,7 @@ import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { parseRands } from "@/lib/format";
-import { runLeadAutomations } from "@/lib/automations";
+import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { recordReferral, markReferralEarned } from "@/lib/referrals";
 import { logAudit, logAuditStrict } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
@@ -166,7 +166,7 @@ export async function createLead(formData: FormData) {
     });
     const refCode = String(formData.get("referralCode") ?? "").trim();
     if (refCode) await recordReferral(refCode, lead.id).catch(() => {});
-    await runLeadAutomations("lead_created", lead.id);
+    await emitLeadJourneyEvent("lead_created", lead.id);
     revalidatePath("/leads");
     revalidatePath("/forecast");
     return { redirectTo: `/leads/${lead.id}` };
@@ -223,7 +223,7 @@ export async function updateLead(id: string, formData: FormData) {
       before,
       after: lead,
     });
-    if (before.stageId !== data.stageId) await runLeadAutomations("stage_entered", id);
+    if (before.stageId !== data.stageId) await emitLeadJourneyEvent("stage_entered", id);
     revalidatePath("/leads");
     revalidatePath("/forecast");
     revalidatePath(`/leads/${id}`);
@@ -276,7 +276,7 @@ export async function moveLead(leadId: string, stageId: string) {
     }
   }
 
-  await runLeadAutomations("stage_entered", leadId);
+  await emitLeadJourneyEvent("stage_entered", leadId);
   revalidatePath("/leads");
   revalidatePath("/forecast");
 }
@@ -361,7 +361,7 @@ export async function moveLeadToTestDrive(
     contactId: lead.contactId,
     user,
   });
-  if (changingStage) await runLeadAutomations("stage_entered", leadId);
+  if (changingStage) await emitLeadJourneyEvent("stage_entered", leadId);
   revalidatePath("/leads");
   revalidatePath("/calendar");
   return { ok: true };
@@ -435,7 +435,7 @@ export async function markWon(leadId: string, formData?: FormData) {
       data: { status: "won", contactId },
     });
     await markReferralEarned(leadId).catch(() => {});
-    await runLeadAutomations("lead_won", leadId);
+    await emitLeadJourneyEvent("lead_won", leadId);
     await logAuditStrict({
       action: "lead.won",
       summary: `Marked lead “${lead.title}” as WON 🎉`,
@@ -467,7 +467,7 @@ export async function markLost(leadId: string, formData: FormData) {
       where: { id: leadId },
       data: { status: "lost", lostReason: reason },
     });
-    await runLeadAutomations("lead_lost", leadId);
+    await emitLeadJourneyEvent("lead_lost", leadId);
     await logAuditStrict({
       action: "lead.lost",
       summary: `Marked lead “${lead.title}” as lost — ${reason}`,

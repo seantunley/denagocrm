@@ -73,8 +73,14 @@ export async function markReferralEarned(leadId: string): Promise<void> {
     contactId: referral.referrerId,
     userName: "System",
   });
-  const { runLeadAutomations } = await import("./automations");
-  await runLeadAutomations("referral_earned", leadId).catch(() => {});
+  const { emitLeadJourneyEvent } = await import("./leadJourneyEvents");
+  // Keyed on the referral, not the lead: the lead row is untouched by earning a
+  // referral fee, so its updatedAt is not this occurrence. A referral only ever
+  // goes pending → earned once (guarded above), so the id alone is the key.
+  await emitLeadJourneyEvent("referral_earned", leadId, {
+    occurrence: `referral:${referral.id}`,
+    payload: { referralId: referral.id, referrerId: referral.referrerId },
+  });
   await sendPushToAll({
     title: "Referral fee due 🎁",
     body: `${contactName(referral.referrer)} referred a won deal — sort out their reward`,

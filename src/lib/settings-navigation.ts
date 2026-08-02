@@ -62,7 +62,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "Communications",
     items: [
       { key: "email", label: "Email", keywords: ["smtp", "imap", "templates"] },
-      { key: "automations", label: "Automations", module: "marketing", keywords: ["rules", "workflows", "triggers"] },
+      { key: "automations", label: "Automations", module: "marketing", keywords: ["rules", "workflows", "triggers", "journeys", "follow-up", "next step"] },
       { key: "helpdesk", label: "Help desk", href: "/settings/helpdesk", permission: "cases.manage", module: "support", keywords: ["mailboxes", "saved replies", "tags", "support", "tickets", "cases"] },
       { key: "integrations", label: "Integrations", keywords: ["api", "webhooks", "whatsapp", "meta"] },
       {

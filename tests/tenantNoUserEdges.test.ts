@@ -351,10 +351,11 @@ test("src/app/api/cron/automations/route.ts: global ErrorLog cleanup runs in wit
 // C4 actor-pick sites (cron/queue + staff/portal cleanup, §2.4) attribute
 // system-generated records via the tenant-aware resolver, not a global oldest-user
 // pick — else a per-tenant queue stamps another tenant's user onto the record.
+// automations.ts and lifecycleJourneys.ts were on this list and are now deleted
+// — both engines were retired in favour of the Journey engine, whose actor pick
+// (journeyStepExecutor.ts) is still checked below.
 const C4_ACTOR_SITES = [
-  "src/lib/automations.ts",
   "src/lib/journeyStepExecutor.ts",
-  "src/lib/lifecycleJourneys.ts",
   "src/lib/serviceReminders.ts",
   "src/lib/reviewRequests.ts",
   "src/lib/imapSync.ts",

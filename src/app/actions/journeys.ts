@@ -94,7 +94,8 @@ export async function createJourney(formData: FormData) {
     user,
   });
   revalidatePath("/journeys");
-  revalidatePath("/automations");
+  // /automations was revalidated here too; it is a redirect now, with nothing
+  // of its own to re-render.
 }
 
 export async function saveJourneyDraft(journeyId: string, formData: FormData) {

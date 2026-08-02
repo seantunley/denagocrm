@@ -173,19 +173,11 @@ export async function saveServiceReminderSettings(formData: FormData) {
   });
 }
 
-export async function saveLifecycleSettings(formData: FormData) {
-  return asActionResult(async () => {
-    await requireOwner();
-    const entries: Record<string, string> = {
-      LIFECYCLE_ANNIVERSARY_ENABLED: formData.get("anniversary") === "on" ? "true" : "false",
-      LIFECYCLE_WINBACK_ENABLED: formData.get("winback") === "on" ? "true" : "false",
-    };
-    for (const [key, value] of Object.entries(entries)) {
-      await putSetting(key, value);
-    }
-    revalidatePath("/settings");
-  });
-}
+// saveLifecycleSettings was removed with the hardcoded lifecycleJourneys engine
+// it configured. Anniversary and win-back are Journey triggers now
+// (purchase_anniversary / win_back on /journeys); leaving a writer for
+// LIFECYCLE_ANNIVERSARY_ENABLED behind would let someone switch a setting that
+// nothing reads.
 
 // ---- Email templates ----
 

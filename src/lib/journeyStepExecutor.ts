@@ -1,5 +1,7 @@
 import { addDays, addHours, addMinutes } from "date-fns";
 import { prisma, basePrisma } from "./db";
+import { nextStepDueDate } from "./businessHours";
+import { getNextStepScheduling } from "./nextStepConfig";
 import { resolveTenantActor } from "./tenantActor";
 import { sendEmail, renderTemplate } from "./email";
 import { sendSms } from "./sms";
@@ -236,12 +238,21 @@ export async function executeJourneyStep(args: {
       const userId = await fallbackUserId(context, stringConfig(step, "assignToId"));
       const dueDays = Math.max(0, numberConfig(step, "dueDays", 1));
       const summary = renderTemplate(stringConfig(step, "summary") ?? journeyName, vars);
+      // Honour the tenant's next-step scheduling (work hour, skip weekends).
+      // `addDays(new Date(), dueDays)` was used here, which is what the retired
+      // AutomationRule engine deliberately did NOT do: its create_activity went
+      // through nextStepDueDate, so "due in 1 day" for a lead that arrived at
+      // 23:09 on a Friday meant 09:00 Monday, not 23:09 Saturday. Retiring that
+      // engine without this would have silently dropped the setting — and
+      // runActivityReminders only pushes for a dueDate still in the future, so a
+      // same-day (dueDays: 0) task could also have landed already overdue.
+      const dueDate = nextStepDueDate(new Date(), dueDays, await getNextStepScheduling());
       await prisma.activity.create({
         data: {
           type: stringConfig(step, "activityType") ?? "todo",
           summary,
           note: stringConfig(step, "note"),
-          dueDate: addDays(new Date(), dueDays),
+          dueDate,
           leadId,
           contactId,
           assignedToId: userId,
@@ -256,7 +267,7 @@ export async function executeJourneyStep(args: {
       await sendPushToAll({
         title: `Journey: ${journeyName}`,
         body: message,
-        url: leadId ? `/leads/${leadId}` : contactId ? `/contacts/${contactId}` : "/automations",
+        url: leadId ? `/leads/${leadId}` : contactId ? `/contacts/${contactId}` : "/journeys",
       });
       return { status: "completed", note: "Team push notification sent" };
     }

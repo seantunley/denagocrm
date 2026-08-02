@@ -136,28 +136,64 @@ async function main() {
       },
     });
   }
-  if ((await prisma.automationRule.count()) === 0) {
-    await prisma.automationRule.create({
-      data: {
+  // The same two starter automations the retired AutomationRule seed created,
+  // as journeys — the one engine that now runs them.
+  if ((await prisma.journey.count()) === 0) {
+    const starters = [
+      {
         name: "Call every new lead within a day",
         trigger: "lead_created",
-        action: "create_activity",
+        triggerConfig: {},
         activityType: "call",
-        activitySummary: "Call this new lead — introduce yourself and book a demo",
-        activityDueDays: 1,
+        summary: "Call this new lead — introduce yourself and book a demo — {{name}}",
+        dueDays: 1,
       },
-    });
-    await prisma.automationRule.create({
-      data: {
+      {
         name: "Nudge when a lead goes quiet for 4 days",
         trigger: "lead_idle",
-        idleDays: 4,
-        action: "create_activity",
+        triggerConfig: { idleDays: 4 },
         activityType: "whatsapp",
-        activitySummary: "Lead has gone quiet — send a WhatsApp check-in",
-        activityDueDays: 0,
+        summary: "Lead has gone quiet — send a WhatsApp check-in — {{name}}",
+        dueDays: 0,
       },
-    });
+    ];
+    for (const starter of starters) {
+      const journey = await prisma.journey.create({
+        data: {
+          name: starter.name,
+          description: "Starter automation.",
+          category: "automation",
+          status: "active",
+          activeVersion: 1,
+        },
+      });
+      await prisma.journeyVersion.create({
+        data: {
+          journeyId: journey.id,
+          version: 1,
+          state: "published",
+          trigger: starter.trigger,
+          triggerConfig: starter.triggerConfig,
+          definition: {
+            startStepId: "step1",
+            steps: [
+              {
+                id: "step1",
+                name: starter.name,
+                type: "create_activity",
+                nextStepId: null,
+                config: {
+                  activityType: starter.activityType,
+                  summary: starter.summary,
+                  dueDays: starter.dueDays,
+                },
+              },
+            ],
+          },
+          publishedAt: new Date(),
+        },
+      });
+    }
   }
 
   console.log("Seed complete.");

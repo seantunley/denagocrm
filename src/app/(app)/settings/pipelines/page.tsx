@@ -16,7 +16,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { PIPELINE_STAGE_ACTION_META } from "@/lib/pipelineStageActions";
-import { prisma } from "@/lib/db";
+import { stageJourneyNames } from "@/lib/journeyStageBadges";
 
 export const dynamic = "force-dynamic";
 
@@ -27,18 +27,7 @@ export default async function PipelineSettingsPage() {
   await Promise.all(
     pipelines.map(async (pipeline) => stagesByPipeline.set(pipeline.id, await listPipelineStages(pipeline.id)))
   );
-  const stageAutomationRules = await prisma.automationRule.findMany({
-    where: { active: true, trigger: "stage_entered", triggerStageId: { not: null } },
-    select: { name: true, triggerStageId: true },
-    orderBy: { name: "asc" },
-  });
-  const automationRulesByStage = new Map<string, string[]>();
-  for (const rule of stageAutomationRules) {
-    if (!rule.triggerStageId) continue;
-    const names = automationRulesByStage.get(rule.triggerStageId) ?? [];
-    names.push(rule.name);
-    automationRulesByStage.set(rule.triggerStageId, names);
-  }
+  const automationRulesByStage = await stageJourneyNames();
 
   return (
     <SettingsWorkspace

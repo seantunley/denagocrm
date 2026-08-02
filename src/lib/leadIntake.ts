@@ -2,7 +2,7 @@ import { prisma } from "./db";
 import { logAudit } from "./audit";
 import { topPosition } from "./leadPos";
 import { sendPushToAll } from "./push";
-import { runLeadAutomations } from "./automations";
+import { emitLeadJourneyEvent } from "./leadJourneyEvents";
 
 export type IntakeLead = {
   name: string;
@@ -72,6 +72,10 @@ export async function createIntakeLead(input: IntakeLead) {
     body: `${lead.title} — ${lead.name} (via ${input.source})`,
     url: `/leads/${lead.id}`,
   }, "lead_new").catch(() => {});
-  await runLeadAutomations("lead_created", lead.id);
+  // Bare await, no `.catch`: this runs under inbound webhooks (Meta lead ads,
+  // the public web form), and emitLeadJourneyEvent resolves rather than
+  // rejecting for exactly that reason — a broken journey must not turn an
+  // accepted lead into a 500 that makes the provider retry.
+  await emitLeadJourneyEvent("lead_created", lead.id, { payload: { source: input.source } });
   return lead;
 }

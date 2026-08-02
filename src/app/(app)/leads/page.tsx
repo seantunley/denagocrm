@@ -7,6 +7,7 @@ import { hasPermission } from "@/lib/permissions";
 import { getDailyForecast } from "@/lib/weather";
 import { listTenantStaff } from "@/lib/tenantActor";
 import { getTimelinePins } from "@/lib/timelinePins";
+import { stageJourneyNames } from "@/lib/journeyStageBadges";
 import KanbanBoard, { type KanbanStage } from "@/components/KanbanBoard";
 import ModalTrigger from "@/components/Modal";
 import LeadForm from "@/components/LeadForm";
@@ -38,7 +39,7 @@ export default async function LeadsPage() {
           hasPermission(currentUser, "leads.mark_lost"),
         ])
       : [false, false, false, false, false, false];
-  const [stages, products, contacts, users, stageAutomationRules] = await Promise.all([
+  const [stages, products, contacts, users, automationRulesByStage] = await Promise.all([
     prisma.pipelineStage.findMany({
       orderBy: { order: "asc" },
       include: {
@@ -61,19 +62,8 @@ export default async function LeadsPage() {
     }),
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
     listTenantStaff(),
-    prisma.automationRule.findMany({
-      where: { active: true, trigger: "stage_entered", triggerStageId: { not: null } },
-      select: { name: true, triggerStageId: true },
-      orderBy: { name: "asc" },
-    }),
+    stageJourneyNames(),
   ]);
-  const automationRulesByStage = new Map<string, string[]>();
-  for (const rule of stageAutomationRules) {
-    if (!rule.triggerStageId) continue;
-    const names = automationRulesByStage.get(rule.triggerStageId) ?? [];
-    names.push(rule.name);
-    automationRulesByStage.set(rule.triggerStageId, names);
-  }
 
   const leadIds = stages.flatMap((stage) => stage.leads.map((lead) => lead.id));
   let nextActivityRows: PlannedActivityRow[] = [];

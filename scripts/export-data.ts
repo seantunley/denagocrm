@@ -19,8 +19,11 @@ async function main() {
     activities: await prisma.activity.findMany(),
     documents: await prisma.document.findMany(),
     emailTemplates: await prisma.emailTemplate.findMany(),
-    automationRules: await prisma.automationRule.findMany(),
-    automationLogs: await prisma.automationLog.findMany(),
+    // The retired AutomationRule engine's run history. Archived by migration
+    // 20260802120000 rather than dropped, and nothing rewrites it — so if this
+    // export ever becomes the copy that survives, the audit trail has to be in
+    // it or the archive was pointless.
+    retiredAutomationLogs: await prisma.retiredAutomationLog.findMany(),
   };
   fs.writeFileSync("data-export.json", JSON.stringify(data, null, 2));
   const counts = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, (v as unknown[]).length]));

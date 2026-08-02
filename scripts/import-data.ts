@@ -79,8 +79,24 @@ async function main() {
   for (const a of raw.activities) await prisma.activity.create({ data: dates(a, ["dueDate", "doneAt", "createdAt"]) });
   for (const d of raw.documents) await prisma.document.create({ data: dates(d, ["createdAt"]) });
   for (const t of raw.emailTemplates) await prisma.emailTemplate.create({ data: dates(t, ["createdAt"]) });
-  for (const r of raw.automationRules) await prisma.automationRule.create({ data: dates(r, ["createdAt"]) });
-  for (const l of raw.automationLogs) await prisma.automationLog.create({ data: dates(l, ["createdAt"]) });
+  // automationRules is gone — the AutomationRule engine was retired and its
+  // table dropped (20260802120000_retire_automation_rules). An older export file
+  // still carrying that key imports fine; it is ignored.
+  //
+  // automationLogs did NOT vanish: that migration archived every row into
+  // RetiredAutomationLog. Restore from either shape — a pre-migration export
+  // still carries its audit trail across, it just lands in the archive table
+  // without the denormalised rule columns the migration could still read.
+  for (const l of raw.retiredAutomationLogs ?? [])
+    await prisma.retiredAutomationLog.create({ data: dates(l, ["createdAt", "archivedAt"]) });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const l of (raw.automationLogs ?? []) as any[])
+    await prisma.retiredAutomationLog.create({
+      data: dates(
+        { id: l.id, tenantId: l.tenantId ?? null, ruleId: l.ruleId, leadId: l.leadId, note: l.note ?? null, createdAt: l.createdAt },
+        ["createdAt"],
+      ),
+    });
 
   console.log("Import complete.");
 }

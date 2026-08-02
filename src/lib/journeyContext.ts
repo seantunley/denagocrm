@@ -146,13 +146,22 @@ export async function loadJourneyContext(
 export function journeyTemplateVars(context: JourneyContext): Record<string, string> {
   const lead = (context.lead ?? {}) as Record<string, unknown>;
   const contact = (context.contact ?? {}) as Record<string, unknown>;
+  const event = (context.event ?? {}) as Record<string, unknown>;
   const firstName = String(contact.firstName ?? String(lead.name ?? "").split(/\s+/)[0] ?? "there");
   return {
     first_name: firstName || "there",
     name: String(contact.name ?? lead.name ?? "Customer"),
     email: String(contact.email ?? lead.email ?? ""),
     phone: String(contact.phone ?? contact.whatsapp ?? lead.phone ?? ""),
-    model: String(lead.productName ?? "Denago vehicle"),
+    // The event's own model wins over the lead's product. A contact-triggered
+    // journey (purchase_anniversary, win_back) has no lead of its own — the
+    // scheduler puts the VEHICLE being congratulated on the event payload, and
+    // `lead` here is only that contact's most recently touched lead, which may
+    // be about something else entirely. Without this the migrated anniversary
+    // email could wish someone a happy anniversary with the wrong cart.
+    model: String(event.model ?? lead.productName ?? "Denago vehicle"),
+    // Set by the purchase_anniversary scheduler; empty for every other trigger.
+    years: String(event.years ?? ""),
     stage: String(lead.stageName ?? ""),
     value: String(Math.round(Number(lead.valueCents ?? 0) / 100)),
     company: String(contact.company ?? ""),
