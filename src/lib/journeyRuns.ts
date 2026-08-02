@@ -40,6 +40,49 @@ async function updateStepLog(args: {
   });
 }
 
+/** Terminal states — a predecessor in any of these no longer blocks anyone. */
+const CLOSED_RUN_STATUSES = ["completed", "failed", "cancelled"];
+
+/**
+ * Release runs parked behind a predecessor by run mode "queued".
+ *
+ * Without this they wait forever: `blocked` is not in the statuses
+ * processJourneyRuns picks up, so nothing would ever start them. A run whose
+ * predecessor has been PURGED is released too — a dangling id must not strand
+ * it behind something that no longer exists.
+ */
+export async function releaseBlockedJourneyRuns(): Promise<number> {
+  const blocked = await prisma.journeyRun.findMany({
+    where: { status: "blocked" },
+    select: { id: true, blockedByRunId: true },
+    take: 200,
+  });
+  if (blocked.length === 0) return 0;
+
+  const predecessorIds = [...new Set(blocked.map((run) => run.blockedByRunId).filter((id): id is string => Boolean(id)))];
+  const stillOpen = new Set(
+    (
+      await prisma.journeyRun.findMany({
+        where: { id: { in: predecessorIds }, status: { notIn: CLOSED_RUN_STATUSES } },
+        select: { id: true },
+      })
+    ).map((run) => run.id),
+  );
+
+  let released = 0;
+  for (const run of blocked) {
+    if (run.blockedByRunId && stillOpen.has(run.blockedByRunId)) continue;
+    // Conditional on still being blocked: two sweeps can overlap, and only one
+    // should hand the run to the processor.
+    const { count } = await prisma.journeyRun.updateMany({
+      where: { id: run.id, status: "blocked" },
+      data: { status: "queued", nextRunAt: new Date(), blockedByRunId: null },
+    });
+    released += count;
+  }
+  return released;
+}
+
 export async function recoverStaleJourneyRuns() {
   const cutoff = new Date(Date.now() - 15 * 60_000);
   return prisma.journeyRun.updateMany({

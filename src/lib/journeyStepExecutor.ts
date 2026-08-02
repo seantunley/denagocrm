@@ -12,6 +12,7 @@ import { canContactPerson, nextCommunicationWindow } from "./communicationPolicy
 import { JourneyContext, journeyTemplateVars } from "./journeyContext";
 import {
   evaluateConditions,
+  explainConditions,
   parseConditionGroup,
   type JourneyStep,
 } from "./journeyTypes";
@@ -171,11 +172,23 @@ export async function executeJourneyStep(args: {
       const condition = parseConditionGroup(step.config.condition);
       const passed = evaluateConditions(condition, context);
       const branch = passed ? step.config.trueStepId : step.config.falseStepId;
+      const taken = typeof branch === "string" && branch ? branch : step.nextStepId ?? null;
+      // WHICH clause decided it, not just the verdict. "Condition did not match"
+      // sends someone re-reading every clause by hand against a lead that has
+      // since changed; the per-clause result is the answer they were going to
+      // reconstruct. It feeds the step timeline in the activity trace.
       return {
         status: "completed",
         note: passed ? "Condition matched" : "Condition did not match",
-        nextStepId: typeof branch === "string" && branch ? branch : step.nextStepId,
-        output: { passed },
+        nextStepId: taken,
+        output: {
+          passed,
+          // `branchTaken` names the step, so a trace reader can follow the path
+          // without re-deriving it from trueStepId/falseStepId themselves.
+          branchTaken: taken,
+          branch: passed ? "true" : "false",
+          clauses: explainConditions(condition, context),
+        },
       };
     }
 

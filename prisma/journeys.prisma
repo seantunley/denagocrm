@@ -7,6 +7,20 @@ model Journey {
   description   String?
   category      String   @default("automation") // automation | marketing
   status        String   @default("draft") // draft | active | paused | archived
+  /// What happens when someone is enrolled again while a run is still open.
+  ///
+  /// After Home Assistant's automation `mode`, and for the same reason: there
+  /// was exactly one implicit answer here — the idempotency key made a repeat
+  /// enrolment on the SAME event a no-op, but a *different* event on the same
+  /// person started a second run, silently, and both then sent.
+  ///
+  ///   single   the open run wins; a new enrolment is dropped (the default,
+  ///            because it is what a drip sequence almost always wants)
+  ///   restart  the open run is cancelled and the new one replaces it
+  ///   queued   the new run waits and starts when the open one finishes
+  ///   parallel both run — the pre-existing behaviour, kept for the cases that
+  ///            genuinely want it
+  runMode       String   @default("single") // single | restart | queued | parallel
   activeVersion Int?
   createdById   String?
   createdAt     DateTime @default(now())
@@ -86,7 +100,11 @@ model JourneyRun {
   journey          Journey        @relation(fields: [journeyId], references: [id], onDelete: Cascade)
   journeyVersionId String
   journeyVersion   JourneyVersion @relation(fields: [journeyVersionId], references: [id], onDelete: Restrict)
-  status           String         @default("queued") // queued | running | waiting | completed | failed | cancelled
+  status           String         @default("queued") // queued | running | waiting | blocked | completed | failed | cancelled
+  /// Set on a run parked by run mode "queued": it starts when this predecessor
+  /// closes. Not a foreign key — the predecessor can be purged while this row
+  /// still names it, and a dangling id must not block the sweep from releasing.
+  blockedByRunId   String?
   entityType       String
   entityId         String
   leadId           String?

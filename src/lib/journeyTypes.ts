@@ -263,6 +263,45 @@ function compare(condition: JourneyCondition, actual: unknown): boolean {
   }
 }
 
+/** One clause's verdict, for the trace. */
+export type ConditionExplanation = {
+  field: string;
+  operator: string;
+  expected: unknown;
+  actual: unknown;
+  passed: boolean;
+};
+
+/**
+ * The per-clause result behind a condition's verdict.
+ *
+ * "Condition did not match" is true and useless: it sends someone re-reading
+ * every clause by hand against a lead whose values have since changed. This
+ * records what each clause actually compared, so the trace answers the question
+ * instead of posing it. Home Assistant's trace does the same thing — its graph
+ * highlights the path taken and each node carries its own result.
+ *
+ * Nested groups are flattened: the field/operator pairs are what a reader is
+ * looking for, and the group structure is already visible in the builder.
+ */
+export function explainConditions(
+  group: JourneyConditionGroup | null,
+  context: Record<string, unknown>
+): ConditionExplanation[] {
+  if (!group) return [];
+  return group.conditions.flatMap((condition) => {
+    if ("conditions" in condition) return explainConditions(condition, context);
+    const actual = valueAtPath(context, condition.field);
+    return [{
+      field: condition.field,
+      operator: condition.operator,
+      expected: condition.value,
+      actual,
+      passed: compare(condition, actual),
+    }];
+  });
+}
+
 export function evaluateConditions(
   group: JourneyConditionGroup | null,
   context: Record<string, unknown>
