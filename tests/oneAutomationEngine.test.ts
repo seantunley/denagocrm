@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { Prisma } from "@prisma/client";
 import { JOURNEY_EVENT_TRIGGERS, JOURNEY_SCHEDULED_TRIGGERS, JOURNEY_TRIGGERS } from "../src/lib/journeyTypes";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -331,4 +332,163 @@ test("the cron no longer runs the two retired sweeps", () => {
   const cron = shipped("src/app/api/cron/automations/route.ts");
   assert.doesNotMatch(cron, /idle-automations/, "idle nudges are a lead_idle journey now");
   assert.doesNotMatch(cron, /lifecycle-journeys/, "anniversary and win-back are journeys now");
+});
+
+/* ── the three review blockers on that migration ────────────────────────── */
+
+const MIGRATION = "prisma/migrations/20260802120000_retire_automation_rules/migration.sql";
+
+/**
+ * The migration's own prose names "AutomationRule" and "AutomationLog" dozens of
+ * times to explain what it retires. Every guard below asks whether a STATEMENT
+ * touches those tables, so the comments have to go first or each check passes on
+ * the explanation instead of the SQL — the same trap `stripComments` exists for
+ * on the TypeScript side. No `--` appears inside a string literal in this file
+ * (the prose uses em dashes), so line-comment stripping is safe here.
+ */
+const stripSqlComments = (sql: string) => sql.replace(/--[^\n]*/g, "");
+
+const MIGRATION_SQL = stripSqlComments(src(MIGRATION));
+
+/** The one guarded, atomic DO block. Null means the guard is gone. */
+const GUARDED_BLOCK = (() => {
+  const match = MIGRATION_SQL.match(/DO \$retire_automation_rules\$[\s\S]*?\$retire_automation_rules\$;/);
+  return match ? match[0] : null;
+})();
+
+test("the migration is genuinely re-runnable: nothing reads a dropped table unguarded", () => {
+  // BLOCKER 1. The migration ends by DROPping "AutomationRule" and
+  // "AutomationLog", so a rerun — or a recovery run after Postgres died
+  // part-way — reaches statements whose source tables are gone and fails with
+  // 42P01. "Idempotent" was claimed in the header and was not true.
+  //
+  // The fix is a PL/pgSQL guard: PL/pgSQL does not parse or plan a statement
+  // until it executes it, so with `to_regclass` NULL the block returns and the
+  // statements below it are never analysed. That only holds if EVERY read of a
+  // retired table is inside the block — one left outside is parsed on the way
+  // past and errors regardless of the guard.
+  assert.ok(
+    GUARDED_BLOCK,
+    "the DO $retire_automation_rules$ block is gone — a second run hits the retired tables and fails",
+  );
+
+  assert.match(
+    GUARDED_BLOCK!,
+    /IF to_regclass\('"AutomationRule"'\) IS NULL OR to_regclass\('"AutomationLog"'\) IS NULL THEN[\s\S]*?RETURN;/,
+    "the block must return early when the tables are already gone",
+  );
+  // The guard has to be the FIRST thing in the block, or the statement above it
+  // is the one that errors.
+  assert.ok(
+    GUARDED_BLOCK!.indexOf("to_regclass") < GUARDED_BLOCK!.indexOf('"AutomationRule" r'),
+    "the guard must precede the first read of the retired tables",
+  );
+
+  const outsideTheGuard = MIGRATION_SQL.replace(GUARDED_BLOCK!, "");
+  const stillOutside = ['"AutomationRule"', '"AutomationLog"', '"_rule_convert"'].filter((ref) =>
+    outsideTheGuard.includes(ref),
+  );
+  assert.deepEqual(
+    stillOutside,
+    [],
+    "these are read or dropped outside the existence guard, so a rerun still fails on them",
+  );
+});
+
+test("AutomationLog history is archived, and archived BEFORE the drop", () => {
+  // BLOCKER 2. AutomationLog was the ONLY execution record the retired engine
+  // ever produced and there is no second copy of it anywhere; dropping it
+  // destroys the audit trail of what fired and when. It is copied into a
+  // retained table first.
+  assert.match(
+    MIGRATION_SQL,
+    /CREATE TABLE IF NOT EXISTS "RetiredAutomationLog"/,
+    "the archive table must be created by this migration, and survive it",
+  );
+  const archive = MIGRATION_SQL.indexOf('INSERT INTO "RetiredAutomationLog"');
+  const dropLog = MIGRATION_SQL.indexOf('DROP TABLE IF EXISTS "AutomationLog"');
+  assert.ok(archive >= 0, "AutomationLog is dropped without being copied anywhere");
+  assert.ok(dropLog >= 0, "the retired table must still be dropped");
+  assert.ok(archive < dropLog, "the archive copy must come BEFORE the drop, not after");
+
+  // Copy and drop in the SAME guarded block, so no crash, ordering or rerun can
+  // separate them into "dropped but never archived".
+  assert.ok(
+    GUARDED_BLOCK?.includes('INSERT INTO "RetiredAutomationLog"') &&
+      GUARDED_BLOCK.includes('DROP TABLE IF EXISTS "AutomationLog"'),
+    "archive and drop must be atomic — both inside the guarded block",
+  );
+
+  // The rule table goes in the same breath, so a bare copy of `ruleId` would be
+  // a pile of orphans. What the rule WAS has to ride along, plus the id of the
+  // journey it became, or the archive is unreadable in practice.
+  for (const column of ['"ruleName"', '"ruleTrigger"', '"ruleAction"', '"journeyId"']) {
+    assert.ok(
+      MIGRATION_SQL.includes(column),
+      `the archive drops ${column}, leaving rows that cannot be traced back to a rule or forward to a journey`,
+    );
+  }
+  // It holds one tenant's lead ids; it must not become the one table where
+  // tenants can read each other's history.
+  assert.match(MIGRATION_SQL, /ALTER TABLE "RetiredAutomationLog" FORCE ROW LEVEL SECURITY/);
+});
+
+test("the archive is readable afterwards — it is a modelled, retained table", () => {
+  // "Archived" is worth nothing if the rows land somewhere no one can query.
+  // Asserted against the generated client rather than the schema text, so this
+  // fails if the model is declared but never actually reaches Prisma.
+  const model = Prisma.dmmf.datamodel.models.find((m) => m.name === "RetiredAutomationLog");
+  assert.ok(model, "RetiredAutomationLog is not a Prisma model — the archived history has no reader");
+  const fields = new Set(model!.fields.map((f) => f.name));
+  for (const required of ["id", "tenantId", "ruleId", "ruleName", "ruleTrigger", "ruleAction", "journeyId", "leadId", "note", "createdAt"]) {
+    assert.ok(fields.has(required), `RetiredAutomationLog.${required} is missing — archived rows lose ${required}`);
+  }
+  // A backup that omits the archive un-archives it the first time it is used.
+  assert.match(shipped("scripts/export-data.ts"), /retiredAutomationLog\.findMany/);
+});
+
+test("a converted rule that SENDS EMAIL is subject to the consent gate", () => {
+  // BLOCKER 3. Every converted rule was categorised 'automation' — deliberately,
+  // because the step executor only applies the consent check to the 'marketing'
+  // category, and the comment said as much: categorising them marketing "would
+  // silently stop emails that fire today".
+  //
+  // That is the reasoning, not the rule. AutomationRule.send_email had NO
+  // consent check of any kind, which is precisely the unsubscribe/POPIA hole the
+  // sibling consent-gate change closes; carrying it forward under a category
+  // that dodges the gate re-opens it by migration. A rule that mails a lead is
+  // direct marketing whatever table it used to live in.
+  assert.match(
+    MIGRATION_SQL,
+    /CASE WHEN c\."action" = 'send_email' THEN 'marketing' ELSE 'automation' END/,
+    "converted email rules must be categorised 'marketing' so the consent gate applies to them",
+  );
+
+  // NARROWER than a blanket recategorisation, on purpose: the category is a
+  // property of the whole journey and each converted rule is exactly one step.
+  // create_activity / move_stage / assign_user contact nobody, and send_push
+  // goes to STAFF devices (sendPushToAll) — gating an internal task on a
+  // customer's mailing preference would be a different bug.
+  assert.doesNotMatch(
+    MIGRATION_SQL,
+    /FROM "_rule_convert" c\s*\n\s*ON CONFLICT[\s\S]*?'marketing',\s*\n\s*CASE WHEN c\.convertible AND c\."active"/,
+    "the category must depend on the action, not be a blanket 'marketing'",
+  );
+
+  // Say it out loud where an operator will actually read it. Some sends that
+  // fire today WILL stop, and a migration that changes who gets email without
+  // saying so is the problem, not the fix.
+  assert.ok(
+    MIGRATION_SQL.includes("CONSENT: this journey is categorised"),
+    "the migrated journey must carry the warning that its sends are now consent-checked",
+  );
+
+  // And the category has to still MEAN something: if the executor stops gating
+  // marketing sends, the line above becomes decoration.
+  const executor = shipped("src/lib/journeyStepExecutor.ts");
+  assert.match(
+    executor,
+    /case "send_email": \{\s*\n\s*if \(category === "marketing"/,
+    "send_email no longer applies any check keyed on the marketing category",
+  );
 });

@@ -720,7 +720,54 @@ model EmailTemplate {
 // activity / move a stage". The Journey engine (prisma/journeys.prisma) is the
 // one that survives; that migration converted every rule into a
 // Journey/JourneyVersion, and JourneyRun/JourneyStepLog replaces AutomationLog
-// as the run history.
+// as the run history FROM THAT POINT ON — which is why the history BEFORE it is
+// kept below rather than dropped with the table.
+
+/// The AutomationLog history, archived rather than destroyed.
+///
+/// AutomationLog was the ONLY execution record the retired AutomationRule engine
+/// ever produced — one row per firing, with the lead and the outcome — and there
+/// was no second copy of it anywhere. Dropping the table would have destroyed
+/// the whole audit trail of what fired and when, which is exactly the question
+/// asked after a customer says "why did I get this email".
+///
+/// Written once, by 20260802120000_retire_automation_rules, and never again: no
+/// application code writes here. It is DENORMALISED because the rule table went
+/// away in the same migration, so a bare copy of `ruleId` would be an orphan —
+/// the rule's name/trigger/action ride along, plus `journeyId`, the deterministic
+/// id of the Journey that rule became, so the history joins forward:
+///
+///   basePrisma.retiredAutomationLog.findMany({ orderBy: { createdAt: "desc" } })
+///   SELECT l.*, j."name" FROM "RetiredAutomationLog" l
+///     LEFT JOIN "Journey" j ON j."id" = l."journeyId";
+///
+/// Read it on the system path (basePrisma / psql): tenantId was nullable and
+/// inert on AutomationLog, so most archived rows carry NULL and the tenant-scoped
+/// client — which applies the same strict RLS policy AutomationLog had — will not
+/// show them.
+model RetiredAutomationLog {
+  /// The original AutomationLog id, so re-running the migration is a no-op.
+  id          String   @id
+  tenantId    String?
+  ruleId      String
+  /// Copied off AutomationRule before it was dropped; NULL if the rule row had
+  /// already been deleted when the log was archived.
+  ruleName    String?
+  ruleTrigger String?
+  ruleAction  String?
+  /// 'jrn_rule_' || md5(ruleId) — the Journey the rule was converted into.
+  journeyId   String?
+  leadId      String
+  note        String?
+  /// When the automation fired (the original AutomationLog.createdAt).
+  createdAt   DateTime
+  /// When this migration copied the row across.
+  archivedAt  DateTime @default(now())
+
+  @@index([ruleId, leadId])
+  @@index([tenantId])
+  @@index([journeyId])
+}
 
 model Quote {
   id         String    @id @default(cuid())
