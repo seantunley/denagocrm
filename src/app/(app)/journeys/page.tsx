@@ -98,6 +98,12 @@ export default async function JourneysPage() {
         title="Marketing journeys & advanced automations"
         description="Versioned multi-step workflows with safe conditions, waits, messaging, CRM actions, segment enrolment and execution history."
       >
+        {/* The trace. A journey that enrols nobody is indistinguishable from one
+            that matched nobody until you can see whether its trigger ever fired. */}
+        <Link href="/journeys/activity" className="btn-secondary">
+          <Activity className="size-4" />
+          Activity &amp; traces
+        </Link>
         <form action={installJourneyTemplates}>
           <button className="btn-secondary">Install recommended drafts</button>
         </form>

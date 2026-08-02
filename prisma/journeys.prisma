@@ -58,6 +58,16 @@ model JourneyEvent {
   availableAt DateTime  @default(now())
   processedAt DateTime?
   error       String?
+  /// Why each active journey did or did not enrol on this event:
+  /// [{ journeyId, journeyName, enrolled, reason }].
+  ///
+  /// Processing decided this in a loop of bare `continue`s, so a journey that
+  /// was never considered looked exactly like one that was considered and did
+  /// not match — and a TRIGGER THAT NOBODY EMITS looked exactly like a trigger
+  /// nobody matched. That is how "New lead created" journeys sat active,
+  /// enrolling nobody, with nothing on screen to say so. Recording the decision
+  /// is what makes the difference visible.
+  decisions   Json?
   dedupeKey   String    @unique
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
