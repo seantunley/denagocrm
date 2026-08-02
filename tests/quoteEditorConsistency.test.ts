@@ -65,8 +65,8 @@ test("the split entry point is gone, not merely bypassed", () => {
  * doorway that reimplemented any of it would be the one that drifts.
  */
 test("every doorway to deleting a quote goes through the same action and the same dialog", () => {
+  // Two doorways now, not three — the record page is a redirect to the editor.
   const surfaces = [
-    "src/app/(app)/quotes/[id]/page.tsx",
     "src/app/(app)/quotes/page.tsx",
     "src/components/quotes/QuoteEditorDialog.tsx",
   ];
@@ -109,12 +109,11 @@ test("deleting from the editor dismisses the editor, without asking about unsave
   assert.match(block, /contentClassName="z-\[110\]"/, "nested in a dialog, the confirmation must stack above it");
 });
 
-test("all three doorways grey the delete out when the role can't use it", () => {
+test("both doorways grey the delete out when the role can't use it", () => {
   // The button used to be offered to everyone and refused on click — after the
   // reason had been typed. Greying it out is a HINT: deleteQuote() still runs
   // the same check, so a client that ignores this gets refused anyway.
   for (const rel of [
-    "src/app/(app)/quotes/[id]/page.tsx",
     "src/app/(app)/quotes/page.tsx",
     "src/components/quotes/QuoteEditorDialog.tsx",
   ]) {
@@ -368,4 +367,83 @@ test("the next-step prompt reports the real outcome, not an optimistic one", () 
     /toast\.success\([^)]*\);\s*\n\s*(await\s+)?createQuoteFromLead/,
     "success must not be announced before the action runs",
   );
+});
+
+/**
+ * The full quote record page is retired. Everything it could do, the editor can
+ * do — see the lifecycle, custom-fields, margin and delete tests above. What
+ * remains at its URL is a redirect, because the id is spread across the app and
+ * beyond it: bookmarks and already-delivered push notifications cannot be
+ * repointed by any amount of editing.
+ */
+test("the record page is a redirect and nothing else", () => {
+  const page = src("src/app/(app)/quotes/[id]/page.tsx");
+  assert.match(page, /redirect\(`\/quotes\?edit=\$\{id\}`\)/, "it must land in the editor");
+  assert.ok(page.split("\n").length < 30, "anything more than a redirect has crept back in");
+  for (const gone of ["SigningBlock", "ConfirmDelete", "CustomFieldsCard", "SaveForm", "prisma"]) {
+    assert.ok(!page.includes(gone), `${gone} is back on a page that should only redirect`);
+  }
+});
+
+test("no orphan is left behind the redirect", () => {
+  // A redirect needs no read guard of its own — it grants nothing, and /quotes
+  // plus quoteEditorRecord() both enforce access. Leaving one would be a DB
+  // round trip per hop on a database where that costs half a second.
+  assert.throws(
+    () => src("src/app/(app)/quotes/[id]/layout.tsx"),
+    "the layout guard should have gone with the page",
+  );
+  // QuoteVersions was rendered by that page and nothing else.
+  assert.throws(() => src("src/components/QuoteVersions.tsx"), "dead component still present");
+});
+
+test("a deep link to a quote that isn't there says so", () => {
+  // With /quotes/<id> redirecting here, this is where a stale bookmark and an
+  // already-sent push notification land. quoteEditorRecord() returns null for a
+  // trashed or inaccessible quote, and `awaitingRecord` would otherwise leave
+  // the visitor on a page that silently never opens anything.
+  const code = shipped("src/components/quotes/QuoteEditorDialog.tsx");
+  const effect = code.slice(code.indexOf("quoteEditorRecord(quoteId)"), code.indexOf("return (", code.indexOf("quoteEditorRecord(quoteId)")));
+  assert.match(effect, /toast\.error\("That quote is no longer available\."\)/);
+  assert.match(effect, /setSelection\(null\)/, "and it must stop waiting");
+  assert.match(effect, /\.catch\(/, "a failed fetch must not hang either");
+});
+
+test("the editor no longer offers a trip to a page that comes straight back", () => {
+  const code = shipped("src/components/quotes/QuoteEditorDialog.tsx");
+  assert.ok(!code.includes("Open full record"), "that link now redirects to the editor you are already in");
+});
+
+/**
+ * A deep link must open the quote it names, not just the ones the list happened
+ * to render.
+ *
+ * `records` holds the newest 200 CURRENT heads. The page used to hand
+ * `initialQuoteId` to the provider only when the id appeared among them, which
+ * silently swallowed exactly the cases /quotes/<id> redirects for: an older
+ * quote, a superseded revision, and every bookmark or already-delivered
+ * notification pointing at either. They landed on the list with nothing said,
+ * and quoteEditorRecord() — the fallback built for this — was never reached, so
+ * the "no longer available" report could not fire either.
+ */
+test("a deep link opens a quote the list never rendered", () => {
+  const page = shipped("src/app/(app)/quotes/page.tsx");
+  assert.match(page, /initialQuoteId=\{edit\}/, "the requested id must reach the provider unfiltered");
+  assert.doesNotMatch(
+    page,
+    /initialQuoteId=\{records\.some/,
+    "filtering against `records` caps deep links at the newest 200 current heads",
+  );
+});
+
+test("the provider resolves a requested id that is not in records", () => {
+  // The three outcomes that must all be reachable for the redirect to be
+  // honest: found outside the list, not found, and not permitted.
+  const code = shipped("src/components/quotes/QuoteEditorDialog.tsx");
+  const provider = code.slice(code.indexOf("export function QuoteEditorProvider("));
+
+  assert.match(provider, /const listed = selection\?\.quoteId \? records\.find/, "the list is a fast path…");
+  assert.match(provider, /if \(!quoteId \|\| listed\) return;/, "…not a gate: a miss must fall through to the fetch");
+  assert.match(provider, /quoteEditorRecord\(quoteId\)/, "…which is the access-controlled loader");
+  assert.match(provider, /toast\.error\("That quote is no longer available\."\)/, "and a miss must be reported");
 });

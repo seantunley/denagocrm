@@ -1271,13 +1271,10 @@ export function QuoteEditorDialog({
                       */}
                       {savedQuote && <Button asChild variant="outline"><a href={`/quotes/${savedQuote.id}/print`} target="_blank" rel="noreferrer"><Printer />Print / PDF</a></Button>}
                       {/*
-                        Was "Signing & delivery", which promised a screen that
-                        does not exist — it is the same destination as "Open
-                        full record" at the bottom of the dialog, and "delivery"
-                        there meant delivery FEES, which that page only itemises.
-                        One destination, one name.
+                        "Open full record" stood here and in the footer. Both are
+                        gone: that page is now a redirect back to this editor, so
+                        the link was a round trip to where you already were.
                       */}
-                      {savedQuote && <Button asChild variant="ghost"><Link href={`/quotes/${savedQuote.id}`}>Open full record <ExternalLink /></Link></Button>}
                     </div>
 
                   </section>
@@ -1326,7 +1323,6 @@ export function QuoteEditorDialog({
           <footer className="flex shrink-0 flex-col-reverse gap-3 border-t border-white/[0.08] bg-[#101411] px-4 py-3 pb-[max(.75rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between sm:px-6">
             <div className="flex min-w-0 items-center gap-3 text-xs text-muted-foreground">
               {record?.createdAt && <span className="truncate">Created {record.createdAt}</span>}
-              {savedQuote && <Link href={`/quotes/${savedQuote.id}`} className="inline-flex shrink-0 items-center gap-1 text-primary hover:underline">Open full record <ExternalLink className="size-3" /></Link>}
               {/*
                 The same ConfirmDelete and the same deleteQuote action as the
                 record page and the list, so the reason field is required here
@@ -1426,9 +1422,25 @@ export function QuoteEditorProvider({
     const quoteId = selection?.quoteId;
     if (!quoteId || listed) return;
     let live = true;
-    quoteEditorRecord(quoteId).then((loaded) => {
-      if (live && loaded) setFetched(loaded);
-    });
+    quoteEditorRecord(quoteId)
+      .then((loaded) => {
+        if (!live) return;
+        if (loaded) {
+          setFetched(loaded);
+          return;
+        }
+        // Trashed, or not this caller's to read. Now that /quotes/<id> redirects
+        // here, this is where a stale bookmark and an already-delivered push
+        // notification land — and `awaitingRecord` would otherwise leave them on
+        // a page that never opens anything, with nothing said.
+        toast.error("That quote is no longer available.");
+        setSelection(null);
+      })
+      .catch(() => {
+        if (!live) return;
+        toast.error("That quote could not be opened.");
+        setSelection(null);
+      });
     return () => {
       live = false;
     };

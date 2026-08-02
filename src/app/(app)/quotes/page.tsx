@@ -111,7 +111,15 @@ export default async function QuotesPage({
       products={productOptions}
       defaults={defaults}
       records={records}
-      initialQuoteId={records.some((record) => record.id === edit) ? edit : undefined}
+      // Passed straight through, NOT filtered against `records`. That check made
+      // sense while a missing record was indistinguishable from "new quote", and
+      // became the hole this whole redirect was meant to close: `records` holds
+      // the newest 200 current heads, so an older quote, a superseded revision,
+      // and every bookmark or already-delivered notification pointing at one
+      // landed silently on the list. The provider fetches whatever it is given
+      // through quoteEditorRecord(), which enforces its own access and reports a
+      // quote that isn't there.
+      initialQuoteId={edit}
     >
       <div className="space-y-5">
         <PageHeader title="Quotes" description={`${quotes.length} current quotes · Create, price and send every customer proposal.`}>
