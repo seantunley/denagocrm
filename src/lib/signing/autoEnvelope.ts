@@ -4,7 +4,7 @@ import { payableTotalCents } from "@/lib/pricing";
 import { contactName } from "@/lib/format";
 import { listTenantStaff } from "@/lib/tenantActor";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
-import { type DocumentModel, type Recipient } from "@/lib/doceditor/model";
+import { type DocumentModel, type DocumentPage, type Recipient } from "@/lib/doceditor/model";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import {
   standardQuoteTemplate,
@@ -26,6 +26,7 @@ import {
   hasSendReadyRecipients,
   recipientIdsWithFields,
   remapTemplateSigningRecipients,
+  resolvePartyRecipients,
 } from "@/lib/signing/templateRecipients";
 
 /**
@@ -180,6 +181,43 @@ function headingFloat(x: number, y: number, text: string) {
   return { id: uid(), x, y, width: 250, block };
 }
 
+/**
+ * A final page that exists only to hold signature fields we placed ourselves.
+ *
+ * Those fields used to go on the last CONTENT page at fixed coordinates
+ * (70/430, 985) — a guess about where a document ends. A template whose content
+ * reaches that far had the signature box land straight on top of it, which is
+ * how "For Denago Cape Town" ended up printed across the middle of the terms.
+ * Nothing here can measure the flowed layout (the renderer emits HTML; it never
+ * reports where the content stopped), so the reliable fix is not a better guess
+ * but a page with nothing else on it.
+ *
+ * Created lazily, so a template that places its own signature fields keeps its
+ * own layout and never gains an extra page.
+ */
+const SIGNATURE_PAGE_ID = "auto-signature-page";
+/** Top of the signature area on that page — below its heading, not at the foot
+ *  of an A4 sheet, because there is no content underneath to sit clear of. */
+const SIGNATURE_TOP = 170;
+const SIGNATURE_ROW = 150;
+
+function signaturePage(doc: DocumentModel): DocumentPage {
+  const last = doc.pages[doc.pages.length - 1];
+  if (last?.id === SIGNATURE_PAGE_ID) return last;
+  const heading = newBlock("text");
+  if (heading.type === "text") {
+    heading.value = [{ type: "p", children: [{ text: "Signatures", bold: true }] }];
+  }
+  const page: DocumentPage = {
+    id: SIGNATURE_PAGE_ID,
+    rows: [newRow([newColumn(100, [heading])])],
+    overlayFields: [],
+    floatingBlocks: [],
+  };
+  doc.pages.push(page);
+  return page;
+}
+
 function addRequiredSigningFields(
   doc: DocumentModel,
   recipient: Recipient,
@@ -190,50 +228,51 @@ function addRequiredSigningFields(
     requireDate?: boolean;
   },
 ): void {
-  const fields = doc.pages.flatMap((page) => page.overlayFields);
-  const recipientFields = fields.filter(
-    (field) => field.recipientId === recipient.id,
+  const placed = doc.pages.flatMap((page, index) =>
+    page.overlayFields
+      .filter((field) => field.recipientId === recipient.id)
+      .map((field) => ({ field, index })),
   );
-  const hasSignature = recipientFields.some((field) =>
+  const signature = placed.find(({ field }) =>
     ["signature", "initials", "stamp"].includes(field.kind),
   );
-  const hasDate = recipientFields.some((field) => field.kind === "date");
-  const last = doc.pages[doc.pages.length - 1];
+  const hasDate = placed.some(({ field }) => field.kind === "date");
 
-  if (!hasSignature) {
-    last.overlayFields.push(
+  // Anchor everything to the signature: the template's own placement when it
+  // has one, otherwise our clean page. A date box stranded on a different page
+  // from the signature it dates is its own kind of confusing.
+  let page: DocumentPage;
+  let x: number;
+  let y: number;
+  if (signature) {
+    page = doc.pages[signature.index];
+    x = signature.field.anchor.x;
+    y = signature.field.anchor.y;
+  } else {
+    page = signaturePage(doc);
+    x = options.x;
+    y = options.y;
+    page.overlayFields.push(
       newOverlayField("signature", {
         id: uid(),
         recipientId: recipient.id,
         required: true,
         label: options.label,
-        anchor: {
-          mode: "page",
-          blockId: null,
-          x: options.x,
-          y: options.y,
-        },
+        anchor: { mode: "page", blockId: null, x, y },
         width: 250,
         height: 60,
       }),
     );
-    last.floatingBlocks.push(
-      headingFloat(options.x, options.y - 33, options.label),
-    );
+    page.floatingBlocks.push(headingFloat(x, y - 33, options.label));
   }
   if (options.requireDate && !hasDate) {
-    last.overlayFields.push(
+    page.overlayFields.push(
       newOverlayField("date", {
         id: uid(),
         recipientId: recipient.id,
         required: true,
         label: "Date",
-        anchor: {
-          mode: "page",
-          blockId: null,
-          x: options.x,
-          y: options.y + 73,
-        },
+        anchor: { mode: "page", blockId: null, x, y: y + 73 },
         width: 160,
         height: 38,
       }),
@@ -260,7 +299,7 @@ function ensureSignable(
     ];
     addRequiredSigningFields(doc, customerRecipient, {
       x: 430,
-      y: 980,
+      y: SIGNATURE_TOP,
       label: customerRecipient.name,
       requireDate: true,
     });
@@ -272,7 +311,7 @@ function ensureSignable(
     if (!idsWithFields.has(recipient.id)) {
       addRequiredSigningFields(doc, recipient, {
         x: index % 2 === 0 ? 70 : 430,
-        y: 900 + Math.floor(index / 2) * 150,
+        y: SIGNATURE_TOP + Math.floor(index / 2) * SIGNATURE_ROW,
         label: recipient.name || "Signer",
         requireDate: true,
       });
@@ -302,12 +341,12 @@ function makeCosignable(
   remapTemplateSigningRecipients(doc, [dealerRecipient, customerRecipient]);
   addRequiredSigningFields(doc, dealerRecipient, {
     x: 70,
-    y: 985,
+    y: SIGNATURE_TOP,
     label: `For ${dealerRecipient.name}`,
   });
   addRequiredSigningFields(doc, customerRecipient, {
     x: 430,
-    y: 985,
+    y: SIGNATURE_TOP,
     label: customerRecipient.name,
     requireDate: true,
   });
@@ -385,7 +424,7 @@ function makeWorkflowSignable(
     const row = Math.floor(index / 2);
     addRequiredSigningFields(doc, recipients[index], {
       x: column === 0 ? 70 : 430,
-      y: 900 + row * 150,
+      y: SIGNATURE_TOP + row * SIGNATURE_ROW,
       label: signer.label || signer.name,
       requireDate: false,
     });
@@ -468,7 +507,35 @@ export async function resolveEnvelope(opts: {
   }
 
   if (!signers) {
-    if (!templateHasReadyRecipients && quoteId && opts.signer) {
+    // A template that names its parties has already answered every question
+    // this branch used to guess at: who signs, in what order, and where their
+    // signature goes. Resolve the people and use it as drawn.
+    const parties = opts.signer
+      ? resolvePartyRecipients(doc, {
+          denago: { name: opts.signer.name, email: opts.signer.email },
+          customer: { name: customer.customerName, email: customer.customerEmail },
+        })
+      : { denago: false, customer: false };
+
+    if (parties.denago) {
+      // Recipient order IS signing order (createSignatureRequestFromDoc assigns
+      // `order` by index), and a countersignature that arrives after the
+      // customer has signed is not a countersignature. Denago goes first
+      // regardless of the order the blocks were added in the editor.
+      doc.recipients = [
+        ...doc.recipients.filter((recipient) => recipient.party === "denago"),
+        ...doc.recipients.filter((recipient) => recipient.party !== "denago"),
+      ];
+      doc = ensureSignable(doc, {
+        name: customer.customerName,
+        email: customer.customerEmail,
+        phone: customer.customerPhone,
+      });
+      // Denago's block exists, so Denago countersigns first and the customer is
+      // only contacted afterwards — the same two steps as the built-in flow.
+      ordering = "sequential";
+      cosign = true;
+    } else if (!templateHasReadyRecipients && quoteId && opts.signer) {
       ({ doc } = makeCosignable(
         doc,
         { name: opts.signer.name, email: opts.signer.email },

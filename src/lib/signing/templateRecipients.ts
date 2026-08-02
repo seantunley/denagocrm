@@ -9,14 +9,60 @@ export function looksLikeEmail(value: string | null | undefined): boolean {
   return Boolean(value?.trim() && /^\S+@\S+\.\S+$/.test(value.trim()));
 }
 
+/** How a party recipient reads in the editor, where it has no name yet. */
+export function recipientLabel(recipient: Recipient): string {
+  if (recipient.party === "denago") return "Denago (whoever sends it)";
+  if (recipient.party === "customer") return "The customer";
+  return recipient.name || recipient.email || "Recipient";
+}
+
 export function hasSendReadyRecipients(doc: DocumentModel): boolean {
   const recipients = doc.recipients.filter(
     (recipient) => recipient.role !== "viewer",
   );
   return (
     recipients.length > 0 &&
-    recipients.every((recipient) => looksLikeEmail(recipient.email))
+    // A party recipient has no email in the template BY DESIGN — it is filled
+    // in from the record at send time, so requiring one here would send every
+    // party-based template down the invent-new-recipients path it exists to
+    // replace.
+    recipients.every(
+      (recipient) => recipient.party !== "custom" || looksLikeEmail(recipient.email),
+    )
   );
+}
+
+export type PartyPeople = {
+  denago: { name: string; email: string | null };
+  customer: { name: string; email: string | null };
+};
+
+/**
+ * Fill in the real people behind a template's party recipients.
+ *
+ * Only ever writes name/email — the recipient's identity, colour, role and the
+ * fields assigned to it are the template author's decisions and stay exactly as
+ * placed. That is the whole point: the signature block ends up where it was
+ * drawn, for the party it was drawn for.
+ */
+export function resolvePartyRecipients(
+  doc: DocumentModel,
+  people: PartyPeople,
+): { denago: boolean; customer: boolean } {
+  const found = { denago: false, customer: false };
+  doc.recipients = doc.recipients.map((recipient) => {
+    if (recipient.party !== "denago" && recipient.party !== "customer") return recipient;
+    const person = people[recipient.party];
+    found[recipient.party] = true;
+    return {
+      ...recipient,
+      // The template may still carry a label the author typed ("Sales manager");
+      // keep it when the resolved person has no name to offer.
+      name: person.name || recipient.name,
+      email: person.email ?? "",
+    };
+  });
+  return found;
 }
 
 function recipientHint(recipient: Recipient): "dealer" | "customer" | null {
@@ -51,7 +97,14 @@ export function remapTemplateSigningRecipients(
   oldSigning.forEach((recipient, index) => {
     let replacementIndex = Math.min(index, replacements.length - 1);
     if (replacements.length === 2) {
-      const hint = recipientHint(recipient);
+      // A declared party is the author saying it outright; the name pattern is
+      // the guess we fall back to for templates written before parties existed.
+      const hint =
+        recipient.party === "denago"
+          ? "dealer"
+          : recipient.party === "customer"
+            ? "customer"
+            : recipientHint(recipient);
       if (hint === "dealer") replacementIndex = 0;
       else if (hint === "customer") replacementIndex = 1;
       else if (oldSigning.length === 1) replacementIndex = 1;

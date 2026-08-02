@@ -115,7 +115,6 @@ test("every surface that renders a quote loads its fees", () => {
   // Loading `items` without `fees` is the other half of the same bug: the total
   // silently drops the delivery charge because the data was never fetched.
   const surfaces = [
-    "src/app/(print)/quotes/[id]/print/page.tsx",
     "src/app/(print)/quotes/[id]/invoice/page.tsx",
     "src/app/(print)/quotes/[id]/agreement/page.tsx",
     "src/app/(print)/quotes/[id]/delivery-note/page.tsx",
@@ -135,6 +134,14 @@ test("every surface that renders a quote loads its fees", () => {
   for (const rel of surfaces) {
     assert.match(src(rel), /fees:/, `${rel} renders a quote total but never loads its fees`);
   }
+
+  // The printable quote no longer loads the quote itself — it renders the same
+  // builder document the customer signs, and bindCtx() (in signing/render.ts,
+  // asserted above) is what fetches the fees. Assert the delegation instead, so
+  // a future edit that goes back to loading its own quote is still caught here.
+  const print = src("src/lib/quotePrintDocument.ts");
+  assert.match(print, /bindCtx\(opts\.quoteId, null\)/, "the printed quote must bind through the shared context");
+  assert.doesNotMatch(print, /quote\.findUnique/, "loading the quote here would reintroduce a second fee-less path");
 });
 
 test("no quote total is summed by hand", () => {

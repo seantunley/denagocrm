@@ -177,8 +177,21 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
         : `<tr><td colspan="${cols.length}" style="padding:7px 9px;color:#94a3b8">Line items appear here when linked to a record</td></tr>`;
       return `<table style="width:100%;border-collapse:collapse;margin:6px 0"><thead>${head}</thead><tbody>${body}</tbody></table>`;
     }
-    case "totalBand":
-      return `<div style="display:flex;justify-content:flex-end;margin:6px 0"><div style="background:${cssColor(block.color, "#ea580c")};color:#fff;border-radius:6px;padding:10px 20px;display:flex;gap:16px;align-items:center"><span style="font-size:9pt;font-weight:700;letter-spacing:1px">${esc(block.label)}</span><span style="font-size:16pt;font-weight:800">${esc(tok(block.amount, ctx))}</span></div></div>`;
+    case "totalBand": {
+      // The amount must never wrap. It is the one number on the page a reader
+      // looks for, and a six-figure total breaking across two lines inside a
+      // coloured band is the ugliest way a document can fail. nowrap makes the
+      // band grow instead; the type scale is there for when growing is not
+      // enough and the band has to share the row.
+      const scale = block.settings?.fontScale ?? 1;
+      const place =
+        block.settings?.horizontalAlignment === "left"
+          ? "flex-start"
+          : block.settings?.horizontalAlignment === "centre"
+            ? "center"
+            : "flex-end";
+      return `<div style="display:flex;justify-content:${place};margin:6px 0"><div style="background:${cssColor(block.color, "#ea580c")};color:#fff;border-radius:6px;padding:10px 20px;display:flex;gap:16px;align-items:center;max-width:100%"><span style="font-size:${(9 * scale).toFixed(2)}pt;font-weight:700;letter-spacing:1px;white-space:nowrap">${esc(block.label)}</span><span style="font-size:${(16 * scale).toFixed(2)}pt;font-weight:800;white-space:nowrap">${esc(tok(block.amount, ctx))}</span></div></div>`;
+    }
     case "terms":
       return `<div style="background:#f8fafc;border-radius:6px;padding:12px 14px;margin:4px 0">${block.title ? `<div style="font-size:8pt;font-weight:700;letter-spacing:1px;color:#64748b;margin-bottom:6px">${esc(block.title)}</div>` : ""}${block.items.map((it) => `<div style="font-size:9pt;color:#64748b;margin-bottom:3px">• ${esc(it.text)}</div>`).join("")}</div>`;
     case "footer": {
@@ -207,13 +220,29 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
   }
 }
 
-/** Per-block width + horizontal alignment within its column (PandaDoc-style narrow blocks). */
+/**
+ * Per-block box + type: width and placement within its column (PandaDoc-style
+ * narrow blocks), plus the typography settings that apply to every block.
+ *
+ * `font-size` is emitted in em so it MULTIPLIES whatever the block sets for
+ * itself — the blocks below express their sizes in points, and a scale is the
+ * only way to change them without editing each one.
+ */
 function blockBoxStyle(b: DocumentBlock): string {
   const w = b.settings?.width;
-  if (!w || w >= 100) return "";
   const align = b.settings?.horizontalAlignment;
-  const margin = align === "right" ? "0 0 0 auto" : align === "centre" ? "0 auto" : "0 auto 0 0";
-  return `width:${w}%;margin:${margin};`;
+  const scale = b.settings?.fontScale;
+  const textAlign = b.settings?.textAlign;
+  let style = "";
+  if (w && w < 100) {
+    const margin = align === "right" ? "0 0 0 auto" : align === "centre" ? "0 auto" : "0 auto 0 0";
+    style += `width:${w}%;margin:${margin};`;
+  }
+  // totalBand sets its own point sizes from the scale (its type is fixed in pt,
+  // so an inherited em would not reach it) — applying it here too would square it.
+  if (scale && scale !== 1 && b.type !== "totalBand") style += `font-size:${scale}em;`;
+  if (textAlign) style += `text-align:${textAlign === "centre" ? "center" : textAlign};`;
+  return style;
 }
 
 function columnHtml(col: DocumentColumn, ctx: RenderCtx, style: DocStyle, logoDataUri?: string): string {
@@ -333,7 +362,23 @@ export function renderSigningSheets(doc: DocumentModel, ctx: RenderCtx, logoData
   return { width: size.w, height: size.h, margin: m, css, pages };
 }
 
-export function renderDocumentHtml(doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string, opts?: { hideOverlays?: boolean; appendHtml?: string; stampedFields?: StampField[] }): string {
+export function renderDocumentHtml(
+  doc: DocumentModel,
+  ctx: RenderCtx,
+  logoDataUri?: string,
+  opts?: {
+    hideOverlays?: boolean;
+    appendHtml?: string;
+    stampedFields?: StampField[];
+    /**
+     * Screen-only chrome placed before the document — the Print / Back bar the
+     * browser print page needs. Kept out of `appendHtml` because that lands
+     * INSIDE the flow after the last page; this sits above it and is hidden by
+     * `@media print`, so what prints is exactly what the PDF pipeline renders.
+     */
+    toolbarHtml?: string;
+  },
+): string {
   const font = fontStack(doc.style.fontFamily);
   const m = doc.style.margin;
   const header = doc.header.length ? doc.header.map((b) => blockHtml(b, ctx, doc.style, logoDataUri)).join("") : "";
@@ -356,7 +401,9 @@ export function renderDocumentHtml(doc: DocumentModel, ctx: RenderCtx, logoDataU
     ul, ol { margin: 0 0 8px 20px; }
     ${header ? `.doc-header { position: fixed; top: -${m - 8}px; left: 0; right: 0; }` : ""}
     ${footer ? `.doc-footer { position: fixed; bottom: -${m - 8}px; left: 0; right: 0; }` : ""}
+    ${opts?.toolbarHtml ? "@media print { .doc-toolbar { display: none !important; } }" : ""}
   </style></head><body>
+    ${opts?.toolbarHtml ?? ""}
     ${header ? `<div class="doc-header">${header}</div>` : ""}
     ${footer ? `<div class="doc-footer">${footer}</div>` : ""}
     ${body}

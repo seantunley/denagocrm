@@ -50,6 +50,34 @@ function walkToActionable(graph: WorkflowGraph, fromId: string | undefined, vars
   return { kind: "dead" };
 }
 
+/**
+ * The DECISION-approval gate the graph is currently parked on, if any.
+ *
+ * A decision approval has no SignatureRecipient row — only an ApprovalStep — so
+ * nextSigner() rightly answers "nobody is up" for it, and the record card would
+ * read that as fully signed and offer no button. Since materialise() now honours
+ * `notify: false` for approvals too, a request can sit on an approval gate that
+ * has not been raised yet; this is what the send path asks so it can raise it
+ * rather than strand the workflow.
+ *
+ * `raised` is whether the ApprovalStep already exists (the approver has been
+ * emailed); a decided step reports null because the graph moves on its own.
+ */
+export async function pendingApprovalNode(
+  requestId: string,
+): Promise<{ nodeId: string; label: string; raised: boolean } | null> {
+  const req = await prisma.signatureRequest.findUnique({
+    where: { id: requestId },
+    select: { status: true, currentNodeId: true, workflowGraphJson: true },
+  });
+  if (!req?.workflowGraphJson || !req.currentNodeId || isRequestClosed(req.status)) return null;
+  const node = parseFrozen(req.workflowGraphJson)?.graph.nodes[req.currentNodeId];
+  if (!node || node.type !== "approval" || node.mode === "signature") return null;
+  const step = await prisma.approvalStep.findFirst({ where: { requestId, nodeId: node.id } });
+  if (step && step.status !== "pending") return null;
+  return { nodeId: node.id, label: node.label || "Approval", raised: Boolean(step) };
+}
+
 /** Signer + signature-mode approval nodes need a recipient + doc block; decision approvals don't. */
 export function docSignerNodes(graph: WorkflowGraph): SignNode[] {
   return Object.values(graph.nodes).filter(
@@ -57,15 +85,36 @@ export function docSignerNodes(graph: WorkflowGraph): SignNode[] {
   );
 }
 
-/** Materialise + notify the actionable node the interpreter has arrived at. */
-async function materialise(requestId: string, node: SignNode): Promise<void> {
+/**
+ * Materialise + notify the actionable node the interpreter has arrived at.
+ *
+ * `notify: false` advances the graph WITHOUT contacting anyone. The record's
+ * signature card now shows the countersigned document before it goes out, and
+ * the interpreter's own notification pre-empted that — the customer received
+ * their signing link while the sender was still looking at the review screen.
+ * The explicit send notifies whoever the graph has arrived at.
+ */
+async function materialise(requestId: string, node: SignNode, notify: boolean): Promise<void> {
   if (node.type === "signer" || (node.type === "approval" && node.mode === "signature")) {
     // Pre-created recipient — activate + notify it.
+    if (!notify) return;
     const recipient = await prisma.signatureRecipient.findFirst({ where: { requestId, nodeId: node.id } });
     if (recipient) await notifyRecipient(recipient.id);
     return;
   }
   if (node.type === "approval") {
+    // A DECISION approval contacts a human exactly as a signer node does — it
+    // emails the approver a token that opens the document. `notify: false` means
+    // "advance the graph without contacting anyone", so it must stop here too;
+    // it used to only gate the signer branch, so a workflow with an approval gate
+    // mailed the approver from the start/countersign path while the sender was
+    // still on the review screen. Returning BEFORE createMany (rather than after)
+    // keeps the createMany + skipDuplicates contract intact: exactly one row is
+    // ever inserted, and the caller that inserts it is the one that notifies.
+    // Nothing is stranded — the node stays un-materialised, and the explicit send
+    // (sendRecordSigning) re-enters here with notify:true, which materialises and
+    // notifies it once.
+    if (!notify) return;
     // Re-check the parent request is still open — a void/decline could have closed
     // it between the transition claim and here, and we must not create + notify an
     // approval step for a dead request.
@@ -103,7 +152,11 @@ async function materialise(requestId: string, node: SignNode): Promise<void> {
  * and materialise the next actionable step (or complete / reject the request).
  * Called on send (currentNodeId null → start) and after every step resolves.
  */
-export async function advanceWorkflow(requestId: string): Promise<void> {
+export async function advanceWorkflow(
+  requestId: string,
+  opts?: { notify?: boolean },
+): Promise<void> {
+  const notify = opts?.notify ?? true;
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId } });
   if (!req || !req.workflowGraphJson) return;
   if (isRequestClosed(req.status)) return;
@@ -126,19 +179,19 @@ export async function advanceWorkflow(requestId: string): Promise<void> {
     if (cur.type === "signer") {
       const r = await prisma.signatureRecipient.findFirst({ where: { requestId, nodeId: cur.id } });
       if (r?.status === "declined") { await rejectRequest(requestId); return; } // a declined signer rejects the request
-      if (r?.status !== "signed") { await materialise(requestId, cur); return; } // not resolved yet — heal
+      if (r?.status !== "signed") { await materialise(requestId, cur, notify); return; } // not resolved yet — heal
       fromEdge = cur.next;
     } else if (cur.type === "approval") {
       if (cur.mode === "signature") {
         const r = await prisma.signatureRecipient.findFirst({ where: { requestId, nodeId: cur.id } });
         if (r?.status === "declined") { fromEdge = cur.whenRejected; }
         else if (r?.status === "signed") { fromEdge = cur.whenApproved; }
-        else { await materialise(requestId, cur); return; } // pending — heal
+        else { await materialise(requestId, cur, notify); return; } // pending — heal
       } else {
         const s = await prisma.approvalStep.findFirst({ where: { requestId, nodeId: cur.id }, orderBy: { createdAt: "desc" } });
         if (s?.status === "rejected") fromEdge = cur.whenRejected;
         else if (s?.status === "approved") fromEdge = cur.whenApproved;
-        else { await materialise(requestId, cur); return; } // pending or never materialised — heal
+        else { await materialise(requestId, cur, notify); return; } // pending or never materialised — heal
       }
     } else {
       return;
@@ -172,7 +225,7 @@ export async function advanceWorkflow(requestId: string): Promise<void> {
     data: { currentNodeId: next.node.id, status: "in_progress" },
   });
   if (claimed.count !== 1) return;
-  await materialise(requestId, next.node);
+  await materialise(requestId, next.node, notify);
 }
 
 /**
@@ -188,8 +241,11 @@ export async function advanceWorkflow(requestId: string): Promise<void> {
  * at-most-once claim for signers; conditional currentNodeId claim for advances).
  * A no-op on a non-workflow or closed request.
  */
-export async function repairWorkflow(requestId: string): Promise<void> {
-  await advanceWorkflow(requestId);
+export async function repairWorkflow(
+  requestId: string,
+  opts?: { notify?: boolean },
+): Promise<void> {
+  await advanceWorkflow(requestId, opts);
 }
 
 async function rejectRequest(requestId: string): Promise<void> {

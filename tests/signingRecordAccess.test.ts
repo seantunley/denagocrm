@@ -160,17 +160,21 @@ test("redirecting where a signing link is delivered leaves an audit trail", () =
 });
 
 test("the doc builder checks access to the record it renders", () => {
-  // `docbuilder.manage` let a holder render ANY quote's or job card's pricing and
-  // customer details into a PDF, file it, and (via sendDocForSigning) mail it.
+  // `docbuilder.manage` let a holder render ANY quote's or job card's pricing
+  // and customer details into a PDF and file it. The mailing half of that —
+  // sendDocForSigning — has since been removed with the editor's "Prepare for
+  // signing" button, so one call site remains: generate-and-file.
   const source = shipped("src/app/actions/doceditor.ts");
   const start = source.indexOf("async function validatedBinding(");
   const body = source.slice(start, source.indexOf("export async function", start));
   assert.match(body, /canAccessQuote\(user, record\.id\)/);
   assert.match(body, /canAccessJobCard\(user, record\.id\)/);
   assert.match(body, /throw new ActionRefusal/);
-  // and both call sites must pass a real authenticated user through
-  assert.match(source, /validatedBinding\(user, templateId, record\)/);
-  assert.equal((source.match(/validatedBinding\(user, templateId, record\)/g) ?? []).length, 2);
+  // EVERY call site must pass a real authenticated user through — the count is
+  // asserted so a new one added without the user is caught, not just tolerated.
+  const calls = source.match(/validatedBinding\(user, templateId, record\)/g) ?? [];
+  assert.equal(calls.length, 1);
+  assert.equal((source.match(/validatedBinding\(/g) ?? []).length, calls.length + 1, "…including the declaration");
 });
 
 test("the paths that were already correct stay correct", () => {

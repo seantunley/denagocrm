@@ -10,6 +10,8 @@ import {
   generateDocEditorExport,
   type ExportFormat,
 } from "@/lib/doceditor/generate";
+import { readTemplateDocument } from "@/lib/doceditor/legacy";
+import { buildPortableDocument } from "@/lib/doceditor/portable";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,6 +50,33 @@ export async function GET(
   }
 
   const requested = url.searchParams.get("format");
+
+  // The portable format is the template itself, not a render of it — so it
+  // deliberately ignores the record binding above and never goes through the
+  // HTML pipeline. It is the only export another tenant can import.
+  if (requested === "json") {
+    const read = readTemplateDocument(template.data, template.name);
+    if (read.status !== "ok") {
+      return new Response(
+        "This document was built in the previous builder, so there is no model to export. Recreate it here first.",
+        { status: 409 },
+      );
+    }
+    const payload = buildPortableDocument({
+      name: template.name,
+      key: template.key,
+      document: read.doc,
+      exportedAt: new Date().toISOString(),
+    });
+    const name = `${template.name.replace(/[^a-z0-9]+/gi, "-")}.denagodoc.json`;
+    return new Response(JSON.stringify(payload, null, 2), {
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Disposition": `attachment; filename="${name}"`,
+      },
+    });
+  }
+
   const format: ExportFormat = FORMATS.includes(requested as ExportFormat)
     ? (requested as ExportFormat)
     : "html";

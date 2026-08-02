@@ -2,27 +2,26 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEditor } from "@/lib/doceditor/store";
 import type { DocumentModel } from "@/lib/doceditor/model";
-import { parseBuilderRecord } from "@/lib/docbuilder/recordBinding";
-import { saveDocEditor, sendDocForSigning } from "@/app/actions/doceditor";
+import { saveDocEditor, importDocEditorTemplate } from "@/app/actions/doceditor";
 import { DndController } from "./DndController";
 import { Palette } from "./Palette";
 import { Canvas } from "./Canvas";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { VersionHistory } from "./VersionHistory";
-import { SignSendWizard } from "./SignSendWizard";
 import { toast } from "sonner";
 import {
   Eye,
   FileDown,
-  FileSignature,
   PanelLeft,
   PanelRight,
   Plus,
   Redo2,
   Save,
   Undo2,
+  Upload,
   X,
 } from "lucide-react";
 import {
@@ -57,12 +56,49 @@ export function DocEditor({
     "idle" | "saving" | "saved"
   >("idle");
   const [record, setRecord] = useState("");
+  // Two states, because the panels are two different things at two sizes: a
+  // bottom drawer on mobile (closed by default) and a docked column on desktop
+  // (open by default). One boolean drove only the drawer, while the column was
+  // pinned visible by `md:block` — so on a desktop the toolbar toggles below
+  // flipped a value nothing was reading.
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [signWizardOpen, setSignWizardOpen] = useState(false);
-  const [signing, setSigning] = useState(false);
+  const [paletteDocked, setPaletteDocked] = useState(true);
+  const [inspectorDocked, setInspectorDocked] = useState(true);
+  const isDesktop = () => typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches;
+  const togglePalette = () => (isDesktop() ? setPaletteDocked((v) => !v) : setPaletteOpen((v) => !v));
+  const toggleInspector = () => (isDesktop() ? setInspectorDocked((v) => !v) : setInspectorOpen((v) => !v));
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveChain = useRef<Promise<void>>(Promise.resolve());
+  const importRef = useRef<HTMLInputElement>(null);
+  const router = useRouter();
+
+  async function onImportFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    // Reset immediately so picking the SAME file twice still fires a change.
+    event.target.value = "";
+    if (!file) return;
+    let payload: unknown;
+    try {
+      payload = JSON.parse(await file.text());
+    } catch {
+      toast.error("That file isn't valid JSON.");
+      return;
+    }
+    const result = await importDocEditorTemplate(payload);
+    if (!result.ok || !result.id) {
+      toast.error(result.error ?? "Could not import that document.");
+      return;
+    }
+    if (result.externalImages) {
+      toast.warning(
+        `Imported “${result.name}”. ${result.externalImages} linked image(s) point at the original tenant's storage and will need re-uploading.`,
+      );
+    } else {
+      toast.success(`Imported “${result.name}”.`);
+    }
+    router.push(`/doc-editor/${result.id}`);
+  }
 
   useEffect(() => {
     load(initialDoc);
@@ -159,36 +195,6 @@ export function DocEditor({
   const buttonClass =
     "inline-flex h-8 items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.035] px-2.5 text-xs text-slate-300 transition hover:bg-white/[0.08] hover:text-white";
 
-  const confirmSend = async (dispatch: boolean) => {
-    const current = useEditor.getState().doc;
-    if (!current) return;
-    setSigning(true);
-    try {
-      await saveDocEditor(id, current);
-      markSaved();
-      const parsed = parseBuilderRecord(record);
-      const result = await sendDocForSigning(
-        id,
-        parsed?.kind === "quote" ? parsed.id : null,
-        parsed?.kind === "jobcard" ? parsed.id : null,
-        { dispatch },
-      );
-      if (result.ok) {
-        toast.success(result.message);
-        setSignWizardOpen(false);
-      } else {
-        toast.error(`Couldn’t prepare for signing: ${result.message}`);
-      }
-    } catch {
-      // A thrown/timed-out server action must not leave an unhandled rejection.
-      // The action reuses an existing open request for this document on retry, so
-      // trying again won't mint a duplicate — surface a retry prompt instead.
-      toast.error("Preparing for signing failed — please try again. If you’d already started, check the Signatures hub before retrying.");
-    } finally {
-      setSigning(false);
-    }
-  };
-
   return (
     <BuilderWorkspaceShell className="h-screen min-h-0 rounded-none border-0">
       <BuilderWorkspaceBar
@@ -225,8 +231,9 @@ export function DocEditor({
         <button
           type="button"
           className={buttonClass}
-          onClick={() => setPaletteOpen((value) => !value)}
-          title="Content palette"
+          onClick={togglePalette}
+          title="Show or hide the content palette"
+          aria-pressed={paletteDocked}
         >
           <PanelLeft className="size-4" />
           <span className="hidden sm:inline">Content</span>
@@ -234,8 +241,9 @@ export function DocEditor({
         <button
           type="button"
           className={buttonClass}
-          onClick={() => setInspectorOpen((value) => !value)}
-          title="Properties inspector"
+          onClick={toggleInspector}
+          title="Show or hide the properties inspector"
+          aria-pressed={inspectorDocked}
         >
           <PanelRight className="size-4" />
           <span className="hidden sm:inline">Inspector</span>
@@ -283,21 +291,42 @@ export function DocEditor({
           <Eye className="size-4" />
           Preview
         </a>
+        {/* "Prepare for signing" stood here. It sent this template to whatever
+            record was chosen in the PREVIEW dropdown beside it — a third way to
+            create a signing envelope for a quote, from a design tool, next to a
+            control that says preview. Sending is the quote's Send tab. */}
         <button
           type="button"
           className={buttonClass}
-          onClick={() => setSignWizardOpen(true)}
-          title="Review recipients, then send now or save a draft"
+          onClick={() => importRef.current?.click()}
+          title="Open a portable JSON export as a new document"
         >
-          <FileSignature className="size-4" />
-          Prepare for signing
+          <Upload className="size-4" />
+          <span className="hidden sm:inline">Import</span>
         </button>
+        <input
+          ref={importRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={onImportFile}
+        />
         <details className="relative">
           <summary className={`${buttonClass} cursor-pointer list-none`}>
             <FileDown className="size-4" />
             Export
           </summary>
           <div className="absolute right-0 z-30 mt-1 w-44 rounded-md border border-slate-200 bg-white p-1 text-sm shadow-lg">
+            {/* The only export that can come back in — the others flatten the
+                document to how it looks and lose the model. */}
+            <a
+              className="block rounded px-2 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
+              href={`/api/doc-editor/${id}/export?format=json`}
+            >
+              Portable JSON
+              <span className="block text-[10px] font-normal text-slate-400">Re-importable, any tenant</span>
+            </a>
+            <div className="my-1 border-t border-slate-100" />
             {[
               ["html", "Static HTML"],
               ["email", "Email-safe HTML"],
@@ -322,7 +351,7 @@ export function DocEditor({
       <DndController>
         <div className="flex min-h-0 flex-1">
           <aside
-            className={`${paletteOpen ? "fixed inset-x-0 bottom-0 z-[80] max-h-[72dvh] rounded-t-3xl shadow-2xl" : "hidden"} w-60 flex-shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50 md:static md:block md:max-h-none md:rounded-none md:shadow-none`}
+            className={`${paletteOpen ? "fixed inset-x-0 bottom-0 z-[80] max-h-[72dvh] rounded-t-3xl shadow-2xl" : "hidden"} w-60 flex-shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50 md:static md:max-h-none md:rounded-none md:shadow-none ${paletteDocked ? "md:block" : "md:hidden"}`}
           >
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white p-3 md:hidden">
               <span className="text-sm font-semibold">Content palette</span>
@@ -336,7 +365,7 @@ export function DocEditor({
             <Canvas zoom={zoom} />
           </main>
           <aside
-            className={`${inspectorOpen ? "fixed inset-x-0 bottom-0 z-[81] max-h-[78dvh] rounded-t-3xl shadow-2xl" : "hidden"} w-80 flex-shrink-0 overflow-y-auto border-l border-slate-200 bg-white md:static md:block md:max-h-none md:rounded-none md:shadow-none`}
+            className={`${inspectorOpen ? "fixed inset-x-0 bottom-0 z-[81] max-h-[78dvh] rounded-t-3xl shadow-2xl" : "hidden"} w-80 flex-shrink-0 overflow-y-auto border-l border-slate-200 bg-white md:static md:max-h-none md:rounded-none md:shadow-none ${inspectorDocked ? "md:block" : "md:hidden"}`}
           >
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white p-3 md:hidden">
               <span className="text-sm font-semibold">Inspector</span>
@@ -389,14 +418,6 @@ export function DocEditor({
         </span>
       </div>
 
-      <SignSendWizard
-        open={signWizardOpen}
-        onClose={() => !signing && setSignWizardOpen(false)}
-        recipients={(doc?.recipients ?? []).map((r) => ({ id: r.id, name: r.name, email: r.email, role: r.role }))}
-        fields={(doc?.pages ?? []).flatMap((p) => p.overlayFields).map((f) => ({ recipientId: f.recipientId, required: f.required }))}
-        busy={signing}
-        onConfirm={confirmSend}
-      />
     </BuilderWorkspaceShell>
   );
 }

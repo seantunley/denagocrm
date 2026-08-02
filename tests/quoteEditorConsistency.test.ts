@@ -486,6 +486,18 @@ test("no second way to write a quote has come back", () => {
     "deleteQuoteFee",
     "setQuoteDeposit",
     "setQuoteTaxMode",
+    // The second countersignature. It wrote Quote.dealerSigned* directly and
+    // knew nothing about the envelope the customer would be sent, so signing
+    // happened twice — once here, once on the hub's own signing surface.
+    "signAsDealer",
+    // The third way to create a signing envelope for a quote: the document
+    // editor's "Prepare for signing", which sent a template against whatever
+    // record was picked in the PREVIEW dropdown beside it.
+    "sendDocForSigning",
+    // Existed only to make that button idempotent. Every surviving path
+    // serialises on the SOURCE record row instead of a content hash.
+    "createOrReuseSignatureRequestFromDoc",
+    "contentFingerprint",
   ];
   const offenders: string[] = [];
   for (const file of walk(path.join(root, "src"))) {

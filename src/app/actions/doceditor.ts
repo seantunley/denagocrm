@@ -1,27 +1,21 @@
 "use server";
 
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
-import { createHash } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { canAccessJobCard, canAccessQuote, requirePermission, type PermissionUser } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { documentSchema } from "@/lib/doceditor/model";
-import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import { blankDocument, standardQuoteTemplate } from "@/lib/doceditor/factory";
-import { generateDocEditorPdf, resolveDocEditorContent, renderResolvedToPdf } from "@/lib/doceditor/generate";
+import { portableDocumentSchema, externalImageCount } from "@/lib/doceditor/portable";
+import { generateDocEditorPdf } from "@/lib/doceditor/generate";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import {
   parseBuilderRecord,
   recordMatchesTemplate,
   type BuilderRecordKind,
 } from "@/lib/docbuilder/recordBinding";
-import { createOrReuseSignatureRequestFromDoc } from "@/lib/signing/service";
-import { dispatchRequest } from "@/lib/signing/dispatch";
-import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
-import { saveFile, deleteFile } from "@/lib/storage";
-
-type SignPrepResult = { ok: boolean; requestId?: string; message: string; sent?: boolean; notified?: number };
+import { saveFile } from "@/lib/storage";
 
 const BASE = "/settings/documents/builder";
 
@@ -109,6 +103,47 @@ export async function createDocEditorTemplate(formData: FormData) {
   });
 }
 
+/**
+ * Create a document from a portable export — the other half of "Export →
+ * Portable JSON", and the reason that format exists.
+ *
+ * Always creates a NEW document rather than overwriting the one open in the
+ * editor: an import is somebody else's work arriving, not an edit to yours.
+ */
+export async function importDocEditorTemplate(
+  raw: unknown,
+): Promise<{ ok: boolean; error?: string; id?: string; name?: string; externalImages?: number }> {
+  const user = await requirePermission("docbuilder.manage");
+  const parsed = portableDocumentSchema.safeParse(raw);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error:
+        "That file is not a Denago document export. Use Export → Portable JSON on the document you want to copy.",
+    };
+  }
+  const { name, key, document } = parsed.data;
+  const created = await prisma.docBuilderTemplate.create({
+    data: { name, key, data: document as object, createdById: user.id },
+  });
+  await logAudit({
+    action: "doceditor.import",
+    summary: `Imported document “${name}”`,
+    entityType: "DocBuilderTemplate",
+    entityId: created.id,
+    user,
+  });
+  revalidatePath(BASE);
+  return {
+    ok: true,
+    id: created.id,
+    name,
+    // Surfaced, not silently accepted: a linked image belongs to the tenant
+    // that uploaded it and will not load here.
+    externalImages: externalImageCount(document),
+  };
+}
+
 /** Generate and file a builder document bound to at most one compatible record. */
 export async function generateDocEditorDocument(formData: FormData) {
   return asActionResult(async () => {
@@ -158,216 +193,6 @@ export async function generateDocEditorDocument(formData: FormData) {
     revalidatePath(BASE);
     return { redirectTo: `/api/files/${document.id}` };
   });
-}
-
-/**
- * Prepare a compatible builder document for signing. With `options.dispatch`,
- * the request is also SENT to recipients in the same step (the send wizard's
- * "Send now") — reusing the exact dispatch path the Signatures hub uses — instead
- * of only creating a draft the user must go to the hub to send.
- */
-export async function sendDocForSigning(
-  templateId: string,
-  quoteId?: string | null,
-  jobCardId?: string | null,
-  options?: { dispatch?: boolean },
-): Promise<SignPrepResult> {
-  const user = await requirePermission("docbuilder.manage");
-  if (quoteId && jobCardId) {
-    return { ok: false, message: "Choose either a quote or a job card." };
-  }
-  const record = quoteId
-    ? { kind: "quote" as const, id: quoteId }
-    : jobCardId
-      ? { kind: "jobcard" as const, id: jobCardId }
-      : null;
-  let binding;
-  try {
-    binding = await validatedBinding(user, templateId, record);
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Invalid record binding.",
-    };
-  }
-
-  // Neither failure may fall through: this path mails the document to a
-  // customer to sign.
-  const read = readTemplateDocument(binding.template.data, binding.template.name);
-  if (read.status !== "ok") {
-    return {
-      ok: false,
-      message:
-        read.status === "unsupported"
-          ? "This template was built in the previous document builder and can't be sent for signing. Create a new document to replace it."
-          : "This template's saved content isn't in a format we recognise, so it can't be sent for signing. Create a new document to replace it.",
-    };
-  }
-  const documentModel = read.doc;
-  if (documentModel.recipients.length === 0) {
-    return {
-      ok: false,
-      message: "Add at least one recipient and signature field first.",
-    };
-  }
-
-  // Resolve the bound document ONCE — template model + the actual quote/job-card/
-  // contact values it merges in. This is the resolved artefact the fingerprint
-  // below must represent, and (on the new-request path) exactly what we render to
-  // PDF, so a request is never sent against different content than it was
-  // fingerprinted on.
-  const resolved = await resolveDocEditorContent(templateId, binding.quoteId, binding.jobCardId);
-  if (!resolved) return { ok: false, message: "Could not resolve the document." };
-
-  // Idempotency: a request is identified by an immutable fingerprint of the
-  // RESOLVED artefact — template model AND the bound record's resolved values
-  // (ctx). Hashing only templateId + record IDs + the template model would miss
-  // a quote whose prices or customer details changed under the same id, and
-  // wrongly reuse/redispatch the earlier PDF. The DB enforces at most one OPEN
-  // request per fingerprint (see migration
-  // 20260725120000_signing_request_fingerprint); this lookup is a fast-path, not
-  // the source of truth — createOrReuseSignatureRequestFromDoc below is what
-  // actually arbitrates a concurrent create race.
-  const contentFingerprint = createHash("sha256")
-    .update(JSON.stringify({
-      templateId,
-      quoteId: binding.quoteId ?? null,
-      jobCardId: binding.jobCardId ?? null,
-      document: documentModel,
-      resolved: { doc: resolved.doc, ctx: resolved.ctx, title: resolved.title },
-    }))
-    .digest("hex");
-
-  const existing = await prisma.signatureRequest.findFirst({
-    where: {
-      contentFingerprint,
-      deletedAt: null,
-      status: { notIn: [...CLOSED_REQUEST_STATUSES] },
-    },
-    orderBy: { createdAt: "desc" },
-    select: { id: true, title: true, status: true },
-  });
-
-  // Already sent / in-progress for this exact content → a retry after a
-  // successful send. Return it; never re-create or re-dispatch (that would
-  // double-send links).
-  if (existing && existing.status !== "draft") {
-    return {
-      ok: true,
-      requestId: existing.id,
-      sent: true,
-      message: "A signing request for this document is already in progress — open the Signatures hub to manage it.",
-    };
-  }
-
-  let requestId: string;
-  let title: string;
-  let prepared: { recipients: number; fields: number } | null = null;
-
-  if (existing) {
-    // Reuse the existing draft (retry of a prepare that already created it).
-    requestId = existing.id;
-    title = existing.title;
-  } else {
-    // Render the SAME resolved artefact we fingerprinted above — not a fresh
-    // resolve, which could race a concurrent edit and store a PDF that no longer
-    // matches contentFingerprint.
-    const result = await renderResolvedToPdf(resolved);
-
-    const storedName = await saveFile(result.buffer, `${result.title}.pdf`, "application/pdf");
-    const document = await prisma.document.create({
-      data: {
-        fileName: `${result.title}.pdf`,
-        storedName,
-        mimeType: "application/pdf",
-        sizeBytes: result.buffer.length,
-        quoteId: result.quoteId,
-        jobCardId: result.jobCardId,
-        contactId: result.contactId,
-        tag: "for-signing",
-        uploadedById: user.id,
-      },
-    });
-    const created = await createOrReuseSignatureRequestFromDoc({
-      doc: documentModel,
-      title: result.title,
-      unsignedPdfRef: storedName,
-      source: {
-        documentId: document.id,
-        quoteId: result.quoteId,
-        jobCardId: result.jobCardId,
-        contactId: result.contactId,
-        templateId,
-      },
-      createdById: user.id,
-      contentFingerprint,
-    });
-    if (created.reused) {
-      // We lost the fingerprint race: the winner has its own Document + PDF, so
-      // the ones we generated a moment ago are orphans. Reconcile them — remove
-      // the stored blob and soft-delete the Document row — so a concurrent
-      // double-send doesn't litter the repository with an unreferenced
-      // for-signing PDF. Best-effort: a cleanup failure must not fail the send
-      // (the winner's request is valid regardless).
-      await deleteFile(storedName).catch(() => {});
-      await prisma.document
-        .update({
-          where: { id: document.id },
-          data: { deletedAt: new Date(), deletedByName: "System", deleteReason: "Superseded by concurrent identical signing request" },
-        })
-        .catch(() => {});
-    } else {
-      await logAudit({
-        action: "doceditor.sign",
-        summary: `Prepared “${result.title}” for signing`,
-        entityType: "SignatureRequest",
-        entityId: created.id,
-        user,
-      });
-    }
-    requestId = created.id;
-    title = result.title;
-    prepared = { recipients: created.recipients, fields: created.fields };
-  }
-  revalidatePath(BASE);
-
-  // "Send now": dispatch in the same step. dispatchRequest only marks REACHABLE
-  // recipients "sent" and returns TRUTHFUL delivery counts, so we log a send and
-  // claim success only when a message actually went out.
-  if (options?.dispatch) {
-    const dispatch = await dispatchRequest(requestId);
-    revalidatePath("/signatures");
-    revalidatePath(`/signatures/${requestId}`);
-    if (dispatch.notified > 0) {
-      await logAudit({
-        action: "signing.send",
-        summary: `Sent “${title}” for signing`,
-        entityType: "SignatureRequest",
-        entityId: requestId,
-        user,
-      });
-      const stranded = dispatch.unreachable > 0 ? ` ${dispatch.unreachable} signer(s) had no contact channel and remain pending.` : "";
-      return { ok: true, requestId, sent: true, notified: dispatch.notified, message: `Sent to ${dispatch.notified} recipient(s).${stranded}` };
-    }
-    // Nothing delivered — never log a successful send. Report why.
-    return {
-      ok: true,
-      requestId,
-      sent: false,
-      message: dispatch.unreachable > 0
-        ? "Prepared, but no signer has a usable contact channel — add an email or phone in the Signatures hub, then send."
-        : "Prepared, but the message could not be delivered — open the Signatures hub to retry.",
-    };
-  }
-
-  return {
-    ok: true,
-    requestId,
-    sent: false,
-    message: prepared
-      ? `Signature request created — ${prepared.recipients} recipient(s), ${prepared.fields} field(s). Open the Signatures hub to send it.`
-      : "Existing draft reused. Open the Signatures hub to send it.",
-  };
 }
 
 /** Create a template pre-built as the branded standard quotation. */
