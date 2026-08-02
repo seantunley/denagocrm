@@ -7,6 +7,7 @@ import { addDays, format } from "date-fns";
 import { prisma } from "./db";
 import { getDayAvailability, reserveSlot } from "./bookingSlots";
 import { createIntakeLead } from "./leadIntake";
+import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { sendPushToAll } from "./push";
 import { resolveTenantActor } from "./tenantActor";
 
@@ -56,19 +57,31 @@ async function createDemo(source: string, vars: Record<string, string>, match: M
   const userId = await firstUserId();
   if (!userId) return;
   const who = await ensureContact(source, vars, match);
-  const stage = await prisma.pipelineStage.findFirst({ orderBy: { order: "asc" } });
-  if (!stage) return;
-  const lead = await prisma.lead.create({
-    data: {
-      title: `Demo / test drive — ${vars.name || "customer"}`,
-      name: vars.name || "Customer",
-      phone: vars.phone || null,
-      email: vars.email || null,
-      source,
-      stageId: stage.id,
-      contactId: who.contactId,
+  // Through the one lead creator. This path created the Lead row itself with no
+  // audit entry, no `position` (so it sorted below every form lead) and no
+  // `lead_created` automations at all — a bot test-drive request never triggered
+  // the follow-up rule the workspace had configured for a new lead.
+  //
+  // The push stays the demo-specific one on the `bot_handoff` toggle rather than
+  // the generic "New lead": it says more, staff already recognise it, and one
+  // request should announce itself once. …IfPipelineReady keeps the old
+  // `if (!stage) return` guard — no pipeline, no lead and no test-drive activity.
+  const title = `Demo / test drive — ${vars.name || "customer"}`;
+  const lead = await createLeadRecordIfPipelineReady({
+    title,
+    name: vars.name || "Customer",
+    phone: vars.phone || null,
+    email: vars.email || null,
+    source,
+    contactId: who.contactId,
+    audit: {
+      action: "lead.received",
+      summary: `Lead “${title}” created from a ${source} demo / test-drive request`,
+      userName: "System",
     },
+    push: { title: "Demo / test-drive request 🚗", body: vars.name || "Customer", kind: "bot_handoff" },
   });
+  if (!lead) return;
   await prisma.activity.create({
     data: {
       type: "test_drive",
@@ -83,7 +96,6 @@ async function createDemo(source: string, vars: Record<string, string>, match: M
       createdById: userId,
     },
   });
-  await sendPushToAll({ title: "Demo / test-drive request 🚗", body: vars.name || "Customer", url: `/leads/${lead.id}` }, "bot_handoff").catch(() => {});
 }
 
 /** The CRM-connected parts of a FlowCtx for a given channel. */

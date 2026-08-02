@@ -1,8 +1,7 @@
 import { prisma } from "./db";
 import { resolveIntegrationBundle, resolveTenantCredential } from "./settings";
-import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
-import { topPosition } from "./leadPos";
+import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { resolveTenantActor } from "./tenantActor";
 import { currentTenantScope } from "./tenantScope";
 
@@ -256,26 +255,29 @@ export async function recordInboundWhatsApp(
 
   // unknown number → create a lead so nothing is lost
   if (!contactId && !leadId) {
-    const firstStage = await prisma.pipelineStage.findFirst({ orderBy: { order: "asc" } });
-    if (firstStage) {
-      const lead = await prisma.lead.create({
-        data: {
-          title: `WhatsApp enquiry — ${profileName ?? fromDigits}`,
-          name: profileName ?? `WhatsApp ${fromDigits}`,
-          phone: "+" + fromDigits,
-          source: "whatsapp",
-          stageId: firstStage.id,
-          position: await topPosition(firstStage.id),
-        },
-      });
-      leadId = lead.id;
-      await logAudit({
+    // Through the one lead creator. This used to be a bare prisma.lead.create
+    // plus an audit line, so an inbound WhatsApp lead fired NO `lead_created`
+    // automations and raised no "New lead" push — the rule a user configures as
+    // "when a new lead is created, notify me" did nothing for the channel most
+    // of them arrive on. (The "New WhatsApp message" push below is about the
+    // MESSAGE and sits on its own toggle; `lead_new` is the one whose settings
+    // description already promised "…website or WhatsApp lead arrives".)
+    //
+    // …IfPipelineReady keeps the old `if (firstStage)` guard: with no pipeline
+    // configured we still record the message below rather than losing it.
+    const title = `WhatsApp enquiry — ${profileName ?? fromDigits}`;
+    const lead = await createLeadRecordIfPipelineReady({
+      title,
+      name: profileName ?? `WhatsApp ${fromDigits}`,
+      phone: "+" + fromDigits,
+      source: "whatsapp",
+      audit: {
         action: "lead.received",
-        summary: `Lead “${lead.title}” created from inbound WhatsApp`,
-        leadId,
+        summary: `Lead “${title}” created from inbound WhatsApp`,
         userName: "System",
-      });
-    }
+      },
+    });
+    if (lead) leadId = lead.id;
   }
 
   // Tenant-aware actor: under enforcement, a member of THIS channel's tenant scope

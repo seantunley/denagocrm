@@ -2,6 +2,7 @@ import { prisma } from "./db";
 import { resolveTenantCredential } from "./settings";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
+import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { saveFile } from "./storage";
 import { resolveTenantActor } from "./tenantActor";
 import { currentTenantScope } from "./tenantScope";
@@ -260,34 +261,35 @@ export async function recordInboundDm(
     if (openLead) {
       leadId = openLead.id;
     } else {
-      const firstStage = await prisma.pipelineStage.findFirst({ orderBy: { order: "asc" } });
-      if (firstStage) {
-        const label = platform === "instagram" ? "Instagram" : "Facebook";
-        const lead = await prisma.lead.create({
-          data: {
-            title: `${label} ad enquiry — ${contact.firstName}${contact.lastName ? ` ${contact.lastName}` : ""}`,
-            name: `${contact.firstName}${contact.lastName ? ` ${contact.lastName}` : ""}`,
-            source: platform === "instagram" ? "instagram" : "facebook",
-            stageId: firstStage.id,
-            contactId: contact.id,
-            notes: [
-              "Started a DM conversation from an ad.",
-              referral.ad_id ? `Ad ID: ${referral.ad_id}` : null,
-              referral.ref ? `Ref: ${referral.ref}` : null,
-            ]
-              .filter(Boolean)
-              .join("\n"),
-          },
-        });
-        leadId = lead.id;
-        await logAudit({
+      // Through the one lead creator. This used to be a bare prisma.lead.create
+      // plus an audit line: an ad-attributed Facebook/Instagram lead fired NO
+      // `lead_created` automations and raised no "New lead" push, and — because
+      // it never set `position` while topPosition hands out DECREASING numbers —
+      // it landed underneath every lead that came in through the web form.
+      const label = platform === "instagram" ? "Instagram" : "Facebook";
+      const who = `${contact.firstName}${contact.lastName ? ` ${contact.lastName}` : ""}`;
+      const title = `${label} ad enquiry — ${who}`;
+      // …IfPipelineReady keeps the old `if (firstStage)` guard: with no pipeline
+      // configured the DM is still filed against the contact below.
+      const lead = await createLeadRecordIfPipelineReady({
+        title,
+        name: who,
+        source: platform === "instagram" ? "instagram" : "facebook",
+        contactId: contact.id,
+        notes: [
+          "Started a DM conversation from an ad.",
+          referral.ad_id ? `Ad ID: ${referral.ad_id}` : null,
+          referral.ref ? `Ref: ${referral.ref}` : null,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        audit: {
           action: "lead.received",
-          summary: `Lead “${lead.title}” created — DM conversation started from an ad`,
-          leadId,
-          contactId: contact.id,
+          summary: `Lead “${title}” created — DM conversation started from an ad`,
           userName: "System",
-        });
-      }
+        },
+      });
+      if (lead) leadId = lead.id;
     }
   }
 
