@@ -18,8 +18,21 @@ import { prisma } from "./db";
  * floor so every journey keeps its most recent runs however quiet it is.
  */
 
-/** Events older than this are dropped, whatever their status. */
-export const EVENT_RETENTION_DAYS = 30;
+/**
+ * Events older than this are dropped, whatever their status.
+ *
+ * MUST STAY LONGER THAN THE LONGEST POSSIBLE WAIT. A `wait_for_trigger` step
+ * parks a run and polls `JourneyEvent` for an event newer than the moment it
+ * armed, for up to `JOURNEY_LIMITS.waitDays` (30). If that ceiling and this
+ * window were equal, the final poll of a maximal wait would race the sweep that
+ * deletes the very event it is looking for — and the failure would be a journey
+ * that quietly timed out instead of continuing, with the event sitting in
+ * neither the table nor the trace.
+ *
+ * Hence 45 rather than 30: fifteen days of headroom over that ceiling. If
+ * `waitDays` is ever raised, raise this first.
+ */
+export const EVENT_RETENTION_DAYS = 45;
 /** Runs older than this are dropped — unless the per-journey floor saves them. */
 export const RUN_RETENTION_DAYS = 60;
 /** Runs kept per journey regardless of age, so a quiet journey still has a trace. */
