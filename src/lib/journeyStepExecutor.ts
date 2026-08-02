@@ -6,7 +6,7 @@ import { sendSms } from "./sms";
 import { sendPushToAll } from "./push";
 import { logAudit } from "./audit";
 import { emitJourneyEvent } from "./journeyEvents";
-import { canContactPerson } from "./communicationPolicy";
+import { canContactPerson, nextCommunicationWindow } from "./communicationPolicy";
 import { JourneyContext, journeyTemplateVars } from "./journeyContext";
 import {
   evaluateConditions,
@@ -74,11 +74,21 @@ function phoneNumber(context: JourneyContext) {
  *
  * A contact we cannot identify is not contactable: no id means no way to check,
  * and the safe answer to "may we market to this person" is no.
+ *
+ * Returns `defer` for a refusal that is about WHEN, not WHETHER. Quiet hours are
+ * temporal — the person has not refused anything, it is merely 3am — so a
+ * skipped step there silently destroys the message, which is a worse outcome
+ * than the 3am send it was added to prevent. The caller waits instead.
  */
-async function marketingBlocked(context: JourneyContext, channel: "email" | "sms"): Promise<string | null> {
+type ConsentVerdict =
+  | { kind: "allowed" }
+  | { kind: "blocked"; reason: string }
+  | { kind: "defer"; reason: string; until: Date };
+
+async function marketingVerdict(context: JourneyContext, channel: "email" | "sms"): Promise<ConsentVerdict> {
   const contact = (context.contact ?? {}) as Record<string, unknown>;
   const contactId = typeof contact.id === "string" ? contact.id : null;
-  if (!contactId) return "no contact record to check consent against";
+  if (!contactId) return { kind: "blocked", reason: "no contact record to check consent against" };
   const tenantId = typeof contact.tenantId === "string" ? contact.tenantId : null;
   const verdict = await canContactPerson({
     contactId,
@@ -86,7 +96,11 @@ async function marketingBlocked(context: JourneyContext, channel: "email" | "sms
     purpose: "marketing",
     requestedChannel: channel,
   });
-  return verdict.allowed ? null : verdict.reason ?? "not contactable";
+  if (verdict.allowed) return { kind: "allowed" };
+  if (verdict.reason === "quiet_hours") {
+    return { kind: "defer", reason: "quiet hours", until: nextCommunicationWindow(new Date()) };
+  }
+  return { kind: "blocked", reason: verdict.reason ?? "not contactable" };
 }
 
 async function recordCommunication(
@@ -152,8 +166,11 @@ export async function executeJourneyStep(args: {
 
     case "send_email": {
       if (category === "marketing") {
-        const blocked = await marketingBlocked(context, "email");
-        if (blocked) return { status: "skipped", note: `Marketing email skipped: ${blocked}` };
+        const verdict = await marketingVerdict(context, "email");
+        if (verdict.kind === "defer") {
+          return { status: "waiting", note: `Email held for ${verdict.reason}`, nextRunAt: verdict.until, nextStepId: step.id };
+        }
+        if (verdict.kind === "blocked") return { status: "skipped", note: `Marketing email skipped: ${verdict.reason}` };
       }
       const to = emailAddress(context);
       if (!to) return { status: "skipped", note: "Email skipped: no email address" };
@@ -182,8 +199,11 @@ export async function executeJourneyStep(args: {
 
     case "send_sms": {
       if (category === "marketing") {
-        const blocked = await marketingBlocked(context, "sms");
-        if (blocked) return { status: "skipped", note: `Marketing SMS skipped: ${blocked}` };
+        const verdict = await marketingVerdict(context, "sms");
+        if (verdict.kind === "defer") {
+          return { status: "waiting", note: `SMS held for ${verdict.reason}`, nextRunAt: verdict.until, nextStepId: step.id };
+        }
+        if (verdict.kind === "blocked") return { status: "skipped", note: `Marketing SMS skipped: ${verdict.reason}` };
       }
       const to = phoneNumber(context);
       if (!to) return { status: "skipped", note: "SMS skipped: no phone number" };

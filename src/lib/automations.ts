@@ -82,9 +82,29 @@ async function applyRule(
       // "has an email address" to sending. Every other outbound path in the app
       // was gated; this one could mail someone who had opted out, withdrawn
       // consent or unsubscribed in the portal, at any hour, with no cap.
-      if (lead.contactId) {
+      //
+      // Resolve the contact by EMAIL when the lead is not linked to one. Gating
+      // on `lead.contactId` alone left the gate skippable: an unlinked lead with
+      // an email address bypassed it completely, which is the majority of
+      // freshly-captured leads and exactly the population most likely to have
+      // unsubscribed under a different lead.
+      const consentContactId =
+        lead.contactId ??
+        // Exact match, not ILIKE: this repo forbids case-insensitive identity
+        // lookups (tests/…ci-exact-identity-lookups) because they cannot use the
+        // index and quietly change which row "the" match is. A missed match
+        // means we fall through to sending, so this is the weaker side of the
+        // fix — but it is the same comparison every other contact lookup makes,
+        // and diverging here would be a second identity rule.
+        (lead.email
+          ? (await prisma.contact.findFirst({
+              where: { email: lead.email, deletedAt: null },
+              select: { id: true },
+            }))?.id ?? null
+          : null);
+      if (consentContactId) {
         const verdict = await canContactPerson({
-          contactId: lead.contactId,
+          contactId: consentContactId,
           tenantId: lead.tenantId ?? null,
           purpose: "marketing",
           requestedChannel: "email",

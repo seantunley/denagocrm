@@ -87,10 +87,31 @@ test("a journey step cannot fall back to the weaker check", () => {
   // knows nothing about ConsentRecord, the portal switch, the hour or the cap.
   const code = shipped("src/lib/journeyStepExecutor.ts");
   assert.doesNotMatch(code, /contact\.marketingOptOut === true/, "the local opt-out read is what this replaced");
-  assert.match(code, /marketingBlocked\(context, "email"\)/);
-  assert.match(code, /marketingBlocked\(context, "sms"\)/);
+  assert.match(code, /marketingVerdict\(context, "email"\)/);
+  assert.match(code, /marketingVerdict\(context, "sms"\)/);
   // No contact id means no way to check, and the safe answer is no.
-  assert.match(code, /if \(!contactId\) return "no contact record to check consent against"/);
+  assert.match(code, /if \(!contactId\) return \{ kind: "blocked", reason: "no contact record to check consent against" \}/);
+});
+
+test("quiet hours defer the message, they do not destroy it", () => {
+  // Quiet hours are about WHEN, not WHETHER — the person has refused nothing,
+  // it is merely 3am. Skipping there silently loses the message, which is a
+  // worse outcome than the 3am send the rule was added to prevent.
+  const code = shipped("src/lib/journeyStepExecutor.ts");
+  assert.match(code, /kind: "defer", reason: "quiet hours", until: nextCommunicationWindow\(new Date\(\)\)/);
+  assert.match(code, /status: "waiting", note: `Email held for/, "a deferred email must reschedule, not skip");
+  assert.match(code, /status: "waiting", note: `SMS held for/, "…and so must an SMS");
+  assert.match(code, /nextRunAt: verdict\.until, nextStepId: step\.id/, "it must resume on the SAME step");
+});
+
+test("an unlinked lead cannot slip past the automation gate", () => {
+  // Gating on `lead.contactId` left the gate skippable: a lead with an email
+  // and no contact row bypassed it completely — which is most freshly-captured
+  // leads, and the population most likely to have unsubscribed under another.
+  const code = shipped("src/lib/automations.ts");
+  assert.match(code, /const consentContactId =\s*lead\.contactId \?\?/, "an unlinked lead must still be resolved");
+  assert.match(code, /contact\.findFirst\(\{\s*where: \{ email: lead\.email, deletedAt: null \}/);
+  assert.doesNotMatch(code, /if \(lead\.contactId\) \{\s*const verdict/, "the old skippable shape must be gone");
 });
 
 test("an automation email is gated before it is sent", () => {
