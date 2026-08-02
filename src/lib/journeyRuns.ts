@@ -304,7 +304,12 @@ async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
         path,
         stepId: step.id,
         stepType: step.type,
-        status: result.status === "skipped" ? "skipped" : "completed",
+        // A step held for retry has not finished, so it is not "completed" —
+        // the trace would otherwise read "completed: Email held for quiet
+        // hours", which says two opposite things at once. The upsert is keyed
+        // on the path, so the eventual real attempt overwrites this row.
+        status:
+          result.status === "skipped" ? "skipped" : result.retryStep ? "running" : "completed",
         note: result.note,
         output: {
           ...result.output,
@@ -317,13 +322,23 @@ async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
       // return value while stop/condition-fail became exceptions. The cursor is
       // advanced first, so the run resumes on the step AFTER the wait, possibly
       // days later and in another process.
-      cursor = advanceCursor({
-        definition,
-        cursor,
-        context: stepContext,
-        lookup,
-        ...(result.branch ? { override: result.branch.stepId } : {}),
-      });
+      //
+      // UNLESS the step is asking to be retried in place. A `wait` step
+      // succeeded, so moving on is right; a step held by quiet hours or a
+      // frequency cap did NOT run, and advancing would drop the send on the
+      // floor. Note this cannot be expressed as a branch override back to the
+      // same id: advanceCursor honours `override` only at the top level, and
+      // inside a repeat or choose it steps the frame index on regardless — so a
+      // nested marketing email would be skipped entirely.
+      if (!(result.status === "waiting" && result.retryStep)) {
+        cursor = advanceCursor({
+          definition,
+          cursor,
+          context: stepContext,
+          lookup,
+          ...(result.branch ? { override: result.branch.stepId } : {}),
+        });
+      }
 
       if (result.status === "waiting") {
         await prisma.journeyRun.update({

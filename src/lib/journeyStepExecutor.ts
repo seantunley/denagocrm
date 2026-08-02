@@ -32,6 +32,22 @@ export type StepResult = {
    * undefined on the same key.
    */
   branch?: { stepId: string | null };
+  /**
+   * "I could not do this yet — try this SAME step again at nextRunAt."
+   *
+   * Two different things share `status: "waiting"`. A `wait` step SUCCEEDED —
+   * pausing is the whole job — so the run resumes on the step after it. A
+   * deferred step did NOT run: quiet hours or a frequency cap held the send,
+   * and the message still has to go out.
+   *
+   * Telling them apart cannot be left to `branch`. `advanceCursor` honours an
+   * override at the TOP LEVEL ONLY — inside a repeat or a choose it ignores the
+   * override and steps the frame index on regardless — so a marketing email
+   * nested in a loop would have been advanced past and silently never sent.
+   * That is the same class of failure as the suppressed-marketing-send bug, so
+   * it gets its own flag rather than an encoding that works in one place.
+   */
+  retryStep?: true;
   nextRunAt?: Date;
   output?: Record<string, unknown>;
 };
@@ -205,7 +221,7 @@ export async function executeJourneyStep(args: {
       if (category === "marketing") {
         const verdict = await marketingVerdict(context, "email");
         if (verdict.kind === "defer") {
-          return { status: "waiting", note: `Email held for ${verdict.reason}`, nextRunAt: verdict.until, nextStepId: step.id };
+          return { status: "waiting", note: `Email held for ${verdict.reason}`, nextRunAt: verdict.until, retryStep: true };
         }
         if (verdict.kind === "blocked") return { status: "skipped", note: `Marketing email skipped: ${verdict.reason}` };
       }
@@ -238,7 +254,7 @@ export async function executeJourneyStep(args: {
       if (category === "marketing") {
         const verdict = await marketingVerdict(context, "sms");
         if (verdict.kind === "defer") {
-          return { status: "waiting", note: `SMS held for ${verdict.reason}`, nextRunAt: verdict.until, nextStepId: step.id };
+          return { status: "waiting", note: `SMS held for ${verdict.reason}`, nextRunAt: verdict.until, retryStep: true };
         }
         if (verdict.kind === "blocked") return { status: "skipped", note: `Marketing SMS skipped: ${verdict.reason}` };
       }

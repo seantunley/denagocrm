@@ -79,7 +79,18 @@ type DriveResult = {
 function drive(
   raw: unknown,
   context: Record<string, unknown> = {},
-  opts: { start?: JourneyCursor; cache?: JourneyScriptCache; maxSteps?: number } = {},
+  opts: {
+    start?: JourneyCursor;
+    cache?: JourneyScriptCache;
+    maxSteps?: number;
+    /**
+     * Step ids that return `{ status: "waiting", retryStep: true }` the FIRST
+     * time they are reached — what quiet hours and the frequency cap do to a
+     * marketing send. The runner parks WITHOUT advancing the cursor, so the
+     * same step runs again on the next tick; this models that by not advancing.
+     */
+    deferOnce?: Set<string>;
+  } = {},
 ): DriveResult {
   const definition: JourneyDefinition = parseJourneyDefinition(raw, { deep: false });
   const cache = opts.cache ?? new JourneyScriptCache();
@@ -89,6 +100,7 @@ function drive(
   const paths: string[] = [];
   const executed: string[] = [];
   const repeatIndexes: (number | null)[] = [];
+  const deferring = new Set(opts.deferOnce ?? []);
   const limit = opts.maxSteps ?? 400;
 
   for (let i = 0; i < limit; i++) {
@@ -115,6 +127,13 @@ function drive(
     paths.push(tracePath);
     executed.push(step.id);
     repeatIndexes.push((repeatVars(cursor)?.index as number) ?? null);
+
+    // A step that could not run yet. The runner parks here WITHOUT advancing,
+    // so the very same position is re-entered next tick.
+    if (deferring.has(step.id)) {
+      deferring.delete(step.id);
+      continue;
+    }
 
     let override: { stepId: string | null } | undefined;
     try {
@@ -838,4 +857,73 @@ test("the builder carries choose/repeat through instead of dropping them", () =>
   assert.match(builder, /disabled=\{READ_ONLY_STEP_TYPES\.has\(step\.type\)\}/, "the type selector must be locked");
   assert.match(builder, /no visual editor for this step yet/i, "…and it must SAY so on screen");
   assert.match(builder, /continueOnError: step\.continueOnError/);
+});
+
+/* ── 10. a step that could not run yet is retried, not skipped ───────────── */
+
+test("a marketing send held by quiet hours is retried IN PLACE, even inside a repeat", () => {
+  // Found while rebasing this branch onto a main that had gained the consent
+  // gate. Two different things share `status: "waiting"`: a `wait` step
+  // SUCCEEDED — pausing is the job — so the run resumes after it; a send held
+  // by quiet hours or a frequency cap did NOT run and still has to go out.
+  //
+  // The old encoding for "retry me" was `nextStepId: step.id`, which became a
+  // branch override. That works at the top level and QUIETLY FAILS inside a
+  // container: advanceCursor honours `override` only when there are no frames,
+  // and otherwise steps the frame index on regardless. So a marketing email in
+  // a loop would be advanced past and never sent — the same silent-suppression
+  // failure the consent-gate fix existed to close.
+  const definition = {
+    startStepId: "loop",
+    steps: [
+      {
+        id: "loop",
+        type: "repeat",
+        config: {
+          mode: "count",
+          count: 1,
+          sequence: [step("email", { nextStepId: null }), step("sms", { nextStepId: null })],
+        },
+        nextStepId: null,
+      },
+    ],
+  };
+
+  const held = drive(definition, {}, { deferOnce: new Set(["email"]) });
+  // "email" appears TWICE: the attempt that was held, then the one that sends.
+  assert.deepEqual(
+    held.executed,
+    ["email", "email", "sms"],
+    "the held send must be retried in place, not skipped",
+  );
+  // Same iteration, so the same trace path — the step-log upsert is keyed on it
+  // and the real attempt overwrites the held one rather than adding a row.
+  assert.equal(held.paths[0], held.paths[1]);
+
+  // And the position it resumes from is the step itself, not the one after it.
+  const undeferred = drive(definition);
+  assert.deepEqual(undeferred.executed, ["email", "sms"]);
+  assert.deepEqual(held.paths.slice(1), undeferred.paths);
+});
+
+test("the runner does not advance the cursor when a step asks to be retried", () => {
+  // The behavioural test above drives a model of the loop; this pins the real
+  // runner, because the model is only faithful if the guard is actually there.
+  const runner = shipped("src/lib/journeyRuns.ts");
+  assert.match(
+    runner,
+    /if \(!\(result\.status === "waiting" && result\.retryStep\)\) \{\s*cursor = advanceCursor\(/,
+    "a retry-in-place must skip advanceCursor entirely",
+  );
+  // And the executor must actually set the flag on both held sends.
+  const executor = shipped("src/lib/journeyStepExecutor.ts");
+  assert.equal(
+    (executor.match(/retryStep: true/g) ?? []).length,
+    2,
+    "both the email and the SMS consent defers must ask to be retried",
+  );
+  assert.ok(
+    !/nextStepId: step\.id/.test(executor),
+    "the old branch-override spelling silently fails inside a container",
+  );
 });
