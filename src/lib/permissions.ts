@@ -390,7 +390,25 @@ export async function requireJobCardAccess(jobCardId: string, permission: Permis
   return user;
 }
 
+/**
+ * Document scope is a union of accessible linked records plus files uploaded by
+ * the user. An unrestricted contact/quote/vehicle scope grants all documents
+ * linked to that record type, but never unrelated unfiled documents.
+ *
+ * THE ONLY document scope in the app. A byte-for-byte second copy lived in
+ * lib/documentAccess.ts and was split by CALLER — the write paths (actions/
+ * documents.ts, signing/access.ts) used this one, while the read paths (the
+ * documents list, global search, /api/files/[id]) used that one. Neither module
+ * imported the other, so the two could drift and the app would answer "you may
+ * open this file" and "you may not edit this file" from two independently
+ * maintained rules. The download endpoint is the sharpest edge: it hands over
+ * bytes, so a copy that fell behind there leaks the document itself. Anything
+ * that needs a document-scope decision imports it from here.
+ */
 export async function getAccessibleDocumentIds(user: PermissionUser): Promise<string[] | null> {
+  // scopePermissions, not two hasPermission() calls (what the deleted copy did):
+  // one RBAC read decides both branches, so view_all and view_owned are answered
+  // from the SAME snapshot and the query cost does not double.
   const permissions = await scopePermissions(user);
   if (permissions === null || permissions.has("documents.view_all")) return null;
   if (!permissions.has("documents.view_owned")) return [];
