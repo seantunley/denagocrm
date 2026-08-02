@@ -3,6 +3,7 @@ import { basePrisma } from "./db";
 import { requireUser } from "./auth";
 import { requireModuleEnabled } from "./modules/enabled";
 import { activeTenantPredicate } from "./tenantPredicate";
+import { governingDocumentLink } from "./documents/governing";
 import {
   RBAC_INITIALIZED,
   RBAC_UNAVAILABLE,
@@ -424,9 +425,17 @@ export async function requireJobCardAccess(jobCardId: string, permission: Permis
 }
 
 /**
- * Document scope is a union of accessible linked records plus files uploaded by
- * the user. An unrestricted contact/quote/vehicle scope grants all documents
- * linked to that record type, but never unrelated unfiled documents.
+ * Document scope is the caller's own uploads plus every document whose GOVERNING
+ * linked record they can reach — one record per document, chosen by precedence
+ * (quote > job card > vehicle > contact). See lib/documents/governing.ts.
+ *
+ * It used to be a UNION over all four links, so a document reachable through any
+ * one of them was reachable. Nearly every system-generated document also carries
+ * the customer: the invoice, the delivery note and the signed contract for a
+ * quote are all filed with `contactId` set alongside `quoteId`. Contact access
+ * therefore handed over the quote's pricing and its terms. An unrestricted
+ * contact/vehicle scope grants documents GOVERNED by that record type, never
+ * documents that merely mention it.
  *
  * THE ONLY document scope in the app. A byte-for-byte second copy lived in
  * lib/documentAccess.ts and was split by CALLER — the write paths (actions/
@@ -456,6 +465,11 @@ export async function getAccessibleDocumentIds(user: PermissionUser): Promise<st
       // whenever a linked-record scope is unrestricted — select every
       // contact-linked document in EVERY tenant.
       ...documentTenantWhere(),
+      // A PRE-FILTER, not the rule. This OR is the old union, kept only to bound
+      // what comes back from the database: every document the precedence rule
+      // admits is reachable through at least one link, so the union is a strict
+      // superset and filtering it below can only ever remove rows. The decision
+      // itself is made per row, against the ONE governing link.
       OR: [
         { uploadedById: user.id },
         ...(contactIds === null ? [{ contactId: { not: null } }] : contactIds.length ? [{ contactId: { in: contactIds } }] : []),
@@ -464,9 +478,40 @@ export async function getAccessibleDocumentIds(user: PermissionUser): Promise<st
         ...(jobCardIds === null ? [{ jobCardId: { not: null } }] : jobCardIds.length ? [{ jobCardId: { in: jobCardIds } }] : []),
       ],
     },
-    select: { id: true },
+    select: { id: true, uploadedById: true, quoteId: true, jobCardId: true, vehicleId: true, contactId: true },
   });
-  return rows.map((row) => row.id);
+  const reachable = {
+    quote: idReach(quoteIds),
+    jobcard: idReach(jobCardIds),
+    vehicle: idReach(vehicleIds),
+    contact: idReach(contactIds),
+  } as const;
+  return rows
+    .filter((row) => {
+      // "You uploaded it" stays an INDEPENDENT grant, deliberately. It is not
+      // derived from a record, so precedence has nothing to say about it: the
+      // uploader was already authorized against the target at upload time
+      // (authorizeUploadTarget), and uploadRepoDocument files documents with no
+      // link at all — take this grant away and the uploader loses the file the
+      // instant they save it, with nobody short of documents.view_all able to
+      // open it.
+      if (row.uploadedById === user.id) return true;
+      const link = governingDocumentLink(row);
+      // No link means no governing record, which is a refusal — never a waiver.
+      return link !== null && reachable[link.kind](link.id);
+    })
+    .map((row) => row.id);
+}
+
+/**
+ * "Can this user reach that id?" for one record type. `null` from a
+ * getAccessible*Ids helper means unrestricted, NOT an empty list — the two look
+ * alike at a glance and confusing them either opens everything or closes it.
+ */
+function idReach(ids: string[] | null): (id: string) => boolean {
+  if (ids === null) return () => true;
+  const set = new Set(ids);
+  return (id) => set.has(id);
 }
 
 /**
