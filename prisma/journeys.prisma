@@ -76,6 +76,11 @@ model JourneyEvent {
   @@index([type, status])
   @@index([journeyId, status])
   @@index([tenantId])
+  /// The retention sweep's early-out: "is any processed event older than the
+  /// cutoff?", asked once per tenant on every cron tick. Without this it is a
+  /// sequential scan of the largest table in the schema, every tick, usually to
+  /// find nothing — housekeeping that costs more than the thing it cleans up.
+  @@index([status, createdAt])
 }
 
 /// A run is pinned to an immutable published version.
@@ -105,6 +110,11 @@ model JourneyRun {
   stepLogs JourneyStepLog[]
 
   @@index([status, nextRunAt])
+  /// Same reason as JourneyEvent's: the retention sweep asks "any CLOSED run
+  /// older than the cutoff?" once per tenant per tick, and answers "no" almost
+  /// every time. [status, nextRunAt] cannot serve it — nextRunAt is null on
+  /// closed runs, which is exactly the set being scanned.
+  @@index([status, createdAt])
   @@index([journeyId, status])
   @@index([entityType, entityId])
   @@index([leadId])

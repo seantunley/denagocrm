@@ -30,13 +30,28 @@ const MAX_DELETES_PER_SWEEP = 2_000;
 export type RetentionResult = { events: number; runs: number };
 
 /**
+ * A run is a trace once it is CLOSED. Before that it is live state — `queued`,
+ * `running`, `waiting` and #304's `blocked` are all still in flight.
+ *
+ * An allowlist of closed statuses rather than a denylist of live ones, on
+ * purpose: a new live status added later is excluded automatically, where a
+ * denylist would silently start deleting it.
+ */
+const CLOSED_RUN_STATUSES = ["completed", "failed", "cancelled"];
+
+/**
  * Prune journey traces. Safe to run every tick; deletes nothing when there is
  * nothing old enough.
  *
- * Only CLOSED runs are eligible. An open run is live state, not a trace — and a
- * `waiting` run legitimately sits idle for weeks between steps, so an age rule
- * that ignored status would delete journeys mid-flight and strand the person
- * halfway through a sequence.
+ * SHAPED AROUND THE EMPTY CASE, because that is nearly every call. The journey
+ * cron runs this once PER TENANT per tick — `runCronPerTenant` establishes a
+ * scope and calls `runJourneyEngine` inside it — so whatever happens here
+ * happens tenants-times-ticks often. Computing the per-journey floor up front
+ * costs one query per journey, for every tenant, on every tick, to almost
+ * always delete nothing: a worse problem than the one being fixed.
+ *
+ * So one indexed query decides whether there is any work at all, and the floor
+ * is computed only for the journeys that actually have stale runs.
  */
 export async function pruneJourneyTraces(): Promise<RetentionResult> {
   const eventCutoff = new Date(Date.now() - EVENT_RETENTION_DAYS * 24 * 60 * 60 * 1000);
@@ -48,13 +63,28 @@ export async function pruneJourneyTraces(): Promise<RetentionResult> {
     where: { createdAt: { lt: eventCutoff }, status: { in: ["processed", "failed"] } },
   });
 
-  // Per-journey floor first: work out which old runs are protected by being
-  // among the most recent for their journey, then delete the rest.
-  const journeys = await prisma.journey.findMany({ select: { id: true } });
+  // THE EARLY OUT. One index scan on (status, createdAt); on the overwhelming
+  // majority of ticks it comes back empty and the sweep is over.
+  //
+  // Oldest first, deliberately: the oldest runs are the ones the per-journey
+  // floor is least likely to protect, so the bounded window is spent on rows
+  // that can actually be deleted. Newest-first would fill the window with
+  // recent-but-past-cutoff runs that the floor then saves, and the sweep would
+  // make no progress at all while the backlog behind it kept growing.
+  const candidates = await prisma.journeyRun.findMany({
+    where: { createdAt: { lt: runCutoff }, status: { in: CLOSED_RUN_STATUSES } },
+    orderBy: { createdAt: "asc" },
+    take: MAX_DELETES_PER_SWEEP,
+    select: { id: true, journeyId: true },
+  });
+  if (candidates.length === 0) return { events, runs: 0 };
+
+  // Only now, and only for the journeys that actually have something stale.
+  const journeyIds = [...new Set(candidates.map((run) => run.journeyId))];
   const protectedIds = new Set<string>();
-  for (const journey of journeys) {
+  for (const journeyId of journeyIds) {
     const recent = await prisma.journeyRun.findMany({
-      where: { journeyId: journey.id },
+      where: { journeyId },
       orderBy: { createdAt: "desc" },
       take: RUNS_KEPT_PER_JOURNEY,
       select: { id: true },
@@ -62,23 +92,11 @@ export async function pruneJourneyTraces(): Promise<RetentionResult> {
     for (const run of recent) protectedIds.add(run.id);
   }
 
-  const stale = await prisma.journeyRun.findMany({
-    where: {
-      createdAt: { lt: runCutoff },
-      // Closed only. `queued`, `running`, `waiting` and `blocked` are live state
-      // — a waiting run can sit idle for weeks by design.
-      status: { in: ["completed", "failed", "cancelled"] },
-      id: { notIn: [...protectedIds] },
-    },
-    take: MAX_DELETES_PER_SWEEP,
-    select: { id: true },
-  });
-  if (stale.length === 0) return { events, runs: 0 };
+  const doomed = candidates.filter((run) => !protectedIds.has(run.id)).map((run) => run.id);
+  if (doomed.length === 0) return { events, runs: 0 };
 
   // Step logs cascade from JourneyRun (onDelete: Cascade), so deleting the run
   // takes its whole timeline with it — no orphaned rows to sweep separately.
-  const { count: runs } = await prisma.journeyRun.deleteMany({
-    where: { id: { in: stale.map((run) => run.id) } },
-  });
+  const { count: runs } = await prisma.journeyRun.deleteMany({ where: { id: { in: doomed } } });
   return { events, runs };
 }
