@@ -28,8 +28,10 @@ function name(c: { firstName: string; lastName: string | null; company: string |
 }
 
 export default async function HealthPage() {
-  await requireRoute("/health");
-  const scored = await bulkHealth();
+  // requireRoute returns the caller, and bulkHealth needs it: the route rule only
+  // says "may see SOME contacts", so the dashboard has to be scoped to which ones.
+  const user = await requireRoute("/health");
+  const scored = await bulkHealth(user);
 
   const counts: Record<HealthTier, number> = { vip: 0, healthy: 0, watch: 0, at_risk: 0 };
   for (const s of scored) counts[s.health.tier] += 1;

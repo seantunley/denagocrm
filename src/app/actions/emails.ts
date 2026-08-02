@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db";
 import { putSetting } from "@/lib/settings";
 import { requireOwner } from "@/lib/auth";
 import {
-  CUSTOMER_RECORD_PERMISSIONS,
+  CUSTOMER_RECORD_WRITE_PERMISSIONS,
   canAccessContact,
   canAccessLead,
   hasAnyPermission,
@@ -30,7 +30,11 @@ export async function sendEmailAction(
   _prev: SendEmailState | undefined,
   formData: FormData
 ): Promise<SendEmailState> {
-  const user = await requireAnyPermission(...CUSTOMER_RECORD_PERMISSIONS);
+  // Write grade. This SENDS MAIL from the workspace's own address, with the
+  // caller's signature, to a free-form recipient — and logs a Communication. It
+  // was gated on the VIEW list, so a read-only rep could send on the company's
+  // behalf. Sending is not a read, whatever the record gate says.
+  const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
   const to = String(formData.get("to") ?? "").trim();
   const subject = String(formData.get("subject") ?? "").trim();
   const bodyHtml = String(formData.get("bodyHtml") ?? "").trim();

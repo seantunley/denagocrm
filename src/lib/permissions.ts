@@ -116,17 +116,45 @@ export async function requireRoute(route: GuardedRoute): Promise<PermissionUser>
 export const GUARDED_ROUTES = ROUTE_RULES.map((rule) => rule.prefix);
 
 /**
- * "May work with customer records at all" — the RBAC replacement for the legacy
+ * "May READ customer records at all" — the RBAC replacement for the legacy
  * crm/workshop module flags on actions that touch a contact or a lead without
- * being scoped to one entity type (notes, emails, AI helpers). Spread it into
+ * being scoped to one entity type (AI helpers, duplicate lookup). Spread it into
  * `requireAnyPermission`; the record-level `canAccessContact`/`canAccessLead`
  * checks at each call site still decide WHICH records.
+ *
+ * READ-GRADE ONLY. Every key here is a *view* permission, and this list must
+ * never gate an action that writes. It used to: logging a communication,
+ * deleting one, toggling a timeline pin and SENDING EMAIL were all gated on this
+ * list, so a user holding nothing but contacts.view_owned could write to the
+ * timeline and send mail from the workspace's address. Use
+ * CUSTOMER_RECORD_WRITE_PERMISSIONS for anything that mutates or sends.
  */
-export const CUSTOMER_RECORD_PERMISSIONS = [
+export const CUSTOMER_RECORD_READ_PERMISSIONS = [
   "contacts.view_all",
   "contacts.view_owned",
   "leads.view_all",
   "leads.view_owned",
+] as const satisfies readonly PermissionKey[];
+
+/**
+ * "May WRITE on a customer record" — the write-grade counterpart, for actions
+ * that record, delete or send something against a contact or a lead without
+ * being scoped to one entity type.
+ *
+ * `contacts.edit` / `leads.edit` are the existing catalogue keys for "may change
+ * this record", and they are already what the sibling single-entity actions
+ * demand: `toggleContactNotePin` requires contacts.edit and `toggleLeadNotePin`
+ * requires leads.edit to pin the very same timeline these actions write to. No
+ * narrower key fits — contacts.delete / leads.delete mean destroying the customer
+ * record itself, not removing one entry from its history, and campaigns.send is
+ * the bulk-marketing surface, not a rep emailing one customer.
+ *
+ * As with the read list, this only answers "at all"; canAccessContact /
+ * canAccessLead at each call site still decide WHICH records.
+ */
+export const CUSTOMER_RECORD_WRITE_PERMISSIONS = [
+  "contacts.edit",
+  "leads.edit",
 ] as const satisfies readonly PermissionKey[];
 
 export async function getUserTeamIds(userId: string): Promise<string[]> {
