@@ -12,6 +12,19 @@ import { NEVER_STOP, type StopSignal } from "./stopSignal";
 /** One event can enrol into several journeys, each of which may send. */
 const EVENT_RESERVE_MS = 4_000;
 
+/**
+ * One journey's verdict on one event, as shown in the activity trace.
+ *
+ * `enrolled: false` is the interesting case and it has several distinct causes
+ * — the reason string is what tells them apart, so never collapse them.
+ */
+export type JourneyEnrolmentDecision = {
+  journeyId: string;
+  journeyName: string;
+  enrolled: boolean;
+  reason: string;
+};
+
 const MAX_EVENT_ATTEMPTS = 3;
 
 export async function emitJourneyEvent(args: {
@@ -99,23 +112,57 @@ export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_
       );
       if (!context) throw new Error("Journey event entity no longer exists");
 
+      // Every journey considered, and why it did or did not enrol. This loop
+      // used to be bare `continue`s: a journey nobody emits for looked exactly
+      // like a journey nobody matched, which is how "New lead created"
+      // journeys sat active enrolling nobody with nothing on screen to say so.
+      const decisions: JourneyEnrolmentDecision[] = [];
+
       for (const journey of journeys) {
         const version = getActiveVersion(journey);
-        if (!version || version.trigger !== event.type) continue;
-        if (!triggerMatches(version.trigger, jsonObject(version.triggerConfig), context, eventPayload)) continue;
-        if (await enqueueJourneyRun({
+        if (!version) {
+          decisions.push({ journeyId: journey.id, journeyName: journey.name, enrolled: false, reason: "no published version" });
+          continue;
+        }
+        if (version.trigger !== event.type) {
+          decisions.push({
+            journeyId: journey.id,
+            journeyName: journey.name,
+            enrolled: false,
+            reason: `listens for "${version.trigger}", not "${event.type}"`,
+          });
+          continue;
+        }
+        // eventPayload, not just the context: a stage_entered event carries the
+        // stage the lead ENTERED, and the cron drains up to 15 minutes later —
+        // judging against the lead's stage now would silently match nothing for
+        // anyone who moved the card again inside that window.
+        if (!triggerMatches(version.trigger, jsonObject(version.triggerConfig), context, eventPayload)) {
+          decisions.push({ journeyId: journey.id, journeyName: journey.name, enrolled: false, reason: "trigger filters did not match" });
+          continue;
+        }
+        const queued = await enqueueJourneyRun({
           journey,
           version,
           entityType: event.entityType as JourneyEntityType,
           entityId: event.entityId,
           eventKey: event.dedupeKey,
           payload: eventPayload,
-        })) enrolled++;
+        });
+        if (queued) enrolled++;
+        decisions.push({
+          journeyId: journey.id,
+          journeyName: journey.name,
+          enrolled: queued,
+          // A false here is not a mismatch — it is the idempotency key doing its
+          // job, which reads as a bug unless it is spelled out.
+          reason: queued ? "enrolled" : "already enrolled for this event",
+        });
       }
 
       await prisma.journeyEvent.update({
         where: { id: event.id },
-        data: { status: "processed", processedAt: new Date() },
+        data: { status: "processed", processedAt: new Date(), decisions },
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown journey event error";
