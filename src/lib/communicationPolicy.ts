@@ -71,6 +71,23 @@ export async function canContactPerson(args: {
       select: { granted: true },
     });
     if (consent && !consent.granted) return { allowed: false, reason: "consent_withdrawn" };
+
+    // The customer's OWN switch, in the portal. This lived in a second gate
+    // (consentGuard) that campaigns and surveys never called, so someone who
+    // unsubscribed in the portal was suppressed on journeys and still received
+    // campaign and survey mail — the "I unsubscribed and you keep emailing me"
+    // complaint. The portal has two overlapping marketing flags; the person is
+    // opted OUT if EITHER is explicitly false, until they are consolidated.
+    if (args.requestedChannel === "email") {
+      const pref = await basePrisma.portalPreference.findFirst({
+        where: { contactId: contact.id },
+        select: { marketingEmail: true, emailMarketing: true },
+      });
+      if (pref && (pref.marketingEmail === false || pref.emailMarketing === false)) {
+        return { allowed: false, reason: "portal_unsubscribed" };
+      }
+    }
+
     if (isCommunicationQuietHour(now)) return { allowed: false, reason: "quiet_hours" };
   }
 

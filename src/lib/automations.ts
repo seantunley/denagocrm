@@ -8,6 +8,7 @@ import { nextStepDueDate } from "./businessHours";
 import { getNextStepScheduling } from "./nextStepConfig";
 import { FOLLOW_UP_TYPE, isOpenFutureFollowUp } from "./followUp";
 import { isModuleEnabled } from "./modules/enabled";
+import { canContactPerson } from "./communicationPolicy";
 
 export const LEAD_TRIGGERS = [
   "lead_created",
@@ -77,6 +78,50 @@ async function applyRule(
     case "send_email": {
       if (!lead.email) return "skipped: lead has no email";
       if (!rule.emailTemplateId) return "skipped: no template configured";
+      // This path had NO consent check of any kind — it went straight from
+      // "has an email address" to sending. Every other outbound path in the app
+      // was gated; this one could mail someone who had opted out, withdrawn
+      // consent or unsubscribed in the portal, at any hour, with no cap.
+      //
+      // Resolve the contact by EMAIL when the lead is not linked to one. Gating
+      // on `lead.contactId` alone left the gate skippable: an unlinked lead with
+      // an email address bypassed it completely, which is the majority of
+      // freshly-captured leads and exactly the population most likely to have
+      // unsubscribed under a different lead.
+      const consentContactId =
+        lead.contactId ??
+        // Exact match, not ILIKE: this repo forbids case-insensitive identity
+        // lookups (tests/…ci-exact-identity-lookups) because they cannot use the
+        // index and quietly change which row "the" match is. A missed match
+        // means we fall through to sending, so this is the weaker side of the
+        // fix — but it is the same comparison every other contact lookup makes,
+        // and diverging here would be a second identity rule.
+        (lead.email
+          ? (await prisma.contact.findFirst({
+              where: { email: lead.email, deletedAt: null },
+              select: { id: true },
+            }))?.id ?? null
+          : null);
+      // FAIL CLOSED when no contact resolves. Gating inside `if (consentContactId)`
+      // meant an unresolvable lead skipped the gate and sent anyway — the exact
+      // shape of the bypass this replaced, one level down, and the opposite of
+      // what the journey engine does for the same condition (it returns
+      // "no contact record to check consent against" and skips).
+      //
+      // This DOES stop mail that sends today: an intake lead with no Contact row
+      // and no email match now gets no automation email. That is the correct
+      // side to err on — we cannot check whether that person opted out, and
+      // "we had no way to know" has never been a defence under POPIA.
+      if (!consentContactId) {
+        return "skipped: no contact record to check consent against";
+      }
+      const verdict = await canContactPerson({
+        contactId: consentContactId,
+        tenantId: lead.tenantId ?? null,
+        purpose: "marketing",
+        requestedChannel: "email",
+      });
+      if (!verdict.allowed) return `skipped: ${verdict.reason ?? "not contactable"}`;
       const template = await prisma.emailTemplate.findUnique({
         where: { id: rule.emailTemplateId },
       });
