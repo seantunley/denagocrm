@@ -143,12 +143,15 @@ test("one step id, three iterations, three separate places on screen", () => {
 });
 
 test("a nested child hangs off its container, not off the top level", () => {
+  // Option 1 at index 2 on purpose: with the two numbers equal, a segment
+  // rebuilt as `choose/<index>/sequence/<option>` produces the identical string
+  // and the fixture would pass a parent lookup that had been swapped.
   const tree = buildTraceTree([
     log("welcome"),
     container("triage", "choose"),
     log("triage/choose/1/sequence/0"),
-    container("triage/choose/1/sequence/1", "repeat"),
-    log("triage/choose/1/sequence/1/repeat/0/sequence/0"),
+    container("triage/choose/1/sequence/2", "repeat"),
+    log("triage/choose/1/sequence/2/repeat/0/sequence/0"),
   ]);
 
   assert.deepEqual(tree.map((node) => node.step.path), ["welcome", "triage"]);
@@ -159,7 +162,7 @@ test("a nested child hangs off its container, not off the top level", () => {
   const inner = branch.nodes[1].groups[0];
   assert.equal(inner.kind, "repeat");
   assert.equal(inner.nodes[0].depth, 2);
-  assert.equal(inner.nodes[0].step.path, "triage/choose/1/sequence/1/repeat/0/sequence/0");
+  assert.equal(inner.nodes[0].step.path, "triage/choose/1/sequence/2/repeat/0/sequence/0");
 });
 
 test("NOTHING is dropped — an orphan and an unreadable path still appear", () => {
@@ -246,33 +249,29 @@ const definition = {
   ],
 };
 
+/** The id of the definition step a path names — null if it resolves to nothing. */
+function idAt(path: string): unknown {
+  const parsed = parseTracePath(path);
+  assert.ok(parsed, `unparseable: ${path}`);
+  return definitionNodeAt(definition, parsed)?.id ?? null;
+}
+
 test("a repeat path resolves by INDEX in the body, never by iteration", () => {
   // Every pass runs the identical sequence. Indexing by iteration would name a
   // real, plausible step from pass two onwards — and read as an empty body once
   // the iteration number ran past the sequence length.
-  const parsed = parseTracePath("triage/choose/1/sequence/1/repeat/2/sequence/1");
-  assert.ok(parsed);
-  assert.equal(definitionNodeAt(definition, parsed).id, "second");
-
-  const firstPass = parseTracePath("triage/choose/1/sequence/1/repeat/0/sequence/1");
-  assert.ok(firstPass);
+  assert.equal(idAt("triage/choose/1/sequence/1/repeat/2/sequence/1"), "second");
   assert.equal(
-    definitionNodeAt(definition, firstPass).id,
+    idAt("triage/choose/1/sequence/1/repeat/0/sequence/1"),
     "second",
     "iteration 0 and iteration 2 execute the same body step",
   );
-  const other = parseTracePath("triage/choose/1/sequence/1/repeat/9/sequence/0");
-  assert.ok(other);
-  assert.equal(definitionNodeAt(definition, other).id, "first");
+  assert.equal(idAt("triage/choose/1/sequence/1/repeat/9/sequence/0"), "first");
 });
 
 test("a choose path descends the option it names, and the default", () => {
-  const taken = parseTracePath("triage/choose/0/sequence/0");
-  assert.ok(taken);
-  assert.equal(definitionNodeAt(definition, taken).id, "vip");
-  const fallback = parseTracePath("triage/choose/default/sequence/0");
-  assert.ok(fallback);
-  assert.equal(definitionNodeAt(definition, fallback).id, "fallback");
+  assert.equal(idAt("triage/choose/0/sequence/0"), "vip");
+  assert.equal(idAt("triage/choose/default/sequence/0"), "fallback");
 });
 
 test("an unreadable definition returns null rather than throwing", () => {
