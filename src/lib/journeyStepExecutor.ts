@@ -89,10 +89,26 @@ async function marketingVerdict(context: JourneyContext, channel: "email" | "sms
   const contact = (context.contact ?? {}) as Record<string, unknown>;
   const contactId = typeof contact.id === "string" ? contact.id : null;
   if (!contactId) return { kind: "blocked", reason: "no contact record to check consent against" };
-  const tenantId = typeof contact.tenantId === "string" ? contact.tenantId : null;
+
+  // Read the tenant from the ROW, not from the journey context. The context is
+  // a compacted snapshot (compactContact) that carries no tenantId, so taking
+  // it from there yielded null for every contact — and canContactPerson matches
+  // with `IS NOT DISTINCT FROM`, so null vs a real tenant is a miss. Every
+  // marketing journey email and SMS would have been blocked as
+  // "contact_not_found_or_cross_tenant".
+  //
+  // A stored context is also a SNAPSHOT taken when the run was enqueued; runs
+  // wait days between steps, so even once the field is added, an in-flight run
+  // would still carry whatever was true then. The row is the only current
+  // answer. A contact that has since been deleted resolves to null here and is
+  // then refused by the policy, which is the right outcome.
+  const row = await prisma.contact.findFirst({
+    where: { id: contactId },
+    select: { tenantId: true },
+  });
   const verdict = await canContactPerson({
     contactId,
-    tenantId,
+    tenantId: row?.tenantId ?? null,
     purpose: "marketing",
     requestedChannel: channel,
   });

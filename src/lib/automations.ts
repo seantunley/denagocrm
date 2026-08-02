@@ -102,15 +102,26 @@ async function applyRule(
               select: { id: true },
             }))?.id ?? null
           : null);
-      if (consentContactId) {
-        const verdict = await canContactPerson({
-          contactId: consentContactId,
-          tenantId: lead.tenantId ?? null,
-          purpose: "marketing",
-          requestedChannel: "email",
-        });
-        if (!verdict.allowed) return `skipped: ${verdict.reason ?? "not contactable"}`;
+      // FAIL CLOSED when no contact resolves. Gating inside `if (consentContactId)`
+      // meant an unresolvable lead skipped the gate and sent anyway — the exact
+      // shape of the bypass this replaced, one level down, and the opposite of
+      // what the journey engine does for the same condition (it returns
+      // "no contact record to check consent against" and skips).
+      //
+      // This DOES stop mail that sends today: an intake lead with no Contact row
+      // and no email match now gets no automation email. That is the correct
+      // side to err on — we cannot check whether that person opted out, and
+      // "we had no way to know" has never been a defence under POPIA.
+      if (!consentContactId) {
+        return "skipped: no contact record to check consent against";
       }
+      const verdict = await canContactPerson({
+        contactId: consentContactId,
+        tenantId: lead.tenantId ?? null,
+        purpose: "marketing",
+        requestedChannel: "email",
+      });
+      if (!verdict.allowed) return `skipped: ${verdict.reason ?? "not contactable"}`;
       const template = await prisma.emailTemplate.findUnique({
         where: { id: rule.emailTemplateId },
       });

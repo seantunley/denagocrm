@@ -104,6 +104,48 @@ test("quiet hours defer the message, they do not destroy it", () => {
   assert.match(code, /nextRunAt: verdict\.until, nextStepId: step\.id/, "it must resume on the SAME step");
 });
 
+test("the tenant comes from the contact ROW, not the journey snapshot", () => {
+  // compactContact() — the journey context — carries no tenantId. Reading it
+  // from there yielded null for every contact, and canContactPerson matches
+  // with `IS NOT DISTINCT FROM`, so null vs a real tenant is a MISS: every
+  // marketing journey email and SMS was blocked as
+  // "contact_not_found_or_cross_tenant". A total suppression that looks like
+  // consent working.
+  //
+  // The stored context is also a snapshot taken when the run was enqueued, and
+  // runs wait days between steps — so even with the field added, an in-flight
+  // run would carry a stale value. The row is the only current answer.
+  const executor = shipped("src/lib/journeyStepExecutor.ts");
+  assert.doesNotMatch(executor, /contact\.tenantId/, "the compacted context has no tenantId to read");
+  assert.match(executor, /contact\.findFirst\(\{\s*where: \{ id: contactId \},\s*select: \{ tenantId: true \}/);
+  assert.match(executor, /tenantId: row\?\.tenantId \?\? null/);
+
+  // …and the context genuinely does not carry it, so this is not belt-and-braces.
+  const context = shipped("src/lib/journeyContext.ts");
+  const start = context.indexOf("function compactContact(");
+  const body = context.slice(start, context.indexOf("\n}", start));
+  assert.doesNotMatch(body, /tenantId/, "if compactContact starts carrying tenantId, revisit — the row is still safer");
+});
+
+test("an unresolvable contact blocks the send in BOTH engines", () => {
+  // The journey path returned "no contact record to check consent against" and
+  // skipped, while the legacy path gated inside `if (consentContactId)` and
+  // sent anyway — the same bypass one level down. Two engines, two answers to
+  // "may we mail someone we cannot check".
+  assert.match(
+    shipped("src/lib/journeyStepExecutor.ts"),
+    /if \(!contactId\) return \{ kind: "blocked"/,
+    "the journey engine fail-closes",
+  );
+  const automations = shipped("src/lib/automations.ts");
+  assert.match(
+    automations,
+    /if \(!consentContactId\) \{\s*return "skipped: no contact record to check consent against";/,
+    "…and so must the legacy engine, until it is retired",
+  );
+  assert.doesNotMatch(automations, /if \(consentContactId\) \{/, "the skippable shape must be gone");
+});
+
 test("an unlinked lead cannot slip past the automation gate", () => {
   // Gating on `lead.contactId` left the gate skippable: a lead with an email
   // and no contact row bypassed it completely — which is most freshly-captured
