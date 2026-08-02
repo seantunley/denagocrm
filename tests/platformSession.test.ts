@@ -41,7 +41,7 @@ test("a CRM session token is REJECTED by the platform verifier", async () => {
       name: "CRM Owner",
       email: "owner@denago.test",
       role: "owner",
-      modules: "crm",
+      grants: "/health",
       sessionVersion: 0,
     },
     60,
@@ -65,9 +65,9 @@ test("a platform token is REJECTED by the CRM verifier", async () => {
       "a platform token must not carry a CRM role claim",
     );
     assert.equal(
-      (payload as unknown as { mods?: string }).mods,
+      (payload as unknown as { rg?: string }).rg,
       undefined,
-      "a platform token must not carry CRM module claims",
+      "a platform token must not carry CRM route-grant claims",
     );
   }
 });

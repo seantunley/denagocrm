@@ -2,8 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireCrmOrWorkshop } from "@/lib/auth";
-import { canAccessContact, canAccessLead, requirePermission, requireAnyPermission } from "@/lib/permissions";
+import {
+  CUSTOMER_RECORD_PERMISSIONS,
+  canAccessContact,
+  canAccessLead,
+  requirePermission,
+  requireAnyPermission,
+  type PermissionUser,
+} from "@/lib/permissions";
 import {
   removeTimelinePin,
   toggleTimelinePin,
@@ -14,7 +20,7 @@ import {
 import { isSocialChannel } from "@/lib/socialChannels";
 
 async function assertCommunicationAccess(
-  user: Awaited<ReturnType<typeof requireCrmOrWorkshop>>,
+  user: PermissionUser,
   communication: { contactId: string | null; leadId: string | null },
 ) {
   if (user.role === "owner") return;
@@ -30,7 +36,7 @@ async function assertCommunicationAccess(
 }
 
 export async function addCommunication(formData: FormData) {
-  const user = await requireCrmOrWorkshop();
+  const user = await requireAnyPermission(...CUSTOMER_RECORD_PERMISSIONS);
   const str = (k: string) => {
     const v = String(formData.get(k) ?? "").trim();
     return v === "" ? null : v;
@@ -89,7 +95,7 @@ export async function addCommunication(formData: FormData) {
 }
 
 export async function toggleCommunicationPin(id: string, path: string) {
-  const user = await requireCrmOrWorkshop();
+  const user = await requireAnyPermission(...CUSTOMER_RECORD_PERMISSIONS);
   const communication = await prisma.communication.findUniqueOrThrow({
     where: { id },
     select: {
@@ -178,7 +184,7 @@ export async function deleteCommunication(
   path: string,
   formData: FormData,
 ) {
-  const user = await requireCrmOrWorkshop();
+  const user = await requireAnyPermission(...CUSTOMER_RECORD_PERMISSIONS);
   const reason =
     String(formData.get("reason") ?? "").trim() || "No reason given";
   const communication = await prisma.communication.findUniqueOrThrow({

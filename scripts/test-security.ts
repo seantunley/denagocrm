@@ -61,7 +61,7 @@ async function main() {
         name: "Security Test",
         email,
         role: "member",
-        modules: "crm",
+        grants: "",
         sessionVersion: initial?.sessionVersion ?? 0,
       },
       60

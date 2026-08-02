@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireCrm } from "@/lib/auth";
+import { requireRoute } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
@@ -18,7 +18,7 @@ import { StatusPill } from "@/components/visual-system";
 export const dynamic = "force-dynamic";
 
 export default async function FleetDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireCrm();
+  await requireRoute("/fleets");
   const { id } = await params;
 
   const fleet = await prisma.fleet.findUnique({

@@ -381,7 +381,6 @@ export default async function SettingsPage({
                             userId={u.id}
                             name={u.name}
                             role={u.role as "owner" | "member"}
-                            modules={u.modules}
                             has2fa={Boolean(u.totpEnabledAt || u.emailOtpEnabled)}
                           />
                         )}

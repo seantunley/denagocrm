@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { signFreshSession, verifySession, refreshSession } from "../src/lib/session";
 
-const USER = { id: "u1", name: "A", email: "a@example.test", role: "owner", modules: "crm", sessionVersion: 3 };
+const USER = { id: "u1", name: "A", email: "a@example.test", role: "owner", grants: "/health", sessionVersion: 3 };
 
 test("session carries the tenant id (tid) claim when provided", async () => {
   const token = await signFreshSession(USER, 60, { jti: "j1", tid: "tenant_acme" });

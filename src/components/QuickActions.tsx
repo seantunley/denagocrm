@@ -29,7 +29,6 @@ export default function QuickActions({
   permissions = [],
   enabledModules,
 }: {
-  modules?: string;
   isAdmin: boolean;
   permissions?: string[];
   enabledModules?: string[];

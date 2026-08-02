@@ -4,8 +4,14 @@ import { asActionResult, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { putSetting } from "@/lib/settings";
-import { requireCrmOrWorkshop, requireOwner } from "@/lib/auth";
-import { canAccessContact, canAccessLead, hasAnyPermission } from "@/lib/permissions";
+import { requireOwner } from "@/lib/auth";
+import {
+  CUSTOMER_RECORD_PERMISSIONS,
+  canAccessContact,
+  canAccessLead,
+  hasAnyPermission,
+  requireAnyPermission,
+} from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
 import { buildSignature, buildEmailHtml, htmlToText } from "@/lib/signature";
@@ -24,7 +30,7 @@ export async function sendEmailAction(
   _prev: SendEmailState | undefined,
   formData: FormData
 ): Promise<SendEmailState> {
-  const user = await requireCrmOrWorkshop();
+  const user = await requireAnyPermission(...CUSTOMER_RECORD_PERMISSIONS);
   const to = String(formData.get("to") ?? "").trim();
   const subject = String(formData.get("subject") ?? "").trim();
   const bodyHtml = String(formData.get("bodyHtml") ?? "").trim();

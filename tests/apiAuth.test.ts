@@ -32,8 +32,10 @@ const PUBLIC_PREFIXES = [
 const APPROVED_GUARDS = [
   "requireApiUser", "requireApiOwner",
   "requireUser", "requireOwner",
-  "requireCrm", "requireWorkshop", "requireInbox", "requireOperational", "requireAnyModule",
-  "requirePermission", "requireAnyPermission",
+  // The module-CSV family (requireCrm/requireWorkshop/requireInbox/
+  // requireOperational/requireAnyModule) is gone — it gated on User.modules,
+  // a second authorization source RBAC never wrote to.
+  "requirePermission", "requireAnyPermission", "requireRoute",
   "getCurrentUser",
   "requireQuoteReadAccess", "requireLeadReadAccess", "requireLeadAccess", "requireDocumentAccess",
   "portalCanAccess", "requirePortal", "verifyPortal", "portalSession",

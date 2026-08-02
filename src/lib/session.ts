@@ -33,7 +33,14 @@ export type SessionPayload = {
   name: string;
   email: string;
   role: string;
-  mods: string;
+  /**
+   * Route grants — the guarded prefixes this user's RBAC opened at sign-in, as a
+   * CSV of ROUTE_RULES prefixes. DERIVED, never authored: see routeAccess.ts and
+   * the mint site in auth.ts#createSessionCookie. It replaces the old `mods`
+   * claim, which carried a hand-ticked per-user module CSV that RBAC neither
+   * read nor wrote — the proxy and the page guards disagreed as a result.
+   */
+  rg: string;
   sv: number; // database session version; incrementing it revokes every older session
   idle: number;
   la: number;
@@ -46,7 +53,8 @@ export async function signFreshSession(
     name: string;
     email: string;
     role: string;
-    modules: string;
+    /** Derived from RBAC by the caller — see routeAccess.ts#routeGrants. */
+    grants: string;
     sessionVersion: number;
   },
   idleMinutes: number,
@@ -62,7 +70,7 @@ export async function signFreshSession(
     name: user.name,
     email: user.email,
     role: user.role,
-    mods: user.modules,
+    rg: user.grants,
     sv: user.sessionVersion,
     idle: idleMinutes,
     la: now,

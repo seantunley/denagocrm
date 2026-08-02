@@ -18,13 +18,6 @@ const SYSTEM_ROLE_IDS = [
 ] as const;
 
 /**
- * Modules a freshly-activated tenant owner gets by default — mirrors the
- * User.modules schema default. Granted by {@link activateTenant} only when the
- * owner has none yet (createTenant provisions them with an empty set).
- */
-const DEFAULT_OWNER_MODULES = "crm,workshop,reports,inbox";
-
-/**
  * Shared tenant-provisioning service. ONE place that turns "a user exists" into "a
  * user belongs to a tenant", so every creation path — initial seed, admin
  * createUser, the SQLite→Postgres data import, and future invitation/signup flows
@@ -176,6 +169,9 @@ export async function createTenant(
         email: input.owner.email,
         passwordHash: input.owner.passwordHash,
         role: "member",
+        // `modules` is RETIRED as an authorization input (see routeAccess.ts) but
+        // the column is still NOT NULL with a permissive default, so pin it empty
+        // rather than let a new account inherit the old default.
         modules: "",
         tenantId: tenant.id,
       },
@@ -226,12 +222,13 @@ export async function activateTenant(
       WHERE "id" = ${ownerId} AND "disabledAt" IS NOT NULL
     `;
     // Give the owner a WORKING workspace. Enabling the account is not enough — a
-    // bare owner has the non-privileged "member" global role, no tenant-admin
-    // permissions, and (from createTenant) no modules. So:
+    // bare owner has the non-privileged "member" global role and no tenant-admin
+    // permissions. So:
     //   1. ensure the tenant's own role copies exist (idempotent), then
-    //   2. assign the tenant-local CRM-admin role (tenant administration), and
-    //   3. grant the default module set if the owner has none yet (never clobber
-    //      a set customized after a prior activation).
+    //   2. assign the tenant-local CRM-admin role (tenant administration).
+    // There is no third step granting a module CSV any more: that column stopped
+    // being an authorization input (see routeAccess.ts) and the CRM-admin role
+    // assignment below is now the whole grant.
     await seedTenantDefaultRoles(tx, tenantId);
     const adminRoleId = `role_crm_admin:${tenantId}`;
     await tx.$executeRaw`
@@ -239,11 +236,8 @@ export async function activateTenant(
       VALUES (gen_random_uuid()::text, ${ownerId}, ${adminRoleId}, ${tenantId})
       ON CONFLICT DO NOTHING
     `;
-    await tx.$executeRaw`
-      UPDATE "User" SET "modules" = ${DEFAULT_OWNER_MODULES}
-      WHERE "id" = ${ownerId} AND ("modules" IS NULL OR "modules" = '')
-    `;
-    // Bump session version so any pre-existing session re-reads the new role/modules.
+    // Bump session version so any pre-existing session re-derives its route
+    // grants from the role just assigned.
     await tx.$executeRaw`UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1 WHERE "id" = ${ownerId}`;
   });
 }

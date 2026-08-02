@@ -26,7 +26,7 @@ import { getAiHealth } from "@/lib/systemHealth";
 import { getLastRun } from "@/lib/securityRunbook";
 import { CompleteActivityButton, FollowUpPrompts } from "@/components/proactive/NextStep";
 import Tabs from "@/components/Tabs";
-import { hasModule } from "@/lib/access";
+import { hasAnyPermission } from "@/lib/permissions";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import { formatZARCompact, formatDate, formatDateTime, contactName } from "@/lib/format";
 import { computeDue, dueLabels, dueColors } from "@/lib/serviceDue";
@@ -212,12 +212,17 @@ const SIGN_STATE: Record<
 export default async function DashboardPage() {
   const user = await requireUser();
   // Workspace module toggles (Settings → Modules) gate in-page content, not just
-  // nav: the automotive pack owns all the workshop/service UI. Legacy per-user
-  // module flags still gate per-account access on top of this.
+  // nav: the automotive pack owns all the workshop/service UI. That is a TENANT
+  // entitlement. WHO may see each section is RBAC — the same permissions that
+  // open the screens these tiles link to. (It used to be the per-user module CSV,
+  // so a permission grant could open /leads while the dashboard still hid it.)
   const enabledModules = await getEnabledModuleIds();
   const automotiveOn = enabledModules.has("automotive");
-  const showSales = hasModule(user, "crm");
-  const showService = hasModule(user, "workshop") && automotiveOn;
+  const [showSales, canSeeService] = await Promise.all([
+    hasAnyPermission(user, "leads.view_all", "leads.view_owned", "quotes.view_all", "quotes.view_owned"),
+    hasAnyPermission(user, "jobcards.view_all", "jobcards.view_owned", "vehicles.view_all", "vehicles.view_owned"),
+  ]);
+  const showService = canSeeService && automotiveOn;
 
   const now = new Date();
   const todayStart = startOfDay(now);

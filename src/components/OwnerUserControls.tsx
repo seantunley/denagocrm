@@ -1,87 +1,55 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useTransition } from "react";
 import { unstable_rethrow } from "next/navigation";
 import { toast } from "sonner";
 
-import { setUserRole, ownerResetUser2fa, setUserModules } from "@/app/actions/security";
-import { MODULES } from "@/lib/access";
+import { setUserRole, ownerResetUser2fa } from "@/app/actions/security";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import type { ActionResult } from "@/lib/actionResultTypes";
 
-/** Admin-only per-teammate controls: modules, role, 2FA reset. */
+/**
+ * Admin-only per-teammate controls: role and 2FA reset.
+ *
+ * The per-user "modules" checkboxes are gone. They wrote `User.modules`, a
+ * second authorization system the RBAC screens never read — ticking a permission
+ * in /settings/access left the user bounced by the proxy, and un-ticking a
+ * module here revoked access that /settings/access still showed as granted.
+ * Access is granted in Settings → Access (roles and permissions) only.
+ */
 export default function OwnerUserControls({
   userId,
   name,
   role,
-  modules,
   has2fa,
 }: {
   userId: string;
   name: string;
   role: "owner" | "member";
-  modules: string;
   has2fa: boolean;
 }) {
-  // The module checkboxes and the role toggle used to fire their action and
-  // discard the promise: a rejection was swallowed whole and a success looked
-  // identical to nothing happening. Both now report, and the checkbox reverts
-  // when the save is refused so the UI never shows a permission that isn't set.
-  const [active, setActive] = useState(
-    () => new Set(modules.split(",").map((m) => m.trim()).filter(Boolean)),
-  );
+  // The role toggle used to fire its action and discard the promise: a rejection
+  // was swallowed whole and a success looked identical to nothing happening. It
+  // now reports either way.
   const [pending, startTransition] = useTransition();
 
-  const report = (run: () => Promise<ActionResult>, fallback: string, onRefused?: () => void) =>
+  const report = (run: () => Promise<ActionResult>, fallback: string) =>
     startTransition(async () => {
       try {
         const result = await run();
         if (result?.error) {
           toast.error(result.error);
-          onRefused?.();
           return;
         }
         toast.success(result?.success ?? fallback);
       } catch (error) {
         unstable_rethrow(error);
         toast.error("Something went wrong. Please try again.");
-        onRefused?.();
       }
     });
 
   return (
     <div className="flex flex-col items-end gap-1.5">
-      {role === "member" && (
-        <div className="flex items-center gap-2 flex-wrap justify-end">
-          {MODULES.map((m) => (
-            <label
-              key={m.id}
-              title={m.desc}
-              className="flex items-center gap-1 text-[11px] text-slate-400 cursor-pointer"
-            >
-              <input
-                type="checkbox"
-                className="h-3.5 w-3.5"
-                checked={active.has(m.id)}
-                disabled={pending}
-                onChange={(e) => {
-                  const before = active;
-                  const next = new Set(before);
-                  if (e.target.checked) next.add(m.id);
-                  else next.delete(m.id);
-                  setActive(next);
-                  report(
-                    () => setUserModules(userId, [...next].join(",")),
-                    "Modules updated.",
-                    () => setActive(before),
-                  );
-                }}
-              />
-              {m.label}
-            </label>
-          ))}
-        </div>
-      )}
       <div className="flex items-center gap-3">
         <button
           type="button"

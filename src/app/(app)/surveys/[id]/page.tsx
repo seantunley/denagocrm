@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireCrm } from "@/lib/auth";
+import { requireRoute } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
 import SurveyBuilder from "@/components/SurveyBuilder";
@@ -22,7 +22,7 @@ export default async function SurveyEditorPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requireCrm();
+  await requireRoute("/surveys");
   const { id } = await params;
 
   const survey = await prisma.survey.findUnique({

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireCrm } from "@/lib/auth";
+import { requireRoute } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { formatDate } from "@/lib/format";
 import { createSurvey, deleteSurvey } from "@/app/actions/surveys";
@@ -18,7 +18,7 @@ import { SectionHeading, Surface } from "@/components/visual-system";
 export const dynamic = "force-dynamic";
 
 export default async function SurveysPage() {
-  await requireCrm();
+  await requireRoute("/surveys");
 
   const surveys = await prisma.survey.findMany({
     orderBy: { createdAt: "desc" },

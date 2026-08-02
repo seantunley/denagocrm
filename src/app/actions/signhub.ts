@@ -2,8 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireCrmOrWorkshop } from "@/lib/auth";
-import { requirePermission } from "@/lib/permissions";
+import { requirePermission, requireAnyPermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { dispatchRequest, notifyRecipient } from "@/lib/signing/dispatch";
 import { logSignEvent } from "@/lib/signing/events";
@@ -18,7 +17,9 @@ import {
 
 /** Approve or reject a pending approval step from inside the app (hub queue). */
 export async function decideApproval(stepId: string, decision: "approve" | "reject", reason?: string): Promise<{ ok: boolean; error?: string }> {
-  const user = await requireCrmOrWorkshop();
+  // The signing hub's own grant, not the retired crm/workshop module flag.
+  // canActOnStep still restricts the decision to the assigned approver.
+  const user = await requireAnyPermission("signing.view", "signing.manage");
   const step = await prisma.approvalStep.findUnique({ where: { id: stepId } });
   if (!step) return { ok: false, error: "Not found" };
   if (step.status !== "pending") return { ok: false, error: "Already actioned." };

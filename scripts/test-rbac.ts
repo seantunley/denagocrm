@@ -172,7 +172,7 @@ async function main() {
       name: "Scoped Sales",
       email: `${ids.salesUser}@example.invalid`,
       role: "member",
-      modules: "crm",
+      // modules is retired; RBAC is the only authorization input now.
     };
 
     assert.equal(await hasPermission(scopedUser, "contacts.view_owned"), true);

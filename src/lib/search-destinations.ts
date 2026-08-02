@@ -9,13 +9,13 @@ export type SearchDestination = {
 };
 
 export function getSearchDestinations({
-  modules,
   isAdmin,
+  permissions = [],
 }: {
-  modules: string;
   isAdmin: boolean;
+  permissions?: string[];
 }): SearchDestination[] {
-  const { topLinks, groups } = buildNav(modules, isAdmin);
+  const { topLinks, groups } = buildNav(isAdmin, permissions);
   const destinations: SearchDestination[] = [
     ...topLinks.map((item) => ({ ...item, group: "Workspace", keywords: [] as string[] })),
     ...groups.flatMap((group) =>

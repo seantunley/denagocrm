@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Crown, Eye, HeartPulse, ShieldCheck, TriangleAlert, UserRoundSearch, type LucideIcon } from "lucide-react";
-import { requireCrm } from "@/lib/auth";
+import { requireRoute } from "@/lib/permissions";
 import { bulkHealth } from "@/lib/healthData";
 import { healthLabels, type HealthTier } from "@/lib/health";
 import { PageHeader } from "@/components/page-header";
@@ -28,7 +28,7 @@ function name(c: { firstName: string; lastName: string | null; company: string |
 }
 
 export default async function HealthPage() {
-  await requireCrm();
+  await requireRoute("/health");
   const scored = await bulkHealth();
 
   const counts: Record<HealthTier, number> = { vip: 0, healthy: 0, watch: 0, at_risk: 0 };

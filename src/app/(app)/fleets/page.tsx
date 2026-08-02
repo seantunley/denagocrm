@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireCrm } from "@/lib/auth";
+import { requireRoute } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
 import { createFleet } from "@/app/actions/fleets";
@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 export const FLEET_TYPES = ["estate", "golf-course", "resort", "business", "other"];
 
 export default async function FleetsPage() {
-  await requireCrm();
+  await requireRoute("/fleets");
   const [fleets, contacts] = await Promise.all([
     prisma.fleet.findMany({
       orderBy: { name: "asc" },

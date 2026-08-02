@@ -3,8 +3,15 @@
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { prisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
-import { getActiveTenantId, requireOperational, requireOwner } from "@/lib/auth";
-import { requireLeadAccess, requireContactAccess, canAccessContact, hasPermission } from "@/lib/permissions";
+import { getActiveTenantId, requireOwner } from "@/lib/auth";
+import {
+  CUSTOMER_RECORD_PERMISSIONS,
+  requireLeadAccess,
+  requireContactAccess,
+  requireAnyPermission,
+  canAccessContact,
+  hasPermission,
+} from "@/lib/permissions";
 import { aiCheckDraft, aiResearch } from "@/lib/ai";
 import { basePrisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
@@ -16,7 +23,7 @@ export async function checkDraft(
   _prev: AiCheckState | undefined,
   formData: FormData
 ): Promise<AiCheckState> {
-  await requireOperational();
+  await requireAnyPermission(...CUSTOMER_RECORD_PERMISSIONS);
   const draft = String(formData.get("draft") ?? "").trim();
   if (!draft) return { error: "Nothing to check yet." };
   const contactId = String(formData.get("contactId") ?? "").trim();
@@ -42,7 +49,7 @@ export async function findPossibleDuplicates(input: {
   email?: string;
   phone?: string;
 }): Promise<{ id: string; label: string; detail: string }[]> {
-  await requireOperational();
+  await requireAnyPermission(...CUSTOMER_RECORD_PERMISSIONS);
   const email = (input.email ?? "").trim().toLowerCase();
   const digits = (input.phone ?? "").replace(/\D/g, "").slice(-9);
   const name = (input.name ?? "").trim();
@@ -120,7 +127,7 @@ export async function researchRecord(
   _prev: ResearchState | undefined,
   formData: FormData
 ): Promise<ResearchState> {
-  await requireOperational();
+  await requireAnyPermission(...CUSTOMER_RECORD_PERMISSIONS);
   const leadId = String(formData.get("leadId") ?? "").trim() || null;
   const contactId = String(formData.get("contactId") ?? "").trim() || null;
   if (!leadId && !contactId) return { error: "Nothing to research." };

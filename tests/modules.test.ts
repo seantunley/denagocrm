@@ -59,7 +59,7 @@ test("the document where-fragments agree with isAutomotiveOwnedDocument and are 
 });
 
 function hrefs(enabled?: Set<string>) {
-  const { topLinks, groups } = buildNav("crm,workshop,reports,inbox", true, [], enabled);
+  const { topLinks, groups } = buildNav(true, [], enabled);
   return [...topLinks, ...groups.flatMap((g) => g.links)].map((l) => l.href);
 }
 
