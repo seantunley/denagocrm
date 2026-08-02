@@ -42,19 +42,25 @@ export async function countersignWithSavedSignature(opts: {
     return { ok: false, error: "This document can no longer be signed." };
   }
 
+  // Assigned AND shared fields. A field with recipientId null is fillable by
+  // EVERY signer — that is how the public sign route scopes them — so loading
+  // only the assigned ones let this mark Denago signed while a required shared
+  // consent tick or text box sat empty, which the customer's own submission
+  // would then be blocked on.
   const fields = await prisma.signatureField.findMany({
-    where: { requestId, recipientId },
+    where: { requestId, OR: [{ recipientId }, { recipientId: null }] },
   });
   // A field this signer cannot answer from a stored signature (a text box, a
   // consent tick) must not be auto-filled — nobody read it. Bail rather than
   // put words in the signer's mouth; the in-person surface still handles it.
   const today = new Date().toISOString().slice(0, 10);
-  const values: { id: string; value: string; kind: string }[] = [];
+  const values: { id: string; value: string; kind: string; shared: boolean }[] = [];
   for (const field of fields) {
+    const shared = field.recipientId === null;
     if (field.kind === "signature" || field.kind === "initials" || field.kind === "stamp") {
-      values.push({ id: field.id, value: signatureRef, kind: field.kind });
+      values.push({ id: field.id, value: signatureRef, kind: field.kind, shared });
     } else if (field.kind === "date") {
-      values.push({ id: field.id, value: today, kind: field.kind });
+      values.push({ id: field.id, value: today, kind: field.kind, shared });
     } else if (field.required) {
       return {
         ok: false,
@@ -96,10 +102,22 @@ export async function countersignWithSavedSignature(opts: {
         create: { fieldId: value.id, recipientId, value: value.value, filledAt, tenantId: recipient.tenantId },
         update: { value: value.value, filledAt },
       });
-      await tx.signatureField.update({
-        where: { id: value.id },
-        data: { value: value.value, filledAt },
-      });
+      // SignatureField.value is the single value the sealed PDF stamps at the
+      // field's one placed position. On a shared field two signers can race for
+      // it, so claim first-write-wins and leave an earlier signer's answer
+      // standing — the same rule the public sign route applies. Each signer's
+      // own answer is preserved above, one row per (field, recipient).
+      if (value.shared) {
+        await tx.signatureField.updateMany({
+          where: { id: value.id, filledAt: null },
+          data: { value: value.value, filledAt },
+        });
+      } else {
+        await tx.signatureField.update({
+          where: { id: value.id },
+          data: { value: value.value, filledAt },
+        });
+      }
     }
     return true;
   });

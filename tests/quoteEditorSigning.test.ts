@@ -160,7 +160,7 @@ test("countersigning does not send the quote to the customer", () => {
   // …and the separate act exists, gated on it being someone else's turn.
   const actions = shipped("src/app/actions/recordSigning.ts");
   const send = actionBody(actions, "sendRecordSigning");
-  assert.match(send, /dispatchRequest\(state\.requestId\)/);
+  assert.match(send, /sendToRecipient\(state\.requestId, recipient\.id\)/);
   assert.match(send, /sameParty\(recipient\.email, user\.email\)/, "it must refuse to 'send' the document to the sender");
 });
 
@@ -192,6 +192,83 @@ test("the document is reviewed in place, not in an iframe of the app", () => {
   const preview = shipped("src/components/signing/SignedDocPreview.tsx");
   assert.doesNotMatch(preview, /<iframe/);
   assert.match(preview, /view\.sheets\.pages\.map/, "it renders the same sheet HTML the signing surface uses");
+});
+
+/**
+ * Review findings on the consolidation. Each of these shipped green: the four
+ * tests below are what would have caught them.
+ */
+
+test("the signed-document read is record-scoped for BOTH kinds", () => {
+  // It checked `jobcards.manage` and then read by id. A module permission says
+  // you may work with job cards, not WHICH — and the payload is the rendered
+  // document plus every signature on it, so a record-scoped user could have
+  // pulled another job card's by asking for it. Quotes were gated; job cards
+  // were not.
+  const body = actionBody(shipped("src/app/actions/recordSigning.ts"), "signedRecordDoc");
+  assert.match(body, /canAccessQuote\(user, id\)/);
+  assert.match(body, /canAccessJobCard\(user, id\)/, "a job card needs the same record-level gate");
+  const gate = body.search(/canAccessJobCard/);
+  const read = body.search(/activeRecordRequest/);
+  assert.ok(gate !== -1 && gate < read, `the gate must precede the read (gate ${gate}, read ${read})`);
+});
+
+test("countersigning fills shared fields, not only its own", () => {
+  // A field with recipientId null is fillable by EVERY signer — that is how the
+  // public sign route scopes them. Loading only the assigned ones marked Denago
+  // signed while a required shared consent tick sat empty, which then blocked
+  // the customer's own submission on a field they never saw Denago skip.
+  const code = shipped("src/lib/signing/countersign.ts");
+  assert.match(code, /OR: \[\{ recipientId \}, \{ recipientId: null \}\]/, "shared fields must be loaded too");
+  // …and a shared field is claimed first-write-wins, as the public route does,
+  // so an earlier signer's answer is not overwritten.
+  assert.match(code, /if \(value\.shared\)/);
+  assert.match(code, /updateMany\(\{\s*where: \{ id: value\.id, filledAt: null \}/);
+});
+
+test("a workflow does not reach anyone before the document is reviewed", () => {
+  // advanceWorkflow() materialises AND notifies. Called on start, it emailed the
+  // first signer immediately — so a workflow whose first node is the customer
+  // reached them while the sender was still looking at the review screen.
+  const actions = shipped("src/app/actions/recordSigning.ts");
+  assert.doesNotMatch(actions, /advanceWorkflow\(requestId\)(?!,)/, "the start path must not notify");
+  assert.match(actions, /advanceWorkflow\(requestId, \{ notify: false \}\)/);
+  assert.match(actions, /repairWorkflow\([^)]*\{ notify: false \}\)/, "healing on start must not notify either");
+
+  // The option has to actually reach the notification.
+  const runtime = shipped("src/lib/signflow/runtime.ts");
+  assert.match(runtime, /async function materialise\(requestId: string, node: SignNode, notify: boolean\)/);
+  assert.match(runtime, /if \(!notify\) return;/, "notify:false must stop before notifyRecipient");
+  assert.doesNotMatch(runtime, /await materialise\(requestId, (cur|next\.node)\);/, "every call site must pass it through");
+});
+
+test("a branched workflow acts on the live node, not the lowest order", () => {
+  // A graph pre-creates a recipient for every path, so the lowest unsigned
+  // `order` is routinely someone on a branch the condition never took —
+  // countersigning, previewing or sending against them is the wrong party.
+  // nextSigner is module-private, so slice it rather than using actionBody().
+  const source = shipped("src/app/actions/recordSigning.ts");
+  const start = source.indexOf("async function nextSigner(");
+  assert.notEqual(start, -1, "nextSigner not found — was it renamed?");
+  const body = source.slice(start, source.indexOf("\nconst sameParty", start));
+  assert.match(body, /workflowGraphJson/, "a workflow envelope must be recognised");
+  assert.match(body, /nodeId: request\.currentNodeId/, "…and resolved through the interpreter's live node");
+  assert.match(body, /if \(!request\.currentNodeId\) return null/, "un-advanced means nobody is up yet");
+
+  // The send must reach that same recipient — dispatchRequest picks its own
+  // targets by order, which is wrong for a branch.
+  const send = actionBody(shipped("src/app/actions/recordSigning.ts"), "sendRecordSigning");
+  assert.match(send, /sendToRecipient\(state\.requestId, recipient\.id\)/);
+  assert.doesNotMatch(send, /dispatchRequest\(/, "order-based dispatch cannot serve a branched graph");
+});
+
+test("Resend takes the resend path", () => {
+  // dispatchRequest's claim excludes an already-"sent" request, so the button
+  // that relabelled itself "Resend" reported a delivery failure every time.
+  const card = shipped("src/components/SigningBlock.tsx");
+  assert.match(card, /preview\.sent \? resendRecordSigning\(kind, id\) : sendRecordSigning\(kind, id\)/);
+  const preview = shipped("src/components/signing/SignedDocPreview.tsx");
+  assert.match(preview, /view\.sent[\s\S]{0,80}Resend/, "the label is what makes taking the wrong path a lie");
 });
 
 test("auto-placed signature fields get a page to themselves", () => {

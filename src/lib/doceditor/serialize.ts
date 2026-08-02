@@ -362,7 +362,23 @@ export function renderSigningSheets(doc: DocumentModel, ctx: RenderCtx, logoData
   return { width: size.w, height: size.h, margin: m, css, pages };
 }
 
-export function renderDocumentHtml(doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string, opts?: { hideOverlays?: boolean; appendHtml?: string; stampedFields?: StampField[] }): string {
+export function renderDocumentHtml(
+  doc: DocumentModel,
+  ctx: RenderCtx,
+  logoDataUri?: string,
+  opts?: {
+    hideOverlays?: boolean;
+    appendHtml?: string;
+    stampedFields?: StampField[];
+    /**
+     * Screen-only chrome placed before the document — the Print / Back bar the
+     * browser print page needs. Kept out of `appendHtml` because that lands
+     * INSIDE the flow after the last page; this sits above it and is hidden by
+     * `@media print`, so what prints is exactly what the PDF pipeline renders.
+     */
+    toolbarHtml?: string;
+  },
+): string {
   const font = fontStack(doc.style.fontFamily);
   const m = doc.style.margin;
   const header = doc.header.length ? doc.header.map((b) => blockHtml(b, ctx, doc.style, logoDataUri)).join("") : "";
@@ -385,7 +401,9 @@ export function renderDocumentHtml(doc: DocumentModel, ctx: RenderCtx, logoDataU
     ul, ol { margin: 0 0 8px 20px; }
     ${header ? `.doc-header { position: fixed; top: -${m - 8}px; left: 0; right: 0; }` : ""}
     ${footer ? `.doc-footer { position: fixed; bottom: -${m - 8}px; left: 0; right: 0; }` : ""}
+    ${opts?.toolbarHtml ? "@media print { .doc-toolbar { display: none !important; } }" : ""}
   </style></head><body>
+    ${opts?.toolbarHtml ?? ""}
     ${header ? `<div class="doc-header">${header}</div>` : ""}
     ${footer ? `<div class="doc-footer">${footer}</div>` : ""}
     ${body}

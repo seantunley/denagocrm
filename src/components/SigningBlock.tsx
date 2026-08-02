@@ -276,7 +276,10 @@ export default function SigningBlock({
           error={err}
           note={note}
           onCountersign={() => run("countersign", () => countersignRecord(kind, id))}
-          onSend={() => run("send", () => sendRecordSigning(kind, id))}
+          // A button labelled "Resend" must take the resend path. sendRecordSigning
+          // is the FIRST send: dispatchRequest's claim excludes an already-"sent"
+          // request, so it would have reported a delivery failure every time.
+          onSend={() => run("send", () => (preview.sent ? resendRecordSigning(kind, id) : sendRecordSigning(kind, id)))}
           onClose={() => { setPreview(null); setErr(null); setNote(null); refresh(); }}
         />
       )}

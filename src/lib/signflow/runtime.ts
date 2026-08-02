@@ -57,10 +57,19 @@ export function docSignerNodes(graph: WorkflowGraph): SignNode[] {
   );
 }
 
-/** Materialise + notify the actionable node the interpreter has arrived at. */
-async function materialise(requestId: string, node: SignNode): Promise<void> {
+/**
+ * Materialise + notify the actionable node the interpreter has arrived at.
+ *
+ * `notify: false` advances the graph WITHOUT contacting anyone. The record's
+ * signature card now shows the countersigned document before it goes out, and
+ * the interpreter's own notification pre-empted that — the customer received
+ * their signing link while the sender was still looking at the review screen.
+ * The explicit send notifies whoever the graph has arrived at.
+ */
+async function materialise(requestId: string, node: SignNode, notify: boolean): Promise<void> {
   if (node.type === "signer" || (node.type === "approval" && node.mode === "signature")) {
     // Pre-created recipient — activate + notify it.
+    if (!notify) return;
     const recipient = await prisma.signatureRecipient.findFirst({ where: { requestId, nodeId: node.id } });
     if (recipient) await notifyRecipient(recipient.id);
     return;
@@ -103,7 +112,11 @@ async function materialise(requestId: string, node: SignNode): Promise<void> {
  * and materialise the next actionable step (or complete / reject the request).
  * Called on send (currentNodeId null → start) and after every step resolves.
  */
-export async function advanceWorkflow(requestId: string): Promise<void> {
+export async function advanceWorkflow(
+  requestId: string,
+  opts?: { notify?: boolean },
+): Promise<void> {
+  const notify = opts?.notify ?? true;
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId } });
   if (!req || !req.workflowGraphJson) return;
   if (isRequestClosed(req.status)) return;
@@ -126,19 +139,19 @@ export async function advanceWorkflow(requestId: string): Promise<void> {
     if (cur.type === "signer") {
       const r = await prisma.signatureRecipient.findFirst({ where: { requestId, nodeId: cur.id } });
       if (r?.status === "declined") { await rejectRequest(requestId); return; } // a declined signer rejects the request
-      if (r?.status !== "signed") { await materialise(requestId, cur); return; } // not resolved yet — heal
+      if (r?.status !== "signed") { await materialise(requestId, cur, notify); return; } // not resolved yet — heal
       fromEdge = cur.next;
     } else if (cur.type === "approval") {
       if (cur.mode === "signature") {
         const r = await prisma.signatureRecipient.findFirst({ where: { requestId, nodeId: cur.id } });
         if (r?.status === "declined") { fromEdge = cur.whenRejected; }
         else if (r?.status === "signed") { fromEdge = cur.whenApproved; }
-        else { await materialise(requestId, cur); return; } // pending — heal
+        else { await materialise(requestId, cur, notify); return; } // pending — heal
       } else {
         const s = await prisma.approvalStep.findFirst({ where: { requestId, nodeId: cur.id }, orderBy: { createdAt: "desc" } });
         if (s?.status === "rejected") fromEdge = cur.whenRejected;
         else if (s?.status === "approved") fromEdge = cur.whenApproved;
-        else { await materialise(requestId, cur); return; } // pending or never materialised — heal
+        else { await materialise(requestId, cur, notify); return; } // pending or never materialised — heal
       }
     } else {
       return;
@@ -172,7 +185,7 @@ export async function advanceWorkflow(requestId: string): Promise<void> {
     data: { currentNodeId: next.node.id, status: "in_progress" },
   });
   if (claimed.count !== 1) return;
-  await materialise(requestId, next.node);
+  await materialise(requestId, next.node, notify);
 }
 
 /**
@@ -188,8 +201,11 @@ export async function advanceWorkflow(requestId: string): Promise<void> {
  * at-most-once claim for signers; conditional currentNodeId claim for advances).
  * A no-op on a non-workflow or closed request.
  */
-export async function repairWorkflow(requestId: string): Promise<void> {
-  await advanceWorkflow(requestId);
+export async function repairWorkflow(
+  requestId: string,
+  opts?: { notify?: boolean },
+): Promise<void> {
+  await advanceWorkflow(requestId, opts);
 }
 
 async function rejectRequest(requestId: string): Promise<void> {

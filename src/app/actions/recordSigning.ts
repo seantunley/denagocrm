@@ -7,6 +7,7 @@ import {
   requireQuoteAccess,
   requireJobCardAccess,
   canAccessQuote,
+  canAccessJobCard,
   hasPermission,
   type PermissionUser,
 } from "@/lib/permissions";
@@ -18,7 +19,7 @@ import { defaultBuilderTemplateId } from "@/lib/docbuilder/store";
 import { resolveEnvelope } from "@/lib/signing/autoEnvelope";
 import { renderEnvelopePdf } from "@/lib/signing/render";
 import { createSignatureRequestFromDoc } from "@/lib/signing/service";
-import { dispatchRequest } from "@/lib/signing/dispatch";
+import { dispatchRequest, notifyRecipient } from "@/lib/signing/dispatch";
 import { logSignEvent } from "@/lib/signing/events";
 import { activeRecordRequest, isLockedForSigning, type QuoteSigningView } from "@/lib/signing/record";
 import { advanceWorkflow, repairWorkflow } from "@/lib/signflow/runtime";
@@ -171,8 +172,10 @@ export async function startRecordSigning(
   // self-heal a workflow request left un-advanced by an earlier crash.
   const existing = await activeRecordRequest({ quoteId, jobCardId });
   if (existing && !isRequestClosed(existing.status)) {
-    await repairWorkflow(existing.requestId);
-    return { ok: true, requestId: existing.requestId };
+    // Heal the graph but do not notify: this is the START path, and the caller
+    // is about to be shown the document to review before it goes anywhere.
+    await repairWorkflow(existing.requestId, { notify: false });
+    return { ok: true, requestId: existing.requestId, preview: true };
   }
 
   // Quote signing uses the editable builder template. Job cards deliberately stay
@@ -300,8 +303,8 @@ export async function startRecordSigning(
     return { ok: false, error: "This record changed while the signing document was being prepared — please try again." };
   }
   if (outcome.kind === "reused") {
-    await repairWorkflow(outcome.requestId);
-    return { ok: true, requestId: outcome.requestId };
+    await repairWorkflow(outcome.requestId, { notify: false });
+    return { ok: true, requestId: outcome.requestId, preview: true };
   }
   const requestId: string = outcome.requestId;
 
@@ -344,7 +347,11 @@ export async function startRecordSigning(
     // The graph + recipient node IDs were committed in the creation transaction;
     // advance the first node now. advanceWorkflow is idempotent, and a retry that
     // reuses an un-advanced request repairs it the same way (repairWorkflow).
-    await advanceWorkflow(requestId);
+    //
+    // notify: false — advancing used to email the first signer on the spot, so a
+    // workflow whose first node is the customer reached them before anyone had
+    // looked at the document. The graph moves; the sending is the send button's.
+    await advanceWorkflow(requestId, { notify: false });
     const after = await prisma.signatureRequest.findUnique({
       where: { id: requestId },
       select: { currentNodeId: true },
@@ -396,6 +403,25 @@ export async function startRecordSigning(
  * "who is up" answer both the countersign and the send button key off.
  */
 async function nextSigner(requestId: string) {
+  const request = await prisma.signatureRequest.findUnique({
+    where: { id: requestId },
+    select: { workflowGraphJson: true, currentNodeId: true },
+  });
+  // A workflow envelope has a live node, and recipient ORDER is not it: a graph
+  // with branches pre-creates a recipient for every path, so the lowest unsigned
+  // order can easily be someone on a branch the condition did not take. Ask the
+  // interpreter which node it is actually sitting on.
+  if (request?.workflowGraphJson) {
+    if (!request.currentNodeId) return null; // not advanced yet — nobody is up
+    return prisma.signatureRecipient.findFirst({
+      where: {
+        requestId,
+        nodeId: request.currentNodeId,
+        role: { not: "viewer" },
+        status: { notIn: ["signed", "declined"] },
+      },
+    });
+  }
   return prisma.signatureRecipient.findFirst({
     where: { requestId, role: { not: "viewer" }, status: { notIn: ["signed", "declined"] } },
     orderBy: { order: "asc" },
@@ -404,6 +430,40 @@ async function nextSigner(requestId: string) {
 
 const sameParty = (a: string | null, b: string | null) =>
   Boolean(a && b && a.trim().toLowerCase() === b.trim().toLowerCase());
+
+/**
+ * Notify ONE named recipient and settle the request's send state around it.
+ *
+ * dispatchRequest() chooses its own targets from recipient order. For a plain
+ * sequential envelope that is the same recipient; for a branched workflow it is
+ * not, because a graph pre-creates a recipient per path and the lowest unsigned
+ * order can sit on a branch the condition never took. The caller has already
+ * resolved who is live, so send to exactly them.
+ */
+async function sendToRecipient(
+  requestId: string,
+  recipientId: string,
+): Promise<{ notified: number; unreachable: number }> {
+  const before = await prisma.signatureRequest.findUnique({
+    where: { id: requestId },
+    select: { sentAt: true },
+  });
+  const outcome = await notifyRecipient(recipientId);
+  const notified = outcome.delivered ? 1 : 0;
+  const unreachable = outcome.reachable ? 0 : 1;
+  if (notified > 0) {
+    // Same bookkeeping dispatchRequest does on a first successful send, and
+    // conditional for the same reason: a void/decline can land during the
+    // provider call, and an unconditional update would resurrect it. sentAt is
+    // preserved once set — it is when the document FIRST went out, not when the
+    // latest signer in the chain was reached.
+    await prisma.signatureRequest.updateMany({
+      where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
+      data: { status: "sent", sentAt: before?.sentAt ?? new Date() },
+    });
+  }
+  return { notified, unreachable };
+}
 
 /**
  * Denago countersigns the open envelope with the signer's stored signature.
@@ -445,6 +505,15 @@ export async function countersignRecord(kind: Kind, id: string): Promise<Result>
   });
   if (!signed.ok) return { ok: false, error: signed.error };
 
+  // A workflow envelope must move to its next node now, or nextSigner() would
+  // keep pointing at the node just signed and the send button would refuse.
+  // Still without notifying — the send is the send.
+  const request = await prisma.signatureRequest.findUnique({
+    where: { id: state.requestId },
+    select: { workflowGraphJson: true },
+  });
+  if (request?.workflowGraphJson) await advanceWorkflow(state.requestId, { notify: false });
+
   await logAudit({
     action: "signing.countersigned",
     summary: `Countersigned “${state.title}” for Denago`,
@@ -476,9 +545,15 @@ export type SignedDocView = {
 export async function signedRecordDoc(kind: Kind, id: string): Promise<SignedDocView | null> {
   const user = await getCurrentUser();
   if (!user) return null;
+  // BOTH gates, for BOTH kinds. A module permission says you may work with job
+  // cards; it does not say WHICH. This payload is the rendered document plus
+  // every signature stamped on it, so a record-scoped user asking by id must be
+  // refused the ones outside their scope — exactly as startRecordSigning's
+  // requireJobCardAccess does on the write side.
   const permission = kind === "quote" ? "quotes.change_status" : "jobcards.manage";
   if (!(await hasPermission(user, permission))) return null;
-  if (kind === "quote" && !(await canAccessQuote(user, id))) return null;
+  const allowed = kind === "quote" ? await canAccessQuote(user, id) : await canAccessJobCard(user, id);
+  if (!allowed) return null;
 
   const state = await activeRecordRequest({
     quoteId: kind === "quote" ? id : null,
@@ -527,7 +602,10 @@ export async function sendRecordSigning(kind: Kind, id: string): Promise<Result>
     return { ok: false, error: "Countersign it first — you are next in the signing order." };
   }
 
-  const { notified, unreachable } = await dispatchRequest(state.requestId);
+  // Send to whoever is ACTUALLY up. dispatchRequest picks its targets by order,
+  // which is right for a plain sequential envelope and wrong for a branched
+  // workflow — there it would mail a recipient on a path the graph never took.
+  const { notified, unreachable } = await sendToRecipient(state.requestId, recipient.id);
   if (notified > 0) {
     await logAudit({
       action: "signing.send",
