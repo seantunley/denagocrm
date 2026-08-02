@@ -149,6 +149,29 @@ test("only one thing countersigns a quote", () => {
   assert.match(countersign, /dealerSignedAt: null/, "…claimed conditionally, so a second call cannot overwrite the first");
 });
 
+test("a countersignature and its evidence commit together", () => {
+  // The signing events and the quote's dealerSigned* columns used to be written
+  // AFTER the transaction. A crash in between left a recipient marked signed
+  // with no audit trail and an uncountersigned quote — and the retry could not
+  // repair it, because the guard at the top sees status === "signed" and
+  // returns ok straight away. There is no "partly signed" state worth having.
+  const code = shipped("src/lib/signing/countersign.ts");
+  const start = code.indexOf("prisma.$transaction");
+  assert.notEqual(start, -1, "the transaction is gone — was it rewritten?");
+  // Bounded FROM the start; an unbounded indexOf can slice backwards to empty.
+  const tx = code.slice(start, code.indexOf("if (!claimed)", start));
+  assert.ok(tx.length > 0, "the slice ran backwards");
+
+  assert.match(tx, /tx\.signatureEvent\.create/, "the signing events belong inside the commit");
+  assert.match(tx, /type: "signed"/, "…including the signed event itself");
+  assert.match(tx, /tx\.quote\.updateMany/, "…and the quote's countersignature columns");
+
+  // Nothing may write after the commit — that is the whole failure mode.
+  const after = code.slice(code.indexOf("if (!claimed)", start));
+  assert.doesNotMatch(after, /await (prisma|tx)\./, "no write may follow the commit");
+  assert.doesNotMatch(after, /logSignEvent/, "logSignEvent uses its own client, so it lands outside the commit");
+});
+
 test("countersigning does not send the quote to the customer", () => {
   // advanceAfterSignature() emails the next signer the instant someone signs.
   // On a sequential envelope that meant the quote left for the customer as a

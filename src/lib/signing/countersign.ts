@@ -1,6 +1,9 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import { logSignEvent, reqMeta } from "./events";
+// reqMeta only: the signing events are written on the transaction client now,
+// so logSignEvent (which uses its own) would put them outside the commit —
+// which is the bug this fixed.
+import { reqMeta } from "./events";
 import { isRequestClosed } from "./status";
 
 /**
@@ -119,34 +122,52 @@ export async function countersignWithSavedSignature(opts: {
         });
       }
     }
+
+    // The evidence and the quote's own columns commit WITH the signature, not
+    // after it. They used to run post-commit, so a crash in between left a
+    // recipient marked signed with no signing events and an uncountersigned
+    // quote — and the retry could not repair it, because the guard at the top
+    // sees status === "signed" and returns ok straight away. There is no
+    // "partly signed" state worth having: either all of this is true or none
+    // of it is.
+    for (const value of values) {
+      await tx.signatureEvent.create({
+        data: {
+          requestId,
+          recipientId,
+          type: "field_filled",
+          actor: signedName,
+          channel: "web",
+          metadata: { kind: value.kind, via: "countersign" },
+        },
+      });
+    }
+    await tx.signatureEvent.create({
+      data: {
+        requestId,
+        recipientId,
+        type: "signed",
+        actor: signedName,
+        channel: "web",
+        ip: meta.ip,
+        userAgent: meta.ua,
+        metadata: { via: "countersign" },
+      },
+    });
+
+    // Keep the quote's own countersignature columns in step. They are what the
+    // Print/PDF view renders (QuotePrintDoc), and they predate the signing hub —
+    // writing them here is what lets the separate "sign as Denago" action go
+    // away without the printed quote losing its signature.
+    if (recipient.request.quoteId) {
+      await tx.quote.updateMany({
+        where: { id: recipient.request.quoteId, dealerSignedAt: null },
+        data: { dealerSignedAt: new Date(), dealerSignedByName: signedName, dealerSignatureRef: signatureRef },
+      });
+    }
     return true;
   });
 
   if (!claimed) return { ok: false, error: "This document can no longer be countersigned." };
-
-  for (const value of values) {
-    await logSignEvent(requestId, { type: "field_filled", recipientId, actor: signedName, channel: "web", metadata: { kind: value.kind, via: "countersign" } });
-  }
-  await logSignEvent(requestId, {
-    type: "signed",
-    recipientId,
-    actor: signedName,
-    channel: "web",
-    ip: meta.ip,
-    userAgent: meta.ua,
-    metadata: { via: "countersign" },
-  });
-
-  // Keep the quote's own countersignature columns in step. They are what the
-  // Print/PDF view renders (QuotePrintDoc), and they predate the signing hub —
-  // writing them here is what lets the separate "sign as Denago" action go away
-  // without the printed quote losing its signature.
-  if (recipient.request.quoteId) {
-    await prisma.quote.updateMany({
-      where: { id: recipient.request.quoteId, dealerSignedAt: null },
-      data: { dealerSignedAt: new Date(), dealerSignedByName: signedName, dealerSignatureRef: signatureRef },
-    });
-  }
-
   return { ok: true };
 }
