@@ -61,17 +61,50 @@ test("access to ONE document is decided by resolving that document", () => {
   );
 });
 
-test("the soft-delete write carries the tenant, not just the gate", () => {
-  // Defence at the write, so a future caller whose gate is wrong cannot reach
-  // across tenants anyway. delegate() runs on basePrisma.
+test("EVERY soft delete and restore is tenant-scoped, not just documents", () => {
+  // Documents were the reported case; contacts, leads, vehicles, products and
+  // library documents had the identical shape — a canAccess*() that returns
+  // true for any id once the user holds `view_all`, then an unrestricted
+  // basePrisma write. An OPTIONAL tenant parameter would have left five of the
+  // six callers exactly as they were, so the helper applies it itself and no
+  // caller can omit it.
   const trash = shipped("src/lib/trash.ts");
-  assert.match(trash, /opts\?: \{ tenantId\?: string \| null \}/, "softDeleteRecord must accept a tenant");
-  assert.match(trash, /delegate\(model\)\.updateMany\(/, "a conditional write, so a tenant mismatch matches no rows");
-  assert.match(trash, /if \(rows\.count === 0\) return null;/, "…and reports the miss instead of pretending");
+  assert.doesNotMatch(trash, /opts\?:/, "an optional tenant is one a caller can forget");
+  assert.match(trash, /function activeTenantWhere\(\)/);
+  assert.match(trash, /tenantId: currentTenantScope\(\)\?\.tenantId \?\? null/);
 
-  const action = shipped("src/app/actions/documents.ts");
-  assert.match(action, /tenantId: currentTenantScope\(\)\?\.tenantId \?\? null/, "deleteDocument must pass it");
-  assert.match(action, /if \(!doc\) redirect\("\/documents"\)/, "a miss must not fall through");
+  for (const fn of ["softDeleteRecord", "restoreRecord"]) {
+    const start = trash.indexOf(`export async function ${fn}(`);
+    assert.notEqual(start, -1, `${fn} is gone — was it renamed?`);
+    const body = trash.slice(start, trash.indexOf("\n}", start));
+    assert.match(body, /updateMany\(/, `${fn} must write conditionally, so a foreign id matches no rows`);
+    assert.match(body, /\.\.\.activeTenantWhere\(\)/, `${fn} must carry the tenant predicate`);
+    assert.match(body, /return null;/, `${fn} must report a miss rather than pretend`);
+  }
+});
+
+test("no caller announces a delete or restore that did not happen", () => {
+  // Every one of these dereferenced the returned row immediately. With the
+  // write now able to match nothing, logging first would audit a phantom
+  // deletion and then crash reading a name off null.
+  for (const [rel, symbol] of [
+    ["src/app/actions/documents.ts", "doc"],
+    ["src/app/actions/contacts.ts", "contact"],
+    ["src/app/actions/leads.ts", "lead"],
+    ["src/app/actions/library.ts", "document"],
+    ["src/app/actions/products.ts", "product"],
+    ["src/app/actions/vehicles.ts", "vehicle"],
+    ["src/app/actions/trash.ts", "record"],
+  ] as const) {
+    const code = shipped(rel);
+    const write = code.search(/(softDeleteRecord|restoreRecord)\(/);
+    assert.notEqual(write, -1, `${rel} no longer soft-deletes — has it moved?`);
+    const after = code.slice(write);
+    const miss = after.indexOf(`if (!${symbol})`);
+    const audit = after.search(/logAudit(Strict)?\(\{/);
+    assert.ok(miss !== -1, `${rel} must check for a miss before using the row`);
+    assert.ok(miss < audit, `${rel} must check the miss BEFORE auditing (${miss} vs ${audit})`);
+  }
 });
 
 test("a deletion that did not happen is not audited", () => {

@@ -153,6 +153,9 @@ export async function deleteLibraryDocument(id: string, formData: FormData) {
   const user = await requirePermission("library.manage");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const document = await softDeleteRecord("libraryDocument", id, reason, user.name);
+  // Nothing matched — another tenant's id, or already gone. Never audit a
+  // deletion that did not happen.
+  if (!document) return;
   await logAudit({
     action: "trash.deleted",
     summary: `Moved library document “${document.name}” to trash — ${reason}`,

@@ -1,6 +1,6 @@
 "use server";
 
-import { asActionResult, ActionRefusal } from "@/lib/actionResult";
+import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { withTenantWrite } from "@/lib/tenantWrite";
@@ -131,6 +131,9 @@ export async function deleteContact(id: string, formData: FormData) {
     const user = await requireContactAccess(id, "contacts.delete");
     const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
     const contact = await softDeleteRecord("contact", id, reason, user.name);
+    // Nothing matched — another tenant's id, or already gone. Never audit a
+    // deletion that did not happen.
+    if (!contact) refuse("That contact could not be found.");
     await logAudit({
       action: "trash.deleted",
       summary: `Moved contact ${contactName(contact)} to trash — ${reason}`,
