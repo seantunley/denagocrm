@@ -625,6 +625,9 @@ export async function deleteLead(leadId: string, formData: FormData) {
     const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
     const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
     const lead = await softDeleteRecord("lead", leadId, reason, user.name);
+    // Nothing matched — another tenant's id, or already gone. Never audit a
+    // deletion that did not happen.
+    if (!lead) refuse("That lead could not be found.");
     await logAuditStrict({
       action: "trash.deleted",
       summary: `Moved lead “${lead.title}” to trash — ${reason}`,

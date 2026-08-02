@@ -1,6 +1,7 @@
 import { subDays } from "date-fns";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
+import { activeTenantPredicate } from "./tenantPredicate";
 import { deleteFile } from "./storage";
 import { type CustomEntity } from "./customFields";
 
@@ -33,23 +34,66 @@ function delegate(model: TrashModel): any {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
+/**
+ * The active tenant. Every trash model carries `tenantId`, and delegate() runs
+ * on basePrisma — which BYPASSES the RLS extension — so the predicate has to be
+ * written by hand at each write.
+ *
+ * Resolved here rather than passed in, because a parameter is a thing a caller
+ * can get wrong: six callers reached these helpers and only one thought about
+ * tenancy. Taking the decision away from them is the fix.
+ */
+function activeTenantWhere(): { tenantId?: string | null } {
+  return activeTenantPredicate("softDeleteRecord/restoreRecord");
+}
+
+/**
+ * Soft-delete one record, within the active tenant.
+ *
+ * `where: { id }` alone is a cross-tenant write waiting for a caller whose
+ * authorization check answers "yes" without looking at the tenant — and that is
+ * the NORM here, not the exception: every canAccess*() helper in this app
+ * returns true for any supplied id once the user holds the matching `view_all`,
+ * because "all" was written to mean "all of mine". The deletion then ran
+ * unrestricted. Documents were the reported case; contacts, leads, vehicles,
+ * products and library documents had the identical shape.
+ *
+ * The predicate is applied unconditionally so no caller can omit it, and the
+ * write is conditional (updateMany) so another tenant's id matches no rows
+ * instead of deleting one.
+ *
+ * Returns null when nothing matched: a caller that assumed a row came back has
+ * to handle the miss rather than logging a deletion that never happened.
+ */
 export async function softDeleteRecord(
   model: TrashModel,
   id: string,
   reason: string,
   userName: string
 ) {
-  return delegate(model).update({
-    where: { id },
+  const rows = await delegate(model).updateMany({
+    where: { id, ...activeTenantWhere() },
     data: { deletedAt: new Date(), deleteReason: reason, deletedByName: userName },
   });
+  if (rows.count === 0) return null;
+  return delegate(model).findFirst({ where: { id, ...activeTenantWhere() } });
 }
 
+/**
+ * Restore one record, within the active tenant — same reasoning as the delete.
+ * Restoring another tenant's row is the same cross-tenant write in reverse:
+ * it resurrects data the other tenant deliberately deleted.
+ *
+ * Returns null when nothing matched, so a caller cannot announce a restore
+ * that did not happen.
+ */
 export async function restoreRecord(model: TrashModel, id: string) {
-  return delegate(model).update({
-    where: { id },
+  const rows = await delegate(model).updateMany({
+    where: { id, ...activeTenantWhere() },
     data: { deletedAt: null, deleteReason: null, deletedByName: null },
   });
+  if (rows.count === 0) return null;
+  return delegate(model).findFirst({ where: { id, ...activeTenantWhere() } });
 }
 
 /** Permanently removes trash older than the retention window. Returns count purged. */

@@ -9,6 +9,11 @@ export async function restoreFromTrash(model: TrashModel, id: string) {
   const user = await requireOwner();
   if (!TRASH_MODELS.includes(model)) return;
   const record = await restoreRecord(model, id);
+  // Nothing matched: the id belongs to another tenant, or was purged. Restoring
+  // another tenant's row resurrects data they deliberately deleted, so this is
+  // a refusal — and without the check we would audit a restore that never
+  // happened, then crash reading a title off null.
+  if (!record) return;
   await logAudit({
     action: "trash.restored",
     summary: `Restored ${model} “${record.title ?? record.model ?? record.fileName ?? record.firstName ?? record.name ?? id}” from trash`,

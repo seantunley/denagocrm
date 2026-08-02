@@ -155,6 +155,9 @@ export async function deleteVehicle(id: string, formData: FormData) {
   const user = await requireVehicleAccess(id, "vehicles.manage");
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const vehicle = await softDeleteRecord("vehicle", id, reason, user.name);
+  // Nothing matched — another tenant's id, or already gone. Never audit a
+  // deletion that did not happen.
+  if (!vehicle) return;
   await logAudit({
     action: "trash.deleted",
     summary: `Moved vehicle ${vehicle.model} to trash — ${reason}`,

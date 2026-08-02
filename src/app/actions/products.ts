@@ -76,6 +76,9 @@ export async function deleteProduct(id: string, formData: FormData) {
   const user = await requireOwner();
   const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
   const product = await softDeleteRecord("product", id, reason, user.name);
+  // Nothing matched — another tenant's id, or already gone. Never audit a
+  // deletion that did not happen.
+  if (!product) return;
   await logAudit({
     action: "trash.deleted",
     summary: `Moved product ${product.name} to trash — ${reason}`,
