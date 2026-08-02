@@ -1,0 +1,137 @@
+import type { JourneyCursor, JourneyWaitState } from "./journeyCursor";
+import type { WaitForTriggerConfig } from "./journeyTypes";
+
+/**
+ * `wait_for_trigger`: park a run until a named event arrives for this entity.
+ *
+ * ── The decision: the waiter POLLS; the event processor does not push ───────
+ *
+ * The obvious design is push — `processJourneyEvents` already walks every
+ * pending event, so it could look for runs parked on a matching wait and set
+ * `nextRunAt = now`. It was rejected, on three specific failures rather than
+ * taste. A waiting run is a different thing from an enrolment, and it has to
+ * survive all three of these:
+ *
+ *   1. AN EVENT ARRIVING BETWEEN THE PARK AND THE COMMIT. The runner decides to
+ *      wait at T0 and writes the row at T0+ε. A pusher scanning at T0+ε/2 finds
+ *      no parked run — the row is not there yet — marks the event processed and
+ *      moves on. The run then sits until its timeout with the event it was
+ *      waiting for already in the table. Closing that needs the park and the
+ *      event scan inside one transaction, and they are two different crons.
+ *      Polling has no such window: `since` is captured at T0, BEFORE the write,
+ *      so an event at T0+ε/2 is `>= since` and the next poll finds it.
+ *
+ *   2. TWO EVENTS IN THE SAME TICK. A pusher would nudge the same run twice and
+ *      the second nudge is either a no-op or a double wake, depending on
+ *      ordering nobody controls. The poll asks one ordered question — earliest
+ *      matching event at or after `since` — and gets one answer. HA behaves the
+ *      same way: `wait_for_trigger` resumes on the FIRST trigger that fires and
+ *      stops listening.
+ *
+ *   3. THE RUN BEING PURGED. Push means the event processor holds a reference to
+ *      a run row, which is the `blockedByRunId` dangling-id problem again. With
+ *      polling the waiter is the only actor: a purged run simply stops asking,
+ *      and there is nothing left pointing at it.
+ *
+ * What polling costs is latency and one indexed query per waiting run per tick.
+ * The latency is not actually worse: `processJourneyRuns` only picks up runs
+ * whose `nextRunAt` has passed, so even a pushed wake would not run before the
+ * next engine tick. The query is bounded by JourneyEvent's
+ * (entityType, entityId, type, createdAt) index and by there being at most one
+ * armed wait per run.
+ *
+ * ── Resuming at the right FRAME ─────────────────────────────────────────────
+ *
+ * A wake must land on the exact frame position, not a top-level step id. That is
+ * not solved here by re-deriving anything: the runner never advances the cursor
+ * while a wait is armed, exactly as it does not advance a send that quiet hours
+ * held (`StepResult.retryStep`). The frames are still on the cursor, untouched,
+ * so `resolveCursor` walks straight back to the same step. The wait's own
+ * identity is the trace PATH — see JourneyWaitState — so the same step in
+ * iteration 2 of a repeat is a genuinely different wait from iteration 0's.
+ */
+
+/**
+ * How often an armed wait re-checks. One minute, deliberately shorter than the
+ * cron cadence: the poll is not the clock, the engine tick is. This only ensures
+ * a wait never sleeps LONGER than a tick, so the wake latency is the cron's and
+ * not an interval invented here.
+ */
+export const WAIT_POLL_INTERVAL_MS = 60_000;
+
+/**
+ * The wait already armed AT THIS POSITION, or null.
+ *
+ * Three things hang off this one comparison, which is why it is a named
+ * function rather than an inline condition in the runner:
+ *
+ *   - a POLL is told apart from a first arrival, so the lifetime step budget is
+ *     charged once for the wait rather than once per engine tick;
+ *   - the step log is not re-opened on every poll, so the trace reports the
+ *     whole wait instead of the last sixty seconds of it;
+ *   - and each iteration of an enclosing `repeat` gets its OWN wait.
+ *
+ * That last one is the trap. Matching on the STEP ID would make iteration 1
+ * inherit iteration 0's watermark and wake instantly on the event that already
+ * resolved iteration 0 — a "chase them twice" journey would fire both chases the
+ * moment the first reply landed. `path` carries the iteration, exactly as the
+ * step log's key does.
+ *
+ * A wait attached to any other position is stale — a hand-edited cursor, or a
+ * definition that changed under a parked run — and the caller drops it.
+ */
+export function armedWaitFor(
+  cursor: JourneyCursor,
+  step: { type: string },
+  path: string,
+): JourneyWaitState | null {
+  if (!cursor.wait) return null;
+  if (step.type !== "wait_for_trigger") return null;
+  return cursor.wait.path === path ? cursor.wait : null;
+}
+
+export function armWaitState(
+  path: string,
+  config: WaitForTriggerConfig,
+  now: Date,
+): JourneyWaitState {
+  return {
+    path,
+    since: now.toISOString(),
+    until: new Date(now.getTime() + config.timeoutMinutes * 60_000).toISOString(),
+  };
+}
+
+/** When the next poll should happen: never past the deadline it is racing. */
+export function waitPollAt(wait: JourneyWaitState, now: Date): Date {
+  const until = Date.parse(wait.until);
+  const next = now.getTime() + WAIT_POLL_INTERVAL_MS;
+  return new Date(Math.min(next, until));
+}
+
+export type WaitDecision =
+  | { kind: "woken" }
+  | { kind: "timed_out" }
+  | { kind: "keep_waiting"; nextRunAt: Date };
+
+/**
+ * What an armed wait should do on this tick.
+ *
+ * ORDER MATTERS, and it is the non-obvious half: an event that was found WINS
+ * even when the deadline has already passed. The poll runs on the cron, so a
+ * tick can easily land after `until` — a late cron, a busy queue, a deploy —
+ * and an event that genuinely arrived inside the window would otherwise be
+ * discarded as a timeout. The question the trace has to answer is "did the thing
+ * happen", not "was the engine punctual". Checking the timeout first would make
+ * the answer depend on scheduler jitter.
+ */
+export function decideWait(wait: JourneyWaitState, now: Date, found: boolean): WaitDecision {
+  if (found) return { kind: "woken" };
+  if (now.getTime() >= Date.parse(wait.until)) return { kind: "timed_out" };
+  return { kind: "keep_waiting", nextRunAt: waitPollAt(wait, now) };
+}
+
+/** How long a wait has been armed, for the trace. */
+export function waitedMs(wait: JourneyWaitState, now: Date): number {
+  return Math.max(0, now.getTime() - Date.parse(wait.since));
+}
