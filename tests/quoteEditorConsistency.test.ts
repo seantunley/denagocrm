@@ -266,8 +266,8 @@ test("the row rewrite does not add round trips inside the transaction", () => {
   assert.ok(tx.length > 200, "the slice must actually contain the transaction body");
   assert.match(tx, /include: \{ items: true, fees: true \}/, "the prior rows must ride along with a query already being made");
   assert.doesNotMatch(tx, /tx\.quoteItem\.findMany|tx\.quoteFee\.findMany/, "no extra reads inside the transaction");
-  assert.match(tx, /new Map\(existing\.items\.map/, "carry-forward still happens");
-  assert.match(tx, /new Map\(existing\.fees\.map/);
+  assert.match(tx, /priorById\(existing\.items\)/, "carry-forward still happens");
+  assert.match(tx, /priorById\(existing\.fees\)/);
 });
 
 test("one builder makes the editor's record, wherever it is loaded", () => {
@@ -316,14 +316,19 @@ test("saving from the editor stops resetting the columns it never shows", () => 
   // defaults: margin's cost basis zeroed, declined optional add-ons silently
   // re-included. Rows are matched by id and the values carried across.
   const code = shipped("src/app/actions/quotes.ts");
-  const at = code.indexOf("const priorItems = new Map(");
+  const at = code.indexOf("const itemRows = itemRowsFor(normalizedItems, priorById(existing.items))");
   assert.ok(at > 0, "the previous rows must be read before they are deleted");
   assert.ok(at < code.indexOf("tx.quoteItem.deleteMany"), "…BEFORE, or there is nothing left to read");
-  const block = code.slice(at, code.indexOf("return tx.quote.findUniqueOrThrow", at));
-  for (const field of ["kind", "costCents", "optional", "selected", "taxRatePct"]) {
-    assert.match(block, new RegExp(`${field}: (taxRatePct \\?\\? )?prior\\?\\.${field}`), `${field} must be carried across`);
-  }
   assert.match(code, /id: z\.string\(\)\.trim\(\)\.min\(1\)\.nullable\(\)\.optional\(\)/, "the payload must identify the row");
+
+  // The inheritance itself, and the id-reuse that makes it work on the SECOND
+  // save too, live in quoteRows.ts and are exercised behaviourally there.
+  const rows = shipped("src/lib/quoteRows.ts");
+  for (const field of ["kind", "costCents", "optional", "selected"]) {
+    assert.match(rows, new RegExp(`${field}: previous\\?\\.${field}`), `${field} must be carried across`);
+  }
+  assert.match(rows, /taxRatePct: taxRatePct \?\? previous\?\.taxRatePct \?\? 15/);
+  assert.match(rows, /\.\.\.\(previous \? \{ id: previous\.id \} : \{\}\)/, "a surviving row must keep its id");
 });
 
 test("a client-supplied row id never reaches a primary key", () => {

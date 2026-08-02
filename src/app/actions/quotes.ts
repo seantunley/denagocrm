@@ -13,6 +13,7 @@ import { getSetting } from "@/lib/settings";
 import { markReferralEarned } from "@/lib/referrals";
 import { withEditableQuote, hasOpenSignatureRequest } from "@/lib/quoteLock";
 import { nextQuoteNumber } from "@/lib/numbering";
+import { feeRowsFor, itemRowsFor, priorById } from "@/lib/quoteRows";
 import { runLeadAutomations } from "@/lib/automations";
 import { parseRands, formatZAR, contactName } from "@/lib/format";
 import { z } from "zod";
@@ -374,41 +375,25 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
           ...cpqQuoteData,
         },
       });
-      // Inherit by row id; a line with no id is new and takes schema defaults.
-      const priorItems = new Map(existing.items.map((row) => [row.id, row]));
-      const priorFees = new Map(existing.fees.map((row) => [row.id, row]));
+      // Inherit the hidden columns by row id, and KEEP that id — see quoteRows.
+      const itemRows = itemRowsFor(normalizedItems, priorById(existing.items));
+      const feeRows = feeRowsFor(normalizedFees, priorById(existing.fees));
       await tx.quoteItem.deleteMany({ where: { quoteId: existing.id } });
-      if (normalizedItems.length > 0) {
-        await tx.quoteItem.createMany({
-          data: normalizedItems.map(({ id, taxRatePct, ...item }) => {
-            const prior = id ? priorItems.get(id) : undefined;
-            return {
-              ...item,
-              quoteId: existing.id,
-              taxRatePct: taxRatePct ?? prior?.taxRatePct ?? 15,
-              kind: prior?.kind ?? "product",
-              costCents: prior?.costCents ?? 0,
-              optional: prior?.optional ?? false,
-              selected: prior?.selected ?? true,
-            };
-          }),
-        });
+      if (itemRows.length > 0) {
+        await tx.quoteItem.createMany({ data: itemRows.map((row) => ({ ...row, quoteId: existing.id })) });
       }
       await tx.quoteFee.deleteMany({ where: { quoteId: existing.id } });
-      if (normalizedFees.length > 0) {
-        await tx.quoteFee.createMany({
-          data: normalizedFees.map(({ id, taxRatePct, ...fee }, index) => {
-            const prior = id ? priorFees.get(id) : undefined;
-            return {
-              ...fee,
-              sortOrder: index,
-              quoteId: existing.id,
-              taxRatePct: taxRatePct ?? prior?.taxRatePct ?? 15,
-            };
-          }),
-        });
+      if (feeRows.length > 0) {
+        await tx.quoteFee.createMany({ data: feeRows.map((row) => ({ ...row, quoteId: existing.id })) });
       }
-      return tx.quote.findUniqueOrThrow({ where: { id: existing.id } });
+      // The rows as PERSISTED, so the audit figure below is the one the database
+      // and every screen agree on. Built from normalizedItems it silently
+      // counted a declined add-on that nothing else charges for.
+      return {
+        quote: await tx.quote.findUniqueOrThrow({ where: { id: existing.id } }),
+        itemRows,
+        feeRows,
+      };
     }
 
     const number = await nextQuoteNumber(tx); // advisory-locked allocation (#11)
@@ -418,48 +403,28 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       createDefaults?.[1] ||
       "Prices include VAT. Delivery arranged on acceptance. E&OE.";
 
-    return tx.quote.create({
-      data: {
-        number,
-        contactId: data.contactId,
-        leadId: linkedLeadId,
-        createdById: user.id,
-        validUntil: validUntil ?? addDays(new Date(), Number.isNaN(validDays) ? 7 : validDays),
-        terms: data.terms || defaultTerms,
-        status: data.intent,
-        ...cpqQuoteData,
-        // `id` is stripped, not spread: on a NEW quote there is no prior row to
-        // inherit from, and letting a client-supplied value reach the primary
-        // key would let a caller choose it. Nothing to carry forward either, so
-        // an unstated tax rate takes the default.
-        items:
-          normalizedItems.length > 0
-            ? {
-                create: normalizedItems.map((item) => ({
-                  description: item.description,
-                  qty: item.qty,
-                  unitPriceCents: item.unitPriceCents,
-                  productId: item.productId,
-                  colorPreference: item.colorPreference,
-                  discountPct: item.discountPct,
-                  taxRatePct: item.taxRatePct ?? 15,
-                })),
-              }
-            : undefined,
-        fees:
-          normalizedFees.length > 0
-            ? {
-                create: normalizedFees.map((fee, index) => ({
-                  label: fee.label,
-                  kind: fee.kind,
-                  amountCents: fee.amountCents,
-                  taxRatePct: fee.taxRatePct ?? 15,
-                  sortOrder: index,
-                })),
-              }
-            : undefined,
-      },
-    });
+    // Same builders, with NOTHING to inherit from — so a client-supplied id
+    // finds no prior row and is dropped rather than choosing a primary key.
+    const itemRows = itemRowsFor(normalizedItems, new Map());
+    const feeRows = feeRowsFor(normalizedFees, new Map());
+    return {
+      quote: await tx.quote.create({
+        data: {
+          number,
+          contactId: data.contactId,
+          leadId: linkedLeadId,
+          createdById: user.id,
+          validUntil: validUntil ?? addDays(new Date(), Number.isNaN(validDays) ? 7 : validDays),
+          terms: data.terms || defaultTerms,
+          status: data.intent,
+          ...cpqQuoteData,
+          items: itemRows.length > 0 ? { create: itemRows } : undefined,
+          fees: feeRows.length > 0 ? { create: feeRows } : undefined,
+        },
+      }),
+      itemRows,
+      feeRows,
+    };
   });
 
   if (!result) {
@@ -469,29 +434,35 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     };
   }
 
+  const { quote: saved, itemRows, feeRows } = result;
   // The figure that lands in the audit trail as the value of this quote — so it
   // is the payable total, fees and delivery included, not the line subtotal.
-  const total = payableTotalCents({ items: normalizedItems, fees: normalizedFees, ...cpqQuoteData });
+  //
+  // Computed from the rows as PERSISTED, not from the request. `normalizedItems`
+  // carries no optional/selected, so quotePricing counted every line: a quote
+  // with an add-on the customer had declined recorded a sale worth more than
+  // the database, the preview and the printed document all say it is.
+  const total = payableTotalCents({ items: itemRows, fees: feeRows, ...cpqQuoteData });
   await logAudit({
     action: data.intent === "sent" ? "quote.sent" : data.id ? "quote.updated" : "quote.created",
     summary:
       data.intent === "sent"
-        ? `Quote Q-${result.number} (${formatZAR(Math.round(total))}) marked sent to the customer`
-        : `${data.id ? "Updated" : "Created"} quote Q-${result.number} for ${contactName(contact)}`,
-    leadId: result.leadId,
+        ? `Quote Q-${saved.number} (${formatZAR(Math.round(total))}) marked sent to the customer`
+        : `${data.id ? "Updated" : "Created"} quote Q-${saved.number} for ${contactName(contact)}`,
+    leadId: saved.leadId,
     contactId: data.contactId,
     user,
   });
 
   revalidatePath("/quotes");
-  revalidatePath(`/quotes/${result.id}`);
+  revalidatePath(`/quotes/${saved.id}`);
   return {
     ok: true,
     quote: {
-      id: result.id,
-      number: result.number,
-      status: result.status,
-      updatedAt: result.updatedAt.toISOString(),
+      id: saved.id,
+      number: saved.number,
+      status: saved.status,
+      updatedAt: saved.updatedAt.toISOString(),
     },
   };
 }
