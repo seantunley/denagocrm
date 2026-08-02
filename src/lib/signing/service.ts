@@ -1,13 +1,12 @@
 import "server-only";
 import { Prisma } from "@prisma/client";
-import { prisma, basePrisma } from "@/lib/db";
+import { basePrisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { formatDate } from "@/lib/format";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { freezeDocumentGlobals } from "@/lib/signing/freezeDocument";
 import { newSignToken } from "./tokens";
-import { CLOSED_REQUEST_STATUSES } from "./status";
 
 export type RequestSource = {
   documentId?: string | null;
@@ -29,9 +28,6 @@ export async function createSignatureRequestFromDoc(opts: {
   // create the request + recipients + fields + event atomically (and under a
   // lock) — e.g. to guarantee at most one open request per quote/job card.
   client?: Prisma.TransactionClient;
-  // Stable fingerprint of template + source + resolved document (recipients,
-  // fields, content) — see createOrReuseSignatureRequestFromDoc below.
-  contentFingerprint?: string | null;
 }): Promise<{ id: string; recipients: number; fields: number }> {
   const { source } = opts;
   const frozenDoc = freezeDocumentGlobals(opts.doc, {
@@ -39,13 +35,10 @@ export async function createSignatureRequestFromDoc(opts: {
     "date.today": formatDate(new Date()),
   });
 
-  // The request + its recipients + fields + created event are ONE envelope —
-  // a partial one (request row with no recipients, say) is corrupt and, worse,
-  // still occupies the fingerprint's open-request slot. Run them atomically: on
-  // the caller's transaction when supplied, otherwise our own, so a failure
-  // part-way (including the fingerprint unique-violation, which must roll the
-  // whole envelope back so createOrReuse's catch reuses the winner cleanly)
-  // leaves nothing behind.
+  // The request + its recipients + fields + created event are ONE envelope — a
+  // partial one (a request row with no recipients, say) is corrupt. Run them
+  // atomically: on the caller's transaction when supplied, otherwise our own,
+  // so a failure part-way leaves nothing behind.
   const writes = async (db: Prisma.TransactionClient) => {
     const request = await db.signatureRequest.create({
       data: {
@@ -61,7 +54,6 @@ export async function createSignatureRequestFromDoc(opts: {
         snapshotJson: frozenDoc as object,
         unsignedPdfRef: opts.unsignedPdfRef,
         createdById: opts.createdById ?? null,
-        contentFingerprint: opts.contentFingerprint ?? null,
       },
     });
 
@@ -139,44 +131,14 @@ export async function createSignatureRequestFromDoc(opts: {
   return result;
 }
 
-/**
- * Atomic create-or-reuse by content fingerprint. A read-then-create (look up
- * an existing open request, create if none found) is a TOCTOU: two concurrent
- * calls can both see nothing and both create a request for the same document.
- * `contentFingerprint` is enforced unique among open (non-closed, non-deleted)
- * requests by a partial DB index (see migration
- * 20260725120000_signing_request_fingerprint), so the database — not this
- * read — is the single arbiter: the loser of the race gets a unique-constraint
- * violation here instead of a duplicate row, and reuses whatever the winner
- * created.
- */
-export async function createOrReuseSignatureRequestFromDoc(
-  opts: Parameters<typeof createSignatureRequestFromDoc>[0] & { contentFingerprint: string },
-): Promise<{ id: string; recipients: number; fields: number; reused: boolean }> {
-  try {
-    const created = await createSignatureRequestFromDoc(opts);
-    return { ...created, reused: false };
-  } catch (error) {
-    const isFingerprintConflict =
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2002" &&
-      (error.meta?.target as string[] | undefined)?.includes("contentFingerprint");
-    if (!isFingerprintConflict) throw error;
-
-    // Find the winner by the SAME predicate the partial unique index enforces
-    // (fingerprint + not deleted + OPEN status). The P2002 fired against an
-    // open row, so scoping to open rows returns exactly that winner — never an
-    // unrelated older closed request that happens to share the fingerprint.
-    const winner = await prisma.signatureRequest.findFirst({
-      where: {
-        contentFingerprint: opts.contentFingerprint,
-        deletedAt: null,
-        status: { notIn: [...CLOSED_REQUEST_STATUSES] },
-      },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, _count: { select: { recipients: true, fields: true } } },
-    });
-    if (!winner) throw error; // conflict resolved (e.g. voided) between our failed insert and this read — surface the original error
-    return { id: winner.id, recipients: winner._count.recipients, fields: winner._count.fields, reused: true };
-  }
-}
+// createOrReuseSignatureRequestFromDoc lived here: an atomic create-or-reuse
+// keyed on a hash of the resolved document, arbitrated by a partial unique
+// index. Its only caller was sendDocForSigning — the document editor's
+// "Prepare for signing" — which existed so the same template could be re-sent
+// against the same record without minting a second envelope and a second email.
+//
+// Every remaining path already guarantees that a different way: startRecordSigning
+// locks the SOURCE record row FOR UPDATE and short-circuits on an existing open
+// request, so the record itself — not a content hash — is the mutex. The
+// fingerprint column and its index went with the function (see migration
+// 20260802_drop_signing_fingerprint).

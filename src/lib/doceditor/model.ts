@@ -52,6 +52,16 @@ export const layoutSettingsSchema = z.object({
   margin: boxSpacingSchema.optional(),
   gap: z.number().optional(),
   background: z.string().optional(),
+  /**
+   * Type size relative to the block's own design (1 = as drawn, 0.6–2 allowed).
+   *
+   * Blocks set their sizes in points, so a long value — a six-figure total, a
+   * long company name — had nowhere to go but onto a second line. A scale is
+   * what lets the designer buy the space back without a new block.
+   */
+  fontScale: z.number().optional(),
+  /** Alignment of the text INSIDE the block, distinct from where the block sits. */
+  textAlign: z.enum(["left", "centre", "right"]).optional(),
 }).default({});
 export type LayoutSettings = z.infer<typeof layoutSettingsSchema>;
 
@@ -266,6 +276,20 @@ export const recipientSchema = z.object({
   email: z.string().default(""),
   role: z.enum(["signer", "viewer", "approver"]).default("signer"),
   color: colorField("#2563eb"),
+  /**
+   * WHICH PARTY this is, decided when the template is designed.
+   *
+   * A template cannot know the customer's name or the sender's email — those
+   * belong to the record it will be used for. Before this existed, a template
+   * recipient was always a literal person, so a signature block could only be
+   * assigned to someone typed in at design time; sending then threw those
+   * recipients away, invented a fresh pair, and worked out which block belonged
+   * to whom by pattern-matching the discarded names. Naming a party instead
+   * says it outright, and it is resolved to a real person at send time.
+   *
+   * Defaults to "custom" so every stored document keeps its current meaning.
+   */
+  party: z.enum(["denago", "customer", "custom"]).default("custom"),
 });
 export type Recipient = z.infer<typeof recipientSchema>;
 

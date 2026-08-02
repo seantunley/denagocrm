@@ -1,10 +1,10 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { useEditor } from "@/lib/doceditor/store";
 import { newBlock } from "@/lib/doceditor/factory";
-import { PAGE_SIZES, type DocumentBlock, type DocumentRow, type DocumentColumn } from "@/lib/doceditor/model";
+import { PAGE_SIZES, type DocumentBlock, type DocumentPage, type DocumentRow, type DocumentColumn } from "@/lib/doceditor/model";
 import { BlockView } from "./BlockView";
 import { OverlayLayer } from "./OverlayLayer";
 import { FloatingLayer } from "./FloatingLayer";
@@ -21,23 +21,80 @@ export function Canvas({ zoom }: { zoom: number }) {
   return (
     <div className="flex flex-col items-center gap-10 py-10" onMouseDown={() => select(null)}>
       {doc.pages.map((page, pIdx) => (
+        <PageView key={page.id} page={page} pIdx={pIdx} zoom={zoom} size={size} margin={doc.style.margin} fontFamily={doc.style.fontFamily} hint={hint} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One page of the canvas, with the sheet's real edge drawn on it.
+ *
+ * The page box only ever set a MIN height, so a page whose content outgrew A4
+ * simply got taller and still looked like one sheet. The renderer paginates for
+ * real, so the first anyone knew of it was the preview arriving with an extra
+ * page and no clue which block had pushed it there. The guides below put that
+ * boundary back where the designer can see it.
+ */
+function PageView({
+  page, pIdx, zoom, size, margin, fontFamily, hint,
+}: {
+  page: DocumentPage; pIdx: number; zoom: number;
+  size: { w: number; h: number }; margin: number;
+  fontFamily: "sans" | "serif" | "mono"; hint: Hint;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState(0);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setHeight(el.scrollHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const sheet = size.h * zoom;
+  // How many sheets this page's content will actually print onto.
+  const sheets = Math.max(1, Math.ceil(height / sheet - 0.001));
+
+  return (
+    <div
+      ref={ref}
+      data-page-idx={pIdx}
+      className="relative bg-white shadow-lg ring-1 ring-black/5"
+      style={{ width: size.w * zoom, minHeight: sheet }}
+    >
+      <div className="relative" style={{ padding: margin * zoom }}>
+        <div style={{ fontFamily: fontFamily === "serif" ? "Georgia,serif" : fontFamily === "mono" ? "monospace" : "Helvetica,Arial,sans-serif" }}>
+          {page.rows.map((row) => <RowView key={row.id} row={row} hint={hint} />)}
+        </div>
+        <AddRowButton pageIdx={pIdx} active={!!hint && "pageIdx" in hint && hint.pageIdx === pIdx} />
+      </div>
+      <FloatingLayer page={page} zoom={zoom} />
+      <OverlayLayer page={page} zoom={zoom} />
+      <div className="pointer-events-none absolute -top-6 left-0 text-[11px] font-medium text-slate-400">Page {pIdx + 1}</div>
+
+      {/* Where the paper actually ends. Anything below a line prints on the next
+          sheet, whatever this one looks like on screen. */}
+      {Array.from({ length: sheets - 1 }, (_, i) => (
         <div
-          key={page.id}
-          data-page-idx={pIdx}
-          className="relative bg-white shadow-lg ring-1 ring-black/5"
-          style={{ width: size.w * zoom, minHeight: size.h * zoom }}
+          key={i}
+          className="pointer-events-none absolute inset-x-0 border-t-2 border-dashed border-rose-400/70"
+          style={{ top: sheet * (i + 1) }}
         >
-          <div className="relative" style={{ padding: doc.style.margin * zoom }}>
-            <div style={{ fontFamily: doc.style.fontFamily === "serif" ? "Georgia,serif" : doc.style.fontFamily === "mono" ? "monospace" : "Helvetica,Arial,sans-serif" }}>
-              {page.rows.map((row) => <RowView key={row.id} row={row} hint={hint} />)}
-            </div>
-            <AddRowButton pageIdx={pIdx} active={!!hint && "pageIdx" in hint && hint.pageIdx === pIdx} />
-          </div>
-          <FloatingLayer page={page} zoom={zoom} />
-          <OverlayLayer page={page} zoom={zoom} />
-          <div className="pointer-events-none absolute -top-6 left-0 text-[11px] font-medium text-slate-400">Page {pIdx + 1}</div>
+          <span className="absolute right-1 -top-5 rounded bg-rose-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+            Page break — overflows onto sheet {i + 2}
+          </span>
         </div>
       ))}
+      {sheets > 1 && (
+        <div className="pointer-events-none absolute -top-6 right-0 text-[11px] font-medium text-rose-500">
+          Prints on {sheets} sheets
+        </div>
+      )}
     </div>
   );
 }

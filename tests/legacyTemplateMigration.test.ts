@@ -109,10 +109,9 @@ test("every piece of the production row's content survives conversion", () => {
 });
 
 test("conversion is deterministic", () => {
-  // sendDocForSigning hashes the parsed document into the fingerprint that
-  // decides whether an OPEN signature request can be reused. Random ids here
-  // would mint a new request — and a new PDF, and a new email to the customer —
-  // on every send of a legacy template.
+  // The converted document is hashed into fingerprints and compared across
+  // reads. Random ids here would make the same stored row look like a different
+  // document every time it was opened, exported or sent.
   const a = legacyToDocument(PRODUCTION_ROW, "Quotation");
   const b = legacyToDocument(PRODUCTION_ROW, "Quotation");
   assert.equal(JSON.stringify(a), JSON.stringify(b));
@@ -218,8 +217,13 @@ test("an unreadable row is not treated as an empty one", () => {
   assert.match(envelope, /if \(read\.status !== "ok"\) return null;/);
   assert.match(envelope, /if \(!template\) return null;/, "a chosen template that is gone must stop too");
 
-  const send = read("src/app/actions/doceditor.ts");
-  assert.match(send, /if \(read\.status !== "ok"\)/, "sendDocForSigning must refuse on ANY non-ok status");
+  // sendDocForSigning carried this guard too, until the document editor stopped
+  // sending things — the portable export is now the other path that reads a
+  // stored template, and it must refuse a legacy row rather than write a file
+  // that claims to be a re-importable document and is not.
+  const exportRoute = read("src/app/api/doc-editor/[id]/export/route.ts");
+  assert.match(exportRoute, /if \(read\.status !== "ok"\)/, "the portable export must refuse on ANY non-ok status");
+  assert.match(exportRoute, /status: 409/, "…and say so, rather than emit an empty document");
 });
 
 test("malformed stored JSON fails safely instead of throwing", () => {
@@ -347,7 +351,10 @@ test("the template loaders all accept both formats", () => {
     ["src/app/doc-editor/[id]/page.tsx", /readTemplateDocument\(template\.data/],
     ["src/lib/doceditor/generate.ts", /readTemplateDocument\(tpl\.data/],
     ["src/lib/signing/autoEnvelope.ts", /readTemplateDocument\(template\.data/],
-    ["src/app/actions/doceditor.ts", /readTemplateDocument\(binding\.template\.data/],
+    // The portable export replaced doceditor.ts as the fourth reader — the
+    // action that loaded a template there was sendDocForSigning, and the
+    // document editor no longer sends anything.
+    ["src/app/api/doc-editor/[id]/export/route.ts", /readTemplateDocument\(template\.data/],
     ["src/lib/docbuilder/store.ts", /readTemplateDocument\(row\.data\)/],
   ] as const) {
     assert.match(read(file), pattern, `${file} still loads templates with the strict parser`);

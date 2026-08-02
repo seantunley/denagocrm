@@ -15,6 +15,14 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** An ISO date as a reader expects to see it on a signed document. */
+function formatStamp(iso: string) {
+  const parsed = new Date(`${iso}T00:00:00`);
+  return Number.isNaN(parsed.getTime())
+    ? iso
+    : parsed.toLocaleDateString("en-ZA", { day: "2-digit", month: "short", year: "numeric" });
+}
+
 /** Canvas signature pad — pointer drawing, exports a PNG data URL. */
 function SignaturePad({ onDone, onCancel }: { onDone: (dataUrl: string) => void; onCancel: () => void }) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -78,7 +86,16 @@ function FieldWidget({ f, value, onSign, onSet, filled }: { f: Field; value: str
     );
   }
   const common: React.CSSProperties = { ...box, border: `2px solid ${ring}`, borderRadius: 6, padding: "2px 6px", fontSize: 13, color: "#0f172a", background: "#fff", outline: "none" };
-  if (f.kind === "date") return <input type="date" value={value} onChange={(e) => onSet(e.target.value)} style={common} />;
+  if (f.kind === "date") {
+    // Stamped, never typed. This is the date the signature was applied, so a
+    // signer who could edit it could record a date they did not sign on — and
+    // an empty box next to a signature reads as one more thing to fill in.
+    return (
+      <div style={{ ...common, display: "flex", alignItems: "center", background: "#f8fafc" }} title="Stamped when you sign">
+        {formatStamp(value || todayISO())}
+      </div>
+    );
+  }
   return <input type="text" placeholder={f.label} value={value} onChange={(e) => onSet(e.target.value)} style={common} />;
 }
 
@@ -205,7 +222,7 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
                     <input type="checkbox" checked={values[f.id] === "true"} onChange={(e) => set(f.id, e.target.checked ? "true" : "false")} /> {f.label || "I agree"}
                   </label>
                 ) : f.kind === "date" ? (
-                  <input type="date" value={values[f.id] ?? ""} onChange={(e) => set(f.id, e.target.value)} style={input} />
+                  <div style={{ ...input, color: "#94a3b8" }}>{formatStamp(values[f.id] || todayISO())} · stamped when you sign</div>
                 ) : (
                   <input type="text" value={values[f.id] ?? ""} placeholder={f.label} onChange={(e) => set(f.id, e.target.value)} style={input} />
                 )}

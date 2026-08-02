@@ -3,8 +3,9 @@
 import { useEditor } from "@/lib/doceditor/store";
 import { getBlock } from "@/lib/doceditor/ops";
 import { newPricingLine } from "@/lib/doceditor/factory";
-import type { DocumentBlock, OverlayField, PricingBlock, ImageBlock, DividerBlock, SpacerBlock, ConditionalBlock, TextBlock, BannerBlock, InfoCardBlock, TotalBandBlock, TermsBlock, FooterBlock, LineItemsBlock, LineItemColumn } from "@/lib/doceditor/model";
+import type { DocumentBlock, OverlayField, Recipient, PricingBlock, ImageBlock, DividerBlock, SpacerBlock, ConditionalBlock, TextBlock, BannerBlock, InfoCardBlock, TotalBandBlock, TermsBlock, FooterBlock, LineItemsBlock, LineItemColumn } from "@/lib/doceditor/model";
 import { lineItemColKeys } from "@/lib/doceditor/model";
+import { recipientLabel } from "@/lib/signing/templateRecipients";
 import { ConditionField } from "@/lib/docbuilder/ConditionField";
 import { validateExpression } from "@/lib/docbuilder/expr";
 import { saveLibraryItem } from "@/app/actions/doclibrary";
@@ -50,14 +51,33 @@ function FieldProps({ field }: { field: OverlayField }) {
       <Section title={`${field.kind} field`}>
         <div className={row}><label className={lbl}>Label</label><input className={inp} value={field.label} placeholder={field.kind} onChange={(e) => updateField(field.id, { label: e.target.value })} /></div>
         <div className={row}>
-          <label className={lbl}>Assigned recipient</label>
+          {/* A date field is never typed by anyone — it is stamped with the
+              moment its signature is applied. So the question is not "who fills
+              this in" but "which signature does it date". */}
+          <label className={lbl}>{field.kind === "date" ? "Dates whose signature?" : "Assigned recipient"}</label>
           <select className={inp} value={field.recipientId ?? ""} onChange={(e) => updateField(field.id, { recipientId: e.target.value || null })}>
             <option value="">Unassigned</option>
-            {recipients.map((r) => <option key={r.id} value={r.id}>{r.name || r.email || "Recipient"}</option>)}
+            {recipients.map((r) => <option key={r.id} value={r.id}>{recipientLabel(r)}</option>)}
           </select>
-          {recipients.length === 0 && <p className="mt-1 text-[11px] text-amber-600">Add a recipient below to assign this field.</p>}
+          {field.kind === "date" ? (
+            <p className="mt-1 text-[11px] text-slate-500">
+              {field.recipientId
+                ? "Stamped automatically the moment they sign — the signer is never asked to type it."
+                : "Unassigned, so it is stamped with the date the document is completed. Assign it to a party to date that party’s signature instead."}
+            </p>
+          ) : recipients.length === 0 ? (
+            <p className="mt-1 text-[11px] text-amber-600">
+              Add a recipient below — set one to “Denago” and one to “The customer”, then assign this field to whichever signs here.
+            </p>
+          ) : !field.recipientId ? (
+            <p className="mt-1 text-[11px] text-amber-600">
+              An unassigned field is filled by whoever opens the document first. Assign it so the signature lands in the right box — and so Denago&apos;s can be applied automatically.
+            </p>
+          ) : null}
         </div>
-        <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={field.required} onChange={(e) => updateField(field.id, { required: e.target.checked })} /> Required</label>
+        {field.kind !== "date" && (
+          <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={field.required} onChange={(e) => updateField(field.id, { required: e.target.checked })} /> Required</label>
+        )}
       </Section>
       <Section title="Position & size">
         <div className="grid grid-cols-2 gap-2">
@@ -79,11 +99,19 @@ function LayoutSection({ block, floating }: { block: DocumentBlock; floating: bo
   const dock = useEditor((s) => s.dock);
   const w = block.settings?.width ?? 100;
   const align = block.settings?.horizontalAlignment ?? "stretch";
+  const scale = block.settings?.fontScale ?? 1;
+  const textAlign = block.settings?.textAlign;
   const set = (patch: Partial<DocumentBlock["settings"]>) => updateBlock(block.id, { settings: { ...block.settings, ...patch } } as Partial<DocumentBlock>);
   const alignBtn = (val: "left" | "centre" | "right", label: string) => (
     <button
       type="button" onClick={() => set({ horizontalAlignment: val })}
       className={`flex-1 rounded border px-2 py-1 text-xs ${align === val ? "border-orange-400 bg-orange-50 text-orange-600" : "border-slate-300 text-slate-600 hover:bg-slate-50"}`}
+    >{label}</button>
+  );
+  const textAlignBtn = (val: "left" | "centre" | "right", label: string) => (
+    <button
+      type="button" onClick={() => set({ textAlign: textAlign === val ? undefined : val })}
+      className={`flex-1 rounded border px-2 py-1 text-xs ${textAlign === val ? "border-orange-400 bg-orange-50 text-orange-600" : "border-slate-300 text-slate-600 hover:bg-slate-50"}`}
     >{label}</button>
   );
 
@@ -102,12 +130,30 @@ function LayoutSection({ block, floating }: { block: DocumentBlock; floating: bo
         <label className={lbl}>Width ({w}%){w >= 100 ? " — full row" : ""}</label>
         <input type="range" min={20} max={100} step={5} className="w-full" value={w} onChange={(e) => set({ width: Number(e.target.value) })} />
       </div>
-      {w < 100 && (
+      {/* The total band places itself on the row even at full width — it is a
+          band, not a paragraph — so it gets this control regardless. */}
+      {(w < 100 || block.type === "totalBand") && (
         <div className={row}>
           <label className={lbl}>Align on the row</label>
           <div className="flex gap-1">{alignBtn("left", "Left")}{alignBtn("centre", "Centre")}{alignBtn("right", "Right")}</div>
         </div>
       )}
+      <div className={row}>
+        <label className={lbl}>Text size ({Math.round(scale * 100)}%)</label>
+        <input
+          type="range" min={60} max={200} step={5} className="w-full" value={Math.round(scale * 100)}
+          onChange={(e) => set({ fontScale: Number(e.target.value) / 100 })}
+        />
+        {scale !== 1 && (
+          <button type="button" className="mt-1 text-[11px] text-slate-500 underline hover:text-slate-700" onClick={() => set({ fontScale: undefined })}>
+            Reset to the block&apos;s own size
+          </button>
+        )}
+      </div>
+      <div className={row}>
+        <label className={lbl}>Text alignment{textAlign ? "" : " — as designed"}</label>
+        <div className="flex gap-1">{textAlignBtn("left", "Left")}{textAlignBtn("centre", "Centre")}{textAlignBtn("right", "Right")}</div>
+      </div>
       <button type="button" onClick={() => detach(block.id)} className="w-full rounded-md border border-orange-200 py-1.5 text-sm text-orange-600 hover:bg-orange-50">⤢ Free placement (drag anywhere)</button>
       <p className="mt-2 text-[11px] text-slate-400">Or drop another block on this one’s left/right edge to build columns.</p>
     </Section>
@@ -419,9 +465,31 @@ function DocumentProps() {
             <div key={r.id} className="rounded-md border border-slate-200 p-2">
               <div className="mb-1 flex items-center gap-2">
                 <span className="h-3 w-3 rounded-full" style={{ background: r.color }} />
-                <input className={inp} value={r.name} placeholder="Name" onChange={(e) => updateRecipient(r.id, { name: e.target.value })} />
+                {/* Who this is, not what they are called. A template is reused
+                    across records, so the name and email belong to the record —
+                    only the party is knowable while designing. */}
+                <select
+                  className={inp}
+                  value={r.party}
+                  onChange={(e) => updateRecipient(r.id, { party: e.target.value as Recipient["party"] })}
+                >
+                  <option value="denago">Denago (whoever sends it)</option>
+                  <option value="customer">The customer</option>
+                  <option value="custom">Someone specific…</option>
+                </select>
               </div>
-              <input className={`${inp} mb-1`} value={r.email} placeholder="Email" onChange={(e) => updateRecipient(r.id, { email: e.target.value })} />
+              {r.party === "custom" ? (
+                <>
+                  <input className={`${inp} mb-1`} value={r.name} placeholder="Name" onChange={(e) => updateRecipient(r.id, { name: e.target.value })} />
+                  <input className={`${inp} mb-1`} value={r.email} placeholder="Email" onChange={(e) => updateRecipient(r.id, { email: e.target.value })} />
+                </>
+              ) : (
+                <p className="mb-1 text-[11px] text-slate-500">
+                  {r.party === "denago"
+                    ? "Filled in from the sender when the document goes out — and their saved signature is applied in one click."
+                    : "Filled in from the quote's contact when the document goes out."}
+                </p>
+              )}
               <div className="flex items-center justify-between">
                 <select className="rounded border border-slate-300 px-1 py-1 text-xs" value={r.role} onChange={(e) => updateRecipient(r.id, { role: e.target.value as "signer" | "viewer" | "approver" })}>
                   <option value="signer">Signer</option><option value="approver">Approver</option><option value="viewer">Viewer</option>

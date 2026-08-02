@@ -148,7 +148,7 @@ export function newOverlayField(kind: OverlayField["kind"], over: Partial<Overla
 
 export function newRecipient(over: Partial<Recipient> = {}): Recipient {
   const palette = ["#2563eb", "#16a34a", "#db2777", "#9333ea", "#ea580c"];
-  return { id: uid(), name: "", email: "", role: "signer", color: palette[Math.floor((Date.now() / 1000) % palette.length)], ...over };
+  return { id: uid(), name: "", email: "", role: "signer", party: "custom", color: palette[Math.floor((Date.now() / 1000) % palette.length)], ...over };
 }
 
 /** A fresh single-page A4 proposal with a starter text block. */

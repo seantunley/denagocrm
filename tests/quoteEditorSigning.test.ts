@@ -48,19 +48,16 @@ test("the embedded card refetches — a route refresh cannot reach inside a dial
   const code = read("src/components/quotes/QuoteEditorDialog.tsx");
   assert.match(code, /onChanged=\{reloadSigning\}/, "the editor must be told when signing state changes");
 
-  for (const rel of ["src/components/SigningBlock.tsx", "src/components/DealerSignPad.tsx"]) {
-    const component = shipped(rel);
-    assert.equal(
-      (component.match(/router\.refresh\(\)/g) ?? []).length,
-      1,
-      `${rel} must route every refresh through the wrapper that also notifies the embedder`,
-    );
-    assert.match(
-      component,
-      /onChanged\?\.\(\)|onSigned\?\.\(\)/,
-      `${rel} never notifies an embedder, so an embedded card goes stale`,
-    );
-  }
+  const card = shipped("src/components/SigningBlock.tsx");
+  assert.equal(
+    (card.match(/router\.refresh\(\)/g) ?? []).length,
+    1,
+    "every refresh must route through the wrapper that also notifies the embedder",
+  );
+  assert.match(card, /onChanged\?\.\(\)/, "the card never notifies an embedder, so an embedded card goes stale");
+  // The signature pad is a child of that card and has no router of its own —
+  // it reports upward and lets the card decide what to re-read.
+  assert.match(shipped("src/components/signing/SignatureCapture.tsx"), /onSaved\(\)/);
 });
 
 test("a live signing request makes the editor read-only", () => {
@@ -120,15 +117,93 @@ test("a quote that cannot be signed yields no card", () => {
   assert.match(body, /!quote \|\| quote\.deletedAt \|\| quote\.supersededAt/);
 });
 
-test("the countersign pad shows the signature it is about to stamp", () => {
-  // "Sign as Denago (your saved signature)" committed a signature onto a
-  // customer-facing document that the signer had no way to look at first.
-  const pad = shipped("src/components/DealerSignPad.tsx");
-  assert.match(pad, /src="\/api\/me\/signature"/, "the saved signature must be previewed");
-  const previewAt = pad.indexOf('src="/api/me/signature"');
-  const buttonAt = pad.indexOf("Sign as Denago");
-  assert.ok(previewAt > 0 && previewAt < buttonAt, "the preview belongs above the button that commits it");
+test("the signature pad stores a signature and nothing else", () => {
+  // It used to draw a signature AND stamp it onto the quote in one action,
+  // writing Quote.dealerSigned* — columns the envelope the customer received
+  // knew nothing about. That is what made countersigning happen twice.
+  const pad = shipped("src/components/signing/SignatureCapture.tsx");
+  assert.match(pad, /saveMySignature/, "the pad's only job is storing the image");
+  assert.doesNotMatch(pad, /quoteId|recordSigning/, "it must not know about the record being signed");
+  assert.match(pad, /src="\/api\/me\/signature"/, "and it shows what it has stored");
   assert.match(pad, /onError=\{\(\) => setPreviewFailed\(true\)\}/, "a ref whose bytes are gone must not leave a broken frame");
+});
+
+/**
+ * There were two countersignature systems. "Sign as Denago" wrote three columns
+ * on the quote row, read only by the Print/PDF view. "Send for signing" then
+ * built an envelope that had never heard of those columns, invented a fresh
+ * Denago signer, and opened its signing surface — so you signed twice, in two
+ * different places, onto two different documents, and the second one could not
+ * offer the signature you had just used.
+ */
+
+test("only one thing countersigns a quote", () => {
+  const actions = shipped("src/app/actions/signing.ts");
+  assert.doesNotMatch(actions, /export async function signAsDealer/, "the quote-level countersignature is retired");
+  assert.doesNotMatch(actions, /dealerSignedAt/, "…including the columns it wrote behind the envelope's back");
+
+  // Those columns still feed the Print/PDF view, so the surviving path keeps
+  // them in step rather than leaving the printed quote unsigned.
+  const countersign = shipped("src/lib/signing/countersign.ts");
+  assert.match(countersign, /dealerSignedAt: new Date\(\)/, "the envelope countersign must maintain the print columns");
+  assert.match(countersign, /dealerSignedAt: null/, "…claimed conditionally, so a second call cannot overwrite the first");
+});
+
+test("countersigning does not send the quote to the customer", () => {
+  // advanceAfterSignature() emails the next signer the instant someone signs.
+  // On a sequential envelope that meant the quote left for the customer as a
+  // side effect of Denago signing, with nothing shown in between — the step
+  // this whole flow exists to put back.
+  const countersign = shipped("src/lib/signing/countersign.ts");
+  assert.doesNotMatch(countersign, /advanceAfterSignature|dispatchRequest|notifyRecipient/, "sending is a separate, explicit act");
+
+  // …and the separate act exists, gated on it being someone else's turn.
+  const actions = shipped("src/app/actions/recordSigning.ts");
+  const send = actionBody(actions, "sendRecordSigning");
+  assert.match(send, /dispatchRequest\(state\.requestId\)/);
+  assert.match(send, /sameParty\(recipient\.email, user\.email\)/, "it must refuse to 'send' the document to the sender");
+});
+
+test("nobody signs in someone else's name", () => {
+  // The countersign applies a stored signature with no human in front of the
+  // document. Bound to the caller's own recipient row, or it is forgery.
+  const body = actionBody(shipped("src/app/actions/recordSigning.ts"), "countersignRecord");
+  assert.match(body, /sameParty\(recipient\.email, user\.email\)/, "the next signer must be the caller");
+  assert.match(body, /drawnSignatureRef/, "…using the caller's own stored signature");
+});
+
+test("a field a stored signature cannot answer is refused, not invented", () => {
+  // Auto-filling a text box or ticking a consent checkbox on behalf of a signer
+  // who never saw it is putting words in their mouth.
+  const code = shipped("src/lib/signing/countersign.ts");
+  const guard = code.indexOf("else if (field.required)");
+  assert.notEqual(guard, -1, "a required field of an un-fillable kind must stop the countersign");
+  assert.ok(guard < code.indexOf("$transaction"), "…before anything is written");
+});
+
+test("the document is reviewed in place, not in an iframe of the app", () => {
+  // The old modal iframed /signatures/<id>/sign/<recipient>, a page inside the
+  // (app) route group — so AppShell rendered inside it and the mobile nav bar
+  // sat across the signing controls.
+  const card = shipped("src/components/SigningBlock.tsx");
+  assert.doesNotMatch(card, /<iframe/, "the preview must not embed an app page");
+  assert.doesNotMatch(card, /signFirstUrl/, "…nor navigate to a second signing surface");
+
+  const preview = shipped("src/components/signing/SignedDocPreview.tsx");
+  assert.doesNotMatch(preview, /<iframe/);
+  assert.match(preview, /view\.sheets\.pages\.map/, "it renders the same sheet HTML the signing surface uses");
+});
+
+test("auto-placed signature fields get a page to themselves", () => {
+  // They were dropped on the last content page at a fixed y of 985 — a guess
+  // about where a document ends. A template whose content reached that far had
+  // "For Denago Cape Town" printed across the middle of its terms block.
+  const envelope = shipped("src/lib/signing/autoEnvelope.ts");
+  assert.doesNotMatch(envelope, /y: 9[0-9][0-9]\b/, "no fixed near-the-foot coordinates may remain");
+  assert.match(envelope, /doc\.pages\.push\(page\)/, "a clean page is appended instead");
+  // Only when we would otherwise be inventing a position — a template that
+  // places its own fields keeps its own layout, and gains no extra page.
+  assert.match(envelope, /if \(signature\) \{/, "an existing placement must win");
 });
 
 test("the signature image is resolved from the session, never from the URL", () => {
