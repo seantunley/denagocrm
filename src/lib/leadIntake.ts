@@ -1,8 +1,5 @@
 import { prisma } from "./db";
-import { logAudit } from "./audit";
-import { topPosition } from "./leadPos";
-import { sendPushToAll } from "./push";
-import { emitLeadJourneyEvent } from "./leadJourneyEvents";
+import { createLeadRecord } from "./leadCreate";
 
 export type IntakeLead = {
   name: string;
@@ -16,13 +13,14 @@ export type IntakeLead = {
   raw?: unknown;
 };
 
-/** Creates a lead in the first pipeline stage, matching the product by model name. */
+/**
+ * Creates a lead in the first pipeline stage, matching the product by model name.
+ *
+ * Product matching, the derived title and the intake `raw` payload are what this
+ * path genuinely adds; the row, the audit entry, the push and the automations
+ * are the shared job of createLeadRecord.
+ */
 export async function createIntakeLead(input: IntakeLead) {
-  const firstStage = await prisma.pipelineStage.findFirst({
-    orderBy: { order: "asc" },
-  });
-  if (!firstStage) throw new Error("No pipeline stages configured");
-
   let productId: string | null = null;
   let valueCents = 0;
   if (input.model) {
@@ -44,38 +42,22 @@ export async function createIntakeLead(input: IntakeLead) {
   const titleParts = [input.model, input.color].filter(Boolean);
   const title = titleParts.length > 0 ? titleParts.join(" – ") : input.name;
 
-  const lead = await prisma.lead.create({
-    data: {
-      title,
-      name: input.name,
-      email: input.email ?? null,
-      phone: input.phone ?? null,
-      source: input.source,
-      productId,
-      color: input.color ?? null,
-      valueCents,
-      notes: input.message ?? null,
-      stageId: firstStage.id,
-      position: await topPosition(firstStage.id),
-      externalId: input.externalId ?? null,
-      raw: input.raw != null ? JSON.stringify(input.raw) : null,
+  return createLeadRecord({
+    title,
+    name: input.name,
+    email: input.email ?? null,
+    phone: input.phone ?? null,
+    source: input.source,
+    productId,
+    color: input.color ?? null,
+    valueCents,
+    notes: input.message ?? null,
+    externalId: input.externalId ?? null,
+    raw: input.raw,
+    audit: {
+      action: "lead.received",
+      summary: `Lead “${title}” received via ${input.source}`,
+      userName: "System",
     },
   });
-  await logAudit({
-    action: "lead.received",
-    summary: `Lead “${lead.title}” received via ${input.source}`,
-    leadId: lead.id,
-    userName: "System",
-  });
-  await sendPushToAll({
-    title: "New lead 🚀",
-    body: `${lead.title} — ${lead.name} (via ${input.source})`,
-    url: `/leads/${lead.id}`,
-  }, "lead_new").catch(() => {});
-  // Bare await, no `.catch`: this runs under inbound webhooks (Meta lead ads,
-  // the public web form), and emitLeadJourneyEvent resolves rather than
-  // rejecting for exactly that reason — a broken journey must not turn an
-  // accepted lead into a 500 that makes the provider retry.
-  await emitLeadJourneyEvent("lead_created", lead.id, { payload: { source: input.source } });
-  return lead;
 }

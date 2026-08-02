@@ -8,7 +8,7 @@ import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { recordReferral, markReferralEarned } from "@/lib/referrals";
 import { logAudit, logAuditStrict } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
-import { topPosition } from "@/lib/leadPos";
+import { createLeadRecord } from "@/lib/leadCreate";
 import { triggerSurvey } from "@/lib/surveys";
 import { removeTimelinePin } from "@/lib/timelinePins";
 import { resolveTenantMemberUser } from "@/lib/tenantActor";
@@ -153,20 +153,30 @@ export async function createLead(formData: FormData) {
       }
     }
 
-    const lead = await prisma.lead.create({
-      data: { ...data, title, createdById: user.id, position: await topPosition(data.stageId) },
-    });
-    await logAuditStrict({
-      action: "lead.created",
-      summary: `Created lead “${lead.title}”`,
-      leadId: lead.id,
-      contactId: lead.contactId,
-      user,
-      after: lead,
+    // Through the one lead creator (src/lib/leadCreate.ts) — the row, the audit
+    // entry and the `lead_created` automations. This path was the COMPLETE one;
+    // the inbound channels each had their own partial copy of it, which is how a
+    // WhatsApp/DM/bot lead came to run no automations at all.
+    const lead = await createLeadRecord({
+      ...data,
+      title,
+      createdById: user.id,
+      audit: {
+        action: "lead.created",
+        summary: `Created lead “${title}”`,
+        // Governance path: an unwritable trail fails the create here, unlike the
+        // best-effort audit an inbound webhook gets.
+        strict: true,
+        recordAfter: true,
+        user,
+      },
+      // No push. The only person a "New lead" notification could tell is the one
+      // who just typed it in; the inbound channels get it because nobody is
+      // watching the door.
+      push: null,
     });
     const refCode = String(formData.get("referralCode") ?? "").trim();
     if (refCode) await recordReferral(refCode, lead.id).catch(() => {});
-    await emitLeadJourneyEvent("lead_created", lead.id);
     revalidatePath("/leads");
     revalidatePath("/forecast");
     return { redirectTo: `/leads/${lead.id}` };
