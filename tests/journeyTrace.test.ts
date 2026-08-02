@@ -52,6 +52,28 @@ test("every enrolment outcome is recorded, including the passed-over ones", () =
   assert.match(code, /data: \{ status: "processed", processedAt: new Date\(\), decisions \}/);
 });
 
+test("the merged loop keeps BOTH the decision record and payload-aware matching", () => {
+  // Two changes landed on this loop from different branches: decision tracing,
+  // and judging stage_entered against the stage carried ON THE EVENT rather
+  // than the lead's stage when the cron drains 15 minutes later. A merge that
+  // took one side wholesale would silently drop the other — tracing that lies
+  // about why nothing matched, or matching that is right but unexplained.
+  const code = shipped("src/lib/journeyEvents.ts");
+  const start = code.indexOf("for (const journey of journeys)");
+  assert.notEqual(start, -1, "the enrolment loop is gone — was it renamed?");
+  const loop = code.slice(start, code.indexOf("journeyEvent.update(", start));
+  assert.ok(loop.length > 0, "the slice ran backwards");
+
+  assert.match(loop, /decisions\.push\(/, "decision tracing must survive the merge");
+  // `[^)]*` would stop at jsonObject(...)'s own closing paren — match on the
+  // argument tail instead, which is the part that actually carries the fix.
+  assert.match(
+    loop,
+    /triggerMatches\([\s\S]*?context,\s*eventPayload\)/,
+    "payload-aware matching must survive the merge — without eventPayload a stage_entered event is judged against the wrong stage",
+  );
+});
+
 test("a skipped duplicate is not reported as a mismatch", () => {
   // enqueueJourneyRun returning false is the idempotency key doing its job.
   // Rendering that as "did not match" sends someone hunting a filter bug.
