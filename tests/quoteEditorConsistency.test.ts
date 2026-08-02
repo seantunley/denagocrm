@@ -413,3 +413,37 @@ test("the editor no longer offers a trip to a page that comes straight back", ()
   const code = shipped("src/components/quotes/QuoteEditorDialog.tsx");
   assert.ok(!code.includes("Open full record"), "that link now redirects to the editor you are already in");
 });
+
+/**
+ * A deep link must open the quote it names, not just the ones the list happened
+ * to render.
+ *
+ * `records` holds the newest 200 CURRENT heads. The page used to hand
+ * `initialQuoteId` to the provider only when the id appeared among them, which
+ * silently swallowed exactly the cases /quotes/<id> redirects for: an older
+ * quote, a superseded revision, and every bookmark or already-delivered
+ * notification pointing at either. They landed on the list with nothing said,
+ * and quoteEditorRecord() — the fallback built for this — was never reached, so
+ * the "no longer available" report could not fire either.
+ */
+test("a deep link opens a quote the list never rendered", () => {
+  const page = shipped("src/app/(app)/quotes/page.tsx");
+  assert.match(page, /initialQuoteId=\{edit\}/, "the requested id must reach the provider unfiltered");
+  assert.doesNotMatch(
+    page,
+    /initialQuoteId=\{records\.some/,
+    "filtering against `records` caps deep links at the newest 200 current heads",
+  );
+});
+
+test("the provider resolves a requested id that is not in records", () => {
+  // The three outcomes that must all be reachable for the redirect to be
+  // honest: found outside the list, not found, and not permitted.
+  const code = shipped("src/components/quotes/QuoteEditorDialog.tsx");
+  const provider = code.slice(code.indexOf("export function QuoteEditorProvider("));
+
+  assert.match(provider, /const listed = selection\?\.quoteId \? records\.find/, "the list is a fast path…");
+  assert.match(provider, /if \(!quoteId \|\| listed\) return;/, "…not a gate: a miss must fall through to the fetch");
+  assert.match(provider, /quoteEditorRecord\(quoteId\)/, "…which is the access-controlled loader");
+  assert.match(provider, /toast\.error\("That quote is no longer available\."\)/, "and a miss must be reported");
+});
