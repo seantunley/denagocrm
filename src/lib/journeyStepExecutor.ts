@@ -6,6 +6,7 @@ import { sendSms } from "./sms";
 import { sendPushToAll } from "./push";
 import { logAudit } from "./audit";
 import { emitJourneyEvent } from "./journeyEvents";
+import { canContactPerson } from "./communicationPolicy";
 import { JourneyContext, journeyTemplateVars } from "./journeyContext";
 import {
   evaluateConditions,
@@ -63,9 +64,29 @@ function phoneNumber(context: JourneyContext) {
   return String(contact.whatsapp ?? contact.phone ?? lead.phone ?? "").trim() || null;
 }
 
-function contactOptedOut(context: JourneyContext) {
+/**
+ * The ONE consent gate — the same one campaigns, surveys and lifecycle mail use.
+ *
+ * This read `contact.marketingOptOut` and nothing else, so a journey happily
+ * emailed someone who had withdrawn consent via ConsentRecord or unsubscribed
+ * in the portal, at 3am, with no frequency cap. Those rules already existed;
+ * they just lived in a policy this file had never heard of.
+ *
+ * A contact we cannot identify is not contactable: no id means no way to check,
+ * and the safe answer to "may we market to this person" is no.
+ */
+async function marketingBlocked(context: JourneyContext, channel: "email" | "sms"): Promise<string | null> {
   const contact = (context.contact ?? {}) as Record<string, unknown>;
-  return contact.marketingOptOut === true;
+  const contactId = typeof contact.id === "string" ? contact.id : null;
+  if (!contactId) return "no contact record to check consent against";
+  const tenantId = typeof contact.tenantId === "string" ? contact.tenantId : null;
+  const verdict = await canContactPerson({
+    contactId,
+    tenantId,
+    purpose: "marketing",
+    requestedChannel: channel,
+  });
+  return verdict.allowed ? null : verdict.reason ?? "not contactable";
 }
 
 async function recordCommunication(
@@ -130,8 +151,9 @@ export async function executeJourneyStep(args: {
       return { status: "completed", note: stringConfig(step, "reason") ?? "Journey stopped", nextStepId: null };
 
     case "send_email": {
-      if (category === "marketing" && contactOptedOut(context)) {
-        return { status: "skipped", note: "Marketing email skipped: contact opted out" };
+      if (category === "marketing") {
+        const blocked = await marketingBlocked(context, "email");
+        if (blocked) return { status: "skipped", note: `Marketing email skipped: ${blocked}` };
       }
       const to = emailAddress(context);
       if (!to) return { status: "skipped", note: "Email skipped: no email address" };
@@ -159,8 +181,9 @@ export async function executeJourneyStep(args: {
     }
 
     case "send_sms": {
-      if (category === "marketing" && contactOptedOut(context)) {
-        return { status: "skipped", note: "Marketing SMS skipped: contact opted out" };
+      if (category === "marketing") {
+        const blocked = await marketingBlocked(context, "sms");
+        if (blocked) return { status: "skipped", note: `Marketing SMS skipped: ${blocked}` };
       }
       const to = phoneNumber(context);
       if (!to) return { status: "skipped", note: "SMS skipped: no phone number" };

@@ -8,6 +8,7 @@ import { nextStepDueDate } from "./businessHours";
 import { getNextStepScheduling } from "./nextStepConfig";
 import { FOLLOW_UP_TYPE, isOpenFutureFollowUp } from "./followUp";
 import { isModuleEnabled } from "./modules/enabled";
+import { canContactPerson } from "./communicationPolicy";
 
 export const LEAD_TRIGGERS = [
   "lead_created",
@@ -77,6 +78,19 @@ async function applyRule(
     case "send_email": {
       if (!lead.email) return "skipped: lead has no email";
       if (!rule.emailTemplateId) return "skipped: no template configured";
+      // This path had NO consent check of any kind — it went straight from
+      // "has an email address" to sending. Every other outbound path in the app
+      // was gated; this one could mail someone who had opted out, withdrawn
+      // consent or unsubscribed in the portal, at any hour, with no cap.
+      if (lead.contactId) {
+        const verdict = await canContactPerson({
+          contactId: lead.contactId,
+          tenantId: lead.tenantId ?? null,
+          purpose: "marketing",
+          requestedChannel: "email",
+        });
+        if (!verdict.allowed) return `skipped: ${verdict.reason ?? "not contactable"}`;
+      }
       const template = await prisma.emailTemplate.findUnique({
         where: { id: rule.emailTemplateId },
       });
