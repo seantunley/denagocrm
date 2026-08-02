@@ -7,10 +7,9 @@ import {
   processJourneyRuns,
   recoverStaleJourneyRuns,
 } from "./journeyRuns";
-import {
-  enrollJourneyNow,
-  runScheduledJourneyEnrollments,
-} from "./journeyScheduling";
+// enrollJourneyNow was imported here and never called — line 17 re-exports it
+// from the same module, which is what callers actually use.
+import { runScheduledJourneyEnrollments } from "./journeyScheduling";
 
 export { emitJourneyEvent, processJourneyEvents } from "./journeyEvents";
 export { processJourneyRuns } from "./journeyRuns";

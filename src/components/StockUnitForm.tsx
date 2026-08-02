@@ -4,7 +4,6 @@ import { useState } from "react";
 import {
   BadgeDollarSign,
   BatteryCharging,
-  Boxes,
   CircleCheck,
   Fingerprint,
   Gauge,

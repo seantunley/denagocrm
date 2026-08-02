@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -446,4 +446,61 @@ test("the provider resolves a requested id that is not in records", () => {
   assert.match(provider, /if \(!quoteId \|\| listed\) return;/, "…not a gate: a miss must fall through to the fetch");
   assert.match(provider, /quoteEditorRecord\(quoteId\)/, "…which is the access-controlled loader");
   assert.match(provider, /toast\.error\("That quote is no longer available\."\)/, "and a miss must be reported");
+});
+
+/**
+ * The record page's server actions went with it.
+ *
+ * Seven actions — three here, four in actions/cpq.ts — had exactly one caller,
+ * that page. The editor does the same work through saveQuoteDraft, which writes
+ * the header, lines and fees in ONE locked transaction rather than a request
+ * per field.
+ *
+ * They are removed rather than left lying around because a server action is a
+ * reachable endpoint: an unused one is not just dead code but surface, still
+ * permission-gated yet untested and unexercised, which is how a guard rots
+ * without anyone noticing. Re-adding one means re-adding a second way to write
+ * a quote, which is the split this whole change closed.
+ */
+test("no second way to write a quote has come back", () => {
+  const walk = (dir: string, out: string[] = []): string[] => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "node_modules" && entry.name !== ".next") walk(full, out);
+      } else if (/\.tsx?$/.test(entry.name)) out.push(full);
+    }
+    return out;
+  };
+  const retired = [
+    "addQuoteItem",
+    "deleteQuoteItem",
+    "updateQuoteMeta",
+    "addQuoteFee",
+    "deleteQuoteFee",
+    "setQuoteDeposit",
+    "setQuoteTaxMode",
+  ];
+  const offenders: string[] = [];
+  for (const file of walk(path.join(root, "src"))) {
+    const code = readFileSync(file, "utf8");
+    for (const name of retired) {
+      if (new RegExp(`\b${name}\b`).test(code)) {
+        offenders.push(`${path.relative(root, file).split(path.sep).join("/")} → ${name}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], `these bring back a per-field write path:\n  ${offenders.join("\n  ")}`);
+  assert.throws(() => src("src/app/actions/cpq.ts"), "actions/cpq.ts should be gone entirely");
+});
+
+test("an underscore means deliberately unused, and lint knows it", () => {
+  // `prevState` on a useActionState action is required whether or not the body
+  // reads it. Flagging those buried the genuinely dead ones — a dozen real
+  // unused imports sat unnoticed among the false positives.
+  const config = readFileSync(path.join(root, "eslint.config.mjs"), "utf8");
+  assert.match(config, /"@typescript-eslint\/no-unused-vars"/, "the rule must be configured, not left at its default");
+  for (const opt of ["argsIgnorePattern", "varsIgnorePattern", "caughtErrorsIgnorePattern"]) {
+    assert.ok(config.includes(`${opt}: "^_"`), `${opt} must exempt the underscore convention`);
+  }
 });
