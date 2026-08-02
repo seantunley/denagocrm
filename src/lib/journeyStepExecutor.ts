@@ -10,6 +10,7 @@ import { logAudit } from "./audit";
 import { emitJourneyEvent } from "./journeyEvents";
 import { canContactPerson, nextCommunicationWindow } from "./communicationPolicy";
 import { JourneyContext, journeyTemplateVars } from "./journeyContext";
+import { AbortJourney, ConditionFailed, StopJourney } from "./journeyControlFlow";
 import {
   evaluateConditions,
   explainConditions,
@@ -20,10 +21,30 @@ import {
 export type StepResult = {
   status: "completed" | "skipped" | "waiting";
   note: string;
-  nextStepId?: string | null;
+  /**
+   * An EXPLICIT jump, set only by the top-level two-way `condition` step.
+   *
+   * This replaces a `nextStepId?: string | null` that carried three meanings on
+   * one field: absent meant "fall through to the step's own nextStepId", `null`
+   * meant "there is no successor, end the run", and a string meant "jump here".
+   * The `stop` step used the `null` spelling, so "the author asked to stop" and
+   * "this branch simply has no successor" were indistinguishable — in the code
+   * and in the trace. `stop` now raises StopJourney, and the remaining two cases
+   * are told apart by the presence of this object rather than by null-vs-
+   * undefined on the same key.
+   */
+  branch?: { stepId: string | null };
   nextRunAt?: Date;
   output?: Record<string, unknown>;
 };
+
+/**
+ * Where a TOP-LEVEL step goes next. Pure, and exported because the distinction
+ * it encodes is the one that used to be wrong.
+ */
+export function resolveTopLevelNext(step: JourneyStep, result: StepResult): string | null {
+  return result.branch ? result.branch.stepId : step.nextStepId ?? null;
+}
 
 function stringConfig(step: JourneyStep, key: string): string | null {
   const value = step.config[key];
@@ -150,12 +171,25 @@ export async function executeJourneyStep(args: {
   category: string;
   journeyName: string;
   runId: string;
+  /**
+   * True when the step is inside a `choose`/`repeat` sequence. It changes
+   * exactly one thing — what a failing `condition` means — because a sequence
+   * has no ids to jump to. See the `condition` case.
+   */
+  inSequence?: boolean;
 }): Promise<StepResult> {
-  const { step, context, category, journeyName, runId } = args;
+  const { step, context, category, journeyName, runId, inSequence = false } = args;
   const vars = journeyTemplateVars(context);
   const { leadId, contactId } = ids(context);
 
   switch (step.type) {
+    // Control flow, not action. The RUNNER owns these because executing them
+    // means moving the cursor, and the cursor is the run's durable position —
+    // see journeyScript.ts. Reaching here at all is a routing bug.
+    case "choose":
+    case "repeat":
+      throw new AbortJourney(`${step.type} ${step.id} reached the action executor`);
+
     case "wait": {
       const amount = Math.max(1, numberConfig(step, "amount", 1));
       const unit = stringConfig(step, "unit") ?? "days";
@@ -171,29 +205,52 @@ export async function executeJourneyStep(args: {
     case "condition": {
       const condition = parseConditionGroup(step.config.condition);
       const passed = evaluateConditions(condition, context);
-      const branch = passed ? step.config.trueStepId : step.config.falseStepId;
-      const taken = typeof branch === "string" && branch ? branch : step.nextStepId ?? null;
       // WHICH clause decided it, not just the verdict. "Condition did not match"
       // sends someone re-reading every clause by hand against a lead that has
       // since changed; the per-clause result is the answer they were going to
       // reconstruct. It feeds the step timeline in the activity trace.
+      const clauses = explainConditions(condition, context);
+
+      if (inSequence) {
+        // Home Assistant's semantics, and the reason _ConditionFail exists: a
+        // bare `condition` inside a sequence is a GATE, and failing it ends the
+        // run. There is nowhere else for it to go — a sequence runs in order and
+        // has no ids to branch to, which is why the parser rejects
+        // trueStepId/falseStepId here. Use `choose` when you want an else.
+        if (!passed) throw new ConditionFailed("Condition did not match");
+        return { status: "completed", note: "Condition matched", output: { passed, clauses } };
+      }
+
+      const configured = passed ? step.config.trueStepId : step.config.falseStepId;
+      const taken = typeof configured === "string" && configured ? configured : step.nextStepId ?? null;
       return {
         status: "completed",
         note: passed ? "Condition matched" : "Condition did not match",
-        nextStepId: taken,
+        branch: { stepId: taken },
         output: {
           passed,
           // `branchTaken` names the step, so a trace reader can follow the path
           // without re-deriving it from trueStepId/falseStepId themselves.
           branchTaken: taken,
           branch: passed ? "true" : "false",
-          clauses: explainConditions(condition, context),
+          clauses,
         },
       };
     }
 
-    case "stop":
-      return { status: "completed", note: stringConfig(step, "reason") ?? "Journey stopped", nextStepId: null };
+    case "stop": {
+      // Raised, not returned. `nextStepId: null` used to say this, and it was
+      // the same value a branch with no successor produced — so the trace could
+      // not tell "the author stopped it here" from "it ran out of steps".
+      // Unwinding also matters now: a stop three sequences deep has to leave all
+      // three, and an exception does that without every level re-propagating it.
+      const reason = stringConfig(step, "reason") ?? "Journey stopped";
+      // HA's `stop` takes `error: true` to end the script as a failure. Ours
+      // marks the run failed WITHOUT retrying — an author-declared stop is
+      // deterministic, so three attempts would fail three times.
+      if (step.config.error === true) throw new AbortJourney(reason);
+      throw new StopJourney(reason);
+    }
 
     case "send_email": {
       if (category === "marketing") {
