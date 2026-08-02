@@ -4,6 +4,7 @@ import { PrismaClient } from "@prisma/client";
 import { prisma, basePrisma } from "../src/lib/db";
 import { resolveActingTenant, createUserInOwnerTenant } from "../src/lib/tenantContext";
 import { ensureFoundingMembership, createTenant, addTenantMembership, activateTenant } from "../src/lib/provisioning";
+import { ROUTE_RULES } from "../src/lib/routeAccess";
 
 // DB-backed verification of the security/integrity fixes (audit Groups 1-3).
 // Runs in CI against the ephemeral seeded database — NOT locally (a local run
@@ -381,14 +382,20 @@ async function main() {
     assert.deepEqual(await resolveActingTenant(ct.ownerId), { error: "no_tenant" }, "a suspended tenant is fail-closed — its owner resolves to no tenant");
     // Activation via the real activateTenant path (not a bare active=true flip):
     // it must give the owner a WORKING workspace — enabled account + tenant-local
-    // crm_admin role (tenant administration) + default modules — otherwise an
-    // activated owner could sign in but manage nothing.
+    // crm_admin role (tenant administration) — otherwise an activated owner
+    // could sign in but manage nothing.
+    //
+    // It used to also grant a `User.modules` CSV, and this asserted that CSV was
+    // non-empty. That column is retired as an authorization input: route access
+    // is derived from RBAC now (see routeAccess.ts), so asserting it would be
+    // asserting a dead field. The guarantee it stood for — "activation yields a
+    // reachable workspace" — is what the role assertions below actually test,
+    // and one of them now names a permission the route table itself consumes.
     await activateTenant(basePrisma, ct.tenantId, ct.ownerId);
     assert.deepEqual(await resolveActingTenant(ct.ownerId), { tenantId: ct.tenantId }, "after activation the owner resolves to exactly the created tenant");
-    const activated = await basePrisma.$queryRaw<Array<{ disabledAt: Date | null; modules: string }>>`
-      SELECT "disabledAt", "modules" FROM "User" WHERE "id" = ${ct.ownerId} LIMIT 1`;
+    const activated = await basePrisma.$queryRaw<Array<{ disabledAt: Date | null }>>`
+      SELECT "disabledAt" FROM "User" WHERE "id" = ${ct.ownerId} LIMIT 1`;
     assert.equal(activated[0]?.disabledAt, null, "activation clears the owner's disabledAt (can sign in)");
-    assert.ok((activated[0]?.modules ?? "").length > 0, "activation grants the owner a non-empty module set (has a CRM workspace)");
     const adminGrant = await basePrisma.$queryRaw<Array<{ n: bigint }>>`
       SELECT COUNT(*)::bigint AS n FROM "UserRole"
       WHERE "userId" = ${ct.ownerId} AND "roleId" = ${`role_crm_admin:${ct.tenantId}`} AND "tenantId" = ${ct.tenantId}`;
@@ -398,6 +405,20 @@ async function main() {
       SELECT COUNT(*)::bigint AS n FROM "RolePermission"
       WHERE "roleId" = ${`role_crm_admin:${ct.tenantId}`} AND "permissionKey" = 'roles.manage'`;
     assert.equal(Number(adminPerms[0]?.n ?? 0), 1, "the tenant-local crm_admin role includes tenant administration (roles.manage)");
+    // …and that the role opens actual ROUTES, which is what "has a CRM
+    // workspace" now means. Route access is derived from RBAC, so a role with
+    // no route-bearing permission would sign in to a workspace that bounces it
+    // everywhere — the same end state the retired empty-modules CSV produced.
+    const routeKeys = ROUTE_RULES.flatMap((rule) => ("anyOf" in rule ? rule.anyOf : []));
+    assert.ok(routeKeys.length > 0, "the route table must actually gate something");
+    const routeGrant = await basePrisma.$queryRaw<Array<{ n: bigint }>>`
+      SELECT COUNT(*)::bigint AS n FROM "RolePermission"
+      WHERE "roleId" = ${`role_crm_admin:${ct.tenantId}`}
+        AND "permissionKey" = ANY(${routeKeys}::text[])`;
+    assert.ok(
+      Number(routeGrant[0]?.n ?? 0) > 0,
+      "activation must grant a permission the route table consumes (an activated owner can reach the CRM)",
+    );
     await basePrisma.userRole.deleteMany({ where: { userId: ct.ownerId } });
     await basePrisma.role.deleteMany({ where: { tenantId: ct.tenantId } });
     await basePrisma.tenantMember.deleteMany({ where: { userId: ct.ownerId } });
