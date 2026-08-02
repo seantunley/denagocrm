@@ -10,7 +10,11 @@ import {
   FileDown,
   Sparkles,
 } from "lucide-react";
-import { requireAnyPermission } from "@/lib/permissions";
+import {
+  requireAnyPermission,
+  getAccessibleQuoteIds,
+  getAccessibleJobCardIds,
+} from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { contactName, formatDate } from "@/lib/format";
 import {
@@ -71,23 +75,81 @@ const TOKENS = [
   "date.today",
 ];
 
-export default async function BuilderIndexPage() {
-  await requireAnyPermission("docbuilder.view", "docbuilder.manage");
+const RECORD_LIMIT = 100;
+
+export default async function BuilderIndexPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string }>;
+}) {
+  const user = await requireAnyPermission("docbuilder.view", "docbuilder.manage");
   await ensureBuilderSeeded();
+
+  /**
+   * `docbuilder.manage` is a CAPABILITY, not an access decision.
+   *
+   * This selector listed quote numbers with customer names, and job card
+   * numbers with customers and vehicles, straight from the table — so a holder
+   * whose record scope is restricted read the metadata of every deal and every
+   * job in the workspace out of a dropdown. generateDocEditorDocument() checks
+   * canAccessQuote/canAccessJobCard before it builds anything, but by then the
+   * disclosure has already happened. Scope the LIST too. (Same shape as the
+   * signing-hub finding: see tests/signingRecordAccess.test.ts.)
+   */
+  const [quoteIds, jobCardIds] = await Promise.all([
+    getAccessibleQuoteIds(user),
+    getAccessibleJobCardIds(user),
+  ]);
+  const scoped = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
+
+  /**
+   * …and a cap is not a corpus. The list stops at 100, which was survivable
+   * while every quote and job card could also generate from its own header.
+   * Those controls are gone, so an older record had no route left at all —
+   * hence the search, which reaches any record the caller may see.
+   */
+  const { q } = await searchParams;
+  const query = (q ?? "").trim();
+  const digits = query.replace(/\D/g, "");
+  const number = digits ? Number.parseInt(digits, 10) : null;
+  const nameLike = { contains: query, mode: "insensitive" as const };
+  const contactMatch = {
+    OR: [{ firstName: nameLike }, { lastName: nameLike }, { company: nameLike }],
+  };
+
   const [templates, quotes, jobCards] = await Promise.all([
     listBuilderTemplates(),
     prisma.quote.findMany({
-      where: { supersededAt: null },
+      where: {
+        supersededAt: null,
+        ...scoped(quoteIds),
+        ...(query
+          ? { OR: [...(number ? [{ number }] : []), { contact: contactMatch }] }
+          : {}),
+      },
       orderBy: { createdAt: "desc" },
-      take: 100,
+      take: RECORD_LIMIT,
       include: { contact: true },
     }),
     prisma.jobCard.findMany({
+      where: {
+        ...scoped(jobCardIds),
+        ...(query
+          ? {
+              OR: [
+                ...(number ? [{ number }] : []),
+                { contact: contactMatch },
+                { vehicle: { model: nameLike } },
+              ],
+            }
+          : {}),
+      },
       orderBy: { openedAt: "desc" },
-      take: 100,
+      take: RECORD_LIMIT,
       include: { contact: true, vehicle: true },
     }),
   ]);
+  const capped = quotes.length === RECORD_LIMIT || jobCards.length === RECORD_LIMIT;
 
   const input =
     "h-9 rounded-md border border-input bg-card px-3 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20";
@@ -156,6 +218,34 @@ export default async function BuilderIndexPage() {
           accept quotes; workshop templates accept job cards. The server rejects
           mismatched combinations before generating or filing anything.
         </p>
+        {/* A plain GET form: the page re-renders scoped and filtered, so no
+            client code is needed to reach a record beyond the newest hundred. */}
+        <form method="get" className="mb-3 flex flex-wrap items-center gap-2">
+          <input
+            type="search"
+            name="q"
+            defaultValue={query}
+            placeholder="Find a record — quote or job number, customer, vehicle"
+            aria-label="Search records"
+            className={`${input} min-w-64 flex-1`}
+          />
+          <Button type="submit" variant="outline" size="sm">Search</Button>
+          {query && (
+            <Link href="/settings/documents/builder" className="text-xs text-muted-foreground hover:text-foreground">
+              Clear
+            </Link>
+          )}
+        </form>
+        {capped && (
+          <p className="mb-3 text-xs text-muted-foreground">
+            Showing the first {RECORD_LIMIT} matches — search by number or customer to narrow it down.
+          </p>
+        )}
+        {query && quotes.length === 0 && jobCards.length === 0 && (
+          <p className="mb-3 text-xs text-muted-foreground">
+            No records match “{query}”. Generating without one fills the template with placeholders.
+          </p>
+        )}
         <SaveForm
           success="Document generated"
           resetOnSuccess={false}

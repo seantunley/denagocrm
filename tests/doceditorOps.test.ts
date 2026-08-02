@@ -114,3 +114,79 @@ test("duplicate inserts a copy with a new id right after", () => {
   const ids = col.blocks.map((b) => b.id);
   assert.equal(new Set(ids).size, ids.length); // all ids unique
 });
+
+// ── Where generating a document belongs ──────────────────────────────────────
+
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
+
+/**
+ * Generating a builder document against a record used to hang off the RECORD
+ * screens — a template dropdown and a Generate button in the header of a quote,
+ * and the same again on a job card. Choosing a document template is not part of
+ * working the record, and it put a settings-shaped control where the work is.
+ * Both are gone; Settings → Documents → Builder is the surface built for it.
+ */
+test("record screens do not offer a document-template picker", () => {
+  for (const rel of ["src/app/(app)/jobcards/[id]/page.tsx", "src/app/(app)/quotes/[id]/page.tsx"]) {
+    const code = src(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+    assert.ok(!code.includes("generateDocEditorDocument"), `${rel} still generates documents from a record header`);
+    assert.ok(!code.includes("listBuilderTemplates"), `${rel} still loads templates it has no use for`);
+  }
+});
+
+test("…and the settings surface that owns it still does", () => {
+  // The action itself is not being removed — only the record-level shortcuts.
+  const settings = src("src/app/(app)/settings/documents/builder/page.tsx");
+  assert.match(settings, /action=\{generateDocEditorDocument\}/, "the builder page must keep generating");
+  assert.match(src("src/app/actions/doceditor.ts"), /export async function generateDocEditorDocument/);
+});
+
+test("signing still resolves its own template, independently", () => {
+  // Envelopes render a builder document through defaultBuilderTemplateId, not
+  // through the shortcut — so removing the shortcut cannot break signing.
+  const signing = src("src/app/actions/recordSigning.ts");
+  assert.match(signing, /defaultBuilderTemplateId\("quote"\)/);
+  assert.ok(!signing.includes("generateDocEditorDocument"), "signing must not depend on the removed control");
+});
+
+/**
+ * `docbuilder.manage` is a CAPABILITY, not an access decision — the same
+ * distinction the signing hub was fixed on (tests/signingRecordAccess.test.ts).
+ * The Builder's record selector listed quote numbers with customer names, and
+ * job card numbers with customers and vehicles, straight from the table. The
+ * generate action checks canAccessQuote/canAccessJobCard before it builds
+ * anything, but by then the metadata has already been read out of a dropdown.
+ */
+test("the Builder's record selector is scoped to what the caller may see", () => {
+  const page = src("src/app/(app)/settings/documents/builder/page.tsx");
+  assert.match(page, /getAccessibleQuoteIds\(user\)/, "quotes must be RBAC-scoped");
+  assert.match(page, /getAccessibleJobCardIds\(user\)/, "job cards must be too");
+  assert.match(page, /ids === null \? \{\} : \{ id: \{ in: ids \} \}/, "null means unrestricted, not 'no filter needed'");
+
+  // Both queries must actually apply it — importing the helper is not using it.
+  const quoteQuery = page.slice(page.indexOf("prisma.quote.findMany"), page.indexOf("prisma.jobCard.findMany"));
+  const jobQuery = page.slice(page.indexOf("prisma.jobCard.findMany"));
+  assert.match(quoteQuery, /\.\.\.scoped\(quoteIds\)/);
+  assert.match(jobQuery.slice(0, jobQuery.indexOf("]")), /\.\.\.scoped\(jobCardIds\)/);
+});
+
+/**
+ * Removing the record-level shortcuts left this selector as the only route to
+ * generating a document against a record — and it stopped at the newest 100,
+ * so anything older had no route at all.
+ */
+test("any accessible record can be reached, not just the newest hundred", () => {
+  const page = src("src/app/(app)/settings/documents/builder/page.tsx");
+  assert.match(page, /name="q"/, "the selector must be searchable");
+  assert.match(page, /searchParams/, "…server-side, so the scoped query does the filtering");
+  // Searchable by the two things someone actually knows: the number, and who it is for.
+  assert.match(page, /number \? \[\{ number \}\] : \[\]/, "search by quote or job number");
+  assert.match(page, /contact: contactMatch/, "…and by customer");
+  assert.match(page, /vehicle: \{ model: nameLike \}/, "job cards by vehicle too");
+  assert.match(page, /capped &&/, "and it must say when the list is truncated rather than look complete");
+});

@@ -36,8 +36,6 @@ import { requireUser } from "@/lib/auth";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import SigningBlock from "@/components/SigningBlock";
-import { listBuilderTemplates } from "@/lib/docbuilder/store";
-import { generateDocEditorDocument } from "@/app/actions/doceditor";
 import { activeRecordRequest } from "@/lib/signing/record";
 import JobCardItemForm from "@/components/JobCardItemForm";
 import { AnnotatablePhoto, type AnnData } from "@/components/PhotoAnnotator";
@@ -51,7 +49,6 @@ import {
   CalendarDays,
   Printer,
   ClipboardCheck,
-  FileText,
   Check,
   Gauge,
   Package,
@@ -175,7 +172,6 @@ export default async function JobCardDetailPage({
   const rateCents = effectiveLabourRateCents(jobCard.labourRateCents, defaultRateCents);
   const timeLabourCents = Math.round(actualHours * rateCents);
   const myRunning = jobCard.timeEntries.find((e) => e.endedAt === null && e.technicianId === currentUser.id) ?? null;
-  const builderDocs = (await listBuilderTemplates()).filter((t) => t.key === "jobcard" || t.key === "service-report");
   const signingState = await activeRecordRequest({ jobCardId: jobCard.id });
   const path = `/jobcards/${jobCard.id}`;
 
@@ -221,15 +217,13 @@ export default async function JobCardDetailPage({
         <div className="flex flex-wrap items-center gap-2">
           <Link href={`/jobcards/${jobCard.id}/print`} className={buttonVariants({ variant: "outline", size: "sm" })}><Printer />Print</Link>
           {jobCard.status === "collected" && <Link href={`/jobcards/${jobCard.id}/service-report`} className={buttonVariants({ variant: "outline", size: "sm" })} target="_blank"><ClipboardCheck />Service report</Link>}
-          {builderDocs.length > 0 && currentUser.role === "owner" && (
-            <SaveForm success="Document generated" resetOnSuccess={false} action={generateDocEditorDocument} className="flex items-center gap-1">
-              <input type="hidden" name="jobCardId" value={jobCard.id} />
-              <select name="templateId" defaultValue={builderDocs[0].id} className="h-8 max-w-44 rounded-md border border-input bg-card px-2 text-xs text-foreground" title="Document template">
-                {builderDocs.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-              <SaveButton className={buttonVariants({ variant: "outline", size: "sm" })}><FileText />Generate</SaveButton>
-            </SaveForm>
-          )}
+          {/* A template picker and a Generate button sat here, mirroring one on
+              the quote record page. Choosing a document template is not part of
+              working a job, and it put a settings-shaped control in the header
+              of a record screen. Generating a builder document against a record
+              lives in Settings → Documents → Builder, which is the surface
+              built for it. Signing is unaffected — an envelope resolves its own
+              template through defaultBuilderTemplateId(). */}
           {terminal && <SaveForm success="Status updated" resetOnSuccess={false} action={setJobCardStatus.bind(null, jobCard.id, "repair")}><SaveButton className={buttonVariants({ variant: "outline", size: "sm" })}>Reopen</SaveButton></SaveForm>}
           {!terminal && <SaveForm success="Status updated" resetOnSuccess={false} action={setJobCardStatus.bind(null, jobCard.id, "cancelled")}><SaveButton className={buttonVariants({ variant: "outline", size: "sm" })}>Cancel job</SaveButton></SaveForm>}
           <ConfirmDelete action={deleteJobCard.bind(null, jobCard.id)} title={`Delete job card #${jobCard.number}?`} description="The job card moves to Trash and can be restored for 60 days." triggerClass="btn-danger btn-sm" />
