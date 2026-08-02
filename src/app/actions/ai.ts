@@ -3,8 +3,16 @@
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { prisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
-import { getActiveTenantId, requireOperational, requireOwner } from "@/lib/auth";
-import { requireLeadAccess, requireContactAccess, canAccessContact, hasPermission } from "@/lib/permissions";
+import { getActiveTenantId, requireOwner } from "@/lib/auth";
+import {
+  CUSTOMER_RECORD_READ_PERMISSIONS,
+  getAccessibleContactIds,
+  requireLeadAccess,
+  requireContactAccess,
+  requireAnyPermission,
+  canAccessContact,
+  hasPermission,
+} from "@/lib/permissions";
 import { aiCheckDraft, aiResearch } from "@/lib/ai";
 import { basePrisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
@@ -16,7 +24,8 @@ export async function checkDraft(
   _prev: AiCheckState | undefined,
   formData: FormData
 ): Promise<AiCheckState> {
-  await requireOperational();
+  // Proofreading writes nothing to the CRM, so the read grade is the right one.
+  await requireAnyPermission(...CUSTOMER_RECORD_READ_PERMISSIONS);
   const draft = String(formData.get("draft") ?? "").trim();
   if (!draft) return { error: "Nothing to check yet." };
   const contactId = String(formData.get("contactId") ?? "").trim();
@@ -36,13 +45,31 @@ export async function checkDraft(
   return result.issues.length > 0 ? { issues: result.issues } : { ok: true };
 }
 
-/** Instant duplicate check while typing a new contact/lead. */
+/**
+ * Instant duplicate check while typing a new contact/lead.
+ *
+ * Scoped to the caller's accessible contacts. The permission gate only asks
+ * "may you see SOME customer records"; the search underneath it was tenant-wide,
+ * so a rep holding nothing but contacts.view_owned could type a name fragment
+ * here and read back the id, name, email and phone of contacts they are refused
+ * on /contacts — the same class of leak as the ILIKE below, reached through the
+ * WHERE clause instead of the operator.
+ *
+ * The cost is honest and deliberate: a scoped user is no longer warned about a
+ * duplicate they cannot see. Silently disclosing the record is not an acceptable
+ * price for that warning.
+ */
 export async function findPossibleDuplicates(input: {
   name?: string;
   email?: string;
   phone?: string;
 }): Promise<{ id: string; label: string; detail: string }[]> {
-  await requireOperational();
+  const user = await requireAnyPermission(...CUSTOMER_RECORD_READ_PERMISSIONS);
+  // null = unrestricted (owner / contacts.view_all). An empty list is a scoped
+  // user with nothing accessible, which must match nothing rather than fall
+  // through to an unfiltered search.
+  const contactIds = await getAccessibleContactIds(user);
+  if (contactIds !== null && contactIds.length === 0) return [];
   const email = (input.email ?? "").trim().toLowerCase();
   const digits = (input.phone ?? "").replace(/\D/g, "").slice(-9);
   const name = (input.name ?? "").trim();
@@ -52,6 +79,7 @@ export async function findPossibleDuplicates(input: {
 
   const matches = await prisma.contact.findMany({
     where: {
+      ...(contactIds === null ? {} : { id: { in: contactIds } }),
       OR: [
         // Exact (case-folded), not `mode: "insensitive"` — that compiled to an
         // unescaped ILIKE, so submitting `%@%` to this duplicate-checker returned
@@ -120,7 +148,10 @@ export async function researchRecord(
   _prev: ResearchState | undefined,
   formData: FormData
 ): Promise<ResearchState> {
-  await requireOperational();
+  // Read grade is only the pre-filter here — the write is gated a few lines down
+  // on the record's own edit permission (requireLeadAccess/requireContactAccess),
+  // which is what actually authorises the ResearchNote and the record update.
+  await requireAnyPermission(...CUSTOMER_RECORD_READ_PERMISSIONS);
   const leadId = String(formData.get("leadId") ?? "").trim() || null;
   const contactId = String(formData.get("contactId") ?? "").trim() || null;
   if (!leadId && !contactId) return { error: "Nothing to research." };

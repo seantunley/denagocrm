@@ -38,7 +38,7 @@ import { APP_VERSION } from "@/lib/version";
 import { cn } from "@/lib/utils";
 import { isPathEnabled } from "@/lib/modules/registry";
 
-type ShellUser = { name: string; role: string; modules: string; permissions: string[]; avatarVersion?: string | null };
+type ShellUser = { name: string; role: string; permissions: string[]; avatarVersion?: string | null };
 
 function initials(name: string) {
   return name
@@ -76,12 +76,12 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules
             ⌘K
           </kbd>
         </button>
-        <QuickActions modules={user.modules} isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} />
+        <QuickActions isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} />
       </div>
 
       {/* Nav */}
       <div className="relative flex-1 overflow-y-auto px-3 py-3">
-        <Nav modules={user.modules} isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting }} />
+        <Nav isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting }} />
       </div>
 
       {/* Help, Settings & user */}
@@ -157,14 +157,17 @@ function MobilePrimaryNav({
   enabledModules?: string[];
   onMore: () => void;
 }) {
-  const modules = new Set(user.modules.split(",").map((item) => item.trim()).filter(Boolean));
-  const has = (module: string) => user.role === "owner" || modules.has(module);
+  // Same RBAC keys the sidebar (nav-config.ts) uses for these two links — the
+  // mobile bar used to read the per-user module CSV instead, so it could offer a
+  // shortcut to a screen the user's permissions did not open.
+  const granted = new Set(user.permissions);
+  const can = (...keys: string[]) => user.role === "owner" || keys.some((key) => granted.has(key));
   const enabledSet = enabledModules ? new Set(enabledModules) : undefined;
   const packOn = (href: string) => !enabledSet || isPathEnabled(href, enabledSet);
   const items = [
     { href: "/", label: "Dashboard", icon: LayoutDashboard, show: true },
-    { href: "/leads", label: "Leads", icon: SquareKanban, show: has("crm") && packOn("/leads") },
-    { href: "/inbox", label: "Inbox", icon: MessageSquare, show: has("inbox") && packOn("/inbox"), badge: inboxWaiting },
+    { href: "/leads", label: "Leads", icon: SquareKanban, show: can("leads.view_all", "leads.view_owned") && packOn("/leads") },
+    { href: "/inbox", label: "Inbox", icon: MessageSquare, show: can("inbox.view", "inbox.reply") && packOn("/inbox"), badge: inboxWaiting },
   ].filter((item) => item.show);
   const active = (href: string) => href === "/" ? pathname === "/" : pathname.startsWith(href);
 
@@ -225,7 +228,7 @@ export default function AppShell({
   return (
     <TooltipProvider delayDuration={250}>
     <div className="min-h-screen">
-      <CommandMenu modules={user.modules} isAdmin={user.role === "owner"} permissions={user.permissions} enabledModules={enabledModules} />
+      <CommandMenu isAdmin={user.role === "owner"} permissions={user.permissions} enabledModules={enabledModules} />
       <QuickCreateDialog />
       <Toaster />
 

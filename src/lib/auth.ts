@@ -5,7 +5,8 @@ import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
 import { prisma, basePrisma } from "./db";
 import { getSetting } from "./settings";
-import { hasModule, type ModuleId } from "./access";
+import { getUserPermissions, usablePermissions } from "./permissionQuery";
+import { routeGrants } from "./routeAccess";
 import { getUserSecurityState, getUserSecurityStateFresh } from "./userSecurity";
 import { resolveActingTenant } from "./tenantContext";
 import { tenantObserving, tenantEnforcing, mayRetryTenantlessSession } from "./tenantEnforcement";
@@ -148,19 +149,6 @@ export async function requireTenantOwner() {
   return user;
 }
 
-export async function requireAnyModule(...mods: ModuleId[]) {
-  const user = await requireUser();
-  if (user.role === "owner") return user;
-  if (!mods.some((module) => hasModule(user, module))) redirect("/");
-  return user;
-}
-
-export const requireCrm = () => requireAnyModule("crm");
-export const requireWorkshop = () => requireAnyModule("workshop");
-export const requireCrmOrWorkshop = () => requireAnyModule("crm", "workshop");
-export const requireInbox = () => requireAnyModule("inbox");
-export const requireOperational = () => requireAnyModule("crm", "workshop", "inbox");
-
 export async function getIdleMinutes(): Promise<number> {
   const raw = await getSetting("SESSION_IDLE_MINUTES");
   const n = raw ? parseInt(raw, 10) : DEFAULT_IDLE_MINUTES;
@@ -168,7 +156,7 @@ export async function getIdleMinutes(): Promise<number> {
 }
 
 export async function createSessionCookie(
-  user: { id: string; name: string; email: string; role: string; modules: string },
+  user: { id: string; name: string; email: string; role: string },
   opts?: { pwa?: boolean }
 ) {
   // Fresh (uncached) read: this runs after a session-version bump in the same
@@ -253,8 +241,27 @@ export async function createSessionCookie(
       sessionTenantId = null;
       await withSystemScope(() => prisma.userSession.create({ data: sessionBase }));
     }
+    // THE MINT SITE for the proxy's route-grant claim. `rg` is DERIVED from RBAC
+    // here and nowhere else — it is a cache of a decision this database read just
+    // made, not a second authority. (Before this, the proxy read a hand-ticked
+    // `User.modules` CSV that RBAC never wrote: an admin could grant a permission
+    // in /settings/access, the page guard would allow the screen, and the edge
+    // would still redirect the user to "/".)
+    //
+    // Computed INSIDE withTenant so the tenant-scoped RBAC read resolves against
+    // the tenant this session is being issued for.
+    //
+    // Freshness is not best-effort: updateRolePermissions and updateUserRoles
+    // (accessControl.ts) and setUserRole (security.ts) all bump
+    // User.sessionVersion for the affected users, and getCurrentUser refuses any
+    // session whose `sv` no longer matches — so a permission change invalidates
+    // every token carrying a now-stale `rg` and the next sign-in re-derives it.
+    const grants = routeGrants(
+      user.role,
+      usablePermissions(await getUserPermissions(user.id)),
+    );
     const token = await signFreshSession(
-      { ...user, sessionVersion: security.sessionVersion },
+      { ...user, grants, sessionVersion: security.sessionVersion },
       idle,
       { jti, pwa, ...(sessionTenantId ? { tid: sessionTenantId } : {}) }
     );

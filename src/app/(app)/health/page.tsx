@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Crown, Eye, HeartPulse, ShieldCheck, TriangleAlert, UserRoundSearch, type LucideIcon } from "lucide-react";
-import { requireCrm } from "@/lib/auth";
+import { requireRoute } from "@/lib/permissions";
 import { bulkHealth } from "@/lib/healthData";
 import { healthLabels, type HealthTier } from "@/lib/health";
 import { PageHeader } from "@/components/page-header";
@@ -28,8 +28,10 @@ function name(c: { firstName: string; lastName: string | null; company: string |
 }
 
 export default async function HealthPage() {
-  await requireCrm();
-  const scored = await bulkHealth();
+  // requireRoute returns the caller, and bulkHealth needs it: the route rule only
+  // says "may see SOME contacts", so the dashboard has to be scoped to which ones.
+  const user = await requireRoute("/health");
+  const scored = await bulkHealth(user);
 
   const counts: Record<HealthTier, number> = { vip: 0, healthy: 0, watch: 0, at_risk: 0 };
   for (const s of scored) counts[s.health.tier] += 1;

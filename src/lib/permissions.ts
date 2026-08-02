@@ -2,9 +2,16 @@ import { redirect } from "next/navigation";
 import { basePrisma } from "./db";
 import { requireUser } from "./auth";
 import { requireModuleEnabled } from "./modules/enabled";
-import { tenantEnforcing } from "./tenantEnforcement";
-import { currentTenantScope } from "./tenantScope";
 import { activeTenantPredicate } from "./tenantPredicate";
+import {
+  RBAC_INITIALIZED,
+  RBAC_UNAVAILABLE,
+  getUserPermissions,
+  usablePermissions,
+} from "./permissionQuery";
+import { ROUTE_RULES, ruleFor, type GuardedRoute } from "./routeAccess";
+
+export { getUserPermissions } from "./permissionQuery";
 
 export const PERMISSIONS = [
   "pipelines.view", "pipelines.manage", "forecast.view", "forecast.manage",
@@ -41,64 +48,21 @@ export const PERMISSIONS = [
 ] as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[number];
+/**
+ * `modules` deliberately absent: the per-user module CSV was the second,
+ * conflicting authorization system this file's guards now replace. See
+ * routeAccess.ts.
+ */
 export type PermissionUser = {
   id: string;
   name: string;
   email: string;
   role: string;
-  modules: string;
 };
-
-const RBAC_UNAVAILABLE = "__rbac_unavailable__";
-const RBAC_INITIALIZED = "__rbac_initialized__";
-
-/**
- * THE RBAC enforcement flip (see the deferred-scoping notes in settings.ts's
- * createUser and accessControl.ts's updateUserRoles): every UserRole write already
- * stamps its owning tenant, but reads stayed tenant-agnostic on purpose, so this one
- * change had to land atomically with the rest of the tenant-enforcement rollout (and
- * its lockout-proofing) — not piecemeal. It has now landed alongside that rollout.
- *
- * DORMANT off: identical query to before (every role assignment the user holds, in
- * any tenant) — today's single-tenant behaviour, byte-for-byte.
- * ENFORCING: scoped to the active tenant's assignments only, so a user who belongs
- * to two tenants no longer receives the UNION of both tenants' privileges — only the
- * one they're currently acting in.
- */
-export async function getUserPermissions(userId: string): Promise<Set<string>> {
-  try {
-    const enforcing = tenantEnforcing();
-    const rows = enforcing
-      ? await basePrisma.$queryRaw<Array<{ key: string }>>`
-          SELECT DISTINCT rp."permissionKey" AS key
-          FROM "UserRole" ur
-          JOIN "RolePermission" rp ON rp."roleId" = ur."roleId"
-          WHERE ur."userId" = ${userId}
-            AND ur."tenantId" IS NOT DISTINCT FROM ${currentTenantScope()?.tenantId ?? null}
-          UNION
-          SELECT ${RBAC_INITIALIZED} AS key
-          WHERE EXISTS (SELECT 1 FROM "Role" LIMIT 1)
-        `
-      : await basePrisma.$queryRaw<Array<{ key: string }>>`
-          SELECT DISTINCT rp."permissionKey" AS key
-          FROM "UserRole" ur
-          JOIN "RolePermission" rp ON rp."roleId" = ur."roleId"
-          WHERE ur."userId" = ${userId}
-          UNION
-          SELECT ${RBAC_INITIALIZED} AS key
-          WHERE EXISTS (SELECT 1 FROM "Role" LIMIT 1)
-        `;
-    return new Set(rows.map((row) => row.key));
-  } catch {
-    return new Set([RBAC_UNAVAILABLE]);
-  }
-}
 
 export async function getUserPermissionList(user: PermissionUser): Promise<string[]> {
   if (user.role === "owner") return [...PERMISSIONS];
-  const permissions = await getUserPermissions(user.id);
-  if (permissions.has(RBAC_UNAVAILABLE) || !permissions.has(RBAC_INITIALIZED)) return [];
-  return [...permissions].filter((key) => !key.startsWith("__"));
+  return [...usablePermissions(await getUserPermissions(user.id))];
 }
 
 export async function hasPermission(user: PermissionUser, permission: PermissionKey): Promise<boolean> {
@@ -124,6 +88,74 @@ export async function requireAnyPermission(...permissions: PermissionKey[]): Pro
   if (!(await hasAnyPermission(user, ...permissions))) redirect("/");
   return user;
 }
+
+/**
+ * The page/action side of the SAME rule the proxy applies at the edge — both
+ * read ROUTE_RULES, so a route can no longer be allowed by one and refused by
+ * the other. (That disagreement was the bug: the proxy consulted a per-user
+ * module CSV that RBAC never wrote to, so granting a permission changed the page
+ * guard's answer and not the proxy's.)
+ *
+ * This is the authoritative check: it resolves live RBAC on every request, while
+ * the edge only holds the grant claim minted at sign-in.
+ */
+export async function requireRoute(route: GuardedRoute): Promise<PermissionUser> {
+  const rule = ruleFor(route);
+  // Unreachable — GuardedRoute is derived from ROUTE_RULES — but a rule that
+  // cannot be found must deny, never wave the request through.
+  if (!rule) redirect("/");
+  if ("owner" in rule) {
+    const user = await requireUser();
+    if (user.role !== "owner") redirect("/");
+    return user;
+  }
+  return requireAnyPermission(...rule.anyOf);
+}
+
+/** Every guarded prefix, for tests and tooling that inventory the surface. */
+export const GUARDED_ROUTES = ROUTE_RULES.map((rule) => rule.prefix);
+
+/**
+ * "May READ customer records at all" — the RBAC replacement for the legacy
+ * crm/workshop module flags on actions that touch a contact or a lead without
+ * being scoped to one entity type (AI helpers, duplicate lookup). Spread it into
+ * `requireAnyPermission`; the record-level `canAccessContact`/`canAccessLead`
+ * checks at each call site still decide WHICH records.
+ *
+ * READ-GRADE ONLY. Every key here is a *view* permission, and this list must
+ * never gate an action that writes. It used to: logging a communication,
+ * deleting one, toggling a timeline pin and SENDING EMAIL were all gated on this
+ * list, so a user holding nothing but contacts.view_owned could write to the
+ * timeline and send mail from the workspace's address. Use
+ * CUSTOMER_RECORD_WRITE_PERMISSIONS for anything that mutates or sends.
+ */
+export const CUSTOMER_RECORD_READ_PERMISSIONS = [
+  "contacts.view_all",
+  "contacts.view_owned",
+  "leads.view_all",
+  "leads.view_owned",
+] as const satisfies readonly PermissionKey[];
+
+/**
+ * "May WRITE on a customer record" — the write-grade counterpart, for actions
+ * that record, delete or send something against a contact or a lead without
+ * being scoped to one entity type.
+ *
+ * `contacts.edit` / `leads.edit` are the existing catalogue keys for "may change
+ * this record", and they are already what the sibling single-entity actions
+ * demand: `toggleContactNotePin` requires contacts.edit and `toggleLeadNotePin`
+ * requires leads.edit to pin the very same timeline these actions write to. No
+ * narrower key fits — contacts.delete / leads.delete mean destroying the customer
+ * record itself, not removing one entry from its history, and campaigns.send is
+ * the bulk-marketing surface, not a rep emailing one customer.
+ *
+ * As with the read list, this only answers "at all"; canAccessContact /
+ * canAccessLead at each call site still decide WHICH records.
+ */
+export const CUSTOMER_RECORD_WRITE_PERMISSIONS = [
+  "contacts.edit",
+  "leads.edit",
+] as const satisfies readonly PermissionKey[];
 
 export async function getUserTeamIds(userId: string): Promise<string[]> {
   try {

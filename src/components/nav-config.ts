@@ -39,15 +39,20 @@ import { isPathEnabled } from "@/lib/modules/registry";
 export type NavLink = { href: string; label: string; icon: LucideIcon };
 export type NavGroup = { key: string; label: string; links: NavLink[] };
 
+/**
+ * The nav is built from RBAC alone. It used to also take the per-user module
+ * CSV, which made a link's visibility and the page's own guard answer to two
+ * different systems — a link could show for a user the proxy then redirected
+ * away (and vice versa). `enabledModules` is the unrelated TENANT feature pack
+ * (src/lib/modules/registry.ts): what the workspace has switched on, not what
+ * this user may do.
+ */
 export function buildNav(
-  modules: string,
   isAdmin: boolean,
   permissionList: string[] = [],
   enabledModules?: ReadonlySet<string>,
 ) {
-  const mods = new Set(modules.split(",").map((module) => module.trim()).filter(Boolean));
   const permissions = new Set(permissionList);
-  const hasModule = (id: string) => isAdmin || mods.has(id);
   const can = (...keys: string[]) => isAdmin || keys.some((key) => permissions.has(key));
 
   const topLinks: NavLink[] = [{ href: "/", label: "Dashboard", icon: LayoutDashboard }];
@@ -60,7 +65,7 @@ export function buildNav(
   const groups: NavGroup[] = [];
 
   const socialLinks: NavLink[] = [];
-  if (can("inbox.view", "inbox.reply") || (permissionList.length === 0 && hasModule("inbox"))) {
+  if (can("inbox.view", "inbox.reply")) {
     socialLinks.push({ href: "/inbox", label: "Inbox", icon: MessageSquare });
   }
   if (socialLinks.length) groups.push({ key: "social", label: "Social", links: socialLinks });
@@ -73,7 +78,9 @@ export function buildNav(
   if (can("signing.view", "signing.manage")) crmLinks.push({ href: "/signatures", label: "Signatures", icon: PenLine });
   if (can("deliveries.view", "deliveries.manage")) crmLinks.push({ href: "/deliveries", label: "Deliveries", icon: Truck });
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/contacts", label: "Contacts", icon: Users });
-  if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/fleets", label: "Fleets", icon: Building2 });
+  // fleets.* — the same rule ROUTE_RULES applies at the edge and requireRoute
+  // applies on the page, so this link cannot appear for someone /fleets bounces.
+  if (can("fleets.view", "fleets.manage")) crmLinks.push({ href: "/fleets", label: "Fleets", icon: Building2 });
   if (can("activities.view", "activities.manage")) crmLinks.push({ href: "/activities", label: "Activities", icon: ListChecks });
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/health", label: "Customer Health", icon: HeartPulse });
   if (can("documents.view_all", "documents.view_owned", "documents.upload", "documents.manage", "document_templates.manage")) {
@@ -147,7 +154,7 @@ export function buildNav(
   return { topLinks, groups };
 }
 
-export function flatNav(modules: string, isAdmin: boolean, permissions: string[] = []): NavLink[] {
-  const { topLinks, groups } = buildNav(modules, isAdmin, permissions);
+export function flatNav(isAdmin: boolean, permissions: string[] = []): NavLink[] {
+  const { topLinks, groups } = buildNav(isAdmin, permissions);
   return [...topLinks, ...groups.flatMap((group) => group.links)];
 }

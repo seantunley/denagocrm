@@ -14,7 +14,13 @@ model User {
   email             String    @unique
   passwordHash      String
   role              String    @default("member") // owner | member
-  modules           String    @default("crm,workshop,reports,inbox") // gated modules, csv
+  // RETIRED — no code reads this. It was a second authorization system alongside
+  // RBAC (UserRole/RolePermission): the edge proxy gated routes on this CSV while
+  // /settings/access never wrote to it, so a granted permission still bounced the
+  // user to "/". Route access is now derived from RBAC — see src/lib/routeAccess.ts.
+  // Column and default left as they are so this needs no migration; drop both once
+  // no deployed build reads the field.
+  modules           String    @default("crm,workshop,reports,inbox") // RETIRED, inert
   totpSecret        String? // encrypted TOTP secret
   totpEnabledAt     DateTime?
   totpBackupCodes   String? // JSON array of bcrypt-hashed one-time backup codes

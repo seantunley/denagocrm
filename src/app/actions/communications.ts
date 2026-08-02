@@ -2,8 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireCrmOrWorkshop } from "@/lib/auth";
-import { canAccessContact, canAccessLead, requirePermission, requireAnyPermission } from "@/lib/permissions";
+import {
+  CUSTOMER_RECORD_WRITE_PERMISSIONS,
+  canAccessContact,
+  canAccessLead,
+  requirePermission,
+  requireAnyPermission,
+  type PermissionUser,
+} from "@/lib/permissions";
 import {
   removeTimelinePin,
   toggleTimelinePin,
@@ -14,7 +20,7 @@ import {
 import { isSocialChannel } from "@/lib/socialChannels";
 
 async function assertCommunicationAccess(
-  user: Awaited<ReturnType<typeof requireCrmOrWorkshop>>,
+  user: PermissionUser,
   communication: { contactId: string | null; leadId: string | null },
 ) {
   if (user.role === "owner") return;
@@ -30,7 +36,10 @@ async function assertCommunicationAccess(
 }
 
 export async function addCommunication(formData: FormData) {
-  const user = await requireCrmOrWorkshop();
+  // Write grade. This creates a Communication (and can upload an image) against a
+  // contact or lead; it was gated on the VIEW list, so contacts.view_owned alone
+  // was enough to write to another team's record timeline.
+  const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
   const str = (k: string) => {
     const v = String(formData.get(k) ?? "").trim();
     return v === "" ? null : v;
@@ -89,7 +98,10 @@ export async function addCommunication(formData: FormData) {
 }
 
 export async function toggleCommunicationPin(id: string, path: string) {
-  const user = await requireCrmOrWorkshop();
+  // Write grade — pinning writes a TimelinePin row and an audit entry. Its
+  // siblings in timelinePins.ts already demand contacts.edit / leads.edit to pin
+  // on the SAME timeline; a view permission here was the odd one out.
+  const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
   const communication = await prisma.communication.findUniqueOrThrow({
     where: { id },
     select: {
@@ -178,7 +190,9 @@ export async function deleteCommunication(
   path: string,
   formData: FormData,
 ) {
-  const user = await requireCrmOrWorkshop();
+  // Write grade — this is a hard delete of a customer's contact history. A view
+  // permission must never be able to destroy the record it can only look at.
+  const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
   const reason =
     String(formData.get("reason") ?? "").trim() || "No reason given";
   const communication = await prisma.communication.findUniqueOrThrow({

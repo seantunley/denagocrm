@@ -234,33 +234,12 @@ export async function ownerResetUser2fa(userId: string): Promise<ActionResult> {
   });
 }
 
-export async function setUserModules(userId: string, modulesCsv: string): Promise<ActionResult> {
-  return asActionResult(async () => {
-    const owner = await requireOwner();
-    const valid = new Set(["crm", "workshop", "reports", "inbox"]);
-    const clean = modulesCsv
-      .split(",")
-      .map((module) => module.trim())
-      .filter((module) => valid.has(module))
-      .join(",");
-    const before = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-    await basePrisma.$transaction(async (tx) => {
-      const target = await tx.user.update({ where: { id: userId }, data: { modules: clean } });
-      await bumpUserSessionVersion(userId, tx);
-      await logAuditStrict({
-        action: "security.modules_changed",
-        summary: `${target.name}'s legacy modules set to ${clean || "none"}; active sessions revoked`,
-        entityType: "User",
-        entityId: userId,
-        user: owner,
-        before: { modules: before.modules },
-        after: { modules: clean },
-      }, tx);
-    }, GOVERNANCE_TX);
-    revalidatePath("/settings");
-    return { success: "Modules updated." };
-  });
-}
+// setUserModules is GONE. It wrote `User.modules`, the per-user CSV the proxy
+// treated as an authorization source of its own: an admin could grant a
+// permission in /settings/access and the user would still be redirected to "/"
+// because this checkbox had never been ticked, with nothing to explain the
+// contradiction. Route access is now derived from RBAC alone (src/lib/
+// routeAccess.ts), so there is one place to grant it: Settings → Access.
 
 export async function revokeUserSessions(userId: string): Promise<ActionResult> {
   return asActionResult(async () => {

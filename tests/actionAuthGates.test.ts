@@ -49,11 +49,14 @@ test("stripComments removes guards that are only mentioned in prose", () => {
 // merely start with require/assert/ensure — requireModuleEnabled, requireBooking,
 // requireTenantMember, requireAssignableUser, assertUniqueSerial and friends
 // check that a *value* is usable, not that the *caller* is allowed.
+// The requireCrm/requireWorkshop/requireInbox/requireOperational family is
+// deliberately absent: those read the retired per-user module CSV, an
+// authorization source RBAC never wrote to. Listing them here would let a new
+// action re-adopt it.
 const APPROVED_GUARDS = [
   "requireUser", "requireOwner", "requireTenantOwner", "getCurrentUser",
-  "requireAnyModule", "requireCrm", "requireWorkshop", "requireCrmOrWorkshop",
-  "requireInbox", "requireOperational",
-  "requirePermission", "requireAnyPermission", "hasPermission", "hasAnyPermission",
+  "requirePermission", "requireAnyPermission", "requireRoute",
+  "hasPermission", "hasAnyPermission",
   "requireLeadAccess", "requireLeadReadAccess", "canAccessLead",
   "requireContactAccess", "requireContactReadAccess", "canAccessContact",
   "requireQuoteAccess", "requireQuoteReadAccess", "canAccessQuote",
@@ -278,15 +281,15 @@ test("every /products and /trash server action is owner-gated", () => {
 test("the proxy keeps its owner gate for /products and /trash (defence in depth)", () => {
   // The page-level checks are the real control; the proxy rule stays because it
   // gives the nicer redirect and pre-filters before any page code runs.
-  const access = stripComments(readFileSync(join(ROOT, "src", "lib", "access.ts"), "utf8"));
+  const access = stripComments(readFileSync(join(ROOT, "src", "lib", "routeAccess.ts"), "utf8"));
   for (const prefix of ["/products", "/trash"]) {
     assert.match(
       access,
-      new RegExp(`prefix:\\s*"${prefix}",\\s*gate:\\s*"admin"`),
-      `ROUTE_GATES must keep the owner-only rule for ${prefix}`,
+      new RegExp(`prefix:\\s*"${prefix}",\\s*owner:\\s*true`),
+      `ROUTE_RULES must keep the owner-only rule for ${prefix}`,
     );
   }
-  assert.match(access, /if \(rule\.gate === "admin"\) return false;/, "an admin route must fail closed for non-owners");
+  assert.match(access, /if \("owner" in rule\) return false;/, "an owner-only route must fail closed for non-owners");
 
   // …and they must never be treated as public by the proxy.
   const proxy = stripComments(readFileSync(join(ROOT, "src", "proxy.ts"), "utf8"));

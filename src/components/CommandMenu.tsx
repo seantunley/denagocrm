@@ -21,12 +21,10 @@ export function openCommandMenu() {
 }
 
 export default function CommandMenu({
-  modules,
   isAdmin,
   permissions = [],
   enabledModules,
 }: {
-  modules: string;
   isAdmin: boolean;
   permissions?: string[];
   enabledModules?: string[];
@@ -34,7 +32,7 @@ export default function CommandMenu({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const enabledSet = enabledModules ? new Set(enabledModules) : undefined;
-  const { topLinks, groups } = buildNav(modules, isAdmin, permissions, enabledSet);
+  const { topLinks, groups } = buildNav(isAdmin, permissions, enabledSet);
   const granted = new Set(permissions);
   const can = (...keys: string[]) => isAdmin || keys.some((key) => granted.has(key));
   const packOn = (href: string) => !enabledSet || isPathEnabled(href, enabledSet);

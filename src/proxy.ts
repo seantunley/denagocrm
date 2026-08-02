@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { routeAllowed } from "@/lib/access";
+import { routeAllowed } from "@/lib/routeAccess";
 import {
   verifySessionFull,
   refreshSession,
@@ -105,11 +105,16 @@ export async function proxy(req: NextRequest) {
     return res;
   }
 
-  // Module gating: users only reach the modules ticked on their account
+  // Route gating from the SINGLE authorization table (src/lib/routeAccess.ts).
+  // The edge has the JWT and no database, so it reads the `rg` grant claim that
+  // was derived from RBAC when the session was minted — the same ROUTE_RULES the
+  // page guards evaluate against live RBAC. This is an optimistic pre-filter, not
+  // the boundary: every gated page re-checks with requireRoute/requireOwner.
+  // A pre-`rg` token carries no grants and is denied (fail closed).
   if (
     !routeAllowed(pathname, {
       role: result.payload.role ?? "member",
-      modules: result.payload.mods ?? "",
+      grants: result.payload.rg ?? "",
     })
   ) {
     if (pathname.startsWith("/api/")) {

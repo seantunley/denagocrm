@@ -43,7 +43,6 @@ export default async function AppLayout({
       user={{
         name: user.name,
         role: user.role,
-        modules: user.modules,
         permissions,
         avatarVersion: user.avatarRef ? user.avatarUpdatedAt?.toISOString() ?? "current" : null,
       }}
