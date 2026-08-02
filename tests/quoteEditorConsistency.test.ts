@@ -7,12 +7,18 @@ import path from "node:path";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 
-/** Source with comments stripped — a naive regex otherwise matches the very
- *  comment that documents the fix. */
-const shipped = (rel: string) =>
-  src(rel)
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "");
+/**
+ * Strip comments — a naive regex otherwise matches the very comment that
+ * documents the fix, which is not a hypothetical: the guard below scans for
+ * seven retired action names, and the note in quotes.ts explaining why they
+ * went lists all seven.
+ *
+ * Whole-line `//` only, so a `https://` inside a string literal survives.
+ */
+const stripComments = (code: string) =>
+  code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+const shipped = (rel: string) => stripComments(src(rel));
 
 /**
  * Creating a quote landed you in one of TWO different UIs depending on which
@@ -483,9 +489,11 @@ test("no second way to write a quote has come back", () => {
   ];
   const offenders: string[] = [];
   for (const file of walk(path.join(root, "src"))) {
-    const code = readFileSync(file, "utf8");
+    // Comments stripped, or this flags the note in quotes.ts that explains why
+    // these seven went — which names all seven.
+    const code = stripComments(readFileSync(file, "utf8"));
     for (const name of retired) {
-      if (new RegExp(`\b${name}\b`).test(code)) {
+      if (new RegExp(String.raw`\b${name}\b`).test(code)) {
         offenders.push(`${path.relative(root, file).split(path.sep).join("/")} → ${name}`);
       }
     }
