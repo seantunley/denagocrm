@@ -134,6 +134,19 @@ async function processOneEvent(
   event: { id: string; type: string; entityType: string; entityId: string; payload: Prisma.JsonValue | null; dedupeKey: string; journeyId: string | null },
 ): Promise<{ enrolled: number; decisions: JourneyEnrolmentDecision[] } | null> {
   let enrolled = 0;
+  // Declared OUTSIDE the try, deliberately.
+  //
+  // Runs are committed one at a time as the loop goes; the event row is only
+  // updated at the end. So a failure after some journeys have enrolled — the
+  // final update, or anything else late — used to discard every decision made
+  // so far and return a single "it failed" placeholder. The manual test run
+  // then had no runId, reported that nothing happened, and the run it had
+  // already created went on to execute and send. "Nothing was sent" while a
+  // live run sends is the worst answer this function can give.
+  //
+  // Whatever was decided is a fact about work already committed, and survives
+  // the failure that follows it.
+  const decisions: JourneyEnrolmentDecision[] = [];
   {
     const claimed = await prisma.journeyEvent.updateMany({
       where: { id: event.id, status: "pending" },
@@ -162,7 +175,6 @@ async function processOneEvent(
       // used to be bare `continue`s: a journey nobody emits for looked exactly
       // like a journey nobody matched, which is how "New lead created"
       // journeys sat active enrolling nobody with nothing on screen to say so.
-      const decisions: JourneyEnrolmentDecision[] = [];
 
       for (const journey of journeys) {
         const version = getActiveVersion(journey);
@@ -233,10 +245,21 @@ async function processOneEvent(
           error: message.slice(0, 1000),
         },
       });
-      return {
-        enrolled,
-        decisions: [{ journeyId: "", journeyName: "—", enrolled: false, reason: message.slice(0, 200) }],
-      };
+      // Everything decided before the failure is KEPT, and the failure is
+      // appended as one more line rather than replacing them. A caller that
+      // enrolled successfully still gets its runId, so it can report — and act
+      // on — the run that actually exists.
+      // Everything decided before the failure is KEPT, and the failure is
+      // appended as one more line rather than replacing them. A caller that
+      // enrolled successfully still gets its runId, so it can report — and act
+      // on — the run that actually exists.
+      decisions.push({
+        journeyId: "",
+        journeyName: "—",
+        enrolled: false,
+        reason: `Event processing failed after ${decisions.filter((d) => d.enrolled).length} enrolment(s): ${message}`.slice(0, 300),
+      });
+      return { enrolled, decisions };
     }
   }
 }
