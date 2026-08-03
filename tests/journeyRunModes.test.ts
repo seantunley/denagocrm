@@ -56,9 +56,12 @@ test("arbitration and creation happen in ONE transaction, under the lock", () =>
   // replacement, or release several `queued` runs together. An event burst on
   // one lead is the ordinary case, not an exotic one.
   const shared = shipped("src/lib/journeyEngineShared.ts");
+  // `return await`, not a bare `return`: the call is wrapped in a try/catch for
+  // the P2002 backstop, and a bare return would settle the promise outside the
+  // catch — so the backstop would never see the rejection it exists for.
   assert.match(
     shared,
-    /return withEnrolmentLock\([\s\S]*?arbitrateEnrolment\(tx,[\s\S]*?tx\.journeyRun\.create\(/,
+    /return await withEnrolmentLock\([\s\S]*?arbitrateEnrolment\(tx,[\s\S]*?tx\.journeyRun\.create\(/,
     "arbitration and creation must be inside one withEnrolmentLock callback",
   );
   const arb = shipped("src/lib/journeyArbitration.ts");
@@ -214,6 +217,66 @@ test("releasing queued runs hands back ONE per person, not the whole queue", () 
     "re-check open runs inside the lock — an enrolment can land between the read and the write",
   );
   assert.match(release, /orderBy: \{ createdAt: "asc" \}/, "a queue drains in the order it formed");
+});
+
+/* ── a duplicate must not abort the transaction ──────────────────────────── */
+
+test("a duplicate enrolment is CHECKED, not caught inside the transaction", () => {
+  // Postgres marks a transaction aborted the moment a statement fails, so
+  // catching P2002 from the insert and returning normally does not work: every
+  // later statement errors with "current transaction is aborted" and the COMMIT
+  // fails too. The handler would report `duplicate_event` and then the commit
+  // would throw on the way out — turning an ordinary repeat event into a failed
+  // one, and (because the event processor retries) into three of them.
+  //
+  // The read is safe here where it would not be outside the lock: the advisory
+  // lock serialises every enrolment for this (journey, entity), and the same
+  // event on the same person always hashes to the same key.
+  const shared = shipped("src/lib/journeyEngineShared.ts");
+  const start = shared.indexOf("return await withEnrolmentLock");
+  assert.notEqual(start, -1, "the lock call is gone — was it renamed?");
+  const inside = shared.slice(start, shared.indexOf("  } catch (error) {", start));
+  assert.ok(inside.length > 0, "the slice ran backwards");
+
+  assert.match(
+    inside,
+    /findUnique\(\{\s*where: \{ idempotencyKey \}/,
+    "the duplicate must be found by a read before the insert",
+  );
+  const check = inside.indexOf("idempotencyKey }");
+  const insert = inside.indexOf("tx.journeyRun.create(");
+  assert.ok(check !== -1 && insert !== -1 && check < insert, "the check must precede the insert");
+  assert.ok(
+    !/P2002/.test(inside),
+    "catching P2002 INSIDE the transaction leaves it aborted — the commit still fails",
+  );
+  // The backstop belongs outside, where the transaction has already rolled back.
+  const outside = shared.slice(shared.indexOf("  } catch (error) {", start));
+  assert.match(outside, /error\.code === "P2002"/, "keep a backstop, but outside the transaction");
+});
+
+test("a manual run acts on the run it created, by id", () => {
+  // "The newest run for this journey and lead" is not the same thing. A
+  // concurrent enrolment can be newer — and under run mode `parallel` a second
+  // run is perfectly legal — so pressing "test" could report on, and drive, a
+  // run somebody else's event had just created.
+  const action = shipped("src/app/actions/journeyRuns.ts");
+  const manual = action.slice(
+    action.indexOf("export async function runJourneyOnLead"),
+    action.indexOf("async function activeTriggerFor"),
+  );
+  assert.ok(manual.length > 0, "the slice ran backwards");
+  assert.match(manual, /findUnique\(\{ where: \{ id: mine\.runId \}/, "the run must be fetched by its own id");
+  assert.ok(
+    !/orderBy: \{ createdAt: "desc" \}/.test(manual),
+    "picking the newest run is the race this replaced",
+  );
+  // …and the id has to survive the trip through the decision record.
+  assert.match(
+    shipped("src/lib/journeyEvents.ts"),
+    /\.\.\.\(outcome\.enrolled \? \{ runId: outcome\.runId \} : \{\}\)/,
+    "the created runId must be carried on the decision",
+  );
 });
 
 /* ── one bad definition must not stop the tick ───────────────────────────── */

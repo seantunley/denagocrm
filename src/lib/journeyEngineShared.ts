@@ -83,11 +83,32 @@ export async function enqueueJourneyRun(args: {
   // extended `prisma` client.
   const mode = parseRunMode(args.journey.runMode);
   const tenantScope = activeTenantPredicate("enqueueJourneyRun");
-  return withEnrolmentLock(args.journey.id, args.entityType, args.entityId, async (tx) => {
-    const against = await arbitrateEnrolment(tx, args.journey.id, args.entityType, args.entityId, mode);
-    if (against.action === "drop") return { enrolled: false, refusal: against.refusal };
+  try {
+    return await withEnrolmentLock(args.journey.id, args.entityType, args.entityId, async (tx) => {
+      // THE DUPLICATE IS CHECKED, NOT CAUGHT.
+      //
+      // Catching P2002 from the insert and carrying on does not work inside a
+      // transaction: Postgres marks the whole transaction aborted the moment a
+      // statement fails, so every later statement errors with "current
+      // transaction is aborted" and the COMMIT fails too. The handler would
+      // return `duplicate_event` and then the commit would throw on the way
+      // out, turning an ordinary repeat event into a failed one — and, because
+      // the event processor retries, into three of them.
+      //
+      // A read is safe here where it would not be outside: the advisory lock
+      // serialises every enrolment for this (journey, entity), and the same
+      // event on the same person always hashes to the same key, so nothing can
+      // insert between this check and the insert below.
 
-    try {
+      const existing = await tx.journeyRun.findUnique({
+        where: { idempotencyKey },
+        select: { id: true },
+      });
+      if (existing) return { enrolled: false as const, refusal: "duplicate_event" as const };
+
+      const against = await arbitrateEnrolment(tx, args.journey.id, args.entityType, args.entityId, mode);
+      if (against.action === "drop") return { enrolled: false as const, refusal: against.refusal };
+
       const run = await tx.journeyRun.create({
         data: {
           // The lock transaction runs on basePrisma, which bypasses the tenant
@@ -120,13 +141,15 @@ export async function enqueueJourneyRun(args: {
         runId: run.id,
         status: run.status as "queued" | "blocked",
       };
-    } catch (error) {
-      // P2002 on the idempotency key: this exact event already produced a run.
-      // A real duplicate, and the ONLY refusal that means "nothing to see here".
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-        return { enrolled: false as const, refusal: "duplicate_event" as const };
-      }
-      throw error;
+    });
+  } catch (error) {
+    // Backstop, and deliberately OUTSIDE the transaction. The pre-check plus the
+    // advisory lock should make this unreachable; if it ever fires, the
+    // transaction has already rolled back, so reporting a duplicate from here is
+    // safe in the way reporting it from inside was not.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return { enrolled: false, refusal: "duplicate_event" };
     }
-  });
+    throw error;
+  }
 }
