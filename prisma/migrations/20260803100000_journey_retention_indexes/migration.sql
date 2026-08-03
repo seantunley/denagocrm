@@ -14,17 +14,26 @@
 -- scan of the two largest tables in the schema, on every tick, to find nothing
 -- — housekeeping costing more than the growth it exists to control.
 --
--- NOT built CONCURRENTLY, deliberately, though these are the tables where a
--- blocking build hurts most. Prisma Migrate wraps each migration in a
--- transaction and CREATE INDEX CONCURRENTLY cannot run inside one, so a
--- CONCURRENTLY build here does not trade a lock for availability — it fails the
--- migration outright and ships no index at all. A brief ACCESS EXCLUSIVE lock
--- during deploy is recoverable; a permanently missing index is the thing this
--- file exists to prevent.
+-- ⚠ THIS BUILD BLOCKS WRITES. READ scripts/prebuild-journey-retention-indexes.sql
+-- BEFORE DEPLOYING TO A BUSY DATABASE.
 --
--- If these tables ever grow large enough that the build window matters, the
--- answer is to run the two statements by hand with CONCURRENTLY ahead of the
--- deploy — IF NOT EXISTS then makes this migration a no-op.
+-- A plain CREATE INDEX takes a SHARE lock, which blocks INSERT/UPDATE/DELETE on
+-- the table for the whole build. It cannot be CONCURRENTLY here: Prisma Migrate
+-- wraps each migration in a transaction, and CONCURRENTLY cannot run inside one
+-- — it would fail the migration outright and ship no index at all.
+--
+-- I originally called that lock "brief". That was an assumption, not a
+-- measurement, and it is the wrong way round: these are the two largest tables
+-- in the schema, which is the entire reason the retention sweep exists. On a
+-- workspace that has been running journeys for a year, the build is not brief.
+--
+-- So the concurrent path is a real, runnable artifact rather than a note:
+--
+--   psql "$DATABASE_URL_UNPOOLED" -f scripts/prebuild-journey-retention-indexes.sql
+--
+-- Run it BEFORE the deploy. IF NOT EXISTS then makes this migration a no-op and
+-- the deploy takes no lock at all. On a small or new database, skip it and let
+-- this build them inline.
 
 -- JourneyEvent: processed/failed events older than the cutoff.
 CREATE INDEX IF NOT EXISTS "JourneyEvent_status_createdAt_idx"

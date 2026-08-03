@@ -375,6 +375,28 @@ test("the early-out query has an index to use", () => {
     !/CONCURRENTLY/.test(statements),
     "CREATE INDEX CONCURRENTLY fails inside Prisma's migration transaction",
   );
+
+  // …but a plain CREATE INDEX blocks writes for the whole build, on the two
+  // LARGEST tables in the schema — which is the very reason the sweep exists.
+  // So the concurrent path has to be a runnable artifact, not a note in a
+  // comment, and the migration has to point at it.
+  const prebuild = src("scripts/prebuild-journey-retention-indexes.sql");
+  for (const table of ["JourneyEvent", "JourneyRun"]) {
+    assert.match(
+      prebuild,
+      new RegExp(`CREATE INDEX CONCURRENTLY IF NOT EXISTS "${table}_status_createdAt_idx"`),
+      `the prebuild script must cover ${table}, or half the deploy still locks`,
+    );
+  }
+  assert.match(
+    migration,
+    /scripts\/prebuild-journey-retention-indexes\.sql/,
+    "the migration must name the script, or nobody deploying will know it exists",
+  );
+  // Interrupted CONCURRENTLY builds leave an INVALID index that Postgres does
+  // not repair and the planner will not use. A script that does not say so
+  // hands someone a silently unindexed table.
+  assert.match(prebuild, /indisvalid/, "the script must say how to find a failed build");
 });
 
 test("a quiet journey still keeps a trace", () => {
