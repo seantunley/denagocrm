@@ -41,8 +41,15 @@
 -- If the tables are small — a new or low-volume workspace — none of this is
 -- necessary: deploy the migration directly and let it build them inline.
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "JourneyEvent_status_createdAt_idx"
-  ON "JourneyEvent"("status", "createdAt");
+-- These must match the migration EXACTLY — same names, same columns, same
+-- order. If they drift, IF NOT EXISTS stops making the migration a no-op and
+-- the deploy takes the write-blocking lock this script exists to avoid.
+--
+-- tenantId leads because the sweep runs inside a tenant scope, so the query is
+-- `tenantId = $1 AND status IN (…) AND createdAt < $2`.
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "JourneyRun_status_createdAt_idx"
-  ON "JourneyRun"("status", "createdAt");
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "JourneyEvent_tenantId_status_createdAt_idx"
+  ON "JourneyEvent"("tenantId", "status", "createdAt");
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "JourneyRun_tenantId_status_createdAt_idx"
+  ON "JourneyRun"("tenantId", "status", "createdAt");

@@ -35,12 +35,19 @@
 -- the deploy takes no lock at all. On a small or new database, skip it and let
 -- this build them inline.
 
+-- tenantId LEADS both indexes. The sweep runs inside a tenant scope
+-- (runCronPerTenant), so the query the Prisma extension actually emits is
+--   tenantId = $1 AND status IN (…) AND createdAt < $2
+-- Ordered (status, createdAt), a tenant with nothing to prune still walks the
+-- expired entries of every OTHER tenant before returning empty — the busiest
+-- workspace would set the cost of the quietest one's early-out, on every tick.
+
 -- JourneyEvent: processed/failed events older than the cutoff.
-CREATE INDEX IF NOT EXISTS "JourneyEvent_status_createdAt_idx"
-  ON "JourneyEvent"("status", "createdAt");
+CREATE INDEX IF NOT EXISTS "JourneyEvent_tenantId_status_createdAt_idx"
+  ON "JourneyEvent"("tenantId", "status", "createdAt");
 
 -- JourneyRun: CLOSED runs older than the cutoff. The existing
 -- [status, nextRunAt] index cannot serve this — nextRunAt is null on closed
 -- runs, which is precisely the set being scanned.
-CREATE INDEX IF NOT EXISTS "JourneyRun_status_createdAt_idx"
-  ON "JourneyRun"("status", "createdAt");
+CREATE INDEX IF NOT EXISTS "JourneyRun_tenantId_status_createdAt_idx"
+  ON "JourneyRun"("tenantId", "status", "createdAt");

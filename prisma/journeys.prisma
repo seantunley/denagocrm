@@ -80,7 +80,14 @@ model JourneyEvent {
   /// cutoff?", asked once per tenant on every cron tick. Without this it is a
   /// sequential scan of the largest table in the schema, every tick, usually to
   /// find nothing — housekeeping that costs more than the thing it cleans up.
-  @@index([status, createdAt])
+  ///
+  /// tenantId LEADS, and that is the whole point. The sweep runs inside a tenant
+  /// scope (runCronPerTenant), so the query the extension actually emits is
+  /// `tenantId = $1 AND status IN (…) AND createdAt < $2`. Ordered
+  /// [status, createdAt], a tenant with nothing to prune still walks the expired
+  /// entries of every OTHER tenant before returning empty — so the busiest
+  /// workspace sets the cost of the quietest one's early-out, on every tick.
+  @@index([tenantId, status, createdAt])
 }
 
 /// A run is pinned to an immutable published version.
@@ -114,7 +121,11 @@ model JourneyRun {
   /// older than the cutoff?" once per tenant per tick, and answers "no" almost
   /// every time. [status, nextRunAt] cannot serve it — nextRunAt is null on
   /// closed runs, which is exactly the set being scanned.
-  @@index([status, createdAt])
+  ///
+  /// tenantId leads for the same reason it does on JourneyEvent: the sweep runs
+  /// under a tenant scope, and without it one workspace's backlog is scanned by
+  /// every other workspace's tick.
+  @@index([tenantId, status, createdAt])
   @@index([journeyId, status])
   @@index([entityType, entityId])
   @@index([leadId])

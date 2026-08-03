@@ -354,14 +354,23 @@ test("the early-out query has an index to use", () => {
   for (const table of ["JourneyEvent", "JourneyRun"]) {
     assert.match(
       migration,
-      new RegExp(`CREATE INDEX IF NOT EXISTS "${table}_status_createdAt_idx"`),
-      `${table} has no (status, createdAt) index — the sweep seq-scans it every tick`,
+      new RegExp(`CREATE INDEX IF NOT EXISTS "${table}_tenantId_status_createdAt_idx"\\s*\\n\\s*ON "${table}"\\("tenantId", "status", "createdAt"\\)`),
+      `${table} has no (tenantId, status, createdAt) index — the sweep seq-scans it every tick`,
     );
   }
+  // tenantId must LEAD. The sweep runs inside a tenant scope, so the emitted
+  // query is `tenantId = $1 AND status IN (…) AND createdAt < $2`. Ordered
+  // (status, createdAt), a tenant with nothing to prune still walks every OTHER
+  // tenant's expired entries before returning empty — the busiest workspace
+  // would set the cost of the quietest one's early-out, on every tick.
   assert.equal(
-    (schema.match(/@@index\(\[status, createdAt\]\)/g) ?? []).length,
+    (schema.match(/@@index\(\[tenantId, status, createdAt\]\)/g) ?? []).length,
     2,
-    "schema and migration must agree: both JourneyEvent and JourneyRun need the index",
+    "schema and migration must agree: both tables need the tenant-leading index",
+  );
+  assert.ok(
+    !/@@index\(\[status, createdAt\]\)/.test(schema),
+    "a tenant-blind (status, createdAt) index makes one workspace pay for all the others",
   );
   // CONCURRENTLY cannot run inside Prisma's per-migration transaction. Using it
   // here would not trade a lock for availability — it would fail the migration
@@ -384,7 +393,7 @@ test("the early-out query has an index to use", () => {
   for (const table of ["JourneyEvent", "JourneyRun"]) {
     assert.match(
       prebuild,
-      new RegExp(`CREATE INDEX CONCURRENTLY IF NOT EXISTS "${table}_status_createdAt_idx"`),
+      new RegExp(`CREATE INDEX CONCURRENTLY IF NOT EXISTS "${table}_tenantId_status_createdAt_idx"\\s*\\n\\s*ON "${table}"\\("tenantId", "status", "createdAt"\\)`),
       `the prebuild script must cover ${table}, or half the deploy still locks`,
     );
   }
