@@ -6,6 +6,7 @@ import {
   getActiveVersion,
   hashJourneyKey,
   jsonObject,
+  REFUSAL_REASONS,
 } from "./journeyEngineShared";
 import { NEVER_STOP, type StopSignal } from "./stopSignal";
 
@@ -19,6 +20,16 @@ const EVENT_RESERVE_MS = 4_000;
  * — the reason string is what tells them apart, so never collapse them.
  */
 export type JourneyEnrolmentDecision = {
+  /**
+   * The run this decision created, when it created one.
+   *
+   * Carried through so a caller can act on the EXACT run it caused. The manual
+   * test run used to re-query "the newest run for this journey and lead", which
+   * a concurrent enrolment can win — under run mode `parallel` especially,
+   * where a second run is legal — so pressing "test" could report on, and
+   * drive, somebody else's run.
+   */
+  runId?: string;
   journeyId: string;
   journeyName: string;
   enrolled: boolean;
@@ -79,6 +90,25 @@ export async function recoverStaleJourneyEvents() {
   });
 }
 
+/**
+ * Process ONE named event, and report what each journey decided.
+ *
+ * The manual-run action needs exactly this. It used to emit its event and then
+ * call the global `processJourneyEvents(100)` / `processJourneyRuns(50)`, so
+ * pressing "test" drove up to fifty unrelated due runs — real sends to real
+ * customers who had nothing to do with the test. And when the backlog was
+ * larger than those limits, the test's own event could still be sitting
+ * pending while the action reported success.
+ */
+export async function processJourneyEventById(
+  eventId: string,
+): Promise<{ processed: boolean; enrolled: number; decisions: JourneyEnrolmentDecision[] }> {
+  const event = await prisma.journeyEvent.findUnique({ where: { id: eventId } });
+  if (!event) return { processed: false, enrolled: 0, decisions: [] };
+  const result = await processOneEvent(event);
+  return { processed: result !== null, enrolled: result?.enrolled ?? 0, decisions: result?.decisions ?? [] };
+}
+
 export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_STOP) {
   const events = await prisma.journeyEvent.findMany({
     where: { status: "pending", availableAt: { lte: new Date() } },
@@ -89,11 +119,40 @@ export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_
 
   for (const event of events) {
     if (stop.shouldStop(EVENT_RESERVE_MS)) break;
+    const outcome = await processOneEvent(event);
+    enrolled += outcome?.enrolled ?? 0;
+  }
+
+  return { processed: events.length, enrolled };
+}
+
+/**
+ * The body of the event loop, for one event. Returns null when another worker
+ * claimed it first.
+ */
+async function processOneEvent(
+  event: { id: string; type: string; entityType: string; entityId: string; payload: Prisma.JsonValue | null; dedupeKey: string; journeyId: string | null },
+): Promise<{ enrolled: number; decisions: JourneyEnrolmentDecision[] } | null> {
+  let enrolled = 0;
+  // Declared OUTSIDE the try, deliberately.
+  //
+  // Runs are committed one at a time as the loop goes; the event row is only
+  // updated at the end. So a failure after some journeys have enrolled — the
+  // final update, or anything else late — used to discard every decision made
+  // so far and return a single "it failed" placeholder. The manual test run
+  // then had no runId, reported that nothing happened, and the run it had
+  // already created went on to execute and send. "Nothing was sent" while a
+  // live run sends is the worst answer this function can give.
+  //
+  // Whatever was decided is a fact about work already committed, and survives
+  // the failure that follows it.
+  const decisions: JourneyEnrolmentDecision[] = [];
+  {
     const claimed = await prisma.journeyEvent.updateMany({
       where: { id: event.id, status: "pending" },
       data: { status: "processing", attempts: { increment: 1 }, error: null },
     });
-    if (claimed.count === 0) continue;
+    if (claimed.count === 0) return null;
 
     try {
       const journeys = await prisma.journey.findMany({
@@ -116,7 +175,6 @@ export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_
       // used to be bare `continue`s: a journey nobody emits for looked exactly
       // like a journey nobody matched, which is how "New lead created"
       // journeys sat active enrolling nobody with nothing on screen to say so.
-      const decisions: JourneyEnrolmentDecision[] = [];
 
       for (const journey of journeys) {
         const version = getActiveVersion(journey);
@@ -141,7 +199,7 @@ export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_
           decisions.push({ journeyId: journey.id, journeyName: journey.name, enrolled: false, reason: "trigger filters did not match" });
           continue;
         }
-        const queued = await enqueueJourneyRun({
+        const outcome = await enqueueJourneyRun({
           journey,
           version,
           entityType: event.entityType as JourneyEntityType,
@@ -149,14 +207,21 @@ export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_
           eventKey: event.dedupeKey,
           payload: eventPayload,
         });
-        if (queued) enrolled++;
+        if (outcome.enrolled) enrolled++;
         decisions.push({
           journeyId: journey.id,
           journeyName: journey.name,
-          enrolled: queued,
-          // A false here is not a mismatch — it is the idempotency key doing its
-          // job, which reads as a bug unless it is spelled out.
-          reason: queued ? "enrolled" : "already enrolled for this event",
+          enrolled: outcome.enrolled,
+          ...(outcome.enrolled ? { runId: outcome.runId } : {}),
+          // Each refusal keeps its own words. These used to collapse to "already
+          // enrolled for this event" — so a per-person cap refusal, a
+          // single-mode drop and an entry-condition mismatch all read as the
+          // idempotency key doing its job, i.e. as nothing being wrong.
+          reason: outcome.enrolled
+            ? outcome.status === "blocked"
+              ? "queued behind an open run (run mode: queued)"
+              : "enrolled"
+            : REFUSAL_REASONS[outcome.refusal],
         });
       }
 
@@ -164,19 +229,37 @@ export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_
         where: { id: event.id },
         data: { status: "processed", processedAt: new Date(), decisions },
       });
+      return { enrolled, decisions };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown journey event error";
-      const retry = event.attempts + 1 < MAX_EVENT_ATTEMPTS;
+      const current = await prisma.journeyEvent.findUnique({
+        where: { id: event.id },
+        select: { attempts: true, availableAt: true },
+      });
+      const retry = (current?.attempts ?? MAX_EVENT_ATTEMPTS) < MAX_EVENT_ATTEMPTS;
       await prisma.journeyEvent.update({
         where: { id: event.id },
         data: {
           status: retry ? "pending" : "failed",
-          availableAt: retry ? new Date(Date.now() + 5 * 60_000) : event.availableAt,
+          availableAt: retry ? new Date(Date.now() + 5 * 60_000) : current?.availableAt,
           error: message.slice(0, 1000),
         },
       });
+      // Everything decided before the failure is KEPT, and the failure is
+      // appended as one more line rather than replacing them. A caller that
+      // enrolled successfully still gets its runId, so it can report — and act
+      // on — the run that actually exists.
+      // Everything decided before the failure is KEPT, and the failure is
+      // appended as one more line rather than replacing them. A caller that
+      // enrolled successfully still gets its runId, so it can report — and act
+      // on — the run that actually exists.
+      decisions.push({
+        journeyId: "",
+        journeyName: "—",
+        enrolled: false,
+        reason: `Event processing failed after ${decisions.filter((d) => d.enrolled).length} enrolment(s): ${message}`.slice(0, 300),
+      });
+      return { enrolled, decisions };
     }
   }
-
-  return { processed: events.length, enrolled };
 }
