@@ -139,7 +139,34 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
   });
   if (claimed.count === 0) return false;
 
-  const definition = parseJourneyDefinition(run.journeyVersion.definition);
+  // Parsing sits INSIDE its own guard, and the reason is blast radius.
+  //
+  // The run has just been claimed as "running". A throw from here escaped
+  // processOneRun into processJourneyRuns and out of runJourneyEngine, so ONE
+  // journey with an unparseable definition aborted the whole tenant tick: every
+  // other run behind it stopped being processed, and this one sat claimed as
+  // "running" until the 15-minute stale sweep — then did it again. A definition
+  // is reachable in that state today by hand-editing it to an unknown step type
+  // or a duplicate id.
+  //
+  // Failed outright rather than retried: a definition that will not parse is
+  // deterministic, and three attempts at it only delay the same answer while
+  // holding the run open.
+  let definition;
+  try {
+    definition = parseJourneyDefinition(run.journeyVersion.definition);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unreadable journey definition";
+    await prisma.journeyRun.updateMany({
+      where: { id: run.id, status: "running" },
+      data: {
+        status: "failed",
+        completedAt: new Date(),
+        lastError: `Definition could not be read: ${message}`.slice(0, 1000),
+      },
+    });
+    return false;
+  }
   let currentStepId = run.currentStepId;
   let context = run.context as unknown as JourneyContext;
   const visited = new Set<string>();

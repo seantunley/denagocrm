@@ -216,6 +216,33 @@ test("releasing queued runs hands back ONE per person, not the whole queue", () 
   assert.match(release, /orderBy: \{ createdAt: "asc" \}/, "a queue drains in the order it formed");
 });
 
+/* ── one bad definition must not stop the tick ───────────────────────────── */
+
+test("an unreadable definition fails ITS run, not the whole tick", () => {
+  // The run is claimed as "running" before the definition is parsed, and the
+  // parse used to sit outside the try. A throw escaped processOneRun →
+  // processJourneyRuns → runJourneyEngine, so one journey with a hand-edited
+  // definition (unknown step type, duplicate id) aborted the entire tenant
+  // tick: every run behind it stopped, and this one sat claimed as "running"
+  // until the 15-minute stale sweep, then did it again.
+  const runs = shipped("src/lib/journeyRuns.ts");
+  const start = runs.indexOf("export async function processOneRun");
+  const body = runs.slice(start, runs.indexOf("export async function processJourneyRuns"));
+  assert.ok(body.length > 0, "the slice ran backwards");
+
+  const parse = body.indexOf("parseJourneyDefinition(run.journeyVersion.definition)");
+  const guard = body.indexOf("try {");
+  assert.notEqual(parse, -1, "the definition parse is gone — was it renamed?");
+  assert.ok(guard !== -1 && guard < parse, "the parse must be inside a try, not before one");
+  // Failed, not retried: an unparseable definition is deterministic, and
+  // retrying only holds the run open while producing the same answer.
+  assert.match(
+    body.slice(parse),
+    /status: "failed",[\s\S]*?Definition could not be read/,
+    "a parse failure must fail this run with a reason, not retry it",
+  );
+});
+
 /* ── manual run targets its own work ─────────────────────────────────────── */
 
 test("a manual test run drives ONLY its own event and run", () => {
