@@ -189,11 +189,16 @@ export async function executeJourneyStep(args: {
   const { leadId, contactId } = ids(context);
 
   switch (step.type) {
-    // Control flow, not action. The RUNNER owns these because executing them
-    // means moving the cursor, and the cursor is the run's durable position —
-    // see journeyScript.ts. Reaching here at all is a routing bug.
+    // Control flow and run state, not action. The RUNNER owns these because
+    // executing them means moving the cursor or rewriting the context, and this
+    // function is handed neither — see journeyScript.ts and journeyWait.ts.
+    // Reaching here at all is a routing bug, and a silent one if it returned a
+    // skip: a `variables` step that quietly did nothing would leave every later
+    // template rendering blank.
     case "choose":
     case "repeat":
+    case "wait_for_trigger":
+    case "variables":
       throw new AbortJourney(`${step.type} ${step.id} reached the action executor`);
 
     case "wait": {

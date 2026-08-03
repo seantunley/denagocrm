@@ -70,15 +70,75 @@ export type RepeatFrame = {
 
 export type JourneyFrame = ChooseFrame | RepeatFrame;
 
+/**
+ * An ARMED `wait_for_trigger`. Position-adjacent state, so it lives with the
+ * position rather than in `run.context`.
+ *
+ * It cannot live in the context: `processOneRun` reloads the context from the
+ * database after every step, which is the same reason `repeat` variables are
+ * derived rather than stored. It cannot live on the step definition either — a
+ * version is immutable and shared by every run pinned to it.
+ *
+ * `path` is the HIERARCHICAL trace path, not the step id, and that is the whole
+ * point. A `wait_for_trigger` inside a `repeat` arms once PER ITERATION: keyed
+ * by step id, iteration 2 would inherit iteration 0's `since` and wake instantly
+ * on the event iteration 0 was already woken by. Keyed by path,
+ * `chase/repeat/2/sequence/0` is a different wait from
+ * `chase/repeat/0/sequence/0`, which is the same reason the step log is keyed on
+ * the path.
+ */
+export type JourneyWaitState = {
+  /** The trace path of the step that armed this wait. */
+  path: string;
+  /**
+   * ISO instant. Only events created at or after it may wake the run.
+   *
+   * Captured at the moment the runner DECIDES to wait, not at the moment the
+   * park is committed. An event that lands in between is then still `>= since`
+   * and is found by the next poll; taking the instant at commit time would put
+   * it before the watermark and lose it silently, forever.
+   */
+  since: string;
+  /** ISO instant the wait gives up at. Always set — see JOURNEY_LIMITS.waitDays. */
+  until: string;
+};
+
 export type JourneyCursor = {
   /** The TOP-LEVEL step. Null means the run has run off the end and is done. */
   stepId: string | null;
   /** Outermost first. Empty for a flat journey — the pre-existing shape. */
   frames: JourneyFrame[];
+  /** Present only while a wait_for_trigger at `wait.path` is armed. */
+  wait?: JourneyWaitState;
 };
 
 export function flatCursor(stepId: string | null): JourneyCursor {
   return { stepId, frames: [] };
+}
+
+function isIsoInstant(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+/**
+ * Read a persisted wait, or nothing.
+ *
+ * A malformed wait drops the WAIT ONLY, never the cursor: the step re-arms on
+ * the next tick and loses at most one poll interval, whereas degrading the whole
+ * cursor to flat would restart an enclosing loop from the top.
+ */
+function parseWait(value: unknown): JourneyWaitState | undefined {
+  if (!isRecord(value)) return undefined;
+  const { path, since, until } = value;
+  if (typeof path !== "string" || !path || path.length > 500) return undefined;
+  if (!isIsoInstant(since) || !isIsoInstant(until)) return undefined;
+  return { path, since, until };
+}
+
+/** Drop an armed wait — on resolution, and on any step that did not arm it. */
+export function clearWait(cursor: JourneyCursor): JourneyCursor {
+  if (!cursor.wait) return cursor;
+  return { stepId: cursor.stepId, frames: cursor.frames.map((frame) => ({ ...frame })) };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -124,7 +184,8 @@ export function parseCursor(value: unknown, fallbackStepId: string | null): Jour
       return flatCursor(fallbackStepId);
     }
   }
-  return { stepId, frames };
+  const wait = parseWait(value.wait);
+  return wait ? { stepId, frames, wait } : { stepId, frames };
 }
 
 /** One frame's contribution to the trace path. */
@@ -172,11 +233,20 @@ export function cursorPath(cursor: JourneyCursor): string {
   return path.slice(0, 500);
 }
 
-/** A structural copy — the runner mutates frames and must not alias run state. */
+/**
+ * A structural copy — the runner mutates frames and must not alias run state.
+ *
+ * An armed wait is CARRIED, not quietly dropped. advanceCursor clones, and a
+ * clone that silently lost the wait would make "the wait is cleared" an
+ * invisible side effect of moving — right by accident on the advance that
+ * resolves it, and wrong everywhere else. Clearing is `clearWait`, spelled out
+ * at the two places that mean it.
+ */
 export function cloneCursor(cursor: JourneyCursor): JourneyCursor {
   return {
     stepId: cursor.stepId,
     frames: cursor.frames.map((frame) => ({ ...frame })),
+    ...(cursor.wait ? { wait: { ...cursor.wait } } : {}),
   };
 }
 

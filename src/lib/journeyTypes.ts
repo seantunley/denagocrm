@@ -52,12 +52,33 @@ export const JOURNEY_STEP_TYPES = [
   // See journeyCursor.ts for how a run parked inside one resumes.
   "choose",
   "repeat",
+  // Two more from Home Assistant's script syntax, and like the containers above
+  // they perform no action: `wait_for_trigger` parks the run until a named event
+  // arrives for this entity, and `variables` writes into the run context. Both
+  // mutate RUN STATE rather than the outside world, so both are executed by the
+  // runner — reaching journeyStepExecutor is a routing bug and says so.
+  "wait_for_trigger",
+  "variables",
 ] as const;
 
 export type JourneyStepType = (typeof JOURNEY_STEP_TYPES)[number];
 
 /** Container steps own nested sequences; the runner, not the executor, runs them. */
 export const JOURNEY_CONTAINER_STEP_TYPES = ["choose", "repeat"] as const;
+
+/**
+ * Every step the RUNNER executes itself, containers included.
+ *
+ * The distinction the executor cares about is not "does it nest" but "does it
+ * touch the cursor or the context" — a `wait_for_trigger` parks on its own frame
+ * position and a `variables` step rewrites the context that the next step reads,
+ * and the executor is handed neither.
+ */
+export const JOURNEY_RUNNER_STEP_TYPES = [
+  ...JOURNEY_CONTAINER_STEP_TYPES,
+  "wait_for_trigger",
+  "variables",
+] as const;
 
 export const REPEAT_MODES = ["count", "while", "until", "for_each"] as const;
 export type RepeatMode = (typeof REPEAT_MODES)[number];
@@ -90,7 +111,37 @@ export const CONDITION_FIELDS = [
   "repeat.last",
 ] as const;
 
-export type ConditionField = (typeof CONDITION_FIELDS)[number];
+/**
+ * A journey variable name. Deliberately narrow, and never a bare context key.
+ *
+ * `variables` publishes into `context.vars`, so a condition names one as
+ * `vars.<name>`. The prefix is the whole safety argument — see VARIABLE_FIELD.
+ */
+export const VARIABLE_NAME = /^[a-zA-Z][a-zA-Z0-9_]{0,39}$/;
+
+/**
+ * The one condition field that is not in the list above, and it is open by
+ * NAMESPACE rather than by name.
+ *
+ * The alternative was to let a `variables` step write bare context keys and
+ * reject the ones that collide with the engine's own (`contact`, `lead`,
+ * `event`, `repeat`, …). Rejected, for a reason this file has already lived
+ * through: that reject-list is a MOVING TARGET. `repeat` became a context key
+ * two commits ago and `vars` is becoming one now, and a published version is
+ * immutable — so a journey saved today naming a variable `repeat` would pass
+ * validation, ship, and then start silently reading the loop counter the day the
+ * engine gained one. Nothing would error; a later step would just read the wrong
+ * thing, which is exactly the failure mode being guarded against.
+ *
+ * Namespacing makes the collision impossible instead of merely currently-absent,
+ * and it keeps CONDITION_FIELDS a closed allow-list: one prefix is added, not an
+ * open set of identifiers. That matters — with bare names a typo'd `lead.sorce`
+ * would have to be accepted as "probably a variable" and would then quietly
+ * evaluate to undefined, which is precisely what the closed list exists to stop.
+ */
+export const VARIABLE_FIELD = /^vars\.[a-zA-Z][a-zA-Z0-9_]{0,39}$/;
+
+export type ConditionField = (typeof CONDITION_FIELDS)[number] | `vars.${string}`;
 export type ConditionOperator =
   | "equals"
   | "not_equals"
@@ -173,6 +224,25 @@ export type JourneyDefinition = {
  *  forEachItems (100)     — the list is SNAPSHOT into the cursor at loop entry,
  *                           so this also caps how much JSON one parked run
  *                           carries.
+ *  waitTriggers (5)       — how many event types ONE wait_for_trigger may watch.
+ *                           Each one widens an indexed query the waiter runs on
+ *                           every poll; five is more alternatives than a person
+ *                           can reason about in a single wait anyway.
+ *  waitDays (30)          — the ceiling on a wait_for_trigger timeout, and the
+ *                           reason a timeout is REQUIRED here when Home
+ *                           Assistant makes it optional. HA can wait forever
+ *                           because its script is a live object you can see and
+ *                           cancel; ours is a database row that would poll on
+ *                           every cron tick until someone noticed. "Forever" is
+ *                           not expressible on purpose.
+ *  variables (10)         — names one `variables` step may set.
+ *  variableChars (500)    — per rendered value.
+ *  variableBytes (4000)   — the WHOLE bag, across every variables step in the
+ *                           run. This is the one that actually matters: the
+ *                           context is written back as JSON after every single
+ *                           step, so an unbounded bag inflates every write for
+ *                           the remaining life of the run — and a run can live
+ *                           for weeks. 4 kB is ~8 full-length values.
  */
 export const JOURNEY_LIMITS = {
   steps: 100,
@@ -181,10 +251,16 @@ export const JOURNEY_LIMITS = {
   conditionsPerGroup: 30,
   repeatIterations: 100,
   forEachItems: 100,
+  waitTriggers: 5,
+  waitDays: 30,
+  variables: 10,
+  variableChars: 500,
+  variableBytes: 4000,
 } as const;
 
 const STEP_TYPES = new Set<string>(JOURNEY_STEP_TYPES);
 const FIELDS = new Set<string>(CONDITION_FIELDS);
+const EVENT_TRIGGERS = new Set<string>(JOURNEY_EVENT_TRIGGERS);
 const OPERATORS = new Set<string>([
   "equals",
   "not_equals",
@@ -227,7 +303,13 @@ export function parseConditionGroup(value: unknown): JourneyConditionGroup | nul
     }
     const field = String(condition.field ?? "");
     const operator = String(condition.operator ?? "");
-    if (!FIELDS.has(field)) throw new Error(`Unsupported condition field: ${field}`);
+    // The closed allow-list, plus the ONE namespace a journey may extend it
+    // with. `vars.x` resolves through the same valueAtPath dot-walk as every
+    // other field — `vars` is a flat map of strings, so there is nothing below
+    // it to walk into.
+    if (!FIELDS.has(field) && !VARIABLE_FIELD.test(field)) {
+      throw new Error(`Unsupported condition field: ${field}`);
+    }
     if (!OPERATORS.has(operator)) throw new Error(`Unsupported condition operator: ${operator}`);
     return {
       field: field as ConditionField,
@@ -303,6 +385,11 @@ function parseStep(raw: unknown, budget: ParseBudget, depth: number, nested: boo
   }
   if (type === "choose") parseChooseConfig(config, budget, depth);
   if (type === "repeat") parseRepeatConfig(config, budget, depth);
+  // Both are validated by the SAME function the runner calls, not a second copy
+  // of the rules. A wait whose triggers only the save path checks is a wait that
+  // parks forever the first time the two drift apart.
+  if (type === "wait_for_trigger") parseWaitForTriggerConfig(config);
+  if (type === "variables") parseVariablesConfig(config);
   return step;
 }
 
@@ -396,6 +483,94 @@ function parseRepeatConfig(config: Record<string, unknown>, budget: ParseBudget,
     }
   }
   parseSequenceInternal(config.sequence, budget, depth + 1, "Repeat sequence");
+}
+
+/* ── wait_for_trigger ────────────────────────────────────────────────────── */
+
+export type WaitForTriggerConfig = {
+  /** Event types that may wake the run. Any ONE of them is enough, as in HA. */
+  triggers: JourneyEventTrigger[];
+  /** Minutes. REQUIRED — see JOURNEY_LIMITS.waitDays for why HA differs. */
+  timeoutMinutes: number;
+  /** HA's `continue_on_timeout`, default true: carry on past a timeout. */
+  continueOnTimeout: boolean;
+};
+
+export const WAIT_TIMEOUT_MAX_MINUTES = JOURNEY_LIMITS.waitDays * 24 * 60;
+
+/**
+ * A `wait_for_trigger` step's config — the SAME parse the runner uses.
+ *
+ * Only JOURNEY_EVENT_TRIGGERS are accepted. Those are the event types some
+ * application write path actually emits (tests/oneAutomationEngine.test.ts
+ * asserts it, per trigger); anything else is a name nothing will ever produce,
+ * so waiting on it is a guaranteed timeout dressed up as a feature. The
+ * SCHEDULED triggers are excluded too — the cron enrols on those by sweeping
+ * records, it does not write a JourneyEvent a waiter could ever see.
+ */
+export function parseWaitForTriggerConfig(config: Record<string, unknown>): WaitForTriggerConfig {
+  const raw = config.triggers;
+  const list = Array.isArray(raw) ? raw : typeof raw === "string" && raw ? [raw] : [];
+  if (list.length === 0) throw new Error("A wait_for_trigger needs at least one trigger");
+  if (list.length > JOURNEY_LIMITS.waitTriggers) {
+    throw new Error(`A wait_for_trigger may watch at most ${JOURNEY_LIMITS.waitTriggers} triggers`);
+  }
+  const triggers = list.map((value) => {
+    const name = String(value);
+    if (!EVENT_TRIGGERS.has(name)) {
+      throw new Error(`A wait_for_trigger cannot wait for "${name}" — nothing emits it`);
+    }
+    return name as JourneyEventTrigger;
+  });
+  if (new Set(triggers).size !== triggers.length) {
+    throw new Error("A wait_for_trigger lists the same trigger twice");
+  }
+
+  const timeoutMinutes = Number(config.timeoutMinutes);
+  if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > WAIT_TIMEOUT_MAX_MINUTES) {
+    throw new Error(
+      `A wait_for_trigger needs timeoutMinutes between 1 and ${WAIT_TIMEOUT_MAX_MINUTES} (${JOURNEY_LIMITS.waitDays} days)`,
+    );
+  }
+
+  // Default TRUE, matching HA: only an explicit `false` stops the run. Written
+  // as `!== false` rather than `=== true` so a config that predates the flag,
+  // or omits it, gets the documented default instead of the strict one.
+  return { triggers, timeoutMinutes, continueOnTimeout: config.continueOnTimeout !== false };
+}
+
+/* ── variables ───────────────────────────────────────────────────────────── */
+
+export type JourneyVariableAssignment = { name: string; template: string };
+
+/**
+ * A `variables` step's config: a FLAT map of name → template string.
+ *
+ * Flat and string-only on purpose. A nested value would have to be walked by
+ * conditions and rendered into templates, and `renderTemplate` can only
+ * substitute a flat key — so a nested variable would validate, save, and then
+ * render as nothing. The cap on the template's own length is the cheap half of
+ * bounding the bag; the rendered total is checked at run time, where the data
+ * is (journeyVariables.ts).
+ */
+export function parseVariablesConfig(config: Record<string, unknown>): JourneyVariableAssignment[] {
+  const set = config.set;
+  if (!isRecord(set)) throw new Error("A variables step needs a `set` map of name → template");
+  const entries = Object.entries(set);
+  if (entries.length === 0) throw new Error("A variables step must set at least one variable");
+  if (entries.length > JOURNEY_LIMITS.variables) {
+    throw new Error(`A variables step may set at most ${JOURNEY_LIMITS.variables} variables`);
+  }
+  return entries.map(([name, template]) => {
+    // Rejects `__proto__`, dots, and anything that could not be addressed as
+    // `vars.<name>` in a condition or `var_<name>` in a template.
+    if (!VARIABLE_NAME.test(name)) throw new Error(`Unsafe variable name: ${name}`);
+    if (typeof template !== "string") throw new Error(`Variable ${name} must be a template string`);
+    if (template.length > JOURNEY_LIMITS.variableChars) {
+      throw new Error(`Variable ${name}'s template is longer than ${JOURNEY_LIMITS.variableChars} characters`);
+    }
+    return { name, template };
+  });
 }
 
 /**

@@ -848,7 +848,10 @@ test("the builder carries choose/repeat through instead of dropping them", () =>
   // save would destroy work with no error and no undo, so the builder preserves
   // the config verbatim and locks the type selector.
   const builder = shipped("src/components/JourneyBuilder.tsx");
-  assert.match(builder, /READ_ONLY_STEP_TYPES = new Set\(\["choose", "repeat"\]\)/);
+  // `wait_for_trigger` and `variables` joined the set for the same reason — see
+  // tests/journeyWaitVariables.test.ts. What matters here is that choose and
+  // repeat are still in it.
+  assert.match(builder, /READ_ONLY_STEP_TYPES = new Set\(\[[^\]]*"choose"[^\]]*"repeat"[^\]]*\]\)/);
   assert.match(
     builder,
     /if \(READ_ONLY_STEP_TYPES\.has\(step\.type\)\) \{\s*return \{ id: step\.id, type: step\.type, continueOnError: step\.continueOnError, config \};/,
