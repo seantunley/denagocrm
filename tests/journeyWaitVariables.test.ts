@@ -37,6 +37,7 @@ import {
   armWaitState,
   armedWaitFor,
   decideWait,
+  isInWaitWindow,
   waitPollAt,
   waitedMs,
 } from "../src/lib/journeyWait";
@@ -118,13 +119,25 @@ class Engine {
   endNote = "";
   private readonly maxStepsPerRun: number;
   private readonly baseContext: () => Record<string, unknown>;
+  /**
+   * Drops the wake query's UPPER bound — the bug as filed, where the lookup only
+   * knew `createdAt >= since`.
+   *
+   * Here so the second line of defence can be exercised on its own. With both
+   * bounds in place the query never hands `decideWait` an out-of-window event,
+   * which is correct and also means the decision's own window check is never
+   * reached. This option reaches it.
+   */
+  private readonly unboundedWakeQuery: boolean;
 
   constructor(raw: unknown, opts: {
     context?: () => Record<string, unknown>;
     maxStepsPerRun?: number;
     cache?: JourneyScriptCache;
     start?: Date;
+    unboundedWakeQuery?: boolean;
   } = {}) {
+    this.unboundedWakeQuery = opts.unboundedWakeQuery ?? false;
     // `{ deep: false }` — the same shallow parse processOneRun uses.
     this.definition = parseJourneyDefinition(raw, { deep: false });
     this.lookup = { cache: opts.cache ?? new JourneyScriptCache(), versionId: "version-1" };
@@ -162,15 +175,21 @@ class Engine {
     this.events.push({ id: `evt_${this.events.length}`, type, entityId, createdAt: at });
   }
 
-  /** findWakeEvent, in memory: same filter, same ordering, same tie-break. */
-  private findWakeEvent(triggers: readonly string[], since: Date) {
+  /**
+   * findWakeEvent, in memory: same filter, same ordering, same tie-break.
+   *
+   * Bounded at BOTH ends, like the query — `[since, until)`. A lower bound alone
+   * lets a late tick pick up an event created after the window closed.
+   */
+  private findWakeEvent(triggers: readonly string[], since: Date, until: Date) {
     return (
       this.events
         .filter(
           (event) =>
             event.entityId === this.entityId &&
             triggers.includes(event.type) &&
-            event.createdAt.getTime() >= since.getTime(),
+            event.createdAt.getTime() >= since.getTime() &&
+            (this.unboundedWakeQuery || event.createdAt.getTime() < until.getTime()),
         )
         .sort(
           (a, b) => a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : 1),
@@ -245,14 +264,19 @@ class Engine {
           return { kind: "waiting", nextRunAt: waitPollAt(wait, now) };
         }
 
-        const woke = this.findWakeEvent(config.triggers, new Date(armedWait.since));
-        const decision = decideWait(armedWait, now, Boolean(woke));
+        const woke = this.findWakeEvent(
+          config.triggers,
+          new Date(armedWait.since),
+          new Date(armedWait.until),
+        );
+        const decision = decideWait(armedWait, now, woke?.createdAt ?? null);
         if (decision.kind === "keep_waiting") return { kind: "waiting", nextRunAt: decision.nextRunAt };
 
         const timedOut = decision.kind === "timed_out";
+        const wokeBy = timedOut ? null : woke;
         const note = timedOut
           ? `Timed out after ${config.timeoutMinutes} minute(s) waiting for ${config.triggers.join(" or ")}`
-          : `Woken by ${woke?.type}`;
+          : `Woken by ${wokeBy?.type}`;
         this.log({
           path: tracePath,
           stepId: step.id,
@@ -263,7 +287,7 @@ class Engine {
             timedOut,
             waitedMs: waitedMs(armedWait, now),
             triggers: config.triggers,
-            event: woke ? { id: woke.id, type: woke.type, at: woke.createdAt.toISOString() } : null,
+            event: wokeBy ? { id: wokeBy.id, type: wokeBy.type, at: wokeBy.createdAt.toISOString() } : null,
           },
         });
         if (timedOut && !config.continueOnTimeout) {
@@ -539,14 +563,163 @@ test("continue_on_timeout false stops the run, and the trace still says why", ()
   assert.equal(engine.row("hold").output.timedOut, true);
 });
 
+/**
+ * Arms a five-minute wait, then hands back the run parked at 09:00 with its
+ * deadline, so a test can plant an event and choose when the cron shows up.
+ */
+function parkedWait(extra: Record<string, unknown> = {}, opts = {}) {
+  const engine = new Engine(
+    {
+      startStepId: "hold",
+      steps: [
+        waitStep("hold", { nextStepId: "chase", timeoutMinutes: 5, ...extra }),
+        push("chase", { nextStepId: null }),
+      ],
+    },
+    opts,
+  );
+  engine.tick();
+  const wait = engine.cursor.wait;
+  assert.ok(wait, "the wait must be armed before the clock is moved");
+  return { engine, until: Date.parse(wait.until) };
+}
+
+test("a delayed cron does not resume a wait on an event from outside its window", () => {
+  // THE FIX, end to end. The wait expired at 09:05. The event lands at 09:20 —
+  // after the author's window closed — and the cron does not get round to this
+  // run until 10:35. The run must take the TIMEOUT branch: the event is late,
+  // the engine is late, and neither makes the other one on time.
+  const { engine, until } = parkedWait();
+  engine.emit("quote_signed", new Date(until + 15 * 60_000));
+  engine.now = new Date(until + 90 * 60_000);
+
+  const outcome = engine.tick();
+  assert.equal(outcome.kind, "completed");
+  assert.equal(engine.row("hold").output.timedOut, true, "an event outside the window is not a wake");
+  assert.equal(engine.row("hold").output.event, null, "and the trace must not name it as one");
+  assert.match(engine.row("hold").note, /Timed out after 5 minute/);
+  assert.deepEqual(engine.sent, ["chase"], "continue_on_timeout defaults to true, so the run carries on");
+});
+
+test("a timeout that genuinely passed still stops a continue_on_timeout: false run", () => {
+  // The branch with consequences. If the out-of-window event were allowed to
+  // win, this run would carry on past a point the author explicitly said to
+  // give up at — the failure is a message sent to someone who never replied.
+  //
+  // Run with the wake query bounded and unbounded, because each way exercises a
+  // different one of the two enforcement points and both must hold alone.
+  for (const unboundedWakeQuery of [false, true]) {
+    const { engine, until } = parkedWait({ continueOnTimeout: false }, { unboundedWakeQuery });
+    engine.emit("quote_signed", new Date(until + 15 * 60_000));
+    engine.now = new Date(until + 90 * 60_000);
+
+    const outcome = engine.tick();
+    assert.equal(outcome.kind, "completed");
+    assert.deepEqual(engine.sent, [], `nothing after the wait may run (unbounded=${unboundedWakeQuery})`);
+    assert.match(engine.endNote, /Timed out after 5 minute/);
+    assert.equal(engine.row("hold").output.timedOut, true);
+  }
+});
+
+test("a late cron still resumes on an event that DID arrive inside the window", () => {
+  // The other half, and the reason the timeout is not simply checked first. The
+  // engine being 90 minutes late must not lose an event that arrived a minute
+  // into a five-minute wait.
+  const { engine, until } = parkedWait();
+  engine.emit("quote_signed", new Date(until - 4 * 60_000));
+  engine.now = new Date(until + 90 * 60_000);
+
+  engine.tick();
+  assert.equal(engine.row("hold").output.timedOut, false, "the thing happened; the engine was merely slow");
+  assert.ok(engine.row("hold").output.event, "and the trace names the event that woke it");
+  assert.match(engine.row("hold").note, /Woken by quote_signed/);
+  assert.deepEqual(engine.sent, ["chase"]);
+});
+
+test("the decision refuses a late event even if the wake query stops bounding one", () => {
+  // Second line of defence, exercised on its own. The query is bounded, so
+  // `decideWait` never normally sees an out-of-window event — this drives the
+  // runner with the lookup the bug was filed against (`createdAt >= since` and
+  // nothing else) and asserts the outcome is unchanged.
+  const { engine, until } = parkedWait({}, { unboundedWakeQuery: true });
+  engine.emit("quote_signed", new Date(until + 15 * 60_000));
+  engine.now = new Date(until + 90 * 60_000);
+
+  engine.tick();
+  assert.equal(engine.row("hold").output.timedOut, true, "the window is enforced by the decision too");
+  assert.equal(engine.row("hold").output.event, null);
+});
+
+const ARMED_AT = new Date("2026-08-03T09:00:00.000Z");
+/** A five-minute wait armed at 09:00 — so `until` is 09:05:00.000. */
+const armedFiveMinutes = () =>
+  armWaitState(
+    "hold",
+    { triggers: ["quote_signed"], timeoutMinutes: 5, continueOnTimeout: true },
+    ARMED_AT,
+  );
+
 test("an event found on a LATE tick beats an already-expired deadline", () => {
   // The poll runs on a cron. A busy queue or a deploy can put the tick after
   // `until`, and an event that genuinely arrived inside the window must not be
   // thrown away because the engine was not punctual.
-  const armed = armWaitState("hold", { triggers: ["quote_signed"], timeoutMinutes: 5, continueOnTimeout: true }, new Date("2026-08-03T09:00:00.000Z"));
+  const armed = armedFiveMinutes();
   const late = new Date("2026-08-03T11:00:00.000Z");
-  assert.deepEqual(decideWait(armed, late, true), { kind: "woken" });
-  assert.deepEqual(decideWait(armed, late, false), { kind: "timed_out" });
+  const inWindow = new Date("2026-08-03T09:02:00.000Z");
+  assert.deepEqual(decideWait(armed, late, inWindow), { kind: "woken" });
+  assert.deepEqual(decideWait(armed, late, null), { kind: "timed_out" });
+});
+
+test("an event that arrived AFTER the window does not beat the timeout", () => {
+  // THE FIX. Tolerating a late tick is not the same as extending the wait by
+  // however late the tick was. A wait armed at 09:00 for five minutes expired at
+  // 09:05; a cron that limps in at 11:00 and finds an event stamped 10:20 must
+  // still report the timeout, because 10:20 is not inside the window the author
+  // configured. Otherwise the run's outcome depends on scheduler jitter — the
+  // exact thing letting an event beat the deadline was meant to protect against.
+  const armed = armedFiveMinutes();
+  const late = new Date("2026-08-03T11:00:00.000Z");
+  const afterWindow = new Date("2026-08-03T10:20:00.000Z");
+  assert.deepEqual(decideWait(armed, late, afterWindow), { kind: "timed_out" });
+});
+
+test("the wait window is half-open: [since, until)", () => {
+  const armed = armedFiveMinutes();
+  const since = Date.parse(armed.since);
+  const until = Date.parse(armed.until);
+  const late = new Date(until + 60 * 60_000);
+
+  // `since` INCLUSIVE. An event written in the same millisecond the wait armed
+  // arrived while we were listening — the whole reason the watermark is taken
+  // before the park commits — and losing it would be silent.
+  assert.deepEqual(decideWait(armed, late, new Date(since)), { kind: "woken" });
+  assert.deepEqual(decideWait(armed, late, new Date(since - 1)), { kind: "timed_out" });
+
+  // `until` EXCLUSIVE, because `until` is already the first instant of "timed
+  // out": decideWait gives up at now >= until. An inclusive upper bound would
+  // put that one millisecond in both outcomes at once and make every wait
+  // timeoutMinutes plus 1ms long.
+  assert.deepEqual(decideWait(armed, late, new Date(until - 1)), { kind: "woken" });
+  assert.deepEqual(decideWait(armed, late, new Date(until)), { kind: "timed_out" });
+  assert.deepEqual(decideWait(armedFiveMinutes(), new Date(until), null), { kind: "timed_out" });
+
+  // And the two ends agree with each other: nothing is both in-window and
+  // past-deadline at the same instant.
+  assert.equal(
+    isInWaitWindow(armed, new Date(until)),
+    false,
+    "the instant the wait gives up cannot also be an instant it was still listening",
+  );
+});
+
+test("a still-open wait with a stray out-of-window event keeps waiting", () => {
+  // The out-of-window event must not short-circuit anything. Before the deadline
+  // the only right answer is still "keep waiting" — not "woken", and not an
+  // early timeout either.
+  const armed = armedFiveMinutes();
+  const midWait = new Date(Date.parse(armed.since) + 60_000);
+  const decision = decideWait(armed, midWait, new Date(Date.parse(armed.until) + 60_000));
+  assert.equal(decision.kind, "keep_waiting");
 });
 
 test("a poll never sleeps past the deadline it is racing", () => {
@@ -1109,8 +1282,57 @@ test("the wake query is not gated on the event's processing status", () => {
   const query = runner.slice(fnAt, endAt);
   assert.ok(query.length > 0);
   assert.doesNotMatch(query, /status:/, "the waiter must not care whether the event has been drained");
-  assert.match(query, /createdAt: \{ gte: since \}/, "gt would lose an event written in the same millisecond");
   assert.match(query, /orderBy: \[\{ createdAt: "asc" \}, \{ id: "asc" \}\]/, "two events in a tick need a tie-break");
+});
+
+test("the wake query is bounded at BOTH ends of the wait window", () => {
+  // The behavioural tests above drive a model of the runner's loop, and a model
+  // can only mirror a query it is told about. This pins the real one.
+  //
+  // A lower bound alone lets a late tick pull back an event created after the
+  // window closed — the poll runs on a cron, so "the tick is hours after
+  // `until`" is ordinary, not exotic.
+  const runner = shipped("src/lib/journeyRuns.ts");
+  const fnAt = runner.indexOf("async function findWakeEvent(");
+  assert.ok(fnAt > 0, "the wake query must exist");
+  const endAt = runner.indexOf("\n}", fnAt);
+  assert.ok(endAt > fnAt, "…and the slice must run forwards");
+  const query = runner.slice(fnAt, endAt);
+  assert.ok(query.length > 0);
+
+  assert.match(
+    query,
+    /createdAt: \{ gte: since, lt: until \}/,
+    "half-open [since, until): gt would lose an event written in the arming millisecond, " +
+      "and no upper bound at all lets a late tick wake on an event from outside the window",
+  );
+  // The bound is only worth anything if the deadline actually reaches the query.
+  assert.match(
+    runner,
+    /findWakeEvent\(\s*run,\s*config\.triggers,\s*new Date\(armedWait\.since\),\s*new Date\(armedWait\.until\),?\s*\)/,
+    "the runner must pass the armed wait's own deadline, not re-derive one",
+  );
+  // And the decision must be given the event's TIME, not a boolean — a boolean
+  // cannot tell "an event was found" from "an event was found in time".
+  assert.match(
+    runner,
+    /decideWait\(armedWait, now, woke\?\.createdAt \?\? null\)/,
+    "decideWait needs the timestamp to apply the window itself",
+  );
+  // The logged event follows the DECISION. Unreachable while the query is
+  // bounded — which is why it is pinned here rather than asserted behaviourally:
+  // the only way to observe it is to lose the bound, and then the trace would
+  // say "timed out" while naming the event that supposedly woke the run.
+  assert.match(
+    runner,
+    /const wokeBy = timedOut \? null : woke;/,
+    "the trace's event field must come from the decision, not straight from the query",
+  );
+  assert.doesNotMatch(
+    runner.slice(runner.indexOf("const wokeBy = timedOut")),
+    /event: woke \?/,
+    "…and the step log must use it",
+  );
 });
 
 test("the runner carries the variables bag across its context refresh", () => {

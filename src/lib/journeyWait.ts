@@ -115,18 +115,52 @@ export type WaitDecision =
   | { kind: "keep_waiting"; nextRunAt: Date };
 
 /**
+ * Is `at` inside the window this wait was armed for?
+ *
+ * HALF-OPEN: `[since, until)`.
+ *
+ * `since` is inclusive because an event written in the same millisecond the
+ * wait armed arrived while we were listening, and losing it would be silent.
+ *
+ * `until` is EXCLUSIVE because it is already the first instant of "timed out" —
+ * `decideWait` below gives up at `now >= until`. An inclusive upper bound would
+ * make the deadline millisecond belong to both outcomes at once, and would make
+ * the window `timeoutMinutes` plus one millisecond. Half-open makes the wait
+ * exactly as long as the author asked for and leaves no instant ambiguous.
+ */
+export function isInWaitWindow(wait: JourneyWaitState, at: Date): boolean {
+  const ms = at.getTime();
+  return ms >= Date.parse(wait.since) && ms < Date.parse(wait.until);
+}
+
+/**
  * What an armed wait should do on this tick.
  *
- * ORDER MATTERS, and it is the non-obvious half: an event that was found WINS
- * even when the deadline has already passed. The poll runs on the cron, so a
- * tick can easily land after `until` — a late cron, a busy queue, a deploy —
+ * ORDER MATTERS, and it is the non-obvious half: an event INSIDE THE WINDOW
+ * wins even when the deadline has already passed. The poll runs on the cron, so
+ * a tick can easily land after `until` — a late cron, a busy queue, a deploy —
  * and an event that genuinely arrived inside the window would otherwise be
  * discarded as a timeout. The question the trace has to answer is "did the thing
  * happen", not "was the engine punctual". Checking the timeout first would make
  * the answer depend on scheduler jitter.
+ *
+ * Which is exactly why this takes the event's TIMESTAMP and not a boolean. With
+ * a boolean, "found" and "found in time" are the same value, and letting it beat
+ * the deadline means a late tick at 10:30 resumes on an event stamped 10:20 for
+ * a wait that expired at 10:00 — the run takes the "it happened" path when the
+ * author's window closed half an hour earlier. Tolerating scheduler jitter must
+ * not turn into extending the wait by however long the cron was late.
+ *
+ * The wake query is bounded by the same window, so this is belt and braces. It
+ * is worth having as a pure function anyway: the rule is stated once, in the one
+ * place both the runner and its tests can reach.
  */
-export function decideWait(wait: JourneyWaitState, now: Date, found: boolean): WaitDecision {
-  if (found) return { kind: "woken" };
+export function decideWait(
+  wait: JourneyWaitState,
+  now: Date,
+  wokeAt: Date | null,
+): WaitDecision {
+  if (wokeAt && isInWaitWindow(wait, wokeAt)) return { kind: "woken" };
   if (now.getTime() >= Date.parse(wait.until)) return { kind: "timed_out" };
   return { kind: "keep_waiting", nextRunAt: waitPollAt(wait, now) };
 }

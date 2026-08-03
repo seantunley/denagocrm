@@ -108,20 +108,31 @@ async function updateStepLog(args: {
  * targeted emissions, and the wait is asking "did this happen to this person",
  * not "did this happen because of this journey".
  *
- * `gte`, not `gt`: an event written in the same millisecond as the wait armed is
- * one that arrived while we were listening, and losing it would be silent.
+ * BOUNDED AT BOTH ENDS — `[since, until)`, the same half-open window
+ * `isInWaitWindow` states. The lower bound alone was not enough: the poll runs
+ * on a cron, so a tick can land well after the deadline, and an unbounded query
+ * would then hand back an event created after the window closed. A wait that
+ * expired at 10:00 would resume at 10:30 on an event stamped 10:20 and take the
+ * "it happened" branch — extending the author's window by however late the cron
+ * happened to be, which is not the same thing as tolerating jitter.
+ *
+ * `gte` on `since`, not `gt`: an event written in the same millisecond as the
+ * wait armed is one that arrived while we were listening, and losing it would be
+ * silent. `lt` on `until`, not `lte`: `until` is already the first instant of
+ * "timed out", so an event stamped exactly there is outside the window.
  */
 async function findWakeEvent(
   run: { entityType: string; entityId: string },
   triggers: readonly string[],
   since: Date,
+  until: Date,
 ) {
   return prisma.journeyEvent.findFirst({
     where: {
       entityType: run.entityType,
       entityId: run.entityId,
       type: { in: [...triggers] },
-      createdAt: { gte: since },
+      createdAt: { gte: since, lt: until },
     },
     // Two events in the same tick must pick the same winner however the rows
     // happen to come back, so the millisecond tie is broken by id.
@@ -413,8 +424,13 @@ async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
           return true;
         }
 
-        const woke = await findWakeEvent(run, config.triggers, new Date(armedWait.since));
-        const decision = decideWait(armedWait, now, Boolean(woke));
+        const woke = await findWakeEvent(
+          run,
+          config.triggers,
+          new Date(armedWait.since),
+          new Date(armedWait.until),
+        );
+        const decision = decideWait(armedWait, now, woke?.createdAt ?? null);
         if (decision.kind === "keep_waiting") {
           // No step-log write on a poll. updateStepLog resets startedAt on a
           // "running" upsert — for a back-edge that is correct — so rewriting
@@ -425,9 +441,14 @@ async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
         }
 
         const timedOut = decision.kind === "timed_out";
+        // The trace follows the DECISION, not the query. Nothing can make them
+        // disagree today — the query is bounded by the same window the decision
+        // applies — but a row that reads "timed out" while naming the event that
+        // woke it would be worse than either outcome on its own.
+        const wokeBy = timedOut ? null : woke;
         const note = timedOut
           ? `Timed out after ${config.timeoutMinutes} minute(s) waiting for ${config.triggers.join(" or ")}`
-          : `Woken by ${woke?.type}`;
+          : `Woken by ${wokeBy?.type}`;
         await updateStepLog({
           runId: run.id,
           path,
@@ -443,7 +464,7 @@ async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
             timedOut,
             waitedMs: waitedMs(armedWait, now),
             triggers: config.triggers,
-            event: woke ? { id: woke.id, type: woke.type, at: woke.createdAt.toISOString() } : null,
+            event: wokeBy ? { id: wokeBy.id, type: wokeBy.type, at: wokeBy.createdAt.toISOString() } : null,
           },
         });
 
