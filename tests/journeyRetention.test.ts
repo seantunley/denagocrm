@@ -3,6 +3,9 @@ import { test } from "node:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import Module, { createRequire } from "node:module";
+
+import * as spy from "./stubs/prismaRetentionSpy";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -15,6 +18,234 @@ const shipped = (rel: string) =>
  * log row per step of each. On a busy workspace that is the fastest-growing
  * data in the app and the data with the least long-term value.
  */
+
+/**
+ * `journeyRetention.ts` is `server-only` and imports a live PrismaClient, so the
+ * unit runner cannot load it as shipped: the `server-only` marker package is not
+ * installed (Next vendors it and swaps it in through an RSC export condition),
+ * and `./db` builds a real client against DATABASE_URL.
+ *
+ * tsx compiles these tests to CommonJS, so both are swapped by intercepting the
+ * module loader and then requiring the real module through it. That buys
+ * BEHAVIOURAL tests of the sweep — the shipped function, its real queries, run
+ * against an in-memory table — instead of reading its source and hoping.
+ *
+ * The `./db` swap is anchored on the REQUESTING file, so it cannot accidentally
+ * hand the spy to some other module that happens to import the database.
+ */
+type Loader = (
+  this: unknown,
+  request: string,
+  parent: { filename?: string } | undefined,
+  isMain: boolean,
+) => unknown;
+const loaderKey = Module as unknown as { _load: Loader };
+const realLoad = loaderKey._load;
+loaderKey._load = function (this: unknown, request: string, parent, isMain) {
+  if (request === "server-only" || request === "client-only") return {};
+  if (request === "./db" && parent?.filename?.endsWith("journeyRetention.ts")) {
+    return { prisma: spy.prisma };
+  }
+  return realLoad.call(this, request, parent, isMain);
+} as Loader;
+
+const retention = createRequire(import.meta.url)(
+  "../src/lib/journeyRetention.ts",
+) as typeof import("../src/lib/journeyRetention");
+
+const DAY = 24 * 60 * 60 * 1000;
+/** Old enough that both cutoffs have passed, so seeding is about status, not age. */
+const ANCIENT = Date.now() - 400 * DAY;
+
+/**
+ * `count` rows with strictly increasing createdAt, oldest first.
+ *
+ * `base` separates one group from another in time. Overlapping timestamps would
+ * interleave two groups inside the bounded window and make the expected counts
+ * depend on sort tie-breaking rather than on the rule under test.
+ */
+function backlog(
+  prefix: string,
+  count: number,
+  extra: Record<string, unknown> = {},
+  base = ANCIENT,
+): spy.Row[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `${prefix}-${i}`,
+    createdAt: new Date(base + i),
+    ...extra,
+  }));
+}
+
+/** The 0-based index encoded in a seeded id, for oldest-first assertions. */
+const seq = (id: string) => Number(id.slice(id.lastIndexOf("-") + 1));
+
+test("one sweep deletes a bounded batch, not the whole expired event backlog", () => {
+  // THE FINDING. `deleteMany` over the full expired set is correct in its result
+  // and wrong in its cost: on a tenant with a year of events it is one statement
+  // holding row locks over millions of rows, for longer than the cron tick it
+  // runs inside. The run sweep already selected a bounded window and deleted by
+  // id; the event sweep did not.
+  const events = 5_000;
+  spy.reset({ journeyEvent: backlog("event", events, { status: "processed" }) });
+
+  return retention.pruneJourneyTraces().then((result) => {
+    assert.equal(
+      result.events,
+      retention.MAX_DELETES_PER_SWEEP,
+      "a single sweep must stop at the ceiling, however large the backlog",
+    );
+    assert.equal(spy.rows("journeyEvent").length, events - retention.MAX_DELETES_PER_SWEEP);
+
+    // The ceiling is only worth anything if the DELETE itself is bounded.
+    // Counting the result would still pass if the sweep issued one unbounded
+    // statement and reported a truncated number, so assert on the call.
+    const deletes = spy.calls.filter((call) => call.model === "journeyEvent" && call.op === "deleteMany");
+    assert.equal(deletes.length, 1, "one delete per sweep");
+    const ids = (deletes[0].args.where as { id: { in: string[] } }).id.in;
+    assert.ok(Array.isArray(ids), "the delete must name the rows it removes, not re-run the age filter");
+    assert.equal(ids.length, retention.MAX_DELETES_PER_SWEEP);
+  });
+});
+
+test("the ceiling is a number a tick can actually afford", () => {
+  // Read from the module rather than trusted blindly: every bound above is
+  // expressed in terms of this, so a sweep could be "bounded" at a million and
+  // pass them all.
+  assert.equal(retention.MAX_DELETES_PER_SWEEP, 2_000);
+});
+
+test("the event backlog drains oldest-first, so successive ticks make progress", async () => {
+  // Same reason the run sweep is oldest-first. A sweep that took an arbitrary
+  // 2,000 would leave the oldest rows to be re-scanned on every tick forever.
+  spy.reset({ journeyEvent: backlog("event", 5_000, { status: "processed" }) });
+
+  const first = await retention.pruneJourneyTraces();
+  assert.equal(first.events, 2_000);
+  assert.ok(
+    spy.rows("journeyEvent").every((row) => seq(row.id) >= 2_000),
+    "the survivors of the first tick must be the NEWEST rows — the oldest go first",
+  );
+
+  const second = await retention.pruneJourneyTraces();
+  const third = await retention.pruneJourneyTraces();
+  assert.deepEqual([second.events, third.events], [2_000, 1_000]);
+  assert.equal(spy.rows("journeyEvent").length, 0, "three ticks must clear a 5,000-row backlog");
+
+  const fourth = await retention.pruneJourneyTraces();
+  assert.equal(fourth.events, 0, "and a drained backlog must then cost nothing");
+});
+
+test("an event the engine has not finished with is never pruned", async () => {
+  // `pending` is work not yet done. Deleting it drops a trigger on the floor,
+  // and the symptom is a journey that never enrolled anyone — silence, not an
+  // error. Only statuses the engine is finished with are eligible.
+  spy.reset({
+    journeyEvent: [
+      ...backlog("pending", 3, { status: "pending" }),
+      ...backlog("processed", 2, { status: "processed" }),
+      ...backlog("failed", 2, { status: "failed" }),
+    ],
+  });
+
+  const result = await retention.pruneJourneyTraces();
+  assert.equal(result.events, 4, "processed and failed are done with; pending is not");
+  assert.deepEqual(
+    spy.rows("journeyEvent").map((row) => row.status),
+    ["pending", "pending", "pending"],
+  );
+});
+
+test("an event still inside the retention window is never pruned", async () => {
+  // The window has to outlast the longest possible wait — a `wait_for_trigger`
+  // polls JourneyEvent for up to JOURNEY_LIMITS.waitDays. Pruning an event a
+  // parked run is still looking for turns a continue into a silent timeout.
+  const at = (days: number) => new Date(Date.now() - days * DAY);
+  spy.reset({
+    journeyEvent: [
+      { id: "just-inside", createdAt: at(retention.EVENT_RETENTION_DAYS - 1), status: "processed" },
+      { id: "just-outside", createdAt: at(retention.EVENT_RETENTION_DAYS + 1), status: "processed" },
+    ],
+  });
+
+  const result = await retention.pruneJourneyTraces();
+  assert.equal(result.events, 1);
+  assert.deepEqual(
+    spy.rows("journeyEvent").map((row) => row.id),
+    ["just-inside"],
+  );
+  assert.ok(
+    retention.EVENT_RETENTION_DAYS > 30,
+    "the window must exceed JOURNEY_LIMITS.waitDays, or a maximal wait races the sweep",
+  );
+});
+
+test("a tick with nothing to prune issues no delete at all", async () => {
+  // This runs once per tenant per tick and finds nothing on almost all of them.
+  // Two indexed lookups — one per table — and no write.
+  spy.reset({
+    journeyEvent: backlog("fresh-event", 5, { status: "processed" }, Date.now()),
+    journeyRun: backlog("live-run", 5, { status: "waiting" }),
+  });
+
+  const result = await retention.pruneJourneyTraces();
+  assert.deepEqual(result, { events: 0, runs: 0 });
+  assert.deepEqual(
+    spy.calls.map((call) => `${call.model}.${call.op}`),
+    ["journeyEvent.findMany", "journeyRun.findMany"],
+    "the empty case must be two lookups and nothing else — no delete, no per-journey floor",
+  );
+  assert.equal(spy.rows("journeyRun").length, 5, "a waiting run is live state, not a trace");
+});
+
+test("the run sweep is bounded and still keeps every journey's most recent runs", async () => {
+  // A quiet journey whose five closed runs are the OLDEST rows in the table,
+  // then a busy journey with a 5,000-run backlog behind them, then three runs
+  // still in flight. Everything here is far past the age cutoff, so age alone
+  // would take the lot.
+  //
+  // The quiet journey sits inside the bounded window on purpose: putting it
+  // outside would make its survival prove nothing except that the sweep never
+  // looked at it.
+  const quiet = backlog("quiet", 5, { status: "completed", journeyId: "quiet" }, ANCIENT);
+  const busy = backlog("busy", 5_000, { status: "completed", journeyId: "busy" }, ANCIENT + 100_000);
+  const waiting = backlog("waiting", 3, { status: "waiting", journeyId: "busy" }, ANCIENT + 200_000);
+  spy.reset({ journeyRun: [...quiet, ...busy, ...waiting] });
+
+  const result = await retention.pruneJourneyTraces();
+  assert.equal(
+    result.runs,
+    retention.MAX_DELETES_PER_SWEEP - quiet.length,
+    "the window holds 2,000 candidates; the five the floor rescues are simply not deleted",
+  );
+
+  const survivors = spy.rows("journeyRun");
+  assert.equal(
+    survivors.filter((row) => row.status === "waiting").length,
+    3,
+    "a waiting run is live state and must survive any age rule",
+  );
+  assert.equal(
+    survivors.filter((row) => row.journeyId === "quiet").length,
+    5,
+    "a quiet journey's whole trace is inside the per-journey floor — it is exactly the journey you debug",
+  );
+  assert.ok(
+    survivors.every((row) => row.journeyId !== "busy" || row.status !== "completed" || seq(row.id) >= 1_995),
+    "the busy journey must lose its OLDEST closed runs first",
+  );
+});
+
+test("the per-journey floor is not silently defeated by the sweep window", async () => {
+  // A journey whose entire closed history fits inside the floor must lose
+  // nothing, no matter how far past the age cutoff all of it is.
+  spy.reset({
+    journeyRun: backlog("kept", 20, { status: "completed", journeyId: "kept" }),
+  });
+  const result = await retention.pruneJourneyTraces();
+  assert.equal(result.runs, 0, "20 runs with a floor of 20 leaves nothing to delete");
+  assert.equal(spy.rows("journeyRun").length, 20);
+});
 
 test("a live run is never pruned by age", () => {
   // THE ONE THAT MATTERS. A `waiting` run legitimately sits idle for WEEKS

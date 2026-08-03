@@ -38,9 +38,18 @@ export const RUN_RETENTION_DAYS = 60;
 /** Runs kept per journey regardless of age, so a quiet journey still has a trace. */
 export const RUNS_KEPT_PER_JOURNEY = 20;
 /** Ceiling per sweep, so one tick cannot spend its whole budget deleting. */
-const MAX_DELETES_PER_SWEEP = 2_000;
+export const MAX_DELETES_PER_SWEEP = 2_000;
 
 export type RetentionResult = { events: number; runs: number };
+
+/**
+ * An event is prunable once the engine has finished with it. `pending` is work
+ * not yet done, and deleting it would drop a trigger on the floor.
+ *
+ * An allowlist for the same reason as `CLOSED_RUN_STATUSES` below: a new
+ * in-flight status added later is excluded automatically.
+ */
+const PRUNABLE_EVENT_STATUSES = ["processed", "failed"];
 
 /**
  * A run is a trace once it is CLOSED. Before that it is live state — `queued`,
@@ -63,8 +72,16 @@ const CLOSED_RUN_STATUSES = ["completed", "failed", "cancelled"];
  * costs one query per journey, for every tenant, on every tick, to almost
  * always delete nothing: a worse problem than the one being fixed.
  *
- * So one indexed query decides whether there is any work at all, and the floor
- * is computed only for the journeys that actually have stale runs.
+ * So one indexed query PER TABLE decides whether that table has any work at
+ * all, and the per-journey floor is computed only for the journeys that
+ * actually have stale runs.
+ *
+ * BOTH sweeps are bounded to MAX_DELETES_PER_SWEEP. A tenant that has been
+ * running journeys for a year has a backlog measured in millions of rows, and
+ * an unbounded `deleteMany` over it is one statement that holds row locks on
+ * the whole expired set for as long as it takes — which on that tenant is
+ * longer than the cron has. Bounded sweeps make no less progress in the long
+ * run; they just make it in pieces that fit inside a tick.
  */
 export async function pruneJourneyTraces(): Promise<RetentionResult> {
   const eventCutoff = new Date(Date.now() - EVENT_RETENTION_DAYS * 24 * 60 * 60 * 1000);
@@ -72,9 +89,29 @@ export async function pruneJourneyTraces(): Promise<RetentionResult> {
 
   // Events are self-contained: once processed they are a record of a decision,
   // and the runs they produced carry their own history.
-  const { count: events } = await prisma.journeyEvent.deleteMany({
-    where: { createdAt: { lt: eventCutoff }, status: { in: ["processed", "failed"] } },
+  //
+  // Selected then deleted by id, like the run sweep below, rather than a bare
+  // `deleteMany` over the whole expired backlog. Same index scan on
+  // (status, createdAt), same cost when there is nothing to do — but the delete
+  // that follows is now a known 2,000 rows instead of however many a tenant has
+  // accumulated.
+  //
+  // Oldest first so the backlog drains from the far end: a sweep that took an
+  // arbitrary 2,000 would leave the oldest rows to be re-scanned every tick.
+  const expiredEvents = await prisma.journeyEvent.findMany({
+    where: { createdAt: { lt: eventCutoff }, status: { in: PRUNABLE_EVENT_STATUSES } },
+    orderBy: { createdAt: "asc" },
+    take: MAX_DELETES_PER_SWEEP,
+    select: { id: true },
   });
+  const events =
+    expiredEvents.length === 0
+      ? 0
+      : (
+          await prisma.journeyEvent.deleteMany({
+            where: { id: { in: expiredEvents.map((event) => event.id) } },
+          })
+        ).count;
 
   // THE EARLY OUT. One index scan on (status, createdAt); on the overwhelming
   // majority of ticks it comes back empty and the sweep is over.
