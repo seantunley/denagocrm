@@ -317,11 +317,16 @@ test("an unreadable definition fails ITS run, not the whole tick", () => {
   // tick: every run behind it stopped, and this one sat claimed as "running"
   // until the 15-minute stale sweep, then did it again.
   const runs = shipped("src/lib/journeyRuns.ts");
-  const start = runs.indexOf("export async function processOneRun");
-  const body = runs.slice(start, runs.indexOf("export async function processJourneyRuns"));
+  const start = runs.indexOf("function processOneRun");
+  assert.notEqual(start, -1, "processOneRun is gone — was it renamed?");
+  const end = runs.indexOf("function processJourneyRuns", start);
+  assert.notEqual(end, -1, "processJourneyRuns is gone — was it renamed?");
+  const body = runs.slice(start, end);
   assert.ok(body.length > 0, "the slice ran backwards");
 
-  const parse = body.indexOf("parseJourneyDefinition(run.journeyVersion.definition)");
+  // No closing paren: the nested-flow engine passes `{ deep: false }` here, and
+  // an anchor that assumed a single argument silently matched nothing.
+  const parse = body.indexOf("parseJourneyDefinition(run.journeyVersion.definition");
   const guard = body.indexOf("try {");
   assert.notEqual(parse, -1, "the definition parse is gone — was it renamed?");
   assert.ok(guard !== -1 && guard < parse, "the parse must be inside a try, not before one");

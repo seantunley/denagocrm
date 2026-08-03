@@ -10,17 +10,44 @@ import { logAudit } from "./audit";
 import { emitJourneyEvent } from "./journeyEvents";
 import { canContactPerson, nextCommunicationWindow } from "./communicationPolicy";
 import { JourneyContext, journeyTemplateVars } from "./journeyContext";
-import {
-  evaluateConditions,
-  explainConditions,
-  parseConditionGroup,
-  type JourneyStep,
-} from "./journeyTypes";
+import { AbortJourney } from "./journeyControlFlow";
+import { conditionStepOutcome, stopStepOutcome } from "./journeyStepControl";
+import { type JourneyStep } from "./journeyTypes";
+
+export { resolveTopLevelNext } from "./journeyStepControl";
 
 export type StepResult = {
   status: "completed" | "skipped" | "waiting";
   note: string;
-  nextStepId?: string | null;
+  /**
+   * An EXPLICIT jump, set only by the top-level two-way `condition` step.
+   *
+   * This replaces a `nextStepId?: string | null` that carried three meanings on
+   * one field: absent meant "fall through to the step's own nextStepId", `null`
+   * meant "there is no successor, end the run", and a string meant "jump here".
+   * The `stop` step used the `null` spelling, so "the author asked to stop" and
+   * "this branch simply has no successor" were indistinguishable — in the code
+   * and in the trace. `stop` now raises StopJourney, and the remaining two cases
+   * are told apart by the presence of this object rather than by null-vs-
+   * undefined on the same key.
+   */
+  branch?: { stepId: string | null };
+  /**
+   * "I could not do this yet — try this SAME step again at nextRunAt."
+   *
+   * Two different things share `status: "waiting"`. A `wait` step SUCCEEDED —
+   * pausing is the whole job — so the run resumes on the step after it. A
+   * deferred step did NOT run: quiet hours or a frequency cap held the send,
+   * and the message still has to go out.
+   *
+   * Telling them apart cannot be left to `branch`. `advanceCursor` honours an
+   * override at the TOP LEVEL ONLY — inside a repeat or a choose it ignores the
+   * override and steps the frame index on regardless — so a marketing email
+   * nested in a loop would have been advanced past and silently never sent.
+   * That is the same class of failure as the suppressed-marketing-send bug, so
+   * it gets its own flag rather than an encoding that works in one place.
+   */
+  retryStep?: true;
   nextRunAt?: Date;
   output?: Record<string, unknown>;
 };
@@ -150,12 +177,25 @@ export async function executeJourneyStep(args: {
   category: string;
   journeyName: string;
   runId: string;
+  /**
+   * True when the step is inside a `choose`/`repeat` sequence. It changes
+   * exactly one thing — what a failing `condition` means — because a sequence
+   * has no ids to jump to. See the `condition` case.
+   */
+  inSequence?: boolean;
 }): Promise<StepResult> {
-  const { step, context, category, journeyName, runId } = args;
+  const { step, context, category, journeyName, runId, inSequence = false } = args;
   const vars = journeyTemplateVars(context);
   const { leadId, contactId } = ids(context);
 
   switch (step.type) {
+    // Control flow, not action. The RUNNER owns these because executing them
+    // means moving the cursor, and the cursor is the run's durable position —
+    // see journeyScript.ts. Reaching here at all is a routing bug.
+    case "choose":
+    case "repeat":
+      throw new AbortJourney(`${step.type} ${step.id} reached the action executor`);
+
     case "wait": {
       const amount = Math.max(1, numberConfig(step, "amount", 1));
       const unit = stringConfig(step, "unit") ?? "days";
@@ -168,38 +208,20 @@ export async function executeJourneyStep(args: {
       return { status: "waiting", note: `Waiting ${amount} ${unit}`, nextRunAt };
     }
 
-    case "condition": {
-      const condition = parseConditionGroup(step.config.condition);
-      const passed = evaluateConditions(condition, context);
-      const branch = passed ? step.config.trueStepId : step.config.falseStepId;
-      const taken = typeof branch === "string" && branch ? branch : step.nextStepId ?? null;
-      // WHICH clause decided it, not just the verdict. "Condition did not match"
-      // sends someone re-reading every clause by hand against a lead that has
-      // since changed; the per-clause result is the answer they were going to
-      // reconstruct. It feeds the step timeline in the activity trace.
-      return {
-        status: "completed",
-        note: passed ? "Condition matched" : "Condition did not match",
-        nextStepId: taken,
-        output: {
-          passed,
-          // `branchTaken` names the step, so a trace reader can follow the path
-          // without re-deriving it from trueStepId/falseStepId themselves.
-          branchTaken: taken,
-          branch: passed ? "true" : "false",
-          clauses: explainConditions(condition, context),
-        },
-      };
-    }
+    // Both are PURE decisions, so they live in journeyStepControl.ts where a
+    // test can import them without dragging the database, the mail provider and
+    // `server-only` along with them.
+    case "condition":
+      return conditionStepOutcome(step, context, inSequence);
 
     case "stop":
-      return { status: "completed", note: stringConfig(step, "reason") ?? "Journey stopped", nextStepId: null };
+      return stopStepOutcome(step);
 
     case "send_email": {
       if (category === "marketing") {
         const verdict = await marketingVerdict(context, "email");
         if (verdict.kind === "defer") {
-          return { status: "waiting", note: `Email held for ${verdict.reason}`, nextRunAt: verdict.until, nextStepId: step.id };
+          return { status: "waiting", note: `Email held for ${verdict.reason}`, nextRunAt: verdict.until, retryStep: true };
         }
         if (verdict.kind === "blocked") return { status: "skipped", note: `Marketing email skipped: ${verdict.reason}` };
       }
@@ -232,7 +254,7 @@ export async function executeJourneyStep(args: {
       if (category === "marketing") {
         const verdict = await marketingVerdict(context, "sms");
         if (verdict.kind === "defer") {
-          return { status: "waiting", note: `SMS held for ${verdict.reason}`, nextRunAt: verdict.until, nextStepId: step.id };
+          return { status: "waiting", note: `SMS held for ${verdict.reason}`, nextRunAt: verdict.until, retryStep: true };
         }
         if (verdict.kind === "blocked") return { status: "skipped", note: `Marketing SMS skipped: ${verdict.reason}` };
       }

@@ -147,8 +147,20 @@ export function journeyTemplateVars(context: JourneyContext): Record<string, str
   const lead = (context.lead ?? {}) as Record<string, unknown>;
   const contact = (context.contact ?? {}) as Record<string, unknown>;
   const event = (context.event ?? {}) as Record<string, unknown>;
+  // Injected by the runner from the innermost `repeat` frame — see
+  // journeyCursor.repeatVars. Absent (and so empty) outside a loop.
+  const repeat = (context.repeat ?? {}) as Record<string, unknown>;
   const firstName = String(contact.firstName ?? String(lead.name ?? "").split(/\s+/)[0] ?? "there");
   return {
+    // 1-based, matching HA's repeat.index. An object item renders as JSON rather
+    // than "[object Object]", which is worse than useless in a message body.
+    repeat_index: repeat.index == null ? "" : String(repeat.index),
+    repeat_item:
+      repeat.item == null
+        ? ""
+        : typeof repeat.item === "object"
+          ? JSON.stringify(repeat.item)
+          : String(repeat.item),
     first_name: firstName || "there",
     name: String(contact.name ?? lead.name ?? "Customer"),
     email: String(contact.email ?? lead.email ?? ""),

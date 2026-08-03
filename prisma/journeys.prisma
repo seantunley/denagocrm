@@ -109,9 +109,33 @@ model JourneyRun {
   entityId         String
   leadId           String?
   contactId        String?
+  /// The TOP-LEVEL step. Still the whole position for a flat journey, which is
+  /// every journey written before nesting existed.
   currentStepId    String?
+  /// WHERE INSIDE a choose/repeat the run is: `{ stepId, frames[] }`.
+  ///
+  /// A journey step list is flat at the top level and nests only inside the two
+  /// container steps, so one step id stopped being enough to say where a run is
+  /// — a run parked on the second step of the third iteration of a repeat needs
+  /// the iteration and the index too. There is no call stack to resume from:
+  /// `processOneRun` executes at most twenty steps and parks, and a `wait` can
+  /// hold a run for days before a DIFFERENT process picks it up. So the frame
+  /// stack is a value here, and the run is rebuilt from it plus the pinned
+  /// (immutable) version definition.
+  ///
+  /// NULL means flat — read as `{ stepId: currentStepId, frames: [] }`, which is
+  /// exactly how every pre-existing run resumes across the deploy.
+  cursor           Json?
   context          Json
   nextRunAt        DateTime       @default(now())
+  /// Lifetime steps executed, across every tick and every wait.
+  ///
+  /// This is what bounds a run. The old cycle detector was a `visited` Set of
+  /// step ids rebuilt per tick: too strict for `repeat`, which re-executes the
+  /// same ids by design, and too weak for the real infinite automation — a
+  /// back-edge with a wait in it went round forever, one step per tick, and the
+  /// per-tick Set never saw it twice.
+  stepsExecuted    Int            @default(0)
   attempts         Int            @default(0)
   lastError        String?
   idempotencyKey   String         @unique
@@ -135,6 +159,22 @@ model JourneyStepLog {
   tenantId    String?
   runId       String
   run         JourneyRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  /// The hierarchical trace path, after Home Assistant's `"0/sequence/1"`.
+  ///
+  ///   welcome                     a top-level step — identical to its id, which
+  ///                               is why every pre-existing row backfills
+  ///                               cleanly and the activity trace is unchanged
+  ///   triage/choose/1/sequence/0  first step of the second branch
+  ///   blast/repeat/2/sequence/1   second step of the THIRD iteration
+  ///
+  /// The iteration number is in here on purpose: `@@unique([runId, stepId])`
+  /// could not survive `repeat`, because the same step id executes once per
+  /// pass and the second write would have collided with — or silently
+  /// overwritten — the first. Uniqueness moves to the path, which differs per
+  /// execution, so every iteration keeps its own record.
+  path        String
+  /// The node's own id. Kept alongside `path` because it is what a person
+  /// recognises, and what the existing trace UI reads.
   stepId      String
   stepType    String
   status      String // running | completed | skipped | failed
@@ -143,7 +183,8 @@ model JourneyStepLog {
   startedAt   DateTime   @default(now())
   completedAt DateTime?
 
-  @@unique([runId, stepId])
+  @@unique([runId, path])
+  @@index([runId, stepId])
   @@index([runId, startedAt])
   @@index([status, startedAt])
   @@index([tenantId])

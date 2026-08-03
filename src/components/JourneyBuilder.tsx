@@ -10,8 +10,22 @@ export type JourneyOption = { id: string; name: string };
 type BuilderStep = {
   id: string;
   type: string;
+  /** HA's per-action `continue_on_error`, round-tripped so saving cannot drop it. */
+  continueOnError?: boolean;
   config: Record<string, unknown>;
 };
+
+/**
+ * `choose` and `repeat` have NO visual editor here — say so rather than pretend.
+ *
+ * They are authored as JSON today. What this builder guarantees is that opening
+ * and re-saving a journey that contains one does not damage it: the step's
+ * config is carried through verbatim, its type cannot be changed by a stray
+ * click on the type dropdown, and the panel shows what is inside it. Silently
+ * dropping the branches — which is what would happen if these types were simply
+ * unknown to the builder — would destroy work with no error and no undo.
+ */
+const READ_ONLY_STEP_TYPES = new Set(["choose", "repeat"]);
 
 export type JourneyBuilderDefaults = {
   name?: string;
@@ -43,6 +57,8 @@ const stepLabels: Record<string, string> = {
   wait: "Wait",
   condition: "Condition / branch",
   stop: "Stop journey",
+  choose: "Choose (branches)",
+  repeat: "Repeat (loop)",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -58,6 +74,11 @@ function cleanSteps(defaults?: JourneyBuilderDefaults["definition"]): BuilderSte
   }
   return existing.map((step) => {
     const config = { ...step.config };
+    // A container's config holds its nested sequences. Nothing below may touch
+    // it — carry it through byte-for-byte.
+    if (READ_ONLY_STEP_TYPES.has(step.type)) {
+      return { id: step.id, type: step.type, continueOnError: step.continueOnError, config };
+    }
     if (step.type === "condition" && isRecord(config.condition)) {
       const group = config.condition;
       const first = Array.isArray(group.conditions) && isRecord(group.conditions[0])
@@ -69,7 +90,7 @@ function cleanSteps(defaults?: JourneyBuilderDefaults["definition"]): BuilderSte
         config.value = first.value;
       }
     }
-    return { id: step.id, type: step.type, config };
+    return { id: step.id, type: step.type, continueOnError: step.continueOnError, config };
   });
 }
 
@@ -170,6 +191,8 @@ export default function JourneyBuilder({
   const definition = useMemo(() => {
     const mapped = steps.map((step, index) => {
       const nextStepId = steps[index + 1]?.id ?? null;
+      // Spreading `step` is what preserves a container's nested sequences and
+      // every step's continueOnError. Only `condition` has its config rebuilt.
       if (step.type !== "condition") return { ...step, nextStepId };
       const stopId = `${step.id}_false_stop`;
       return {
@@ -342,13 +365,36 @@ export default function JourneyBuilder({
           <div key={step.id} className="rounded-lg border border-slate-800 bg-slate-900/40 p-4 space-y-3">
             <div className="flex items-center gap-2">
               <span className="badge bg-slate-800 text-slate-300">{index + 1}</span>
-              <select className="input flex-1" value={step.type} onChange={(e) => setType(index, e.target.value)}>
+              {/* Disabled for containers: changing the type resets config, and a
+                  container's config IS its nested sequences. One stray click
+                  would delete every branch with no error and no undo. */}
+              <select
+                className="input flex-1"
+                value={step.type}
+                disabled={READ_ONLY_STEP_TYPES.has(step.type)}
+                onChange={(e) => setType(index, e.target.value)}
+              >
                 {Object.entries(stepLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
               <button type="button" className="btn-secondary btn-sm" onClick={() => moveStep(index, -1)}>↑</button>
               <button type="button" className="btn-secondary btn-sm" onClick={() => moveStep(index, 1)}>↓</button>
               <button type="button" className="text-red-400 text-sm" onClick={() => setSteps((current) => current.filter((_, i) => i !== index))}>Remove</button>
             </div>
+
+            {READ_ONLY_STEP_TYPES.has(step.type) && (
+              <div className="rounded border border-amber-500/30 bg-amber-500/[0.06] p-3 text-xs text-amber-200/90">
+                <p className="font-semibold text-amber-300">
+                  {step.type === "choose"
+                    ? `${Array.isArray(step.config.options) ? step.config.options.length : 0} branch${Array.isArray(step.config.options) && step.config.options.length === 1 ? "" : "es"}${step.config.default ? " + default" : ""}`
+                    : `Repeat: ${String(step.config.mode ?? "?")}`}
+                </p>
+                <p className="mt-1 leading-5">
+                  There is no visual editor for this step yet — it is authored as JSON. It is
+                  carried through this form exactly as saved, so editing the rest of the journey
+                  cannot damage it.
+                </p>
+              </div>
+            )}
 
             {step.type === "send_email" && (
               <div className="space-y-2">
@@ -399,6 +445,24 @@ export default function JourneyBuilder({
               </div>
             )}
             {step.type === "stop" && <input className="input" placeholder="Reason" value={String(step.config.reason ?? "")} onChange={(e) => setConfig(index, "reason", e.target.value)} />}
+
+            {/* Per step, because only the author knows which of their steps is
+                load-bearing. One failed SMS used to fail the whole run and burn
+                one of its three attempts, so a provider outage on a courtesy
+                notification could permanently kill a journey whose remaining
+                steps were the ones that mattered. */}
+            {!READ_ONLY_STEP_TYPES.has(step.type) && step.type !== "wait" && step.type !== "stop" && (
+              <label className="flex items-center gap-2 text-xs text-slate-400">
+                <input
+                  type="checkbox"
+                  checked={step.continueOnError === true}
+                  onChange={(e) => setSteps((current) => current.map((s, i) =>
+                    i === index ? { ...s, continueOnError: e.target.checked } : s
+                  ))}
+                />
+                Keep going if this step fails
+              </label>
+            )}
           </div>
         ))}
       </div>

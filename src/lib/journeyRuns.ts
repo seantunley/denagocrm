@@ -1,43 +1,87 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { logAudit } from "./audit";
-import { executeJourneyStep } from "./journeyStepExecutor";
+import { executeJourneyStep, resolveTopLevelNext } from "./journeyStepExecutor";
 import { loadJourneyContext, type JourneyEntityType, type JourneyContext } from "./journeyContext";
-import { parseJourneyDefinition, stepById } from "./journeyTypes";
+import { parseJourneyDefinition } from "./journeyTypes";
+import { AbortJourney, ConditionFailed, StopJourney, isControlFlow } from "./journeyControlFlow";
+import { parseCursor, withRepeatVars, type JourneyCursor } from "./journeyCursor";
+import {
+  advanceCursor,
+  chooseBranch,
+  enterChoose,
+  enterRepeat,
+  journeyScriptCache,
+  pushFrame,
+  resolveCursor,
+  type CursorPosition,
+  type ScriptLookup,
+} from "./journeyScript";
 import { NEVER_STOP, type StopSignal } from "./stopSignal";
+import { budgetStopUpdate } from "./journeyRunState";
 import { withEnrolmentLock } from "./journeyArbitration";
 import { activeTenantPredicate } from "./tenantPredicate";
-import { budgetStopUpdate } from "./journeyRunState";
 
 const MAX_RUN_ATTEMPTS = 3;
 const MAX_STEPS_PER_TICK = 20;
+/**
+ * The LIFETIME step budget for one run, and the replacement for the `visited`
+ * Set that used to sit in the step loop.
+ *
+ * That Set was a cycle detector: revisiting a step id within a tick threw. It
+ * was wrong in both directions. Too strict, because a `repeat` re-executes the
+ * same step ids on purpose — every loop would have been reported as a cycle. Too
+ * weak, because it was rebuilt from empty on every tick, so the actual infinite
+ * automation — a back-edge with a `wait` in it — went round forever, one step
+ * per tick, and was never caught at all.
+ *
+ * What genuinely bounds a run is total work done, counted durably. `stepsExecuted`
+ * is persisted on the row, so it survives parks, waits and process restarts, and
+ * a run that will not terminate hits this ceiling and ABORTS (no retry — a loop
+ * that did not end in 500 steps will not end in the next three attempts either).
+ * Legitimate loops spend the budget honestly; 100 iterations of a four-step body
+ * is 400, so this leaves room for one full-size repeat plus its surroundings.
+ */
+const MAX_STEPS_PER_RUN = 500;
 /** A single step can send an email or a WhatsApp message. */
 const STEP_RESERVE_MS = 4_000;
 
 async function updateStepLog(args: {
   runId: string;
+  /** Hierarchical trace path — the identity of one EXECUTION of a step. */
+  path: string;
   stepId: string;
   stepType: string;
   status: string;
   note?: string;
   output?: Record<string, unknown>;
 }) {
+  const done = ["completed", "skipped", "failed"].includes(args.status);
   await prisma.journeyStepLog.upsert({
-    where: { runId_stepId: { runId: args.runId, stepId: args.stepId } },
+    // Keyed on the PATH, not the step id. `@@unique([runId, stepId])` could not
+    // survive `repeat`: the same step id executes on every iteration, and the
+    // second write would have collided with the first — or, through this upsert,
+    // silently overwritten iteration one's record with iteration two's. The path
+    // carries the iteration number, so each execution keeps its own row.
+    where: { runId_path: { runId: args.runId, path: args.path } },
     create: {
       runId: args.runId,
+      path: args.path,
       stepId: args.stepId,
       stepType: args.stepType,
       status: args.status,
       note: args.note,
       output: args.output as Prisma.InputJsonValue | undefined,
-      completedAt: ["completed", "skipped", "failed"].includes(args.status) ? new Date() : null,
+      completedAt: done ? new Date() : null,
     },
     update: {
       status: args.status,
       note: args.note,
       output: args.output as Prisma.InputJsonValue | undefined,
-      completedAt: ["completed", "skipped", "failed"].includes(args.status) ? new Date() : null,
+      // A top-level back-edge can re-run the same path days later. Without this
+      // reset the recorded duration would include the wait in between.
+      ...(args.status === "running" ? { startedAt: new Date(), completedAt: null } : {}),
+      completedAt: done ? new Date() : null,
     },
   });
 }
@@ -93,7 +137,13 @@ export async function releaseBlockedJourneyRuns(): Promise<number> {
     const { count } = await withEnrolmentLock(run.journeyId, run.entityType, run.entityId, async (tx) => {
       const tenant = activeTenantPredicate("releaseBlockedJourneyRuns");
       const openNow = await tx.journeyRun.count({
-        where: { ...tenant, journeyId: run.journeyId, entityType: run.entityType, entityId: run.entityId, status: { in: ["queued", "running", "waiting"] } },
+        where: {
+          ...tenant,
+          journeyId: run.journeyId,
+          entityType: run.entityType,
+          entityId: run.entityId,
+          status: { in: ["queued", "running", "waiting"] },
+        },
       });
       if (openNow > 0) return { count: 0 };
       return tx.journeyRun.updateMany({
@@ -139,22 +189,34 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
   });
   if (claimed.count === 0) return false;
 
-  // Parsing sits INSIDE its own guard, and the reason is blast radius.
+  // PREPARATION SITS INSIDE ITS OWN GUARD, and the reason is blast radius.
   //
   // The run has just been claimed as "running". A throw from here escaped
   // processOneRun into processJourneyRuns and out of runJourneyEngine, so ONE
-  // journey with an unparseable definition aborted the whole tenant tick: every
-  // other run behind it stopped being processed, and this one sat claimed as
-  // "running" until the 15-minute stale sweep — then did it again. A definition
-  // is reachable in that state today by hand-editing it to an unknown step type
-  // or a duplicate id.
+  // journey with an unreadable definition stopped every other run in that
+  // tenant's tick and left itself claimed as "running" until the 15-minute
+  // stale sweep — which then handed it back to do the same thing again.
   //
-  // Failed outright rather than retried: a definition that will not parse is
-  // deterministic, and three attempts at it only delay the same answer while
-  // holding the run open.
+  // This branch made that far more likely, and it is worth being explicit about
+  // why: refusing top-level cycles is a NEW way to throw here. Every journey
+  // published while back-edges were still permitted now fails this parse, and a
+  // published version is immutable — so the definition cannot be corrected in
+  // place, and the run would have poisoned the tick on every retry forever.
+  //
+  // Failed outright rather than retried, for the same reason: the version is
+  // immutable, so a definition that will not parse now will not parse on the
+  // third attempt either. Retrying only holds the run open and burns budget.
   let definition;
+  let lookup: ScriptLookup;
+  let cursor: JourneyCursor;
   try {
-    definition = parseJourneyDefinition(run.journeyVersion.definition);
+    // Shallow on purpose: this parse happens on EVERY tick for EVERY run, and
+    // validating ten `choose` branches to execute one of them is work nobody
+    // asked for. The branch actually entered is prepared and validated on
+    // entry, then cached by immutable version id. See journeyScript.ts.
+    definition = parseJourneyDefinition(run.journeyVersion.definition, { deep: false });
+    lookup = { cache: journeyScriptCache(), versionId: run.journeyVersionId };
+    cursor = parseCursor(run.cursor, run.currentStepId);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unreadable journey definition";
     await prisma.journeyRun.updateMany({
@@ -167,23 +229,25 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
     });
     return false;
   }
-  let currentStepId = run.currentStepId;
+
   let context = run.context as unknown as JourneyContext;
-  const visited = new Set<string>();
+  let stepsExecuted = run.stepsExecuted;
+  /** The last position reached, so the catch blocks can log against it. */
+  let position: CursorPosition | null = null;
 
   /**
    * Write to the run ONLY while we still own it.
    *
    * The claim above takes the run from queued/waiting to `running`, and that is
-   * the whole of our title to it. Every later write used an unconditional
-   * `update({ where: { id } })`, so a run cancelled mid-flight by run mode
-   * `restart` was quietly resurrected: the worker finished its steps and wrote
-   * `completed` straight over `cancelled`. The replacement run was already
-   * sending by then, so the customer got both sequences — and the trace showed
-   * two completed runs with nothing to say one had been superseded.
+   * the whole of this worker's title to it. Unconditional writes meant a run
+   * cancelled mid-flight by run mode `restart` was quietly resurrected: the
+   * worker finished its steps and wrote `completed` straight over `cancelled`,
+   * while the replacement run was already sending. The customer got both
+   * sequences, and the trace showed two completed runs with nothing to say one
+   * had been superseded.
    *
-   * Returns false when the row is no longer ours, which is the signal to stop
-   * touching it and get out of the loop.
+   * Every write below goes through this. Returns false when the row is no
+   * longer ours, which is the signal to stop touching it and get out.
    */
   const stillOurs = async (data: Prisma.JourneyRunUpdateManyMutationInput) => {
     const { count } = await prisma.journeyRun.updateMany({
@@ -193,14 +257,48 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
     return count > 0;
   };
 
+  const park = async () =>
+    stillOurs(
+      budgetStopUpdate(cursor.stepId, context as Prisma.InputJsonValue, {
+        cursor: cursor as unknown as Prisma.InputJsonValue,
+        stepsExecuted,
+      }),
+    );
+
+  const finish = async (note: string) => {
+    const finished = await stillOurs({
+      status: "completed",
+      currentStepId: null,
+      // DbNull, not JsonNull: this must CLEAR the column, not store the JSON
+      // literal `null` in it. A finished run has no position.
+      cursor: Prisma.DbNull,
+      stepsExecuted,
+      completedAt: new Date(),
+      attempts: 0,
+      context: context as Prisma.InputJsonValue,
+    });
+    // Cancelled out from under us while the last steps ran. Write nothing and
+    // say nothing: the "completed" status and the audit line both belong to the
+    // replacement run, not to this one.
+    if (!finished) return false;
+    await logAudit({
+      action: "journey.completed",
+      summary: `Journey “${run.journey.name}” completed${note ? `: ${note}` : ""}`,
+      leadId: run.leadId,
+      contactId: run.contactId,
+      userName: "Journey engine",
+    });
+    return true;
+  };
+
   try {
     for (let count = 0; count < MAX_STEPS_PER_TICK; count++) {
       // Budget spent: park the run exactly where it is and RETURN.
       //
       // `break` here was wrong and actively harmful: falling out of the loop
-      // lands on the "exceeded MAX_STEPS_PER_TICK" throw below, whose catch
-      // marks the not-yet-executed step FAILED, increments attempts, and after
-      // MAX_RUN_ATTEMPTS budget stops fails the journey permanently. Running out
+      // used to land on an "exceeded MAX_STEPS_PER_TICK" throw, whose catch
+      // marked the not-yet-executed step FAILED, incremented attempts, and after
+      // MAX_RUN_ATTEMPTS budget stops failed the journey permanently. Running out
       // of time is not an error and must not consume a retry.
       //
       // The run was claimed as "running", so it has to be put back to "queued"
@@ -208,86 +306,147 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
       // recovery sweep. attempts is deliberately untouched: a budget stop is not
       // an attempt, and any genuine earlier failures keep their count.
       if (stop.shouldStop(STEP_RESERVE_MS)) {
-        await stillOurs(budgetStopUpdate(currentStepId, context as Prisma.InputJsonValue));
+        await park();
         return false;
       }
-      const step = stepById(definition, currentStepId);
-      if (!step) {
-        const finished = await stillOurs({
+
+      position = resolveCursor(definition, cursor, lookup);
+      if (!position) return finish("");
+      const { step, path, keyPath } = position;
+      const inSequence = cursor.frames.length > 0;
+      // What the step sees: the run context plus the innermost loop's variables,
+      // derived from the cursor rather than stored, because the context is
+      // reloaded from the database after every step and would wipe them.
+      const stepContext = withRepeatVars(context, cursor);
+
+      if (stepsExecuted >= MAX_STEPS_PER_RUN) {
+        throw new AbortJourney(`Journey exceeded ${MAX_STEPS_PER_RUN} steps in one run`);
+      }
+      stepsExecuted += 1;
+
+      /* ── control-flow containers: the RUNNER runs these, not the executor ── */
+      if (step.type === "choose" || step.type === "repeat") {
+        let entered = null;
+        if (step.type === "choose") {
+          const picked = chooseBranch(step, keyPath, stepContext, lookup);
+          entered = picked ? enterChoose(step, picked.option) : null;
+        } else {
+          entered = enterRepeat(step, keyPath, stepContext, lookup);
+        }
+
+        await updateStepLog({
+          runId: run.id,
+          path,
+          stepId: step.id,
+          stepType: step.type,
           status: "completed",
-          currentStepId: null,
-          completedAt: new Date(),
-          attempts: 0,
-          context: context as Prisma.InputJsonValue,
+          note: entered
+            ? entered.kind === "choose"
+              ? `Chose branch ${entered.option}`
+              : "Entered repeat"
+            : step.type === "choose"
+              ? "No branch matched"
+              : "Repeat skipped: nothing to iterate",
+          output: entered?.kind === "repeat" ? { items: entered.items?.length ?? null } : {},
         });
-        // Cancelled out from under us while the last steps ran. Say nothing and
-        // write nothing: the audit line and the "completed" status both belong
-        // to the replacement run, not to this one.
-        if (!finished) return false;
-        await logAudit({
-          action: "journey.completed",
-          summary: `Journey “${run.journey.name}” completed`,
-          leadId: run.leadId,
-          contactId: run.contactId,
-          userName: "Journey engine",
-        });
-        return true;
+
+        cursor = entered
+          ? pushFrame(cursor, entered)
+          : advanceCursor({ definition, cursor, context: stepContext, lookup });
+        await persistPosition(run.id, cursor, stepsExecuted, context);
+        continue;
       }
 
-      if (visited.has(step.id)) {
-        throw new Error(`Journey cycle detected at step ${step.id}`);
-      }
-      visited.add(step.id);
-
+      /* ── leaf actions ─────────────────────────────────────────────────── */
       // Re-check ownership BEFORE the step runs, not just before the write.
-      // Steps send email and WhatsApp, and an unsent message is recoverable
-      // where a sent one is not — so the check that matters is the one in front
-      // of the send. This narrows the window to a single step's execution; a
-      // cancellation landing inside that window still gets one more send, which
-      // would need cooperative cancellation to close and is not worth a
-      // second connection per step.
-      // Re-check ownership BEFORE the step runs, not just before the write.
-      // Steps send email and WhatsApp, and an unsent message is recoverable
-      // where a sent one is not — so the check that matters is the one in front
-      // of the send. This narrows the window to a single step's execution; a
-      // cancellation landing inside that window still gets one more send, which
-      // would need cooperative cancellation to close.
+      // Leaf steps send email, SMS and push, and an unsent message is
+      // recoverable where a sent one is not — so the check that matters is the
+      // one in front of the send. This narrows the window to a single step's
+      // execution; a cancellation landing inside that window still gets one
+      // more send, which would need cooperative cancellation to close.
       const owned = await prisma.journeyRun.count({ where: { id: run.id, status: "running" } });
       if (owned === 0) return false;
 
+      await updateStepLog({ runId: run.id, path, stepId: step.id, stepType: step.type, status: "running" });
+
+      let result;
+      try {
+        result = await executeJourneyStep({
+          step,
+          context: stepContext,
+          category: run.journey.category,
+          journeyName: run.journey.name,
+          runId: run.id,
+          inSequence,
+        });
+      } catch (error) {
+        // continueOnError, after HA's per-action flag. Control flow is NEVER
+        // swallowed: a stop, a condition gate or an abort is a decision, and
+        // treating it as a recoverable fault would run steps the author put
+        // behind it.
+        if (isControlFlow(error) || !step.continueOnError) throw error;
+        const message = error instanceof Error ? error.message : "Step failed";
+        await updateStepLog({
+          runId: run.id,
+          path,
+          stepId: step.id,
+          stepType: step.type,
+          status: "failed",
+          note: `Continued past error: ${message}`.slice(0, 1000),
+        });
+        cursor = advanceCursor({ definition, cursor, context: stepContext, lookup });
+        await persistPosition(run.id, cursor, stepsExecuted, context);
+        continue;
+      }
+
+      const nextTop = inSequence ? null : resolveTopLevelNext(step, result);
       await updateStepLog({
         runId: run.id,
+        path,
         stepId: step.id,
         stepType: step.type,
-        status: "running",
-      });
-      const result = await executeJourneyStep({
-        step,
-        context,
-        category: run.journey.category,
-        journeyName: run.journey.name,
-        runId: run.id,
-      });
-      const nextStepId = result.nextStepId === undefined
-        ? step.nextStepId ?? null
-        : result.nextStepId;
-      await updateStepLog({
-        runId: run.id,
-        stepId: step.id,
-        stepType: step.type,
-        status: result.status === "skipped" ? "skipped" : "completed",
+        // A step held for retry has not finished, so it is not "completed" —
+        // the trace would otherwise read "completed: Email held for quiet
+        // hours", which says two opposite things at once. The upsert is keyed
+        // on the path, so the eventual real attempt overwrites this row.
+        status:
+          result.status === "skipped" ? "skipped" : result.retryStep ? "running" : "completed",
         note: result.note,
         output: {
           ...result.output,
-          nextStepId,
+          nextStepId: nextTop,
           nextRunAt: result.nextRunAt?.toISOString(),
         },
       });
 
+      // A wait is a PARK, not an unwind — which is exactly why it stayed a
+      // return value while stop/condition-fail became exceptions. The cursor is
+      // advanced first, so the run resumes on the step AFTER the wait, possibly
+      // days later and in another process.
+      //
+      // UNLESS the step is asking to be retried in place. A `wait` step
+      // succeeded, so moving on is right; a step held by quiet hours or a
+      // frequency cap did NOT run, and advancing would drop the send on the
+      // floor. Note this cannot be expressed as a branch override back to the
+      // same id: advanceCursor honours `override` only at the top level, and
+      // inside a repeat or choose it steps the frame index on regardless — so a
+      // nested marketing email would be skipped entirely.
+      if (!(result.status === "waiting" && result.retryStep)) {
+        cursor = advanceCursor({
+          definition,
+          cursor,
+          context: stepContext,
+          lookup,
+          ...(result.branch ? { override: result.branch.stepId } : {}),
+        });
+      }
+
       if (result.status === "waiting") {
         await stillOurs({
           status: "waiting",
-          currentStepId: nextStepId,
+          currentStepId: cursor.stepId,
+          cursor: cursor as unknown as Prisma.InputJsonValue,
+          stepsExecuted,
           nextRunAt: result.nextRunAt ?? new Date(Date.now() + 60_000),
           attempts: 0,
           context: context as Prisma.InputJsonValue,
@@ -295,7 +454,6 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         return true;
       }
 
-      currentStepId = nextStepId;
       const refreshed = await loadJourneyContext(
         run.entityType as JourneyEntityType,
         run.entityId,
@@ -303,44 +461,94 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
       );
       if (refreshed) context = refreshed;
       // Losing the row here means it was cancelled while this step ran. Stop
-      // rather than carrying on to the next step of a run that no longer exists.
-      const kept = await stillOurs({
-        currentStepId,
-        attempts: 0,
-        context: context as Prisma.InputJsonValue,
-      });
+      // rather than stepping a run that has been replaced.
+      const kept = await persistPosition(run.id, cursor, stepsExecuted, context);
       if (!kept) return false;
     }
 
-    throw new Error(`Journey exceeded ${MAX_STEPS_PER_TICK} immediate steps without waiting`);
+    // Out of per-tick steps. This used to THROW, which was defensible when
+    // twenty immediate steps could only mean a runaway definition — it cannot
+    // mean that any more, because a `repeat` of forty passes reaches twenty
+    // legitimately. Park and pick it up next tick; MAX_STEPS_PER_RUN is what
+    // catches a run that genuinely never ends.
+    await park();
+    return false;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown journey run error";
-    if (currentStepId) {
-      const step = stepById(definition, currentStepId);
-      if (step) {
+    /* ── deliberate control flow: not faults, never retried ──────────────── */
+    if (error instanceof StopJourney || error instanceof ConditionFailed) {
+      if (position) {
         await updateStepLog({
           runId: run.id,
-          stepId: step.id,
-          stepType: step.type,
-          status: "failed",
-          note: message.slice(0, 1000),
+          path: position.path,
+          stepId: position.step.id,
+          stepType: position.step.type,
+          status: "completed",
+          note: error.message.slice(0, 1000),
+          output: { stopped: true, reason: error instanceof ConditionFailed ? "condition" : "stop" },
         });
       }
+      return finish(error.message);
     }
-    const attempts = run.attempts + 1;
-    const retry = attempts < MAX_RUN_ATTEMPTS;
-    // Conditional like every other write here: a run cancelled mid-flight must
-    // not be dragged back to "queued" by the failure of the step it was
-    // cancelled during, which would put it back in the queue beside its
-    // replacement.
+
+    const abort = error instanceof AbortJourney;
+    const message = error instanceof Error ? error.message : "Unknown journey run error";
+    if (position) {
+      await updateStepLog({
+        runId: run.id,
+        path: position.path,
+        stepId: position.step.id,
+        stepType: position.step.type,
+        status: "failed",
+        note: message.slice(0, 1000),
+      });
+    }
+    // An abort is deterministic — a loop that will not terminate, a cursor that
+    // no longer matches its definition, an author-declared error stop. Retrying
+    // it three times fails three times and burns the budget doing it.
+    const attempts = abort ? MAX_RUN_ATTEMPTS : run.attempts + 1;
+    const retry = !abort && attempts < MAX_RUN_ATTEMPTS;
+    // Conditional like every other write: a run cancelled mid-flight must not be
+    // dragged back to "queued" by the failure of the step it was cancelled
+    // during, which would return it to the queue beside its replacement.
     await stillOurs({
       status: retry ? "queued" : "failed",
       attempts,
+      stepsExecuted,
       nextRunAt: retry ? new Date(Date.now() + 5 * 60_000) : run.nextRunAt,
       lastError: message.slice(0, 1000),
     });
     return false;
   }
+}
+
+/**
+ * The run's durable position after a step.
+ *
+ * `currentStepId` keeps carrying the TOP-LEVEL step so existing screens and
+ * queries still read correctly; `cursor` carries the frames that say where
+ * inside a container the run actually is. A run parked here can be resumed by
+ * any process, from these two columns and the pinned (immutable) version alone.
+ */
+async function persistPosition(
+  runId: string,
+  cursor: JourneyCursor,
+  stepsExecuted: number,
+  context: JourneyContext,
+) {
+  // Conditional on the run still being ours — see `stillOurs` in processOneRun.
+  // Returns false when it is not, which the caller uses to stop stepping a run
+  // that has been cancelled and replaced.
+  const { count } = await prisma.journeyRun.updateMany({
+    where: { id: runId, status: "running" },
+    data: {
+      currentStepId: cursor.stepId,
+      cursor: cursor as unknown as Prisma.InputJsonValue,
+      stepsExecuted,
+      attempts: 0,
+      context: context as Prisma.InputJsonValue,
+    },
+  });
+  return count > 0;
 }
 
 export async function processJourneyRuns(limit = 40, stop: StopSignal = NEVER_STOP) {
