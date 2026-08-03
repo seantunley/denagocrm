@@ -1092,3 +1092,51 @@ test("a long straight chain is not mistaken for a cycle", () => {
   const definition = parseJourneyDefinition({ startStepId: "s0", steps });
   assert.equal(definition.steps.length, 40);
 });
+
+/* ── 13. one unreadable definition must not poison the tick ──────────────── */
+
+test("definition AND cursor preparation are inside the per-run error boundary", () => {
+  // The run is claimed as "running" before anything is parsed. A throw from
+  // preparation escaped processOneRun → processJourneyRuns → runJourneyEngine,
+  // so one bad definition stopped every other run in that tenant's tick and
+  // left itself claimed until the 15-minute stale sweep — which handed it back
+  // to do it again.
+  //
+  // Refusing top-level cycles (above) is a NEW way to throw here: every journey
+  // published while back-edges were permitted now fails this parse. And a
+  // published version is IMMUTABLE, so the definition cannot be corrected in
+  // place — the run would have poisoned the tick on every retry, forever.
+  const runs = shipped("src/lib/journeyRuns.ts");
+  // Anchor without the `export` keyword: processOneRun is exported on the
+  // run-modes branch and not on this one, and an anchor that misses returns -1,
+  // which slices to something that passes every assertion vacuously.
+  const start = runs.indexOf("function processOneRun");
+  assert.notEqual(start, -1, "processOneRun is gone — was it renamed?");
+  const end = runs.indexOf("function processJourneyRuns", start);
+  assert.notEqual(end, -1, "processJourneyRuns is gone — was it renamed?");
+  const body = runs.slice(start, end);
+  assert.ok(body.length > 0, "the slice ran backwards");
+
+  const guard = body.indexOf("try {");
+  for (const call of [
+    "parseJourneyDefinition(run.journeyVersion.definition",
+    "parseCursor(run.cursor, run.currentStepId)",
+    "journeyScriptCache()",
+  ]) {
+    const at = body.indexOf(call);
+    assert.notEqual(at, -1, `${call} is gone — was it renamed?`);
+    assert.ok(guard !== -1 && guard < at, `${call} must be inside a try, not before one`);
+  }
+
+  // Deterministically failed, not retried: the version is immutable, so a
+  // definition that will not parse now will not parse on the third attempt.
+  assert.match(
+    body.slice(guard),
+    /status: "failed",[\s\S]*?Definition could not be read/,
+    "an unreadable definition must fail its own run with a reason",
+  );
+  assert.ok(
+    !/status: retry \? "queued" : "failed"[\s\S]{0,200}Definition could not be read/.test(body),
+    "preparation failures must not go through the retrying path",
+  );
+});

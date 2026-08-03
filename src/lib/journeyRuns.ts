@@ -152,14 +152,47 @@ async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
   });
   if (claimed.count === 0) return false;
 
-  // Shallow on purpose: this parse happens on EVERY tick for EVERY run, and
-  // validating ten `choose` branches to execute one of them is work nobody asked
-  // for. The branch actually entered is prepared and validated on entry, then
-  // cached by immutable version id. See journeyScript.ts.
-  const definition = parseJourneyDefinition(run.journeyVersion.definition, { deep: false });
-  const lookup: ScriptLookup = { cache: journeyScriptCache(), versionId: run.journeyVersionId };
+  // PREPARATION SITS INSIDE ITS OWN GUARD, and the reason is blast radius.
+  //
+  // The run has just been claimed as "running". A throw from here escaped
+  // processOneRun into processJourneyRuns and out of runJourneyEngine, so ONE
+  // journey with an unreadable definition stopped every other run in that
+  // tenant's tick and left itself claimed as "running" until the 15-minute
+  // stale sweep — which then handed it back to do the same thing again.
+  //
+  // This branch made that far more likely, and it is worth being explicit about
+  // why: refusing top-level cycles is a NEW way to throw here. Every journey
+  // published while back-edges were still permitted now fails this parse, and a
+  // published version is immutable — so the definition cannot be corrected in
+  // place, and the run would have poisoned the tick on every retry forever.
+  //
+  // Failed outright rather than retried, for the same reason: the version is
+  // immutable, so a definition that will not parse now will not parse on the
+  // third attempt either. Retrying only holds the run open and burns budget.
+  let definition;
+  let lookup: ScriptLookup;
+  let cursor: JourneyCursor;
+  try {
+    // Shallow on purpose: this parse happens on EVERY tick for EVERY run, and
+    // validating ten `choose` branches to execute one of them is work nobody
+    // asked for. The branch actually entered is prepared and validated on
+    // entry, then cached by immutable version id. See journeyScript.ts.
+    definition = parseJourneyDefinition(run.journeyVersion.definition, { deep: false });
+    lookup = { cache: journeyScriptCache(), versionId: run.journeyVersionId };
+    cursor = parseCursor(run.cursor, run.currentStepId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unreadable journey definition";
+    await prisma.journeyRun.updateMany({
+      where: { id: run.id, status: "running" },
+      data: {
+        status: "failed",
+        completedAt: new Date(),
+        lastError: `Definition could not be read: ${message}`.slice(0, 1000),
+      },
+    });
+    return false;
+  }
 
-  let cursor = parseCursor(run.cursor, run.currentStepId);
   let context = run.context as unknown as JourneyContext;
   let stepsExecuted = run.stepsExecuted;
   /** The last position reached, so the catch blocks can log against it. */
