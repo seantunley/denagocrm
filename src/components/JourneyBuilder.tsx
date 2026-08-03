@@ -3,19 +3,62 @@
 import { useMemo, useRef, useState } from "react";
 import { createJourney } from "@/app/actions/journeys";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
+import { JOURNEY_RUN_MODES, RUN_MODE_LEGACY_NOTE } from "@/lib/journeyRunModes";
 
 export type JourneyOption = { id: string; name: string };
 
 type BuilderStep = {
   id: string;
   type: string;
+  /** HA's per-action `continue_on_error`, round-tripped so saving cannot drop it. */
+  continueOnError?: boolean;
   config: Record<string, unknown>;
 };
+
+/**
+ * The step types with NO visual editor here — say so rather than pretend.
+ *
+ * They are authored as JSON today. What this builder guarantees is that opening
+ * and re-saving a journey that contains one does not damage it: the step's
+ * config is carried through verbatim, its type cannot be changed by a stray
+ * click on the type dropdown, and the panel shows what is inside it. Silently
+ * dropping the branches — which is what would happen if these types were simply
+ * unknown to the builder — would destroy work with no error and no undo.
+ *
+ * `wait_for_trigger` and `variables` join the containers for exactly the same
+ * reason. A wait's `triggers` array and a variables step's `set` map are
+ * structured config this form has no widget for, and losing either on save is
+ * silent: a wait with no triggers fails validation on the next publish, and a
+ * variables step with an empty `set` would leave every later `{{var_…}}`
+ * rendering blank with nothing on screen to explain it.
+ */
+const READ_ONLY_STEP_TYPES = new Set(["choose", "repeat", "wait_for_trigger", "variables"]);
+
+/** The one-line summary shown for a step the form cannot edit. */
+function readOnlySummary(step: BuilderStep): string {
+  if (step.type === "choose") {
+    const options = Array.isArray(step.config.options) ? step.config.options.length : 0;
+    return `${options} branch${options === 1 ? "" : "es"}${step.config.default ? " + default" : ""}`;
+  }
+  if (step.type === "repeat") return `Repeat: ${String(step.config.mode ?? "?")}`;
+  if (step.type === "wait_for_trigger") {
+    const triggers = Array.isArray(step.config.triggers) ? step.config.triggers : [];
+    return `Wait for ${triggers.join(" or ") || "?"} (timeout ${String(step.config.timeoutMinutes ?? "?")} min)`;
+  }
+  const names = isRecord(step.config.set) ? Object.keys(step.config.set) : [];
+  return `Sets ${names.join(", ") || "nothing"}`;
+}
 
 export type JourneyBuilderDefaults = {
   name?: string;
   description?: string | null;
   category?: string;
+  /**
+   * The journey's CURRENT mode, straight from the row — not a suggestion.
+   * Undefined only for a journey being created; anything else and the control
+   * would show "single" over a row that says "parallel".
+   */
+  runMode?: string;
   trigger?: string;
   triggerConfig?: Record<string, unknown> | null;
   conditionSource?: string;
@@ -36,6 +79,10 @@ const stepLabels: Record<string, string> = {
   wait: "Wait",
   condition: "Condition / branch",
   stop: "Stop journey",
+  choose: "Choose (branches)",
+  repeat: "Repeat (loop)",
+  wait_for_trigger: "Wait for an event",
+  variables: "Set variables",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -51,6 +98,11 @@ function cleanSteps(defaults?: JourneyBuilderDefaults["definition"]): BuilderSte
   }
   return existing.map((step) => {
     const config = { ...step.config };
+    // A container's config holds its nested sequences. Nothing below may touch
+    // it — carry it through byte-for-byte.
+    if (READ_ONLY_STEP_TYPES.has(step.type)) {
+      return { id: step.id, type: step.type, continueOnError: step.continueOnError, config };
+    }
     if (step.type === "condition" && isRecord(config.condition)) {
       const group = config.condition;
       const first = Array.isArray(group.conditions) && isRecord(group.conditions[0])
@@ -62,7 +114,7 @@ function cleanSteps(defaults?: JourneyBuilderDefaults["definition"]): BuilderSte
         config.value = first.value;
       }
     }
-    return { id: step.id, type: step.type, config };
+    return { id: step.id, type: step.type, continueOnError: step.continueOnError, config };
   });
 }
 
@@ -88,6 +140,11 @@ export default function JourneyBuilder({
   const counter = useRef(100);
   const [trigger, setTrigger] = useState(defaults.trigger ?? "lead_created");
   const [category, setCategory] = useState(defaults.category ?? "automation");
+  // Not parseRunMode() — that lives beside basePrisma and cannot cross into the
+  // browser. An unrecognised stored value shows as "nothing selected", which is
+  // honest: the server would read it as `single`, and pretending the radio was
+  // already on `single` would hide a row that does not say that.
+  const [runMode, setRunMode] = useState(defaults.runMode ?? "single");
   const [triggerConfig, setTriggerConfig] = useState<Record<string, unknown>>(
     defaults.triggerConfig ?? {}
   );
@@ -158,6 +215,8 @@ export default function JourneyBuilder({
   const definition = useMemo(() => {
     const mapped = steps.map((step, index) => {
       const nextStepId = steps[index + 1]?.id ?? null;
+      // Spreading `step` is what preserves a container's nested sequences and
+      // every step's continueOnError. Only `condition` has its config rebuilt.
       if (step.type !== "condition") return { ...step, nextStepId };
       const stopId = `${step.id}_false_stop`;
       return {
@@ -269,8 +328,42 @@ export default function JourneyBuilder({
         )}
       </div>
 
+      {/* Re-enrolment. Sits directly under the trigger because it is the same
+          question — what the trigger firing a SECOND time means — and because
+          leaving it out of the form is what pinned every journey to whatever
+          the database happened to hold. */}
+      <fieldset className="rounded-lg border border-slate-800 p-4 space-y-3">
+        <legend className="font-semibold px-1">2. If the same person is enrolled again</legend>
+        <div className="space-y-2">
+          {JOURNEY_RUN_MODES.map((mode) => (
+            <label
+              key={mode.value}
+              className={`flex gap-3 rounded-lg border p-3 cursor-pointer ${
+                runMode === mode.value ? "border-primary bg-primary/5" : "border-slate-800"
+              }`}
+            >
+              <input
+                type="radio"
+                name="runMode"
+                value={mode.value}
+                className="mt-1"
+                checked={runMode === mode.value}
+                onChange={(e) => setRunMode(e.target.value)}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">{mode.label}</span>
+                {/* One line of plain English each. Four bare keywords are not a
+                    choice anybody can make. */}
+                <span className="block text-xs text-slate-400 mt-0.5">{mode.description}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-slate-500">{RUN_MODE_LEGACY_NOTE}</p>
+      </fieldset>
+
       <details className="rounded-lg border border-slate-800 p-4">
-        <summary className="font-semibold cursor-pointer">2. Optional entry filters</summary>
+        <summary className="font-semibold cursor-pointer">3. Optional entry filters</summary>
         <div className="grid md:grid-cols-3 gap-3 mt-3">
           <div>
             <label className="label">Lead source</label>
@@ -289,20 +382,39 @@ export default function JourneyBuilder({
 
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold">3. Journey steps</h3>
+          <h3 className="font-semibold">4. Journey steps</h3>
           <button type="button" className="btn-secondary btn-sm" onClick={addStep}>+ Add step</button>
         </div>
         {steps.map((step, index) => (
           <div key={step.id} className="rounded-lg border border-slate-800 bg-slate-900/40 p-4 space-y-3">
             <div className="flex items-center gap-2">
               <span className="badge bg-slate-800 text-slate-300">{index + 1}</span>
-              <select className="input flex-1" value={step.type} onChange={(e) => setType(index, e.target.value)}>
+              {/* Disabled for containers: changing the type resets config, and a
+                  container's config IS its nested sequences. One stray click
+                  would delete every branch with no error and no undo. */}
+              <select
+                className="input flex-1"
+                value={step.type}
+                disabled={READ_ONLY_STEP_TYPES.has(step.type)}
+                onChange={(e) => setType(index, e.target.value)}
+              >
                 {Object.entries(stepLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
               <button type="button" className="btn-secondary btn-sm" onClick={() => moveStep(index, -1)}>↑</button>
               <button type="button" className="btn-secondary btn-sm" onClick={() => moveStep(index, 1)}>↓</button>
               <button type="button" className="text-red-400 text-sm" onClick={() => setSteps((current) => current.filter((_, i) => i !== index))}>Remove</button>
             </div>
+
+            {READ_ONLY_STEP_TYPES.has(step.type) && (
+              <div className="rounded border border-amber-500/30 bg-amber-500/[0.06] p-3 text-xs text-amber-200/90">
+                <p className="font-semibold text-amber-300">{readOnlySummary(step)}</p>
+                <p className="mt-1 leading-5">
+                  There is no visual editor for this step yet — it is authored as JSON. It is
+                  carried through this form exactly as saved, so editing the rest of the journey
+                  cannot damage it.
+                </p>
+              </div>
+            )}
 
             {step.type === "send_email" && (
               <div className="space-y-2">
@@ -353,6 +465,24 @@ export default function JourneyBuilder({
               </div>
             )}
             {step.type === "stop" && <input className="input" placeholder="Reason" value={String(step.config.reason ?? "")} onChange={(e) => setConfig(index, "reason", e.target.value)} />}
+
+            {/* Per step, because only the author knows which of their steps is
+                load-bearing. One failed SMS used to fail the whole run and burn
+                one of its three attempts, so a provider outage on a courtesy
+                notification could permanently kill a journey whose remaining
+                steps were the ones that mattered. */}
+            {!READ_ONLY_STEP_TYPES.has(step.type) && step.type !== "wait" && step.type !== "stop" && (
+              <label className="flex items-center gap-2 text-xs text-slate-400">
+                <input
+                  type="checkbox"
+                  checked={step.continueOnError === true}
+                  onChange={(e) => setSteps((current) => current.map((s, i) =>
+                    i === index ? { ...s, continueOnError: e.target.checked } : s
+                  ))}
+                />
+                Keep going if this step fails
+              </label>
+            )}
           </div>
         ))}
       </div>

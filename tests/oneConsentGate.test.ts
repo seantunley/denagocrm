@@ -113,7 +113,17 @@ test("quiet hours defer the message, they do not destroy it", () => {
   assert.match(code, /kind: "defer", reason: "quiet hours", until: nextCommunicationWindow\(new Date\(\)\)/);
   assert.match(code, /status: "waiting", note: `Email held for/, "a deferred email must reschedule, not skip");
   assert.match(code, /status: "waiting", note: `SMS held for/, "…and so must an SMS");
-  assert.match(code, /nextRunAt: verdict\.until, nextStepId: step\.id/, "it must resume on the SAME step");
+  // "Resume on the SAME step" used to be spelled `nextStepId: step.id`. Once
+  // steps could nest, that became a branch override — and advanceCursor honours
+  // an override at the TOP LEVEL ONLY, stepping the frame index on regardless
+  // inside a repeat or choose. So the old spelling still deferred correctly for
+  // a flat journey while silently skipping the send in a nested one: the exact
+  // suppression this test exists to prevent, reintroduced by the encoding.
+  assert.match(code, /nextRunAt: verdict\.until, retryStep: true/, "it must resume on the SAME step");
+  assert.ok(
+    !/nextStepId: step\.id/.test(code),
+    "the branch-override spelling fails silently inside a container step",
+  );
 });
 
 test("the tenant comes from the contact ROW, not the journey snapshot", () => {

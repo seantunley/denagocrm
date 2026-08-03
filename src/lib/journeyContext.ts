@@ -1,5 +1,6 @@
 import { prisma } from "./db";
 import { contactName } from "./format";
+import { journeyVars, variableTemplateVars } from "./journeyVariables";
 
 export type JourneyEntityType = "lead" | "contact";
 
@@ -7,6 +8,12 @@ export type JourneyContext = Record<string, unknown> & {
   event: Record<string, unknown>;
   lead: Record<string, unknown> | null;
   contact: Record<string, unknown> | null;
+  /**
+   * The `variables` step's bag. Absent until a journey sets one, and carried
+   * across the runner's per-step context refresh by `withJourneyVars` — see
+   * journeyVariables.ts for why it is namespaced rather than spread flat.
+   */
+  vars?: Record<string, string>;
 };
 
 function compactContact(contact: {
@@ -147,8 +154,27 @@ export function journeyTemplateVars(context: JourneyContext): Record<string, str
   const lead = (context.lead ?? {}) as Record<string, unknown>;
   const contact = (context.contact ?? {}) as Record<string, unknown>;
   const event = (context.event ?? {}) as Record<string, unknown>;
+  // Injected by the runner from the innermost `repeat` frame — see
+  // journeyCursor.repeatVars. Absent (and so empty) outside a loop.
+  const repeat = (context.repeat ?? {}) as Record<string, unknown>;
   const firstName = String(contact.firstName ?? String(lead.name ?? "").split(/\s+/)[0] ?? "there");
   return {
+    // Journey variables, as `{{var_<name>}}`. Spread FIRST so that even if the
+    // prefix were ever to collide with a built-in below, the built-in wins —
+    // a `variables` step must not be able to redefine `{{first_name}}`. The
+    // prefix already makes a collision impossible (VARIABLE_NAME requires a
+    // leading letter, and no built-in key starts with "var_"); this is belt and
+    // braces on the ordering, so adding a key below can never open the hole.
+    ...variableTemplateVars(journeyVars(context)),
+    // 1-based, matching HA's repeat.index. An object item renders as JSON rather
+    // than "[object Object]", which is worse than useless in a message body.
+    repeat_index: repeat.index == null ? "" : String(repeat.index),
+    repeat_item:
+      repeat.item == null
+        ? ""
+        : typeof repeat.item === "object"
+          ? JSON.stringify(repeat.item)
+          : String(repeat.item),
     first_name: firstName || "there",
     name: String(contact.name ?? lead.name ?? "Customer"),
     email: String(contact.email ?? lead.email ?? ""),

@@ -77,10 +77,16 @@ export async function sendEmail(input: {
   }
 }
 
-/** Replaces {{placeholder}} tokens; unknown tokens are left blank. */
-export function renderTemplate(template: string, vars: Record<string, string>): string {
-  return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key: string) => vars[key] ?? "");
-}
+/**
+ * Replaces {{placeholder}} tokens; unknown tokens are left blank.
+ *
+ * The implementation moved to `./template` so it can be imported without this
+ * module's nodemailer / settings / tenant-scope dependencies — the journey
+ * `variables` step needs it and must stay pure. Re-exported here so that every
+ * existing `from "@/lib/email"` import keeps working; there is still exactly
+ * one copy of the substitution rule.
+ */
+export { renderTemplate } from "./template";
 
 export function leadVars(lead: {
   name: string;

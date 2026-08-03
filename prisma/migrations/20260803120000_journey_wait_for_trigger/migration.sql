@@ -1,0 +1,30 @@
+-- wait_for_trigger: the index a parked run polls on.
+--
+-- Sorts after 20260803090000_journey_nested_flow, which is the migration that
+-- added the cursor this feature stores its wait state inside.
+--
+-- No new columns. That is the point of the design: the wait lives in the
+-- JourneyRun.cursor JSON that nested flow already added, and the events it
+-- watches are the JourneyEvent rows the engine already writes. The only thing
+-- missing was a way to ask the question cheaply.
+--
+-- The question, once per waiting run per engine tick:
+--
+--   SELECT ... FROM "JourneyEvent"
+--    WHERE "entityType" = $1 AND "entityId" = $2
+--      AND "type" = ANY($3) AND "createdAt" >= $4
+--    ORDER BY "createdAt" ASC, "id" ASC LIMIT 1
+--
+-- Column order is entity → type → createdAt: the equalities first (entity cuts
+-- the table to one person's rows), the IN list next, and the range LAST, since a
+-- range predicate stops any column after it in the index from being used. None
+-- of the existing indexes — (status, availableAt), (type, status),
+-- (journeyId, status), (tenantId) — lead with the entity, so without this the
+-- poll is a sequential scan of every event ever recorded.
+--
+-- NOT created CONCURRENTLY: Prisma wraps a migration in a transaction and
+-- CREATE INDEX CONCURRENTLY cannot run inside one — it fails outright rather
+-- than degrading. JourneyEvent is a small, append-only queue table, so the brief
+-- lock this takes is not the problem it would be on a wide table.
+CREATE INDEX IF NOT EXISTS "JourneyEvent_entityType_entityId_type_createdAt_idx"
+  ON "JourneyEvent" ("entityType", "entityId", "type", "createdAt");

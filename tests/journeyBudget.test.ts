@@ -112,23 +112,64 @@ test("a budget stop parks the run — it does not fail it", () => {
   assert.notEqual(update.status, "failed");
 });
 
-test("the stop branch returns instead of falling through to the failure path", () => {
+test("the stop branch parks and returns instead of falling through", () => {
   const runs = src("src/lib/journeyRuns.ts");
   const loopAt = runs.indexOf("for (let count = 0; count < MAX_STEPS_PER_TICK");
-  const throwAt = runs.indexOf("Journey exceeded", loopAt);
-  assert.ok(loopAt > 0 && throwAt > loopAt, "the step loop and its overflow throw must both exist");
-  const loopBody = runs.slice(loopAt, throwAt);
+  assert.ok(loopAt > 0, "the step loop must exist");
 
-  const stopAt = loopBody.indexOf("stop.shouldStop(");
-  assert.ok(stopAt > 0, "the step loop must check the budget");
-  const stopBranch = loopBody.slice(stopAt, stopAt + 400);
-  assert.match(stopBranch, /budgetStopUpdate\(/, "the stop branch must persist the parked state");
-  assert.match(stopBranch, /return false;/, "the stop branch must RETURN, not break into the throw");
-  assert.doesNotMatch(
-    loopBody.slice(stopAt, stopAt + 120),
-    /\bbreak;/,
-    "breaking here reaches the overflow throw and fails the run",
+  const stopAt = runs.indexOf("stop.shouldStop(", loopAt);
+  assert.ok(stopAt > loopAt, "the step loop must check the budget");
+  const stopBranch = runs.slice(stopAt, stopAt + 200);
+  // `park()` is the helper; it must be the thing that calls budgetStopUpdate.
+  assert.match(stopBranch, /await park\(\);/, "the stop branch must persist the parked state");
+  assert.match(stopBranch, /return false;/, "the stop branch must RETURN, not break");
+  assert.doesNotMatch(stopBranch.slice(0, 120), /\bbreak;/, "breaking here would fall past the park");
+  assert.match(
+    runs.slice(0, loopAt),
+    /const park = async \(\) =>[\s\S]{0,400}budgetStopUpdate\(/,
+    "park() must persist exactly the budget-stop shape",
   );
+});
+
+test("running out of PER-TICK steps parks the run — nesting made 20 steps normal", () => {
+  // This used to `throw new Error("Journey exceeded 20 immediate steps…")`,
+  // which was defensible when twenty immediate steps could only mean a runaway
+  // definition. A `repeat` of forty passes reaches twenty legitimately, so the
+  // throw would have failed every real loop after three ticks. What catches a
+  // run that genuinely never ends is now the LIFETIME budget, which is durable.
+  const runs = src("src/lib/journeyRuns.ts");
+  assert.doesNotMatch(
+    runs,
+    /throw new Error\(`Journey exceeded \$\{MAX_STEPS_PER_TICK\}/,
+    "exhausting the per-tick budget must not fail the run",
+  );
+  assert.match(runs, /MAX_STEPS_PER_RUN = \d+/, "a lifetime step budget must exist");
+  assert.match(
+    runs,
+    /throw new AbortJourney\(`Journey exceeded \$\{MAX_STEPS_PER_RUN\}/,
+    "the lifetime budget must abort — an unbounded loop is not worth retrying",
+  );
+  assert.match(
+    runs,
+    /stepsExecuted: run\.stepsExecuted|let stepsExecuted = run\.stepsExecuted/,
+    "the lifetime count must be READ from the row, or it resets every tick",
+  );
+});
+
+test("a budget stop preserves the frame stack and the lifetime count", () => {
+  // Parking mid-repeat and resuming with an empty cursor would silently restart
+  // the loop; resuming with stepsExecuted back at 0 would remove the only bound
+  // on a run that never ends.
+  const update = budgetStopUpdate("loop", { some: "context" }, {
+    cursor: { stepId: "loop", frames: [{ kind: "repeat", step: "loop", iteration: 2, index: 1 }] },
+    stepsExecuted: 37,
+  });
+  assert.deepEqual(update.cursor, {
+    stepId: "loop",
+    frames: [{ kind: "repeat", step: "loop", iteration: 2, index: 1 }],
+  });
+  assert.equal(update.stepsExecuted, 37);
+  assert.ok(!("attempts" in update), "still not an attempt");
 });
 
 test("the outer loops break only where nothing has been claimed", () => {

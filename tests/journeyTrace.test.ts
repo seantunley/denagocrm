@@ -4,6 +4,13 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+import {
+  MAX_OPEN_RUNS_PER_ENTITY,
+  REFUSAL_REASONS,
+  enrolmentLockKey,
+  parseRunMode,
+} from "../src/lib/journeyArbitration";
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 const shipped = (rel: string) =>
@@ -45,7 +52,10 @@ test("every enrolment outcome is recorded, including the passed-over ones", () =
     /no published version/,
     /listens for/,
     /trigger filters did not match/,
-    /already enrolled for this event/,
+    // The enrolment refusals moved into REFUSAL_REASONS, where they are one
+    // string per cause rather than one string for all of them. The loop looks
+    // them up instead of spelling any single one out.
+    /REFUSAL_REASONS\[outcome\.refusal\]/,
   ]) {
     assert.match(loop, reason, `each distinct cause needs its own reason: ${reason}`);
   }
@@ -74,11 +84,33 @@ test("the merged loop keeps BOTH the decision record and payload-aware matching"
   );
 });
 
-test("a skipped duplicate is not reported as a mismatch", () => {
-  // enqueueJourneyRun returning false is the idempotency key doing its job.
-  // Rendering that as "did not match" sends someone hunting a filter bug.
-  const code = shipped("src/lib/journeyEvents.ts");
-  assert.match(code, /reason: queued \? "enrolled" : "already enrolled for this event"/);
+test("every refusal keeps its own words — they are not all 'already enrolled'", () => {
+  // THIS TEST USED TO ENFORCE THE BUG. It pinned
+  //   reason: queued ? "enrolled" : "already enrolled for this event"
+  // which is exactly the collapse that made the trace useless: enqueueJourneyRun
+  // returned a bare boolean, so a missing entity, an entry-condition mismatch, a
+  // definition with no steps, a per-person cap refusal, a single-mode drop and a
+  // real duplicate ALL rendered as the idempotency key doing its job — that is,
+  // as nothing being wrong. Someone reading the trace to find out why a customer
+  // was not enrolled was told the one thing that was not true.
+  const reasons = Object.values(REFUSAL_REASONS);
+  assert.equal(
+    new Set(reasons).size,
+    reasons.length,
+    "two refusals share a string — the trace cannot tell those two causes apart",
+  );
+  // Only the genuine duplicate may say "already enrolled".
+  assert.equal(REFUSAL_REASONS.duplicate_event, "already enrolled for this event");
+  for (const [refusal, text] of Object.entries(REFUSAL_REASONS)) {
+    if (refusal === "duplicate_event") continue;
+    assert.ok(
+      !/already enrolled/.test(text),
+      `"${refusal}" reads as a duplicate ("${text}") — that is the collapse this test exists to prevent`,
+    );
+  }
+  // …and a cap refusal must name the cap, or "the trace shows when the cap
+  // bites" is a claim the trace cannot support.
+  assert.match(REFUSAL_REASONS.cap_reached, new RegExp(String(MAX_OPEN_RUNS_PER_ENTITY)));
 });
 
 test("the trace answers 'has this trigger EVER fired'", () => {

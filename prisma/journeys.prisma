@@ -7,6 +7,20 @@ model Journey {
   description   String?
   category      String   @default("automation") // automation | marketing
   status        String   @default("draft") // draft | active | paused | archived
+  /// What happens when someone is enrolled again while a run is still open.
+  ///
+  /// After Home Assistant's automation `mode`, and for the same reason: there
+  /// was exactly one implicit answer here — the idempotency key made a repeat
+  /// enrolment on the SAME event a no-op, but a *different* event on the same
+  /// person started a second run, silently, and both then sent.
+  ///
+  ///   single   the open run wins; a new enrolment is dropped (the default,
+  ///            because it is what a drip sequence almost always wants)
+  ///   restart  the open run is cancelled and the new one replaces it
+  ///   queued   the new run waits and starts when the open one finishes
+  ///   parallel both run — the pre-existing behaviour, kept for the cases that
+  ///            genuinely want it
+  runMode       String   @default("single") // single | restart | queued | parallel
   activeVersion Int?
   createdById   String?
   createdAt     DateTime @default(now())
@@ -88,6 +102,19 @@ model JourneyEvent {
   /// entries of every OTHER tenant before returning empty — so the busiest
   /// workspace sets the cost of the quietest one's early-out, on every tick.
   @@index([tenantId, status, createdAt])
+  /// What a parked `wait_for_trigger` asks on every poll: "has an event of one
+  /// of these types been recorded for this entity since I started listening".
+  ///
+  /// Column order matters — entity first, because it is the equality that cuts
+  /// the table down to one person's handful of rows; then type (an IN list);
+  /// then createdAt, which is the range and so has to come last to be usable.
+  /// Without this the waiter is a sequential scan of every event ever recorded,
+  /// once per waiting run, per engine tick.
+  ///
+  /// Distinct from the retention index above and both are needed: that one
+  /// answers "anything old, anywhere in this tenant", this one answers "anything
+  /// new, for this one person". Neither serves the other's leading column.
+  @@index([entityType, entityId, type, createdAt])
 }
 
 /// A run is pinned to an immutable published version.
@@ -98,14 +125,42 @@ model JourneyRun {
   journey          Journey        @relation(fields: [journeyId], references: [id], onDelete: Cascade)
   journeyVersionId String
   journeyVersion   JourneyVersion @relation(fields: [journeyVersionId], references: [id], onDelete: Restrict)
-  status           String         @default("queued") // queued | running | waiting | completed | failed | cancelled
+  status           String         @default("queued") // queued | running | waiting | blocked | completed | failed | cancelled
+  /// Set on a run parked by run mode "queued": it starts when this predecessor
+  /// closes. Not a foreign key — the predecessor can be purged while this row
+  /// still names it, and a dangling id must not block the sweep from releasing.
+  blockedByRunId   String?
   entityType       String
   entityId         String
   leadId           String?
   contactId        String?
+  /// The TOP-LEVEL step. Still the whole position for a flat journey, which is
+  /// every journey written before nesting existed.
   currentStepId    String?
+  /// WHERE INSIDE a choose/repeat the run is: `{ stepId, frames[] }`.
+  ///
+  /// A journey step list is flat at the top level and nests only inside the two
+  /// container steps, so one step id stopped being enough to say where a run is
+  /// — a run parked on the second step of the third iteration of a repeat needs
+  /// the iteration and the index too. There is no call stack to resume from:
+  /// `processOneRun` executes at most twenty steps and parks, and a `wait` can
+  /// hold a run for days before a DIFFERENT process picks it up. So the frame
+  /// stack is a value here, and the run is rebuilt from it plus the pinned
+  /// (immutable) version definition.
+  ///
+  /// NULL means flat — read as `{ stepId: currentStepId, frames: [] }`, which is
+  /// exactly how every pre-existing run resumes across the deploy.
+  cursor           Json?
   context          Json
   nextRunAt        DateTime       @default(now())
+  /// Lifetime steps executed, across every tick and every wait.
+  ///
+  /// This is what bounds a run. The old cycle detector was a `visited` Set of
+  /// step ids rebuilt per tick: too strict for `repeat`, which re-executes the
+  /// same ids by design, and too weak for the real infinite automation — a
+  /// back-edge with a wait in it went round forever, one step per tick, and the
+  /// per-tick Set never saw it twice.
+  stepsExecuted    Int            @default(0)
   attempts         Int            @default(0)
   lastError        String?
   idempotencyKey   String         @unique
@@ -138,6 +193,22 @@ model JourneyStepLog {
   tenantId    String?
   runId       String
   run         JourneyRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  /// The hierarchical trace path, after Home Assistant's `"0/sequence/1"`.
+  ///
+  ///   welcome                     a top-level step — identical to its id, which
+  ///                               is why every pre-existing row backfills
+  ///                               cleanly and the activity trace is unchanged
+  ///   triage/choose/1/sequence/0  first step of the second branch
+  ///   blast/repeat/2/sequence/1   second step of the THIRD iteration
+  ///
+  /// The iteration number is in here on purpose: `@@unique([runId, stepId])`
+  /// could not survive `repeat`, because the same step id executes once per
+  /// pass and the second write would have collided with — or silently
+  /// overwritten — the first. Uniqueness moves to the path, which differs per
+  /// execution, so every iteration keeps its own record.
+  path        String
+  /// The node's own id. Kept alongside `path` because it is what a person
+  /// recognises, and what the existing trace UI reads.
   stepId      String
   stepType    String
   status      String // running | completed | skipped | failed
@@ -146,7 +217,8 @@ model JourneyStepLog {
   startedAt   DateTime   @default(now())
   completedAt DateTime?
 
-  @@unique([runId, stepId])
+  @@unique([runId, path])
+  @@index([runId, stepId])
   @@index([runId, startedAt])
   @@index([status, startedAt])
   @@index([tenantId])

@@ -6,14 +6,15 @@ import {
 import {
   processJourneyRuns,
   recoverStaleJourneyRuns,
+  releaseBlockedJourneyRuns,
 } from "./journeyRuns";
 // enrollJourneyNow was imported here and never called — line 17 re-exports it
 // from the same module, which is what callers actually use.
 import { runScheduledJourneyEnrollments } from "./journeyScheduling";
 import { pruneJourneyTraces } from "./journeyRetention";
 
-export { emitJourneyEvent, processJourneyEvents } from "./journeyEvents";
-export { processJourneyRuns } from "./journeyRuns";
+export { emitJourneyEvent, processJourneyEventById, processJourneyEvents } from "./journeyEvents";
+export { processJourneyRuns, processOneRun } from "./journeyRuns";
 export { enrollJourneyNow, runScheduledJourneyEnrollments } from "./journeyScheduling";
 
 /**
@@ -31,6 +32,9 @@ export async function runJourneyEngine(stop: StopSignal = NEVER_STOP) {
     recoverStaleJourneyEvents(),
     recoverStaleJourneyRuns(),
   ]);
+  // Before processing: a run parked behind a predecessor that has since closed
+  // must be handed back to the queue, or run mode "queued" is a one-way trip.
+  const released = await releaseBlockedJourneyRuns();
   const scheduled = await runScheduledJourneyEnrollments(stop);
   const events = await processJourneyEvents(50, stop);
   const runs = await processJourneyRuns(40, stop);
@@ -41,6 +45,7 @@ export async function runJourneyEngine(stop: StopSignal = NEVER_STOP) {
   return {
     recoveredEvents: recoveredEvents.count,
     recoveredRuns: recoveredRuns.count,
+    releasedBlocked: released,
     scheduled,
     eventsProcessed: events.processed,
     enrolled: events.enrolled,

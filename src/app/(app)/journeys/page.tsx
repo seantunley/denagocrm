@@ -5,6 +5,9 @@ import { prisma } from "@/lib/db";
 import { requireOwner } from "@/lib/auth";
 import { formatDateTime } from "@/lib/format";
 import JourneyBuilder, { type JourneyBuilderDefaults } from "@/components/JourneyBuilder";
+import JourneyTestRun from "@/components/JourneyTestRun";
+import { parseRunMode } from "@/lib/journeyArbitration";
+import { JOURNEY_RUN_MODE_COPY } from "@/lib/journeyRunModes";
 import {
   installJourneyTemplates,
   publishJourney,
@@ -28,7 +31,7 @@ function record(value: Prisma.JsonValue | null): Record<string, unknown> {
 }
 
 function defaultsFor(
-  journey: { name: string; description: string | null; category: string },
+  journey: { name: string; description: string | null; category: string; runMode: string },
   version: {
     trigger: string;
     triggerConfig: Prisma.JsonValue | null;
@@ -47,6 +50,9 @@ function defaultsFor(
     name: journey.name,
     description: journey.description,
     category: journey.category,
+    // Through parseRunMode, not raw: the editor must show what the ENGINE will
+    // do with the stored string, and an unrecognised value runs as "single".
+    runMode: parseRunMode(journey.runMode),
     trigger: version.trigger,
     triggerConfig: record(version.triggerConfig),
     conditionSource: String(find("lead.source") ?? ""),
@@ -70,7 +76,7 @@ function statusTone(status: string) {
 
 export default async function JourneysPage() {
   await requireOwner();
-  const [journeys, stages, users, templates, tags, segments, recentRuns] = await Promise.all([
+  const [journeys, stages, users, templates, tags, segments, recentRuns, testLeads] = await Promise.all([
     prisma.journey.findMany({
       where: { status: { not: "archived" } },
       orderBy: { updatedAt: "desc" },
@@ -89,8 +95,22 @@ export default async function JourneysPage() {
       take: 30,
       include: { journey: true, journeyVersion: true },
     }),
+    // Candidates for a manual test run. The extension-wrapped client scopes this
+    // to the tenant and drops soft-deleted rows; open leads only, and capped,
+    // because this feeds a <select> and the operator is looking for one they
+    // recognise, not browsing the pipeline.
+    prisma.lead.findMany({
+      where: { status: "open" },
+      orderBy: { updatedAt: "desc" },
+      take: 100,
+      select: { id: true, title: true, name: true },
+    }),
   ]);
   const options = { stages, users, templates, tags, segments };
+  const leadOptions = testLeads.map((lead) => ({
+    id: lead.id,
+    label: lead.title || lead.name,
+  }));
 
   return (
     <div className="space-y-6">
@@ -122,6 +142,11 @@ export default async function JourneysPage() {
           const draft = journey.versions.find((version) => version.state === "draft");
           const published = journey.versions.find((version) => version.version === journey.activeVersion);
           const editable = draft ?? published ?? journey.versions[0];
+          // Visible without opening the editor, deliberately. Journeys created
+          // before run modes existed were backfilled to `parallel` while new
+          // ones default to `single`, so two journeys on this list can do
+          // opposite things on a second enrolment and nothing else says which.
+          const runMode = JOURNEY_RUN_MODE_COPY[parseRunMode(journey.runMode)];
           return (
             <article key={journey.id} className="card space-y-4">
               <div className="flex items-start gap-3 flex-wrap">
@@ -130,11 +155,20 @@ export default async function JourneysPage() {
                     <h3 className="font-semibold">{journey.name}</h3>
                     <StatusPill tone={statusTone(journey.status)}>{journey.status}</StatusPill>
                     <StatusPill>{journey.category}</StatusPill>
+                    {/* Parallel is the only mode that lets one person receive
+                        two live sequences, so it is the only one badged as a
+                        thing to notice rather than a neutral fact. */}
+                    <StatusPill tone={runMode.value === "parallel" ? "warning" : "neutral"}>
+                      re-enrol: {runMode.value}
+                    </StatusPill>
                     {draft && <StatusPill tone="info">draft v{draft.version}</StatusPill>}
                   </div>
                   <p className="text-sm text-muted-foreground mt-1">{journey.description || "No description"}</p>
                   <p className="text-xs text-muted-foreground mt-2">
                     Trigger: {triggerLabel((published ?? editable)?.trigger ?? "unknown")} · Active version: {journey.activeVersion ?? "none"} · Runs: {journey._count.runs}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Re-enrolled while a run is open? {runMode.description}
                   </p>
                 </div>
                 <div className="flex gap-2 flex-wrap">
@@ -146,6 +180,13 @@ export default async function JourneysPage() {
                   ) : null}
                   {journey.status === "active" && ["lead_idle", "contact_segment", "purchase_anniversary", "win_back"].includes(published?.trigger ?? "") && (
                     <form action={runJourneyNowAction.bind(null, journey.id)}><button className="btn-secondary btn-sm">Enroll now</button></form>
+                  )}
+                  {/* Offered as soon as there is something published to run.
+                      Not gated on `active`: the action refuses a paused journey
+                      in words, and reading that refusal is more useful than
+                      wondering where the button went. */}
+                  {journey.activeVersion && (
+                    <JourneyTestRun journeyId={journey.id} journeyName={journey.name} leads={leadOptions} />
                   )}
                   <form action={setJourneyStatus.bind(null, journey.id, "archived")}><button className="text-xs text-red-400 px-2 py-1">Archive</button></form>
                 </div>

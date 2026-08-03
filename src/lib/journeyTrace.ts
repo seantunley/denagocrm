@@ -49,6 +49,15 @@ export type TraceRun = {
   completedAt: Date | null;
   lastError: string | null;
   steps: {
+    /**
+     * The hierarchical path, after HA's `"0/sequence/1"`. For a flat journey it
+     * is identical to stepId — which is why every trace written before nesting
+     * existed still reads correctly. Inside a container it names the branch and
+     * the ITERATION, so `blast/repeat/2/sequence/1` and
+     * `blast/repeat/0/sequence/1` are distinguishable, which flat step ids never
+     * were.
+     */
+    path: string;
     stepId: string;
     stepType: string;
     status: string;
@@ -145,6 +154,7 @@ export async function recentTraceRuns(journeyId: string, limit = 25): Promise<Tr
     completedAt: run.completedAt,
     lastError: run.lastError,
     steps: run.stepLogs.map((log) => ({
+      path: log.path,
       stepId: log.stepId,
       stepType: log.stepType,
       status: log.status,
