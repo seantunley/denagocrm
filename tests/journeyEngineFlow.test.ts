@@ -927,3 +927,168 @@ test("the runner does not advance the cursor when a step asks to be retried", ()
     "the old branch-override spelling silently fails inside a container",
   );
 });
+
+/* ── 11. the ceiling must not reject the documented maximum ──────────────── */
+
+test("a repeat of exactly the maximum count completes instead of failing", () => {
+  // The ceiling was checked BEFORE asking whether the loop had finished. With
+  // `count: 100` the passes are iterations 0…99, so after the last one `next`
+  // is 100 — and a loop that had just done exactly what the author asked was
+  // aborted as a runaway and its run marked failed. JOURNEY_LIMITS caps
+  // repeatIterations at 100 and the parser accepts count: 100, so the limit and
+  // the validator disagreed about what "100 iterations" means.
+  const max = JOURNEY_LIMITS.repeatIterations;
+  const run = drive({
+    startStepId: "loop",
+    steps: [
+      {
+        id: "loop",
+        type: "repeat",
+        nextStepId: "after",
+        config: { mode: "count", count: max, sequence: [step("tick")] },
+      },
+      step("after", { nextStepId: null }),
+    ],
+  }, {}, { maxSteps: max * 4 });
+
+  assert.equal(run.ended, "end", `a full-length repeat must finish, not ${run.ended}`);
+  assert.equal(
+    run.executed.filter((id) => id === "tick").length,
+    max,
+    "every requested pass must run",
+  );
+  // …and the step AFTER the loop must be reached, which is what "completes"
+  // actually means to the person who wrote the journey.
+  assert.equal(run.executed[run.executed.length - 1], "after");
+});
+
+test("a for_each over the maximum item count completes too", () => {
+  // Same defect, reached through the other bounded mode: forEachItems is capped
+  // at 100 as well, so the largest legal list was also the one that failed.
+  const max = JOURNEY_LIMITS.forEachItems;
+  const items = Array.from({ length: max }, (_, i) => `item-${i}`);
+  const run = drive({
+    startStepId: "loop",
+    steps: [
+      {
+        id: "loop",
+        type: "repeat",
+        nextStepId: null,
+        config: { mode: "for_each", itemsPath: "list", sequence: [step("tick")] },
+      },
+    ],
+  }, { list: items }, { maxSteps: max * 4 });
+
+  assert.equal(run.ended, "end");
+  assert.equal(run.executed.filter((id) => id === "tick").length, max);
+});
+
+test("a runaway while still hits the ceiling", () => {
+  // The ceiling moved, it did not go away. A condition that never goes false is
+  // the case it exists for, and it must still abort rather than spin.
+  assert.throws(
+    () =>
+      drive({
+        startStepId: "loop",
+        steps: [
+          {
+            id: "loop",
+            type: "repeat",
+            nextStepId: null,
+            config: {
+              mode: "while",
+              conditions: { all: [{ field: "lead.id", operator: "is_not_empty" }] },
+              sequence: [step("tick")],
+            },
+          },
+        ],
+      }, { lead: { id: "lead-1" } }, { maxSteps: 5000 }),
+    /exceeded 100 iterations/,
+    "an endless while must abort at the ceiling",
+  );
+});
+
+/* ── 12. a top-level back-edge cannot be traced, so it is refused ────────── */
+
+test("a top-level back-edge is refused, and says to use repeat", () => {
+  // A top-level step's trace path is exactly its id, and JourneyStepLog is
+  // upserted on (runId, path) — so a second visit silently OVERWRITES the
+  // first. The activity trace, whose whole job is showing what happened, would
+  // show only the latest pass with no sign the earlier ones existed.
+  //
+  // Nothing bounded it either: the per-tick `visited` Set that used to catch
+  // this was removed (a repeat revisits ids by design, so it called every
+  // legitimate loop a cycle) and it never caught the real case anyway, because
+  // rebuilding it per tick meant a back-edge with a `wait` in it went round
+  // forever and was never seen twice. A static check catches exactly that.
+  assert.throws(
+    () =>
+      parseJourneyDefinition({
+        startStepId: "a",
+        steps: [step("a", { nextStepId: "b" }), step("b", { nextStepId: "a" })],
+      }),
+    /loops back to a[\s\S]*repeat step/,
+    "a two-step loop must be refused with advice, not accepted",
+  );
+});
+
+test("a condition branching backwards is a back-edge too", () => {
+  // The obvious way to write "keep checking until it's true" by hand, and the
+  // one most likely to be reached — trueStepId/falseStepId are jump targets
+  // exactly like nextStepId.
+  assert.throws(
+    () =>
+      parseJourneyDefinition({
+        startStepId: "gate",
+        steps: [
+          { id: "gate", type: "condition", nextStepId: null, config: { conditions: { all: [] }, falseStepId: "work" } },
+          step("work", { nextStepId: "gate" }),
+        ],
+      }),
+    /loops back to/,
+  );
+});
+
+test("a step pointing at ITSELF is refused", () => {
+  // The degenerate case, and the cheapest one to get wrong in a builder.
+  assert.throws(
+    () => parseJourneyDefinition({ startStepId: "a", steps: [step("a", { nextStepId: "a" })] }),
+    /loops back to a/,
+  );
+});
+
+test("convergence is NOT a cycle — two branches may meet", () => {
+  // The check must refuse back-edges, not any repeated target. Both arms of a
+  // condition landing on one follow-up step is ordinary, executes it once, and
+  // traces cleanly.
+  const definition = parseJourneyDefinition({
+    startStepId: "gate",
+    steps: [
+      {
+        id: "gate",
+        type: "condition",
+        nextStepId: null,
+        config: { conditions: { all: [] }, trueStepId: "yes", falseStepId: "no" },
+      },
+      step("yes", { nextStepId: "done" }),
+      step("no", { nextStepId: "done" }),
+      step("done", { nextStepId: null }),
+    ],
+  });
+  assert.equal(definition.steps.length, 4);
+
+  // …and it really does execute `done` exactly once, with one trace identity.
+  const run = drive(definition as unknown, {});
+  assert.equal(run.executed.filter((id) => id === "done").length, 1);
+  assert.equal(new Set(run.paths).size, run.paths.length, "every execution keeps its own path");
+});
+
+test("a long straight chain is not mistaken for a cycle", () => {
+  // Guards the traversal itself: a colour map that never marks nodes done would
+  // reject deep-but-acyclic graphs, and this is the shape that catches it.
+  const steps = Array.from({ length: 40 }, (_, i) =>
+    step(`s${i}`, { nextStepId: i === 39 ? null : `s${i + 1}` }),
+  );
+  const definition = parseJourneyDefinition({ startStepId: "s0", steps });
+  assert.equal(definition.steps.length, 40);
+});

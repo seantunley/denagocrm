@@ -456,7 +456,82 @@ export function parseJourneyDefinition(
     }
   }
 
+  assertNoTopLevelCycle(steps);
   return { startStepId, steps };
+}
+
+/**
+ * Refuse a cycle in the TOP-LEVEL jump graph.
+ *
+ * A back-edge — `a → b → a` through nextStepId, or through a condition's
+ * trueStepId/falseStepId — is a loop written as GOTO, and it breaks two things
+ * at once now that steps can nest:
+ *
+ *  - THE TRACE CANNOT REPRESENT IT. A top-level step's trace path is exactly
+ *    its id, and JourneyStepLog is upserted on (runId, path). So the second
+ *    visit silently overwrites the first, and the activity trace — whose entire
+ *    job is showing what actually happened — shows only the latest pass, with
+ *    no sign the earlier ones existed.
+ *  - NOTHING BOUNDS IT. The per-tick `visited` Set that used to catch this was
+ *    removed, correctly: a `repeat` revisits step ids by design, so the Set
+ *    called every legitimate loop a cycle. But it was also too weak for the
+ *    real case, because it was rebuilt empty on each tick — a back-edge with a
+ *    `wait` in it went round forever, one step per tick, and was never seen
+ *    twice.
+ *
+ * A static check is the right replacement for exactly that reason: it catches
+ * the wait-in-the-loop case the runtime Set could not, and it costs one pass
+ * over at most `JOURNEY_LIMITS.steps` nodes.
+ *
+ * CONVERGENCE STAYS LEGAL. Two branches meeting at one step (`a → c`, `b → c`)
+ * is not a cycle and executes `c` once; only a genuine back-edge is refused.
+ *
+ * Looping is not being taken away — `repeat` is the construct for it, and it is
+ * the one the cursor, the iteration ceiling and the trace path can all model.
+ */
+function assertNoTopLevelCycle(steps: JourneyStep[]): void {
+  const byId = new Map(steps.map((step) => [step.id, step]));
+  const targets = (step: JourneyStep): string[] => {
+    const out: string[] = [];
+    if (step.nextStepId) out.push(step.nextStepId);
+    if (step.type === "condition") {
+      for (const key of ["trueStepId", "falseStepId"] as const) {
+        const target = step.config[key];
+        if (typeof target === "string" && target) out.push(target);
+      }
+    }
+    return out;
+  };
+
+  // Iterative DFS with an explicit colour map: recursion here would be bounded
+  // by JOURNEY_LIMITS.steps, but the stack depth is the author's to choose and
+  // a definition is not trusted input.
+  const state = new Map<string, "open" | "done">();
+  for (const root of steps) {
+    if (state.get(root.id) === "done") continue;
+    const stack: { id: string; next: number }[] = [{ id: root.id, next: 0 }];
+    state.set(root.id, "open");
+    while (stack.length) {
+      const frame = stack[stack.length - 1];
+      const step = byId.get(frame.id);
+      const edges = step ? targets(step) : [];
+      if (frame.next >= edges.length) {
+        state.set(frame.id, "done");
+        stack.pop();
+        continue;
+      }
+      const child = edges[frame.next++];
+      if (state.get(child) === "open") {
+        throw new Error(
+          `Step ${frame.id} loops back to ${child}. Use a repeat step for loops — a back-edge cannot be traced, because every pass would overwrite the last.`,
+        );
+      }
+      if (state.get(child) !== "done" && byId.has(child)) {
+        state.set(child, "open");
+        stack.push({ id: child, next: 0 });
+      }
+    }
+  }
 }
 
 /** Exported for `for_each`'s itemsPath, which resolves against the same context. */

@@ -327,24 +327,41 @@ export function shouldContinueRepeat(
   lookup: ScriptLookup,
 ): boolean {
   const next = frame.iteration + 1;
+  const prepared = prepareRepeat(container, keyPath, lookup);
+  const wantsAnother = (() => {
+    switch (prepared.mode) {
+      case "count":
+        return next < prepared.count;
+      case "for_each":
+        return next < (frame.items?.length ?? 0);
+      case "while":
+        return evaluateConditions(prepared.whileGroup, contextForIteration(context, frame, next));
+      default:
+        // until is evaluated against the iteration that JUST RAN, then negated:
+        // "repeat until X" continues while X is false.
+        return !evaluateConditions(prepared.untilGroup, contextForIteration(context, frame, frame.iteration));
+    }
+  })();
+
+  // ASK WHETHER THE LOOP IS FINISHED BEFORE ENFORCING THE CEILING.
+  //
+  // The ceiling used to be checked first, which rejected the documented
+  // maximum: `count: 100` runs iterations 0…99, and after the last one `next`
+  // is 100 — so a loop that had just completed every pass the author asked for
+  // was aborted as a runaway and the run marked failed. A 100-item `for_each`
+  // did the same, and `forEachItems` is likewise capped at 100. The limit and
+  // the validator disagreed about what "100 iterations" means.
+  //
+  // The comparison is right — `next >= 100` is pass 101 — it was only being
+  // asked at the wrong moment. A genuine runaway `while` still hits it, because
+  // that is the case where wantsAnother stays true forever.
+  if (!wantsAnother) return false;
   if (next >= JOURNEY_LIMITS.repeatIterations) {
     throw new AbortJourney(
       `Repeat ${container.id} exceeded ${JOURNEY_LIMITS.repeatIterations} iterations`,
     );
   }
-  const prepared = prepareRepeat(container, keyPath, lookup);
-  switch (prepared.mode) {
-    case "count":
-      return next < prepared.count;
-    case "for_each":
-      return next < (frame.items?.length ?? 0);
-    case "while":
-      return evaluateConditions(prepared.whileGroup, contextForIteration(context, frame, next));
-    default:
-      // until is evaluated against the iteration that JUST RAN, then negated:
-      // "repeat until X" continues while X is false.
-      return !evaluateConditions(prepared.untilGroup, contextForIteration(context, frame, frame.iteration));
-  }
+  return true;
 }
 
 /* ── advancing ───────────────────────────────────────────────────────────── */
