@@ -12,8 +12,8 @@ import {
 // from the same module, which is what callers actually use.
 import { runScheduledJourneyEnrollments } from "./journeyScheduling";
 
-export { emitJourneyEvent, processJourneyEvents } from "./journeyEvents";
-export { processJourneyRuns } from "./journeyRuns";
+export { emitJourneyEvent, processJourneyEventById, processJourneyEvents } from "./journeyEvents";
+export { processJourneyRuns, processOneRun } from "./journeyRuns";
 export { enrollJourneyNow, runScheduledJourneyEnrollments } from "./journeyScheduling";
 
 /**

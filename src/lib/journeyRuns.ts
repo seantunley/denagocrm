@@ -19,6 +19,8 @@ import {
 } from "./journeyScript";
 import { NEVER_STOP, type StopSignal } from "./stopSignal";
 import { budgetStopUpdate } from "./journeyRunState";
+import { withEnrolmentLock } from "./journeyArbitration";
+import { activeTenantPredicate } from "./tenantPredicate";
 
 const MAX_RUN_ATTEMPTS = 3;
 const MAX_STEPS_PER_TICK = 20;
@@ -98,7 +100,9 @@ const CLOSED_RUN_STATUSES = ["completed", "failed", "cancelled"];
 export async function releaseBlockedJourneyRuns(): Promise<number> {
   const blocked = await prisma.journeyRun.findMany({
     where: { status: "blocked" },
-    select: { id: true, blockedByRunId: true },
+    // Oldest first, so a queue that has built up drains in the order it formed.
+    orderBy: { createdAt: "asc" },
+    select: { id: true, journeyId: true, entityType: true, entityId: true, blockedByRunId: true },
     take: 200,
   });
   if (blocked.length === 0) return 0;
@@ -114,14 +118,40 @@ export async function releaseBlockedJourneyRuns(): Promise<number> {
   );
 
   let released = 0;
+  // At most ONE release per person per journey per sweep. Three runs queued
+  // behind one predecessor all become eligible the moment it closes, and
+  // releasing them together would start three at once — a queue that delivers
+  // in parallel, which is the one thing the mode promises not to do. The rest
+  // stay blocked and the next sweep takes the next one, because by then the
+  // released run is itself open and holds the line.
+  const releasedFor = new Set<string>();
   for (const run of blocked) {
     if (run.blockedByRunId && stillOpen.has(run.blockedByRunId)) continue;
-    // Conditional on still being blocked: two sweeps can overlap, and only one
-    // should hand the run to the processor.
-    const { count } = await prisma.journeyRun.updateMany({
-      where: { id: run.id, status: "blocked" },
-      data: { status: "queued", nextRunAt: new Date(), blockedByRunId: null },
+    const lane = `${run.journeyId}:${run.entityType}:${run.entityId}`;
+    if (releasedFor.has(lane)) continue;
+
+    // Under the same lock enrolment takes, and re-checking the open runs inside
+    // it: an enrolment arriving between the eligibility read above and this
+    // write would otherwise be invisible, and the released run would start
+    // beside it.
+    const { count } = await withEnrolmentLock(run.journeyId, run.entityType, run.entityId, async (tx) => {
+      const tenant = activeTenantPredicate("releaseBlockedJourneyRuns");
+      const openNow = await tx.journeyRun.count({
+        where: {
+          ...tenant,
+          journeyId: run.journeyId,
+          entityType: run.entityType,
+          entityId: run.entityId,
+          status: { in: ["queued", "running", "waiting"] },
+        },
+      });
+      if (openNow > 0) return { count: 0 };
+      return tx.journeyRun.updateMany({
+        where: { ...tenant, id: run.id, status: "blocked" },
+        data: { status: "queued", nextRunAt: new Date(), blockedByRunId: null },
+      });
     });
+    if (count > 0) releasedFor.add(lane);
     released += count;
   }
   return released;
@@ -135,7 +165,14 @@ export async function recoverStaleJourneyRuns() {
   });
 }
 
-async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
+/**
+ * Drive ONE run to its next parking point.
+ *
+ * Exported so the manual-run action can process the run its own test produced,
+ * instead of calling the global `processJourneyRuns(50)` and driving up to
+ * fifty unrelated customers' journeys as a side effect of pressing "test".
+ */
+export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
   const run = await prisma.journeyRun.findUnique({
     where: { id: runId },
     include: { journey: true, journeyVersion: true },
@@ -198,30 +235,52 @@ async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
   /** The last position reached, so the catch blocks can log against it. */
   let position: CursorPosition | null = null;
 
+  /**
+   * Write to the run ONLY while we still own it.
+   *
+   * The claim above takes the run from queued/waiting to `running`, and that is
+   * the whole of this worker's title to it. Unconditional writes meant a run
+   * cancelled mid-flight by run mode `restart` was quietly resurrected: the
+   * worker finished its steps and wrote `completed` straight over `cancelled`,
+   * while the replacement run was already sending. The customer got both
+   * sequences, and the trace showed two completed runs with nothing to say one
+   * had been superseded.
+   *
+   * Every write below goes through this. Returns false when the row is no
+   * longer ours, which is the signal to stop touching it and get out.
+   */
+  const stillOurs = async (data: Prisma.JourneyRunUpdateManyMutationInput) => {
+    const { count } = await prisma.journeyRun.updateMany({
+      where: { id: run.id, status: "running" },
+      data,
+    });
+    return count > 0;
+  };
+
   const park = async () =>
-    prisma.journeyRun.update({
-      where: { id: run.id },
-      data: budgetStopUpdate(cursor.stepId, context as Prisma.InputJsonValue, {
+    stillOurs(
+      budgetStopUpdate(cursor.stepId, context as Prisma.InputJsonValue, {
         cursor: cursor as unknown as Prisma.InputJsonValue,
         stepsExecuted,
       }),
-    });
+    );
 
   const finish = async (note: string) => {
-    await prisma.journeyRun.update({
-      where: { id: run.id },
-      data: {
-        status: "completed",
-        currentStepId: null,
-        // DbNull, not JsonNull: this must CLEAR the column, not store the JSON
-        // literal `null` in it. A finished run has no position.
-        cursor: Prisma.DbNull,
-        stepsExecuted,
-        completedAt: new Date(),
-        attempts: 0,
-        context: context as Prisma.InputJsonValue,
-      },
+    const finished = await stillOurs({
+      status: "completed",
+      currentStepId: null,
+      // DbNull, not JsonNull: this must CLEAR the column, not store the JSON
+      // literal `null` in it. A finished run has no position.
+      cursor: Prisma.DbNull,
+      stepsExecuted,
+      completedAt: new Date(),
+      attempts: 0,
+      context: context as Prisma.InputJsonValue,
     });
+    // Cancelled out from under us while the last steps ran. Write nothing and
+    // say nothing: the "completed" status and the audit line both belong to the
+    // replacement run, not to this one.
+    if (!finished) return false;
     await logAudit({
       action: "journey.completed",
       summary: `Journey “${run.journey.name}” completed${note ? `: ${note}` : ""}`,
@@ -299,6 +358,15 @@ async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
       }
 
       /* ── leaf actions ─────────────────────────────────────────────────── */
+      // Re-check ownership BEFORE the step runs, not just before the write.
+      // Leaf steps send email, SMS and push, and an unsent message is
+      // recoverable where a sent one is not — so the check that matters is the
+      // one in front of the send. This narrows the window to a single step's
+      // execution; a cancellation landing inside that window still gets one
+      // more send, which would need cooperative cancellation to close.
+      const owned = await prisma.journeyRun.count({ where: { id: run.id, status: "running" } });
+      if (owned === 0) return false;
+
       await updateStepLog({ runId: run.id, path, stepId: step.id, stepType: step.type, status: "running" });
 
       let result;
@@ -374,17 +442,14 @@ async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
       }
 
       if (result.status === "waiting") {
-        await prisma.journeyRun.update({
-          where: { id: run.id },
-          data: {
-            status: "waiting",
-            currentStepId: cursor.stepId,
-            cursor: cursor as unknown as Prisma.InputJsonValue,
-            stepsExecuted,
-            nextRunAt: result.nextRunAt ?? new Date(Date.now() + 60_000),
-            attempts: 0,
-            context: context as Prisma.InputJsonValue,
-          },
+        await stillOurs({
+          status: "waiting",
+          currentStepId: cursor.stepId,
+          cursor: cursor as unknown as Prisma.InputJsonValue,
+          stepsExecuted,
+          nextRunAt: result.nextRunAt ?? new Date(Date.now() + 60_000),
+          attempts: 0,
+          context: context as Prisma.InputJsonValue,
         });
         return true;
       }
@@ -395,7 +460,10 @@ async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
         (context.event ?? {}) as Record<string, unknown>
       );
       if (refreshed) context = refreshed;
-      await persistPosition(run.id, cursor, stepsExecuted, context);
+      // Losing the row here means it was cancelled while this step ran. Stop
+      // rather than stepping a run that has been replaced.
+      const kept = await persistPosition(run.id, cursor, stepsExecuted, context);
+      if (!kept) return false;
     }
 
     // Out of per-tick steps. This used to THROW, which was defensible when
@@ -439,15 +507,15 @@ async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP) {
     // it three times fails three times and burns the budget doing it.
     const attempts = abort ? MAX_RUN_ATTEMPTS : run.attempts + 1;
     const retry = !abort && attempts < MAX_RUN_ATTEMPTS;
-    await prisma.journeyRun.update({
-      where: { id: run.id },
-      data: {
-        status: retry ? "queued" : "failed",
-        attempts,
-        stepsExecuted,
-        nextRunAt: retry ? new Date(Date.now() + 5 * 60_000) : run.nextRunAt,
-        lastError: message.slice(0, 1000),
-      },
+    // Conditional like every other write: a run cancelled mid-flight must not be
+    // dragged back to "queued" by the failure of the step it was cancelled
+    // during, which would return it to the queue beside its replacement.
+    await stillOurs({
+      status: retry ? "queued" : "failed",
+      attempts,
+      stepsExecuted,
+      nextRunAt: retry ? new Date(Date.now() + 5 * 60_000) : run.nextRunAt,
+      lastError: message.slice(0, 1000),
     });
     return false;
   }
@@ -467,8 +535,11 @@ async function persistPosition(
   stepsExecuted: number,
   context: JourneyContext,
 ) {
-  await prisma.journeyRun.update({
-    where: { id: runId },
+  // Conditional on the run still being ours — see `stillOurs` in processOneRun.
+  // Returns false when it is not, which the caller uses to stop stepping a run
+  // that has been cancelled and replaced.
+  const { count } = await prisma.journeyRun.updateMany({
+    where: { id: runId, status: "running" },
     data: {
       currentStepId: cursor.stepId,
       cursor: cursor as unknown as Prisma.InputJsonValue,
@@ -477,6 +548,7 @@ async function persistPosition(
       context: context as Prisma.InputJsonValue,
     },
   });
+  return count > 0;
 }
 
 export async function processJourneyRuns(limit = 40, stop: StopSignal = NEVER_STOP) {
