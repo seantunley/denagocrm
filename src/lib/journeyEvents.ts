@@ -20,6 +20,16 @@ const EVENT_RESERVE_MS = 4_000;
  * — the reason string is what tells them apart, so never collapse them.
  */
 export type JourneyEnrolmentDecision = {
+  /**
+   * The run this decision created, when it created one.
+   *
+   * Carried through so a caller can act on the EXACT run it caused. The manual
+   * test run used to re-query "the newest run for this journey and lead", which
+   * a concurrent enrolment can win — under run mode `parallel` especially,
+   * where a second run is legal — so pressing "test" could report on, and
+   * drive, somebody else's run.
+   */
+  runId?: string;
   journeyId: string;
   journeyName: string;
   enrolled: boolean;
@@ -190,6 +200,7 @@ async function processOneEvent(
           journeyId: journey.id,
           journeyName: journey.name,
           enrolled: outcome.enrolled,
+          ...(outcome.enrolled ? { runId: outcome.runId } : {}),
           // Each refusal keeps its own words. These used to collapse to "already
           // enrolled for this event" — so a per-person cap refusal, a
           // single-mode drop and an entry-condition mismatch all read as the
