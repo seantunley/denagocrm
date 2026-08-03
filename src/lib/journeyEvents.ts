@@ -6,6 +6,7 @@ import {
   getActiveVersion,
   hashJourneyKey,
   jsonObject,
+  REFUSAL_REASONS,
 } from "./journeyEngineShared";
 import { NEVER_STOP, type StopSignal } from "./stopSignal";
 
@@ -79,6 +80,25 @@ export async function recoverStaleJourneyEvents() {
   });
 }
 
+/**
+ * Process ONE named event, and report what each journey decided.
+ *
+ * The manual-run action needs exactly this. It used to emit its event and then
+ * call the global `processJourneyEvents(100)` / `processJourneyRuns(50)`, so
+ * pressing "test" drove up to fifty unrelated due runs — real sends to real
+ * customers who had nothing to do with the test. And when the backlog was
+ * larger than those limits, the test's own event could still be sitting
+ * pending while the action reported success.
+ */
+export async function processJourneyEventById(
+  eventId: string,
+): Promise<{ processed: boolean; enrolled: number; decisions: JourneyEnrolmentDecision[] }> {
+  const event = await prisma.journeyEvent.findUnique({ where: { id: eventId } });
+  if (!event) return { processed: false, enrolled: 0, decisions: [] };
+  const result = await processOneEvent(event);
+  return { processed: result !== null, enrolled: result?.enrolled ?? 0, decisions: result?.decisions ?? [] };
+}
+
 export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_STOP) {
   const events = await prisma.journeyEvent.findMany({
     where: { status: "pending", availableAt: { lte: new Date() } },
@@ -89,11 +109,27 @@ export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_
 
   for (const event of events) {
     if (stop.shouldStop(EVENT_RESERVE_MS)) break;
+    const outcome = await processOneEvent(event);
+    enrolled += outcome?.enrolled ?? 0;
+  }
+
+  return { processed: events.length, enrolled };
+}
+
+/**
+ * The body of the event loop, for one event. Returns null when another worker
+ * claimed it first.
+ */
+async function processOneEvent(
+  event: { id: string; type: string; entityType: string; entityId: string; payload: Prisma.JsonValue | null; dedupeKey: string; journeyId: string | null },
+): Promise<{ enrolled: number; decisions: JourneyEnrolmentDecision[] } | null> {
+  let enrolled = 0;
+  {
     const claimed = await prisma.journeyEvent.updateMany({
       where: { id: event.id, status: "pending" },
       data: { status: "processing", attempts: { increment: 1 }, error: null },
     });
-    if (claimed.count === 0) continue;
+    if (claimed.count === 0) return null;
 
     try {
       const journeys = await prisma.journey.findMany({
@@ -141,7 +177,7 @@ export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_
           decisions.push({ journeyId: journey.id, journeyName: journey.name, enrolled: false, reason: "trigger filters did not match" });
           continue;
         }
-        const queued = await enqueueJourneyRun({
+        const outcome = await enqueueJourneyRun({
           journey,
           version,
           entityType: event.entityType as JourneyEntityType,
@@ -149,14 +185,20 @@ export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_
           eventKey: event.dedupeKey,
           payload: eventPayload,
         });
-        if (queued) enrolled++;
+        if (outcome.enrolled) enrolled++;
         decisions.push({
           journeyId: journey.id,
           journeyName: journey.name,
-          enrolled: queued,
-          // A false here is not a mismatch — it is the idempotency key doing its
-          // job, which reads as a bug unless it is spelled out.
-          reason: queued ? "enrolled" : "already enrolled for this event",
+          enrolled: outcome.enrolled,
+          // Each refusal keeps its own words. These used to collapse to "already
+          // enrolled for this event" — so a per-person cap refusal, a
+          // single-mode drop and an entry-condition mismatch all read as the
+          // idempotency key doing its job, i.e. as nothing being wrong.
+          reason: outcome.enrolled
+            ? outcome.status === "blocked"
+              ? "queued behind an open run (run mode: queued)"
+              : "enrolled"
+            : REFUSAL_REASONS[outcome.refusal],
         });
       }
 
@@ -164,19 +206,26 @@ export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_
         where: { id: event.id },
         data: { status: "processed", processedAt: new Date(), decisions },
       });
+      return { enrolled, decisions };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown journey event error";
-      const retry = event.attempts + 1 < MAX_EVENT_ATTEMPTS;
+      const current = await prisma.journeyEvent.findUnique({
+        where: { id: event.id },
+        select: { attempts: true, availableAt: true },
+      });
+      const retry = (current?.attempts ?? MAX_EVENT_ATTEMPTS) < MAX_EVENT_ATTEMPTS;
       await prisma.journeyEvent.update({
         where: { id: event.id },
         data: {
           status: retry ? "pending" : "failed",
-          availableAt: retry ? new Date(Date.now() + 5 * 60_000) : event.availableAt,
+          availableAt: retry ? new Date(Date.now() + 5 * 60_000) : current?.availableAt,
           error: message.slice(0, 1000),
         },
       });
+      return {
+        enrolled,
+        decisions: [{ journeyId: "", journeyName: "—", enrolled: false, reason: message.slice(0, 200) }],
+      };
     }
   }
-
-  return { processed: events.length, enrolled };
 }

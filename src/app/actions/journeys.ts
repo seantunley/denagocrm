@@ -11,6 +11,7 @@ import {
   parseConditionGroup,
   parseJourneyDefinition,
 } from "@/lib/journeyTypes";
+import { parseRunMode } from "@/lib/journeyArbitration";
 import {
   enrollJourneyNow,
   processJourneyEvents,
@@ -48,11 +49,21 @@ function journeyData(formData: FormData) {
   const entryConditions = parseConditionGroup(rawConditions);
   const definition = parseJourneyDefinition(rawDefinition);
 
+  // Absent is NOT the same as invalid, and the difference is destructive.
+  // parseRunMode maps anything it does not recognise to "single" — which is
+  // right for a garbage value, but a form that simply did not carry the control
+  // would then silently downgrade every backfilled `parallel` journey to
+  // `single` the first time anyone pressed Save. So a missing field means
+  // "leave it alone"; only a present one is parsed and written.
+  const rawRunMode = formData.get("runMode");
+  const runMode = rawRunMode === null ? null : parseRunMode(String(rawRunMode));
+
   return {
     name: name.slice(0, 160),
     description: description?.slice(0, 1000) ?? null,
     category,
     trigger,
+    runMode,
     triggerConfig: triggerConfig as Prisma.InputJsonValue | null,
     entryConditions: entryConditions as Prisma.InputJsonValue | null,
     definition: definition as Prisma.InputJsonValue,
@@ -69,6 +80,9 @@ export async function createJourney(formData: FormData) {
         name: data.name,
         description: data.description,
         category: data.category,
+        // A new journey with no control on the form keeps the schema default
+        // ("single"), which is the safe end of the range.
+        ...(data.runMode ? { runMode: data.runMode } : {}),
         createdById: user.id,
         tenantId,
       },
@@ -132,6 +146,11 @@ export async function saveJourneyDraft(journeyId: string, formData: FormData) {
         name: data.name,
         description: data.description,
         category: data.category,
+        // The run mode lives on the Journey, not the version: it governs
+        // enrolment, which happens before any version is chosen, and it takes
+        // effect without a republish. Dropping it here is what left every
+        // journey stuck on whatever the database had.
+        ...(data.runMode ? { runMode: data.runMode } : {}),
         status: journey.activeVersion ? journey.status : "draft",
       },
     });
