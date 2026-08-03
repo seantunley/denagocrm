@@ -255,6 +255,34 @@ test("a duplicate enrolment is CHECKED, not caught inside the transaction", () =
   assert.match(outside, /error\.code === "P2002"/, "keep a backstop, but outside the transaction");
 });
 
+test("a failure after enrolment does not erase the runs already created", () => {
+  // Runs are committed one at a time as the loop goes; the event row is only
+  // updated at the end. So a failure after some journeys have enrolled — the
+  // final update, or anything else late — used to discard every decision made
+  // so far and return one "it failed" placeholder. The manual test run then had
+  // no runId, reported that nothing happened, and the run it had ALREADY
+  // created went on to execute and send.
+  //
+  // "Nothing was sent" while a live run sends is the worst answer this can give.
+  const events = shipped("src/lib/journeyEvents.ts");
+  const fn = events.slice(events.indexOf("async function processOneEvent"));
+  assert.ok(fn.length > 0, "the slice ran backwards");
+
+  // The array must be declared OUTSIDE the try, or the catch cannot see it.
+  const declared = fn.indexOf("const decisions: JourneyEnrolmentDecision[] = []");
+  const tryAt = fn.indexOf("try {");
+  assert.notEqual(declared, -1, "the decisions array is gone — was it renamed?");
+  assert.ok(declared < tryAt, "decisions must be declared before the try, or the catch loses them");
+
+  const cat = fn.slice(fn.indexOf("} catch (error) {"));
+  assert.match(cat, /decisions\.push\(/, "the failure is APPENDED to the decisions");
+  assert.match(cat, /return \{ enrolled, decisions \}/, "…and the accumulated ones are returned");
+  assert.ok(
+    !/decisions: \[\{/.test(cat),
+    "returning a fresh single-element array is what threw the committed runs away",
+  );
+});
+
 test("a manual run acts on the run it created, by id", () => {
   // "The newest run for this journey and lead" is not the same thing. A
   // concurrent enrolment can be newer — and under run mode `parallel` a second
