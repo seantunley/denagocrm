@@ -79,11 +79,15 @@ export async function runJourneyOnLead(journeyId: string, leadId: string) {
     };
   }
 
-  const run = await prisma.journeyRun.findFirst({
-    where: { journeyId, entityType: "lead", entityId: lead.id },
-    orderBy: { createdAt: "desc" },
-    select: { id: true, status: true },
-  });
+  // THE EXACT run this test created, by id.
+  //
+  // Selecting "the newest run for this journey and lead" was wrong: a
+  // concurrent enrolment can be newer, and under run mode `parallel` a second
+  // run is perfectly legal — so pressing "test" could report on, and drive,
+  // a run somebody else's event had just created.
+  const run = mine.runId
+    ? await prisma.journeyRun.findUnique({ where: { id: mine.runId }, select: { id: true, status: true } })
+    : null;
   if (!run) return { ok: false as const, error: "Enrolled, but the run could not be found." };
 
   // A run parked by run mode "queued" must NOT be driven here — it is waiting
