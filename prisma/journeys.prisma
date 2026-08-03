@@ -90,6 +90,18 @@ model JourneyEvent {
   @@index([type, status])
   @@index([journeyId, status])
   @@index([tenantId])
+  /// The retention sweep's early-out: "is any processed event older than the
+  /// cutoff?", asked once per tenant on every cron tick. Without this it is a
+  /// sequential scan of the largest table in the schema, every tick, usually to
+  /// find nothing — housekeeping that costs more than the thing it cleans up.
+  ///
+  /// tenantId LEADS, and that is the whole point. The sweep runs inside a tenant
+  /// scope (runCronPerTenant), so the query the extension actually emits is
+  /// `tenantId = $1 AND status IN (…) AND createdAt < $2`. Ordered
+  /// [status, createdAt], a tenant with nothing to prune still walks the expired
+  /// entries of every OTHER tenant before returning empty — so the busiest
+  /// workspace sets the cost of the quietest one's early-out, on every tick.
+  @@index([tenantId, status, createdAt])
   /// What a parked `wait_for_trigger` asks on every poll: "has an event of one
   /// of these types been recorded for this entity since I started listening".
   ///
@@ -98,6 +110,10 @@ model JourneyEvent {
   /// then createdAt, which is the range and so has to come last to be usable.
   /// Without this the waiter is a sequential scan of every event ever recorded,
   /// once per waiting run, per engine tick.
+  ///
+  /// Distinct from the retention index above and both are needed: that one
+  /// answers "anything old, anywhere in this tenant", this one answers "anything
+  /// new, for this one person". Neither serves the other's leading column.
   @@index([entityType, entityId, type, createdAt])
 }
 
@@ -156,6 +172,15 @@ model JourneyRun {
   stepLogs JourneyStepLog[]
 
   @@index([status, nextRunAt])
+  /// Same reason as JourneyEvent's: the retention sweep asks "any CLOSED run
+  /// older than the cutoff?" once per tenant per tick, and answers "no" almost
+  /// every time. [status, nextRunAt] cannot serve it — nextRunAt is null on
+  /// closed runs, which is exactly the set being scanned.
+  ///
+  /// tenantId leads for the same reason it does on JourneyEvent: the sweep runs
+  /// under a tenant scope, and without it one workspace's backlog is scanned by
+  /// every other workspace's tick.
+  @@index([tenantId, status, createdAt])
   @@index([journeyId, status])
   @@index([entityType, entityId])
   @@index([leadId])
