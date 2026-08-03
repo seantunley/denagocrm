@@ -1,5 +1,6 @@
 import { prisma } from "./db";
 import { contactName } from "./format";
+import { journeyVars, variableTemplateVars } from "./journeyVariables";
 
 export type JourneyEntityType = "lead" | "contact";
 
@@ -7,6 +8,12 @@ export type JourneyContext = Record<string, unknown> & {
   event: Record<string, unknown>;
   lead: Record<string, unknown> | null;
   contact: Record<string, unknown> | null;
+  /**
+   * The `variables` step's bag. Absent until a journey sets one, and carried
+   * across the runner's per-step context refresh by `withJourneyVars` — see
+   * journeyVariables.ts for why it is namespaced rather than spread flat.
+   */
+  vars?: Record<string, string>;
 };
 
 function compactContact(contact: {
@@ -152,6 +159,13 @@ export function journeyTemplateVars(context: JourneyContext): Record<string, str
   const repeat = (context.repeat ?? {}) as Record<string, unknown>;
   const firstName = String(contact.firstName ?? String(lead.name ?? "").split(/\s+/)[0] ?? "there");
   return {
+    // Journey variables, as `{{var_<name>}}`. Spread FIRST so that even if the
+    // prefix were ever to collide with a built-in below, the built-in wins —
+    // a `variables` step must not be able to redefine `{{first_name}}`. The
+    // prefix already makes a collision impossible (VARIABLE_NAME requires a
+    // leading letter, and no built-in key starts with "var_"); this is belt and
+    // braces on the ordering, so adding a key below can never open the hole.
+    ...variableTemplateVars(journeyVars(context)),
     // 1-based, matching HA's repeat.index. An object item renders as JSON rather
     // than "[object Object]", which is worse than useless in a message body.
     repeat_index: repeat.index == null ? "" : String(repeat.index),

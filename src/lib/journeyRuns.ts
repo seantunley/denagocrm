@@ -2,10 +2,21 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { logAudit } from "./audit";
 import { executeJourneyStep, resolveTopLevelNext } from "./journeyStepExecutor";
-import { loadJourneyContext, type JourneyEntityType, type JourneyContext } from "./journeyContext";
-import { parseJourneyDefinition } from "./journeyTypes";
+import {
+  journeyTemplateVars,
+  loadJourneyContext,
+  type JourneyEntityType,
+  type JourneyContext,
+} from "./journeyContext";
+import {
+  parseJourneyDefinition,
+  parseVariablesConfig,
+  parseWaitForTriggerConfig,
+} from "./journeyTypes";
 import { AbortJourney, ConditionFailed, StopJourney, isControlFlow } from "./journeyControlFlow";
-import { parseCursor, withRepeatVars, type JourneyCursor } from "./journeyCursor";
+import { cloneCursor, clearWait, parseCursor, withRepeatVars, type JourneyCursor } from "./journeyCursor";
+import { armWaitState, armedWaitFor, decideWait, waitPollAt, waitedMs } from "./journeyWait";
+import { applyJourneyVariables, journeyVars, withJourneyVars } from "./journeyVariables";
 import {
   advanceCursor,
   chooseBranch,
@@ -83,6 +94,52 @@ async function updateStepLog(args: {
       ...(args.status === "running" ? { startedAt: new Date(), completedAt: null } : {}),
       completedAt: done ? new Date() : null,
     },
+  });
+}
+
+/**
+ * The earliest event that could wake an armed `wait_for_trigger`.
+ *
+ * Deliberately NOT filtered by the event's processing `status`. An event is a
+ * fact the moment the row exists; whether `processJourneyEvents` has drained it
+ * is a different cron's business. Requiring "processed" would make a wake depend
+ * on that cron having already run, and requiring "pending" would miss every
+ * event it had. Neither has anything to do with the question being asked.
+ *
+ * Not filtered by journeyId either: `emitJourneyEvent` sets one only for
+ * targeted emissions, and the wait is asking "did this happen to this person",
+ * not "did this happen because of this journey".
+ *
+ * BOUNDED AT BOTH ENDS — `[since, until)`, the same half-open window
+ * `isInWaitWindow` states. The lower bound alone was not enough: the poll runs
+ * on a cron, so a tick can land well after the deadline, and an unbounded query
+ * would then hand back an event created after the window closed. A wait that
+ * expired at 10:00 would resume at 10:30 on an event stamped 10:20 and take the
+ * "it happened" branch — extending the author's window by however late the cron
+ * happened to be, which is not the same thing as tolerating jitter.
+ *
+ * `gte` on `since`, not `gt`: an event written in the same millisecond as the
+ * wait armed is one that arrived while we were listening, and losing it would be
+ * silent. `lt` on `until`, not `lte`: `until` is already the first instant of
+ * "timed out", so an event stamped exactly there is outside the window.
+ */
+async function findWakeEvent(
+  run: { entityType: string; entityId: string },
+  triggers: readonly string[],
+  since: Date,
+  until: Date,
+) {
+  return prisma.journeyEvent.findFirst({
+    where: {
+      entityType: run.entityType,
+      entityId: run.entityId,
+      type: { in: [...triggers] },
+      createdAt: { gte: since, lt: until },
+    },
+    // Two events in the same tick must pick the same winner however the rows
+    // happen to come back, so the millisecond tie is broken by id.
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: { id: true, type: true, createdAt: true },
   });
 }
 
@@ -265,6 +322,31 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
       }),
     );
 
+  /**
+   * Park on the CURRENT position — no advance — until `nextRunAt`.
+   *
+   * The same write the `wait` step's park does, reused by `wait_for_trigger`
+   * because the requirement is identical and the mistake would be identical
+   * too: advancing before parking is right for a `wait` (it succeeded) and
+   * wrong for a wait_for_trigger, which has not finished waiting. That is the
+   * distinction `StepResult.retryStep` exists for, and it is why this does not
+   * touch the cursor at all.
+   */
+  const parkWaiting = async (nextRunAt: Date) =>
+    // Through `stillOurs` like every other write: a wait_for_trigger parked by
+    // a run that has since been cancelled and replaced must not be written back
+    // to "waiting", which would resurrect it and leave it polling forever
+    // beside its replacement.
+    stillOurs({
+      status: "waiting",
+      currentStepId: cursor.stepId,
+      cursor: cursor as unknown as Prisma.InputJsonValue,
+      stepsExecuted,
+      nextRunAt,
+      attempts: 0,
+      context: context as Prisma.InputJsonValue,
+    });
+
   const finish = async (note: string) => {
     const finished = await stillOurs({
       status: "completed",
@@ -319,10 +401,25 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
       // reloaded from the database after every step and would wipe them.
       const stepContext = withRepeatVars(context, cursor);
 
-      if (stepsExecuted >= MAX_STEPS_PER_RUN) {
-        throw new AbortJourney(`Journey exceeded ${MAX_STEPS_PER_RUN} steps in one run`);
+      // An armed wait belongs to exactly ONE position, named by its trace path.
+      // Anything else here means the cursor moved on with a stale wait still
+      // attached — a hand-edited cursor, or a corrupt one — and leaving it would
+      // let a later arrival at that path believe it had been listening since
+      // then, and wake on an event that predates it.
+      const armedWait = armedWaitFor(cursor, step, path);
+      if (cursor.wait && !armedWait) cursor = clearWait(cursor);
+
+      // A POLL is not work, and must not be charged to the lifetime budget.
+      // Charging it would give wait_for_trigger a second, invisible ceiling —
+      // "500 engine ticks" rather than its own timeout — and a long wait would
+      // then abort with a step-budget message naming nothing the author wrote.
+      // Arming the wait costs one step; re-checking it costs none.
+      if (!armedWait) {
+        if (stepsExecuted >= MAX_STEPS_PER_RUN) {
+          throw new AbortJourney(`Journey exceeded ${MAX_STEPS_PER_RUN} steps in one run`);
+        }
+        stepsExecuted += 1;
       }
-      stepsExecuted += 1;
 
       /* ── control-flow containers: the RUNNER runs these, not the executor ── */
       if (step.type === "choose" || step.type === "repeat") {
@@ -353,6 +450,135 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         cursor = entered
           ? pushFrame(cursor, entered)
           : advanceCursor({ definition, cursor, context: stepContext, lookup });
+        await persistPosition(run.id, cursor, stepsExecuted, context);
+        continue;
+      }
+
+      /* ── wait_for_trigger: park on THIS frame until an event arrives ────── */
+      if (step.type === "wait_for_trigger") {
+        const config = parseWaitForTriggerConfig(step.config);
+        // Read ONCE, and before anything is written. `since` is derived from
+        // this instant, so an event landing between here and the commit below
+        // is still at-or-after the watermark and is found by the next poll.
+        // Taking the clock at commit time instead would put that event behind
+        // the watermark and lose it, silently, for the life of the wait.
+        const now = new Date();
+
+        if (!armedWait) {
+          const wait = armWaitState(path, config, now);
+          cursor = { ...cloneCursor(cursor), wait };
+          await updateStepLog({
+            runId: run.id,
+            path,
+            stepId: step.id,
+            stepType: step.type,
+            status: "running",
+            note: `Waiting for ${config.triggers.join(" or ")}`,
+            output: {
+              triggers: config.triggers,
+              until: wait.until,
+              continueOnTimeout: config.continueOnTimeout,
+            },
+          });
+          await parkWaiting(waitPollAt(wait, now));
+          return true;
+        }
+
+        const woke = await findWakeEvent(
+          run,
+          config.triggers,
+          new Date(armedWait.since),
+          new Date(armedWait.until),
+        );
+        const decision = decideWait(armedWait, now, woke?.createdAt ?? null);
+        if (decision.kind === "keep_waiting") {
+          // No step-log write on a poll. updateStepLog resets startedAt on a
+          // "running" upsert — for a back-edge that is correct — so rewriting
+          // the row every minute would report the last poll interval as the
+          // duration of a three-day wait.
+          await parkWaiting(decision.nextRunAt);
+          return true;
+        }
+
+        const timedOut = decision.kind === "timed_out";
+        // The trace follows the DECISION, not the query. Nothing can make them
+        // disagree today — the query is bounded by the same window the decision
+        // applies — but a row that reads "timed out" while naming the event that
+        // woke it would be worse than either outcome on its own.
+        const wokeBy = timedOut ? null : woke;
+        const note = timedOut
+          ? `Timed out after ${config.timeoutMinutes} minute(s) waiting for ${config.triggers.join(" or ")}`
+          : `Woken by ${wokeBy?.type}`;
+        await updateStepLog({
+          runId: run.id,
+          path,
+          stepId: step.id,
+          stepType: step.type,
+          status: "completed",
+          note,
+          // The two outcomes are separated by a FIELD, not by reading prose.
+          // "the event happened" versus "it never did" is the only question
+          // this step exists to answer, and making a trace reader parse a
+          // sentence for it is the same defect as "Condition did not match".
+          output: {
+            timedOut,
+            waitedMs: waitedMs(armedWait, now),
+            triggers: config.triggers,
+            event: wokeBy ? { id: wokeBy.id, type: wokeBy.type, at: wokeBy.createdAt.toISOString() } : null,
+          },
+        });
+
+        if (timedOut && !config.continueOnTimeout) {
+          // HA's `continue_on_timeout: false` stops the script. Ended here
+          // rather than by raising StopJourney — the spelling a `stop` step
+          // uses — because the StopJourney handler rewrites this same path's
+          // log row with `{ stopped: true, reason: "stop" }` and would erase
+          // the `timedOut` field just written. Raising and catching inside one
+          // function, to lose the one thing the step had to record, is not a
+          // symmetry worth having. The run still ends completed, exactly as a
+          // stop does.
+          return finish(note);
+        }
+
+        cursor = advanceCursor({ definition, cursor: clearWait(cursor), context: stepContext, lookup });
+        await persistPosition(run.id, cursor, stepsExecuted, context);
+        continue;
+      }
+
+      /* ── variables: named values later steps can read ───────────────────── */
+      if (step.type === "variables") {
+        const assignments = parseVariablesConfig(step.config);
+        const applied = applyJourneyVariables({
+          stepId: step.id,
+          assignments,
+          // Merged over what the run already has, so a second variables step
+          // adds rather than replaces, and re-setting a name overwrites it.
+          existing: journeyVars(context),
+          // Rendered against the context the STEP sees — loop variables
+          // included — so `{{repeat_item}}` works inside a for_each.
+          templateVars: journeyTemplateVars(stepContext),
+        });
+        context = withJourneyVars(context, applied.vars);
+        await updateStepLog({
+          runId: run.id,
+          path,
+          stepId: step.id,
+          stepType: step.type,
+          status: "completed",
+          note: `Set ${assignments.map((assignment) => assignment.name).join(", ")}`,
+          // `truncated` names anything that hit the per-value cap. A value cut
+          // in half and never mentioned is the silent-damage failure this
+          // codebase keeps paying for.
+          output: { variables: applied.vars, truncated: applied.truncated },
+        });
+        // Re-derived from the NEW context: a repeat's while/until may test a
+        // variable this step just set.
+        cursor = advanceCursor({
+          definition,
+          cursor,
+          context: withRepeatVars(context, cursor),
+          lookup,
+        });
         await persistPosition(run.id, cursor, stepsExecuted, context);
         continue;
       }
@@ -459,7 +685,12 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         run.entityId,
         (context.event ?? {}) as Record<string, unknown>
       );
-      if (refreshed) context = refreshed;
+      // loadJourneyContext returns `{ event, lead, contact }` and nothing else,
+      // so a bare `context = refreshed` erases the variables bag on the very
+      // next step after a `variables` step ran — the same wipe that stops
+      // repeat variables from being stored in the context at all. They cannot be
+      // derived (they are authored values), so they are carried explicitly.
+      if (refreshed) context = withJourneyVars(refreshed, journeyVars(context));
       // Losing the row here means it was cancelled while this step ran. Stop
       // rather than stepping a run that has been replaced.
       const kept = await persistPosition(run.id, cursor, stepsExecuted, context);

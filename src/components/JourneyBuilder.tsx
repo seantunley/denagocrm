@@ -17,7 +17,7 @@ type BuilderStep = {
 };
 
 /**
- * `choose` and `repeat` have NO visual editor here — say so rather than pretend.
+ * The step types with NO visual editor here — say so rather than pretend.
  *
  * They are authored as JSON today. What this builder guarantees is that opening
  * and re-saving a journey that contains one does not damage it: the step's
@@ -25,8 +25,30 @@ type BuilderStep = {
  * click on the type dropdown, and the panel shows what is inside it. Silently
  * dropping the branches — which is what would happen if these types were simply
  * unknown to the builder — would destroy work with no error and no undo.
+ *
+ * `wait_for_trigger` and `variables` join the containers for exactly the same
+ * reason. A wait's `triggers` array and a variables step's `set` map are
+ * structured config this form has no widget for, and losing either on save is
+ * silent: a wait with no triggers fails validation on the next publish, and a
+ * variables step with an empty `set` would leave every later `{{var_…}}`
+ * rendering blank with nothing on screen to explain it.
  */
-const READ_ONLY_STEP_TYPES = new Set(["choose", "repeat"]);
+const READ_ONLY_STEP_TYPES = new Set(["choose", "repeat", "wait_for_trigger", "variables"]);
+
+/** The one-line summary shown for a step the form cannot edit. */
+function readOnlySummary(step: BuilderStep): string {
+  if (step.type === "choose") {
+    const options = Array.isArray(step.config.options) ? step.config.options.length : 0;
+    return `${options} branch${options === 1 ? "" : "es"}${step.config.default ? " + default" : ""}`;
+  }
+  if (step.type === "repeat") return `Repeat: ${String(step.config.mode ?? "?")}`;
+  if (step.type === "wait_for_trigger") {
+    const triggers = Array.isArray(step.config.triggers) ? step.config.triggers : [];
+    return `Wait for ${triggers.join(" or ") || "?"} (timeout ${String(step.config.timeoutMinutes ?? "?")} min)`;
+  }
+  const names = isRecord(step.config.set) ? Object.keys(step.config.set) : [];
+  return `Sets ${names.join(", ") || "nothing"}`;
+}
 
 export type JourneyBuilderDefaults = {
   name?: string;
@@ -46,6 +68,10 @@ export type JourneyBuilderDefaults = {
   definition?: { startStepId?: string | null; steps?: BuilderStep[] } | null;
 };
 
+// One source, shared with the trace — a second copy is how the builder and the
+// activity trace end up calling the same step type two different things. The
+// map moved to journeyTypes.ts and is typed Record<JourneyStepType, string>, so
+// a new step type is a compile error until it is given a name here.
 const stepLabels: Record<string, string> = JOURNEY_STEP_LABELS;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -370,11 +396,7 @@ export default function JourneyBuilder({
 
             {READ_ONLY_STEP_TYPES.has(step.type) && (
               <div className="rounded border border-amber-500/30 bg-amber-500/[0.06] p-3 text-xs text-amber-200/90">
-                <p className="font-semibold text-amber-300">
-                  {step.type === "choose"
-                    ? `${Array.isArray(step.config.options) ? step.config.options.length : 0} branch${Array.isArray(step.config.options) && step.config.options.length === 1 ? "" : "es"}${step.config.default ? " + default" : ""}`
-                    : `Repeat: ${String(step.config.mode ?? "?")}`}
-                </p>
+                <p className="font-semibold text-amber-300">{readOnlySummary(step)}</p>
                 <p className="mt-1 leading-5">
                   There is no visual editor for this step yet — it is authored as JSON. It is
                   carried through this form exactly as saved, so editing the rest of the journey

@@ -90,6 +90,15 @@ model JourneyEvent {
   @@index([type, status])
   @@index([journeyId, status])
   @@index([tenantId])
+  /// What a parked `wait_for_trigger` asks on every poll: "has an event of one
+  /// of these types been recorded for this entity since I started listening".
+  ///
+  /// Column order matters — entity first, because it is the equality that cuts
+  /// the table down to one person's handful of rows; then type (an IN list);
+  /// then createdAt, which is the range and so has to come last to be usable.
+  /// Without this the waiter is a sequential scan of every event ever recorded,
+  /// once per waiting run, per engine tick.
+  @@index([entityType, entityId, type, createdAt])
 }
 
 /// A run is pinned to an immutable published version.
