@@ -1,12 +1,21 @@
 import Link from "next/link";
-import { Activity, ArrowLeft, TriangleAlert } from "lucide-react";
+import { Activity, ArrowLeft, ListTree, TriangleAlert } from "lucide-react";
 import { requireOwner } from "@/lib/auth";
 import { formatDateTime } from "@/lib/format";
-import { recentTraceEvents, triggerHealth } from "@/lib/journeyTrace";
+import { recentRunSummaries, recentTraceEvents, traceRun, triggerHealth } from "@/lib/journeyTrace";
+import JourneyRunTrace from "@/components/JourneyRunTrace";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState, StatusPill } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
+
+function runTone(status: string) {
+  if (status === "completed") return "success" as const;
+  if (status === "failed") return "danger" as const;
+  if (status === "waiting" || status === "blocked") return "warning" as const;
+  if (status === "cancelled") return "neutral" as const;
+  return "info" as const;
+}
 
 /**
  * The journey activity trace, after Home Assistant's automation traces.
@@ -19,10 +28,25 @@ export const dynamic = "force-dynamic";
  * The trigger table is deliberately first. "Never fired" is the answer that
  * identifies broken wiring, and a list of runs can never give it to you: an
  * empty run list looks identical either way.
+ *
+ * `?run=<id>` opens ONE run's path through the graph, on this same page rather
+ * than a route of its own: the three questions — did the trigger fire, was this
+ * person enrolled, what did their run do — are one investigation, and splitting
+ * the last one onto another screen loses the first two behind a back button.
  */
-export default async function JourneyActivityPage() {
+export default async function JourneyActivityPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ run?: string }>;
+}) {
   await requireOwner();
-  const [health, events] = await Promise.all([triggerHealth(), recentTraceEvents({ limit: 60 })]);
+  const { run: runId } = await searchParams;
+  const [health, events, runs, selected] = await Promise.all([
+    triggerHealth(),
+    recentTraceEvents({ limit: 60 }),
+    recentRunSummaries(30),
+    runId ? traceRun(runId) : Promise.resolve(null),
+  ]);
   const neverFired = health.filter((row) => !row.everSeen);
 
   return (
@@ -59,6 +83,20 @@ export default async function JourneyActivityPage() {
         </div>
       )}
 
+      {/* The trigger table is normally first, but someone who followed a link to
+          a specific run asked for that run — showing it below two sections they
+          did not ask for makes them hunt for their own click. */}
+      {runId && (selected
+        ? <JourneyRunTrace run={selected} />
+        : (
+          <div className="rounded-xl border border-border bg-card p-4">
+            <p className="text-sm text-muted-foreground">
+              That run is not available. It has been purged by trace retention, or it belongs to
+              another workspace.
+            </p>
+          </div>
+        ))}
+
       <section className="rounded-xl border border-border bg-card p-4">
         <h2 className="mb-3 text-sm font-semibold text-foreground">Triggers — last 30 days</h2>
         {/* A list, not a table: three short fields that wrap cleanly on a phone
@@ -82,6 +120,46 @@ export default async function JourneyActivityPage() {
             </li>
           ))}
         </ul>
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-4">
+        <h2 className="mb-1 text-sm font-semibold text-foreground">Recent runs</h2>
+        <p className="mb-3 text-[11px] text-muted-foreground">
+          Open one to see the path it took — which branch of each choose, and how many times each
+          repeat went round.
+        </p>
+        {runs.length === 0 ? (
+          <EmptyState
+            icon={ListTree}
+            title="No runs yet"
+            description="Nothing has been enrolled. Check above whether the trigger has ever fired."
+            className="py-8"
+          />
+        ) : (
+          <ul className="divide-y divide-border/50">
+            {runs.map((run) => (
+              <li key={run.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
+                <Link
+                  href={`/journeys/activity?run=${run.id}`}
+                  className={run.id === runId
+                    ? "text-[12px] font-semibold text-primary"
+                    : "text-[12px] text-primary hover:underline"}
+                >
+                  {run.journeyName}
+                </Link>
+                <span className="text-[11px] text-muted-foreground">
+                  {run.leadId ? "lead" : run.contactId ? "contact" : run.entityType} · {run.steps} step
+                  {run.steps === 1 ? "" : "s"}
+                </span>
+                <StatusPill tone={runTone(run.status)}>{run.status}</StatusPill>
+                {run.lastError && <span className="truncate text-[11px] text-red-400">{run.lastError}</span>}
+                <span className="ml-auto text-[11px] text-muted-foreground">
+                  {formatDateTime(run.createdAt)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section className="rounded-xl border border-border bg-card p-4">

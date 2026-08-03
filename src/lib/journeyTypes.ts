@@ -63,6 +63,31 @@ export const JOURNEY_STEP_TYPES = [
 
 export type JourneyStepType = (typeof JOURNEY_STEP_TYPES)[number];
 
+/**
+ * What each step type is CALLED on screen.
+ *
+ * Here rather than in the builder because the trace reads it too, and two copies
+ * would drift the moment a step type is renamed — leaving the trace naming a
+ * step differently from the builder the reader is comparing it against.
+ */
+export const JOURNEY_STEP_LABELS: Record<JourneyStepType, string> = {
+  send_email: "Send email",
+  send_sms: "Send SMS",
+  create_activity: "Create activity",
+  send_push: "Notify the team",
+  move_stage: "Move lead stage",
+  assign_user: "Assign lead",
+  add_tag: "Add contact tag",
+  remove_tag: "Remove contact tag",
+  wait: "Wait",
+  condition: "Condition / branch",
+  stop: "Stop journey",
+  choose: "Choose (branches)",
+  repeat: "Repeat (loop)",
+  wait_for_trigger: "Wait for an event",
+  variables: "Set variables",
+};
+
 /** Container steps own nested sequences; the runner, not the executor, runs them. */
 export const JOURNEY_CONTAINER_STEP_TYPES = ["choose", "repeat"] as const;
 

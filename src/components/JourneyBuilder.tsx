@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { createJourney } from "@/app/actions/journeys";
+import { JOURNEY_STEP_LABELS } from "@/lib/journeyTypes";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 import { JOURNEY_RUN_MODES, RUN_MODE_LEGACY_NOTE } from "@/lib/journeyRunModes";
 
@@ -67,23 +68,11 @@ export type JourneyBuilderDefaults = {
   definition?: { startStepId?: string | null; steps?: BuilderStep[] } | null;
 };
 
-const stepLabels: Record<string, string> = {
-  send_email: "Send email",
-  send_sms: "Send SMS",
-  create_activity: "Create activity",
-  send_push: "Notify the team",
-  move_stage: "Move lead stage",
-  assign_user: "Assign lead",
-  add_tag: "Add contact tag",
-  remove_tag: "Remove contact tag",
-  wait: "Wait",
-  condition: "Condition / branch",
-  stop: "Stop journey",
-  choose: "Choose (branches)",
-  repeat: "Repeat (loop)",
-  wait_for_trigger: "Wait for an event",
-  variables: "Set variables",
-};
+// One source, shared with the trace — a second copy is how the builder and the
+// activity trace end up calling the same step type two different things. The
+// map moved to journeyTypes.ts and is typed Record<JourneyStepType, string>, so
+// a new step type is a compile error until it is given a name here.
+const stepLabels: Record<string, string> = JOURNEY_STEP_LABELS;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);

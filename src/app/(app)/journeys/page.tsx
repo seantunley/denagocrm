@@ -236,6 +236,12 @@ export default async function JourneysPage() {
                     <td className="text-xs text-red-300 max-w-64 truncate">{run.lastError ?? "—"}</td>
                     <td>
                       <div className="flex gap-2">
+                        {/* The path this particular run took. "Current step" in
+                            the column above is one step id, which inside a
+                            repeat names a node the run has visited many times. */}
+                        <Link className="text-xs text-primary hover:underline" href={`/journeys/activity?run=${run.id}`}>
+                          Trace
+                        </Link>
                         {["failed", "cancelled"].includes(run.status) && (
                           <form action={retryJourneyRun.bind(null, run.id)}><button className="btn-secondary btn-sm">Retry</button></form>
                         )}

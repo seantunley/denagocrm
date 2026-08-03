@@ -1380,6 +1380,14 @@ test("the builder cannot silently destroy either new step type", () => {
     builder,
     /READ_ONLY_STEP_TYPES = new Set\(\["choose", "repeat", "wait_for_trigger", "variables"\]\)/,
   );
-  assert.match(builder, /wait_for_trigger: "Wait for an event"/, "…and the type must be selectable-by-name");
-  assert.match(builder, /variables: "Set variables"/);
+  // The label map was hoisted out of this component into journeyTypes.ts, so
+  // the builder and the activity trace cannot call the same step type two
+  // different things. The requirement is unchanged — both new types must have a
+  // human name — it just lives in the shared map now, which is typed
+  // Record<JourneyStepType, string> so a new type without a name will not
+  // compile.
+  assert.match(builder, /stepLabels: Record<string, string> = JOURNEY_STEP_LABELS/, "one label map, not two");
+  const labels = shipped("src/lib/journeyTypes.ts");
+  assert.match(labels, /wait_for_trigger: "Wait for an event"/, "…and the type must be selectable-by-name");
+  assert.match(labels, /variables: "Set variables"/);
 });
