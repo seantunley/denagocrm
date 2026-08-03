@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { createJourney } from "@/app/actions/journeys";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
+import { JOURNEY_RUN_MODES, RUN_MODE_LEGACY_NOTE } from "@/lib/journeyRunModes";
 
 export type JourneyOption = { id: string; name: string };
 
@@ -52,6 +53,12 @@ export type JourneyBuilderDefaults = {
   name?: string;
   description?: string | null;
   category?: string;
+  /**
+   * The journey's CURRENT mode, straight from the row — not a suggestion.
+   * Undefined only for a journey being created; anything else and the control
+   * would show "single" over a row that says "parallel".
+   */
+  runMode?: string;
   trigger?: string;
   triggerConfig?: Record<string, unknown> | null;
   conditionSource?: string;
@@ -133,6 +140,11 @@ export default function JourneyBuilder({
   const counter = useRef(100);
   const [trigger, setTrigger] = useState(defaults.trigger ?? "lead_created");
   const [category, setCategory] = useState(defaults.category ?? "automation");
+  // Not parseRunMode() — that lives beside basePrisma and cannot cross into the
+  // browser. An unrecognised stored value shows as "nothing selected", which is
+  // honest: the server would read it as `single`, and pretending the radio was
+  // already on `single` would hide a row that does not say that.
+  const [runMode, setRunMode] = useState(defaults.runMode ?? "single");
   const [triggerConfig, setTriggerConfig] = useState<Record<string, unknown>>(
     defaults.triggerConfig ?? {}
   );
@@ -316,8 +328,42 @@ export default function JourneyBuilder({
         )}
       </div>
 
+      {/* Re-enrolment. Sits directly under the trigger because it is the same
+          question — what the trigger firing a SECOND time means — and because
+          leaving it out of the form is what pinned every journey to whatever
+          the database happened to hold. */}
+      <fieldset className="rounded-lg border border-slate-800 p-4 space-y-3">
+        <legend className="font-semibold px-1">2. If the same person is enrolled again</legend>
+        <div className="space-y-2">
+          {JOURNEY_RUN_MODES.map((mode) => (
+            <label
+              key={mode.value}
+              className={`flex gap-3 rounded-lg border p-3 cursor-pointer ${
+                runMode === mode.value ? "border-primary bg-primary/5" : "border-slate-800"
+              }`}
+            >
+              <input
+                type="radio"
+                name="runMode"
+                value={mode.value}
+                className="mt-1"
+                checked={runMode === mode.value}
+                onChange={(e) => setRunMode(e.target.value)}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">{mode.label}</span>
+                {/* One line of plain English each. Four bare keywords are not a
+                    choice anybody can make. */}
+                <span className="block text-xs text-slate-400 mt-0.5">{mode.description}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-slate-500">{RUN_MODE_LEGACY_NOTE}</p>
+      </fieldset>
+
       <details className="rounded-lg border border-slate-800 p-4">
-        <summary className="font-semibold cursor-pointer">2. Optional entry filters</summary>
+        <summary className="font-semibold cursor-pointer">3. Optional entry filters</summary>
         <div className="grid md:grid-cols-3 gap-3 mt-3">
           <div>
             <label className="label">Lead source</label>
@@ -336,7 +382,7 @@ export default function JourneyBuilder({
 
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold">3. Journey steps</h3>
+          <h3 className="font-semibold">4. Journey steps</h3>
           <button type="button" className="btn-secondary btn-sm" onClick={addStep}>+ Add step</button>
         </div>
         {steps.map((step, index) => (
