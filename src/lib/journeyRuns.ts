@@ -421,6 +421,40 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         stepsExecuted += 1;
       }
 
+      /* ── a disabled step is SKIPPED, and the trace SAYS it was skipped ───── */
+      //
+      // HA's per-action `enabled: false`. Checked here — before the container
+      // branch, before the wait handler, before the executor — because "muted"
+      // has to mean the same thing for every step type: a disabled `choose` must
+      // not be entered, a disabled `wait_for_trigger` must not arm, a disabled
+      // `stop` must not end the run.
+      //
+      // The step log write is the whole feature. Advancing quietly would be one
+      // line shorter and would reproduce exactly the defect this engine's trace
+      // work existed to fix: a step that did nothing and said nothing is
+      // indistinguishable, three weeks later, from a step that was never
+      // reached. `disabled: true` is a FIELD rather than only prose, for the
+      // same reason `timedOut` is — the question is binary and a reader should
+      // not have to parse a sentence to answer it.
+      //
+      // The cursor advances WITHOUT an override, so a disabled top-level
+      // `condition` falls through to its own nextStepId rather than picking a
+      // branch: a muted question has no answer to branch on.
+      if (step.enabled === false) {
+        await updateStepLog({
+          runId: run.id,
+          path,
+          stepId: step.id,
+          stepType: step.type,
+          status: "skipped",
+          note: "Skipped: this step is turned off",
+          output: { disabled: true },
+        });
+        cursor = advanceCursor({ definition, cursor, context: stepContext, lookup });
+        await persistPosition(run.id, cursor, stepsExecuted, context);
+        continue;
+      }
+
       /* ── control-flow containers: the RUNNER runs these, not the executor ── */
       if (step.type === "choose" || step.type === "repeat") {
         let entered = null;

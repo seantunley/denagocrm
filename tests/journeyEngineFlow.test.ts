@@ -60,6 +60,15 @@ type DriveResult = {
   paths: string[];
   /** Step ids, in order. A repeat legitimately repeats them. */
   executed: string[];
+  /**
+   * Trace paths the runner RECORDED as skipped — today, disabled steps.
+   *
+   * Separate from `paths` on purpose. A disabled step did not execute, so it
+   * must not appear there; but it must appear SOMEWHERE, because a step that
+   * did nothing and wrote nothing is indistinguishable from one that was never
+   * reached. This array is the step-log write, modelled.
+   */
+  skipped: string[];
   /** How the run ended: "end" | "stop" | "condition" | "budget". */
   ended: string;
   note: string;
@@ -99,16 +108,27 @@ function drive(
 
   const paths: string[] = [];
   const executed: string[] = [];
+  const skipped: string[] = [];
   const repeatIndexes: (number | null)[] = [];
   const deferring = new Set(opts.deferOnce ?? []);
   const limit = opts.maxSteps ?? 400;
+  const done = (ended: string, note = "") =>
+    ({ paths, executed, skipped, ended, note, cursor, cache, repeatIndexes });
 
   for (let i = 0; i < limit; i++) {
     const position = resolveCursor(definition, cursor, lookup);
-    if (!position) return { paths, executed, ended: "end", note: "", cursor, cache, repeatIndexes };
+    if (!position) return done("end");
     const { step, path: tracePath, keyPath } = position;
     const inSequence = cursor.frames.length > 0;
     const stepContext = withRepeatVars(context, cursor);
+
+    // A disabled step, BEFORE the container branch — so a muted `choose` is not
+    // entered and a muted `stop` does not end the run. Recorded, never silent.
+    if (step.enabled === false) {
+      skipped.push(tracePath);
+      cursor = advanceCursor({ definition, cursor, context: stepContext, lookup });
+      continue;
+    }
 
     if (step.type === "choose" || step.type === "repeat") {
       const frame =
@@ -143,10 +163,10 @@ function drive(
       }
     } catch (error) {
       if (error instanceof StopJourney) {
-        return { paths, executed, ended: "stop", note: error.message, cursor, cache, repeatIndexes };
+        return done("stop", error.message);
       }
       if (error instanceof ConditionFailed) {
-        return { paths, executed, ended: "condition", note: error.message, cursor, cache, repeatIndexes };
+        return done("condition", error.message);
       }
       throw error;
     }
@@ -159,7 +179,7 @@ function drive(
       ...(override ? { override: override.stepId } : {}),
     });
   }
-  return { paths, executed, ended: "budget", note: "", cursor, cache, repeatIndexes };
+  return done("budget");
 }
 
 const step = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -854,7 +874,7 @@ test("the builder carries choose/repeat through instead of dropping them", () =>
   assert.match(builder, /READ_ONLY_STEP_TYPES = new Set\(\[[^\]]*"choose"[^\]]*"repeat"[^\]]*\]\)/);
   assert.match(
     builder,
-    /if \(READ_ONLY_STEP_TYPES\.has\(step\.type\)\) \{\s*return \{ id: step\.id, type: step\.type, continueOnError: step\.continueOnError, config \};/,
+    /if \(READ_ONLY_STEP_TYPES\.has\(step\.type\)\) \{\s*return \{ id: step\.id, type: step\.type, continueOnError: step\.continueOnError, enabled: step\.enabled, config \};/,
     "a container's config must be carried through untouched",
   );
   assert.match(builder, /disabled=\{READ_ONLY_STEP_TYPES\.has\(step\.type\)\}/, "the type selector must be locked");
@@ -1142,4 +1162,191 @@ test("definition AND cursor preparation are inside the per-run error boundary", 
     !/status: retry \? "queued" : "failed"[\s\S]{0,200}Definition could not be read/.test(body),
     "preparation failures must not go through the retrying path",
   );
+});
+
+/* ── 14. a disabled step is muted, not deleted — and never silently ──────── */
+
+test("a disabled step is SKIPPED and recorded as skipped, not passed over", () => {
+  // HA's per-action `enabled: false`. The point is to mute a step without
+  // deleting it, because deleting loses its config, its id and its trace
+  // history — and people delete-and-retype precisely because there is no mute.
+  const journey = {
+    startStepId: "a",
+    steps: [
+      step("a", { nextStepId: "b" }),
+      step("b", { nextStepId: "c", enabled: false }),
+      step("c", { nextStepId: null }),
+    ],
+  };
+  const run = drive(journey);
+  assert.deepEqual(run.executed, ["a", "c"], "the muted step must not run");
+  assert.deepEqual(run.skipped, ["b"], "…and must still appear in the trace as skipped");
+  assert.equal(run.ended, "end", "the run carries on past it");
+
+  // The same journey with the flag off runs all three — so the skip is the
+  // flag's doing and not the shape of the definition.
+  const armed = drive({
+    startStepId: "a",
+    steps: [step("a", { nextStepId: "b" }), step("b", { nextStepId: "c" }), step("c", { nextStepId: null })],
+  });
+  assert.deepEqual(armed.executed, ["a", "b", "c"]);
+  assert.deepEqual(armed.skipped, []);
+});
+
+test("a disabled CONTAINER is not entered — its whole branch is muted", () => {
+  // Checked before the container branch on purpose. Entering a disabled
+  // `choose` and then muting each nested step would push a frame, write a
+  // container log naming the branch it chose, and cost the run one step per
+  // muted child — a "disabled" step that is measurably doing work.
+  const run = drive(
+    {
+      startStepId: "triage",
+      steps: [
+        {
+          id: "triage",
+          type: "choose",
+          nextStepId: "after",
+          enabled: false,
+          config: { options: [{ sequence: [step("fb")] }], default: [step("other")] },
+        },
+        step("after", { nextStepId: null }),
+      ],
+    },
+    { lead: { source: "facebook" } },
+  );
+  assert.deepEqual(run.executed, ["after"], "no branch may run");
+  assert.deepEqual(run.skipped, ["triage"]);
+  assert.equal(run.cursor.frames.length, 0, "no frame may be pushed for a muted container");
+});
+
+test("a disabled repeat does not loop, and a disabled step INSIDE one is muted every pass", () => {
+  const run = drive({
+    startStepId: "loop",
+    steps: [{
+      id: "loop",
+      type: "repeat",
+      nextStepId: null,
+      config: { mode: "count", count: 3, sequence: [step("send", { enabled: false }), step("log")] },
+    }],
+  });
+  assert.deepEqual(run.executed, ["log", "log", "log"], "the loop still runs; the muted step does not");
+  assert.deepEqual(
+    run.skipped,
+    ["loop/repeat/0/sequence/0", "loop/repeat/1/sequence/0", "loop/repeat/2/sequence/0"],
+    "each pass records its own skip — the path carries the iteration",
+  );
+
+  const mutedLoop = drive({
+    startStepId: "loop",
+    steps: [
+      {
+        id: "loop",
+        type: "repeat",
+        nextStepId: "after",
+        enabled: false,
+        config: { mode: "count", count: 3, sequence: [step("send")] },
+      },
+      step("after", { nextStepId: null }),
+    ],
+  });
+  assert.deepEqual(mutedLoop.executed, ["after"], "a muted loop runs zero passes");
+});
+
+test("a disabled stop does not end the run, and a disabled condition does not branch", () => {
+  // The two step types where muting has to mean something other than "skip an
+  // action". A `stop` decides; a `condition` decides. The decision IS the step,
+  // so a muted one makes no decision at all.
+  const noStop = drive({
+    startStepId: "a",
+    steps: [
+      step("a", { nextStepId: "halt" }),
+      { id: "halt", type: "stop", nextStepId: "after", enabled: false, config: { reason: "Enough" } },
+      step("after", { nextStepId: null }),
+    ],
+  });
+  assert.equal(noStop.ended, "end", "a muted stop must not stop");
+  assert.deepEqual(noStop.executed, ["a", "after"]);
+
+  // A top-level condition falls through to its OWN nextStepId, not to
+  // trueStepId/falseStepId: the run advances with no override, because a muted
+  // question has no answer to branch on.
+  const noBranch = drive(
+    {
+      startStepId: "gate",
+      steps: [
+        {
+          id: "gate",
+          type: "condition",
+          nextStepId: "fallthrough",
+          enabled: false,
+          config: {
+            condition: { logic: "and", conditions: [{ field: "lead.source", operator: "equals", value: "web" }] },
+            trueStepId: "yes",
+            falseStepId: "no",
+          },
+        },
+        step("yes", { nextStepId: null }),
+        step("no", { nextStepId: null }),
+        step("fallthrough", { nextStepId: null }),
+      ],
+    },
+    { lead: { source: "web" } },
+  );
+  assert.deepEqual(noBranch.executed, ["fallthrough"], "neither branch may be taken");
+  assert.deepEqual(noBranch.skipped, ["gate"]);
+});
+
+test("only a literal false disables — and `enabled` round-trips through the parser", () => {
+  const parse = (enabled: unknown) =>
+    parseJourneyDefinition({
+      startStepId: "a",
+      steps: [{ id: "a", type: "send_push", nextStepId: null, enabled, config: {} }],
+    }).steps[0].enabled;
+
+  assert.equal(parse(false), false, "a dropped flag silently re-arms a muted step");
+  // Everything else is the documented default, so a definition written before
+  // this flag existed — which says nothing at all — keeps running.
+  assert.equal(parse(true), undefined, "`enabled: true` is the default and is not stored");
+  assert.equal(parse(undefined), undefined);
+  assert.equal(parse("false"), undefined, "a string is not a boolean; the safe reading is 'on'");
+  assert.equal(parse(0), undefined);
+});
+
+test("the runner RECORDS the skip before it advances", () => {
+  // The behavioural tests above drive a model of the loop; this pins the real
+  // runner, because the model is only faithful if the step log is genuinely
+  // written. Advancing quietly is one line shorter and reproduces exactly the
+  // defect the trace work existed to fix.
+  const runner = shipped("src/lib/journeyRuns.ts");
+  const at = runner.indexOf("if (step.enabled === false) {");
+  assert.notEqual(at, -1, "the disabled-step branch is gone — was it renamed?");
+  const containerAt = runner.indexOf('if (step.type === "choose" || step.type === "repeat")');
+  assert.notEqual(containerAt, -1, "the container branch is gone — was it renamed?");
+  assert.ok(at < containerAt, "the check must precede the container branch, or a muted choose is entered");
+  const branch = runner.slice(at, containerAt);
+  assert.ok(branch.length > 0, "the slice ran backwards");
+
+  assert.match(branch, /status: "skipped"/, "a muted step must be recorded, not silently advanced");
+  assert.match(branch, /output: \{ disabled: true \}/, "…as a FIELD, not only as prose");
+  const logAt = branch.indexOf("await updateStepLog(");
+  const advanceAt = branch.indexOf("advanceCursor(");
+  assert.ok(logAt !== -1 && advanceAt > logAt, "the log must be written before the cursor moves");
+  // No override: a muted top-level condition falls through to its own
+  // nextStepId rather than picking a branch it never evaluated.
+  assert.doesNotMatch(branch, /override/, "a muted step decides nothing, so it overrides nothing");
+});
+
+test("the builder offers the mute for every step type, containers included", () => {
+  // Muting a branch the form cannot visually edit is exactly when this is
+  // needed, and the alternative — deleting it — destroys the config with no
+  // undo. So the checkbox is NOT inside the `!READ_ONLY_STEP_TYPES.has(...)`
+  // guard that continueOnError sits behind.
+  const builder = shipped("src/components/JourneyBuilder.tsx");
+  const at = builder.indexOf("Step is on");
+  assert.notEqual(at, -1, "the mute checkbox is gone — was it relabelled?");
+  const guardAt = builder.indexOf('!READ_ONLY_STEP_TYPES.has(step.type) && step.type !== "wait"');
+  assert.notEqual(guardAt, -1, "the continueOnError guard is gone — was it changed?");
+  assert.ok(at < guardAt, "the mute must sit outside the read-only guard, not behind it");
+  assert.match(builder, /checked=\{step\.enabled !== false\}/, "absent must read as ON");
+  assert.match(builder, /enabled: step\.enabled/, "…and a save must not drop the flag");
 });

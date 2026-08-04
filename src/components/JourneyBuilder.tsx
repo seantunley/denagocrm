@@ -13,6 +13,9 @@ type BuilderStep = {
   type: string;
   /** HA's per-action `continue_on_error`, round-tripped so saving cannot drop it. */
   continueOnError?: boolean;
+  /** HA's per-action `enabled`. Round-tripped for the same reason: a step
+   *  silently re-armed by a save is a message sent that nobody asked for. */
+  enabled?: boolean;
   config: Record<string, unknown>;
 };
 
@@ -90,7 +93,7 @@ function cleanSteps(defaults?: JourneyBuilderDefaults["definition"]): BuilderSte
     // A container's config holds its nested sequences. Nothing below may touch
     // it — carry it through byte-for-byte.
     if (READ_ONLY_STEP_TYPES.has(step.type)) {
-      return { id: step.id, type: step.type, continueOnError: step.continueOnError, config };
+      return { id: step.id, type: step.type, continueOnError: step.continueOnError, enabled: step.enabled, config };
     }
     if (step.type === "condition" && isRecord(config.condition)) {
       const group = config.condition;
@@ -103,7 +106,7 @@ function cleanSteps(defaults?: JourneyBuilderDefaults["definition"]): BuilderSte
         config.value = first.value;
       }
     }
-    return { id: step.id, type: step.type, continueOnError: step.continueOnError, config };
+    return { id: step.id, type: step.type, continueOnError: step.continueOnError, enabled: step.enabled, config };
   });
 }
 
@@ -375,9 +378,20 @@ export default function JourneyBuilder({
           <button type="button" className="btn-secondary btn-sm" onClick={addStep}>+ Add step</button>
         </div>
         {steps.map((step, index) => (
-          <div key={step.id} className="rounded-lg border border-slate-800 bg-slate-900/40 p-4 space-y-3">
+          <div
+            key={step.id}
+            className={`rounded-lg border border-slate-800 bg-slate-900/40 p-4 space-y-3 ${
+              step.enabled === false ? "opacity-60" : ""
+            }`}
+          >
             <div className="flex items-center gap-2">
               <span className="badge bg-slate-800 text-slate-300">{index + 1}</span>
+              {/* A muted step still occupies its place in the sequence, so the
+                  list has to show which one is off. Dimming alone is a hint, not
+                  a statement — the badge is the statement. */}
+              {step.enabled === false && (
+                <span className="badge bg-amber-500/15 text-amber-300">Off</span>
+              )}
               {/* Disabled for containers: changing the type resets config, and a
                   container's config IS its nested sequences. One stray click
                   would delete every branch with no error and no undo. */}
@@ -454,6 +468,23 @@ export default function JourneyBuilder({
               </div>
             )}
             {step.type === "stop" && <input className="input" placeholder="Reason" value={String(step.config.reason ?? "")} onChange={(e) => setConfig(index, "reason", e.target.value)} />}
+
+            {/* HA's per-action `enabled`, offered for EVERY step type including
+                the ones with no visual editor — muting a branch you cannot edit
+                here is exactly when you need this, and the alternative is
+                deleting it and losing its config, its id and its trace history.
+                A disabled step is skipped and RECORDED as skipped, so the
+                activity trace still explains the gap. */}
+            <label className="flex items-center gap-2 text-xs text-slate-400">
+              <input
+                type="checkbox"
+                checked={step.enabled !== false}
+                onChange={(e) => setSteps((current) => current.map((s, i) =>
+                  i === index ? { ...s, enabled: e.target.checked } : s
+                ))}
+              />
+              Step is on
+            </label>
 
             {/* Per step, because only the author knows which of their steps is
                 load-bearing. One failed SMS used to fail the whole run and burn

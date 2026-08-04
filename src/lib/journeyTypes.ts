@@ -213,6 +213,25 @@ export type JourneyStep = {
    * swallowed by it: those are decisions, not faults.
    */
   continueOnError?: boolean;
+  /**
+   * After Home Assistant's per-action `enabled`. Absent or true means it runs;
+   * only a literal `false` mutes it.
+   *
+   * The point is to mute a step WITHOUT deleting it — a send that is wrong this
+   * month but right next month, a chase you want off while a promotion runs. The
+   * alternative people actually reach for is deleting the step and retyping it
+   * later, which loses its config, its id, and therefore its trace history.
+   *
+   * A disabled step is SKIPPED AND RECORDED AS SKIPPED. It is never quietly
+   * passed over: the whole argument for the activity trace is that a step which
+   * did nothing and said nothing is indistinguishable from a step that was never
+   * reached, and "why did this customer not get the email" must be answerable
+   * from the trace rather than by re-reading the definition.
+   *
+   * Read as `!== false` rather than `=== true`, like continueOnError, so every
+   * definition written before this flag existed keeps the documented default.
+   */
+  enabled?: boolean;
   config: Record<string, unknown>;
 };
 
@@ -391,6 +410,11 @@ function parseStepHeader(raw: unknown, budget: ParseBudget, nested: boolean): Jo
     config: isRecord(raw.config) ? raw.config : {},
   };
   if (raw.continueOnError === true) step.continueOnError = true;
+  // Only a literal `false` is stored. `enabled: true` is the default and is
+  // dropped rather than round-tripped, so the saved JSON says nothing about the
+  // steps that are simply on — and an older definition, which says nothing at
+  // all, means the same thing.
+  if (raw.enabled === false) step.enabled = false;
   return step;
 }
 
