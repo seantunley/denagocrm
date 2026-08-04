@@ -268,6 +268,43 @@ export async function putTenantCredential(tenantId: string, key: string, value: 
 }
 
 /**
+ * Writes a WHOLE integration bundle for a tenant in ONE transaction.
+ *
+ * The guided config flow (src/app/actions/integrationFlow.ts) commits every
+ * field of an integration at once, only after a live connection test passed.
+ * Looping `putTenantCredential` would make that commit non-atomic: a crash
+ * between two keys leaves the tenant with a half-written bundle — precisely the
+ * "incomplete" state `integrationOverrideStatus` exists to warn about — and, far
+ * worse, a bundle that no longer matches the combination that was actually
+ * verified. One transaction means the tenant either has the verified bundle or
+ * the one they had before.
+ *
+ * Encryption goes through the same {@link storedSettingValue} rule as every
+ * other write path, so a credential key cannot end up in clear text here.
+ *
+ * `basePrisma` with an EXPLICIT tenantId on every row, exactly as
+ * {@link putTenantCredential} does: callers pass the tenant from their own
+ * session, never from ambient scope.
+ */
+export async function putTenantCredentialBundle(
+  tenantId: string,
+  entries: Readonly<Record<string, string>>,
+): Promise<void> {
+  const rows = Object.entries(entries).filter(([, value]) => value !== "");
+  if (rows.length === 0) return;
+  await basePrisma.$transaction(
+    rows.map(([key, value]) => {
+      const stored = storedSettingValue(key, value);
+      return basePrisma.tenantIntegrationCredential.upsert({
+        where: { tenantId_key: { tenantId, key } },
+        update: { value: stored },
+        create: { tenantId, key, value: stored },
+      });
+    }),
+  );
+}
+
+/**
  * Existence-only check for a tenant's own override — powers the tenant-facing
  * "Override active" / "Using platform default" status in the per-tenant
  * credential overrides UI. Deliberately never touches or returns the stored

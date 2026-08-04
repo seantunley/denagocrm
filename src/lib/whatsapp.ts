@@ -27,6 +27,45 @@ async function waCredentials(): Promise<[string | null, string | null]> {
   return [bundle.WA_PHONE_NUMBER_ID, bundle.WA_ACCESS_TOKEN];
 }
 
+/**
+ * Reports how a real send went to this tenant's integration connection state,
+ * so an expired or revoked WA_ACCESS_TOKEN surfaces as "Reconnect needed" in
+ * Settings → Integration overrides instead of quietly failing every message.
+ *
+ * Reuses the SAME classifier the guided setup's connection test uses
+ * (classifyGraphError), so a token Meta rejects mid-flight is described to the
+ * owner in exactly the words the setup wizard would have used, and is blamed on
+ * the same flow step.
+ *
+ * Fire-and-forget and fully swallowed: this is bookkeeping hanging off a
+ * customer-facing send, and it must never add latency to it or change its
+ * result. Only auth-class failures flip the status — see REAUTH_FAILURE_CODES.
+ */
+function noteWhatsAppOutcome(
+  phoneNumberId: string,
+  token: string,
+  res: { ok: boolean; status: number },
+  body: unknown,
+): void {
+  void (async () => {
+    try {
+      const [{ noteIntegrationSendOutcome }, { classifyGraphError }] = await Promise.all([
+        import("./integrationConnection"),
+        import("./integrationProbe"),
+      ]);
+      const tenantId = ambientTenantId();
+      if (res.ok) {
+        await noteIntegrationSendOutcome(tenantId, "whatsapp", { ok: true });
+        return;
+      }
+      const failure = classifyGraphError(res.status, body, { phoneNumberId, accessToken: token });
+      await noteIntegrationSendOutcome(tenantId, "whatsapp", { ok: false, failure }, [token]);
+    } catch {
+      /* bookkeeping must never break a send */
+    }
+  })();
+}
+
 /** Normalises a phone number to WhatsApp digits (27…). */
 export function waDigits(phone: string): string {
   let d = phone.replace(/\D/g, "");
@@ -83,12 +122,14 @@ export async function sendWhatsAppText(
   });
   if (!res.ok) {
     const err = await res.json().catch(() => null);
+    noteWhatsAppOutcome(phoneNumberId, token, res, err);
     const msg: string = err?.error?.message ?? `WhatsApp API error ${res.status}`;
     const friendly = msg.includes("24")
       ? "Outside the 24-hour reply window — the customer must message you first (or use an approved template from WhatsApp Manager)."
       : msg;
     return { ok: false, error: friendly };
   }
+  noteWhatsAppOutcome(phoneNumberId, token, res, null);
   return { ok: true };
 }
 

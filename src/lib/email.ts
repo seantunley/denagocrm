@@ -69,12 +69,51 @@ export async function sendEmail(input: {
       html: input.html,
       attachments: input.attachments,
     });
+    noteSmtpOutcome(config, null);
     return { ok: true };
   } catch (err) {
+    noteSmtpOutcome(config, err);
     const { logError } = await import("./errorLog");
     await logError("smtp", err, `to: ${input.to} — ${input.subject}`);
     return { ok: false, error: err instanceof Error ? err.message : "Failed to send email" };
   }
+}
+
+/**
+ * Reports how a real send went to this tenant's integration connection state, so
+ * a mailbox password that has been changed or expired surfaces as "Reconnect
+ * needed" in Settings → Integration overrides rather than silently bouncing
+ * every notification.
+ *
+ * Reuses the SAME classifier the guided setup's connection test uses
+ * (classifySmtpError), so the owner reads the same sentence, blamed on the same
+ * step, whether the failure was found by the wizard or by a real send. Only
+ * auth-class failures flip the status: a mail server that was briefly
+ * unreachable must not demand a password nobody got wrong.
+ *
+ * Fire-and-forget and fully swallowed — bookkeeping must never delay or alter a
+ * send. Note this deliberately does NOT pass the raw error to the connection
+ * store: classifySmtpError turns it into a curated sentence with the password
+ * redacted, whereas a nodemailer error message can quote the AUTH exchange.
+ */
+function noteSmtpOutcome(config: SmtpConfig, err: unknown): void {
+  void (async () => {
+    try {
+      const [{ noteIntegrationSendOutcome }, { classifySmtpError }] = await Promise.all([
+        import("./integrationConnection"),
+        import("./integrationProbe"),
+      ]);
+      const tenantId = currentTenantScope()?.tenantId ?? null;
+      if (!err) {
+        await noteIntegrationSendOutcome(tenantId, "smtp", { ok: true });
+        return;
+      }
+      const failure = classifySmtpError(err, config);
+      await noteIntegrationSendOutcome(tenantId, "smtp", { ok: false, failure }, [config.pass]);
+    } catch {
+      /* bookkeeping must never break a send */
+    }
+  })();
 }
 
 /**
