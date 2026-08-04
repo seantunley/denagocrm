@@ -186,8 +186,19 @@ export type JourneyCondition = {
   value?: unknown;
 };
 
+/**
+ * `not` is HA's, and it means NONE OF THESE — the same thing HA's `condition:
+ * not` means: "passes if all embedded conditions are not valid". So it is NOR,
+ * not "negate the first one".
+ *
+ * Spelled as a third `logic` rather than a `negate: true` flag on a group. A
+ * flag would have made `{ logic: "or", negate: true }` and
+ * `{ logic: "and", negate: true }` two more shapes to evaluate, explain and
+ * render, for no expressiveness a nested group does not already give: `not` of a
+ * nested `and` is `{ logic: "not", conditions: [{ logic: "and", … }] }`.
+ */
 export type JourneyConditionGroup = {
-  logic: "and" | "or";
+  logic: "and" | "or" | "not";
   conditions: Array<JourneyCondition | JourneyConditionGroup>;
 };
 
@@ -332,7 +343,11 @@ function cleanId(value: unknown): string | null {
 export function parseConditionGroup(value: unknown): JourneyConditionGroup | null {
   if (value == null) return null;
   if (!isRecord(value)) throw new Error("Conditions must be an object");
-  const logic = value.logic === "or" ? "or" : "and";
+  // Unknown logic falls back to "and", as it always has. That is deliberately
+  // NOT a throw: entryConditions and choose options are stored JSON that
+  // predates this field, and the permissive reading is the one every existing
+  // journey was saved under.
+  const logic = value.logic === "or" ? "or" : value.logic === "not" ? "not" : "and";
   if (!Array.isArray(value.conditions)) throw new Error("Conditions must contain a list");
   if (value.conditions.length > JOURNEY_LIMITS.conditionsPerGroup) {
     throw new Error(`A journey may contain at most ${JOURNEY_LIMITS.conditionsPerGroup} conditions`);
@@ -816,8 +831,35 @@ export type ConditionExplanation = {
   operator: string;
   expected: unknown;
   actual: unknown;
+  /**
+   * The COMPARISON's own result — did `actual` match `expected`. Unchanged by
+   * negation, on purpose: this field answers "what did the clause see and how
+   * did that compare", which is a fact about the data and must not flip
+   * meaning depending on where the clause sits.
+   */
   passed: boolean;
+  /**
+   * True when an ODD number of enclosing `not` groups apply to this clause.
+   *
+   * Without it the flattened trace is actively misleading under a `not`: the
+   * clause that PASSED is the one that made the group fail, and a reader
+   * scanning for ✗ would find nothing wrong and conclude the engine was broken.
+   * That is the "Condition did not match" defect again, one level down.
+   *
+   * Read together with `passed` through `clauseHeld` — never on its own.
+   */
+  negated: boolean;
 };
+
+/**
+ * Did this clause help its group pass?
+ *
+ * The one place the two fields are combined, so the trace UI and any test agree
+ * on what a tick means. Under a `not`, a clause holds by NOT matching.
+ */
+export function clauseHeld(clause: { passed: boolean; negated?: boolean }): boolean {
+  return clause.negated ? !clause.passed : clause.passed;
+}
 
 /**
  * The per-clause result behind a condition's verdict.
@@ -830,14 +872,34 @@ export type ConditionExplanation = {
  *
  * Nested groups are flattened: the field/operator pairs are what a reader is
  * looking for, and the group structure is already visible in the builder.
+ *
+ * ── What flattening does and does not promise, now that `not` exists ────────
+ *
+ * These rows are DIAGNOSTIC, not a re-derivation of the verdict. The verdict is
+ * recorded separately, as `output.passed`, by whoever ran the group — and it
+ * has to be, because a flat list cannot express composition: an `or` where one
+ * clause shows ✗ still passed, and that has been true since per-clause results
+ * were added. Nothing here changes that contract.
+ *
+ * What `not` WOULD have broken, and what `negated` fixes, is worse than
+ * imprecision. Under a `not`, a clause that matched is the reason the group
+ * failed — so a reader scanning the rows for a ✗ would find every clause green
+ * beside a step that did not match, and conclude the engine was lying. Carrying
+ * the negation makes each row state what it was actually asked to do: required,
+ * or excluded.
+ *
+ * `depth` is parity, not a count: two `not`s cancel, exactly as they do in the
+ * evaluation.
  */
 export function explainConditions(
   group: JourneyConditionGroup | null,
-  context: Record<string, unknown>
+  context: Record<string, unknown>,
+  negated = false,
 ): ConditionExplanation[] {
   if (!group) return [];
+  const inner = group.logic === "not" ? !negated : negated;
   return group.conditions.flatMap((condition) => {
-    if ("conditions" in condition) return explainConditions(condition, context);
+    if ("conditions" in condition) return explainConditions(condition, context, inner);
     const actual = valueAtPath(context, condition.field);
     return [{
       field: condition.field,
@@ -845,6 +907,7 @@ export function explainConditions(
       expected: condition.value,
       actual,
       passed: compare(condition, actual),
+      negated: inner,
     }];
   });
 }
@@ -853,12 +916,20 @@ export function evaluateConditions(
   group: JourneyConditionGroup | null,
   context: Record<string, unknown>
 ): boolean {
+  // An empty group is "no filter" and passes — including an empty `not`, which
+  // agrees with the rule below: NOR of nothing is true. The two must agree, or
+  // deleting the last clause from a `not` would flip an entry filter from
+  // "everyone except X" to "nobody", silently, on save.
   if (!group || group.conditions.length === 0) return true;
   const results = group.conditions.map((condition) =>
     "conditions" in condition
       ? evaluateConditions(condition, context)
       : compare(condition, valueAtPath(context, condition.field))
   );
+  // `not` is NOR — "none of these are valid" — matching Home Assistant's
+  // `condition: not`, which takes a LIST. It is not "negate the first clause",
+  // and it is not `!and(...)`: `not` over [a, b] excludes a and excludes b.
+  if (group.logic === "not") return !results.some(Boolean);
   return group.logic === "or" ? results.some(Boolean) : results.every(Boolean);
 }
 

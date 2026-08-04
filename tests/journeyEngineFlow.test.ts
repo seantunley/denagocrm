@@ -6,6 +6,10 @@ import path from "node:path";
 
 import {
   JOURNEY_LIMITS,
+  clauseHeld,
+  evaluateConditions,
+  explainConditions,
+  parseConditionGroup,
   parseJourneyDefinition,
   parseJourneySequence,
   type JourneyDefinition,
@@ -874,10 +878,10 @@ test("the builder carries choose/repeat through instead of dropping them", () =>
   assert.match(builder, /READ_ONLY_STEP_TYPES = new Set\(\[[^\]]*"choose"[^\]]*"repeat"[^\]]*\]\)/);
   assert.match(
     builder,
-    /if \(READ_ONLY_STEP_TYPES\.has\(step\.type\)\) \{\s*return \{ id: step\.id, type: step\.type, continueOnError: step\.continueOnError, enabled: step\.enabled, config \};/,
+    /const carried = \{ id: step\.id, type: step\.type, continueOnError: step\.continueOnError, enabled: step\.enabled, config \};\s*if \(isReadOnlyStep\(carried\)\) return carried;/,
     "a container's config must be carried through untouched",
   );
-  assert.match(builder, /disabled=\{READ_ONLY_STEP_TYPES\.has\(step\.type\)\}/, "the type selector must be locked");
+  assert.match(builder, /disabled=\{isReadOnlyStep\(step\)\}/, "the type selector must be locked");
   assert.match(builder, /no visual editor for this step yet/i, "…and it must SAY so on screen");
   assert.match(builder, /continueOnError: step\.continueOnError/);
 });
@@ -1344,9 +1348,257 @@ test("the builder offers the mute for every step type, containers included", () 
   const builder = shipped("src/components/JourneyBuilder.tsx");
   const at = builder.indexOf("Step is on");
   assert.notEqual(at, -1, "the mute checkbox is gone — was it relabelled?");
-  const guardAt = builder.indexOf('!READ_ONLY_STEP_TYPES.has(step.type) && step.type !== "wait"');
+  const guardAt = builder.indexOf('!isReadOnlyStep(step) && step.type !== "wait"');
   assert.notEqual(guardAt, -1, "the continueOnError guard is gone — was it changed?");
   assert.ok(at < guardAt, "the mute must sit outside the read-only guard, not behind it");
   assert.match(builder, /checked=\{step\.enabled !== false\}/, "absent must read as ON");
   assert.match(builder, /enabled: step\.enabled/, "…and a save must not drop the flag");
+});
+
+/* ── 15. `not` in condition groups ───────────────────────────────────────── */
+
+const clause = (field: string, value: unknown, operator = "equals") =>
+  ({ field, operator, value });
+
+test("`not` is NONE OF THESE, not 'negate the first clause'", () => {
+  // Home Assistant's `condition: not` takes a LIST and passes when all of the
+  // embedded conditions are invalid. So it is NOR. The tempting reading —
+  // !and(...) — differs the moment there is more than one clause, and it
+  // differs in the dangerous direction: !and([a, b]) passes when only ONE of
+  // them is false, which for an exclusion list means mailing people the author
+  // wrote the group to exclude.
+  const group = parseConditionGroup({
+    logic: "not",
+    conditions: [clause("lead.source", "facebook"), clause("lead.status", "lost")],
+  });
+  assert.equal(group?.logic, "not", "the parser must keep the logic it was given");
+
+  const neither = { lead: { source: "website", status: "open" } };
+  const onlyFirst = { lead: { source: "facebook", status: "open" } };
+  const onlySecond = { lead: { source: "website", status: "lost" } };
+  const both = { lead: { source: "facebook", status: "lost" } };
+
+  assert.equal(evaluateConditions(group, neither), true, "none match, so the group passes");
+  assert.equal(evaluateConditions(group, onlyFirst), false);
+  assert.equal(evaluateConditions(group, onlySecond), false, "…and !and(a,b) would have passed here");
+  assert.equal(evaluateConditions(group, both), false);
+});
+
+test("`not` nests, and two of them cancel", () => {
+  const doubleNegative = parseConditionGroup({
+    logic: "not",
+    conditions: [{ logic: "not", conditions: [clause("lead.source", "web")] }],
+  });
+  assert.equal(evaluateConditions(doubleNegative, { lead: { source: "web" } }), true);
+  assert.equal(evaluateConditions(doubleNegative, { lead: { source: "phone" } }), false);
+
+  // `not` wrapping an `and`: "not both of these".
+  const notBoth = parseConditionGroup({
+    logic: "not",
+    conditions: [{
+      logic: "and",
+      conditions: [clause("lead.source", "web"), clause("lead.status", "open")],
+    }],
+  });
+  assert.equal(evaluateConditions(notBoth, { lead: { source: "web", status: "open" } }), false);
+  assert.equal(evaluateConditions(notBoth, { lead: { source: "web", status: "lost" } }), true);
+
+  // And an `and` holding a `not`, which is how an exclusion is usually written:
+  // "web leads, but not the lost ones".
+  const mixed = parseConditionGroup({
+    logic: "and",
+    conditions: [
+      clause("lead.source", "web"),
+      { logic: "not", conditions: [clause("lead.status", "lost")] },
+    ],
+  });
+  assert.equal(evaluateConditions(mixed, { lead: { source: "web", status: "open" } }), true);
+  assert.equal(evaluateConditions(mixed, { lead: { source: "web", status: "lost" } }), false);
+  assert.equal(evaluateConditions(mixed, { lead: { source: "phone", status: "open" } }), false);
+});
+
+test("an empty `not` passes, exactly as an empty and/or does", () => {
+  // These two rules have to agree. If the empty-group short-circuit said "pass"
+  // while NOR-of-nothing said "fail", deleting the last clause from a `not`
+  // would flip an entry filter from "everyone except X" to "nobody" — silently,
+  // on save, with the journey still looking active.
+  assert.equal(evaluateConditions(parseConditionGroup({ logic: "not", conditions: [] }), {}), true);
+  assert.equal(evaluateConditions(parseConditionGroup({ logic: "and", conditions: [] }), {}), true);
+  assert.equal(evaluateConditions(parseConditionGroup({ logic: "or", conditions: [] }), {}), true);
+});
+
+test("an unknown logic still reads as `and` — stored JSON predates this field", () => {
+  // Not a throw. entryConditions and choose options are stored JSON written
+  // before `logic` had three values, and the permissive reading is the one
+  // every existing journey was saved under.
+  const group = parseConditionGroup({ logic: "nor", conditions: [clause("lead.source", "web")] });
+  assert.equal(group?.logic, "and");
+});
+
+test("the per-clause trace says whether a clause was REQUIRED or EXCLUDED", () => {
+  // The truthfulness problem `not` creates. Flattened, a clause under a `not`
+  // that MATCHED is the reason the group failed — so a reader scanning for a ✗
+  // would find every row green beside a step that did not match, and conclude
+  // the trace was lying. `passed` stays the comparison's own result, because
+  // that is a fact about the data; `negated` says what the group asked of it.
+  const group = parseConditionGroup({
+    logic: "and",
+    conditions: [
+      clause("lead.source", "web"),
+      { logic: "not", conditions: [clause("lead.status", "lost")] },
+    ],
+  });
+  const excluded = explainConditions(group, { lead: { source: "web", status: "lost" } });
+
+  assert.deepEqual(excluded.map((row) => row.field), ["lead.source", "lead.status"]);
+  assert.deepEqual(excluded.map((row) => row.passed), [true, true], "both comparisons matched");
+  assert.deepEqual(excluded.map((row) => row.negated), [false, true]);
+  // …and the group nevertheless FAILED, which is exactly what a bare `passed`
+  // column could not have explained.
+  assert.equal(evaluateConditions(group, { lead: { source: "web", status: "lost" } }), false);
+  assert.deepEqual(
+    excluded.map(clauseHeld),
+    [true, false],
+    "the second clause is why it failed, and the trace must be able to say so",
+  );
+
+  // The clause still records what it SAW, negated or not.
+  assert.equal(excluded[1].actual, "lost");
+  assert.equal(excluded[1].expected, "lost");
+});
+
+test("negation is PARITY in the trace, matching the evaluation", () => {
+  const group = parseConditionGroup({
+    logic: "not",
+    conditions: [{ logic: "not", conditions: [clause("lead.source", "web")] }],
+  });
+  const rows = explainConditions(group, { lead: { source: "web" } });
+  assert.deepEqual(rows.map((row) => row.negated), [false], "two nots cancel, here as well");
+  assert.deepEqual(rows.map(clauseHeld), [true]);
+  assert.equal(evaluateConditions(group, { lead: { source: "web" } }), true, "…and the two agree");
+});
+
+test("a condition STEP records its negated clauses, and gates on the group's verdict", () => {
+  // End to end through the step that actually runs one. `output.passed` is the
+  // authoritative verdict — the clause rows are diagnostic beside it, which is
+  // the contract a flat list has had since `or` existed.
+  const gate = {
+    id: "gate",
+    type: "condition" as const,
+    nextStepId: null,
+    config: {
+      condition: { logic: "not", conditions: [clause("contact.province", "Gauteng")] },
+      trueStepId: "yes",
+      falseStepId: "no",
+    },
+  };
+
+  const excluded = conditionStepOutcome(gate, { contact: { province: "Gauteng" } }, false);
+  assert.equal(excluded.output.passed, false);
+  assert.deepEqual(excluded.branch, { stepId: "no" });
+  assert.deepEqual(
+    (excluded.output.clauses as Array<Record<string, unknown>>).map((row) => [row.passed, row.negated]),
+    [[true, true]],
+    "matched, and excluded — which is why it failed",
+  );
+
+  const allowed = conditionStepOutcome(gate, { contact: { province: "Western Cape" } }, false);
+  assert.equal(allowed.output.passed, true);
+  assert.deepEqual(allowed.branch, { stepId: "yes" });
+});
+
+test("a `not` drives a real run: choose branches and repeat while both honour it", () => {
+  // Behavioural, through the runner's own traversal rather than the predicate
+  // alone. `not` has to work everywhere a condition group is read.
+  const journey = {
+    startStepId: "triage",
+    steps: [
+      {
+        id: "triage",
+        type: "choose",
+        nextStepId: "after",
+        config: {
+          options: [{
+            conditions: { logic: "not", conditions: [clause("contact.marketingOptOut", true)] },
+            sequence: [step("mail")],
+          }],
+          default: [step("skip")],
+        },
+      },
+      step("after", { nextStepId: null }),
+    ],
+  };
+  assert.deepEqual(drive(journey, { contact: { marketingOptOut: false } }).executed, ["mail", "after"]);
+  assert.deepEqual(
+    drive(journey, { contact: { marketingOptOut: true } }).executed,
+    ["skip", "after"],
+    "an opted-out contact must take the default branch",
+  );
+
+  // `repeat while not …` — the loop runs until the excluded thing becomes true.
+  const loop = drive({
+    startStepId: "loop",
+    steps: [
+      {
+        id: "loop",
+        type: "repeat",
+        nextStepId: "done",
+        config: {
+          mode: "while",
+          while: { logic: "not", conditions: [clause("lead.status", "won")] },
+          sequence: [step("chase")],
+        },
+      },
+      step("done", { nextStepId: null }),
+    ],
+  }, { lead: { status: "won" } });
+  assert.deepEqual(loop.executed, ["done"], "a while whose `not` is already false must not run the body");
+});
+
+test("a `repeat while not` with no clauses is still refused", () => {
+  // The infinite-loop guard must not have a hole punched in it by the new
+  // logic: an empty `not` evaluates TRUE, exactly as an empty `and` does, so it
+  // would loop until the iteration ceiling stopped it a hundred messages later.
+  assert.throws(
+    () =>
+      parseJourneyDefinition({
+        startStepId: "loop",
+        steps: [{
+          id: "loop",
+          type: "repeat",
+          config: { mode: "while", while: { logic: "not", conditions: [] }, sequence: [step("s")] },
+        }],
+      }),
+    /never ends/,
+  );
+});
+
+test("the builder carries a condition group it cannot represent, instead of flattening it", () => {
+  // The editor is ONE clause under `and`, and everything it saves is rebuilt
+  // from three inputs — so anything richer authored as JSON was silently
+  // flattened to conditions[0] on the next save: every other clause, every
+  // nested group and every `not`, gone, with no error and no undo. A journey
+  // would then enrol the exact set of people it was written to exclude.
+  //
+  // `not` did not create that hole, it made it reachable.
+  const builder = shipped("src/components/JourneyBuilder.tsx");
+  assert.match(builder, /function complexCondition\(/, "the form must know what it cannot edit");
+  assert.match(
+    builder,
+    /if \(group\.logic != null && group\.logic !== "and"\) return true;/,
+    "a `not` or an `or` group is not representable by a single-clause editor",
+  );
+  assert.match(builder, /if \(!Array\.isArray\(list\) \|\| list\.length !== 1\) return true;/);
+  // A carried condition must not have a second false-branch stop minted for it:
+  // it already names its own falseStepId, and the orphan would fail the parse.
+  assert.match(
+    builder,
+    /\.filter\(\(step\) => step\.type === "condition" && !isReadOnlyStep\(step\)\)/,
+  );
+  // …and the single-clause editor must not be offered for one either, or the
+  // three inputs would show the first clause of a group they cannot save.
+  assert.match(builder, /step\.type === "condition" && !isReadOnlyStep\(step\) && \(/);
+  // A step with no stored group is a NEW one the form is about to build — that
+  // must stay editable, or adding a condition would be impossible.
+  assert.match(builder, /if \(!isRecord\(group\)\) return false;/);
 });

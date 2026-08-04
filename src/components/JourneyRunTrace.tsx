@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { CircleSlash, GitBranch, Repeat, TriangleAlert } from "lucide-react";
 import { formatDateTime } from "@/lib/format";
-import { JOURNEY_STEP_LABELS, type JourneyStepType } from "@/lib/journeyTypes";
+import { JOURNEY_STEP_LABELS, clauseHeld, type JourneyStepType } from "@/lib/journeyTypes";
 import type { TraceRunDetail } from "@/lib/journeyTrace";
 import {
   OPEN_RUN_STATUSES,
@@ -114,9 +114,17 @@ function StepRow({ node, run }: { node: TraceNode; run: TraceRunDetail }) {
               key={`${clause.field}-${clause.operator}-${index}`}
               className="flex flex-wrap items-baseline gap-1.5 text-[11px]"
             >
-              <span className={clause.passed ? "text-emerald-400" : "text-red-400"}>
-                {clause.passed ? "✓" : "✗"}
+              {/* The tick is whether the clause HELD, not whether it matched.
+                  Under a `not` those are opposites: the clause that matched is
+                  the one that made the group fail, and showing a green ✓ beside
+                  a step that did not match would send the reader hunting for a
+                  bug in the engine. `not` on the row is what says which. */}
+              <span className={clauseHeld(clause) ? "text-emerald-400" : "text-red-400"}>
+                {clauseHeld(clause) ? "✓" : "✗"}
               </span>
+              {clause.negated && (
+                <span className="font-mono uppercase text-amber-300">not</span>
+              )}
               <span className="font-mono text-foreground">{clause.field}</span>
               <span className="text-muted-foreground">{describeOperator(clause.operator)}</span>
               <span className="font-mono text-foreground">{describeValue(clause.expected)}</span>

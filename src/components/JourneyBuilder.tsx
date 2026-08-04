@@ -38,8 +38,56 @@ type BuilderStep = {
  */
 const READ_ONLY_STEP_TYPES = new Set(["choose", "repeat", "wait_for_trigger", "variables"]);
 
+/**
+ * A `condition` whose group this form CANNOT represent.
+ *
+ * The editor below is a single clause: one field, one operator, one value,
+ * under `and`. Everything it saves is rebuilt from those three inputs — which
+ * means anything richer that was authored as JSON was, until now, silently
+ * flattened to `conditions[0]` on the next save. Every other clause, every
+ * nested group, and (the reason this became urgent) every `not`, gone; no
+ * error, no undo, and a journey that now enrols the exact set of people it was
+ * written to exclude.
+ *
+ * `not` did not create that hole, it made it reachable: `not` is precisely the
+ * kind of thing someone hand-authors into a condition step. So a group the form
+ * cannot round-trip makes the step read-only, exactly as a container is.
+ *
+ * A step with NO stored group is a new one the form is about to build — that is
+ * the flat field/operator/value shape, and it is editable.
+ */
+function complexCondition(config: Record<string, unknown>): boolean {
+  const group = config.condition;
+  if (!isRecord(group)) return false;
+  if (group.logic != null && group.logic !== "and") return true;
+  const list = group.conditions;
+  if (!Array.isArray(list) || list.length !== 1) return true;
+  return !isRecord(list[0]) || Array.isArray((list[0] as Record<string, unknown>).conditions);
+}
+
+/** Every reason a step is carried through verbatim rather than edited here. */
+function isReadOnlyStep(step: BuilderStep): boolean {
+  if (READ_ONLY_STEP_TYPES.has(step.type)) return true;
+  return step.type === "condition" && complexCondition(step.config);
+}
+
+/** How many leaf clauses a group holds, at every depth. */
+function countClauses(group: unknown): number {
+  if (!isRecord(group) || !Array.isArray(group.conditions)) return 0;
+  return group.conditions.reduce<number>(
+    (total, entry) =>
+      total + (isRecord(entry) && Array.isArray(entry.conditions) ? countClauses(entry) : 1),
+    0,
+  );
+}
+
 /** The one-line summary shown for a step the form cannot edit. */
 function readOnlySummary(step: BuilderStep): string {
+  if (step.type === "condition") {
+    const group = isRecord(step.config.condition) ? step.config.condition : {};
+    const clauses = countClauses(group);
+    return `Condition (${String(group.logic ?? "and")}): ${clauses} clause${clauses === 1 ? "" : "s"}`;
+  }
   if (step.type === "choose") {
     const options = Array.isArray(step.config.options) ? step.config.options.length : 0;
     return `${options} branch${options === 1 ? "" : "es"}${step.config.default ? " + default" : ""}`;
@@ -90,11 +138,11 @@ function cleanSteps(defaults?: JourneyBuilderDefaults["definition"]): BuilderSte
   }
   return existing.map((step) => {
     const config = { ...step.config };
-    // A container's config holds its nested sequences. Nothing below may touch
-    // it — carry it through byte-for-byte.
-    if (READ_ONLY_STEP_TYPES.has(step.type)) {
-      return { id: step.id, type: step.type, continueOnError: step.continueOnError, enabled: step.enabled, config };
-    }
+    const carried = { id: step.id, type: step.type, continueOnError: step.continueOnError, enabled: step.enabled, config };
+    // A container's config holds its nested sequences, and a rich condition's
+    // holds a group this form cannot rebuild. Nothing below may touch either —
+    // carry them through byte-for-byte.
+    if (isReadOnlyStep(carried)) return carried;
     if (step.type === "condition" && isRecord(config.condition)) {
       const group = config.condition;
       const first = Array.isArray(group.conditions) && isRecord(group.conditions[0])
@@ -208,8 +256,10 @@ export default function JourneyBuilder({
     const mapped = steps.map((step, index) => {
       const nextStepId = steps[index + 1]?.id ?? null;
       // Spreading `step` is what preserves a container's nested sequences and
-      // every step's continueOnError. Only `condition` has its config rebuilt.
-      if (step.type !== "condition") return { ...step, nextStepId };
+      // every step's continueOnError. Only a condition the form can actually
+      // represent has its config rebuilt; a richer group is carried, along with
+      // its own trueStepId/falseStepId, rather than rewritten from one clause.
+      if (step.type !== "condition" || isReadOnlyStep(step)) return { ...step, nextStepId };
       const stopId = `${step.id}_false_stop`;
       return {
         ...step,
@@ -228,8 +278,11 @@ export default function JourneyBuilder({
         },
       };
     });
+    // Only for the conditions this form generated a false-branch for. A carried
+    // condition already names its own falseStepId, and minting a second stop
+    // step for it would be an orphan the parser then rejects.
     const generatedStops = steps
-      .filter((step) => step.type === "condition")
+      .filter((step) => step.type === "condition" && !isReadOnlyStep(step))
       .map((step) => ({
         id: `${step.id}_false_stop`,
         type: "stop",
@@ -398,7 +451,7 @@ export default function JourneyBuilder({
               <select
                 className="input flex-1"
                 value={step.type}
-                disabled={READ_ONLY_STEP_TYPES.has(step.type)}
+                disabled={isReadOnlyStep(step)}
                 onChange={(e) => setType(index, e.target.value)}
               >
                 {Object.entries(stepLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -408,7 +461,7 @@ export default function JourneyBuilder({
               <button type="button" className="text-red-400 text-sm" onClick={() => setSteps((current) => current.filter((_, i) => i !== index))}>Remove</button>
             </div>
 
-            {READ_ONLY_STEP_TYPES.has(step.type) && (
+            {isReadOnlyStep(step) && (
               <div className="rounded border border-amber-500/30 bg-amber-500/[0.06] p-3 text-xs text-amber-200/90">
                 <p className="font-semibold text-amber-300">{readOnlySummary(step)}</p>
                 <p className="mt-1 leading-5">
@@ -455,7 +508,7 @@ export default function JourneyBuilder({
             {step.type === "move_stage" && <select className="input" value={String(step.config.stageId ?? "")} onChange={(e) => setConfig(index, "stageId", e.target.value)}><option value="">Choose stage</option>{stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select>}
             {step.type === "assign_user" && <select className="input" value={String(step.config.userId ?? "")} onChange={(e) => setConfig(index, "userId", e.target.value)}><option value="">Choose user</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select>}
             {(step.type === "add_tag" || step.type === "remove_tag") && <select className="input" value={String(step.config.tagId ?? "")} onChange={(e) => setConfig(index, "tagId", e.target.value)}><option value="">Choose tag</option>{tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}</select>}
-            {step.type === "condition" && (
+            {step.type === "condition" && !isReadOnlyStep(step) && (
               <div className="grid md:grid-cols-3 gap-2">
                 <select className="input" value={String(step.config.field ?? "lead.source")} onChange={(e) => setConfig(index, "field", e.target.value)}>
                   <option value="lead.source">Lead source</option><option value="lead.status">Lead status</option><option value="lead.valueCents">Lead value (cents)</option><option value="lead.stageId">Lead stage</option><option value="contact.province">Contact province</option><option value="contact.tags">Contact tag ID</option><option value="contact.hasVehicle">Has vehicle</option>
@@ -491,7 +544,7 @@ export default function JourneyBuilder({
                 one of its three attempts, so a provider outage on a courtesy
                 notification could permanently kill a journey whose remaining
                 steps were the ones that mattered. */}
-            {!READ_ONLY_STEP_TYPES.has(step.type) && step.type !== "wait" && step.type !== "stop" && (
+            {!isReadOnlyStep(step) && step.type !== "wait" && step.type !== "stop" && (
               <label className="flex items-center gap-2 text-xs text-slate-400">
                 <input
                   type="checkbox"
