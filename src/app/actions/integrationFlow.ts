@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireTenantOwner, getActiveTenantId } from "@/lib/auth";
-import { putTenantCredentialBundle } from "@/lib/settings";
+import { putTenantCredentialBundle, resolveIntegrationBundle } from "@/lib/settings";
 import { logAuditStrict } from "@/lib/audit";
 import { getIntegrationFlow, flowFieldKeys, VERIFY_STEP_ID, type FieldErrors } from "@/lib/integrationFlow";
 import { probeIntegration, type ProbeWarning } from "@/lib/integrationProbe";
@@ -153,7 +153,6 @@ export async function retestIntegration(integrationId: string): Promise<FlowResu
     return { kind: "failed", code: "invalid_input", message: "No active tenant is resolved for your account.", goToStep: VERIFY_STEP_ID };
   }
 
-  const { resolveIntegrationBundle } = await import("@/lib/settings");
   const bundle = await resolveIntegrationBundle(tenantId, integrationId);
   if (!bundle) {
     return {
