@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma } from "@/lib/db";
+import { basePrisma, prisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
@@ -13,85 +13,186 @@ export function approvalUrl(token: string): string {
   return `${BASE}/approvals/${token}`;
 }
 
-/** Resolve who should be notified for an approval step (name + email). Exported for tests. */
-export async function resolveApprover(step: { assigneeType: string; assigneeUserId: string | null; assigneeRole: string | null; assigneeName: string | null; assigneeEmail: string | null }): Promise<{ name: string; email: string | null }> {
+export type ApprovalDeliveryResult = { ok: boolean; skipped?: boolean; error?: string };
+export type ApprovalActor = {
+  userId?: string;
+  name: string;
+  ip?: string | null;
+  userAgent?: string | null;
+  channel?: "web" | "in_person";
+};
+
+/** Resolve who should be notified for an approval step (name + email). */
+export async function resolveApprover(step: {
+  assigneeType: string;
+  assigneeUserId: string | null;
+  assigneeRole: string | null;
+  assigneeName: string | null;
+  assigneeEmail: string | null;
+}): Promise<{ name: string; email: string | null }> {
   if (step.assigneeType === "staff") {
-    // Validate the stored assignee is STILL an active, non-disabled member of THIS
-    // request's tenant. `User` is global, so an unscoped lookup would happily return
-    // a cross-tenant/stale/disabled user and email them this tenant's document +
-    // token. Branch on the TYPE (not `&& assigneeUserId`) so a malformed/legacy
-    // staff step with a null/unresolved id also fails closed under enforcement
-    // rather than leaking to a stored email.
-    const u = step.assigneeUserId ? await resolveTenantMemberUser(step.assigneeUserId) : null;
-    if (u) return { name: u.name, email: u.email };
+    const user = step.assigneeUserId ? await resolveTenantMemberUser(step.assigneeUserId) : null;
+    if (user) return { name: user.name, email: user.email };
     if (tenantEnforcing()) return { name: step.assigneeName || "Approver", email: null };
   }
   if (step.assigneeType === "owner") {
-    // The OWNER of this request's tenant — never the first global owner, which
-    // could belong to another tenant and be emailed this document.
-    const u = await resolveTenantActor({ ownerOnly: true });
-    if (u) return { name: u.name, email: u.email };
+    const user = await resolveTenantActor({ ownerOnly: true });
+    if (user) return { name: user.name, email: user.email };
     if (tenantEnforcing()) return { name: step.assigneeName || "Approver", email: null };
   }
-  // role, or the DORMANT fallback for an unresolved staff/owner: the typed email/name.
   return { name: step.assigneeName || step.assigneeRole || "Approver", email: step.assigneeEmail };
 }
 
-/** Email the approver a link to review + approve/reject (best-effort). */
-export async function notifyApprover(stepId: string): Promise<void> {
-  const step = await prisma.approvalStep.findUnique({ where: { id: stepId }, include: { request: true } });
-  if (!step) return;
-  // Don't email an approval link for a request that has already closed
-  // (completed/voided/declined/expired/rejected) — the link would be dead.
-  if (isRequestClosed(step.request.status)) return;
+async function approvalAlreadySent(tenantId: string, requestId: string, stepId: string): Promise<boolean> {
+  const rows = await basePrisma.$queryRaw<Array<{ found: boolean }>>`
+    SELECT EXISTS(
+      SELECT 1 FROM "SignatureEvent"
+      WHERE "tenantId" = ${tenantId}
+        AND "requestId" = ${requestId}
+        AND "type" = 'approval_sent'
+        AND "metadata"->>'stepId' = ${stepId}
+    ) AS "found"
+  `;
+  return Boolean(rows[0]?.found);
+}
+
+/**
+ * Email the approver a review link. The ApprovalStep INSERT already committed a
+ * transition-queue job, so this function is idempotent and reports delivery
+ * truthfully. `approval_sent` means SMTP accepted the message, never merely that
+ * an attempt was made.
+ */
+export async function notifyApprover(stepId: string): Promise<ApprovalDeliveryResult> {
+  const step = await prisma.approvalStep.findUnique({
+    where: { id: stepId },
+    include: { request: true },
+  });
+  if (!step || !step.tenantId) return { ok: false, error: "Approval step not found or has no tenant owner" };
+  if (isRequestClosed(step.request.status) || step.status !== "pending") return { ok: true, skipped: true };
+  if (await approvalAlreadySent(step.tenantId, step.requestId, step.id)) return { ok: true, skipped: true };
+
   const who = await resolveApprover(step);
-  const url = approvalUrl(step.token);
-  if (who.email) {
-    await sendEmail({
-      to: who.email,
-      subject: `Approval needed: ${step.request.title}`,
-      text: `Hi ${who.name},\n\n"${step.request.title}" needs your approval (${step.label}).\n\nReview and approve or reject here:\n${url}\n\nDenago Cape Town`,
-    }).catch(() => {});
-  }
-  await logSignEvent(step.requestId, { type: "approval_sent", actor: "system", channel: "email", metadata: { to: who.email, label: step.label } });
+  if (!who.email) return { ok: false, error: `No deliverable email for approval “${step.label}”` };
+  const result = await sendEmail({
+    to: who.email,
+    subject: `Approval needed: ${step.request.title}`,
+    text: `Hi ${who.name},\n\n"${step.request.title}" needs your approval (${step.label}).\n\nReview and approve or reject here:\n${approvalUrl(step.token)}\n\nDenago Cape Town`,
+  });
+  if (!result.ok) return { ok: false, error: result.error ?? "Approval email failed" };
+
+  await logSignEvent(step.requestId, {
+    type: "approval_sent",
+    actor: "system",
+    channel: "email",
+    metadata: { to: who.email, label: step.label, stepId: step.id },
+  });
+  return { ok: true };
 }
 
 /** Whether a user is allowed to act on this approval step from inside the app. */
-export function canActOnStep(step: { assigneeType: string; assigneeUserId: string | null }, user: { id: string; role: string }): boolean {
-  if (user.role === "owner") return true; // owners/admins can action any step
+export function canActOnStep(
+  step: { assigneeType: string; assigneeUserId: string | null },
+  user: { id: string; role: string },
+): boolean {
+  if (user.role === "owner") return true;
   if (step.assigneeType === "staff") return step.assigneeUserId === user.id;
-  return false; // role/owner steps require owner (kept strict for v1)
+  return false;
 }
 
-/** Approve a step → advance the workflow down the approved branch. */
-export async function approveStep(stepId: string, by: { userId?: string; name: string }): Promise<{ ok: boolean; error?: string }> {
-  // Claim only a pending step whose PARENT request is still open — atomically, via
-  // a relation filter — so a step can't be actioned after the request was
-  // completed/voided/declined/expired/rejected.
-  const claimed = await prisma.approvalStep.updateMany({
-    where: { id: stepId, status: "pending", request: { status: { notIn: [...CLOSED_REQUEST_STATUSES] } } },
-    data: { status: "approved", decidedByUserId: by.userId ?? null, decidedByName: by.name, decidedAt: new Date() },
+type LockedStep = {
+  id: string;
+  tenantId: string;
+  requestId: string;
+  status: string;
+  label: string;
+};
+
+async function decideStep(
+  stepId: string,
+  decision: "approved" | "rejected",
+  by: ApprovalActor,
+  reason = "",
+): Promise<{ ok: boolean; error?: string }> {
+  const reference = await prisma.approvalStep.findUnique({
+    where: { id: stepId },
+    select: { requestId: true, tenantId: true },
   });
-  if (claimed.count === 0) return { ok: false, error: "This approval can no longer be actioned." };
-  const step = await prisma.approvalStep.findUnique({ where: { id: stepId } });
-  if (step) {
-    await logSignEvent(step.requestId, { type: "approved", actor: by.name, metadata: { label: step.label } });
-    await advanceWorkflow(step.requestId);
-  }
+  if (!reference?.tenantId) return { ok: false, error: "This approval can no longer be actioned." };
+  const decidedAt = new Date();
+
+  const requestId = await prisma.$transaction(async (tx) => {
+    const requests = await tx.$queryRaw<Array<{ status: string; deletedAt: Date | null }>>`
+      SELECT "status", "deletedAt"
+      FROM "SignatureRequest"
+      WHERE "id" = ${reference.requestId} AND "tenantId" = ${reference.tenantId}
+      FOR UPDATE
+    `;
+    const request = requests[0];
+    if (!request || request.deletedAt || CLOSED_REQUEST_STATUSES.includes(request.status as never)) return null;
+
+    const steps = await tx.$queryRaw<LockedStep[]>`
+      SELECT "id", "tenantId", "requestId", "status", "label"
+      FROM "ApprovalStep"
+      WHERE "id" = ${stepId}
+        AND "requestId" = ${reference.requestId}
+        AND "tenantId" = ${reference.tenantId}
+      FOR UPDATE
+    `;
+    const step = steps[0];
+    if (!step || step.status !== "pending") return null;
+
+    const claimed = await tx.approvalStep.updateMany({
+      where: { id: step.id, tenantId: step.tenantId, status: "pending" },
+      data: {
+        status: decision,
+        decidedByUserId: by.userId ?? null,
+        decidedByName: by.name,
+        decidedAt,
+        ...(decision === "rejected" ? { reason: reason.slice(0, 500) } : {}),
+      },
+    });
+    if (claimed.count !== 1) return null;
+
+    await tx.signatureEvent.create({
+      data: {
+        requestId: step.requestId,
+        type: decision === "approved" ? "approved" : "rejected",
+        actor: by.name,
+        channel: by.channel ?? "web",
+        ip: by.ip ?? null,
+        userAgent: by.userAgent ?? null,
+        metadata: {
+          stepId: step.id,
+          label: step.label,
+          decision,
+          ...(decision === "rejected" ? { reason: reason.slice(0, 500) } : {}),
+          ...(by.userId ? { userId: by.userId } : {}),
+        },
+      },
+    });
+    // ApprovalStep triggers revoke the bearer token and enqueue workflow recovery
+    // in this same transaction.
+    return step.requestId;
+  });
+
+  if (!requestId) return { ok: false, error: "This approval can no longer be actioned." };
+  // Fast path only. The transition worker owns eventual advancement and rejection
+  // notification, so a committed decision is never reported as failed.
+  await advanceWorkflow(requestId).catch(() => {});
   return { ok: true };
 }
 
-/** Reject a step → advance down the rejected branch (or reject the request). */
-export async function rejectStep(stepId: string, by: { userId?: string; name: string }, reason: string): Promise<{ ok: boolean; error?: string }> {
-  const claimed = await prisma.approvalStep.updateMany({
-    where: { id: stepId, status: "pending", request: { status: { notIn: [...CLOSED_REQUEST_STATUSES] } } },
-    data: { status: "rejected", decidedByUserId: by.userId ?? null, decidedByName: by.name, decidedAt: new Date(), reason: reason.slice(0, 500) },
-  });
-  if (claimed.count === 0) return { ok: false, error: "This approval can no longer be actioned." };
-  const step = await prisma.approvalStep.findUnique({ where: { id: stepId } });
-  if (step) {
-    await logSignEvent(step.requestId, { type: "rejected", actor: by.name, metadata: { label: step.label, reason } });
-    await advanceWorkflow(step.requestId);
-  }
-  return { ok: true };
+export async function approveStep(
+  stepId: string,
+  by: ApprovalActor,
+): Promise<{ ok: boolean; error?: string }> {
+  return decideStep(stepId, "approved", by);
+}
+
+export async function rejectStep(
+  stepId: string,
+  by: ApprovalActor,
+  reason: string,
+): Promise<{ ok: boolean; error?: string }> {
+  return decideStep(stepId, "rejected", by, reason);
 }
