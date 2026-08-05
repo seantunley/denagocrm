@@ -262,6 +262,22 @@ export function periodRange(period: PeriodId, now: Date): { gte?: Date; lt?: Dat
       return { gte: startOfMonth(subMonths(now, 1)), lt: startOfMonth(now) };
     case "year":
       return { gte: startOfYear(now), lt: startOfYear(addYears(now, 1)) };
+    /*
+     * The stale windows. Open-ENDED on the early side on purpose: "older than 30
+     * days" means everything from the beginning of time up to that cut, not the
+     * month before it. A lead untouched for two years is more stale than one
+     * untouched for five weeks, not less, and a bounded window would silently
+     * drop exactly the rows the card exists to surface.
+     *
+     * `lt` only, so these compose with the half-open convention every window
+     * above uses and a row on the boundary belongs to exactly one of them.
+     */
+    case "older_7d":
+      return { lt: startOfDay(subDays(now, 6)) };
+    case "older_30d":
+      return { lt: startOfDay(subDays(now, 29)) };
+    case "older_90d":
+      return { lt: startOfDay(subDays(now, 89)) };
   }
 }
 

@@ -533,8 +533,45 @@ test("every period in the catalogue compiles to a window", () => {
       assert.equal(range, null, "all time must be no predicate at all");
       continue;
     }
-    assert.ok(range?.gte instanceof Date && range.lt instanceof Date, `${period.id} needs both bounds`);
+    assert.ok(range, `${period.id} produced no window at all`);
+    if (period.id.startsWith("older_")) {
+      /*
+       * The stale windows are open-ended on the early side, and that is the
+       * whole point of them. "Older than 30 days" must mean everything up to
+       * that cut, not the month before it — a lead untouched for two years is
+       * MORE stale than one untouched for five weeks, and a lower bound would
+       * silently drop exactly the rows the card exists to surface.
+       */
+      assert.equal(range.gte, undefined, `${period.id} must not have a lower bound`);
+      assert.ok(range.lt instanceof Date, `${period.id} needs an upper bound`);
+      continue;
+    }
+    assert.ok(range.gte instanceof Date && range.lt instanceof Date, `${period.id} needs both bounds`);
     assert.ok(range.gte < range.lt, `${period.id} produced an empty window`);
+  }
+});
+
+test("a stale window and its matching recent window partition the timeline", () => {
+  /*
+   * "Last 7 days" and "older than 7 days" sit next to each other in the picker
+   * and a user will read them as opposites. If the two overlapped, a row would
+   * appear on both cards at once; if they left a gap, a row would fall off both
+   * and be invisible to someone who built the pair deliberately to cover
+   * everything. Neither is discoverable by looking at either card alone.
+   */
+  const now = new Date(2026, 7, 5, 14, 30);
+  for (const [recent, stale] of [
+    ["7d", "older_7d"],
+    ["30d", "older_30d"],
+    ["90d", "older_90d"],
+  ] as const) {
+    const a = periodRange(recent, now)!;
+    const b = periodRange(stale, now)!;
+    assert.equal(
+      b.lt!.getTime(),
+      a.gte!.getTime(),
+      `${recent} and ${stale} do not meet exactly — a row falls into both or neither`,
+    );
   }
 });
 

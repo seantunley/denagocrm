@@ -489,6 +489,20 @@ export const PERIODS = [
   { id: "month", label: "This month" },
   { id: "last_month", label: "Last month" },
   { id: "year", label: "This year" },
+  /*
+   * The OTHER direction, and the reason it exists is the single most useful card
+   * anybody wants to build: "open leads nobody has touched in a week".
+   *
+   * Every window above looks backwards from today and asks what HAPPENED. The
+   * stale-work question is the complement — what has NOT happened — and without
+   * these it is not expressible at all. The nearest workaround is an absolute
+   * date filter, which is silently wrong the day after it is typed, on a screen
+   * people glance at rather than read. That is the worst possible place for a
+   * filter that ages out.
+   */
+  { id: "older_7d", label: "Older than 7 days" },
+  { id: "older_30d", label: "Older than 30 days" },
+  { id: "older_90d", label: "Older than 90 days" },
 ] as const;
 
 export type PeriodId = (typeof PERIODS)[number]["id"];

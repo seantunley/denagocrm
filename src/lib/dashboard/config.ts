@@ -286,8 +286,19 @@ function cardSchema(depth: number): z.ZodType<CardConfig> {
     z.object({
       ...BASE_CARD,
       type: z.literal("markdown"),
-      // Rendered through the same sanitising renderer the rest of the app uses.
-      // A markdown card is a note to the team, not an injection point.
+      /*
+       * Rendered as PLAIN TEXT today — paragraphs and line breaks, every
+       * character a JSX text node, no `dangerouslySetInnerHTML` anywhere near
+       * it.
+       *
+       * The app has no markdown dependency and no sanitising renderer, and the
+       * honest options were to add one or to render text. A card whose content
+       * is typed by one user and displayed to others is not the place to
+       * introduce the first HTML-from-a-string path in the codebase, so the
+       * name is aspirational and the behaviour is deliberately duller than it.
+       * See renderMarkdown in components/dashboard/cards/markdown.tsx — that is
+       * the single function to change if a sanitising renderer ever lands.
+       */
       content: z.string().max(LIMITS.markdownLength).default(""),
     }),
     z.object({
@@ -497,7 +508,30 @@ export function parseConfig(input: unknown): { config: DashboardConfig; dropped:
   }
   const version = typeof raw.version === "number" ? raw.version : 1;
   const title = typeof raw.title === "string" ? raw.title.slice(0, LIMITS.titleLength) : undefined;
-  const config: DashboardConfig = { version: Math.min(version, CONFIG_VERSION), title, views };
+  /*
+   * The version is carried through UNCHANGED, and that is the whole point.
+   *
+   * Clamping it to CONFIG_VERSION was the obvious thing and it was wrong in the
+   * exact way this comment used to claim it was not. Picture a release that
+   * writes version 2 and is then rolled back. The old build reads the config,
+   * understands the parts it recognises, drops the rest — fine so far, that is
+   * what a read path is for. But if it also rewrote the stamp to 1, the config
+   * would then pass `parseConfigStrict` on the next save, and the user's next
+   * unrelated edit would quietly persist the half-understood version as though
+   * it were complete. The parts the older build never knew about would be gone
+   * for good, and nobody would have been told.
+   *
+   * Leaving the stamp alone makes the write path refuse (it checks
+   * `version > CONFIG_VERSION`), so the worst case is a dashboard that renders
+   * best-effort and cannot be saved until the newer build is back — recoverable,
+   * and loud about it.
+   */
+  if (version > CONFIG_VERSION) {
+    dropped.push(
+      "This dashboard was saved by a newer version of the app. It is shown as best we can read it, and cannot be saved until that version is back.",
+    );
+  }
+  const config: DashboardConfig = { version, title, views };
   enforceCardBudget(config, dropped);
   return { config, dropped };
 }
@@ -527,7 +561,16 @@ function salvageView(candidate: unknown, dropped: string[]): ViewConfig | null {
     sections.push({
       id: typeof sectionRaw.id === "string" ? sectionRaw.id : `section-${sections.length}`,
       title: typeof sectionRaw.title === "string" ? sectionRaw.title : undefined,
-      columnSpan: 1,
+      // Salvaged INDEPENDENTLY of the cards, and this is not tidiness.
+      //
+      // A section fails to parse most often because ONE card inside it is
+      // malformed. Rebuilding it with no `visibility` would take a section
+      // somebody had deliberately hidden — behind a role, a permission, a time
+      // of day — and make it unconditionally visible, triggered by a completely
+      // unrelated card. A degradation path is allowed to show less than was
+      // asked for; it must never show more.
+      visibility: salvageVisibility(sectionRaw.visibility),
+      columnSpan: salvageSpan(sectionRaw.columnSpan),
       cards,
     });
   }
@@ -536,9 +579,52 @@ function salvageView(candidate: unknown, dropped: string[]): ViewConfig | null {
     title: raw.title.slice(0, LIMITS.titleLength),
     icon: typeof raw.icon === "string" ? raw.icon : undefined,
     path: typeof raw.path === "string" ? slugify(raw.path) : slugify(raw.title),
-    columns: 3,
+    columns: salvageSpan(raw.columns, 3),
+    // Same reasoning as the section above: a tab hidden from most of the team
+    // must not become visible to them because one card in it went bad.
+    visibility: salvageVisibility(raw.visibility),
     sections,
   };
+}
+
+/**
+ * Keep whatever part of a visibility list still parses.
+ *
+ * Conditions are independent of each other, so one unreadable clause is no
+ * reason to discard the rest — and discarding them all is the direction that
+ * REVEALS. If nothing survives, `undefined` would mean "always visible", so a
+ * list that had clauses but lost every one of them degrades to a condition that
+ * can never be met rather than to no condition at all.
+ */
+function salvageVisibility(raw: unknown): Condition[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const schema = conditionSchema(MAX_CONDITION_DEPTH);
+  const kept: Condition[] = [];
+  for (const entry of raw.slice(0, MAX_CONDITIONS)) {
+    const parsed = schema.safeParse(entry);
+    if (parsed.success) kept.push(parsed.data);
+  }
+  if (kept.length > 0) return kept;
+  return [UNREADABLE_CONDITION];
+}
+
+/**
+ * "Hidden, because the rule that hid this could not be read."
+ *
+ * A role nobody holds, rather than an empty `or` — which would also evaluate
+ * false but would fail `parseConfigStrict` on the way back out (`roles` requires
+ * at least one entry), and a config that renders but cannot be saved would trap
+ * the user's next unrelated edit. This one is a legal condition that simply
+ * never matches, so the dashboard stays editable and the section stays hidden
+ * until someone opens it in the editor and says what they meant.
+ */
+const UNREADABLE_CONDITION: Condition = {
+  kind: "role",
+  roles: ["__unreadable_visibility_rule__"],
+};
+
+function salvageSpan(raw: unknown, fallback: 1 | 2 | 3 | 4 = 1): 1 | 2 | 3 | 4 {
+  return raw === 1 || raw === 2 || raw === 3 || raw === 4 ? raw : fallback;
 }
 
 function describeDroppedCard(raw: unknown): string {
@@ -702,7 +788,11 @@ export function slugify(value: string): string {
     .normalize("NFKD")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 60);
+    .slice(0, 60)
+    // Trimmed AGAIN after the cut. The first trim cannot know where the slice
+    // will land, so a title long enough to be truncated at a dash boundary ends
+    // in one — and this is a stored URL segment, not a display string.
+    .replace(/-+$/g, "");
   return slug.length > 0 ? slug : "tab";
 }
 
