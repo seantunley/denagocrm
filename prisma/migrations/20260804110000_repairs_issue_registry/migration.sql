@@ -3,13 +3,26 @@
 -- TIMESTAMP-PREFIXED, and it has to be. scripts/apply-migrations.mjs orders by
 -- `Number.parseInt(name, 10)`, NOT lexicographically, so every timestamped
 -- migration sorts after every numerically-prefixed one and timestamps sort
--- among themselves numerically. This is 20260804100000, later than
+-- among themselves numerically. This is 20260804110000, later than
 -- 20260803120000_journey_wait_for_trigger — the latest migration on main — so
 -- it lands at the end of the order rather than in the middle of it.
 --
--- No CREATE INDEX CONCURRENTLY anywhere below: Prisma Migrate wraps each
--- migration in a transaction and CONCURRENTLY cannot run inside one. It would
--- not trade a lock for availability, it would fail the migration and ship no
+-- It was 20260804100000, and moved because feat/user-dashboards claims that
+-- exact prefix for 20260804100000_dashboard_layout. Two migrations sharing a
+-- prefix parse to the SAME integer, so their order becomes whatever the
+-- directory listing happens to give — reproducible on one machine and not on
+-- another. Neither had been applied to production, so renaming cost nothing;
+-- once applied, the name is recorded in _prisma_migrations and renaming would
+-- re-run the file instead.
+--
+-- No CREATE INDEX CONCURRENTLY anywhere below, and NOT for the reason usually
+-- given. This repo does not run `prisma migrate deploy` — apply-migrations.mjs
+-- shells out to `prisma db execute --file` per migration, precisely because
+-- Prisma's lexical ordering mis-sorts these prefixes. CONCURRENTLY still cannot
+-- run here, because `db execute` submits the file as ONE multi-statement script
+-- and Postgres wraps that in an implicit transaction. So the effect is the same
+-- but the cause is the runner, not Prisma Migrate: it would not trade a lock for
+-- availability, it would fail the migration and ship no
 -- index at all. Unlike the journey retention indexes there is no prebuild
 -- script to point at either, and there does not need to be: this table is
 -- created empty by this migration, so the index builds take no meaningful lock.

@@ -573,7 +573,7 @@ test("the registry table sorts after everything it depends on", () => {
 });
 
 test("every query the registry issues has an index, and the table has an RLS policy", () => {
-  const migration = src("prisma/migrations/20260804100000_repairs_issue_registry/migration.sql");
+  const migration = src("prisma/migrations/20260804110000_repairs_issue_registry/migration.sql");
   const schema = src("prisma/repairs.prisma");
 
   // Identity — the whole idempotency guarantee.
