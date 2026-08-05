@@ -3,6 +3,7 @@ import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { logError } from "@/lib/errorLog";
 import { runCronPerTenant } from "@/lib/tenantCron";
 import { runSigningJobs } from "@/lib/signing/jobWorker";
+import { runSigningTransitionJobs } from "@/lib/signing/transitionWorker";
 import { signingReadiness } from "@/lib/signing/securityPolicy";
 
 export const runtime = "nodejs";
@@ -29,9 +30,27 @@ export async function GET(req: NextRequest) {
     async (tenantId, budget) => {
       const concreteTenantId = tenantId ?? DEFAULT_TENANT_ID;
       if (budget.shouldStop(10_000)) {
-        return { claimed: 0, completed: 0, retried: 0, dead: 0, leased: 0, skipped: "deadline" as const };
+        return {
+          transitions: { claimed: 0, completed: 0, retried: 0, dead: 0, leased: 0 },
+          completion: { claimed: 0, completed: 0, retried: 0, dead: 0, leased: 0 },
+          skipped: "deadline" as const,
+        };
       }
-      return runSigningJobs(concreteTenantId, 20);
+
+      // A committed signature/decline/approval may create or close the request,
+      // which in turn transactionally enqueues completion jobs. Drain those
+      // transition continuations first, then process the newly materialised
+      // completion work during the same tenant run when budget permits.
+      const transitions = await runSigningTransitionJobs(concreteTenantId, 20);
+      if (budget.shouldStop(10_000)) {
+        return {
+          transitions,
+          completion: { claimed: 0, completed: 0, retried: 0, dead: 0, leased: 0 },
+          skipped: "deadline-after-transitions" as const,
+        };
+      }
+      const completion = await runSigningJobs(concreteTenantId, 20);
+      return { transitions, completion };
     },
     {
       maxRuntimeMs: MAX_RUNTIME_MS,
