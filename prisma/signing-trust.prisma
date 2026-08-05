@@ -1,0 +1,79 @@
+/// Durable transactional outbox for non-database signing effects.
+/// All workers claim rows by tenant and use a lease; idempotencyKey makes every
+/// logical side effect exactly-once at the database boundary.
+model SigningJob {
+  id             String    @id
+  tenantId       String
+  requestId      String
+  jobType        String
+  idempotencyKey String
+  payload        Json      @default("{}")
+  status         String    @default("pending")
+  attempts       Int       @default(0)
+  availableAt    DateTime  @default(now())
+  leaseUntil     DateTime?
+  leaseOwner     String?
+  lastError      String?
+  completedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now())
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, status, availableAt])
+  @@index([tenantId, requestId])
+}
+
+/// Hashed, expiring, attempt-limited step-up ceremony for an external signer.
+/// The raw OTP is never persisted.
+model SigningIdentityChallenge {
+  id          String    @id
+  tenantId    String
+  recipientId String
+  purpose     String    @default("sign")
+  codeHash    String
+  expiresAt   DateTime
+  attempts    Int       @default(0)
+  consumedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantId, recipientId, createdAt])
+}
+
+/// Immutable custody record for the final sealed original. Ordinary Document
+/// Trash/delete operations are blocked while this row exists.
+model LegalArtifact {
+  id             String   @id
+  tenantId       String
+  requestId      String
+  documentId     String?
+  storageRef     String
+  sha256         String
+  sizeBytes      Int?
+  retentionClass String   @default("contract-7y")
+  retainUntil    DateTime @default(dbgenerated("CURRENT_TIMESTAMP + INTERVAL '7 years'"))
+  legalHold      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, requestId])
+  @@unique([tenantId, storageRef])
+}
+
+/// Append-only verification/evidence manifest for a LegalArtifact. Revalidation
+/// appends a new row so historical validation claims cannot be overwritten.
+model LegalArtifactValidation {
+  id                     String   @id
+  tenantId               String
+  artifactId             String
+  observedSha256         String?
+  sizeBytes              Int?
+  certificateFingerprint String?
+  manifestHash           String
+  manifest               Json
+  valid                  Boolean
+  errors                 Json     @default("[]")
+  appCommit              String?
+  createdAt              DateTime @default(now())
+
+  @@index([tenantId, artifactId, createdAt])
+}
