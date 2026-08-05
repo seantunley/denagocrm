@@ -1,9 +1,16 @@
 -- Build the reporting-statistics SOURCE-TABLE indexes WITHOUT locking out writes.
 --
 -- Run this against the target database BEFORE deploying migration
--- 20260804120000_reporting_statistics. That migration creates the same four
+-- 20260804120000_reporting_statistics. That migration creates the same seven
 -- indexes with IF NOT EXISTS, so once these exist it is a no-op for them and the
 -- deploy takes no lock on "Lead" or "JobCard" at all.
+--
+-- THIS IS A PRECONDITION, NOT ADVICE. On a table big enough for the lock to
+-- matter (32 MB or 100k rows, whichever comes first) the migration REFUSES TO
+-- RUN while any of these indexes is missing, and prints this filename. It is not
+-- a warning in a comment that a deploy can sail past; it fails the deploy. On a
+-- small or empty database — CI, disaster recovery, a new workspace — the
+-- migration builds them inline and this script is unnecessary.
 --
 -- ── why this file exists ─────────────────────────────────────────────────────
 --
@@ -34,8 +41,10 @@
 --
 -- Safe to re-run. If a build is interrupted, Postgres leaves an INVALID index
 -- behind — the planner will not use it and Postgres will not repair it, so the
--- table is silently unindexed and the rollup silently sequential-scans it.
--- Check for one and drop it before retrying:
+-- table is silently unindexed and the rollup silently sequential-scans it. Note
+-- that the migration's precondition check only asks whether the index EXISTS, so
+-- an invalid one satisfies it while helping nothing. Check for one and drop it
+-- before retrying:
 --
 --   SELECT i.indexrelid::regclass AS invalid_index
 --   FROM pg_index i
@@ -44,15 +53,23 @@
 --
 --   -- then, for each:  DROP INDEX CONCURRENTLY "<name>";
 --
--- If the tables are small — a new or low-volume workspace — none of this is
--- necessary: deploy the migration directly and let it build them inline.
+-- ── the escape hatch ─────────────────────────────────────────────────────────
+--
+-- If the write pause is acceptable — a maintenance window, a restore into a
+-- database nothing is talking to — tell the migration so explicitly instead of
+-- running this script:
+--
+--   SET app.allow_blocking_index_build = 'on';
+--
+-- in the same session, before applying migrations.
 
 -- These must match the migration EXACTLY — same names, same columns, same
--- order. If they drift, IF NOT EXISTS stops making the migration a no-op and
--- the deploy takes the write-blocking lock this script exists to avoid.
+-- order. If they drift, IF NOT EXISTS stops making the migration a no-op, the
+-- precondition check still sees a missing index, and the deploy fails.
 --
--- tenantId leads all four because the rollup runs inside a tenant scope, so
--- every query is emitted as `tenantId = $1 AND …`.
+-- tenantId leads all seven because the rollup names the tenant in every query it
+-- makes — whether or not enforcement is on — so every one is emitted as
+-- `tenantId = $1 AND …`.
 
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "Lead_tenantId_updatedAt_id_idx"
   ON "Lead"("tenantId", "updatedAt", "id");
@@ -60,8 +77,20 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS "Lead_tenantId_updatedAt_id_idx"
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "Lead_tenantId_createdAt_idx"
   ON "Lead"("tenantId", "createdAt");
 
+-- deals_won / deals_lost range on the IMMUTABLE lifecycle dates, not on
+-- "updatedAt" — see the long note in the migration. These two serve those
+-- aggregates and the MIN() probe that gives the backfill walk a floor.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "Lead_tenantId_wonAt_idx"
+  ON "Lead"("tenantId", "wonAt");
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "Lead_tenantId_lostAt_idx"
+  ON "Lead"("tenantId", "lostAt");
+
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "JobCard_tenantId_updatedAt_id_idx"
   ON "JobCard"("tenantId", "updatedAt", "id");
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "JobCard_tenantId_createdAt_idx"
+  ON "JobCard"("tenantId", "createdAt");
 
 CREATE INDEX CONCURRENTLY IF NOT EXISTS "JobCard_tenantId_completedAt_idx"
   ON "JobCard"("tenantId", "completedAt");

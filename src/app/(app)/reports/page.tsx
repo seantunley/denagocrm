@@ -16,6 +16,7 @@ import {
   readStatisticBuckets,
   seriesOf,
   statisticsReadyFor,
+  statisticsTenantId,
   totalOf,
   type StatisticMetric,
 } from "@/lib/statistics";
@@ -217,10 +218,13 @@ async function bucketAggregates(options: {
   prevAxis: Date[];
   automotiveOn: boolean;
   userNames: Map<string, string>;
+  /** Resolved ONCE by the caller and threaded through every read below. */
+  tenantId: string;
 }): Promise<Aggregates> {
-  const { from, to, prevFrom, prevTo, period, axis, prevAxis, automotiveOn, userNames } = options;
+  const { from, to, prevFrom, prevTo, period, axis, prevAxis, automotiveOn, userNames, tenantId } =
+    options;
   const read = (metric: StatisticMetric, rangeFrom: Date, rangeTo: Date) =>
-    readStatisticBuckets({ metric, period, from: rangeFrom, to: rangeTo });
+    readStatisticBuckets({ metric, period, from: rangeFrom, to: rangeTo, tenantId });
 
   const [leadRows, prevLeadRows, wonRows, prevWonRows, lostRows, prevLostRows, jobRows, sourceRows] =
     await Promise.all([
@@ -324,23 +328,29 @@ async function liveAggregates(options: {
         where: { ...leadFilter, createdAt: { gte: prevFrom, lt: prevTo } },
         select: { createdAt: true },
       }),
+      // `wonAt` / `lostAt`, NOT `updatedAt` — the same immutable lifecycle dates
+      // the buckets are keyed on. This path serves the restricted and filtered
+      // readers, so if it dated a won deal differently the two paths would
+      // report different numbers for the same month to different people, and
+      // adding a note to an old deal would move it into the current month here
+      // while the bucket path kept it where it closed.
       prisma.lead.findMany({
-        where: { ...leadFilter, status: "won", updatedAt: { gte: from, lt: to } },
+        where: { ...leadFilter, status: "won", wonAt: { gte: from, lt: to } },
         select: {
-          updatedAt: true,
+          wonAt: true,
           valueCents: true,
           assignedTo: { select: { name: true } },
         },
       }),
       prisma.lead.findMany({
-        where: { ...leadFilter, status: "won", updatedAt: { gte: prevFrom, lt: prevTo } },
+        where: { ...leadFilter, status: "won", wonAt: { gte: prevFrom, lt: prevTo } },
         select: { valueCents: true },
       }),
       prisma.lead.count({
-        where: { ...leadFilter, status: "lost", updatedAt: { gte: from, lt: to } },
+        where: { ...leadFilter, status: "lost", lostAt: { gte: from, lt: to } },
       }),
       prisma.lead.count({
-        where: { ...leadFilter, status: "lost", updatedAt: { gte: prevFrom, lt: prevTo } },
+        where: { ...leadFilter, status: "lost", lostAt: { gte: prevFrom, lt: prevTo } },
       }),
       automotiveOn
         ? prisma.jobCard.findMany({
@@ -382,7 +392,7 @@ async function liveAggregates(options: {
     lost: lostInRange,
     prevLost,
     trend: spans.map((span, index) => {
-      const wonHere = wonInRange.filter((won) => won.updatedAt >= span.start && won.updatedAt < span.end);
+      const wonHere = wonInRange.filter((won) => won.wonAt! >= span.start && won.wonAt! < span.end);
       return {
         label: span.label,
         leads: leadCounts[index],
@@ -444,8 +454,13 @@ export default async function ReportsPage({
   const neededMetrics: StatisticMetric[] = automotiveOn
     ? ["leads_created", "deals_won", "deals_lost", "jobcards_completed"]
     : ["leads_created", "deals_won", "deals_lost"];
+  // ONE tenant resolution for the whole render, from the request scope — never
+  // from a bucket row. The readiness check and every bucket read below are given
+  // the SAME value, so the page cannot decide it is ready on one workspace's
+  // cursor and then read another workspace's numbers.
+  const statsTenantId = statisticsTenantId();
   const useBuckets =
-    unrestricted && !filtered && (await statisticsReadyFor(neededMetrics));
+    unrestricted && !filtered && (await statisticsReadyFor(neededMetrics, statsTenantId));
 
   const [openLeads, users, products, allSources] = await Promise.all([
     prisma.lead.findMany({
@@ -475,6 +490,7 @@ export default async function ReportsPage({
         prevAxis,
         automotiveOn,
         userNames: new Map(users.map((u) => [u.id, u.name ?? "Unnamed"])),
+        tenantId: statsTenantId,
       })
     : await liveAggregates({
         from,

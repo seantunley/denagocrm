@@ -39,12 +39,24 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const runs = await runCronPerTenant(async (_tenantId, budget) => {
-      // A tenant admitted with seconds left would start a backfill it cannot
-      // finish. Nothing is lost by declining — the rollup is incremental, so
-      // the next tick resumes from the same cursor rather than restarting.
+    const runs = await runCronPerTenant(async (tenantId, budget) => {
+      // A tenant admitted with seconds left would start a backfill slice it
+      // cannot finish. Nothing is lost by declining — the rollup is incremental
+      // and its backfill is resumable, so the next tick carries on from the
+      // recorded position rather than restarting.
       if (budget.shouldStop(ROLLUP_RESERVE_MS)) return { skipped: "insufficient-budget" as const };
-      return rollUpStatistics();
+      return rollUpStatistics(new Date(), {
+        // THE TENANT IS PASSED IN, not re-derived inside the rollup. Under
+        // enforcement this is the slice's tenant; while dormant it is null and
+        // the rollup falls back to the founding tenant — the same value the
+        // dormant path's scope carries (see runCronPerTenant), so the two can
+        // never disagree.
+        tenantId: tenantId ?? undefined,
+        // The backfill walks history in slices and records its position after
+        // each one. Handing it the tick's budget lets it stop on a recorded
+        // boundary instead of being killed part-way through a slice.
+        shouldStop: () => budget.shouldStop(ROLLUP_RESERVE_MS),
+      });
     }, {
       maxRuntimeMs: routeBudget.remainingMs,
       minStartBudgetMs: MIN_START_BUDGET_MS,

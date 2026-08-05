@@ -35,6 +35,9 @@ export type SourceRow = {
   tenantId?: string | null;
   createdAt: Date;
   updatedAt: Date;
+  /** Immutable lifecycle dates — what the won/lost metrics actually bucket on. */
+  wonAt?: Date | null;
+  lostAt?: Date | null;
   completedAt?: Date | null;
   deletedAt?: Date | null;
   status?: string;
@@ -112,6 +115,12 @@ function matches(row: Row, where: any = {}): boolean {
       if (!Array.isArray(condition) || !condition.some((clause) => matches(row, clause))) return false;
       continue;
     }
+    // The change probe combines a tenant OR with a keyset OR, which cannot share
+    // one object — so it nests both under AND. Every clause must hold.
+    if (field === "AND") {
+      if (!Array.isArray(condition) || !condition.every((clause) => matches(row, clause))) return false;
+      continue;
+    }
     if (!matchesCondition(row[field] ?? null, condition)) return false;
   }
   return true;
@@ -158,6 +167,18 @@ function model(table: TableName, label: string) {
       if (!row) throw new Error(`prismaStatisticsSpy: no ${label} matched update`);
       Object.assign(row, args.data);
       return Promise.resolve({ ...row });
+    },
+    /**
+     * The bucket writer uses `updateMany`, not `update`, so the tenant can be
+     * NAMED in the predicate alongside the id — `update` accepts only a unique
+     * filter. A tenant mismatch therefore matches nothing and writes nothing,
+     * which is the behaviour under test rather than an implementation detail.
+     */
+    updateMany(args: any): Promise<{ count: number }> {
+      calls.push({ model: label, op: "updateMany", args });
+      const found = tables[table].filter((candidate) => matches(candidate, args.where));
+      for (const row of found) Object.assign(row, args.data);
+      return Promise.resolve({ count: found.length });
     },
     createMany(args: any): Promise<{ count: number }> {
       calls.push({ model: label, op: "createMany", args });
@@ -231,26 +252,73 @@ function extract(sql: string, pattern: RegExp, what: string): RegExpMatchArray {
  *     There is no in-memory equivalent to "reproduce" it against, so it is
  *     asserted structurally.
  */
+/**
+ * The tenant predicate, REPRODUCED rather than asserted.
+ *
+ * It must be present in every raw query — the rollup applies it whether or not
+ * enforcement is on, which is the whole point — so its absence throws here
+ * rather than quietly widening the result set.
+ *
+ * Two accepted shapes, and the difference between them is the fix:
+ *   `("tenantId" = ? OR "tenantId" IS NULL)` — the FOUNDING tenant, which also
+ *     owns the legacy un-owned rows.
+ *   `"tenantId" = ?`                         — everyone else. STRICT: a second
+ *     workspace can never absorb a NULL-tenant row.
+ * Either way the bound tenant value is the last one.
+ */
+function tenantFilter(sql: string, values: any[]): (row: Row) => boolean {
+  const foundingForm = /AND \("tenantId" = \?::text OR "tenantId" IS NULL\)/.test(sql);
+  const strictForm = /AND "tenantId" = \?::text/.test(sql);
+  if (!foundingForm && !strictForm) {
+    throw new Error(
+      `prismaStatisticsSpy: raw query carries NO tenant predicate — it must always carry one:\n${sql}`,
+    );
+  }
+  const tenantId = values[values.length - 1] as string;
+  return (row: Row) => {
+    const owner = (row.tenantId ?? null) as string | null;
+    return owner === tenantId || (foundingForm && owner === null);
+  };
+}
+
+/** Rows of `table` this query is allowed to see, with the shared filters applied. */
+function visibleRows(sql: string, values: any[], table: TableName): Row[] {
+  const excludesTrashed = /"deletedAt" IS NULL/.test(sql);
+  const equals = sql.match(/AND "status" = '(\w+)'/);
+  const notEquals = sql.match(/AND "status" <> '(\w+)'/);
+  const inTenant = tenantFilter(sql, values);
+  return tables[table].filter((row) => {
+    if (excludesTrashed && row.deletedAt) return false;
+    if (equals && row.status !== equals[1]) return false;
+    if (notEquals && row.status === notEquals[1]) return false;
+    return inTenant(row);
+  });
+}
+
+/** `SELECT MIN(<col>) AS "oldest"` — the floor of the backfill walk. */
+function runOldest(sql: string, values: any[]): any[] {
+  const table = extract(sql, /FROM "(Lead|JobCard)"/, 'FROM "<table>"')[1] as TableName;
+  const dateColumn = extract(sql, /SELECT MIN\("(\w+)"\)/, "the MIN column")[1];
+  const dates = visibleRows(sql, values, table)
+    .map((row) => row[dateColumn] as Date | null | undefined)
+    .filter((date): date is Date => Boolean(date));
+  if (dates.length === 0) return [{ oldest: null }];
+  return [{ oldest: dates.reduce((a, b) => (a <= b ? a : b)) }];
+}
+
 function runAggregate(sql: string, values: any[]): any[] {
+  if (/SELECT MIN\(/.test(sql)) return runOldest(sql, values);
+
   const table = extract(sql, /FROM "(Lead|JobCard)"/, 'FROM "<table>"')[1] as TableName;
   const unit = extract(sql, /date_trunc\('(day|month)'/, "date_trunc unit")[1] as "day" | "month";
   const dateColumn = extract(sql, /AND "(\w+)" >= \?/, "the bucket date range")[1];
 
   extract(sql, /\+ INTERVAL '2 hours'\) - INTERVAL '2 hours'/, "the SAST offset arithmetic");
-  const excludesTrashed = /"deletedAt" IS NULL/.test(sql);
 
   const [from, to] = values as [Date, Date];
 
-  const equals = sql.match(/AND "status" = '(\w+)'/);
-  const notEquals = sql.match(/AND "status" <> '(\w+)'/);
   const dimensionExpr = extract(sql, /\n\s*(.+?) AS "dimension"/, 'the "dimension" expression')[1];
   const sumExpr = extract(sql, /COALESCE\(SUM\((.+?)\), 0\)::bigint/, "the sum expression")[1];
-
-  // A tenant predicate is present iff the SQL names it; when it is, its bound
-  // value is the last one. Reproduced rather than assumed so a test can seed two
-  // tenants and prove the rollup does not mix them.
-  const tenantScoped = /AND "tenantId" IS NOT DISTINCT FROM \?::text/.test(sql);
-  const tenantId = tenantScoped ? (values[values.length - 1] as string | null) : undefined;
 
   const dimensionOf = (row: Row): string => {
     if (dimensionExpr === "''") return "";
@@ -268,14 +336,11 @@ function runAggregate(sql: string, values: any[]): any[] {
   };
 
   const grouped = new Map<string, { bucketStart: Date; dimension: string; count: number; sumCents: bigint }>();
-  for (const row of tables[table]) {
-    if (excludesTrashed && row.deletedAt) continue;
+  for (const row of visibleRows(sql, values, table)) {
     const at = row[dateColumn] as Date | null | undefined;
+    // A NULL bucket date is outside every range — the row is not counted at all.
     if (!at) continue;
     if (!(at >= from && at < to)) continue;
-    if (equals && row.status !== equals[1]) continue;
-    if (notEquals && row.status === notEquals[1]) continue;
-    if (tenantScoped && (row.tenantId ?? null) !== (tenantId ?? null)) continue;
 
     const bucketStart = truncate(unit, at);
     const dimension = dimensionOf(row);

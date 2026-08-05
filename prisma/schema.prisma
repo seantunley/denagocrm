@@ -614,6 +614,21 @@ model Lead {
   quantity   Int     @default(1) // number of carts wanted (drives the value)
   valueCents Int     @default(0)
   status     String  @default("open") // open | won | lost
+  /// WHEN the deal closed — immutable lifecycle dates, not `updatedAt`.
+  ///
+  /// Both columns have existed since 52_pipelines_forecasting_rbac_audit, which
+  /// also installs the Lead_sync_pipeline_forecast trigger that sets whichever
+  /// one applies the first time a deal reaches that status, preserves it
+  /// (COALESCE) on every later write, and clears BOTH when a deal is re-opened.
+  /// They were never surfaced to Prisma, so every reporting surface dated a won
+  /// deal by `updatedAt` instead — which moves whenever anyone adds a note, so
+  /// editing an old deal silently restated the month it was won in.
+  ///
+  /// Read-only from the app's point of view: the trigger is the writer. See the
+  /// long note above METRICS in src/lib/statistics.ts for why a bucketed report
+  /// cannot use a mutable date at all.
+  wonAt      DateTime?
+  lostAt     DateTime?
   lostReason String?
   position   Int     @default(0)
   externalId String? @unique // e.g. Facebook leadgen_id

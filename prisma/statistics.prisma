@@ -30,20 +30,33 @@ model StatisticBucket {
   /// same tick, or a run that overlaps a previous one, addresses the SAME row
   /// and writes the SAME value. There is no path by which a bucket accumulates.
   ///
-  /// A `@@unique` on those five columns cannot do this job: `tenantId` is
-  /// nullable (every model here carries it that way, and it IS null in
-  /// enforcement-dormant mode), and Postgres treats NULLs in a unique index as
-  /// distinct — so the constraint would silently permit unlimited duplicates in
-  /// precisely the mode every deployment runs in today. A derived primary key
-  /// has no null semantics to get wrong.
+  /// It is also why every write to a bucket is tenant-safe twice over: the id
+  /// CONTAINS the tenant, so an id built for one workspace cannot address
+  /// another's row, and the rollup names `tenantId` in the predicate as well.
   id          String   @id
-  tenantId    String?
+  /// NOT NULL, unlike most tenant columns in this schema.
+  ///
+  /// These tables are new, so there is no legacy population to migrate and no
+  /// reason to inherit the nullable-tenant problem: a NULL-tenant bucket is
+  /// invisible the moment strict enforcement is switched on (the RLS policy
+  /// below has no `IS NULL` escape hatch), which would silently orphan a
+  /// workspace's entire reporting history at the exact moment isolation starts
+  /// mattering. The rollup resolves a concrete tenant on every path — the
+  /// founding tenant stands in while enforcement is dormant — so there is never
+  /// a value it would have to write null.
+  tenantId    String
   /// leads_created | deals_won | deals_lost | jobcards_completed
   metric      String
   /// day | month — the downsampling ladder. See src/lib/statistics.ts.
   period      String
   /// First instant of the bucket, as a UTC timestamp of Africa/Johannesburg
   /// midnight (so a "day" starts at 22:00 UTC the previous day).
+  ///
+  /// Which SOURCE date decides this is the single most important decision in
+  /// the feature and it is documented above METRICS in src/lib/statistics.ts:
+  /// always an immutable lifecycle date (createdAt / wonAt / lostAt /
+  /// completedAt), never a mutable `updatedAt`, because a sealed bucket that
+  /// could still gain rows from the past is a permanent double count.
   bucketStart DateTime
   /// The metric's breakdown value — lead source, assignee id — or "" for a
   /// metric with no breakdown. NOT nullable, because it is part of the identity
@@ -61,8 +74,8 @@ model StatisticBucket {
   /// every chart on the Reports page.
   ///
   /// tenantId LEADS, for the same reason it leads the journey retention indexes
-  /// (see prisma/journeys.prisma): both the rollup and the reads run inside a
-  /// tenant scope, so the query the extension actually emits is
+  /// (see prisma/journeys.prisma): both the rollup and the reads name the
+  /// tenant explicitly, so the query actually emitted is
   /// `tenantId = $1 AND metric = $2 AND period = $3 AND bucketStart >= $4`.
   /// Ordered without tenantId first, one workspace's buckets are walked by every
   /// other workspace's query.
@@ -82,19 +95,35 @@ model StatisticBucket {
 model StatisticCursor {
   /// Derived from (tenant, source), same rationale as StatisticBucket.id.
   id        String   @id
-  tenantId  String?
+  /// NOT NULL — see StatisticBucket.tenantId. A cursor invisible under
+  /// enforcement is worse than a lost bucket: the rollup would decide the
+  /// tenant had never been backfilled and rebuild its entire history.
+  tenantId  String
   /// lead | jobcard
   source    String
   /// The `updatedAt` of the newest source row already accounted for.
+  ///
+  /// ONLY EVER ADVANCED PAST FINISHED WORK. Every bounded step in the rollup
+  /// reports whether it completed, and an incomplete one leaves this exactly
+  /// where it was so the next tick sees the same changes again.
   cursorAt  DateTime
   /// Tie-break within one millisecond of `cursorAt`, so the keyset probe can be
   /// strictly-greater-than without ever stepping over a row that shares a
   /// timestamp with the last one consumed. Prisma DateTime is millisecond
   /// precision; a bulk import writes hundreds of rows inside one.
   cursorId  String   @default("")
+  /// DURABLE BACKFILL PROGRESS: history has been built from here forwards.
+  ///
+  /// The initial backfill walks backwards in month-aligned slices and records
+  /// this after each one, so a tick killed by the route deadline loses at most
+  /// one slice. Without it a database too large to backfill inside one tick
+  /// restarted from today on every tick and never finished — non-terminating,
+  /// not merely slow. Null once `backfilledAt` is set; it has no further use.
+  backfillFrom DateTime?
   /// Set once, when the source's whole history was first rolled up. Its ABSENCE
-  /// is what selects the backfill path, so it is also the "have I ever run for
-  /// this tenant" flag.
+  /// is what selects the backfill path, so it is also the "have I ever finished
+  /// for this tenant" flag — and it is stamped only when the walk reaches the
+  /// oldest row, never part-way.
   backfilledAt DateTime?
   updatedAt DateTime @updatedAt
 
