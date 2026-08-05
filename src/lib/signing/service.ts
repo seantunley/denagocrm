@@ -6,6 +6,7 @@ import { formatDate } from "@/lib/format";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { freezeDocumentGlobals } from "@/lib/signing/freezeDocument";
+import { signingSecurityMode } from "./securityPolicy";
 import { newSignToken } from "./tokens";
 
 export type RequestSource = {
@@ -16,6 +17,8 @@ export type RequestSource = {
   templateId?: string | null;
 };
 
+export type SigningIdentityMode = "link" | "email_otp";
+
 export async function createSignatureRequestFromDoc(opts: {
   doc: DocumentModel;
   title: string;
@@ -24,16 +27,23 @@ export async function createSignatureRequestFromDoc(opts: {
   ordering?: "parallel" | "sequential";
   message?: string;
   createdById?: string | null;
+  /** Explicit template policy. Strict production defaults to email OTP whenever
+   * every signer has an email address; compatibility mode keeps link possession. */
+  identityMode?: SigningIdentityMode;
   // Run all writes on this transaction client when provided, so the caller can
   // create the request + recipients + fields + event atomically (and under a
   // lock) — e.g. to guarantee at most one open request per quote/job card.
   client?: Prisma.TransactionClient;
-}): Promise<{ id: string; recipients: number; fields: number }> {
+}): Promise<{ id: string; recipients: number; fields: number; identityMode: SigningIdentityMode }> {
   const { source } = opts;
   const frozenDoc = freezeDocumentGlobals(opts.doc, {
     ...companyTokens(await getCompanyProfile()),
     "date.today": formatDate(new Date()),
   });
+  const signers = frozenDoc.recipients.filter((recipient) => recipient.role !== "viewer");
+  const allSignersHaveEmail = signers.length > 0 && signers.every((recipient) => Boolean(recipient.email?.trim()));
+  const identityMode: SigningIdentityMode =
+    opts.identityMode ?? (signingSecurityMode() === "strict" && allSignersHaveEmail ? "email_otp" : "link");
 
   // The request + its recipients + fields + created event are ONE envelope — a
   // partial one (a request row with no recipients, say) is corrupt. Run them
@@ -56,6 +66,13 @@ export async function createSignatureRequestFromDoc(opts: {
         createdById: opts.createdById ?? null,
       },
     });
+    // identityMode landed through the trust migration before the generated client
+    // knew the column. Keep the write in this transaction so the request is never
+    // briefly dispatched under the weaker default.
+    await db.$executeRaw`
+      UPDATE "SignatureRequest" SET "identityMode" = ${identityMode}
+      WHERE "id" = ${request.id}
+    `;
 
     const idMap = new Map<string, string>();
     for (let index = 0; index < frozenDoc.recipients.length; index += 1) {
@@ -103,11 +120,12 @@ export async function createSignatureRequestFromDoc(opts: {
           title: opts.title,
           recipients: frozenDoc.recipients.length,
           fields: fieldsData.length,
+          identityMode,
         },
       },
     });
 
-    return { id: request.id, recipients: frozenDoc.recipients.length, fields: fieldsData.length };
+    return { id: request.id, recipients: frozenDoc.recipients.length, fields: fieldsData.length, identityMode };
   };
 
   // Own transaction on basePrisma when the caller didn't supply one — the same
@@ -123,7 +141,7 @@ export async function createSignatureRequestFromDoc(opts: {
   // request never logs a phantom creation.
   await logAudit({
     action: "signing.create",
-    summary: `Created signature request “${opts.title}”`,
+    summary: `Created signature request “${opts.title}” (${result.identityMode})`,
     entityType: "SignatureRequest",
     entityId: result.id,
   });
