@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { basePrisma } from "./db";
-import { requireUser } from "./auth";
+import { requireUser, requireTenantOwner } from "./auth";
 import { requireModuleEnabled } from "./modules/enabled";
 import { activeTenantPredicate } from "./tenantPredicate";
 import { governingDocumentLink } from "./documents/governing";
@@ -110,6 +110,11 @@ export async function requireRoute(route: GuardedRoute): Promise<PermissionUser>
     if (user.role !== "owner") redirect("/");
     return user;
   }
+  // The authoritative half of a `tenantOwner` rule. This resolves
+  // Tenant.ownerUserId live on every request, so a person who stopped being
+  // their workspace's owner loses the screen here even while an unexpired token
+  // still carries the grant the edge reads.
+  if ("tenantOwner" in rule) return requireTenantOwner();
   return requireAnyPermission(...rule.anyOf);
 }
 

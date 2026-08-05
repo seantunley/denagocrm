@@ -605,20 +605,39 @@ test("every query the registry issues has an index, and the table has an RLS pol
   assert.doesNotMatch(migration.replace(/^\s*--.*$/gm, ""), /CONCURRENTLY/);
 });
 
-test("/repairs is gated once, in the shared route table", () => {
+test("/repairs is gated once, in the shared route table, as a TENANT-owner surface", () => {
+  // Every row this page reads is stamped with one tenant (repairsTenantId scopes
+  // the detector writes and both reads), so the person entitled to see it is the
+  // owner of the workspace it describes. `owner: true` would have meant the
+  // PLATFORM owner instead: tenant B's provisioned owner locked out of tenant B's
+  // own inbox, and the platform owner shown whichever workspace their session
+  // happened to be scoped to.
   const rules = shipped("src/lib/routeAccess.ts");
-  assert.match(rules, /\{ prefix: "\/repairs", owner: true \}/, "the edge rule must exist");
-  for (const file of ["src/app/(app)/repairs/page.tsx", "src/app/(app)/repairs/layout.tsx"]) {
-    assert.match(shipped(file), /requireOwner\(\)/, `${file} must apply the same rule the proxy applies`);
+  assert.match(rules, /\{ prefix: "\/repairs", tenantOwner: true \}/, "the edge rule must exist");
+
+  const surfaces = ["src/app/(app)/repairs/page.tsx", "src/app/(app)/repairs/layout.tsx"];
+  for (const file of surfaces) {
+    assert.match(
+      shipped(file),
+      /await requireRoute\("\/repairs"\)/,
+      `${file} must apply the same rule the proxy applies, by reading it rather than restating it`,
+    );
   }
   // A server action is reachable by a direct POST, so the page guard is not the
   // boundary. Both mutations restate it.
   const actions = shipped("src/app/actions/repairs.ts");
   assert.equal(
-    (actions.match(/await requireOwner\(\)/g) ?? []).length,
+    (actions.match(/await requireTenantOwner\(\)/g) ?? []).length,
     2,
     "every action must gate itself, not rely on the page",
   );
+  for (const file of [...surfaces, "src/app/actions/repairs.ts"]) {
+    assert.doesNotMatch(
+      shipped(file),
+      /\brequireOwner\(/,
+      `${file} must not demand the PLATFORM role — that is the lockout this rule exists to avoid`,
+    );
+  }
   assert.doesNotMatch(
     actions,
     /resolvedAt:\s*new Date\(\)/,

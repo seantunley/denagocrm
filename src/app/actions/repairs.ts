@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { setRepairIssueIgnored } from "@/lib/repairs";
@@ -9,10 +9,15 @@ import { setRepairIssueIgnored } from "@/lib/repairs";
 /**
  * Ignore / un-ignore one repair issue.
  *
- * `requireOwner()` in EVERY action, not only on the page. A server action is
- * reachable by a direct POST, so the page guard is not the boundary — it is the
- * same rule stated where the mutation happens. It matches
- * `{ prefix: "/repairs", owner: true }` in routeAccess.ts.
+ * `requireTenantOwner()` in EVERY action, not only on the page. A server action
+ * is reachable by a direct POST, so the page guard is not the boundary — it is
+ * the same rule stated where the mutation happens. It matches
+ * `{ prefix: "/repairs", tenantOwner: true }` in routeAccess.ts.
+ *
+ * TENANT owner, not platform owner, for the same reason the route rule is:
+ * `setRepairIssueIgnored` narrows by `repairsTenantId()`, so this action can
+ * only ever touch the caller's own workspace. Requiring the platform role would
+ * have left every other workspace's owner unable to dismiss their own issues.
  *
  * There is deliberately no "resolve" action. An issue is a statement about the
  * world, so the only thing that may retract it is the detector finding the
@@ -22,7 +27,7 @@ import { setRepairIssueIgnored } from "@/lib/repairs";
  */
 export async function ignoreRepairIssue(id: string) {
   return asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     if (!(await setRepairIssueIgnored(id, true, user.id))) {
       refuse("That issue is no longer open — it may have cleared itself.");
     }
@@ -34,7 +39,7 @@ export async function ignoreRepairIssue(id: string) {
 
 export async function restoreRepairIssue(id: string) {
   return asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     if (!(await setRepairIssueIgnored(id, false, user.id))) {
       refuse("That issue is no longer open — it may have cleared itself.");
     }

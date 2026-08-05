@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { ArrowRight, BellOff, CheckCircle2, Hammer } from "lucide-react";
-import { requireOwner } from "@/lib/auth";
+import { requireRoute } from "@/lib/permissions";
 import { formatDateTime } from "@/lib/format";
 import { listRepairIssues, type RepairIssueView } from "@/lib/repairs";
 import { ignoreRepairIssue, restoreRepairIssue } from "@/app/actions/repairs";
@@ -23,9 +23,16 @@ export const dynamic = "force-dynamic";
  * issue: an issue is a claim about the state of the workspace, and the only
  * thing entitled to withdraw it is a detector finding the problem gone. The one
  * human verb is Ignore, and Ignore hides — it does not assert a fix.
+ *
+ * Guarded through `requireRoute("/repairs")` rather than a restated predicate,
+ * so the page and the edge proxy answer from the same row of ROUTE_RULES. That
+ * rule is `tenantOwner`: everything below is scoped to ONE tenant by
+ * `repairsTenantId()`, so the person entitled to see it is the owner of the
+ * workspace it describes — which the platform owner is not, for any workspace
+ * but their own.
  */
 export default async function RepairsPage() {
-  await requireOwner();
+  await requireRoute("/repairs");
   const { open, ignored } = await listRepairIssues();
 
   return (

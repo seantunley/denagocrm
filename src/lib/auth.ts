@@ -256,9 +256,40 @@ export async function createSessionCookie(
     // User.sessionVersion for the affected users, and getCurrentUser refuses any
     // session whose `sv` no longer matches — so a permission change invalidates
     // every token carrying a now-stale `rg` and the next sign-in re-derives it.
+    //
+    // Tenant ownership is the one input `rg` needs that RBAC does not hold: it
+    // is a row (Tenant.ownerUserId), and the edge proxy has no database, so it
+    // has to be decided here or not at all. Read against sessionTenantId — the
+    // tenant this session is actually stamped with — not the resolved `tenantId`
+    // above, which the tenantless-session fallback may have just dropped.
+    //
+    // basePrisma deliberately, exactly as requireTenantOwner() does: Tenant is a
+    // tenant-scoped model, so the guarded client would fail closed reading the
+    // very row that decides the scope.
+    //
+    // Best-effort, and it FAILS CLOSED: any error mints no tenant-owner grant,
+    // costing that owner the gated screens until their next sign-in. Failing the
+    // login instead would lock a whole workspace out of the CRM over a page —
+    // and requireRoute re-resolves this live on every request anyway, so the
+    // grant is a cache, never the boundary.
+    let tenantOwner = false;
+    if (sessionTenantId && user.role !== "owner") {
+      try {
+        const tenant = await basePrisma.tenant.findUnique({
+          where: { id: sessionTenantId },
+          select: { ownerUserId: true },
+        });
+        tenantOwner = tenant?.ownerUserId === user.id;
+      } catch (e) {
+        if (tenantObserving()) {
+          console.warn(`[tenant-monitor] tenant-owner grant resolve failed for user ${user.id}:`, e);
+        }
+      }
+    }
     const grants = routeGrants(
       user.role,
       usablePermissions(await getUserPermissions(user.id)),
+      { tenantOwner },
     );
     const token = await signFreshSession(
       { ...user, grants, sessionVersion: security.sessionVersion },
