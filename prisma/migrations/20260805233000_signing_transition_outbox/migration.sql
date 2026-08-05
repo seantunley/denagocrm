@@ -1,22 +1,24 @@
 -- Every committed human decision gets a durable continuation job. Inline callers
 -- still run for responsiveness; the outbox is the crash-recovery authority.
+-- Transition jobs use a separate queue state so an older completion worker cannot
+-- claim an unfamiliar job type during a rolling deployment.
 SET app.bypass_rls = 'on';
 
 CREATE OR REPLACE FUNCTION signing_enqueue_recipient_transition() RETURNS trigger AS $$
 BEGIN
   IF OLD."status" IS DISTINCT FROM NEW."status" AND NEW."status" = 'signed' THEN
-    INSERT INTO "SigningJob" ("id","tenantId","requestId","jobType","idempotencyKey","payload")
+    INSERT INTO "SigningJob" ("id","tenantId","requestId","jobType","idempotencyKey","payload","status")
     VALUES (
       'sj_' || replace(gen_random_uuid()::text, '-', ''), NEW."tenantId", NEW."requestId",
       'advance_signature', 'advance:' || NEW."requestId" || ':' || NEW."id",
-      jsonb_build_object('recipientId', NEW."id")
+      jsonb_build_object('recipientId', NEW."id"), 'transition'
     ) ON CONFLICT ("tenantId","idempotencyKey") DO NOTHING;
   ELSIF OLD."status" IS DISTINCT FROM NEW."status" AND NEW."status" = 'declined' THEN
-    INSERT INTO "SigningJob" ("id","tenantId","requestId","jobType","idempotencyKey","payload")
+    INSERT INTO "SigningJob" ("id","tenantId","requestId","jobType","idempotencyKey","payload","status")
     VALUES (
       'sj_' || replace(gen_random_uuid()::text, '-', ''), NEW."tenantId", NEW."requestId",
       'decline_notify', 'decline:' || NEW."requestId" || ':' || NEW."id",
-      jsonb_build_object('recipientId', NEW."id")
+      jsonb_build_object('recipientId', NEW."id"), 'transition'
     ) ON CONFLICT ("tenantId","idempotencyKey") DO NOTHING;
   END IF;
   RETURN NEW;
@@ -30,11 +32,11 @@ FOR EACH ROW EXECUTE FUNCTION signing_enqueue_recipient_transition();
 CREATE OR REPLACE FUNCTION signing_enqueue_approval_transition() RETURNS trigger AS $$
 BEGIN
   IF OLD."status" IS DISTINCT FROM NEW."status" AND NEW."status" IN ('approved','rejected') THEN
-    INSERT INTO "SigningJob" ("id","tenantId","requestId","jobType","idempotencyKey","payload")
+    INSERT INTO "SigningJob" ("id","tenantId","requestId","jobType","idempotencyKey","payload","status")
     VALUES (
       'sj_' || replace(gen_random_uuid()::text, '-', ''), NEW."tenantId", NEW."requestId",
       'advance_approval', 'approval:' || NEW."requestId" || ':' || NEW."id",
-      jsonb_build_object('approvalStepId', NEW."id", 'decision', NEW."status")
+      jsonb_build_object('approvalStepId', NEW."id", 'decision', NEW."status"), 'transition'
     ) ON CONFLICT ("tenantId","idempotencyKey") DO NOTHING;
   END IF;
   RETURN NEW;
