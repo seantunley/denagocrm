@@ -1,0 +1,102 @@
+/// Long-term reporting statistics — pre-aggregated buckets.
+///
+/// The Reports page answers "deals won per month, this year vs last" by
+/// materialising a YEAR of Lead rows into Node and bucketing them in a nested
+/// filter loop, twice — once for the range, once for the comparison period.
+/// That cost grows with the tenant's whole history and is paid again on every
+/// page view.
+///
+/// The fix is to compute those numbers once, into buckets: a fine-grained
+/// series kept for a bounded window, downsampled into a coarse series kept
+/// long-term. A twelve-month chart then reads twelve small rows instead of
+/// every lead in the year, and no table grows without bound.
+///
+/// Kept in its own Prisma schema file so the domain can evolve independently —
+/// and, right now, so it does not collide with parallel work in schema.prisma.
+
+/// One pre-aggregated measurement: a metric, over one time bucket, for one
+/// dimension value.
+///
+/// NARROW, not wide — one row per (metric, bucket, dimension) rather than one
+/// row per bucket with a column per metric. Adding a metric must not be a
+/// schema migration, and a metric nobody records must not cost a column of
+/// zeroes on every row.
+model StatisticBucket {
+  /// The bucket's IDENTITY, derived from its natural key rather than generated.
+  ///
+  /// THIS IS THE IDEMPOTENCY PRIMITIVE. The rollup recomputes a bucket's value
+  /// from source and upserts it under an id it can always re-derive from
+  /// (tenant, metric, period, bucketStart, dimension) — so a second run in the
+  /// same tick, or a run that overlaps a previous one, addresses the SAME row
+  /// and writes the SAME value. There is no path by which a bucket accumulates.
+  ///
+  /// A `@@unique` on those five columns cannot do this job: `tenantId` is
+  /// nullable (every model here carries it that way, and it IS null in
+  /// enforcement-dormant mode), and Postgres treats NULLs in a unique index as
+  /// distinct — so the constraint would silently permit unlimited duplicates in
+  /// precisely the mode every deployment runs in today. A derived primary key
+  /// has no null semantics to get wrong.
+  id          String   @id
+  tenantId    String?
+  /// leads_created | deals_won | deals_lost | jobcards_completed
+  metric      String
+  /// day | month — the downsampling ladder. See src/lib/statistics.ts.
+  period      String
+  /// First instant of the bucket, as a UTC timestamp of Africa/Johannesburg
+  /// midnight (so a "day" starts at 22:00 UTC the previous day).
+  bucketStart DateTime
+  /// The metric's breakdown value — lead source, assignee id — or "" for a
+  /// metric with no breakdown. NOT nullable, because it is part of the identity
+  /// above and a null there is the same trap as a null tenantId.
+  dimension   String   @default("")
+  /// How many source rows fell in this bucket.
+  count       Int      @default(0)
+  /// The money attached to those rows, where the metric has any (0 otherwise).
+  sumCents    BigInt   @default(0)
+  /// When this bucket was last recomputed. Diagnostic — a bucket that stopped
+  /// moving is how a stalled rollup looks from the outside.
+  computedAt  DateTime @default(now())
+
+  /// The read path: "this metric, this period, over this date range", which is
+  /// every chart on the Reports page.
+  ///
+  /// tenantId LEADS, for the same reason it leads the journey retention indexes
+  /// (see prisma/journeys.prisma): both the rollup and the reads run inside a
+  /// tenant scope, so the query the extension actually emits is
+  /// `tenantId = $1 AND metric = $2 AND period = $3 AND bucketStart >= $4`.
+  /// Ordered without tenantId first, one workspace's buckets are walked by every
+  /// other workspace's query.
+  @@index([tenantId, metric, period, bucketStart])
+  /// The retention sweep's early-out: "are there day buckets older than the
+  /// cutoff?", asked once per tenant per tick and answered "no" almost always.
+  /// [tenantId, metric, ...] cannot serve it — the sweep does not name a metric.
+  @@index([tenantId, period, bucketStart])
+  @@index([tenantId])
+}
+
+/// How far the rollup has consumed each source table's change clock.
+///
+/// One row per (tenant, source) — NOT per metric. The three Lead metrics share
+/// Lead's `updatedAt`, so they share one probe: asking the same question of the
+/// same index three times per tick is three times the cost for one answer.
+model StatisticCursor {
+  /// Derived from (tenant, source), same rationale as StatisticBucket.id.
+  id        String   @id
+  tenantId  String?
+  /// lead | jobcard
+  source    String
+  /// The `updatedAt` of the newest source row already accounted for.
+  cursorAt  DateTime
+  /// Tie-break within one millisecond of `cursorAt`, so the keyset probe can be
+  /// strictly-greater-than without ever stepping over a row that shares a
+  /// timestamp with the last one consumed. Prisma DateTime is millisecond
+  /// precision; a bulk import writes hundreds of rows inside one.
+  cursorId  String   @default("")
+  /// Set once, when the source's whole history was first rolled up. Its ABSENCE
+  /// is what selects the backfill path, so it is also the "have I ever run for
+  /// this tenant" flag.
+  backfilledAt DateTime?
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+}
