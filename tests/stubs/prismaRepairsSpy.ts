@@ -107,6 +107,20 @@ function model(name: ModelName) {
           return direction === "desc" ? -cmp : cmp;
         });
       }
+      // CURSOR PAGINATION, modelled properly rather than ignored. The journey
+      // walk pages with `cursor`/`skip`, and a stub that dropped them would hand
+      // page one back on every iteration — a >PAGE_SIZE test would then "pass"
+      // while silently re-reading the same rows, which is precisely the class of
+      // bug the pagination exists to prevent.
+      const cursor = args.cursor as Record<string, unknown> | undefined;
+      if (cursor) {
+        const entries = Object.entries(cursor);
+        if (entries.length !== 1) throw new Error("prismaRepairsSpy: one cursor key only");
+        const [field, value] = entries[0];
+        const at = found.findIndex((row) => row[field] === value);
+        if (at < 0) throw new Error(`prismaRepairsSpy: cursor ${field}=${String(value)} matched no row`);
+        found = found.slice(at + (typeof args.skip === "number" ? args.skip : 0));
+      }
       if (typeof args.take === "number") found = found.slice(0, args.take);
       return Promise.resolve(found.map((row) => project(row, args.select as Record<string, boolean>)));
     },

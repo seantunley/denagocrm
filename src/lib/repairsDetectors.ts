@@ -23,6 +23,28 @@ import {
  * the failure it finds is genuinely invisible today. Several obvious candidates
  * did not survive that test and are deliberately absent — see the note at the
  * bottom of this file.
+ *
+ * TENANT SCOPING IS EXPLICIT IN EVERY QUERY, never inherited from the guard.
+ *
+ * These run on the automations cron, once per tenant per tick, and they FILE
+ * ROWS: whatever a detector reads is written back as a repair issue stamped with
+ * `repairsTenantId()`. The db.ts tenant extension deliberately does not scope
+ * anything while enforcement is off, so a detector relying on it alone would,
+ * during a dormant or monitor rollout, read every tenant's journeys and file
+ * another workspace's failures against the founding tenant — a cross-tenant
+ * read AND a wrong write, from housekeeping nobody is watching.
+ *
+ * So each query names `repairsTenantId()` itself — the SAME value the issues are
+ * stamped with, so what a detector reads and what it writes can never disagree.
+ * Under enforcement the guard overwrites the predicate with the identical
+ * authoritative value (`scopeWhere` spreads its own tenantId last), so this is
+ * belt-and-braces there and load-bearing everywhere else.
+ *
+ * Strict equality, deliberately: a NULL-tenant row is un-owned, and matching it
+ * would re-open the same hole the moment enforcement were ever switched back
+ * off. Legacy NULL rows are therefore skipped rather than guessed at — a
+ * detector that under-reports is recoverable; one that files across tenants is
+ * not.
  */
 
 /** How far back the run-failure detector looks. Two cron ticks' worth is noise; a day is a pattern. */
@@ -36,12 +58,17 @@ export const RUN_FAILURE_WINDOW_HOURS = 24;
  * carries.
  */
 export const RUN_FAILURE_THRESHOLD = 3;
+/** Rows per page of the active-journey walk. */
+export const JOURNEY_PAGE_SIZE = 200;
 /**
- * Ceiling on journeys examined per tick. A workspace with more active journeys
- * than this is not one this sweep should walk inside a cron tick; hitting it
- * revokes `complete`, so a truncated pass can raise but never clear.
+ * Ceiling on PAGES walked per tick, so the sweep stays bounded inside a cron
+ * tick. Hitting it revokes `complete`, so a truncated pass can raise but never
+ * clear. At the page size above this is 2,000 active journeys in one tenant —
+ * far past any real workspace, where the previous flat cap of 200 was not.
  */
-export const MAX_JOURNEYS_SCANNED = 200;
+export const MAX_JOURNEY_PAGES = 10;
+/** Total journeys any one tick will examine. */
+export const MAX_JOURNEYS_SCANNED = JOURNEY_PAGE_SIZE * MAX_JOURNEY_PAGES;
 
 export const JOURNEY_TEMPLATE_DETECTOR = "journey.email_template_missing";
 export const JOURNEY_UNPUBLISHED_DETECTOR = "journey.active_without_published_version";
@@ -93,14 +120,39 @@ export function referencedEmailTemplateIds(node: unknown, into: Set<string> = ne
  * two. Only a definition that actually names a template costs a third.
  */
 async function detectJourneyConfiguration(): Promise<DetectorReport[]> {
-  const journeys = await prisma.journey.findMany({
-    where: { status: "active" },
-    select: { id: true, name: true, activeVersion: true },
-    take: MAX_JOURNEYS_SCANNED,
-  });
-  // A full page back means there may be more we never looked at, so neither
-  // report may clear this tick.
-  const complete = journeys.length < MAX_JOURNEYS_SCANNED;
+  const tenantId = repairsTenantId();
+
+  // DETERMINISTIC PAGINATION, not a single truncated page.
+  //
+  // A bare `take: N` had two failure modes. With EXACTLY N active journeys the
+  // first page came back full, `complete` was revoked on every tick forever, and
+  // rows that should have cleared never could. With MORE than N — and no
+  // `orderBy` — the page was whatever the planner returned, so journeys outside
+  // it were never examined at all, on any tick.
+  //
+  // Ordering by `id` makes the walk total and repeatable, and `complete` is now
+  // earned: it is only set when a SHORT page proves the end was reached. Hitting
+  // the page ceiling still revokes it, so a truncated pass can raise but never
+  // clear — the original guarantee, now with a bound that a normal workspace
+  // cannot trip.
+  const journeys: Array<{ id: string; name: string; activeVersion: number | null }> = [];
+  let cursor: string | undefined;
+  let complete = false;
+  for (let page = 0; page < MAX_JOURNEY_PAGES; page++) {
+    const batch = await prisma.journey.findMany({
+      where: { tenantId, status: "active" },
+      select: { id: true, name: true, activeVersion: true },
+      orderBy: { id: "asc" },
+      take: JOURNEY_PAGE_SIZE,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+    journeys.push(...batch);
+    if (batch.length < JOURNEY_PAGE_SIZE) {
+      complete = true;
+      break;
+    }
+    cursor = batch[batch.length - 1]!.id;
+  }
 
   // An ACTIVE journey with no active version enrols nobody, silently and
   // forever. The journeys page does print "Active version: none" — in the
@@ -128,7 +180,7 @@ async function detectJourneyConfiguration(): Promise<DetectorReport[]> {
   }
 
   const versions = await prisma.journeyVersion.findMany({
-    where: { journeyId: { in: published.map((journey) => journey.id) }, state: "published" },
+    where: { tenantId, journeyId: { in: published.map((journey) => journey.id) }, state: "published" },
     select: { journeyId: true, version: true, definition: true },
   });
 
@@ -154,7 +206,7 @@ async function detectJourneyConfiguration(): Promise<DetectorReport[]> {
   // ONE query for every template referenced anywhere, not one per journey. The
   // `in` list is bounded by the journey cap above.
   const existing = await prisma.emailTemplate.findMany({
-    where: { id: { in: [...allIds] } },
+    where: { tenantId, id: { in: [...allIds] } },
     select: { id: true },
   });
   const alive = new Set(existing.map((template) => template.id));
@@ -199,8 +251,9 @@ async function detectJourneyConfiguration(): Promise<DetectorReport[]> {
  * createdAt >= $2` is the same shape). Below the threshold nothing else runs.
  */
 async function detectFailingJourneyRuns(): Promise<DetectorReport> {
+  const tenantId = repairsTenantId();
   const since = new Date(Date.now() - RUN_FAILURE_WINDOW_HOURS * 60 * 60 * 1000);
-  const where = { status: "failed", createdAt: { gte: since } };
+  const where = { tenantId, status: "failed", createdAt: { gte: since } };
 
   // THE EARLY OUT. Cheaper than the groupBy and answers "is this worth asking
   // properly?" — a workspace under the threshold in total cannot have any one
@@ -221,7 +274,7 @@ async function detectFailingJourneyRuns(): Promise<DetectorReport> {
   }
 
   const journeys = await prisma.journey.findMany({
-    where: { id: { in: offenders.map((row) => row.journeyId) } },
+    where: { tenantId, id: { in: offenders.map((row) => row.journeyId) } },
     select: { id: true, name: true },
   });
   const nameOf = new Map(journeys.map((journey) => [journey.id, journey.name]));

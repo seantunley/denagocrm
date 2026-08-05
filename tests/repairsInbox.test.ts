@@ -320,11 +320,12 @@ test("a journey whose email template was deleted is raised, and clears when it i
   // `{ status: "skipped", note: "Email skipped: template was deleted" }` — the
   // step does not fail, the run completes, nothing is logged, and nobody in the
   // journey receives the email. There is no other surface in the app that says so.
-  const seed = (templates: Array<{ id: string }>, carried: spy.Row[] = []) => ({
+  const seed = (templates: Array<{ id: string; tenantId?: string }>, carried: spy.Row[] = []) => ({
     repairIssue: carried,
-    journey: [{ id: "j1", name: "Welcome", status: "active", activeVersion: 2 }],
+    journey: [{ id: "j1", tenantId: TENANT, name: "Welcome", status: "active", activeVersion: 2 }],
     journeyVersion: [
       {
+        tenantId: TENANT,
         journeyId: "j1",
         version: 2,
         state: "published",
@@ -334,6 +335,7 @@ test("a journey whose email template was deleted is raised, and clears when it i
       // pinned to it are already in flight and cannot be re-pointed, so it must
       // not produce an issue nobody can act on.
       {
+        tenantId: TENANT,
         journeyId: "j1",
         version: 1,
         state: "published",
@@ -359,7 +361,7 @@ test("a journey whose email template was deleted is raised, and clears when it i
   // Now the template exists again. Nobody clicked anything; the detector simply
   // stops reporting it — the row raised above is carried across so it is the
   // SAME row that has to clear.
-  spy.reset(seed([{ id: "gone" }], raised.map((row) => ({ ...row }))));
+  spy.reset(seed([{ id: "gone", tenantId: TENANT }], raised.map((row) => ({ ...row }))));
   await detectors.runRepairsDetectors();
   assert.ok(
     spy.rows("repairIssue").every((row) => row.resolvedAt instanceof Date),
@@ -368,7 +370,7 @@ test("a journey whose email template was deleted is raised, and clears when it i
 });
 
 test("an active journey with nothing published is raised as its own issue", async () => {
-  spy.reset({ journey: [{ id: "j2", name: "Nurture", status: "active", activeVersion: null }] });
+  spy.reset({ journey: [{ id: "j2", tenantId: TENANT, name: "Nurture", status: "active", activeVersion: null }] });
   await detectors.runRepairsDetectors();
 
   const keys = spy.rows("repairIssue").map((row) => row.key);
@@ -380,6 +382,78 @@ test("an active journey with nothing published is raised as its own issue", asyn
   );
 });
 
+test("another tenant's broken journey is never scanned, and never filed against ours", async () => {
+  // THE DORMANT-MODE HOLE. The db.ts guard deliberately scopes nothing while
+  // enforcement is off, and this sweep both READS journeys and WRITES issues
+  // stamped with repairsTenantId(). A detector that leaned on the guard alone
+  // would, during a dormant or monitor rollout, read the other workspace's
+  // journeys and file their failures as ours — a cross-tenant read and a wrong
+  // write at once. The stub never scopes anything, so if the predicate were
+  // dropped from the query this test fails.
+  spy.reset({
+    journey: [
+      { id: "ours", tenantId: TENANT, name: "Ours", status: "active", activeVersion: 1 },
+      { id: "theirs", tenantId: "someone-else", name: "Theirs", status: "active", activeVersion: null },
+    ],
+    journeyVersion: [
+      { tenantId: TENANT, journeyId: "ours", version: 1, state: "published", definition: { steps: [] } },
+    ],
+  });
+  await detectors.runRepairsDetectors();
+
+  assert.deepEqual(
+    spy.rows("repairIssue").map((row) => row.key),
+    [],
+    "the other tenant's unpublished journey must not be raised — not against them, and certainly not against us",
+  );
+  for (const call of spy.calls.filter((c) => c.model === "journey")) {
+    assert.equal(
+      (call.args.where as { tenantId?: string } | undefined)?.tenantId,
+      TENANT,
+      "every journey read must name our tenant explicitly, not rely on the guard",
+    );
+  }
+});
+
+test("exactly one full page of journeys still counts as a complete pass", async () => {
+  // THE OFF-BY-ONE THAT NEVER CLEARED. `complete` used to be
+  // `journeys.length < PAGE_SIZE`, so a workspace sitting on EXACTLY the cap
+  // reported incomplete on every tick forever — and an incomplete report may
+  // raise but may never clear, so stale issues became permanent. Paging until a
+  // SHORT page proves the end fixes it: page two comes back empty, which is the
+  // proof.
+  const page = detectors.JOURNEY_PAGE_SIZE;
+  spy.reset({
+    journey: Array.from({ length: page }, (_, i) => ({
+      // Zero-padded so lexical order matches insertion order — the walk pages by
+      // `id` ascending and the cursor has to land somewhere deterministic.
+      id: `j${String(i).padStart(4, "0")}`,
+      tenantId: TENANT,
+      name: `Journey ${i}`,
+      status: "active",
+      activeVersion: 1,
+    })),
+    journeyVersion: Array.from({ length: page }, (_, i) => ({
+      tenantId: TENANT,
+      journeyId: `j${String(i).padStart(4, "0")}`,
+      version: 1,
+      state: "published",
+      definition: { steps: [] },
+    })),
+    // Open, and no longer reported. It may only clear if the pass was complete.
+    repairIssue: [
+      issueRow({
+        detector: detectors.JOURNEY_UNPUBLISHED_DETECTOR,
+        key: `${detectors.JOURNEY_UNPUBLISHED_DETECTOR}:long-gone`,
+      }),
+    ],
+  });
+  await detectors.runRepairsDetectors();
+
+  const stale = spy.rows("repairIssue").find((row) => row.key === `${detectors.JOURNEY_UNPUBLISHED_DETECTOR}:long-gone`);
+  assert.notEqual(stale?.resolvedAt, null, "a full first page is not a truncated pass — the stale issue must clear");
+});
+
 test("a repeatedly failing journey is one issue whose key never moves", async () => {
   // The COUNT must not be in the key. It changes every tick, and a key that
   // changes is a new issue every tick — one broken journey would become an
@@ -387,11 +461,12 @@ test("a repeatedly failing journey is one issue whose key never moves", async ()
   const runs = (n: number) =>
     Array.from({ length: n }, (_, i) => ({
       id: `r${i}`,
+      tenantId: TENANT,
       journeyId: "j3",
       status: "failed",
       createdAt: new Date(),
     }));
-  const base = { journey: [{ id: "j3", name: "Drip", status: "paused", activeVersion: null }] };
+  const base = { journey: [{ id: "j3", tenantId: TENANT, name: "Drip", status: "paused", activeVersion: null }] };
 
   spy.reset({ ...base, journeyRun: runs(4) });
   await detectors.runRepairsDetectors();
@@ -411,7 +486,7 @@ test("a quiet workspace never asks the failure question properly", async () => {
   // The early out. One indexed count, served by the (tenantId, status,
   // createdAt) index the retention sweep already added; below the threshold
   // nothing else runs.
-  spy.reset({ journeyRun: [{ id: "r", journeyId: "j", status: "failed", createdAt: new Date() }] });
+  spy.reset({ journeyRun: [{ id: "r", tenantId: TENANT, journeyId: "j", status: "failed", createdAt: new Date() }] });
   await detectors.runRepairsDetectors();
 
   assert.deepEqual(
@@ -458,7 +533,7 @@ test("switching the marketing pack off clears the journey issues instead of stra
   // difference between clearing those rows and freezing them forever.
   spy.reset({
     repairIssue: [issueRow({ key: `${detectors.JOURNEY_TEMPLATE_DETECTOR}:j1:gone`, detector: detectors.JOURNEY_TEMPLATE_DETECTOR })],
-    journey: [{ id: "j1", name: "Welcome", status: "active", activeVersion: null }],
+    journey: [{ id: "j1", tenantId: TENANT, name: "Welcome", status: "active", activeVersion: null }],
   });
   enabledModules = new Set(["core"]);
   try {
