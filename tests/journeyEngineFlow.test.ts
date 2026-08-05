@@ -393,7 +393,7 @@ test("repeat count runs exactly count passes and publishes a 1-based index", () 
     }, step("done", { nextStepId: null })],
   });
   assert.deepEqual(run.executed, ["send", "send", "send", "done"]);
-  // 1-based like HA's repeat.index; null once the loop is left.
+  // 1-based, because a person reads it in a message; null once the loop is left.
   assert.deepEqual(run.repeatIndexes, [1, 2, 3, null]);
 });
 
@@ -616,7 +616,7 @@ test("stop is RAISED, and unwinds every enclosing sequence", () => {
 });
 
 test("stop with error: true aborts instead of completing", () => {
-  // HA's `stop` takes error: true. Ours must fail the run WITHOUT retrying — an
+  // `error: true` must fail the run WITHOUT retrying — an
   // author-declared stop is deterministic, so three attempts fail three times.
   assert.throws(
     () => stopStepOutcome({ id: "s", type: "stop", config: { error: true, reason: "Bad data" } }),
@@ -1171,7 +1171,7 @@ test("definition AND cursor preparation are inside the per-run error boundary", 
 /* ── 14. a disabled step is muted, not deleted — and never silently ──────── */
 
 test("a disabled step is SKIPPED and recorded as skipped, not passed over", () => {
-  // HA's per-action `enabled: false`. The point is to mute a step without
+  // The point is to mute a step without
   // deleting it, because deleting loses its config, its id and its trace
   // history — and people delete-and-retype precisely because there is no mute.
   const journey = {
@@ -1361,8 +1361,8 @@ const clause = (field: string, value: unknown, operator = "equals") =>
   ({ field, operator, value });
 
 test("`not` is NONE OF THESE, not 'negate the first clause'", () => {
-  // Home Assistant's `condition: not` takes a LIST and passes when all of the
-  // embedded conditions are invalid. So it is NOR. The tempting reading —
+  // `not` takes a LIST and passes when all of the conditions inside it are
+  // invalid. So it is NOR. The tempting reading —
   // !and(...) — differs the moment there is more than one clause, and it
   // differs in the dangerous direction: !and([a, b]) passes when only ONE of
   // them is false, which for an exclusion list means mailing people the author

@@ -84,8 +84,8 @@ export const OPEN_RUN_STATUSES = ["queued", "running", "waiting", "blocked"];
  * How many runs one person may have open on one journey before further
  * enrolments are dropped.
  *
- * Home Assistant caps this too (`max`, default 10) and it is not decoration: a
- * "queued" journey with no ceiling is an unbounded queue. A lead whose stage
+ * Not decoration: a "queued" journey with no ceiling is an unbounded queue that
+ * nothing drains faster than it fills. A lead whose stage
  * changes twenty times in an afternoon would park twenty runs, and they would
  * then drain one after another and send twenty times — days after the activity
  * that caused them.

@@ -25,9 +25,8 @@ import {
 /**
  * LAZY SUB-SCRIPT PREPARATION.
  *
- * Home Assistant instantiates a branch's sub-`Script` only when that branch is
- * first reached and caches it on the parent by index. The equivalent problem
- * here is sharper, because `processOneRun` re-parses the definition from JSON
+ * A branch is prepared only when it is first reached, and then memoised. The
+ * problem is sharp here because `processOneRun` re-parses the definition from JSON
  * EVERY TICK for EVERY run: a `choose` with ten branches would validate ten
  * sequences and ten condition groups to execute one of them, on every tick, for
  * every enrolled person.
@@ -200,7 +199,7 @@ export function resolveCursor(
  * Options are tested IN ORDER and the loop returns on the first match, so the
  * conditions of later options are never parsed and — the expensive half — no
  * option's SEQUENCE is prepared except the one that wins. An option with no
- * `conditions` is an unconditional else, which is how HA behaves too.
+ * `conditions` is an unconditional else.
  *
  * Returns null when nothing matched and there is no default: the run falls
  * through to the choose step's own nextStepId.

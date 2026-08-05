@@ -18,7 +18,7 @@ function runTone(status: string) {
 }
 
 /**
- * The journey activity trace, after Home Assistant's automation traces.
+ * The journey activity trace: what fired, and what each journey decided.
  *
  * The engine already recorded every event, run and step; nothing showed them.
  * So a journey that never ran looked exactly like one that ran and matched

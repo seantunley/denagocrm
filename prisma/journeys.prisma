@@ -9,8 +9,7 @@ model Journey {
   status        String   @default("draft") // draft | active | paused | archived
   /// What happens when someone is enrolled again while a run is still open.
   ///
-  /// After Home Assistant's automation `mode`, and for the same reason: there
-  /// was exactly one implicit answer here — the idempotency key made a repeat
+  /// There was exactly one implicit answer here — the idempotency key made a repeat
   /// enrolment on the SAME event a no-op, but a *different* event on the same
   /// person started a second run, silently, and both then sent.
   ///
@@ -193,7 +192,8 @@ model JourneyStepLog {
   tenantId    String?
   runId       String
   run         JourneyRun @relation(fields: [runId], references: [id], onDelete: Cascade)
-  /// The hierarchical trace path, after Home Assistant's `"0/sequence/1"`.
+  /// The hierarchical trace path: the step id, plus one segment per container
+  /// the run had entered when it executed.
   ///
   ///   welcome                     a top-level step — identical to its id, which
   ///                               is why every pre-existing row backfills

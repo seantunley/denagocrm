@@ -132,7 +132,7 @@ test("the cap applies to every mode, including parallel", () => {
   const parallelExit = body.indexOf('mode === "parallel"');
   assert.ok(capCheck !== -1 && parallelExit !== -1);
   assert.ok(capCheck < parallelExit, "the cap must be checked BEFORE parallel returns early");
-  assert.equal(MAX_OPEN_RUNS_PER_ENTITY, 10, "HA's default `max`; changing it is a product decision");
+  assert.equal(MAX_OPEN_RUNS_PER_ENTITY, 10, "changing this ceiling is a product decision");
 });
 
 test("blocked counts as open, or the cap and `single` both leak", () => {
