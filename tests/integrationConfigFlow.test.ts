@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
 import { commitVerifiedCredentials, type CommitDeps } from "../src/lib/integrationCommit";
+import { noteIntegrationSendOutcome } from "../src/lib/integrationConnection";
+import { runAfterResponse } from "../src/lib/afterResponse";
+import { credentialOwnerTenantId } from "../src/lib/settings";
+import { currentTenantScope } from "../src/lib/tenantScope";
+import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 import {
   redactSecrets,
   classifySmtpError,
@@ -18,6 +23,7 @@ import {
   validateFlowStep,
   validateWholeFlow,
   getIntegrationFlow,
+  hasIntegrationFlow,
   flowFieldKeys,
   VERIFY_STEP_ID,
 } from "../src/lib/integrationFlow";
@@ -558,7 +564,7 @@ test("the credential bundle is committed in a single transaction", () => {
 
 test("the send paths report auth failures so an expired credential cannot fail silently", () => {
   const wa = readFileSync(join(root, "src/lib/whatsapp.ts"), "utf8");
-  assert.match(wa, /noteWhatsAppOutcome\(phoneNumberId, token, res, err\)/, "a failed WhatsApp send must report its outcome");
+  assert.match(wa, /await noteWhatsAppOutcome\(creds, res, err\)/, "a failed WhatsApp send must report its outcome");
   assert.match(wa, /classifyGraphError/, "the send path must reuse the setup flow's classifier");
 
   const email = readFileSync(join(root, "src/lib/email.ts"), "utf8");
@@ -642,4 +648,329 @@ test("editing a credential by hand drops the verification verdict that was about
     /deleteMany\(\{ where: \{ tenantId, integrationId \} \}\)/,
     "invalidation must DELETE (never verified) rather than claim the provider rejected anything",
   );
+});
+
+// ── Runtime send health: the right tenant, a real lifecycle, every path ──────
+//
+// The badge in Settings is only as honest as the runtime hook behind it, and
+// that hook had three separate ways of reporting nothing at all:
+//
+//   (a) it re-derived the tenant from `currentTenantScope()`, which is a
+//       deliberate NO-OP while enforcement is off — so on a normal
+//       user-triggered send it found null and returned early;
+//   (b) it was started unawaited, so a serverless invocation could be torn down
+//       on top of the pending write; and
+//   (c) only TEXT sends called it, so a token that expired while a tenant was
+//       sending brochures and voice notes still read "Connected".
+//
+// Each guard below fails against that version.
+
+/** Source with comments stripped — prose ABOUT a banned call must not trip a check. */
+const shipped = (rel: string) =>
+  readFileSync(join(root, rel), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
+/** Top-level `function name(...)` declarations, each mapped to its source text. */
+function topLevelFunctions(code: string): Map<string, string> {
+  const starts: { name: string; index: number }[] = [];
+  const re = /^(?:export\s+)?(?:async\s+)?function\s+(\w+)/gm;
+  for (let m = re.exec(code); m; m = re.exec(code)) starts.push({ name: m[1], index: m.index });
+  const out = new Map<string, string>();
+  starts.forEach((s, i) => {
+    out.set(s.name, code.slice(s.index, i + 1 < starts.length ? starts[i + 1].index : code.length));
+  });
+  return out;
+}
+
+/** Every call site of `name`, as the text leading up to and including the `(`. */
+const callSites = (code: string, name: string) =>
+  [...code.matchAll(new RegExp(`.{0,24}\\b${name}\\(`, "g"))].map((m) => m[0]);
+
+const SEND_TENANT = "tenant_example_send_health";
+
+// ── (a) the tenant is given, never looked up ────────────────────────────────
+
+test("send health is recorded against the tenant it is GIVEN, with no ambient scope to read", async () => {
+  // The PRODUCTION case, asserted rather than assumed: enforcement is off, so
+  // the staff chokepoint enters no scope at all and there is no ambient tenant.
+  // A hook that re-read scope here found null and returned early — which is why
+  // the badge moved for cron probes and never for the sends that matter.
+  assert.equal(currentTenantScope(), undefined, "this guard only means something with no ambient scope");
+
+  const recorded: { tenantId: string; integrationId: string; code: string }[] = [];
+  await noteIntegrationSendOutcome(
+    SEND_TENANT,
+    "whatsapp",
+    { ok: false, failure: classifyGraphError(401, { error: { code: 190 } }, WA_PROBE) },
+    [SECRET],
+    {
+      recordFailure: async (tenantId, integrationId, failure) => {
+        recorded.push({ tenantId, integrationId, code: failure.code });
+      },
+    },
+  );
+
+  assert.deepEqual(
+    recorded,
+    [{ tenantId: SEND_TENANT, integrationId: "whatsapp", code: "auth_failed" }],
+    "the hook must record against the explicit tenant it was handed, not one it goes looking for",
+  );
+});
+
+test("a healthy send heals a stale badge, and is free when nothing was wrong", async () => {
+  const verified: string[] = [];
+  await noteIntegrationSendOutcome(SEND_TENANT, "smtp", { ok: true }, [], {
+    read: async () => ({
+      integrationId: "smtp",
+      status: "reauth_required" as const,
+      lastVerifiedAt: null,
+      blameStep: "credentials",
+      lastErrorCode: "auth_failed",
+      lastErrorText: "rejected",
+      lastErrorAt: new Date(),
+    }),
+    recordVerified: async (tenantId) => { verified.push(tenantId); },
+  });
+  assert.deepEqual(verified, [SEND_TENANT], "a send that worked must clear a Reconnect the tenant has since fixed");
+
+  const again: string[] = [];
+  await noteIntegrationSendOutcome(SEND_TENANT, "smtp", { ok: true }, [], {
+    read: async () => ({
+      integrationId: "smtp",
+      status: "connected" as const,
+      lastVerifiedAt: new Date(),
+      blameStep: null,
+      lastErrorCode: null,
+      lastErrorText: null,
+      lastErrorAt: null,
+    }),
+    recordVerified: async (tenantId) => { again.push(tenantId); },
+  });
+  assert.deepEqual(again, [], "an already-healthy integration must not take a row write on every single message");
+});
+
+test("credentials resolved with no tenant belong to the founding tenant, not to nobody", () => {
+  // resolveIntegrationBundle / resolveTenantCredential fall back to the global
+  // AppSetting row on a null tenant, and settingsOwnerTenantId owns that row for
+  // the founding tenant. So "no tenant" is not "no owner" — and the founding
+  // tenant is exactly what the overrides page reads its badges for.
+  assert.equal(
+    credentialOwnerTenantId(null),
+    DEFAULT_TENANT_ID,
+    "a send made with platform credentials must move the platform owner's badge",
+  );
+  assert.equal(credentialOwnerTenantId("tenant_other"), "tenant_other", "a real tenant is passed straight through");
+});
+
+test("the send-health hook takes a required tenant and can no longer be handed null", () => {
+  const src = shipped("src/lib/integrationConnection.ts");
+  const start = src.indexOf("export async function noteIntegrationSendOutcome");
+  assert.ok(start !== -1, "noteIntegrationSendOutcome must still exist");
+  const fn = src.slice(start, src.indexOf("export async function clearIntegrationVerification"));
+
+  assert.doesNotMatch(
+    fn,
+    /tenantId: string \| null/,
+    "a nullable tenant is what let real sends report nothing — make it required so callers must resolve one",
+  );
+  assert.doesNotMatch(fn, /if \(!tenantId\) return/, "the early return on a missing tenant was the silent drop");
+  assert.doesNotMatch(
+    src,
+    /currentTenantScope|tenantScope/,
+    "the connection store must never derive the acting tenant itself",
+  );
+});
+
+test("neither send path re-reads ambient scope to decide whose health it is reporting", () => {
+  const wa = shipped("src/lib/whatsapp.ts");
+  const waNote = wa.slice(wa.indexOf("async function noteWhatsAppOutcome"), wa.indexOf("export function waDigits"));
+  assert.ok(waNote.length > 0, "noteWhatsAppOutcome must still sit above waDigits");
+  assert.doesNotMatch(
+    waNote,
+    /ambientTenantId\(\)|currentTenantScope\(\)/,
+    "the WhatsApp hook must not ask scope a second question it cannot answer",
+  );
+  assert.match(waNote, /creds\.tenantId/, "the tenant must arrive with the resolved credentials");
+
+  const email = shipped("src/lib/email.ts");
+  const smtpNote = email.slice(
+    email.indexOf("async function noteSmtpOutcome"),
+    email.indexOf("export { renderTemplate }"),
+  );
+  assert.ok(smtpNote.length > 0, "noteSmtpOutcome must still sit above the renderTemplate re-export");
+  assert.doesNotMatch(smtpNote, /currentTenantScope\(\)/, "the SMTP hook must not re-read ambient scope either");
+  assert.match(smtpNote, /config\.tenantId/, "the tenant must arrive on the resolved SMTP config");
+});
+
+// ── (b) the write is seen through, not abandoned ────────────────────────────
+
+test("post-response work is finished, not merely started, when there is no response to run after", async () => {
+  // Cron sweeps, scripts and tests have no request scope, so `after()` is
+  // unavailable and the only correct answer is to await. The old shape —
+  // a fire-and-forget async IIFE — resolved the caller immediately and left the
+  // write racing the end of the invocation.
+  let finished = false;
+  await runAfterResponse(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    finished = true;
+  });
+  assert.equal(finished, true, "the work must have completed by the time the caller continues");
+});
+
+test("inside a request the work is REGISTERED with the platform rather than run inline", async () => {
+  const registered: (() => Promise<void>)[] = [];
+  let ran = false;
+  await runAfterResponse(async () => { ran = true; }, { after: (task) => { registered.push(task); } });
+
+  assert.equal(registered.length, 1, "the work must be handed to after()/waitUntil, which extends the invocation");
+  assert.equal(ran, false, "…and must not have been run inline, or it would add latency to the send");
+  await registered[0]();
+  assert.equal(ran, true, "the registered callback must be the work itself");
+});
+
+test("post-response bookkeeping still swallows its own failures", async () => {
+  // Reaching the end of this test IS the assertion: neither layer may rethrow.
+  await runAfterResponse(async () => { throw new Error("connection store unavailable"); });
+  await noteIntegrationSendOutcome(SEND_TENANT, "smtp", { ok: true }, [], {
+    read: async () => { throw new Error("table not migrated yet"); },
+  });
+  assert.ok(true, "a broken connection store must never surface as a failed send");
+});
+
+test("the send-health write goes through the post-response mechanism by default", () => {
+  const conn = shipped("src/lib/integrationConnection.ts");
+  assert.match(conn, /import \{ runAfterResponse \} from "\.\/afterResponse"/, "the default lifecycle must be the shared one");
+  assert.match(conn, /deps\.schedule \?\? runAfterResponse/, "…and injectable only for tests");
+
+  const after = shipped("src/lib/afterResponse.ts");
+  assert.match(after, /import\("next\/server"\)/, "the platform mechanism is next/server's after()");
+  assert.match(after, /await guarded\(\)/, "…with an awaited fallback wherever after() is unavailable");
+});
+
+test("no send path starts its bookkeeping and walks away", () => {
+  for (const [rel, name] of [
+    ["src/lib/whatsapp.ts", "noteWhatsAppOutcome"],
+    ["src/lib/email.ts", "noteSmtpOutcome"],
+  ] as const) {
+    const code = shipped(rel);
+    assert.doesNotMatch(
+      code,
+      /void \(async \(\) =>/,
+      `${rel}: a fire-and-forget async IIFE is exactly the shape a serverless teardown eats`,
+    );
+    const sites = callSites(code, name);
+    assert.ok(sites.length >= 3, `${rel}: expected the declaration plus several ${name} call sites, found ${sites.length}`);
+    for (const site of sites) {
+      if (site.includes("function ")) continue; // the declaration itself
+      assert.ok(
+        site.endsWith(`await ${name}(`),
+        `${rel}: "${site.trim()}" is not awaited — the write is dropped when the invocation ends`,
+      );
+    }
+  }
+});
+
+// ── (c) every path that spends the credential reports on it ─────────────────
+
+test("every WhatsApp path that presents the access token reports how it went", () => {
+  const bodies = topLevelFunctions(shipped("src/lib/whatsapp.ts"));
+
+  // Named explicitly so renaming or adding an outbound path trips this guard
+  // rather than quietly shrinking coverage.
+  const OUTBOUND = [
+    "fetchWhatsAppMedia",
+    "sendInteractive",
+    "sendWhatsAppAudioId",
+    "sendWhatsAppButtons",
+    "sendWhatsAppImage",
+    "sendWhatsAppList",
+    "sendWhatsAppText",
+    "uploadWhatsAppMedia",
+  ];
+  assert.deepEqual(
+    [...bodies.keys()].filter((n) => /^(send|upload|fetch)/.test(n)).sort(),
+    OUTBOUND,
+    "an outbound WhatsApp path was added or renamed — give it an entry here and make it report its outcome",
+  );
+
+  const silent: string[] = [];
+  for (const name of OUTBOUND) {
+    const body = bodies.get(name) ?? "";
+    // Button and list messages carry no credentials of their own; they delegate.
+    if (!/Bearer \$\{/.test(body)) {
+      assert.match(body, /sendInteractive\(/, `${name} neither presents the token nor delegates to something that does`);
+      continue;
+    }
+    if (!/noteWhatsAppOutcome\(/.test(body)) silent.push(name);
+  }
+  assert.deepEqual(
+    silent,
+    [],
+    `these WhatsApp paths spend the same access token as sendWhatsAppText but report nothing, so a token that expires mid-flight stays "Connected" for as long as the failing sends happen to be media: ${silent.join(", ")}`,
+  );
+
+  // Both directions, not just failures: a success is what heals a stale badge.
+  for (const name of ["sendWhatsAppImage", "uploadWhatsAppMedia", "sendWhatsAppAudioId", "sendInteractive"]) {
+    assert.match(
+      bodies.get(name) ?? "",
+      /await noteWhatsAppOutcome\(creds, res, null\)/,
+      `${name} must report success too, or a fixed integration never stops saying "Reconnect"`,
+    );
+  }
+});
+
+test("the media READ never turns an expired voice note into a demand to reconnect", () => {
+  // Meta expires media after ~30 days, and that endpoint is addressed by media
+  // id — so its 404 / code 100 would classify as `identity_mismatch`, which is
+  // reauth-class. Only the token-class statuses are unambiguous there.
+  const body = topLevelFunctions(shipped("src/lib/whatsapp.ts")).get("fetchWhatsAppMedia") ?? "";
+  assert.match(body, /metaRes\.status === 401 \|\| metaRes\.status === 403/, "failures must be narrowed to token-class statuses");
+  assert.match(body, /await noteWhatsAppOutcome\(creds, metaRes, null\)/, "a successful authenticated read still proves the token works");
+  assert.equal(failureRequiresReauth("identity_mismatch"), true, "…which is why the narrowing above is load-bearing");
+});
+
+test("the SMTP send path reports both outcomes, matching WhatsApp", () => {
+  const code = shipped("src/lib/email.ts");
+  const send = code.slice(code.indexOf("export async function sendEmail"), code.indexOf("async function noteSmtpOutcome"));
+  assert.match(send, /await noteSmtpOutcome\(config, null\)/, "a successful send must heal a stale Reconnect badge");
+  assert.match(send, /await noteSmtpOutcome\(config, err\)/, "a failed send must report why");
+
+  // WhatsApp's six outbound calls are enumerated above because they are six.
+  // SMTP has exactly one, and the equivalent guard is that it stays that way: a
+  // second transport built anywhere in this module would be a send whose failures
+  // nothing reports, which is how sendWhatsAppImage came to be silent.
+  const transports = code.match(/createTransport\(/g) ?? [];
+  assert.equal(
+    transports.length,
+    1,
+    "a second SMTP transport appeared in email.ts — route it through sendEmail, or it sends mail whose failures never reach the badge",
+  );
+  assert.ok(send.includes("createTransport("), "…and the one transport must be the one inside sendEmail");
+});
+
+test("health is only ever recorded for an integration the owner can actually reconnect", () => {
+  // The reauth panel promises "The setup below opens at the step that needs
+  // fixing", and that setup only renders for an integration with a guided flow
+  // (hasIntegrationFlow). Reporting a send failure for one without a flow would
+  // therefore paint "This integration has stopped working" above nothing at all.
+  //
+  // This is why telegram, sms and meta — which also send through tenant
+  // credentials — are deliberately NOT wired to this hook: there is no probe to
+  // classify their failures with and no flow to send the owner to. Giving one of
+  // them a flow and a classifier is what unlocks it, and this guard is what makes
+  // the wrong order fail loudly.
+  const reported = new Set<string>();
+  for (const file of readdirSync(join(root, "src/lib")).filter((name) => name.endsWith(".ts"))) {
+    const code = shipped(join("src/lib", file));
+    for (const m of code.matchAll(/noteIntegrationSendOutcome\([^,]+,\s*"([^"]+)"/g)) reported.add(m[1]);
+  }
+
+  assert.deepEqual([...reported].sort(), ["smtp", "whatsapp"], "the integrations reporting send health");
+  for (const integrationId of reported) {
+    assert.ok(
+      hasIntegrationFlow(integrationId),
+      `"${integrationId}" reports send health but has no guided flow, so a failure would demand a reconnect the settings page cannot offer`,
+    );
+  }
 });

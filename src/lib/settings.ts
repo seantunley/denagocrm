@@ -377,3 +377,46 @@ export async function resolveIntegrationBundle(
 
   return Object.fromEntries(keys.map((k) => [k, overrides.get(k) ?? null]));
 }
+
+/**
+ * The tenant that OWNS the credential {@link resolveTenantCredential} or
+ * {@link resolveIntegrationBundle} just returned for `tenantId` — i.e. the
+ * tenant whose Connected / Reconnect badge a send made with those credentials
+ * is about.
+ *
+ * A NULL `tenantId` does NOT mean "no tenant". Both resolvers fall back to the
+ * global `AppSetting` row on null, and `settingsOwnerTenantId()` owns that row
+ * for the FOUNDING tenant (off-mode and system scope alike) — so the credentials
+ * that came back are the founding tenant's, and its badge is the one that must
+ * move. This is why send-health reporting must never re-read ambient scope: with
+ * enforcement off there IS no request scope (decideStaffTenantScope enters none),
+ * so a second look would find null and drop the report on the floor for exactly
+ * the sends real users make.
+ *
+ * Pure, and never reads ambient scope or a looked-up row: it restates the
+ * fallback rule the two resolvers above already applied to the SAME argument.
+ */
+export function credentialOwnerTenantId(tenantId: string | null): string {
+  return tenantId ?? DEFAULT_TENANT_ID;
+}
+
+/** A resolved bundle together with the tenant it belongs to. */
+export type ResolvedIntegrationBundle = {
+  /** Never null — see {@link credentialOwnerTenantId}. */
+  tenantId: string;
+  values: Record<string, string | null>;
+};
+
+/**
+ * {@link resolveIntegrationBundle}, but carrying the resolved tenant ALONGSIDE
+ * the values so a caller can report send health against it without asking the
+ * ambient scope a second question it cannot answer.
+ */
+export async function resolveIntegrationBundleForTenant(
+  tenantId: string | null,
+  integrationId: string,
+): Promise<ResolvedIntegrationBundle | null> {
+  const values = await resolveIntegrationBundle(tenantId, integrationId);
+  if (!values) return null;
+  return { tenantId: credentialOwnerTenantId(tenantId), values };
+}

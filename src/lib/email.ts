@@ -1,9 +1,17 @@
 import nodemailer from "nodemailer";
-import { resolveIntegrationBundle } from "./settings";
+import { resolveIntegrationBundleForTenant } from "./settings";
 import { currentTenantScope } from "./tenantScope";
 import { formatZAR } from "./format";
 
 export type SmtpConfig = {
+  /**
+   * The tenant these credentials were resolved FOR — carried on the config so
+   * the send-health hook is handed a tenant rather than asking ambient scope a
+   * second time. Scope is a no-op while enforcement is off, so the second answer
+   * would be null and the report would be dropped. Same reasoning, and the same
+   * helper, as WhatsAppCredentials in src/lib/whatsapp.ts.
+   */
+  tenantId: string;
   host: string;
   port: number;
   secure: boolean;
@@ -13,18 +21,18 @@ export type SmtpConfig = {
 };
 
 export async function getSmtpConfig(): Promise<SmtpConfig | null> {
-  const tenantId = currentTenantScope()?.tenantId ?? null;
-  const bundle = await resolveIntegrationBundle(tenantId, "smtp");
+  const bundle = await resolveIntegrationBundleForTenant(currentTenantScope()?.tenantId ?? null, "smtp");
   if (!bundle) return null;
-  const host = bundle.SMTP_HOST;
-  const from = bundle.SMTP_FROM;
+  const host = bundle.values.SMTP_HOST;
+  const from = bundle.values.SMTP_FROM;
   if (!host || !from) return null;
   return {
+    tenantId: bundle.tenantId,
     host,
-    port: bundle.SMTP_PORT ? parseInt(bundle.SMTP_PORT, 10) : 587,
-    secure: bundle.SMTP_SECURE === "true",
-    user: bundle.SMTP_USER,
-    pass: bundle.SMTP_PASS,
+    port: bundle.values.SMTP_PORT ? parseInt(bundle.values.SMTP_PORT, 10) : 587,
+    secure: bundle.values.SMTP_SECURE === "true",
+    user: bundle.values.SMTP_USER,
+    pass: bundle.values.SMTP_PASS,
     from,
   };
 }
@@ -69,10 +77,10 @@ export async function sendEmail(input: {
       html: input.html,
       attachments: input.attachments,
     });
-    noteSmtpOutcome(config, null);
+    await noteSmtpOutcome(config, null);
     return { ok: true };
   } catch (err) {
-    noteSmtpOutcome(config, err);
+    await noteSmtpOutcome(config, err);
     const { logError } = await import("./errorLog");
     await logError("smtp", err, `to: ${input.to} — ${input.subject}`);
     return { ok: false, error: err instanceof Error ? err.message : "Failed to send email" };
@@ -91,29 +99,33 @@ export async function sendEmail(input: {
  * auth-class failures flip the status: a mail server that was briefly
  * unreachable must not demand a password nobody got wrong.
  *
- * Fire-and-forget and fully swallowed — bookkeeping must never delay or alter a
- * send. Note this deliberately does NOT pass the raw error to the connection
- * store: classifySmtpError turns it into a curated sentence with the password
- * redacted, whereas a nodemailer error message can quote the AUTH exchange.
+ * AWAITED, not fired and forgotten, and reported against `config.tenantId` — the
+ * tenant the credentials themselves were resolved for. Both properties match
+ * src/lib/whatsapp.ts: an unawaited write dies with the serverless invocation,
+ * and a tenant re-read from ambient scope is null on a normal request.
+ * `noteIntegrationSendOutcome` registers the write with the platform's
+ * post-response mechanism, so the await costs a registration rather than a
+ * database round trip. Fully swallowed — bookkeeping must never alter a send.
+ *
+ * Note this deliberately does NOT pass the raw error to the connection store:
+ * classifySmtpError turns it into a curated sentence with the password redacted,
+ * whereas a nodemailer error message can quote the AUTH exchange.
  */
-function noteSmtpOutcome(config: SmtpConfig, err: unknown): void {
-  void (async () => {
-    try {
-      const [{ noteIntegrationSendOutcome }, { classifySmtpError }] = await Promise.all([
-        import("./integrationConnection"),
-        import("./integrationProbe"),
-      ]);
-      const tenantId = currentTenantScope()?.tenantId ?? null;
-      if (!err) {
-        await noteIntegrationSendOutcome(tenantId, "smtp", { ok: true });
-        return;
-      }
-      const failure = classifySmtpError(err, config);
-      await noteIntegrationSendOutcome(tenantId, "smtp", { ok: false, failure }, [config.pass]);
-    } catch {
-      /* bookkeeping must never break a send */
+async function noteSmtpOutcome(config: SmtpConfig, err: unknown): Promise<void> {
+  try {
+    const [{ noteIntegrationSendOutcome }, { classifySmtpError }] = await Promise.all([
+      import("./integrationConnection"),
+      import("./integrationProbe"),
+    ]);
+    if (!err) {
+      await noteIntegrationSendOutcome(config.tenantId, "smtp", { ok: true });
+      return;
     }
-  })();
+    const failure = classifySmtpError(err, config);
+    await noteIntegrationSendOutcome(config.tenantId, "smtp", { ok: false, failure }, [config.pass]);
+  } catch {
+    /* bookkeeping must never break a send */
+  }
 }
 
 /**

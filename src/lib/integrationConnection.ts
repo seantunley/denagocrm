@@ -18,6 +18,7 @@
 // in — a caller cannot store a raw provider body here even by mistake.
 
 import { prisma } from "./db";
+import { runAfterResponse } from "./afterResponse";
 import { failureRequiresReauth, redactSecrets, type ProbeFailure, type ProbeFailureCode } from "./integrationProbe";
 
 export type IntegrationConnectionState = {
@@ -138,36 +139,74 @@ export async function recordIntegrationFailure(
   });
 }
 
+/** Injection seam for unit tests only; all real callers use the defaults. */
+export type SendOutcomeDeps = {
+  read?: (tenantId: string, integrationId: string) => Promise<IntegrationConnectionState | null>;
+  recordVerified?: (tenantId: string, integrationId: string) => Promise<void>;
+  recordFailure?: (
+    tenantId: string,
+    integrationId: string,
+    failure: { code: ProbeFailureCode; message: string; blameStep: string },
+    secrets: readonly (string | null | undefined)[],
+  ) => Promise<void>;
+  schedule?: (work: () => Promise<void>) => Promise<void>;
+};
+
 /**
- * Best-effort runtime hook for the SEND paths (src/lib/whatsapp.ts,
- * src/lib/email.ts): report how a real send went so an expired credential
- * surfaces as "Reconnect" in settings instead of silently failing every message.
+ * Runtime hook for the SEND paths (src/lib/whatsapp.ts, src/lib/email.ts):
+ * report how a real send went so an expired credential surfaces as "Reconnect"
+ * in settings instead of silently failing every message.
  *
- * Swallows its own errors on purpose. This is telemetry hanging off a send — if
- * recording the state fails (no tenant in scope, table not migrated yet), the
- * send's own result must be unaffected. It is also fire-and-forget at every call
- * site, so it can never add latency to a customer-facing message.
+ * `tenantId` is a REQUIRED, non-nullable string, and it must be the tenant the
+ * credentials that performed the send were resolved FOR — see
+ * `credentialOwnerTenantId` in src/lib/settings.ts, which the send paths call
+ * beside their credential lookup and thread through here. This function does not
+ * (and must not) consult `currentTenantScope()`:
+ *
+ *   - Request tenant scope is a deliberate NO-OP while enforcement is off, and
+ *     enforcement is off in production. Re-reading it would yield null on a
+ *     normal user-triggered send, and a null-tolerant signature would then drop
+ *     the report — the health badge would move for cron probes and never for the
+ *     sends that actually matter.
+ *   - Cron sweeps and webhook handlers legitimately run with no scope at all.
+ *
+ * Making the parameter non-nullable is the enforcement: there is no longer a
+ * value a caller can pass that means "work it out yourself".
+ *
+ * LIFECYCLE. The write is handed to {@link runAfterResponse}, which registers it
+ * with the platform's post-response mechanism (`after()`/`waitUntil`) inside a
+ * request and awaits it everywhere else. It is never started and abandoned: an
+ * unawaited async call can be — and on serverless routinely is — killed the
+ * instant the response flushes, losing the write silently. Awaiting this call is
+ * cheap: in a request it returns as soon as the work is registered.
+ *
+ * Errors are still swallowed whole (runAfterResponse guarantees it). This is
+ * telemetry hanging off a customer-facing send; if the table is not migrated yet
+ * or the row write fails, the send's own result must be unaffected.
  */
 export async function noteIntegrationSendOutcome(
-  tenantId: string | null,
+  tenantId: string,
   integrationId: string,
   outcome: { ok: true } | { ok: false; failure: ProbeFailure },
   secrets: readonly (string | null | undefined)[] = [],
+  deps: SendOutcomeDeps = {},
 ): Promise<void> {
-  if (!tenantId) return;
-  try {
+  const schedule = deps.schedule ?? runAfterResponse;
+  const read = deps.read ?? getIntegrationConnection;
+  const recordVerified = deps.recordVerified ?? recordIntegrationVerified;
+  const recordFailure = deps.recordFailure ?? recordIntegrationFailure;
+
+  await schedule(async () => {
     if (outcome.ok) {
       // Only worth a write when something was previously wrong: a healthy
       // integration would otherwise take a row update on every single message.
-      const current = await getIntegrationConnection(tenantId, integrationId);
+      const current = await read(tenantId, integrationId);
       if (current && current.status === "connected" && current.lastErrorCode === null) return;
-      await recordIntegrationVerified(tenantId, integrationId);
+      await recordVerified(tenantId, integrationId);
       return;
     }
-    await recordIntegrationFailure(tenantId, integrationId, outcome.failure, secrets);
-  } catch {
-    // Never let connection bookkeeping break a send.
-  }
+    await recordFailure(tenantId, integrationId, outcome.failure, secrets);
+  });
 }
 
 /**
