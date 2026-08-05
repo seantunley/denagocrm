@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { createJourney } from "@/app/actions/journeys";
-import { JOURNEY_STEP_LABELS } from "@/lib/journeyTypes";
+import { JOURNEY_LIMITS, JOURNEY_STEP_LABELS } from "@/lib/journeyTypes";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 import { JOURNEY_RUN_MODES, RUN_MODE_LEGACY_NOTE } from "@/lib/journeyRunModes";
 
@@ -155,6 +155,10 @@ export default function JourneyBuilder({
       type === "wait" ? { amount: 1, unit: "days" }
       : type === "create_activity" ? { activityType: "call", dueDays: 0 }
       : type === "condition" ? { field: "lead.source", operator: "equals", value: "" }
+      // A mark-lost step will not SAVE without a reason (parseLeadOutcomeConfig
+      // refuses one), so the field is seeded empty and visible rather than left
+      // for the author to discover on a rejected save.
+      : type === "lead_mark_lost" ? { reason: "" }
       : {};
     setSteps((current) => current.map((step, i) =>
       i === index ? { ...step, type, config: initial } : step
@@ -441,6 +445,41 @@ export default function JourneyBuilder({
             {step.type === "move_stage" && <select className="input" value={String(step.config.stageId ?? "")} onChange={(e) => setConfig(index, "stageId", e.target.value)}><option value="">Choose stage</option>{stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select>}
             {step.type === "assign_user" && <select className="input" value={String(step.config.userId ?? "")} onChange={(e) => setConfig(index, "userId", e.target.value)}><option value="">Choose user</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select>}
             {(step.type === "add_tag" || step.type === "remove_tag") && <select className="input" value={String(step.config.tagId ?? "")} onChange={(e) => setConfig(index, "tagId", e.target.value)}><option value="">Choose tag</option>{tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}</select>}
+
+            {/* The lead outcome steps. Each says which statuses it acts on,
+                because "why did my step skip?" is otherwise a question only the
+                run trace can answer — and the answer is always the same one. */}
+            {step.type === "lead_mark_lost" && (
+              <div className="space-y-2">
+                <input
+                  className="input"
+                  placeholder="Lost reason (required) — e.g. Went with a competitor"
+                  maxLength={JOURNEY_LIMITS.leadOutcomeReason}
+                  value={String(step.config.reason ?? "")}
+                  onChange={(e) => setConfig(index, "reason", e.target.value)}
+                />
+                <p className="text-xs text-slate-500">
+                  Only an <strong>open</strong> lead is marked lost — one already won or lost is left
+                  exactly as it is and the step records itself as skipped. Reports group closed-lost
+                  leads by this reason, so it is required. Supports {"{{first_name}}"}, {"{{model}}"} and
+                  the other message placeholders.
+                </p>
+              </div>
+            )}
+            {step.type === "lead_mark_won" && (
+              <p className="text-xs text-slate-500">
+                Only an <strong>open</strong> lead is marked won. A lead already won is left alone and
+                the step records itself as skipped, so a journey that runs again cannot count the same
+                sale twice or pay a referral fee twice. To win a lead that was closed, put a
+                “Reopen lead” step in front of this one.
+              </p>
+            )}
+            {step.type === "lead_reopen" && (
+              <p className="text-xs text-slate-500">
+                Puts a <strong>won or lost</strong> lead back to open and clears its lost reason. A lead
+                that is already open is left alone and the step records itself as skipped.
+              </p>
+            )}
             {step.type === "condition" && (
               <div className="grid md:grid-cols-3 gap-2">
                 <select className="input" value={String(step.config.field ?? "lead.source")} onChange={(e) => setConfig(index, "field", e.target.value)}>
