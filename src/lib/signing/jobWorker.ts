@@ -1,6 +1,6 @@
 import "server-only";
 import crypto from "crypto";
-import { basePrisma, prisma } from "@/lib/db";
+import { basePrisma } from "@/lib/db";
 import { readFile } from "@/lib/storage";
 import { sendEmail } from "@/lib/email";
 import { logError } from "@/lib/errorLog";
@@ -11,8 +11,6 @@ import { runPostCompletion } from "./postComplete";
 import { COMPLETED_EVENT, POST_COMPLETION_EVENT } from "./completionFanout";
 import { sourceSignedByThisRequest } from "./recoveryScope";
 
-const JOB_LEASE_MINUTES = 10;
-const REQUEST_LEASE_MINUTES = 10;
 const MAX_JOB_ATTEMPTS = 12;
 
 type SigningJob = {
@@ -92,7 +90,7 @@ async function claimJobs(tenantId: string, limit: number): Promise<SigningJob[]>
     UPDATE "SigningJob" j
        SET "status" = 'running',
            "leaseOwner" = ${owner},
-           "leaseUntil" = NOW() + INTERVAL '${JOB_LEASE_MINUTES} minutes',
+           "leaseUntil" = NOW() + INTERVAL '10 minutes',
            "attempts" = j."attempts" + 1,
            "updatedAt" = NOW()
       FROM candidates c
@@ -106,7 +104,7 @@ async function claimRequestLease(job: SigningJob): Promise<string | null> {
   const count = await basePrisma.$executeRaw`
     UPDATE "SignatureRequest"
        SET "recoveryLeaseOwner" = ${owner},
-           "recoveryLeaseUntil" = NOW() + INTERVAL '${REQUEST_LEASE_MINUTES} minutes'
+           "recoveryLeaseUntil" = NOW() + INTERVAL '10 minutes'
      WHERE "id" = ${job.requestId}
        AND "tenantId" = ${job.tenantId}
        AND ("recoveryLeaseUntil" IS NULL OR "recoveryLeaseUntil" < NOW())
@@ -147,7 +145,9 @@ async function completionRequest(job: SigningJob): Promise<CompletionRequest> {
 }
 
 async function executeCompletionEmail(job: SigningJob): Promise<void> {
-  // The PR #324 marker means every addressed recipient was accepted by SMTP.
+  // PR #324 writes this marker only after every addressed recipient was accepted
+  // by SMTP, so a durable job created in the same completion transaction can
+  // safely no-op when the inline path already finished.
   if (await eventExists(job.requestId, job.tenantId, COMPLETED_EVENT)) return;
   const recipientId = typeof job.payload.recipientId === "string" ? job.payload.recipientId : null;
   if (!recipientId) throw new Error("Completion-email job has no recipientId");
@@ -280,7 +280,12 @@ async function executeArtifactVerification(job: SigningJob): Promise<void> {
   if (observedSha256 !== artifact.sha256) errors.push("sealed PDF hash mismatch");
   if (artifact.sizeBytes !== null && artifact.sizeBytes !== bytes.length) errors.push("sealed PDF size mismatch");
   if (process.env.NODE_ENV === "production" && !certificate.trusted) errors.push("PDF seal is not backed by the configured trusted certificate");
-  if (process.env.NODE_ENV === "production" && process.env.BLOB_PRIVATE === "true" && artifact.storageRef.includes(".blob.vercel-storage.com") && !artifact.storageRef.includes(".private.blob.vercel-storage.com")) {
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.BLOB_PRIVATE === "true" &&
+    artifact.storageRef.includes(".blob.vercel-storage.com") &&
+    !artifact.storageRef.includes(".private.blob.vercel-storage.com")
+  ) {
     errors.push("legal artifact is still stored in the public Blob store");
   }
 
@@ -342,14 +347,15 @@ async function executeArtifactVerification(job: SigningJob): Promise<void> {
   const manifestJson = canonicalJson(manifest);
   const manifestHash = crypto.createHash("sha256").update(manifestJson).digest("hex");
   const validationId = `lav_${crypto.randomUUID().replace(/-/g, "")}`;
+  const errorsJson = JSON.stringify(errors);
   await basePrisma.$executeRaw`
     INSERT INTO "LegalArtifactValidation"
       ("id","tenantId","artifactId","observedSha256","sizeBytes","certificateFingerprint",
        "manifestHash","manifest","valid","errors","appCommit","createdAt")
     VALUES
       (${validationId}, ${artifact.tenantId}, ${artifact.id}, ${observedSha256}, ${bytes.length},
-       ${certificate.fingerprintSha256}, ${manifestHash}, ${JSON.parse(manifestJson)},
-       ${errors.length === 0}, ${errors}, ${process.env.VERCEL_GIT_COMMIT_SHA ?? null}, NOW())
+       ${certificate.fingerprintSha256}, ${manifestHash}, ${manifestJson}::jsonb,
+       ${errors.length === 0}, ${errorsJson}::jsonb, ${process.env.VERCEL_GIT_COMMIT_SHA ?? null}, NOW())
   `;
 
   if (errors.length) throw new Error(errors.join("; "));
@@ -390,7 +396,11 @@ async function retryOrDead(job: SigningJob, error: unknown): Promise<"retry" | "
            "lastError" = ${message}, "updatedAt" = NOW()
      WHERE "id" = ${job.id} AND "tenantId" = ${job.tenantId}
   `;
-  await logError(dead ? "signing-job-dead" : "signing-job-retry", new Error(message), `job ${job.id}, request ${job.requestId}`).catch(() => {});
+  await logError(
+    dead ? "signing-job-dead" : "signing-job-retry",
+    new Error(message),
+    `job ${job.id}, request ${job.requestId}`,
+  ).catch(() => {});
   return dead ? "dead" : "retry";
 }
 
