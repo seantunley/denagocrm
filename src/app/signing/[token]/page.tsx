@@ -3,9 +3,11 @@ import { prisma } from "@/lib/db";
 import { isValidSignToken } from "@/lib/signing/tokens";
 import { renderRequestSigningSheets, signedFieldStamps } from "@/lib/signing/render";
 import { recordView } from "@/lib/signing/events";
+import { identityStatus, loadRecipientIdentity } from "@/lib/signing/identity";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
 import { SignSurface } from "./SignSurface";
+import { IdentityGate } from "./IdentityGate";
 import { Toaster } from "@/components/ui/sonner";
 
 export const dynamic = "force-dynamic";
@@ -36,11 +38,7 @@ function Msg({ title, body }: { title: string; body: string }) {
 export default async function SigningPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   if (!isValidSignToken(token)) notFound();
-  // Phase C no-user edge: derive the document's tenant from a narrow trusted lookup
-  // FIRST, then load + render inside that scope — the same guarded reads the POST
-  // route runs, so the read and write surfaces share one tenant derivation and
-  // can't drift. Dormant no-op when off; 404 under enforcement for an unknown /
-  // untenanted token.
+  // Derive the tenant from the bearer link before any ordinary signing read.
   return withTokenTenantScope(
     () => resolveSignRecipientTenant(token),
     () => renderSigningPage(token),
@@ -49,14 +47,21 @@ export default async function SigningPage({ params }: { params: Promise<{ token:
 }
 
 async function renderSigningPage(token: string) {
-  const recipient = await prisma.signatureRecipient.findUnique({
-    where: { token },
-    include: { request: { include: { recipients: { orderBy: { order: "asc" } }, fields: true } } },
-  });
-  if (!recipient) notFound();
+  const [recipient, identity] = await Promise.all([
+    prisma.signatureRecipient.findUnique({
+      where: { token },
+      include: { request: { include: { recipients: { orderBy: { order: "asc" } }, fields: true } } },
+    }),
+    loadRecipientIdentity(token),
+  ]);
+  if (!recipient || !identity) notFound();
   const req = recipient.request;
 
-  if (req.deletedAt || req.status === "voided") return <Msg title="Document unavailable" body="This signing link is no longer active. Please contact Denago Cape Town." />;
+  // Every terminal state closes the document surface. Completed parties receive
+  // the sealed PDF by email; the bearer link is revoked by the database trigger.
+  if (req.deletedAt || ["completed", "declined", "expired", "voided", "rejected"].includes(req.status)) {
+    return <Msg title="Document unavailable" body="This signing link is no longer active. Please contact Denago Cape Town." />;
+  }
   if (req.expiresAt && req.expiresAt < new Date()) return <Msg title="Link expired" body="This signing link has expired. Please ask Denago to resend it." />;
   if (recipient.status === "signed") return <Msg title="Already signed ✓" body="You've completed this document — thank you. A copy will be emailed to you once everyone has signed." />;
   if (recipient.status === "declined") return <Msg title="Declined" body="You declined to sign this document. Contact Denago if this was a mistake." />;
@@ -75,7 +80,9 @@ async function renderSigningPage(token: string) {
 
   return (
     <Shell>
-      <SignSurface token={token} title={req.title} recipientName={recipient.name} sheets={sheets} fields={myFields} stamps={stamps} />
+      <IdentityGate token={token} initial={identityStatus(identity)}>
+        <SignSurface token={token} title={req.title} recipientName={recipient.name} sheets={sheets} fields={myFields} stamps={stamps} />
+      </IdentityGate>
     </Shell>
   );
 }
