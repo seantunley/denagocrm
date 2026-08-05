@@ -359,10 +359,16 @@ model ProductColor {
 
 model Contact {
   id            String   @id @default(cuid())
+  // isCompany is DELIBERATELY still a boolean, not an enum. The customer-type
+  // selector offers three options (individual / business / fleet) and maps them
+  // onto this flag plus `fleetId` below — see lib/contactKind.ts for the mapping
+  // and why. Every existing reader of isCompany keeps its meaning: a fleet
+  // contact is a company contact that also belongs to a fleet.
   isCompany     Boolean  @default(false)
   firstName     String
   lastName      String?
   company       String?
+  vatNumber     String? // VAT registration number — companies and fleet accounts only
   email         String?
   phone         String?
   whatsapp      String?
@@ -391,6 +397,20 @@ model Contact {
   // prod. Nothing reads it yet — behaviour is unchanged.
   tenantId String?
 
+  // FLEET MEMBERSHIP — which fleet account this contact belongs to.
+  //
+  // This is NOT the same thing as `Fleet.contactId`, and the two must not be
+  // collapsed: `Fleet.contactId` names the ONE primary contact / fleet manager
+  // for a fleet, while this column is the MANY side — every person who belongs
+  // to that fleet. A fleet's primary contact is normally also a member, but a
+  // fleet has many members and only one manager.
+  //
+  // Scalar with no Prisma relation, matching `Fleet.contactId` (also scalar) and
+  // the TenantApiKey/ChannelIdentity convention: resolution is app-layer and
+  // tenant-scoped, so a cross-tenant id simply fails to resolve rather than
+  // being caught by a foreign key after the fact.
+  fleetId     String?
+
   ownerId     String?
   owner       User?   @relation("ContactOwner", fields: [ownerId], references: [id])
   createdById String?
@@ -412,6 +432,7 @@ model Contact {
   consentRecords    ConsentRecord[]
 
   @@index([tenantId])
+  @@index([fleetId])
   @@unique([tenantId, id])
 }
 
@@ -1072,13 +1093,40 @@ model Vehicle {
 
 // A fleet / B2B account — an estate, golf course, resort or business that
 // owns many carts. Groups vehicles for a fleet-level service overview.
+// A managed account: an estate, golf course, lodge, resort or business that runs
+// a group of vehicles. A fleet is a BUSINESS RECORD in its own right — the
+// registration, VAT and billing details below are the ones a quote or invoice
+// addressed to the fleet would carry, which is why they live here and not on the
+// manager's personal contact record.
+//
+// NOTE: issuing quotes TO a fleet is deliberately not built yet — there is no
+// `Quote.fleetId`. This model holds the details; wiring them into quoting,
+// pricing and the document renderer is a separate change.
 model Fleet {
   id          String    @id @default(cuid())
   tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name        String
-  type        String? // estate | golf-course | resort | business | other
+  type        String? // see lib/fleetTypes.ts — estate | golf-course | lodge | resort | business | other
   notes       String?
-  contactId   String? // primary contact / fleet manager
+  // The ONE primary contact / fleet manager. The MANY side — every contact that
+  // belongs to this fleet — is `Contact.fleetId`. Different facts, kept apart on
+  // purpose: this is who you phone, that is who is covered.
+  contactId   String?
+
+  // Business record. All nullable and additive: a fleet created before these
+  // existed is still valid, just missing its billing detail.
+  registrationNumber String? // company / CK registration number
+  vatNumber          String? // VAT registration number (same field name as Contact.vatNumber)
+  billingEmail       String? // where invoices go — distinct from the manager's personal email
+  billingPhone       String?
+  // Address fields reuse Contact's exact names and meanings rather than
+  // inventing a parallel addressLine1/addressLine2 vocabulary for the same idea.
+  address            String? // street address / estate + unit
+  suburb             String?
+  city               String?
+  province           String?
+  postalCode         String?
+
   createdAt   DateTime  @default(now())
   createdById String?
   deletedAt   DateTime?

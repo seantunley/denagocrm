@@ -18,6 +18,14 @@ type Doc = {
   createdAt: Date;
   tag?: string | null;
   uploadedBy: { name: string };
+  /**
+   * Whose record this file is filed against. Only set where the panel shows an
+   * AGGREGATE — the fleet page pools the documents of every contact in the fleet,
+   * and an aggregated list with no attribution is unreadable. Omitted (and
+   * therefore not rendered) on the single-contact, vehicle and job-card panels,
+   * where the owner is the page you are already on.
+   */
+  ownerLabel?: string | null;
 };
 
 /** A quote and every piece of paper that belongs to it. */
@@ -93,6 +101,7 @@ function DocRow({ doc, revalidate }: { doc: Doc; revalidate: string }) {
         <p className="text-xs text-slate-400">
           {label ? `${label} · ` : ""}
           {humanSize(doc.sizeBytes)} · {formatDate(doc.createdAt)} · {doc.uploadedBy.name}
+          {doc.ownerLabel ? ` · ${doc.ownerLabel}` : ""}
         </p>
       </div>
       <div className="opacity-0 group-hover:opacity-100">
@@ -115,6 +124,8 @@ export default function DocumentsPanel({
   vehicleId,
   jobCardId,
   revalidate,
+  hideUpload = false,
+  emptyText = "No documents uploaded.",
 }: {
   documents: Doc[];
   /** Quote-by-quote grouping. Omit for the vehicle and job card panels. */
@@ -123,6 +134,15 @@ export default function DocumentsPanel({
   vehicleId?: string;
   jobCardId?: string;
   revalidate: string;
+  /**
+   * Drop the upload form. For AGGREGATE views (the fleet page) where there is no
+   * single record to file a new document against: with no contactId/vehicleId/
+   * jobCardId the form would happily upload a document linked to nothing, which
+   * looks like it worked and files the paperwork nowhere.
+   */
+  hideUpload?: boolean;
+  /** What to say when there is nothing to show. */
+  emptyText?: string;
 }) {
   const grouped = quoteGroups && quoteGroups.length > 0;
   return (
@@ -132,22 +152,24 @@ export default function DocumentsPanel({
         <FileText className="size-4 text-primary" />
       </div>
 
-      <form
-        action={uploadDocument}
-        className="mb-4 grid gap-2 rounded-xl border border-border bg-muted/20 p-3"
-      >
-        {contactId && <input type="hidden" name="contactId" value={contactId} />}
-        {vehicleId && <input type="hidden" name="vehicleId" value={vehicleId} />}
-        {jobCardId && <input type="hidden" name="jobCardId" value={jobCardId} />}
-        <input type="hidden" name="revalidate" value={revalidate} />
-        <input
-          type="file"
-          name="file"
-          required
-          className="w-full min-w-0 text-xs text-muted-foreground file:mr-3 file:cursor-pointer file:rounded-md file:border file:border-border file:bg-background file:px-2.5 file:py-1.5 file:text-xs file:font-medium file:text-foreground"
-        />
-        <button className="btn-primary btn-sm w-full"><Upload className="size-4" />Upload document</button>
-      </form>
+      {!hideUpload && (
+        <form
+          action={uploadDocument}
+          className="mb-4 grid gap-2 rounded-xl border border-border bg-muted/20 p-3"
+        >
+          {contactId && <input type="hidden" name="contactId" value={contactId} />}
+          {vehicleId && <input type="hidden" name="vehicleId" value={vehicleId} />}
+          {jobCardId && <input type="hidden" name="jobCardId" value={jobCardId} />}
+          <input type="hidden" name="revalidate" value={revalidate} />
+          <input
+            type="file"
+            name="file"
+            required
+            className="w-full min-w-0 text-xs text-muted-foreground file:mr-3 file:cursor-pointer file:rounded-md file:border file:border-border file:bg-background file:px-2.5 file:py-1.5 file:text-xs file:font-medium file:text-foreground"
+          />
+          <button className="btn-primary btn-sm w-full"><Upload className="size-4" />Upload document</button>
+        </form>
+      )}
 
       {/* A quote is listed whether or not it has any paperwork yet — an accepted,
           signed quote that nobody generated a PDF for used to vanish from here
@@ -188,7 +210,7 @@ export default function DocumentsPanel({
       )}
 
       {documents.length === 0 ? (
-        !grouped && <p className="text-sm text-slate-400">No documents uploaded.</p>
+        !grouped && <p className="text-sm text-slate-400">{emptyText}</p>
       ) : (
         <>
           {grouped && (
