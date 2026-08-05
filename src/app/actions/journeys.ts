@@ -6,11 +6,8 @@ import { prisma } from "@/lib/db";
 import { withTenantWrite } from "@/lib/tenantWrite";
 import { requireOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
-import {
-  JOURNEY_TRIGGERS,
-  parseConditionGroup,
-  parseJourneyDefinition,
-} from "@/lib/journeyTypes";
+import { parseConditionGroup, parseJourneyDefinition } from "@/lib/journeyTypes";
+import { parseJourneyTriggers } from "@/lib/journeyTriggers";
 import { parseRunMode } from "@/lib/journeyArbitration";
 import {
   enrollJourneyNow,
@@ -29,18 +26,30 @@ function parseObject(value: FormDataEntryValue | null, label: string) {
   }
 }
 
+/** The array counterpart of parseObject — same "not valid JSON" contract. */
+function parseArray(value: FormDataEntryValue | null, label: string) {
+  if (!value || String(value).trim() === "") return null;
+  try {
+    const parsed = JSON.parse(String(value));
+    if (!Array.isArray(parsed)) throw new Error();
+    return parsed as unknown[];
+  } catch {
+    throw new Error(`${label} is not valid JSON`);
+  }
+}
+
 function journeyData(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim();
   const description = String(formData.get("description") ?? "").trim() || null;
   const category = String(formData.get("category") ?? "automation");
-  const trigger = String(formData.get("trigger") ?? "");
   if (!name) throw new Error("Journey name is required");
-  if (!JOURNEY_TRIGGERS.includes(trigger as (typeof JOURNEY_TRIGGERS)[number])) {
-    throw new Error("Unsupported journey trigger");
-  }
   if (!new Set(["automation", "marketing"]).has(category)) throw new Error("Invalid journey category");
 
-  const triggerConfig = parseObject(formData.get("triggerConfig"), "Trigger configuration");
+  // STRICT here, tolerant in the engine. This is the one place a person is
+  // waiting to be told their journey is wrong, so an unknown trigger, a repeated
+  // id or two unnamed triggers of the same type are all refused with a message
+  // — rather than saved and discovered later as a journey that enrols nobody.
+  const triggers = parseJourneyTriggers(parseArray(formData.get("triggers"), "Enrolment triggers"));
   const rawConditions = parseObject(formData.get("entryConditions"), "Entry conditions");
   const rawDefinition = parseObject(formData.get("definition"), "Journey definition") ?? {
     startStepId: null,
@@ -62,9 +71,8 @@ function journeyData(formData: FormData) {
     name: name.slice(0, 160),
     description: description?.slice(0, 1000) ?? null,
     category,
-    trigger,
     runMode,
-    triggerConfig: triggerConfig as Prisma.InputJsonValue | null,
+    triggers: triggers as unknown as Prisma.InputJsonValue,
     entryConditions: entryConditions as Prisma.InputJsonValue | null,
     definition: definition as Prisma.InputJsonValue,
   };
@@ -92,8 +100,7 @@ export async function createJourney(formData: FormData) {
         journeyId: j.id,
         version: 1,
         state: "draft",
-        trigger: data.trigger,
-        triggerConfig: data.triggerConfig ?? Prisma.JsonNull,
+        triggers: data.triggers,
         entryConditions: data.entryConditions ?? Prisma.JsonNull,
         definition: data.definition,
         createdById: user.id,
@@ -122,8 +129,7 @@ export async function saveJourneyDraft(journeyId: string, formData: FormData) {
     });
     const draft = journey.versions.find((version) => version.state === "draft");
     const versionData = {
-      trigger: data.trigger,
-      triggerConfig: data.triggerConfig ?? Prisma.JsonNull,
+      triggers: data.triggers,
       entryConditions: data.entryConditions ?? Prisma.JsonNull,
       definition: data.definition,
       createdById: user.id,
@@ -234,8 +240,7 @@ export async function installJourneyTemplates() {
       name: "New lead speed-to-contact",
       description: "Immediately alerts the team and creates a same-day follow-up task.",
       category: "automation",
-      trigger: "lead_created",
-      triggerConfig: {},
+      triggers: [{ type: "lead_created", config: {} }],
       entryConditions: { logic: "and", conditions: [] },
       definition: definition([
         { id: "notify", type: "send_push", config: { message: "New lead: {{name}} — {{model}}" } },
@@ -246,8 +251,7 @@ export async function installJourneyTemplates() {
       name: "Won-customer welcome",
       description: "A delayed welcome message after a lead is marked won.",
       category: "marketing",
-      trigger: "lead_won",
-      triggerConfig: {},
+      triggers: [{ type: "lead_won", config: {} }],
       entryConditions: { logic: "and", conditions: [] },
       definition: definition([
         { id: "wait", type: "wait", config: { amount: 1, unit: "days" } },
@@ -265,8 +269,7 @@ export async function installJourneyTemplates() {
       name: "Purchase anniversary",
       description: "Annual anniversary greeting for vehicle owners.",
       category: "marketing",
-      trigger: "purchase_anniversary",
-      triggerConfig: {},
+      triggers: [{ type: "purchase_anniversary", config: {} }],
       entryConditions: { logic: "and", conditions: [] },
       definition: definition([
         {
@@ -283,8 +286,7 @@ export async function installJourneyTemplates() {
       name: "Service win-back",
       description: "Re-engages owners who have been inactive for 12 months.",
       category: "marketing",
-      trigger: "win_back",
-      triggerConfig: { inactiveMonths: 12 },
+      triggers: [{ type: "win_back", config: { inactiveMonths: 12 } }],
       entryConditions: { logic: "and", conditions: [] },
       definition: definition([
         {
@@ -319,8 +321,7 @@ export async function installJourneyTemplates() {
           journeyId: tpl.id,
           version: 1,
           state: "draft",
-          trigger: item.trigger,
-          triggerConfig: item.triggerConfig,
+          triggers: item.triggers,
           entryConditions: item.entryConditions,
           definition: item.definition,
           createdById: user.id,

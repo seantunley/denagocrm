@@ -4,7 +4,8 @@ import { prisma } from "./db";
 import { resolveContacts, type SegmentCriteria } from "./campaigns";
 import { emitJourneyEvent } from "./journeyEvents";
 import { leadHasGoneQuiet } from "./leadIdle";
-import { getActiveVersion, jsonObject } from "./journeyEngineShared";
+import { getActiveVersion } from "./journeyEngineShared";
+import { readJourneyTriggers, triggerKeySuffix, type JourneyTriggerSpec } from "./journeyTriggers";
 
 function recurrenceWindow(repeat: unknown, now = new Date()) {
   if (repeat === "daily") return now.toISOString().slice(0, 10);
@@ -22,18 +23,29 @@ type SchedulableJourney = {
   versions: Array<{
     id: string;
     version: number;
-    trigger: string;
-    triggerConfig: Prisma.JsonValue | null;
+    triggers: Prisma.JsonValue;
   }>;
 };
 
-async function scheduleJourney(journey: SchedulableJourney, stop: StopSignal) {
-  const version = getActiveVersion(journey);
-  if (!version) return 0;
-  const config = jsonObject(version.triggerConfig);
+/**
+ * What the payload carries so the matcher can tell two same-type triggers apart.
+ *
+ * Without it, both `lead_idle` triggers on a version would sweep separately with
+ * their own idleDays and then both be attributed to whichever appears first in
+ * the list — one configuration would emit events that never name it.
+ */
+const named = (spec: JourneyTriggerSpec) => (spec.id ? { triggerId: spec.id } : {});
+
+async function sweepTrigger(
+  journey: SchedulableJourney,
+  version: { version: number },
+  spec: JourneyTriggerSpec,
+  stop: StopSignal,
+) {
+  const config = spec.config;
   let created = 0;
 
-  if (version.trigger === "lead_idle") {
+  if (spec.type === "lead_idle") {
     const days = Math.max(1, Number(config.idleDays ?? 3));
     const now = new Date();
     // Narrow to leads whose own row is already stale; a lead touched more
@@ -51,17 +63,17 @@ async function scheduleJourney(journey: SchedulableJourney, stop: StopSignal) {
       // a quote we sent, or who have a follow-up call already booked.
       if (!(await leadHasGoneQuiet(lead, days, now))) continue;
       if (await emitJourneyEvent({
-        type: version.trigger,
+        type: spec.type,
         entityType: "lead",
         entityId: lead.id,
         journeyId: journey.id,
-        payload: { idleDays: days },
-        dedupeKey: `${journey.id}:${version.version}:lead-idle:${lead.id}`,
+        payload: { idleDays: days, ...named(spec) },
+        dedupeKey: `${journey.id}:${version.version}:lead-idle:${lead.id}${triggerKeySuffix(spec)}`,
       })) created++;
     }
   }
 
-  if (version.trigger === "contact_segment") {
+  if (spec.type === "contact_segment") {
     const segmentId = typeof config.segmentId === "string" ? config.segmentId : null;
     if (!segmentId) return created;
     const segment = await prisma.segment.findUnique({ where: { id: segmentId } });
@@ -77,17 +89,17 @@ async function scheduleJourney(journey: SchedulableJourney, stop: StopSignal) {
     for (const contact of contacts) {
       if (stop.shouldStop(ENROL_RESERVE_MS)) break;
       if (await emitJourneyEvent({
-        type: version.trigger,
+        type: spec.type,
         entityType: "contact",
         entityId: contact.id,
         journeyId: journey.id,
-        payload: { segmentId, window },
-        dedupeKey: `${journey.id}:${version.version}:segment:${contact.id}:${window}`,
+        payload: { segmentId, window, ...named(spec) },
+        dedupeKey: `${journey.id}:${version.version}:segment:${contact.id}:${window}${triggerKeySuffix(spec)}`,
       })) created++;
     }
   }
 
-  if (version.trigger === "purchase_anniversary") {
+  if (spec.type === "purchase_anniversary") {
     const now = new Date();
     const vehicles = await prisma.vehicle.findMany({
       where: { purchaseDate: { not: null }, deletedAt: null },
@@ -100,17 +112,17 @@ async function scheduleJourney(journey: SchedulableJourney, stop: StopSignal) {
       const years = now.getFullYear() - purchased.getFullYear();
       if (years < 1) continue;
       if (await emitJourneyEvent({
-        type: version.trigger,
+        type: spec.type,
         entityType: "contact",
         entityId: vehicle.contactId,
         journeyId: journey.id,
-        payload: { vehicleId: vehicle.id, model: vehicle.model, years },
-        dedupeKey: `${journey.id}:${version.version}:anniversary:${vehicle.id}:${now.getFullYear()}`,
+        payload: { vehicleId: vehicle.id, model: vehicle.model, years, ...named(spec) },
+        dedupeKey: `${journey.id}:${version.version}:anniversary:${vehicle.id}:${now.getFullYear()}${triggerKeySuffix(spec)}`,
       })) created++;
     }
   }
 
-  if (version.trigger === "win_back") {
+  if (spec.type === "win_back") {
     const months = Math.max(3, Number(config.inactiveMonths ?? 12));
     const vehicles = await prisma.vehicle.findMany({
       where: { deletedAt: null },
@@ -136,16 +148,33 @@ async function scheduleJourney(journey: SchedulableJourney, stop: StopSignal) {
       if (lastContact && differenceInCalendarMonths(now, lastContact) < 3) continue;
       seen.add(contact.id);
       if (await emitJourneyEvent({
-        type: version.trigger,
+        type: spec.type,
         entityType: "contact",
         entityId: contact.id,
         journeyId: journey.id,
-        payload: { vehicleId: vehicle.id, model: vehicle.model, inactiveMonths: months },
-        dedupeKey: `${journey.id}:${version.version}:winback:${contact.id}:${window}`,
+        payload: { vehicleId: vehicle.id, model: vehicle.model, inactiveMonths: months, ...named(spec) },
+        dedupeKey: `${journey.id}:${version.version}:winback:${contact.id}:${window}${triggerKeySuffix(spec)}`,
       })) created++;
     }
   }
 
+  return created;
+}
+
+/**
+ * Sweep for EVERY scheduled trigger the active version lists, not just one.
+ *
+ * A trigger this function has no sweep for is an EVENT trigger — some write path
+ * emits it — so it is passed over here rather than treated as a gap.
+ */
+async function scheduleJourney(journey: SchedulableJourney, stop: StopSignal) {
+  const version = getActiveVersion(journey);
+  if (!version) return 0;
+  let created = 0;
+  for (const spec of readJourneyTriggers(version.triggers)) {
+    if (stop.shouldStop(ENROL_RESERVE_MS)) break;
+    created += await sweepTrigger(journey, version, spec, stop);
+  }
   return created;
 }
 

@@ -142,16 +142,14 @@ async function main() {
     const starters = [
       {
         name: "Call every new lead within a day",
-        trigger: "lead_created",
-        triggerConfig: {},
+        triggers: [{ type: "lead_created", config: {} }],
         activityType: "call",
         summary: "Call this new lead — introduce yourself and book a demo — {{name}}",
         dueDays: 1,
       },
       {
         name: "Nudge when a lead goes quiet for 4 days",
-        trigger: "lead_idle",
-        triggerConfig: { idleDays: 4 },
+        triggers: [{ type: "lead_idle", config: { idleDays: 4 } }],
         activityType: "whatsapp",
         summary: "Lead has gone quiet — send a WhatsApp check-in — {{name}}",
         dueDays: 0,
@@ -172,8 +170,7 @@ async function main() {
           journeyId: journey.id,
           version: 1,
           state: "published",
-          trigger: starter.trigger,
-          triggerConfig: starter.triggerConfig,
+          triggers: starter.triggers,
           definition: {
             startStepId: "step1",
             steps: [

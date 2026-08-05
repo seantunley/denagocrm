@@ -8,6 +8,7 @@ import {
   jsonObject,
   REFUSAL_REASONS,
 } from "./journeyEngineShared";
+import { decideTrigger, readJourneyTriggers } from "./journeyTriggers";
 import { NEVER_STOP, type StopSignal } from "./stopSignal";
 
 /** One event can enrol into several journeys, each of which may send. */
@@ -61,25 +62,6 @@ export async function emitJourneyEvent(args: {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return null;
     throw error;
   }
-}
-
-function triggerMatches(
-  trigger: string,
-  config: Record<string, unknown>,
-  context: Awaited<ReturnType<typeof loadJourneyContext>>,
-  payload: Record<string, unknown> = {}
-) {
-  if (!context) return false;
-  if (trigger === "stage_entered") {
-    const lead = (context.lead ?? {}) as Record<string, unknown>;
-    // Prefer the stage recorded ON THE EVENT over the lead's stage now. Events
-    // are drained by a cron that runs every 15 minutes, so a rep who moves a
-    // lead Qualified → Quoted inside that window would otherwise have the
-    // Qualified event judged against "Quoted" and silently match nothing.
-    const entered = typeof payload.stageId === "string" ? payload.stageId : lead.stageId;
-    return !config.stageId || config.stageId === entered;
-  }
-  return true;
 }
 
 export async function recoverStaleJourneyEvents() {
@@ -182,21 +164,24 @@ async function processOneEvent(
           decisions.push({ journeyId: journey.id, journeyName: journey.name, enrolled: false, reason: "no published version" });
           continue;
         }
-        if (version.trigger !== event.type) {
-          decisions.push({
-            journeyId: journey.id,
-            journeyName: journey.name,
-            enrolled: false,
-            reason: `listens for "${version.trigger}", not "${event.type}"`,
-          });
-          continue;
-        }
+        // ONE verdict for the whole trigger LIST, and it keeps the two refusals
+        // apart: "this journey does not listen for that at all" and "it does,
+        // but that trigger's own filter said no" are different answers to "why
+        // was this customer not enrolled", and collapsing them is the defect
+        // recording decisions exists to prevent.
+        //
         // eventPayload, not just the context: a stage_entered event carries the
         // stage the lead ENTERED, and the cron drains up to 15 minutes later —
         // judging against the lead's stage now would silently match nothing for
         // anyone who moved the card again inside that window.
-        if (!triggerMatches(version.trigger, jsonObject(version.triggerConfig), context, eventPayload)) {
-          decisions.push({ journeyId: journey.id, journeyName: journey.name, enrolled: false, reason: "trigger filters did not match" });
+        const verdict = decideTrigger(
+          readJourneyTriggers(version.triggers),
+          event.type,
+          context,
+          eventPayload,
+        );
+        if (!verdict.matched) {
+          decisions.push({ journeyId: journey.id, journeyName: journey.name, enrolled: false, reason: verdict.reason });
           continue;
         }
         const outcome = await enqueueJourneyRun({
@@ -205,7 +190,14 @@ async function processOneEvent(
           entityType: event.entityType as JourneyEntityType,
           entityId: event.entityId,
           eventKey: event.dedupeKey,
-          payload: eventPayload,
+          // WHICH trigger let this person in, published as `event.triggerId` so
+          // a later step can branch on it. Only when the author named one —
+          // every backfilled version, and every trigger nobody needed to
+          // distinguish, leaves the field absent rather than inventing a value
+          // a condition could accidentally match.
+          payload: verdict.matched.id
+            ? { ...eventPayload, triggerId: verdict.matched.id }
+            : eventPayload,
         });
         if (outcome.enrolled) enrolled++;
         decisions.push({
