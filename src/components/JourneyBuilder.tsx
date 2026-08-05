@@ -11,7 +11,7 @@ export type JourneyOption = { id: string; name: string };
 type BuilderStep = {
   id: string;
   type: string;
-  /** HA's per-action `continue_on_error`, round-tripped so saving cannot drop it. */
+  /** Per-step, round-tripped so saving cannot drop it. */
   continueOnError?: boolean;
   config: Record<string, unknown>;
 };

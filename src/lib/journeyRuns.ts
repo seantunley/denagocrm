@@ -529,7 +529,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         });
 
         if (timedOut && !config.continueOnTimeout) {
-          // HA's `continue_on_timeout: false` stops the script. Ended here
+          // `continueOnTimeout: false` ends the run. Ended here
           // rather than by raising StopJourney — the spelling a `stop` step
           // uses — because the StopJourney handler rewrites this same path's
           // log row with `{ stopped: true, reason: "stop" }` and would erase
@@ -606,7 +606,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
           inSequence,
         });
       } catch (error) {
-        // continueOnError, after HA's per-action flag. Control flow is NEVER
+        // continueOnError, the per-step flag. Control flow is NEVER
         // swallowed: a stop, a condition gate or an abort is a decision, and
         // treating it as a recoverable fault would run steps the author put
         // behind it.

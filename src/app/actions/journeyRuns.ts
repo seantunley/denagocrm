@@ -25,8 +25,7 @@ export async function runJourneyNowAction(journeyId: string) {
 /**
  * Run a journey against ONE chosen lead, now.
  *
- * After Home Assistant's "Run actions", and for the same reason: testing a
- * journey otherwise means waiting for the real event to happen to a real
+ * Testing a journey otherwise means waiting for the real event to happen to a real
  * customer, so the usual method is to enrol yourself and hope the copy is
  * right. This drives the genuine path — same emit, same entry conditions, same
  * run mode, same steps — against a lead you pick.

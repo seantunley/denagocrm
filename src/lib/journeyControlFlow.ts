@@ -1,10 +1,9 @@
 /**
  * Control flow, raised rather than returned.
  *
- * Modelled on Home Assistant's `homeassistant/helpers/script.py`, which uses
- * `_StopScript`, `_ConditionFail` and `_AbortScript` instead of threading a
- * status flag back through every caller. We threaded a status union, and it had
- * already started lying: `StepResult.nextStepId` meant THREE things on one
+ * Raising beats threading a status flag back through every caller. We threaded
+ * a status union, and it had already started lying: `StepResult.nextStepId`
+ * meant THREE things on one
  * field — absent said "follow the step's own nextStepId", `null` said "there is
  * no successor, end the run", and a string said "jump here". The `stop` step
  * used the `null` spelling, so "the author asked to stop" and "this branch
@@ -31,14 +30,14 @@ export abstract class JourneyControlFlow extends Error {
 }
 
 /**
- * The author asked to stop. HA's `_StopScript`.
+ * The author asked to stop.
  *
  * A normal, successful end: the run is marked completed, no retry, no error.
  */
 export class StopJourney extends JourneyControlFlow {}
 
 /**
- * A bare `condition` step inside a sequence did not pass. HA's `_ConditionFail`.
+ * A bare `condition` step inside a sequence did not pass.
  *
  * Also a normal end — the journey simply does not apply to this record — but a
  * distinct one, because "stopped because the author said so" and "stopped
@@ -52,7 +51,7 @@ export class ConditionFailed extends JourneyControlFlow {
 }
 
 /**
- * Give up on this run and do NOT retry it. HA's `_AbortScript`.
+ * Give up on this run and do NOT retry it.
  *
  * The distinction from an ordinary thrown Error is the retry: an ordinary error
  * (an SMS provider 503) is worth three attempts, whereas everything that raises
