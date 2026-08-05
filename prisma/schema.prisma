@@ -1875,7 +1875,18 @@ model SignatureEvent {
   request   SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
   recipientId String?
-  type        String // created|sent|delivered|opened|viewed|field_filled|signed|declined|completed|reminded|downloaded|voided
+  /// created|sent|delivered|opened|viewed|field_filled|signed|declined|completed|reminded|downloaded|voided|recovery_attempt
+  ///
+  /// `completed` is written LAST by completeSignatureRequest — after the
+  /// notification and post-completion fan-out, not before it. Its ABSENCE on a
+  /// request whose status is already `completed` therefore means one specific
+  /// thing: the transaction committed and the external work never finished. That
+  /// is the detector recoverStrandedCompletions() sweeps on, so this event is
+  /// load-bearing and not merely a trail entry.
+  ///
+  /// `recovery_attempt` records one pass of that sweep, written BEFORE the work
+  /// so attempts stay bounded when a request cannot be repaired.
+  type        String
   actor       String // "Denago: <name>" | recipient name | "system"
   channel     String? // email|whatsapp|sms|in_person|web
   ip          String?

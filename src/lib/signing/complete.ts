@@ -13,6 +13,7 @@ import { bindCtx, logoDataUri } from "./render";
 import { logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
 import { runPostCompletion } from "./postComplete";
+import { signedPdfIsUnreferenced } from "./compensate";
 
 /** Internal sentinel: the completion claim was lost to a concurrent close. */
 class CompletionLost extends Error {}
@@ -285,12 +286,23 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       }
     });
   } catch (err) {
-    await deleteFile(storedName).catch(() => {});
+    // A thrown error is NOT proof the transaction rolled back. If the COMMIT
+    // succeeded and only its acknowledgement was lost, Postgres has committed:
+    // signedPdfRef and the new Document row both name this blob, and deleting it
+    // destroys the signed artefact underneath a record that says it exists.
+    //
+    // That is what happened to Quote Q-1010 on 2026-08-04 — see
+    // SIGNING-PDF-LOSS-INCIDENT.md. So ASK before deleting, and keep the file on
+    // every ambiguous answer, including a failed check (usually the same broken
+    // connection that lost the acknowledgement).
+    if (await signedPdfIsUnreferenced(storedName, () =>
+      prisma.signatureRequest.findUnique({ where: { id: requestId }, select: { signedPdfRef: true } }),
+    )) {
+      await deleteFile(storedName).catch(() => {});
+    }
     if (err instanceof CompletionLost || err instanceof SourceCompletionLost) return;
     throw err;
   }
-
-  await logSignEvent(requestId, { type: "completed", actor: "system", metadata: { hash } });
 
   // External fan-out only (referral, automations, push, audit). The core source
   // state is already committed above; this is best-effort and never unwinds it.
@@ -315,4 +327,17 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       attachments: [{ filename: `${req.title}.pdf`, content: pdf, contentType: "application/pdf" }],
     });
   }
+
+  // LAST, not first. This event used to be written immediately after the
+  // transaction, which made it a record that the commit happened — but nothing
+  // then recorded whether the work above actually ran, and nothing could:
+  // advanceAfterSignature and completeSignatureRequest both return early on a
+  // closed request, so a completion that committed and failed to notify anyone
+  // was unreachable forever, and silent.
+  //
+  // Written here, its absence means exactly one thing — "committed, but the
+  // fan-out did not finish" — which is what recoverStrandedCompletions() sweeps
+  // for. The completion TIME is unaffected: `completedAt` on the row is set
+  // inside the transaction and remains the authoritative timestamp.
+  await logSignEvent(requestId, { type: "completed", actor: "system", metadata: { hash } });
 }

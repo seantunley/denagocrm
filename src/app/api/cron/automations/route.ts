@@ -5,6 +5,7 @@ export const maxDuration = 60;
 import { runServiceReminders } from "@/lib/serviceReminders";
 import { runSignatureRequestReminders } from "@/lib/signingReminders";
 import { recoverStaleSigningClaims } from "@/lib/signing/dispatch";
+import { recoverStrandedCompletions } from "@/lib/signing/recoverCompletions";
 import { syncFacebookLeads } from "@/lib/metaLeadSync";
 import { syncGoogleReviews } from "@/lib/googleReviews";
 import { syncInboundEmail } from "@/lib/imapSync";
@@ -66,6 +67,10 @@ async function runOperationalQueues(budget: CronSliceContext) {
   const remindersSent = on("automotive") ? await phase("service-reminders", runServiceReminders, -1) : null;
   const signingReminders = await phase("signature-request-reminders", runSignatureRequestReminders, -1);
   const staleSigningClaims = await phase("stale-signing-claims", recoverStaleSigningClaims, null);
+  // Completions that committed but never notified anyone. Runs alongside the
+  // stale-claim sweep because it is the same class of problem at the other end
+  // of the lifecycle: work the request can no longer re-drive by itself.
+  const strandedCompletions = await phase("stranded-completions", recoverStrandedCompletions, null);
   const fbLeads = on("marketing") ? await phase("meta-lead-sync", syncFacebookLeads, -1) : null;
   const googleReviews = on("marketing") ? await phase("google-reviews", syncGoogleReviews, -1) : null;
   const inboundEmail = await phase("imap-sync", syncInboundEmail, -1);
@@ -87,6 +92,7 @@ async function runOperationalQueues(budget: CronSliceContext) {
     remindersSent,
     signingReminders,
     staleSigningClaims,
+    strandedCompletions,
     fbLeads,
     googleReviews,
     inboundEmail,
