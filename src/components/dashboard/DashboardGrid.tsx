@@ -5,6 +5,7 @@ import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
+  MeasuringStrategy,
   MouseSensor,
   TouchSensor,
   closestCenter,
@@ -92,6 +93,18 @@ const SPAN_CLASS: Record<1 | 2 | 3, string> = {
  * different sizes.
  */
 const NO_TRANSFORM: SortingStrategy = () => null;
+
+/**
+ * Re-measure the drop targets continuously, not once at drag-start.
+ *
+ * This pairs with the live reorder and is not optional. dnd-kit's default is to
+ * measure droppables when a drag BEGINS, which is correct for the usual sortable
+ * — items there never move in the DOM, they are only displaced by transform, so
+ * their real rects never change. Here the DOM genuinely reorders under the
+ * pointer, so drag-start rects go stale the moment the first swap happens and
+ * every collision after it is computed against where the cards used to be.
+ */
+const MEASURE_ALWAYS = { droppable: { strategy: MeasuringStrategy.Always } };
 
 /**
  * The user's order, extended with any rendered card it does not mention.
@@ -351,6 +364,7 @@ export default function DashboardGrid({
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
+        measuring={MEASURE_ALWAYS}
         onDragStart={onDragStart}
         onDragOver={onDragOver}
         onDragEnd={onDragEnd}

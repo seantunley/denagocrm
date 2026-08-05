@@ -358,6 +358,19 @@ test("the sortable strategy applies no transforms, because the cards are not uni
   assert.match(grid, /<DragOverlay/, "a drag overlay must give the user something in hand");
 });
 
+test("drop targets are re-measured continuously, because the DOM really reorders", () => {
+  const grid = GRID();
+  // dnd-kit measures droppables once at drag-start by default, which is right
+  // only when items never move in the DOM. They do here, so every collision
+  // after the first swap would be computed against stale rects.
+  assert.match(
+    grid,
+    /const MEASURE_ALWAYS = \{ droppable: \{ strategy: MeasuringStrategy\.Always \} \};/,
+    "droppables must be measured continuously",
+  );
+  assert.match(grid, /measuring=\{MEASURE_ALWAYS\}/, "the measuring config must be wired up");
+});
+
 test("a re-render with an unchanged server layout does not clobber a local drag", () => {
   const grid = GRID();
   // `savedOrder` is a fresh array every server render. A reference-compared
