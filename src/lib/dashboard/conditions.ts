@@ -436,3 +436,64 @@ export function screenBreakpoints(conditions: readonly Condition[] | undefined):
   });
   return [...out];
 }
+
+/* ── the clock a `time` condition is judged against ───────────────── */
+
+/**
+ * The workspace's timezone, not the server's.
+ *
+ * A `time` condition is written by somebody who means their own working day —
+ * "show the workshop board between seven and five". The server runs in UTC, and
+ * on a UTC clock a South African working day starts at five in the morning, so
+ * a card configured for business hours would appear two hours early and vanish
+ * two hours early. Nobody reports that as a timezone bug; they report that the
+ * dashboard is wrong in the afternoon.
+ *
+ * `Intl` rather than a +02:00 constant, because an offset is a fact about a
+ * DATE, not about a place. South Africa does not observe daylight saving today,
+ * but hardcoding the offset would bury that assumption in a dashboard module,
+ * and the first person to hit it would be looking at a card, not at this file.
+ */
+export const WORKSPACE_TIMEZONE = "Africa/Johannesburg";
+
+const WEEKDAY_INDEX: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
+/**
+ * Local wall-clock minutes past midnight, and the local weekday.
+ *
+ * Both come from ONE `formatToParts` call, which is not just tidiness: reading
+ * the hour and the weekday from separate formatter calls could straddle
+ * midnight and report 00:30 on the previous day.
+ */
+export function localClock(
+  now: Date,
+  timeZone: string = WORKSPACE_TIMEZONE,
+): { minutes: number; weekday: number } {
+  const parts = new Intl.DateTimeFormat("en-ZA", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    weekday: "short",
+  }).formatToParts(now);
+
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  // Some environments render midnight as hour "24" under hour12: false. That
+  // means zero minutes past midnight, not a twenty-fifth hour, and left
+  // unhandled it puts every midnight card outside every window.
+  const hour = Number(get("hour")) % 24;
+  const minute = Number(get("minute"));
+  const weekday = WEEKDAY_INDEX[get("weekday").slice(0, 3)] ?? now.getDay();
+  return {
+    minutes: Number.isFinite(hour) && Number.isFinite(minute) ? hour * 60 + minute : 0,
+    weekday,
+  };
+}

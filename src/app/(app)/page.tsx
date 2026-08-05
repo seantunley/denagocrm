@@ -1,85 +1,52 @@
 import { prisma } from "@/lib/db";
-import { evaluateConditions } from "@/lib/journeyTypes";
 import { formatDate } from "@/lib/format";
 import { FollowUpPrompts } from "@/components/proactive/NextStep";
-import DashboardGrid, { type GridCard, type AddableCard } from "@/components/dashboard/DashboardGrid";
+import DashboardScreen from "@/components/dashboard/DashboardScreen";
 import {
-  addableCards,
-  isConditional,
-  visibleCards,
-} from "@/lib/dashboard/registry";
-import {
-  dashboardViewer,
-  dashboardWindow,
-  dashboardLayoutForViewer,
-  plannedActivities,
-  grants,
-} from "@/lib/dashboard/data";
-import { DASHBOARD_CARD_IMPLS } from "@/lib/dashboard/cards";
+  DEFAULT_DASHBOARD_SLUG,
+  dashboardBySlug,
+  defaultDashboard,
+} from "@/lib/dashboard/store";
+import { dashboardViewer, dashboardWindow, plannedActivities, grants } from "@/lib/dashboard/data";
 
 /**
- * The home screen: cards the user arranges, rather than a fixed layout.
+ * The home screen: the user's own dashboard.
  *
- * This page used to be ~890 lines — every query for every tile in one
- * `Promise.all`, and the markup for all of them inline. It is now a thin shell:
- * resolve who is asking, ask the registry which cards they may see, load those
- * in parallel, and hand the rendered nodes to the grid. Adding a card means
- * adding a registry entry, not editing this file.
+ * This page used to be ~890 lines of queries and markup, then a thin shell over
+ * a flat list of twelve fixed cards. It is now a shell over a CONFIG — tabs,
+ * sections, and cards the user built — and the only thing that makes it "home"
+ * is which dashboard it resolves to.
  *
- * THE ORDER OF OPERATIONS IS THE SECURITY MODEL:
+ * ── NOT YET TAKEN CONTROL ───────────────────────────────────────────────────
  *
- *   1. Resolve the viewer's permissions and the tenant's enabled modules ONCE.
- *   2. Filter the saved layout down to cards they are entitled to. Everything
- *      after this point only ever concerns cards that passed step 2 — a card the
- *      viewer may not see is never loaded, so its query never runs.
- *   3. Load the survivors in parallel.
- *   4. Apply each card's visibility condition to the signals it published.
+ * A user with no stored dashboard gets `defaultDashboard()`, which is generated
+ * from the card catalogue rather than read from the database. Nothing is written
+ * until their first edit. That matters for two reasons: a brand-new user's home
+ * screen is exactly what it has always been with no migration to run, and a
+ * default that IMPROVES in a later release reaches everyone who never customised
+ * theirs, instead of freezing at whatever the catalogue looked like on the day
+ * they signed up.
  *
- * Conditions come LAST, after permissions, and never the other way round: a
- * condition that decided whether to run a query would make the query itself the
- * disclosure.
+ * ── WHAT IS NOT A CARD, AND WHY ─────────────────────────────────────────────
+ *
+ * The greeting and the follow-up prompts sit outside the dashboard entirely.
+ * The prompts are an INTERACTION — mark it done, or do not — rather than a
+ * summary, and they are about the viewer's own overdue work. A user who
+ * rearranged them off their screen would silently stop being asked about it.
+ * Everything that is a summary is a card; these two are not.
  */
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>;
+}) {
+  const { tab } = await searchParams;
   const { user, access } = await dashboardViewer();
-  const layout = await dashboardLayoutForViewer();
 
-  // Step 2 — the permission and module filter. `visibleCards` is the SAME
-  // function the add-card picker filters through (below), so the picker cannot
-  // offer a card the renderer would refuse.
-  const entitled = visibleCards(layout, access);
+  // The stored home dashboard, or the generated one. `dashboardBySlug` is
+  // scoped to the session user, so this can only ever be the caller's own.
+  const dashboard = (await dashboardBySlug(DEFAULT_DASHBOARD_SLUG)) ?? defaultDashboard();
 
-  // Step 3 — every visible card loads at once. Shared sub-queries are memoised
-  // per request in lib/dashboard/data.ts, so two cards wanting the same rows
-  // cost one query, not two.
-  const loaded = await Promise.all(
-    entitled.map(async (meta) => ({ meta, ...(await DASHBOARD_CARD_IMPLS[meta.id].load()) })),
-  );
-
-  // Step 4 — visibility conditions, evaluated against each card's own signals
-  // using the shared journey condition evaluator. A card whose renderer returned
-  // nothing at all is dropped here too, so a card with no entitled content
-  // leaves no empty box behind.
-  const cards: GridCard[] = loaded
-    .filter(
-      ({ meta, node, signals }) =>
-        node !== null && evaluateConditions(meta.condition ?? null, { vars: signals }),
-    )
-    .map(({ meta, node }) => ({ id: meta.id, title: meta.title, span: meta.span, node }));
-
-  const addable: AddableCard[] = addableCards(layout, access).map((meta) => ({
-    id: meta.id,
-    title: meta.title,
-    description: meta.description,
-    conditional: isConditional(meta),
-  }));
-
-  /* ── page chrome ──────────────────────────────────────────────────
-   * The greeting and the follow-up prompts are NOT cards. They are the "before
-   * you do anything else" band: the prompts are an interaction (mark it done,
-   * or don't) rather than a summary, and a user who arranged them off the screen
-   * would silently stop being asked about their own overdue work. Everything
-   * that is a SUMMARY is a card; these two are not.
-   */
   const { todayStart, now } = await dashboardWindow();
 
   // The viewer's OWN overdue items. Inherently self-scoped — assignedToId is the
@@ -91,10 +58,9 @@ export default async function DashboardPage() {
     include: { lead: true },
   });
 
-  // The agenda count in the subtitle is drawn from the same query the agenda
-  // card uses (memoised, so it is free here), and is shown only to someone who
-  // may see activities at all — otherwise the subtitle would quietly report the
-  // size of a queue they cannot open.
+  // Drawn from the same query the agenda card uses (memoised, so it is free
+  // here), and shown only to someone who may see activities at all — otherwise
+  // the subtitle would quietly report the size of a queue they cannot open.
   const seesActivities = grants(access, "activities.view", "activities.manage");
   const dueTodayCount = seesActivities ? (await plannedActivities()).today.length : null;
 
@@ -130,7 +96,7 @@ export default async function DashboardPage() {
         )}
       </div>
 
-      <DashboardGrid cards={cards} addable={addable} savedOrder={[...layout]} />
+      <DashboardScreen dashboard={dashboard} tab={tab} />
     </div>
   );
 }
