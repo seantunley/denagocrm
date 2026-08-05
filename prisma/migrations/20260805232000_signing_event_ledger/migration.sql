@@ -65,6 +65,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS "SignatureEvent_eventHash_key"
 CREATE OR REPLACE FUNCTION signing_chain_event() RETURNS trigger AS $$
 DECLARE prior RECORD;
 BEGIN
+  -- Same-event triggers run alphabetically in PostgreSQL. Derive the parent
+  -- tenant here as well as in SignatureEvent_stamp_tenant so chain integrity does
+  -- not depend on trigger naming or application enforcement mode.
+  IF NEW."tenantId" IS NULL THEN
+    SELECT "tenantId" INTO NEW."tenantId"
+    FROM "SignatureRequest" WHERE "id" = NEW."requestId";
+  END IF;
+  IF NEW."tenantId" IS NULL THEN
+    RAISE EXCEPTION 'Cannot chain an event without a tenant-owned request';
+  END IF;
+
   -- Serialize only this request's evidence stream, including the first event.
   PERFORM pg_advisory_xact_lock(hashtext(NEW."tenantId" || ':' || NEW."requestId")::bigint);
   SELECT "sequence", "eventHash" INTO prior
