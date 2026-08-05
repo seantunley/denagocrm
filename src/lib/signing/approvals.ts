@@ -2,7 +2,7 @@ import "server-only";
 import { basePrisma, prisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { logSignEvent } from "./events";
-import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
+import { isRequestClosed } from "./status";
 import { advanceWorkflow } from "@/lib/signflow/runtime";
 import { resolveTenantActor, resolveTenantMemberUser } from "@/lib/tenantActor";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
@@ -128,7 +128,7 @@ async function decideStep(
       FOR UPDATE
     `;
     const request = requests[0];
-    if (!request || request.deletedAt || CLOSED_REQUEST_STATUSES.includes(request.status as never)) return null;
+    if (!request || request.deletedAt || isRequestClosed(request.status)) return null;
 
     const steps = await tx.$queryRaw<LockedStep[]>`
       SELECT "id", "tenantId", "requestId", "status", "label"
