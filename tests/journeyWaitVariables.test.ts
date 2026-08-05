@@ -9,9 +9,11 @@ import {
   WAIT_TIMEOUT_MAX_MINUTES,
   parseJourneyDefinition,
   parseVariablesConfig,
+  parseWaitForConditionConfig,
   parseWaitForTriggerConfig,
   parseConditionGroup,
   evaluateConditions,
+  explainConditions,
   type JourneyDefinition,
 } from "../src/lib/journeyTypes";
 import {
@@ -58,7 +60,7 @@ const shipped = (rel: string) =>
   src(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
 /**
- * `wait_for_trigger` and `variables`, after Home Assistant's script syntax.
+ * `wait_for_trigger`, `wait_for_condition` and `variables`.
  *
  * Everything that can be is BEHAVIOURAL. `Engine` below is processOneRun's step
  * loop with the database swapped for two arrays and a fake clock — the same
@@ -304,6 +306,85 @@ class Engine {
         continue;
       }
 
+      /* wait_for_condition */
+      if (step.type === "wait_for_condition") {
+        const config = parseWaitForConditionConfig(step.config);
+        const now = new Date(this.now);
+
+        // THE POLL: re-read the world, exactly as the runner reloads the
+        // context. Reading the parked snapshot instead would answer what was
+        // true when the run last moved.
+        this.context = withJourneyVars(this.baseContext(), journeyVars(this.context));
+        const pollContext = withRepeatVars(this.context, this.cursor);
+        const met = evaluateConditions(config.condition, pollContext);
+        const clauses = explainConditions(config.condition, pollContext);
+
+        if (!armedWait && met) {
+          this.ran.push(tracePath);
+          this.log({
+            path: tracePath,
+            stepId: step.id,
+            stepType: step.type,
+            status: "completed",
+            note: "Condition was already true",
+            output: { met: true, timedOut: false, waitedMs: 0, clauses },
+          });
+          this.cursor = advanceCursor({
+            definition: this.definition,
+            cursor: this.cursor,
+            context: pollContext,
+            lookup: this.lookup,
+          });
+          continue;
+        }
+
+        if (!armedWait) {
+          const wait = armWaitState(tracePath, config, now);
+          this.cursor = { ...cloneCursor(this.cursor), wait };
+          this.ran.push(tracePath);
+          this.log({
+            path: tracePath,
+            stepId: step.id,
+            stepType: step.type,
+            status: "running",
+            note: "Waiting until the condition is true",
+            output: { until: wait.until, continueOnTimeout: config.continueOnTimeout, clauses },
+          });
+          this.now = new Date(this.now.getTime() + COMMIT_LAG_MS);
+          return { kind: "waiting", nextRunAt: waitPollAt(wait, now) };
+        }
+
+        // `now` in place of an event's timestamp: a polled condition never
+        // learns WHEN it became true, only that it is true now.
+        const decision = decideWait(armedWait, now, met ? now : null);
+        if (decision.kind === "keep_waiting") return { kind: "waiting", nextRunAt: decision.nextRunAt };
+
+        const timedOut = decision.kind === "timed_out";
+        const note = timedOut
+          ? `Timed out after ${config.timeoutMinutes} minute(s) waiting for the condition`
+          : "Condition became true";
+        this.log({
+          path: tracePath,
+          stepId: step.id,
+          stepType: step.type,
+          status: "completed",
+          note,
+          output: { met: !timedOut, timedOut, waitedMs: waitedMs(armedWait, now), clauses },
+        });
+        if (timedOut && !config.continueOnTimeout) {
+          this.ended = "completed";
+          this.endNote = note;
+          return { kind: "completed", note };
+        }
+        this.cursor = advanceCursor({
+          definition: this.definition,
+          cursor: clearWait(this.cursor),
+          context: pollContext,
+          lookup: this.lookup,
+        });
+        continue;
+      }
+
       /* variables */
       if (step.type === "variables") {
         const assignments = parseVariablesConfig(step.config);
@@ -444,7 +525,7 @@ test("an event of a watched type wakes the run and it continues after the wait",
 });
 
 test("an event that predates the wait does NOT wake it — the watermark is the arm instant", () => {
-  // HA's wait_for_trigger listens from the moment the action is reached. A
+  // A wait listens from the moment the step is reached, and no earlier. A
   // journey that moves a lead's stage and then waits for `stage_entered` must
   // not be woken by its own preceding move — the engine emits that event itself
   // (journeyStepExecutor's move_stage), so this is a real self-wake, not a
@@ -536,16 +617,16 @@ test("a timeout is distinguishable in the trace from an event that arrived", () 
   assert.notEqual(timedOut.row("hold").note, woken.row("hold").note);
 });
 
-test("continue_on_timeout defaults to true — the sequence carries on", () => {
+test("continueOnTimeout defaults to true — the sequence carries on", () => {
   const engine = new Engine({
     startStepId: "hold",
     steps: [waitStep("hold", { nextStepId: "chase", timeoutMinutes: 5 }), push("chase", { nextStepId: null })],
   });
   engine.drain();
-  assert.deepEqual(engine.sent, ["chase"], "HA's default is to continue past a timeout");
+  assert.deepEqual(engine.sent, ["chase"], "the default is to continue past a timeout");
 });
 
-test("continue_on_timeout false stops the run, and the trace still says why", () => {
+test("continueOnTimeout false stops the run, and the trace still says why", () => {
   const engine = new Engine({
     startStepId: "hold",
     steps: [
@@ -598,10 +679,10 @@ test("a delayed cron does not resume a wait on an event from outside its window"
   assert.equal(engine.row("hold").output.timedOut, true, "an event outside the window is not a wake");
   assert.equal(engine.row("hold").output.event, null, "and the trace must not name it as one");
   assert.match(engine.row("hold").note, /Timed out after 5 minute/);
-  assert.deepEqual(engine.sent, ["chase"], "continue_on_timeout defaults to true, so the run carries on");
+  assert.deepEqual(engine.sent, ["chase"], "continueOnTimeout defaults to true, so the run carries on");
 });
 
-test("a timeout that genuinely passed still stops a continue_on_timeout: false run", () => {
+test("a timeout that genuinely passed still stops a continueOnTimeout: false run", () => {
   // The branch with consequences. If the out-of-window event were allowed to
   // win, this run would carry on past a point the author explicitly said to
   // give up at — the failure is a message sent to someone who never replied.
@@ -652,12 +733,7 @@ test("the decision refuses a late event even if the wake query stops bounding on
 
 const ARMED_AT = new Date("2026-08-03T09:00:00.000Z");
 /** A five-minute wait armed at 09:00 — so `until` is 09:05:00.000. */
-const armedFiveMinutes = () =>
-  armWaitState(
-    "hold",
-    { triggers: ["quote_signed"], timeoutMinutes: 5, continueOnTimeout: true },
-    ARMED_AT,
-  );
+const armedFiveMinutes = () => armWaitState("hold", { timeoutMinutes: 5 }, ARMED_AT);
 
 test("an event found on a LATE tick beats an already-expired deadline", () => {
   // The poll runs on a cron. A busy queue or a deploy can put the tick after
@@ -724,14 +800,14 @@ test("a still-open wait with a stray out-of-window event keeps waiting", () => {
 
 test("a poll never sleeps past the deadline it is racing", () => {
   const now = new Date("2026-08-03T09:00:00.000Z");
-  const wait = armWaitState("hold", { triggers: ["lead_won"], timeoutMinutes: 10, continueOnTimeout: true }, now);
+  const wait = armWaitState("hold", { timeoutMinutes: 10 }, now);
 
   // Mid-wait: a whole interval, because the deadline is further away than that.
   assert.equal(waitPollAt(wait, now).getTime(), now.getTime() + WAIT_POLL_INTERVAL_MS);
 
   // The LAST poll has to land ON the deadline. Sleeping a full interval from
   // here would overshoot it, and the timeout would be reported up to a minute
-  // late — which for a `continue_on_timeout: false` wait means the run stays
+  // late — which for a `continueOnTimeout: false` wait means the run stays
   // open past the point the author said to give up.
   const nearEnd = new Date(Date.parse(wait.until) - 15_000);
   assert.equal(waitPollAt(wait, nearEnd).toISOString(), wait.until);
@@ -920,9 +996,8 @@ test("wait_for_trigger config is validated at save time", () => {
 });
 
 test("a timeout is REQUIRED and capped — 'wait forever' is not expressible", () => {
-  // HA lets the timeout be omitted because its script is a live object you can
-  // see and cancel. Ours is a database row that would poll on every engine tick
-  // until somebody noticed.
+  // A parked wait is not a live object anybody can see and cancel; it is a
+  // database row that would poll on every engine tick until somebody noticed.
   const build = (config: Record<string, unknown>) =>
     parseJourneyDefinition({
       startStepId: "hold",
@@ -943,7 +1018,7 @@ test("continueOnTimeout is true unless it is explicitly false", () => {
   assert.equal(parseWaitForTriggerConfig(base).continueOnTimeout, true);
   assert.equal(parseWaitForTriggerConfig({ ...base, continueOnTimeout: false }).continueOnTimeout, false);
   // Anything that is not literally false gets the documented default, so a
-  // config written before the flag existed behaves as HA does.
+  // config written before the flag existed keeps the documented default.
   assert.equal(parseWaitForTriggerConfig({ ...base, continueOnTimeout: "no" }).continueOnTimeout, true);
 });
 
@@ -1227,7 +1302,7 @@ test("both new steps are runner-owned, and reaching the executor is a routing bu
   assert.ok(throwAt > switchAt, "the routing-bug throw must exist");
   const guard = executor.slice(switchAt, throwAt);
   assert.ok(guard.length > 0);
-  for (const type of ["choose", "repeat", "wait_for_trigger", "variables"]) {
+  for (const type of ["choose", "repeat", "wait_for_trigger", "wait_for_condition", "variables"]) {
     assert.match(guard, new RegExp(`case "${type}":`), `${type} must fall into the routing-bug throw`);
   }
 });
@@ -1239,8 +1314,11 @@ test("the wait handler reads the clock ONCE, before it writes anything", () => {
   const runner = shipped("src/lib/journeyRuns.ts");
   const waitAt = runner.indexOf('if (step.type === "wait_for_trigger") {');
   assert.ok(waitAt > 0, "the wait handler must exist");
-  const endAt = runner.indexOf('if (step.type === "variables") {', waitAt);
-  assert.ok(endAt > waitAt, "the variables handler must follow it");
+  // Anchored on the handler that FOLLOWS this one. Ending the slice at
+  // `variables` instead would swallow every wait added between the two and
+  // count their clock reads as this handler's.
+  const endAt = runner.indexOf('if (step.type === "wait_for_condition") {', waitAt);
+  assert.ok(endAt > waitAt, "the wait_for_condition handler must follow it");
   const handler = runner.slice(waitAt, endAt);
   assert.ok(handler.length > 0);
 
@@ -1376,10 +1454,14 @@ test("the builder cannot silently destroy either new step type", () => {
   // step's `set` map are structured config this form has no widget for, and
   // dropping either on save is silent damage with no error and no undo.
   const builder = shipped("src/components/JourneyBuilder.tsx");
-  assert.match(
-    builder,
-    /READ_ONLY_STEP_TYPES = new Set\(\["choose", "repeat", "wait_for_trigger", "variables"\]\)/,
-  );
+  const setAt = builder.indexOf("READ_ONLY_STEP_TYPES = new Set(");
+  assert.notEqual(setAt, -1, "the read-only set is gone — was it renamed?");
+  const setEnd = builder.indexOf("]);", setAt);
+  assert.ok(setEnd > setAt, "the slice ran backwards");
+  const readOnly = builder.slice(setAt, setEnd);
+  for (const type of ["choose", "repeat", "wait_for_trigger", "variables", "wait_for_condition"]) {
+    assert.match(readOnly, new RegExp(`"${type}"`), `${type} must be carried, not rebuilt`);
+  }
   // The label map was hoisted out of this component into journeyTypes.ts, so
   // the builder and the activity trace cannot call the same step type two
   // different things. The requirement is unchanged — both new types must have a
@@ -1390,4 +1472,423 @@ test("the builder cannot silently destroy either new step type", () => {
   const labels = shipped("src/lib/journeyTypes.ts");
   assert.match(labels, /wait_for_trigger: "Wait for an event"/, "…and the type must be selectable-by-name");
   assert.match(labels, /variables: "Set variables"/);
+  assert.match(labels, /wait_for_condition: "Wait until true"/);
+});
+
+/* ══ 10. wait_for_condition: park until something BECOMES true ═════════════ */
+
+/**
+ * A world the test can change while a run is parked in it.
+ *
+ * `Engine.baseContext` is re-read on every context refresh AND on every
+ * condition poll, so mutating this between ticks is exactly what a rep moving a
+ * card while a journey waits looks like.
+ */
+function movingWorld(initial: Record<string, unknown>) {
+  const world = { ...initial };
+  return {
+    world,
+    context: () => ({
+      event: { type: "lead_created" },
+      lead: { id: "lead_1", source: "web", ...world },
+      contact: { id: "contact_1", firstName: "Ada", source: "referral", tags: ["a", "b"] },
+    }),
+  };
+}
+
+/** `nextStepId` is a STEP key, everything else is step config. */
+const untilStep = (id: string, extra: Record<string, unknown> = {}) => {
+  const { nextStepId = null, ...config } = extra;
+  return {
+    id,
+    type: "wait_for_condition",
+    nextStepId,
+    config: {
+      condition: { logic: "and", conditions: [{ field: "lead.status", operator: "equals", value: "won" }] },
+      timeoutMinutes: 60,
+      ...config,
+    },
+  };
+};
+
+test("a wait_for_condition parks on its own position instead of advancing past it", () => {
+  // The same trap `wait` versus a held send taught: a duration `wait` SUCCEEDED
+  // by pausing, so the run resumes after it. This has not finished waiting, and
+  // advancing would run the next step immediately — for "wait until they are
+  // Won, then send the handover pack", that is sending it to someone still
+  // deciding.
+  const { context } = movingWorld({ status: "qualified" });
+  const engine = new Engine(
+    {
+      startStepId: "hold",
+      steps: [untilStep("hold", { nextStepId: "pack" }), push("pack", { nextStepId: null })],
+    },
+    { context },
+  );
+
+  const first = engine.tick();
+  assert.equal(first.kind, "waiting");
+  assert.equal(engine.cursor.stepId, "hold", "the cursor must not have moved");
+  assert.equal(engine.cursor.wait?.path, "hold", "the wait must be armed on this position");
+  assert.deepEqual(engine.sent, [], "nothing after the wait may run yet");
+});
+
+test("the poll RE-READS the world, so a change while parked is what wakes the run", () => {
+  // The whole feature. The run's stored context is a snapshot written when the
+  // run last moved and then left alone for as long as it is parked, so asking
+  // the snapshot "is this lead Won yet" answers what was true days ago — the
+  // wait would either fire the instant it armed or never fire at all, and
+  // which of those you got would depend only on what the snapshot happened to
+  // hold rather than on the lead.
+  const { world, context } = movingWorld({ status: "qualified" });
+  const engine = new Engine(
+    {
+      startStepId: "hold",
+      steps: [untilStep("hold", { nextStepId: "pack" }), push("pack", { nextStepId: null })],
+    },
+    { context },
+  );
+
+  engine.tick();
+  assert.deepEqual(engine.sent, []);
+
+  // Two polls with nothing changed: still parked, and still no step log rewrite.
+  engine.now = new Date(engine.now.getTime() + WAIT_POLL_INTERVAL_MS);
+  assert.equal(engine.tick().kind, "waiting");
+  engine.now = new Date(engine.now.getTime() + WAIT_POLL_INTERVAL_MS);
+  assert.equal(engine.tick().kind, "waiting");
+
+  // The rep moves the card.
+  world.status = "won";
+  engine.now = new Date(engine.now.getTime() + WAIT_POLL_INTERVAL_MS);
+  const outcome = engine.drain();
+
+  assert.equal(outcome.kind, "completed");
+  assert.deepEqual(engine.sent, ["pack"], "the step after the wait runs, exactly once");
+  const row = engine.row("hold");
+  assert.equal(row.output.met, true);
+  assert.equal(row.output.timedOut, false);
+  assert.match(row.note, /Condition became true/);
+  assert.ok((row.output.waitedMs as number) >= 3 * WAIT_POLL_INTERVAL_MS, "…after a real wait");
+});
+
+test("a condition already true on arrival continues immediately, without parking", () => {
+  // Arming here would park the run for a poll interval to re-learn something
+  // already known. For "wait until Won" on a lead that is already Won that is a
+  // minute of nothing on every enrolment, and a trace row that says "waiting"
+  // for a step that never had to.
+  const { context } = movingWorld({ status: "won" });
+  const engine = new Engine(
+    {
+      startStepId: "hold",
+      steps: [untilStep("hold", { nextStepId: "pack" }), push("pack", { nextStepId: null })],
+    },
+    { context },
+  );
+
+  const outcome = engine.tick();
+  assert.equal(outcome.kind, "completed", "one tick, no park");
+  assert.deepEqual(engine.sent, ["pack"]);
+  const row = engine.row("hold");
+  assert.equal(row.output.met, true);
+  assert.equal(row.output.waitedMs, 0);
+  assert.match(row.note, /already true/);
+});
+
+test("a timeout names the clauses that were still false", () => {
+  // "It never became true" is the answer nobody can act on. Which field, and
+  // what it actually held, is the one they can — the same reason a `condition`
+  // step records per-clause results rather than a bare verdict.
+  const { context } = movingWorld({ status: "qualified" });
+  const engine = new Engine(
+    {
+      startStepId: "hold",
+      steps: [untilStep("hold", { nextStepId: "pack", timeoutMinutes: 5 }), push("pack", { nextStepId: null })],
+    },
+    { context },
+  );
+  const outcome = engine.drain();
+
+  assert.equal(outcome.kind, "completed");
+  const row = engine.row("hold");
+  assert.equal(row.output.timedOut, true);
+  assert.equal(row.output.met, false, "a FIELD, not prose — the question is binary");
+  assert.deepEqual(row.output.clauses, [
+    { field: "lead.status", operator: "equals", expected: "won", actual: "qualified", passed: false, negated: false },
+  ]);
+  assert.deepEqual(engine.sent, ["pack"], "continue-on-timeout defaults to true");
+});
+
+test("continueOnTimeout false stops the run, and the trace still says why", () => {
+  const { context } = movingWorld({ status: "qualified" });
+  const engine = new Engine(
+    {
+      startStepId: "hold",
+      steps: [
+        untilStep("hold", { nextStepId: "pack", timeoutMinutes: 5, continueOnTimeout: false }),
+        push("pack", { nextStepId: null }),
+      ],
+    },
+    { context },
+  );
+  const outcome = engine.drain();
+
+  assert.equal(outcome.kind, "completed");
+  assert.deepEqual(engine.sent, [], "nothing after the wait may run");
+  assert.match(engine.endNote, /Timed out after 5 minute/);
+  // Ended inline rather than by raising a stop, which would rewrite this same
+  // path's row and erase the one field the step had to record.
+  assert.equal(engine.row("hold").output.met, false);
+  assert.equal(engine.row("hold").output.timedOut, true);
+});
+
+test("a condition that only becomes true AFTER the deadline is a timeout, not a wake", () => {
+  // A polled condition never learns when it became true, only that it is true
+  // now — so a cron that limps in ninety minutes late and finds it true cannot
+  // tell "true since minute two" from "true since a minute ago". Letting the
+  // late observation win would extend every wait by however late the cron
+  // happened to be, which is the outcome depending on scheduler jitter rather
+  // than on what the author asked for.
+  const { world, context } = movingWorld({ status: "qualified" });
+  const engine = new Engine(
+    {
+      startStepId: "hold",
+      steps: [
+        untilStep("hold", { nextStepId: "pack", timeoutMinutes: 5, continueOnTimeout: false }),
+        push("pack", { nextStepId: null }),
+      ],
+    },
+    { context },
+  );
+  engine.tick();
+  const until = Date.parse(engine.cursor.wait!.until);
+
+  // It becomes true well after the window closed, and the cron is later still.
+  world.status = "won";
+  engine.now = new Date(until + 90 * 60_000);
+
+  const outcome = engine.tick();
+  assert.equal(outcome.kind, "completed");
+  assert.equal(engine.row("hold").output.timedOut, true, "the author's window had closed");
+  assert.equal(engine.row("hold").output.met, false, "…and the trace must not claim otherwise");
+  assert.deepEqual(engine.sent, []);
+});
+
+test("a condition observed true INSIDE the window wins, even on a late tick", () => {
+  // The other half. Being late must not throw away an observation genuinely
+  // made in time: the poll at minute one saw it, and a cron that then went to
+  // sleep for an hour does not un-see it.
+  const { world, context } = movingWorld({ status: "qualified" });
+  const engine = new Engine(
+    {
+      startStepId: "hold",
+      steps: [untilStep("hold", { nextStepId: "pack", timeoutMinutes: 5 }), push("pack", { nextStepId: null })],
+    },
+    { context },
+  );
+  engine.tick();
+  world.status = "won";
+  engine.now = new Date(engine.now.getTime() + WAIT_POLL_INTERVAL_MS);
+
+  engine.tick();
+  assert.equal(engine.row("hold").output.met, true);
+  assert.equal(engine.row("hold").output.timedOut, false);
+});
+
+test("polling a condition does not spend the LIFETIME step budget", () => {
+  // Same rule as the event wait: charging a poll would give the step a second,
+  // invisible ceiling — "500 engine ticks" rather than its own timeout — and a
+  // long wait would abort with a step-budget message naming nothing the author
+  // wrote.
+  const { context } = movingWorld({ status: "qualified" });
+  const engine = new Engine(
+    { startStepId: "hold", steps: [untilStep("hold", { timeoutMinutes: 600 })] },
+    { context, maxStepsPerRun: 3 },
+  );
+  engine.tick();
+  assert.equal(engine.stepsExecuted, 1, "arming costs one step");
+  for (let i = 0; i < 20; i++) {
+    engine.now = new Date(engine.now.getTime() + WAIT_POLL_INTERVAL_MS);
+    engine.tick();
+  }
+  assert.equal(engine.stepsExecuted, 1, "…and twenty polls cost nothing");
+});
+
+test("the trace reports the whole condition wait, not the last poll interval", () => {
+  const { context } = movingWorld({ status: "qualified" });
+  const engine = new Engine(
+    { startStepId: "hold", steps: [untilStep("hold", { timeoutMinutes: 10 })] },
+    { context },
+  );
+  const armedAt = new Date(engine.now);
+  engine.drain();
+  const row = engine.row("hold");
+  assert.equal(row.startedAt.getTime(), armedAt.getTime(), "startedAt must be the ARM, not the last poll");
+  assert.ok((row.output.waitedMs as number) >= 10 * 60_000);
+});
+
+test("a condition wait inside a repeat arms once PER ITERATION", () => {
+  // Keyed on the trace path, like the event wait and like the step log. Keyed
+  // on the step id instead, iteration 1 would inherit iteration 0's watermark
+  // and its deadline — so the second pass of a "check again tomorrow" loop
+  // would resolve on state the first pass already consumed.
+  const { world, context } = movingWorld({ status: "qualified" });
+  const engine = new Engine(
+    {
+      startStepId: "loop",
+      steps: [
+        {
+          id: "loop",
+          type: "repeat",
+          nextStepId: "done",
+          config: {
+            mode: "count",
+            count: 2,
+            sequence: [untilStep("hold", { timeoutMinutes: 60 }), push("nudge")],
+          },
+        },
+        push("done", { nextStepId: null }),
+      ],
+    },
+    { context },
+  );
+
+  engine.tick();
+  assert.equal(engine.cursor.wait?.path, "loop/repeat/0/sequence/0", "armed on the frame path");
+
+  world.status = "won";
+  engine.now = new Date(engine.now.getTime() + WAIT_POLL_INTERVAL_MS);
+  // Everything in memory thrown away — a different cron process, days later.
+  engine.reload();
+  const second = engine.tick();
+
+  // Iteration 0 resolves and sends; iteration 1's wait finds the condition
+  // ALREADY true and continues immediately, which is the correct reading of a
+  // fresh evaluation and not an inherited watermark.
+  assert.equal(second.kind, "completed");
+  assert.deepEqual(engine.sent, ["nudge", "nudge", "done"]);
+  assert.equal(engine.row("loop/repeat/0/sequence/0").output.met, true);
+  assert.equal(engine.row("loop/repeat/1/sequence/0").output.waitedMs, 0, "a fresh wait, evaluated fresh");
+});
+
+test("the two waits share ONE armed slot, and each recognises its own", () => {
+  // A run is at one position, so it can only be waiting for one thing. What
+  // matters is that armedWaitFor knows every step type entitled to claim the
+  // slot: a wait type it did not recognise would find its own state "stale",
+  // drop it and re-arm on every poll — a wait with a fresh watermark every
+  // minute, which never expires and never fires.
+  const armed = armWaitState("hold", { timeoutMinutes: 5 }, new Date());
+  const cursor: JourneyCursor = { stepId: "hold", frames: [], wait: armed };
+  assert.deepEqual(armedWaitFor(cursor, { type: "wait_for_condition" }, "hold"), armed);
+  assert.deepEqual(armedWaitFor(cursor, { type: "wait_for_trigger" }, "hold"), armed);
+  assert.equal(armedWaitFor(cursor, { type: "send_email" }, "hold"), null);
+  assert.equal(armedWaitFor(cursor, { type: "wait_for_condition" }, "elsewhere"), null);
+});
+
+/* ══ 11. wait_for_condition config, refused at save time ═══════════════════ */
+
+test("a wait_for_condition with no clauses is refused", () => {
+  // An empty group evaluates TRUE — "no filter" — so an empty wait is satisfied
+  // the instant it is reached: a step that reads as "wait until…", traces as
+  // "condition was already true", and waits for nothing. It is the trap a
+  // `repeat while` already refuses, reached from the other side.
+  const build = (config: Record<string, unknown>) =>
+    parseJourneyDefinition({
+      startStepId: "hold",
+      steps: [{ id: "hold", type: "wait_for_condition", nextStepId: null, config }],
+    });
+
+  const ok = { condition: { logic: "and", conditions: [{ field: "lead.status", operator: "equals", value: "won" }] }, timeoutMinutes: 60 };
+  assert.doesNotThrow(() => build(ok));
+  assert.throws(() => build({ timeoutMinutes: 60 }), /at least one condition/);
+  assert.throws(() => build({ condition: { logic: "and", conditions: [] }, timeoutMinutes: 60 }), /at least one condition/);
+  // The closed field allow-list still applies — this is the same parse.
+  assert.throws(
+    () => build({ condition: { logic: "and", conditions: [{ field: "user.passwordHash", operator: "is_not_empty" }] }, timeoutMinutes: 60 }),
+    /Unsupported condition field/,
+  );
+});
+
+test("a condition wait's timeout is REQUIRED and capped, exactly as the event wait's is", () => {
+  // The ceiling has to bind BOTH waits or it is a suggestion. A parked run is a
+  // database row that would poll on every engine tick until somebody noticed;
+  // "forever" is not expressible on purpose, and a second waiting step type is
+  // the obvious place for that to quietly stop being true.
+  const build = (config: Record<string, unknown>) =>
+    parseJourneyDefinition({
+      startStepId: "hold",
+      steps: [{ id: "hold", type: "wait_for_condition", nextStepId: null, config }],
+    });
+  const condition = { logic: "and", conditions: [{ field: "lead.status", operator: "equals", value: "won" }] };
+
+  assert.throws(() => build({ condition }), /timeoutMinutes between 1 and/);
+  assert.throws(() => build({ condition, timeoutMinutes: 0 }), /timeoutMinutes between 1 and/);
+  assert.throws(() => build({ condition, timeoutMinutes: 1.5 }), /timeoutMinutes between 1 and/);
+  assert.throws(
+    () => build({ condition, timeoutMinutes: WAIT_TIMEOUT_MAX_MINUTES + 1 }),
+    /timeoutMinutes between 1 and/,
+  );
+  assert.equal(
+    parseWaitForConditionConfig({ condition, timeoutMinutes: WAIT_TIMEOUT_MAX_MINUTES }).timeoutMinutes,
+    WAIT_TIMEOUT_MAX_MINUTES,
+    "the documented maximum must be accepted, not rejected off by one",
+  );
+  // Default TRUE, and only a literal false stops the run.
+  assert.equal(parseWaitForConditionConfig({ condition, timeoutMinutes: 5 }).continueOnTimeout, true);
+  assert.equal(
+    parseWaitForConditionConfig({ condition, timeoutMinutes: 5, continueOnTimeout: false }).continueOnTimeout,
+    false,
+  );
+  assert.equal(
+    parseWaitForConditionConfig({ condition, timeoutMinutes: 5, continueOnTimeout: "no" }).continueOnTimeout,
+    true,
+  );
+});
+
+test("the condition wait POLLS the database, and does not advance while armed", () => {
+  // The behavioural tests above drive a model of the loop; this pins the real
+  // runner, because the model is only faithful if the handler genuinely
+  // re-reads the world before it evaluates, and genuinely parks in place.
+  const runner = shipped("src/lib/journeyRuns.ts");
+  const at = runner.indexOf('if (step.type === "wait_for_condition") {');
+  assert.notEqual(at, -1, "the condition-wait handler is gone — was it renamed?");
+  const end = runner.indexOf('if (step.type === "variables") {', at);
+  assert.notEqual(end, -1, "the variables handler must follow it");
+  const handler = runner.slice(at, end);
+  assert.ok(handler.length > 0, "the slice ran backwards");
+
+  // THE POLL. Without this the step reads the parked snapshot and answers what
+  // was true when the run last moved.
+  const loadAt = handler.indexOf("await loadJourneyContext(");
+  const evalAt = handler.indexOf("evaluateConditions(config.condition");
+  assert.notEqual(loadAt, -1, "the handler must re-read the world on every poll");
+  assert.ok(evalAt > loadAt, "…before it evaluates, not after");
+  assert.match(
+    handler,
+    /if \(polled\) context = withJourneyVars\(polled, journeyVars\(context\)\);/,
+    "the refreshed context must be kept, with the variables bag carried across it",
+  );
+
+  // The park must NOT advance the cursor: a branch override is honoured at top
+  // level only, so inside a repeat an advance cannot be undone and the step
+  // after the wait would run while the wait was still open.
+  assert.ok(
+    handler.indexOf("advanceCursor(") < handler.indexOf("await parkWaiting(") ||
+      handler.lastIndexOf("advanceCursor(") > handler.lastIndexOf("await parkWaiting("),
+    "the advance must come after every park",
+  );
+  const lastPark = handler.lastIndexOf("await parkWaiting(");
+  assert.notEqual(lastPark, -1, "the handler must park");
+  assert.ok(
+    handler.indexOf("advanceCursor({ definition, cursor: clearWait(cursor)", lastPark) > lastPark,
+    "resolving the wait must clear it, after the last park",
+  );
+
+  // One rule about what the deadline means, shared with the event wait.
+  assert.match(
+    handler,
+    /decideWait\(armedWait, now, met \? now : null\)/,
+    "a polled condition has no event timestamp — only an observation made in the window counts",
+  );
+  assert.match(handler, /output: \{ met: !timedOut, timedOut/, "the trace field must follow the decision");
 });

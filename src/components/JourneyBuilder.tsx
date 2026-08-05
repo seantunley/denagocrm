@@ -11,10 +11,10 @@ export type JourneyOption = { id: string; name: string };
 type BuilderStep = {
   id: string;
   type: string;
-  /** HA's per-action `continue_on_error`, round-tripped so saving cannot drop it. */
+  /** Keep going if this step fails. Round-tripped so saving cannot drop it. */
   continueOnError?: boolean;
-  /** HA's per-action `enabled`. Round-tripped for the same reason: a step
-   *  silently re-armed by a save is a message sent that nobody asked for. */
+  /** Whether this step runs. Round-tripped for the same reason: a step silently
+   *  re-armed by a save is a message sent that nobody asked for. */
   enabled?: boolean;
   config: Record<string, unknown>;
 };
@@ -36,7 +36,16 @@ type BuilderStep = {
  * variables step with an empty `set` would leave every later `{{var_…}}`
  * rendering blank with nothing on screen to explain it.
  */
-const READ_ONLY_STEP_TYPES = new Set(["choose", "repeat", "wait_for_trigger", "variables"]);
+const READ_ONLY_STEP_TYPES = new Set([
+  "choose",
+  "repeat",
+  "wait_for_trigger",
+  "variables",
+  // A wait_for_condition holds a whole condition GROUP, which is more than the
+  // single-clause editor below can express — the same reason a rich `condition`
+  // step is carried rather than edited here.
+  "wait_for_condition",
+]);
 
 /**
  * A `condition` whose group this form CANNOT represent.
@@ -96,6 +105,10 @@ function readOnlySummary(step: BuilderStep): string {
   if (step.type === "wait_for_trigger") {
     const triggers = Array.isArray(step.config.triggers) ? step.config.triggers : [];
     return `Wait for ${triggers.join(" or ") || "?"} (timeout ${String(step.config.timeoutMinutes ?? "?")} min)`;
+  }
+  if (step.type === "wait_for_condition") {
+    const clauses = countClauses(step.config.condition);
+    return `Wait until ${clauses} condition${clauses === 1 ? "" : "s"} hold (timeout ${String(step.config.timeoutMinutes ?? "?")} min)`;
   }
   const names = isRecord(step.config.set) ? Object.keys(step.config.set) : [];
   return `Sets ${names.join(", ") || "nothing"}`;
@@ -522,7 +535,7 @@ export default function JourneyBuilder({
             )}
             {step.type === "stop" && <input className="input" placeholder="Reason" value={String(step.config.reason ?? "")} onChange={(e) => setConfig(index, "reason", e.target.value)} />}
 
-            {/* HA's per-action `enabled`, offered for EVERY step type including
+            {/* Offered for EVERY step type including
                 the ones with no visual editor — muting a branch you cannot edit
                 here is exactly when you need this, and the alternative is
                 deleting it and losing its config, its id and its trace history.

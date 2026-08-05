@@ -9,8 +9,11 @@ import {
   type JourneyContext,
 } from "./journeyContext";
 import {
+  evaluateConditions,
+  explainConditions,
   parseJourneyDefinition,
   parseVariablesConfig,
+  parseWaitForConditionConfig,
   parseWaitForTriggerConfig,
 } from "./journeyTypes";
 import { AbortJourney, ConditionFailed, StopJourney, isControlFlow } from "./journeyControlFlow";
@@ -423,8 +426,8 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
 
       /* ── a disabled step is SKIPPED, and the trace SAYS it was skipped ───── */
       //
-      // HA's per-action `enabled: false`. Checked here — before the container
-      // branch, before the wait handler, before the executor — because "muted"
+      // Checked here — before the container branch, before the wait handler,
+      // before the executor — because "muted"
       // has to mean the same thing for every step type: a disabled `choose` must
       // not be entered, a disabled `wait_for_trigger` must not arm, a disabled
       // `stop` must not end the run.
@@ -563,7 +566,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         });
 
         if (timedOut && !config.continueOnTimeout) {
-          // HA's `continue_on_timeout: false` stops the script. Ended here
+          // `continueOnTimeout: false` ends the run. Ended here
           // rather than by raising StopJourney — the spelling a `stop` step
           // uses — because the StopJourney handler rewrites this same path's
           // log row with `{ stopped: true, reason: "stop" }` and would erase
@@ -575,6 +578,117 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
         }
 
         cursor = advanceCursor({ definition, cursor: clearWait(cursor), context: stepContext, lookup });
+        await persistPosition(run.id, cursor, stepsExecuted, context);
+        continue;
+      }
+
+      /* ── wait_for_condition: park until something BECOMES true ──────────── */
+      if (step.type === "wait_for_condition") {
+        const config = parseWaitForConditionConfig(step.config);
+        const now = new Date();
+
+        // RE-READ THE WORLD. This is the poll, and skipping it would make the
+        // step a no-op dressed as a wait.
+        //
+        // `context` is a SNAPSHOT: it is written back after each leaf step and
+        // then sits in the row untouched for as long as the run is parked. So
+        // asking "is this lead Won yet" of the stored context answers what was
+        // true when the run last moved — days ago — and the wait would either
+        // fire on the instant it armed or never fire at all, depending only on
+        // what the snapshot happened to hold. Neither answer is about the lead.
+        //
+        // The refreshed context is KEPT rather than used and thrown away, so
+        // the step after the wait sees the world the wait actually observed —
+        // and the variables bag is carried across it for the same reason it is
+        // carried across every other refresh.
+        const polled = await loadJourneyContext(
+          run.entityType as JourneyEntityType,
+          run.entityId,
+          (context.event ?? {}) as Record<string, unknown>,
+        );
+        if (polled) context = withJourneyVars(polled, journeyVars(context));
+        const pollContext = withRepeatVars(context, cursor);
+        const met = evaluateConditions(config.condition, pollContext);
+        // Recorded on EVERY outcome, including the timeout. "It never became
+        // true" is the answer nobody can act on; "lead.status was still
+        // qualified, not won" is the one they can.
+        const clauses = explainConditions(config.condition, pollContext);
+
+        // Already true on arrival: continue immediately rather than park.
+        // Arming here would hold the run for a poll interval to re-learn
+        // something already known — for "wait until Won" on a lead that is
+        // already Won, a minute of nothing on every such enrolment.
+        if (!armedWait && met) {
+          await updateStepLog({
+            runId: run.id,
+            path,
+            stepId: step.id,
+            stepType: step.type,
+            status: "completed",
+            note: "Condition was already true",
+            output: { met: true, timedOut: false, waitedMs: 0, clauses },
+          });
+          cursor = advanceCursor({ definition, cursor, context: pollContext, lookup });
+          await persistPosition(run.id, cursor, stepsExecuted, context);
+          continue;
+        }
+
+        if (!armedWait) {
+          const wait = armWaitState(path, config, now);
+          cursor = { ...cloneCursor(cursor), wait };
+          await updateStepLog({
+            runId: run.id,
+            path,
+            stepId: step.id,
+            stepType: step.type,
+            status: "running",
+            note: "Waiting until the condition is true",
+            output: { until: wait.until, continueOnTimeout: config.continueOnTimeout, clauses },
+          });
+          await parkWaiting(waitPollAt(wait, now));
+          return true;
+        }
+
+        // `now` in place of an event's timestamp — see journeyWait.ts. A polled
+        // condition never learns WHEN it became true, only that it is true now,
+        // so only an observation made inside the window can count. Passing the
+        // same decision function is the point: there is one rule about what the
+        // deadline means, and a second wait must not quietly acquire its own.
+        const decision = decideWait(armedWait, now, met ? now : null);
+        if (decision.kind === "keep_waiting") {
+          // No step-log write on a poll, for the reason wait_for_trigger has
+          // none: a "running" upsert resets startedAt, so rewriting the row
+          // every minute would report a three-day wait as sixty seconds.
+          await parkWaiting(decision.nextRunAt);
+          return true;
+        }
+
+        const timedOut = decision.kind === "timed_out";
+        const note = timedOut
+          ? `Timed out after ${config.timeoutMinutes} minute(s) waiting for the condition`
+          : "Condition became true";
+        await updateStepLog({
+          runId: run.id,
+          path,
+          stepId: step.id,
+          stepType: step.type,
+          status: "completed",
+          note,
+          // `met` is the field, and it follows the DECISION rather than the
+          // observation: a row reading "timed out" while also saying the
+          // condition held would be worse than either outcome on its own.
+          output: { met: !timedOut, timedOut, waitedMs: waitedMs(armedWait, now), clauses },
+        });
+
+        if (timedOut && !config.continueOnTimeout) {
+          // Ended here rather than by raising StopJourney, for the reason the
+          // trigger wait ends inline: the StopJourney handler rewrites this
+          // same path's row with `{ stopped: true, reason: "stop" }` and would
+          // erase the `met` field this step exists to record.
+          return finish(note);
+        }
+
+        cursor = advanceCursor({ definition, cursor: clearWait(cursor), context: pollContext, lookup });
         await persistPosition(run.id, cursor, stepsExecuted, context);
         continue;
       }
@@ -640,7 +754,7 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
           inSequence,
         });
       } catch (error) {
-        // continueOnError, after HA's per-action flag. Control flow is NEVER
+        // The step's own continueOnError flag. Control flow is NEVER
         // swallowed: a stop, a condition gate or an abort is a decision, and
         // treating it as a recoverable fault would run steps the author put
         // behind it.

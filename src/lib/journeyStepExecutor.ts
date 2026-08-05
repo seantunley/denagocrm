@@ -198,6 +198,7 @@ export async function executeJourneyStep(args: {
     case "choose":
     case "repeat":
     case "wait_for_trigger":
+    case "wait_for_condition":
     case "variables":
       throw new AbortJourney(`${step.type} ${step.id} reached the action executor`);
 

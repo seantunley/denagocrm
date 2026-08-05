@@ -52,13 +52,20 @@ export const JOURNEY_STEP_TYPES = [
   // See journeyCursor.ts for how a run parked inside one resumes.
   "choose",
   "repeat",
-  // Two more from Home Assistant's script syntax, and like the containers above
-  // they perform no action: `wait_for_trigger` parks the run until a named event
-  // arrives for this entity, and `variables` writes into the run context. Both
+  // Two more that, like the containers above, perform no action of their own:
+  // `wait_for_trigger` parks the run until a named event arrives for this
+  // entity, and `variables` writes into the run context. Both
   // mutate RUN STATE rather than the outside world, so both are executed by the
   // runner — reaching journeyStepExecutor is a routing bug and says so.
   "wait_for_trigger",
   "variables",
+  // Park until something BECOMES true. The other two waits cannot express it —
+  // `wait` is a duration and answers "how long", and
+  // `wait_for_trigger` needs a JourneyEvent somebody writes, so "wait until this
+  // lead reaches Won" was only expressible as a fixed guess at how long that
+  // takes. Like the other wait it parks the run on its own position, so the
+  // runner owns it too.
+  "wait_for_condition",
 ] as const;
 
 export type JourneyStepType = (typeof JOURNEY_STEP_TYPES)[number];
@@ -86,6 +93,7 @@ export const JOURNEY_STEP_LABELS: Record<JourneyStepType, string> = {
   repeat: "Repeat (loop)",
   wait_for_trigger: "Wait for an event",
   variables: "Set variables",
+  wait_for_condition: "Wait until true",
 };
 
 /** Container steps own nested sequences; the runner, not the executor, runs them. */
@@ -103,7 +111,19 @@ export const JOURNEY_RUNNER_STEP_TYPES = [
   ...JOURNEY_CONTAINER_STEP_TYPES,
   "wait_for_trigger",
   "variables",
+  "wait_for_condition",
 ] as const;
+
+/**
+ * The steps that PARK the run on their own position and poll from there.
+ *
+ * Named as a set because the cursor carries exactly ONE armed wait — a run is
+ * at one position, so it can only be waiting for one thing — and `armedWaitFor`
+ * has to recognise every step type entitled to claim it. Spelled out here
+ * rather than as a comparison in journeyWait.ts so adding a third wait cannot
+ * leave a stale wait attached to a step that then re-arms it every tick.
+ */
+export const JOURNEY_WAIT_STEP_TYPES = ["wait_for_trigger", "wait_for_condition"] as const;
 
 export const REPEAT_MODES = ["count", "while", "until", "for_each"] as const;
 export type RepeatMode = (typeof REPEAT_MODES)[number];
@@ -126,8 +146,8 @@ export const CONDITION_FIELDS = [
   "contact.hasVehicle",
   "contact.tags",
   "event.type",
-  // The loop variables a `repeat` publishes, after Home Assistant's `repeat`
-  // template variable. Without these a `while`/`until` condition can only look
+  // The loop variables a `repeat` publishes. Without these a `while`/`until`
+  // condition can only look
   // at the lead or contact, and `for_each` would have no way to test the item it
   // is currently on — which is most of the point of iterating a list.
   "repeat.index",
@@ -187,9 +207,8 @@ export type JourneyCondition = {
 };
 
 /**
- * `not` is HA's, and it means NONE OF THESE — the same thing HA's `condition:
- * not` means: "passes if all embedded conditions are not valid". So it is NOR,
- * not "negate the first one".
+ * `not` means NONE OF THESE: the group passes when every condition inside it is
+ * invalid. So it is NOR, not "negate the first one" and not `!and(...)`.
  *
  * Spelled as a third `logic` rather than a `negate: true` flag on a group. A
  * flag would have made `{ logic: "or", negate: true }` and
@@ -214,7 +233,7 @@ export type JourneyStep = {
    */
   nextStepId?: string | null;
   /**
-   * After Home Assistant's per-action `continue_on_error`.
+   * Keep the run going when THIS step throws.
    *
    * One failed SMS threw, failed the whole run, and burned one of three run
    * attempts — so a provider outage on a "nice to have" notification could
@@ -225,8 +244,8 @@ export type JourneyStep = {
    */
   continueOnError?: boolean;
   /**
-   * After Home Assistant's per-action `enabled`. Absent or true means it runs;
-   * only a literal `false` mutes it.
+   * Whether this step runs at all. Absent or true means it runs; only a literal
+   * `false` mutes it.
    *
    * The point is to mute a step WITHOUT deleting it — a send that is wrong this
    * month but right next month, a chase you want off while a promotion runs. The
@@ -267,8 +286,9 @@ export type JourneyDefinition = {
  *                           cursor frame stack that has to survive in a JSON
  *                           column between ticks. Five is already deeper than a
  *                           person can hold in their head.
- *  chooseOptions (10)     — matches the ten-branch case in HA's own docs; more
- *                           than that is a lookup table, not a branch.
+ *  chooseOptions (10)     — more than ten is a lookup table, not a branch, and
+ *                           nobody reviewing a journey can hold it in their
+ *                           head. Past that, use nested chooses or a repeat.
  *  conditionsPerGroup(30) — unchanged, and now bounded overall by depth × steps.
  *  repeatIterations (100) — the runtime ceiling for EVERY repeat mode. A `while`
  *                           whose condition never goes false is the classic
@@ -283,13 +303,13 @@ export type JourneyDefinition = {
  *                           Each one widens an indexed query the waiter runs on
  *                           every poll; five is more alternatives than a person
  *                           can reason about in a single wait anyway.
- *  waitDays (30)          — the ceiling on a wait_for_trigger timeout, and the
- *                           reason a timeout is REQUIRED here when Home
- *                           Assistant makes it optional. HA can wait forever
- *                           because its script is a live object you can see and
- *                           cancel; ours is a database row that would poll on
- *                           every cron tick until someone noticed. "Forever" is
- *                           not expressible on purpose.
+ *  waitDays (30)          — the ceiling on a wait_for_trigger OR
+ *                           wait_for_condition timeout, and the reason a
+ *                           timeout is REQUIRED on both. A parked wait is not a
+ *                           live object anybody can see and cancel; it is a
+ *                           database row that would poll on every cron tick,
+ *                           forever, until a person happened to notice it.
+ *                           "Wait indefinitely" is not expressible on purpose.
  *  variables (10)         — names one `variables` step may set.
  *  variableChars (500)    — per rendered value.
  *  variableBytes (4000)   — the WHOLE bag, across every variables step in the
@@ -453,6 +473,7 @@ function parseStep(raw: unknown, budget: ParseBudget, depth: number, nested: boo
   // of the rules. A wait whose triggers only the save path checks is a wait that
   // parks forever the first time the two drift apart.
   if (type === "wait_for_trigger") parseWaitForTriggerConfig(config);
+  if (type === "wait_for_condition") parseWaitForConditionConfig(config);
   if (type === "variables") parseVariablesConfig(config);
   return step;
 }
@@ -552,15 +573,34 @@ function parseRepeatConfig(config: Record<string, unknown>, budget: ParseBudget,
 /* ── wait_for_trigger ────────────────────────────────────────────────────── */
 
 export type WaitForTriggerConfig = {
-  /** Event types that may wake the run. Any ONE of them is enough, as in HA. */
+  /** Event types that may wake the run. Any ONE of them is enough. */
   triggers: JourneyEventTrigger[];
-  /** Minutes. REQUIRED — see JOURNEY_LIMITS.waitDays for why HA differs. */
+  /** Minutes. REQUIRED — see JOURNEY_LIMITS.waitDays for why. */
   timeoutMinutes: number;
-  /** HA's `continue_on_timeout`, default true: carry on past a timeout. */
+  /** Default true: carry on past a timeout rather than ending the run. */
   continueOnTimeout: boolean;
 };
 
 export const WAIT_TIMEOUT_MAX_MINUTES = JOURNEY_LIMITS.waitDays * 24 * 60;
+
+/**
+ * The timeout rule, stated ONCE for every step that parks and polls.
+ *
+ * REQUIRED, and capped, for the reason spelled out at JOURNEY_LIMITS.waitDays:
+ * a parked wait is not a live object somebody can see and cancel, it is a
+ * database row that would poll on every cron tick until a person noticed.
+ * "Wait indefinitely" is not expressible on purpose, and it has to be
+ * un-expressible for BOTH waits or the ceiling is a suggestion.
+ */
+function parseWaitTimeoutMinutes(config: Record<string, unknown>, what: string): number {
+  const timeoutMinutes = Number(config.timeoutMinutes);
+  if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > WAIT_TIMEOUT_MAX_MINUTES) {
+    throw new Error(
+      `A ${what} needs timeoutMinutes between 1 and ${WAIT_TIMEOUT_MAX_MINUTES} (${JOURNEY_LIMITS.waitDays} days)`,
+    );
+  }
+  return timeoutMinutes;
+}
 
 /**
  * A `wait_for_trigger` step's config — the SAME parse the runner uses.
@@ -590,17 +630,46 @@ export function parseWaitForTriggerConfig(config: Record<string, unknown>): Wait
     throw new Error("A wait_for_trigger lists the same trigger twice");
   }
 
-  const timeoutMinutes = Number(config.timeoutMinutes);
-  if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > WAIT_TIMEOUT_MAX_MINUTES) {
-    throw new Error(
-      `A wait_for_trigger needs timeoutMinutes between 1 and ${WAIT_TIMEOUT_MAX_MINUTES} (${JOURNEY_LIMITS.waitDays} days)`,
-    );
-  }
+  const timeoutMinutes = parseWaitTimeoutMinutes(config, "wait_for_trigger");
 
-  // Default TRUE, matching HA: only an explicit `false` stops the run. Written
+  // Default TRUE: only an explicit `false` stops the run. Written
   // as `!== false` rather than `=== true` so a config that predates the flag,
   // or omits it, gets the documented default instead of the strict one.
   return { triggers, timeoutMinutes, continueOnTimeout: config.continueOnTimeout !== false };
+}
+
+/* ── wait_for_condition ──────────────────────────────────────────────────── */
+
+export type WaitForConditionConfig = {
+  /** What has to become true. At least one clause — see below. */
+  condition: JourneyConditionGroup;
+  /** Minutes. REQUIRED, and capped, exactly as wait_for_trigger's is. */
+  timeoutMinutes: number;
+  /** Default true: carry on past a timeout rather than ending the run. */
+  continueOnTimeout: boolean;
+};
+
+/**
+ * A `wait_for_condition` step's config — the SAME parse the runner uses.
+ *
+ * The condition may not be EMPTY, and that is not tidiness. `evaluateConditions`
+ * reads an empty group as "no filter" and returns true, so an empty wait is
+ * satisfied the instant it is reached: a step that renders in the builder as
+ * "wait until…", traces as "condition was already true", and waits for nothing
+ * at all. It is the same trap `repeat while` already refuses, reached from the
+ * other side — there an empty group loops forever, here it never waits — and it
+ * is far cheaper to refuse at save time than to explain a month later.
+ */
+export function parseWaitForConditionConfig(config: Record<string, unknown>): WaitForConditionConfig {
+  const condition = parseConditionGroup(config.condition);
+  if (!condition || condition.conditions.length === 0) {
+    throw new Error("A wait_for_condition needs at least one condition, or it never waits");
+  }
+  return {
+    condition,
+    timeoutMinutes: parseWaitTimeoutMinutes(config, "wait_for_condition"),
+    continueOnTimeout: config.continueOnTimeout !== false,
+  };
 }
 
 /* ── variables ───────────────────────────────────────────────────────────── */
@@ -867,8 +936,8 @@ export function clauseHeld(clause: { passed: boolean; negated?: boolean }): bool
  * "Condition did not match" is true and useless: it sends someone re-reading
  * every clause by hand against a lead whose values have since changed. This
  * records what each clause actually compared, so the trace answers the question
- * instead of posing it. Home Assistant's trace does the same thing — its graph
- * highlights the path taken and each node carries its own result.
+ * instead of posing it: the path taken is visible, and each node carries its
+ * own result.
  *
  * Nested groups are flattened: the field/operator pairs are what a reader is
  * looking for, and the group structure is already visible in the builder.
@@ -926,9 +995,9 @@ export function evaluateConditions(
       ? evaluateConditions(condition, context)
       : compare(condition, valueAtPath(context, condition.field))
   );
-  // `not` is NOR — "none of these are valid" — matching Home Assistant's
-  // `condition: not`, which takes a LIST. It is not "negate the first clause",
-  // and it is not `!and(...)`: `not` over [a, b] excludes a and excludes b.
+  // `not` is NOR — "none of these are valid" — because it takes a LIST. It is
+  // not "negate the first clause", and it is not `!and(...)`: `not` over [a, b]
+  // excludes a AND excludes b.
   if (group.logic === "not") return !results.some(Boolean);
   return group.logic === "or" ? results.some(Boolean) : results.every(Boolean);
 }

@@ -1,5 +1,5 @@
 import type { JourneyCursor, JourneyWaitState } from "./journeyCursor";
-import type { WaitForTriggerConfig } from "./journeyTypes";
+import { JOURNEY_WAIT_STEP_TYPES } from "./journeyTypes";
 
 /**
  * `wait_for_trigger`: park a run until a named event arrives for this entity.
@@ -24,9 +24,8 @@ import type { WaitForTriggerConfig } from "./journeyTypes";
  *   2. TWO EVENTS IN THE SAME TICK. A pusher would nudge the same run twice and
  *      the second nudge is either a no-op or a double wake, depending on
  *      ordering nobody controls. The poll asks one ordered question — earliest
- *      matching event at or after `since` — and gets one answer. HA behaves the
- *      same way: `wait_for_trigger` resumes on the FIRST trigger that fires and
- *      stops listening.
+ *      matching event at or after `since` — and gets one answer. A wait resumes
+ *      on the FIRST trigger that fires and then stops listening.
  *
  *   3. THE RUN BEING PURGED. Push means the event processor holds a reference to
  *      a run row, which is the `blockedByRunId` dangling-id problem again. With
@@ -49,6 +48,31 @@ import type { WaitForTriggerConfig } from "./journeyTypes";
  * so `resolveCursor` walks straight back to the same step. The wait's own
  * identity is the trace PATH — see JourneyWaitState — so the same step in
  * iteration 2 of a repeat is a genuinely different wait from iteration 0's.
+ *
+ * ── `wait_for_condition` shares all of this, and one thing differs ──────────
+ *
+ * The park, the watermark, the deadline, the poll cadence and `decideWait` are
+ * the same; only the question asked on each poll changes. There the poll is not
+ * a choice between designs — a condition over a lead's own columns has nothing
+ * to push. Nobody writes a row when a lead's status changes to the value some
+ * parked run happens to be watching for, and adding one would be a trigger for
+ * every field of every record.
+ *
+ * WHAT DIFFERS IS OBSERVABILITY, and it is the thing to hold on to. A
+ * `wait_for_trigger` finds a ROW, and the row carries the instant it happened —
+ * which is why a cron that limps in ninety minutes late can still resume a run
+ * on an event that genuinely arrived inside the window. A polled condition has
+ * no such timestamp: all it ever learns is "true, now". So "it became true
+ * inside the window" is not knowable, and only an observation MADE inside the
+ * window counts. `decideWait` is handed `now` in place of an event time and
+ * applies the identical rule.
+ *
+ * The consequence, stated plainly rather than discovered later: the effective
+ * resolution of a polled condition is one poll interval. Something that becomes
+ * true in the final interval before the deadline is reported as a timeout, and
+ * that is inherent to polling — not a boundary the runner may reinterpret,
+ * because reinterpreting it is precisely how an outcome starts depending on
+ * when the cron happened to run.
  */
 
 /**
@@ -79,20 +103,33 @@ export const WAIT_POLL_INTERVAL_MS = 60_000;
  *
  * A wait attached to any other position is stale — a hand-edited cursor, or a
  * definition that changed under a parked run — and the caller drops it.
+ *
+ * The step-type check is a SET, not a comparison against one name. The cursor
+ * carries exactly one armed wait, because a run is at exactly one position; a
+ * second waiting step type that this function did not recognise would find its
+ * own wait "stale", drop it, and re-arm from scratch on every single poll — a
+ * wait that never expires and never fires, with a fresh watermark each minute.
  */
+const WAIT_STEP_TYPES = new Set<string>(JOURNEY_WAIT_STEP_TYPES);
+
 export function armedWaitFor(
   cursor: JourneyCursor,
   step: { type: string },
   path: string,
 ): JourneyWaitState | null {
   if (!cursor.wait) return null;
-  if (step.type !== "wait_for_trigger") return null;
+  if (!WAIT_STEP_TYPES.has(step.type)) return null;
   return cursor.wait.path === path ? cursor.wait : null;
 }
 
+/**
+ * Shared by both waits: the state is the same three fields either way, because
+ * "where am I, since when, and until when" is the whole of a park. What differs
+ * is only the question asked on each poll.
+ */
 export function armWaitState(
   path: string,
-  config: WaitForTriggerConfig,
+  config: { timeoutMinutes: number },
   now: Date,
 ): JourneyWaitState {
   return {
