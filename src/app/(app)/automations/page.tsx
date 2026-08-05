@@ -19,7 +19,8 @@ import { redirect } from "next/navigation";
  * notifications could not.
  *
  * No access check: a redirect grants nothing. /journeys enforces its own
- * (requireOwner), landing the caller where a guard here would have.
+ * (requireRoute("/journeys") — journeys.manage), landing the caller where a
+ * guard here would have.
  */
 export default async function AutomationsRedirect() {
   redirect("/journeys");
