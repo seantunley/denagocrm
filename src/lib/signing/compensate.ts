@@ -37,40 +37,93 @@
  * on a positive answer that nothing does. Every uncertain outcome keeps the
  * file, because the two failure modes are not comparable: an orphaned blob costs
  * a few hundred kilobytes of storage, a deleted one costs a signed contract.
+ *
+ * ── ASK ABOUT EVERY REFERENCE, NOT THE CONVENIENT ONE ──────────────────────
+ *
+ * The first version of this check asked only whether the live `SignatureRequest`
+ * named the blob. That reopens the same hole by another door. The completion
+ * transaction files TWO durable references — `SignatureRequest.signedPdfRef` and
+ * a `Document` row whose `storedName` is the blob — and the request is
+ * soft-deletable. Commit lands, the request is trashed, the request lookup
+ * answers "no row", the helper says "unreferenced", and the blob is deleted out
+ * from under a `Document` that still points at it. Same lost contract, different
+ * route: the Documents tab, where the signed PDF is actually filed.
+ *
+ * So the caller must probe EVERY durable reference, the probes must be
+ * soft-delete INCLUSIVE (a trashed row still names the blob, and Trash restores),
+ * and a missing probe is treated exactly like an unanswered one — keep the file.
+ * {@link DURABLE_BLOB_REFERENCES} is the list; adding a third reference to it
+ * fails every call site closed until that call site is updated, which is the
+ * point of naming them.
  */
 
-/** What the check needs from the request row — nothing else. */
-export type CompletionRefLookup = () => Promise<{ signedPdfRef: string | null } | null | undefined>;
+/**
+ * Every place the completion path durably records the name of a sealed PDF.
+ *
+ * Both are written inside the SAME transaction, so after a lost commit
+ * acknowledgement either may exist. Deleting requires positive proof that
+ * NEITHER references the blob.
+ */
+export const DURABLE_BLOB_REFERENCES = [
+  "SignatureRequest.signedPdfRef",
+  "Document.storedName",
+] as const;
+
+export type DurableBlobReference = (typeof DURABLE_BLOB_REFERENCES)[number];
+
+/**
+ * One counter per durable reference: how many rows of that kind name this blob.
+ *
+ * A probe MUST be soft-delete inclusive and explicitly scoped to the owning
+ * tenant — see the call site in complete.ts. Counting, rather than returning the
+ * row, keeps the contract unambiguous: there is no shape to misread, and
+ * anything that is not a finite count ≥ 0 is treated as no answer at all.
+ */
+export type BlobReferenceProbes = Record<DurableBlobReference, () => Promise<number | bigint>>;
 
 /**
  * True only when the stored blob is provably unreferenced and may be deleted.
  *
  * Returns false — KEEP THE FILE — in every ambiguous case:
  *
- *   • the row names this blob                the commit landed; it is live
- *   • the lookup throws                      usually the same broken connection
+ *   • any probe counts ≥ 1                   something names this blob; it is live
+ *   • any probe throws                       usually the same broken connection
  *                                            that lost the acknowledgement, so
  *                                            this is exactly the case that
  *                                            caused the incident
- *   • the lookup returns a malformed row     no answer is not a "no"
+ *   • any probe answers with a non-count     no answer is not a "no"
+ *   • a required probe was not supplied      an unasked question is not a "no"
+ *   • the blob has no name we can match on   we could not identify what we were
+ *                                            about to delete
  *
- * Returns true when the row is gone, or names a DIFFERENT blob (a concurrent
- * completion won the claim and wrote its own upload — ours is genuinely
- * unreferenced), or names none at all.
+ * Returns true only when EVERY durable reference has been asked and every one of
+ * them counted zero — which is what a genuine rollback looks like, and what
+ * still lets a genuine rollback clean up after itself.
  */
 export async function signedPdfIsUnreferenced(
   storedName: string,
-  lookup: CompletionRefLookup,
+  probes: BlobReferenceProbes,
 ): Promise<boolean> {
   // An empty stored name can never be matched against a row, so it could only
   // ever produce a delete call for a blob we cannot identify. Refuse.
   if (!storedName) return false;
-  try {
-    const row = await lookup();
-    if (row === null || row === undefined) return true; // no request row references anything
-    if (typeof row !== "object" || !("signedPdfRef" in row)) return false; // unreadable — keep
-    return row.signedPdfRef !== storedName;
-  } catch {
-    return false;
+  if (!probes || typeof probes !== "object") return false;
+
+  for (const reference of DURABLE_BLOB_REFERENCES) {
+    const probe = probes[reference];
+    // A reference nobody asked about is not a reference that answered "no".
+    if (typeof probe !== "function") return false;
+    let answer: unknown;
+    try {
+      answer = await probe();
+    } catch {
+      return false;
+    }
+    // Prisma `count` gives a number; a raw COUNT(*) gives a bigint. Anything
+    // else — null, undefined, NaN, a string, a row object — is not an answer.
+    const count = typeof answer === "bigint" ? Number(answer) : answer;
+    if (typeof count !== "number" || !Number.isFinite(count) || count < 0) return false;
+    if (count > 0) return false;
   }
+  return true;
 }
