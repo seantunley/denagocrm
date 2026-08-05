@@ -57,6 +57,14 @@ export const ROUTE_RULES = [
   { prefix: "/bot-builder", owner: true },
   { prefix: "/products", owner: true },
   { prefix: "/trash", owner: true },
+  // Repairs — the workspace issue inbox. Owner-only, and not for want of a
+  // narrower key: every fix route it links to is owner-gated already (/journeys
+  // calls requireOwner(), /settings/integration-overrides reads credential
+  // configuration), so a rule that let anyone else in would show them problems
+  // they cannot act on and Fix buttons that bounce them back to "/". The page
+  // also reports across domains — journeys, integrations — which no single
+  // permission in the catalogue describes.
+  { prefix: "/repairs", owner: true },
 ] as const satisfies readonly RouteRule[];
 
 /** A prefix that appears in ROUTE_RULES — the only thing `requireRoute` accepts. */
