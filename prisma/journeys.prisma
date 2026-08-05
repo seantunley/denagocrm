@@ -60,6 +60,21 @@ model JourneyVersion {
   /// `inactiveMonths`), so one bag could not express the first thing anyone
   /// wants out of this: "entered Quoted OR entered Won".
   triggers        Json
+  /// EXPAND PHASE — the old single-trigger pair, kept for exactly one release.
+  ///
+  /// vercel.json runs `apply-migrations && next build`, so the schema changes
+  /// while the PREVIOUS deployment is still serving production, and that build
+  /// reads these two columns. Dropping them in the same release would break the
+  /// app that is live at that moment, and keep it broken if the build failed.
+  /// So both representations exist, every writer populates both (dual-write),
+  /// and a follow-up CONTRACT migration removes these — plus the dual-write and
+  /// the index below — once this release is deployed and verified.
+  ///
+  /// Nothing READS these any more: `triggers` is the single source of truth for
+  /// what a version listens for. They are written only so the older build stays
+  /// correct for the length of the rollout.
+  trigger         String
+  triggerConfig   Json?
   entryConditions Json?
   definition      Json
   createdById     String?
@@ -70,11 +85,14 @@ model JourneyVersion {
 
   @@unique([journeyId, version])
   @@index([journeyId, state])
-  /// [trigger, state] went with the column. Nothing replaces it, deliberately:
-  /// no query filters versions by trigger any more. The two callers that used to
-  /// — the enrolment matcher and the pipeline stage badges — both load the
-  /// active journeys they already need and choose in memory, over a list of at
-  /// most JOURNEY_LIMITS.triggers entries.
+  /// Kept for the expand phase only — the previous build still issues
+  /// `WHERE "trigger" = … AND "state" = …` and must not start seq-scanning
+  /// mid-rollout. Nothing on THIS build filters versions by trigger any more:
+  /// the enrolment matcher and the pipeline stage badges both load the active
+  /// journeys they already need and choose in memory, over a list of at most
+  /// JOURNEY_LIMITS.triggers entries. The contract migration drops it with the
+  /// column.
+  @@index([trigger, state])
   @@index([tenantId])
 }
 

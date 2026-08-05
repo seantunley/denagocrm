@@ -8,6 +8,7 @@ import {
   jsonObject,
   REFUSAL_REASONS,
 } from "./journeyEngineShared";
+import { journeyTenantId } from "./journeyTenant";
 import { decideTrigger, readJourneyTriggers } from "./journeyTriggers";
 import { NEVER_STOP, type StopSignal } from "./stopSignal";
 
@@ -50,6 +51,12 @@ export async function emitJourneyEvent(args: {
   try {
     return await prisma.journeyEvent.create({
       data: {
+        // STAMPED, not left to the guard. With enforcement off the extension
+        // writes nothing, so this row would land with a NULL tenantId — un-owned
+        // by the workspace that raised it, and invisible to the strictly-equal
+        // predicate every read below uses. Stamping it here is what makes the
+        // queue's reads and writes agree in both modes.
+        tenantId: journeyTenantId(),
         type: args.type,
         entityType: args.entityType,
         entityId: args.entityId,
@@ -65,9 +72,14 @@ export async function emitJourneyEvent(args: {
 }
 
 export async function recoverStaleJourneyEvents() {
+  const tenantId = journeyTenantId();
   const cutoff = new Date(Date.now() - 15 * 60_000);
   return prisma.journeyEvent.updateMany({
-    where: { status: "processing", updatedAt: { lt: cutoff } },
+    // A recovery that is not tenant-scoped is a cross-tenant WRITE: one slice
+    // would hand every other workspace's in-flight events back to the queue,
+    // and the tenant whose worker was mid-flight would see its own events
+    // re-processed underneath it.
+    where: { tenantId, status: "processing", updatedAt: { lt: cutoff } },
     data: { status: "pending", availableAt: new Date(), error: "Recovered stale processing event" },
   });
 }
@@ -85,15 +97,24 @@ export async function recoverStaleJourneyEvents() {
 export async function processJourneyEventById(
   eventId: string,
 ): Promise<{ processed: boolean; enrolled: number; decisions: JourneyEnrolmentDecision[] }> {
-  const event = await prisma.journeyEvent.findUnique({ where: { id: eventId } });
+  const tenantId = journeyTenantId();
+  // Scoped by (id, tenantId), not fetched-then-checked. This is reachable from a
+  // server action with an id from the request, so another workspace's event id
+  // must resolve to nothing rather than to a row we then have to remember to
+  // vet. findFirst because (id, tenantId) is not a unique index.
+  const event = await prisma.journeyEvent.findFirst({ where: { id: eventId, tenantId } });
   if (!event) return { processed: false, enrolled: 0, decisions: [] };
-  const result = await processOneEvent(event);
+  const result = await processOneEvent(tenantId, event);
   return { processed: result !== null, enrolled: result?.enrolled ?? 0, decisions: result?.decisions ?? [] };
 }
 
 export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_STOP) {
+  // ONE resolution for the whole pass, taken before the first query and threaded
+  // into every event, so the batch this drains and the journeys it matches
+  // against are the same tenant's by construction.
+  const tenantId = journeyTenantId();
   const events = await prisma.journeyEvent.findMany({
-    where: { status: "pending", availableAt: { lte: new Date() } },
+    where: { tenantId, status: "pending", availableAt: { lte: new Date() } },
     orderBy: { createdAt: "asc" },
     take: limit,
   });
@@ -101,7 +122,7 @@ export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_
 
   for (const event of events) {
     if (stop.shouldStop(EVENT_RESERVE_MS)) break;
-    const outcome = await processOneEvent(event);
+    const outcome = await processOneEvent(tenantId, event);
     enrolled += outcome?.enrolled ?? 0;
   }
 
@@ -113,6 +134,7 @@ export async function processJourneyEvents(limit = 50, stop: StopSignal = NEVER_
  * claimed it first.
  */
 async function processOneEvent(
+  tenantId: string,
   event: { id: string; type: string; entityType: string; entityId: string; payload: Prisma.JsonValue | null; dedupeKey: string; journeyId: string | null },
 ): Promise<{ enrolled: number; decisions: JourneyEnrolmentDecision[] } | null> {
   let enrolled = 0;
@@ -131,7 +153,10 @@ async function processOneEvent(
   const decisions: JourneyEnrolmentDecision[] = [];
   {
     const claimed = await prisma.journeyEvent.updateMany({
-      where: { id: event.id, status: "pending" },
+      // The CLAIM carries the tenant too. It is the first write of the pass and
+      // the one that decides who owns the work; unqualified, one slice could
+      // claim — and so silently steal and re-attempt — another workspace's event.
+      where: { id: event.id, tenantId, status: "pending" },
       data: { status: "processing", attempts: { increment: 1 }, error: null },
     });
     if (claimed.count === 0) return null;
@@ -139,17 +164,62 @@ async function processOneEvent(
     try {
       const journeys = await prisma.journey.findMany({
         where: {
+          tenantId,
           status: "active",
+          // `event.journeyId` NARROWS an already tenant-scoped set; it never
+          // widens it. Scoping by tenant here rather than checking the journey
+          // afterwards means a journeyId from another workspace matches nothing.
           ...(event.journeyId ? { id: event.journeyId } : {}),
         },
-        include: { versions: { where: { state: "published" } } },
+        include: { versions: { where: { tenantId, state: "published" } } },
       });
       const payload = jsonObject(event.payload);
-      const eventPayload = { ...payload, type: event.type };
+
+      // `triggerId` IS AN INTERNAL SELECTION, NOT PART OF THE RUN CONTEXT.
+      //
+      // The scheduler puts a trigger's id on the event it raises so two
+      // same-type triggers on one version — two `lead_idle` sweeps with
+      // different idleDays — are attributed to the configuration that actually
+      // fired, and decideTrigger honours that to pick between candidates. But
+      // the payload is written by the event PRODUCER, and the run context is
+      // published to journey conditions as `event.triggerId`.
+      //
+      // Copied straight through, those two roles collapse: an incoming
+      // `triggerId` survived into the run context even when the matched trigger
+      // was UNNAMED, so a step could branch on a name its own author never gave
+      // anything — a condition field partly controlled by whoever raised the
+      // event. So the two bags are separated here:
+      //
+      //   contextPayload — what JOURNEYS SEE. It is `event` in the run context
+      //                    and the base of the run payload, and it never carries
+      //                    an incoming triggerId. The published one is added
+      //                    below from `verdict.matched.id` alone, i.e. only
+      //                    where the author named the trigger that matched.
+      //   eventPayload   — what the MATCHER judges, which is the same bag plus
+      //                    the incoming selection. Internal, and never stored.
+      const { triggerId: incoming, ...carried } = payload;
+      const selection = typeof incoming === "string" ? incoming : null;
+      const contextPayload = { ...carried, type: event.type };
+      const eventPayload = selection ? { ...contextPayload, triggerId: selection } : contextPayload;
+
+      // THE ENTITY IS RESOLVED WITHIN THIS TENANT BEFORE ITS CONTEXT IS LOADED.
+      //
+      // loadJourneyContext looks a lead/contact up by id alone, so with
+      // enforcement off it will happily return another workspace's record —
+      // whose name, email and phone then become the run context that the
+      // messages are rendered from. Asking the tenant-scoped question first
+      // means a foreign entityId is indistinguishable from a deleted one, which
+      // is the outcome the caller already handles.
+      const owned =
+        event.entityType === "lead"
+          ? await prisma.lead.findFirst({ where: { id: event.entityId, tenantId }, select: { id: true } })
+          : await prisma.contact.findFirst({ where: { id: event.entityId, tenantId }, select: { id: true } });
+      if (!owned) throw new Error("Journey event entity no longer exists");
+
       const context = await loadJourneyContext(
         event.entityType as JourneyEntityType,
         event.entityId,
-        eventPayload
+        contextPayload
       );
       if (!context) throw new Error("Journey event entity no longer exists");
 
@@ -195,9 +265,14 @@ async function processOneEvent(
           // every backfilled version, and every trigger nobody needed to
           // distinguish, leaves the field absent rather than inventing a value
           // a condition could accidentally match.
+          //
+          // Built on contextPayload, NOT eventPayload: the difference between
+          // the two is exactly the incoming selection, and taking the wider bag
+          // here is how the producer's `triggerId` used to survive an unnamed
+          // match. `verdict.matched.id` is the only source of this field.
           payload: verdict.matched.id
-            ? { ...eventPayload, triggerId: verdict.matched.id }
-            : eventPayload,
+            ? { ...contextPayload, triggerId: verdict.matched.id }
+            : contextPayload,
         });
         if (outcome.enrolled) enrolled++;
         decisions.push({
@@ -217,20 +292,24 @@ async function processOneEvent(
         });
       }
 
+      // (id, tenantId) on every write back to the event, using Prisma's extended
+      // unique where — so the pass can only ever settle the row it claimed, and
+      // a foreign id raises P2025 instead of quietly recording someone else's
+      // decisions on someone else's event.
       await prisma.journeyEvent.update({
-        where: { id: event.id },
+        where: { id: event.id, tenantId },
         data: { status: "processed", processedAt: new Date(), decisions },
       });
       return { enrolled, decisions };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown journey event error";
       const current = await prisma.journeyEvent.findUnique({
-        where: { id: event.id },
+        where: { id: event.id, tenantId },
         select: { attempts: true, availableAt: true },
       });
       const retry = (current?.attempts ?? MAX_EVENT_ATTEMPTS) < MAX_EVENT_ATTEMPTS;
       await prisma.journeyEvent.update({
-        where: { id: event.id },
+        where: { id: event.id, tenantId },
         data: {
           status: retry ? "pending" : "failed",
           availableAt: retry ? new Date(Date.now() + 5 * 60_000) : current?.availableAt,

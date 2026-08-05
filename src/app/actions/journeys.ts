@@ -78,6 +78,87 @@ function journeyData(formData: FormData) {
   };
 }
 
+/**
+ * The legacy `trigger` / `triggerConfig` pair, derived from the triggers list.
+ *
+ * EXPAND-PHASE DUAL-WRITE, and temporary. vercel.json runs
+ * `apply-migrations && next build`, so the previous deployment keeps serving
+ * production while this one builds — and that build reads those two columns.
+ * Writing them alongside `triggers` is what keeps it correct for the length of
+ * the rollout, and what makes a rollback a non-event instead of an outage.
+ *
+ * The FIRST trigger is the one projected down, mirroring the migration's
+ * one-element backfill in reverse: a version with several triggers is a version
+ * the old build cannot represent, so it sees the first and enrols on that rather
+ * than on nothing. Under-representing is recoverable; `trigger` is NOT NULL and
+ * a version with no triggers should never have got this far, so an empty list
+ * throws rather than inventing a value the old build would act on.
+ *
+ * Deleted by the contract migration, together with the columns themselves.
+ */
+function legacyTriggerPair(triggers: unknown): { trigger: string; triggerConfig: Prisma.InputJsonValue | typeof Prisma.JsonNull } {
+  const first = Array.isArray(triggers) ? (triggers[0] as { type?: unknown; config?: unknown } | undefined) : undefined;
+  if (!first || typeof first.type !== "string" || !first.type) {
+    throw new Error("A journey version must declare at least one trigger.");
+  }
+  const config = first.config;
+  return {
+    trigger: first.type,
+    triggerConfig:
+      config && typeof config === "object" ? (config as Prisma.InputJsonValue) : Prisma.JsonNull,
+  };
+}
+
+/**
+ * Every stage and segment a trigger names must belong to the SAME tenant as the
+ * journey about to go live.
+ *
+ * Shape validation cannot answer this: `parseJourneyTriggers` proves a
+ * `stageId` is a well-formed string, not that it points at a row this workspace
+ * owns. A published version is what the enrolment sweep acts on, so a reference
+ * to another tenant's stage or segment is either an enrolment that never fires
+ * or one that fires against data this workspace cannot see — both silent.
+ *
+ * Scoped by the journey's OWN tenantId rather than checked afterwards, so a
+ * foreign id simply does not resolve. `tenantId: null` compiles to `IS NULL`,
+ * which is the correct reading of an untenanted journey: it may reference
+ * untenanted rows and nothing else.
+ */
+async function assertTriggerReferencesResolve(tenantId: string | null, triggers: unknown): Promise<void> {
+  const specs = Array.isArray(triggers) ? (triggers as Array<{ type?: unknown; config?: unknown }>) : [];
+  const stageIds = new Set<string>();
+  const segmentIds = new Set<string>();
+  for (const spec of specs) {
+    const config = (spec?.config ?? {}) as Record<string, unknown>;
+    if (typeof config.stageId === "string" && config.stageId) stageIds.add(config.stageId);
+    if (typeof config.segmentId === "string" && config.segmentId) segmentIds.add(config.segmentId);
+  }
+
+  if (stageIds.size > 0) {
+    const found = await prisma.pipelineStage.findMany({
+      where: { tenantId, id: { in: [...stageIds] } },
+      select: { id: true },
+    });
+    const alive = new Set(found.map((row) => row.id));
+    const missing = [...stageIds].filter((id) => !alive.has(id));
+    if (missing.length > 0) {
+      throw new Error("This journey enrols on a pipeline stage that no longer exists in this workspace.");
+    }
+  }
+
+  if (segmentIds.size > 0) {
+    const found = await prisma.segment.findMany({
+      where: { tenantId, id: { in: [...segmentIds] } },
+      select: { id: true },
+    });
+    const alive = new Set(found.map((row) => row.id));
+    const missing = [...segmentIds].filter((id) => !alive.has(id));
+    if (missing.length > 0) {
+      throw new Error("This journey enrols on a segment that no longer exists in this workspace.");
+    }
+  }
+}
+
 export async function createJourney(formData: FormData) {
   const user = await requireOwner();
   const data = journeyData(formData);
@@ -101,6 +182,7 @@ export async function createJourney(formData: FormData) {
         version: 1,
         state: "draft",
         triggers: data.triggers,
+        ...legacyTriggerPair(data.triggers),
         entryConditions: data.entryConditions ?? Prisma.JsonNull,
         definition: data.definition,
         createdById: user.id,
@@ -130,6 +212,7 @@ export async function saveJourneyDraft(journeyId: string, formData: FormData) {
     const draft = journey.versions.find((version) => version.state === "draft");
     const versionData = {
       triggers: data.triggers,
+      ...legacyTriggerPair(data.triggers),
       entryConditions: data.entryConditions ?? Prisma.JsonNull,
       definition: data.definition,
       createdById: user.id,
@@ -177,7 +260,24 @@ export async function publishJourney(journeyId: string) {
   });
   const draft = journey.versions.find((version) => version.state === "draft");
   if (!draft) throw new Error("This journey has no draft to publish");
+
+  // PUBLISH IS THE STRICT GATE — for the whole version, not just its definition.
+  //
+  // Saving already validates strictly, so it is tempting to treat a stored draft
+  // as trusted. It is not: legacy drafts were CONVERTED into the triggers shape
+  // by a migration, never re-saved, and the runtime reader is deliberately
+  // tolerant of trigger names it does not know so that an unknown name degrades
+  // to "matches nothing" instead of throwing mid-sweep. Publishing such a draft
+  // without re-checking therefore produces an ACTIVE journey that silently
+  // enrols nobody — the exact failure this feature must not introduce, and one
+  // no error surfaces because tolerance is doing its job.
+  //
+  // So everything that decides who gets enrolled is re-parsed here, strictly,
+  // before any row changes state.
+  parseJourneyTriggers(draft.triggers);
+  parseConditionGroup(draft.entryConditions);
   parseJourneyDefinition(draft.definition);
+  await assertTriggerReferencesResolve(journey.tenantId, draft.triggers);
 
   await prisma.$transaction([
     prisma.journeyVersion.updateMany({
@@ -322,6 +422,7 @@ export async function installJourneyTemplates() {
           version: 1,
           state: "draft",
           triggers: item.triggers,
+          ...legacyTriggerPair(item.triggers),
           entryConditions: item.entryConditions,
           definition: item.definition,
           createdById: user.id,

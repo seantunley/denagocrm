@@ -357,15 +357,37 @@ test("the scheduled half of the trigger list is what the cron sweeps", () => {
 
 /* ── the schema and the migration ────────────────────────────────────────── */
 
-test("no reader of the old single-trigger columns is left anywhere", () => {
-  // The strongest available guarantee that no reader was missed, and the reason
-  // the columns were dropped rather than kept as a denormalised copy: a stale
-  // reader is now a compile error and a SQL error, not a journey that silently
-  // stops enrolling.
+test("the expand phase keeps both representations, and nothing READS the old pair", () => {
+  // This started life asserting the old columns were GONE. They are not, and
+  // deliberately so: vercel.json runs `apply-migrations && next build`, so the
+  // schema changes while the PREVIOUS deployment is still serving production —
+  // and that build reads `trigger`/`triggerConfig`. Dropping them in the same
+  // release breaks the app that is live at that moment, and leaves it broken if
+  // the build fails. So both exist for one release, every writer populates both,
+  // and a follow-up CONTRACT migration removes them.
+  //
+  // What still has to hold is the thing the original assertion was protecting:
+  // no READER may be left on the old pair, because two sources of truth with a
+  // stale reader is a journey that silently stops enrolling. The columns are
+  // write-only for the length of the rollout.
   const schema = src("prisma/journeys.prisma");
-  assert.ok(!/^\s*trigger\s+String/m.test(schema), "JourneyVersion.trigger is back");
-  assert.ok(!/^\s*triggerConfig\s+Json/m.test(schema), "JourneyVersion.triggerConfig is back");
+  assert.match(schema, /^\s*trigger\s+String/m, "the expand phase must KEEP the old column for the running build");
   assert.match(schema, /^\s*triggers\s+Json$/m, "the list must be NOT NULL — a version listening for nothing enrols nobody");
+
+  // The only permitted mention of the legacy pair in application code is the
+  // dual-WRITE helper. Any `.trigger`/`triggerConfig` READ would be a second
+  // source of truth.
+  const writers = src("src/app/actions/journeys.ts");
+  assert.match(writers, /legacyTriggerPair/, "writers must dual-write the legacy pair during the expand phase");
+
+  const engine = ["src/lib/journeyScheduling.ts", "src/lib/journeyEvents.ts", "src/lib/journeyTriggers.ts"];
+  for (const file of engine) {
+    const text = src(file);
+    assert.ok(
+      !/triggerConfig/.test(text) && !/\.trigger(?!s)/.test(text),
+      `${file} still reads the legacy single-trigger pair — the engine must read only "triggers"`,
+    );
+  }
 });
 
 test("the migration backfills every row before it drops anything", () => {
@@ -375,9 +397,19 @@ test("the migration backfills every row before it drops anything", () => {
   assert.match(sql, /SET app\.bypass_rls = 'on'/);
   const backfillAt = sql.indexOf('SET "triggers" = jsonb_build_array');
   const notNullAt = sql.indexOf('ALTER COLUMN "triggers" SET NOT NULL');
-  const dropAt = sql.indexOf('DROP COLUMN IF EXISTS "trigger"');
   assert.ok(backfillAt > 0 && notNullAt > backfillAt, "SET NOT NULL is what proves the backfill reached every row");
-  assert.ok(dropAt > notNullAt, "the source column must not be dropped before the backfill is proven");
+  // EXPAND PHASE: nothing is dropped. The previous deployment serves production
+  // while this migration runs (vercel.json: apply-migrations && next build) and
+  // still reads these columns, so dropping them here breaks the app that is live
+  // at that moment. The contract migration removes them in a later release.
+  assert.ok(
+    !/^\s*ALTER TABLE "JourneyVersion" DROP COLUMN/m.test(sql),
+    "the expand migration must not drop the old columns — the running build still reads them",
+  );
+  assert.ok(
+    !/^\s*DROP INDEX IF EXISTS "JourneyVersion_trigger_state_idx"/m.test(sql),
+    "the old index serves the running build's query and must survive the expand phase",
+  );
   // Both halves of the old shape, carried across.
   assert.match(sql, /'type', "trigger"/);
   assert.match(sql, /'config',[\s\S]*?"triggerConfig"/);

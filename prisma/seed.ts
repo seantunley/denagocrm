@@ -171,6 +171,11 @@ async function main() {
           version: 1,
           state: "published",
           triggers: starter.triggers,
+          // Expand-phase dual-write: the previous build still reads these two
+          // columns (see prisma/journeys.prisma). Removed by the contract
+          // migration along with the columns.
+          trigger: starter.triggers[0].type,
+          triggerConfig: starter.triggers[0].config,
           definition: {
             startStepId: "step1",
             steps: [

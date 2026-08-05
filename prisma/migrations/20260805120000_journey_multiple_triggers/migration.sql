@@ -39,21 +39,32 @@
 -- win-back journey mid-cycle does not see its keys change and re-emit to
 -- everybody it has already contacted.
 --
--- ── ROLLING BACK ───────────────────────────────────────────────────────────
+-- ── EXPAND ONLY. THE OLD COLUMNS STAY. ─────────────────────────────────────
 --
--- The old columns are DROPPED rather than kept alongside, and that is a choice
--- with a cost. Keeping "trigger" as a denormalised copy would leave two places
--- that answer "what does this journey listen for", and a reader left on the old
--- one is a journey that silently stops enrolling — the exact failure this
--- feature must not introduce. Dropping the columns makes that impossible to
--- write: the TypeScript compiler rejects every stale property access and
--- PostgreSQL rejects every stale SQL reference.
+-- This is the EXPAND half of an expand/contract pair, and the drops that used
+-- to live at the bottom of this file have been removed deliberately.
 --
--- The cost is that redeploying the PREVIOUS build against this database fails.
--- It fails LOUDLY and before serving: scripts/apply-migrations.mjs ends with an
--- integrity check that compares the live database against the deployed schema
--- and blocks the build on a missing column. A schema rollback is a deliberate
--- act; this makes it a blocked build rather than a silent one.
+-- vercel.json runs `apply-migrations && next build`: the schema changes BEFORE
+-- the new build exists, and the PREVIOUS deployment carries on serving
+-- production traffic throughout — then keeps serving it if the build fails or
+-- promotion never happens. That old build queries "trigger" and
+-- "triggerConfig". Dropping them here would therefore break the deployment that
+-- is live AT THAT MOMENT, and leave it broken for as long as the rollout takes
+-- (or permanently, if the rollout fails). Rollback incompatibility was the
+-- lesser problem; forward incompatibility with the running app was the real one.
+--
+-- So both representations exist for one release. "trigger"/"triggerConfig" stay
+-- exactly as they are — still NOT NULL, still indexed — and every writer keeps
+-- populating them alongside "triggers" (see src/app/actions/journeys.ts), so the
+-- old build reads correct data for the whole window and a rollback is a
+-- non-event rather than an outage.
+--
+-- The concern that motivated dropping them — two places answering "what does
+-- this journey listen for", with a reader left on the stale one — is real, and
+-- is what the CONTRACT migration is for. It drops the columns, the index and
+-- the dual-write in a LATER release, once this one is deployed and every row
+-- and every writer has been verified. Two temporary representations for one
+-- release is a smaller risk than a schema no currently deployed build can use.
 --
 -- ── RE-RUNNABILITY ─────────────────────────────────────────────────────────
 --
@@ -115,13 +126,19 @@ $backfill$;
 -- rather than leaving a version that quietly enrols nobody.
 ALTER TABLE "JourneyVersion" ALTER COLUMN "triggers" SET NOT NULL;
 
--- The index existed to serve `WHERE "trigger" = … AND "state" = …`. Nothing
--- asks that any more: the enrolment matcher loads the active journeys it needs
--- regardless and chooses in memory, and the pipeline stage badges — the only
--- other caller — already filtered its stageId in JS for the same reason.
-DROP INDEX IF EXISTS "JourneyVersion_trigger_state_idx";
-
-ALTER TABLE "JourneyVersion" DROP COLUMN IF EXISTS "trigger";
-ALTER TABLE "JourneyVersion" DROP COLUMN IF EXISTS "triggerConfig";
+-- NOTHING IS DROPPED HERE. See the EXPAND ONLY note at the top of this file.
+--
+-- "trigger", "triggerConfig" and the JourneyVersion_trigger_state_idx index all
+-- survive this migration untouched, because the deployment that is serving
+-- production while this runs still reads them. The contract migration — a
+-- separate, later release — is what removes:
+--
+--   DROP INDEX IF EXISTS "JourneyVersion_trigger_state_idx";
+--   ALTER TABLE "JourneyVersion" DROP COLUMN IF EXISTS "trigger";
+--   ALTER TABLE "JourneyVersion" DROP COLUMN IF EXISTS "triggerConfig";
+--
+-- …together with legacyTriggerPair() in src/app/actions/journeys.ts and the two
+-- fields in prisma/journeys.prisma. Do not land those three statements until
+-- this release is deployed and every row and writer has been verified.
 
 RESET app.bypass_rls;

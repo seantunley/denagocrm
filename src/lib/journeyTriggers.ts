@@ -90,6 +90,23 @@ const SCHEDULED_TYPES = new Set<string>(JOURNEY_SCHEDULED_TRIGGERS);
 /** Does the cron enrol for this trigger by sweeping records, rather than an event? */
 export const isScheduledTrigger = (type: string) => SCHEDULED_TYPES.has(type);
 
+/**
+ * Trigger types that carry NO filter capable of telling two instances apart.
+ *
+ * Listing a type here means "at most one per version". Absent types have a
+ * discriminating config — stageId, segmentId, idleDays, inactiveMonths — so two
+ * of those describe genuinely different enrolments and both are reachable.
+ */
+const FILTERLESS_TRIGGER_TYPES = [
+  "lead_created",
+  "lead_won",
+  "lead_lost",
+  "quote_signed",
+  "quote_declined",
+  "delivered",
+  "referral_earned",
+] as const;
+
 /** Same shape a step id must have — safe in a dedupe key and in a condition value. */
 const TRIGGER_ID = /^[a-zA-Z0-9_-]{1,40}$/;
 
@@ -144,6 +161,28 @@ export function parseJourneyTriggers(value: unknown): JourneyTriggerSpec[] {
     if (specs.filter((other) => other.type === spec.type).length > 1 && !spec.id) {
       throw new Error(
         `This journey lists "${spec.type}" more than once, so each one needs its own ID — otherwise nothing can tell them apart`,
+      );
+    }
+  }
+
+  // UNIQUE IDS ARE NOT ENOUGH WHEN NOTHING CAN SELECT BETWEEN THEM.
+  //
+  // A distinct id makes two same-type triggers distinguishable to a person
+  // reading the journey. It does not make them REACHABLE. Emitters broadcast an
+  // event TYPE — `lead_created` — and cannot know a version-specific trigger id,
+  // so matching falls to the first entry of that type and every later one is
+  // dead config: it renders in the builder, it reads as configured, and it never
+  // fires. Accepting it is worse than rejecting it, because the failure is
+  // invisible.
+  //
+  // The types below carry no filter capable of separating two instances. The
+  // ones deliberately ABSENT do: stage_entered has stageId, segment_entered has
+  // segmentId, lead_idle has idleDays, win_back has inactiveMonths — two of
+  // those differ by their config and both are genuinely reachable.
+  for (const type of FILTERLESS_TRIGGER_TYPES) {
+    if (specs.filter((spec) => spec.type === type).length > 1) {
+      throw new Error(
+        `This journey lists "${type}" more than once, but nothing distinguishes them — an event carries only its type, so only the first would ever fire. Remove the duplicate, or use a trigger that filters (a stage, a segment, or an idle period).`,
       );
     }
   }

@@ -65,9 +65,15 @@ test("the cron hands its deadline down instead of only gating admission", () => 
 test("callers with no deadline are unaffected", () => {
   // A person pressing "enrol now" must not inherit a cron budget.
   const scheduling = src("src/lib/journeyScheduling.ts");
+  // The subject is the STOP SIGNAL, not the argument list: scheduleJourney also
+  // takes the slice's tenantId now (every query in the sweep names it, rather
+  // than leaning on a guard that scopes nothing while enforcement is off), and
+  // pinning the exact arity would make this guard fail on changes that have
+  // nothing to do with budgets. What must not drift is that this path passes
+  // NEVER_STOP.
   assert.match(
     scheduling,
-    /scheduleJourney\(journey, NEVER_STOP\)/,
+    /scheduleJourney\([^)]*\bNEVER_STOP\)/,
     "the interactive enrolment path must opt out of stopping",
   );
   assert.equal(NEVER_STOP.shouldStop(), false);
