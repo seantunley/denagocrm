@@ -7,7 +7,7 @@ import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { freezeDocumentGlobals } from "@/lib/signing/freezeDocument";
 import { signingSecurityMode } from "./securityPolicy";
-import { newSignToken } from "./tokens";
+import { createProtectedBearerToken } from "./tokenVault";
 
 export type RequestSource = {
   documentId?: string | null;
@@ -27,12 +27,7 @@ export async function createSignatureRequestFromDoc(opts: {
   ordering?: "parallel" | "sequential";
   message?: string;
   createdById?: string | null;
-  /** Explicit template policy. Strict production defaults to email OTP whenever
-   * every signer has an email address; compatibility mode keeps link possession. */
   identityMode?: SigningIdentityMode;
-  // Run all writes on this transaction client when provided, so the caller can
-  // create the request + recipients + fields + event atomically (and under a
-  // lock) — e.g. to guarantee at most one open request per quote/job card.
   client?: Prisma.TransactionClient;
 }): Promise<{ id: string; recipients: number; fields: number; identityMode: SigningIdentityMode }> {
   const { source } = opts;
@@ -45,10 +40,6 @@ export async function createSignatureRequestFromDoc(opts: {
   const identityMode: SigningIdentityMode =
     opts.identityMode ?? (signingSecurityMode() === "strict" && allSignersHaveEmail ? "email_otp" : "link");
 
-  // The request + its recipients + fields + created event are ONE envelope — a
-  // partial one (a request row with no recipients, say) is corrupt. Run them
-  // atomically: on the caller's transaction when supplied, otherwise our own,
-  // so a failure part-way leaves nothing behind.
   const writes = async (db: Prisma.TransactionClient) => {
     const request = await db.signatureRequest.create({
       data: {
@@ -66,9 +57,6 @@ export async function createSignatureRequestFromDoc(opts: {
         createdById: opts.createdById ?? null,
       },
     });
-    // identityMode landed through the trust migration before the generated client
-    // knew the column. Keep the write in this transaction so the request is never
-    // briefly dispatched under the weaker default.
     await db.$executeRaw`
       UPDATE "SignatureRequest" SET "identityMode" = ${identityMode}
       WHERE "id" = ${request.id}
@@ -77,6 +65,7 @@ export async function createSignatureRequestFromDoc(opts: {
     const idMap = new Map<string, string>();
     for (let index = 0; index < frozenDoc.recipients.length; index += 1) {
       const recipient = frozenDoc.recipients[index];
+      const bearer = createProtectedBearerToken();
       const row = await db.signatureRecipient.create({
         data: {
           requestId: request.id,
@@ -85,18 +74,27 @@ export async function createSignatureRequestFromDoc(opts: {
           role: recipient.role,
           order: index,
           color: recipient.color,
-          token: newSignToken(),
+          // The URL secret is encrypted at rest; tokenHash is corrected to the
+          // plaintext digest immediately below in this same transaction.
+          token: bearer.stored,
         },
       });
+      await db.$executeRaw`
+        UPDATE "SignatureRecipient" p
+        SET "tokenHash" = ${bearer.hash}
+        WHERE p."id" = ${row.id}
+          AND p."requestId" = ${request.id}
+          AND p."tenantId" = (
+            SELECT r."tenantId" FROM "SignatureRequest" r WHERE r."id" = ${request.id}
+          )
+      `;
       idMap.set(recipient.id, row.id);
     }
 
     const fieldsData = frozenDoc.pages.flatMap((page, pageIndex) =>
       page.overlayFields.map((field) => ({
         requestId: request.id,
-        recipientId: field.recipientId
-          ? idMap.get(field.recipientId) ?? null
-          : null,
+        recipientId: field.recipientId ? idMap.get(field.recipientId) ?? null : null,
         kind: field.kind,
         page: pageIndex,
         x: field.anchor.x,
@@ -107,9 +105,7 @@ export async function createSignatureRequestFromDoc(opts: {
         label: field.label,
       })),
     );
-    if (fieldsData.length) {
-      await db.signatureField.createMany({ data: fieldsData });
-    }
+    if (fieldsData.length) await db.signatureField.createMany({ data: fieldsData });
 
     await db.signatureEvent.create({
       data: {
@@ -121,6 +117,7 @@ export async function createSignatureRequestFromDoc(opts: {
           recipients: frozenDoc.recipients.length,
           fields: fieldsData.length,
           identityMode,
+          bearerTokens: "aes-256-gcm+sha256",
         },
       },
     });
@@ -128,35 +125,15 @@ export async function createSignatureRequestFromDoc(opts: {
     return { id: request.id, recipients: frozenDoc.recipients.length, fields: fieldsData.length, identityMode };
   };
 
-  // Own transaction on basePrisma when the caller didn't supply one — the same
-  // client the record-signing caller already builds its transaction on, so both
-  // entry points create the envelope through an identical path.
   const result = opts.client
     ? await writes(opts.client)
     : await basePrisma.$transaction((tx) => writes(tx));
 
-  // Best-effort audit AFTER the envelope commits — logAudit runs on its own
-  // connection/transaction, so keeping it out of the request transaction means
-  // an audit hiccup can't roll back a committed request, and a rolled-back
-  // request never logs a phantom creation.
   await logAudit({
     action: "signing.create",
     summary: `Created signature request “${opts.title}” (${result.identityMode})`,
     entityType: "SignatureRequest",
     entityId: result.id,
   });
-
   return result;
 }
-
-// createOrReuseSignatureRequestFromDoc lived here: an atomic create-or-reuse
-// keyed on a hash of the resolved document, arbitrated by a partial unique
-// index. Its only caller was sendDocForSigning — the document editor's
-// "Prepare for signing" — which existed so the same template could be re-sent
-// against the same record without minting a second envelope and a second email.
-//
-// Every remaining path already guarantees that a different way: startRecordSigning
-// locks the SOURCE record row FOR UPDATE and short-circuits on an existing open
-// request, so the record itself — not a content hash — is the mutex. The
-// fingerprint column and its index went with the function (see migration
-// 20260802_drop_signing_fingerprint).
