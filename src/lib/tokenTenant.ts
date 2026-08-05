@@ -1,43 +1,26 @@
 import "server-only";
 import { basePrisma } from "./db";
+import { resolveApprovalToken, resolveSigningRecipientToken } from "./signing/tokenVault";
 
 /**
- * Trusted PRE-SCOPE tenant resolvers for the no-user token surfaces (public
- * signing + approval pages/routes, campaign open/click tracking, unsubscribe).
- *
- * Each does a DELIBERATELY NARROW `basePrisma` lookup — the owning `tenantId` only,
- * keyed by the public token — so the request's tenant can be established BEFORE any
- * guarded read. This mirrors `resolvePortalTenant` in portal.ts: `basePrisma` (the
- * unguarded client) is correct and REQUIRED here, because the tenant guard has no
- * scope yet and this is the single trusted boundary the public surface crosses
- * before its scope exists. A guarded read at this point would dead-lock (no scope →
- * `TenantScopeError`). Returns null for an unknown token so the caller fails closed.
- *
- * These are the ONE resolver per token type shared by the page and its mutation
- * route, so the read surface and the write surface can never drift onto different
- * tenant-derivation logic.
+ * Trusted PRE-SCOPE tenant resolvers for no-user token surfaces. Signing and
+ * approval secrets are resolved by SHA-256 digest through the token vault; the
+ * plaintext token is never compared with ciphertext at rest. Campaign/survey
+ * tokens retain their existing model-specific resolver.
  */
 
-/** Owning tenant of a per-recipient signing token (from the parent request). */
 export async function resolveSignRecipientTenant(
   token: string,
 ): Promise<{ tenantId: string | null } | null> {
-  const row = await basePrisma.signatureRecipient.findUnique({
-    where: { token },
-    select: { request: { select: { tenantId: true } } },
-  });
-  return row ? { tenantId: row.request.tenantId } : null;
+  const owner = await resolveSigningRecipientToken(token);
+  return owner ? { tenantId: owner.tenantId } : null;
 }
 
-/** Owning tenant of an approval-step token. */
 export async function resolveApprovalStepTenant(
   token: string,
 ): Promise<{ tenantId: string | null } | null> {
-  const row = await basePrisma.approvalStep.findUnique({
-    where: { token },
-    select: { tenantId: true },
-  });
-  return row ? { tenantId: row.tenantId } : null;
+  const owner = await resolveApprovalToken(token);
+  return owner ? { tenantId: owner.tenantId } : null;
 }
 
 /** Owning tenant of a campaign tracking/unsubscribe token. */
