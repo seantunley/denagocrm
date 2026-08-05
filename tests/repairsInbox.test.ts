@@ -139,7 +139,29 @@ test("re-detecting the same problem does not duplicate it", async () => {
     bornAt.getTime(),
     "…but first-seen is not, or 'this has been broken since Tuesday' is lost",
   );
-  assert.ok((row.lastSeenAt as Date) > bornAt, "last-confirmed moves with every tick");
+  // Asserted on the WRITE, not on the clock. This was
+  //   assert.ok(row.lastSeenAt > bornAt)
+  // which failed in CI and passed locally for no better reason than speed: the
+  // three syncs run back to back, and on a fast machine all three land in the
+  // same millisecond, so the two timestamps are equal and a strict `>` is false.
+  //
+  // Loosening it to `>=` would have made it green and useless — it would pass
+  // just as happily if lastSeenAt were never written at all, since it would then
+  // still equal bornAt. What actually matters is that every re-confirmation
+  // WRITES the field, so checking the update payload is both deterministic and
+  // a stronger guard than the comparison it replaces.
+  const refreshWrites = spy.calls
+    .filter((call) => call.model === "repairIssue" && call.op === "update")
+    .map((call) => (call.args.data as Record<string, unknown>) ?? {});
+  assert.equal(refreshWrites.length, 2, "two re-confirmations, two writes");
+  for (const [i, data] of refreshWrites.entries()) {
+    assert.ok("lastSeenAt" in data, `re-confirmation ${i + 1} did not record last-seen`);
+    assert.ok(!("firstSeenAt" in data), `re-confirmation ${i + 1} overwrote first-seen`);
+  }
+  assert.ok(
+    (row.lastSeenAt as Date).getTime() >= bornAt.getTime(),
+    "last-confirmed must never move backwards",
+  );
 });
 
 test("a problem that goes away clears itself", async () => {
