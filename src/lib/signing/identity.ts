@@ -1,6 +1,6 @@
 import "server-only";
 import crypto from "crypto";
-import { basePrisma, prisma } from "@/lib/db";
+import { basePrisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { logSignEvent } from "./events";
 import { signingOtpHash, safeEqualHex } from "./securityPolicy";
@@ -16,6 +16,20 @@ type RecipientIdentity = {
   identityVerifiedAt: Date | null;
   identityMethod: string | null;
   request: { id: string; title: string; identityMode: string; status: string; deletedAt: Date | null };
+};
+
+type RecipientIdentityRow = {
+  id: string;
+  tenantId: string;
+  name: string;
+  email: string | null;
+  identityVerifiedAt: Date | null;
+  identityMethod: string | null;
+  requestId: string;
+  requestTitle: string;
+  identityMode: string;
+  requestStatus: string;
+  requestDeletedAt: Date | null;
 };
 
 type ChallengeRow = {
@@ -50,21 +64,44 @@ export function identityStatus(recipient: RecipientIdentity): IdentityStatus {
   };
 }
 
+/**
+ * Trusted token lookup before ordinary guarded work. The query is deliberately
+ * narrow, rejects revoked links, and returns only the recipient + request facts
+ * needed by the identity ceremony. The route has already established the token's
+ * tenant scope through tokenTenant.ts; the tenant column is still selected and
+ * every later write repeats it explicitly.
+ */
 export async function loadRecipientIdentity(token: string): Promise<RecipientIdentity | null> {
-  const row = await prisma.signatureRecipient.findUnique({
-    where: { token },
-    select: {
-      id: true,
-      tenantId: true,
-      name: true,
-      email: true,
-      identityVerifiedAt: true,
-      identityMethod: true,
-      request: { select: { id: true, title: true, identityMode: true, status: true, deletedAt: true } },
-    },
-  });
+  const rows = await basePrisma.$queryRaw<RecipientIdentityRow[]>`
+    SELECT p."id", p."tenantId", p."name", p."email",
+           p."identityVerifiedAt", p."identityMethod",
+           r."id" AS "requestId", r."title" AS "requestTitle",
+           r."identityMode", r."status" AS "requestStatus",
+           r."deletedAt" AS "requestDeletedAt"
+    FROM "SignatureRecipient" p
+    JOIN "SignatureRequest" r
+      ON r."id" = p."requestId" AND r."tenantId" = p."tenantId"
+    WHERE p."token" = ${token}
+      AND p."tokenRevokedAt" IS NULL
+    LIMIT 1
+  `;
+  const row = rows[0];
   if (!row?.tenantId) return null;
-  return row as RecipientIdentity;
+  return {
+    id: row.id,
+    tenantId: row.tenantId,
+    name: row.name,
+    email: row.email,
+    identityVerifiedAt: row.identityVerifiedAt,
+    identityMethod: row.identityMethod,
+    request: {
+      id: row.requestId,
+      title: row.requestTitle,
+      identityMode: row.identityMode,
+      status: row.requestStatus,
+      deletedAt: row.requestDeletedAt,
+    },
+  };
 }
 
 export async function startEmailOtp(token: string): Promise<{ ok: boolean; status?: IdentityStatus; error?: string }> {
@@ -199,8 +236,5 @@ export async function verifyEmailOtp(
     metadata: { mode: "email_otp" },
   });
 
-  return {
-    ok: true,
-    status: { ...current, verified: true },
-  };
+  return { ok: true, status: { ...current, verified: true } };
 }
