@@ -84,12 +84,10 @@ export async function verifyAndSaveIntegration(
   // "never persist an unverified credential" invariant can be unit-tested
   // directly rather than asserted against this file's source text. Everything
   // this action adds around it is auth, wiring, auditing and revalidation.
-  const secrets = Object.values(values ?? {});
   const outcome = await commitVerifiedCredentials(integrationId, values ?? {}, {
     probe: (id, clean) => probeIntegration(id, clean),
     saveBundle: (clean) => putTenantCredentialBundle(tenantId, clean),
     recordVerified: () => recordIntegrationVerified(tenantId, integrationId),
-    recordFailure: (failure) => recordIntegrationFailure(tenantId, integrationId, failure, secrets),
   });
 
   if (outcome.kind === "unknown_integration") {

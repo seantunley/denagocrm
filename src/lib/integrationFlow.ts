@@ -134,6 +134,45 @@ export function flowFieldKeys(flow: IntegrationFlow): string[] {
   return flow.steps.flatMap((s) => [...s.fieldKeys]);
 }
 
+/**
+ * Keys the WIZARD insists on, even though the shared catalogue marks them
+ * optional.
+ *
+ * `required: false` on SMTP_SECURE is right for the per-key overrides page,
+ * where blank honestly means "leave whatever is stored alone". It is wrong here,
+ * because this flow's whole promise is that what got tested is what got saved —
+ * and blank broke that in both directions. The probe read blank as `false` and
+ * tested an unencrypted connection, while `putTenantCredentialBundle` skips
+ * empty values, so an existing `SMTP_SECURE=true` override survived untouched
+ * (or, with no override, the tenant kept falling back to a platform value that
+ * may be either). Either way the bundle that was verified is not the bundle that
+ * is stored — exactly the thing this feature exists to make impossible.
+ *
+ * The honest fix is to refuse to guess: encryption is on or off, the owner says
+ * which, and the value that passes the test is the value that gets written.
+ */
+const REQUIRED_IN_FLOW: ReadonlySet<string> = new Set(["SMTP_SECURE"]);
+
+function requiredInFlow(key: string): boolean {
+  return REQUIRED_IN_FLOW.has(key);
+}
+
+/**
+ * Which guided flows a credential key belongs to.
+ *
+ * Powers verification invalidation: the per-key save/clear controls in the
+ * overrides page write `TenantIntegrationCredential` directly, without going
+ * near the wizard, so whatever `IntegrationConnection` says about that
+ * integration stops being true the moment one of its keys changes. This maps the
+ * edited key back to the affected integration(s) so the stale verdict can be
+ * dropped rather than left on screen.
+ *
+ * A list, not a single id, because nothing stops two flows sharing a key.
+ */
+export function integrationsUsingCredentialKey(key: string): string[] {
+  return INTEGRATION_FLOWS.filter((flow) => flowFieldKeys(flow).includes(key)).map((flow) => flow.integrationId);
+}
+
 /** Field metadata (label/placeholder/required) for a key, from the shared catalogue. */
 export function flowField(integrationId: string, key: string): TenantCredentialField | null {
   const integration = TENANT_CREDENTIAL_INTEGRATIONS.find((i) => i.id === integrationId);
@@ -167,7 +206,7 @@ const VALIDATORS: Record<string, (raw: string) => string | null> = {
     if (port < 1 || port > 65535) return "The port must be between 1 and 65535.";
     return null;
   },
-  SMTP_SECURE: (v) => (v === "" || v === "true" || v === "false" ? null : "Choose whether encryption is on or off."),
+  SMTP_SECURE: (v) => (v === "true" || v === "false" ? null : "Choose whether encryption is on or off."),
   SMTP_USER: (v) => (v ? null : "Enter the username your mail server expects."),
   SMTP_PASS: (v) => (v ? null : "Enter the password for this mailbox."),
   SMTP_FROM: (v) => {
@@ -217,9 +256,9 @@ export function validateFlowStep(
   for (const key of step.fieldKeys) {
     const field = flowField(integrationId, key);
     const raw = (values[key] ?? "").trim();
-    // Optional fields (SMTP_SECURE) may be left blank; a supplied value is still
-    // shape-checked, so "maybe" never becomes "unchecked".
-    if (!raw && field?.required === false) continue;
+    // An optional field may be left blank — EXCEPT in this flow, where blank is
+    // not a value the wizard can honestly test (see requiredInFlow).
+    if (!raw && field?.required === false && !requiredInFlow(key)) continue;
     const message = VALIDATORS[key]?.(raw);
     if (message) errors[key] = message;
   }

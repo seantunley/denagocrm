@@ -45,3 +45,29 @@ CREATE INDEX IF NOT EXISTS "IntegrationConnection_tenantId_idx"
 -- attention" read, which filters on status within a tenant.
 CREATE INDEX IF NOT EXISTS "IntegrationConnection_tenantId_status_idx"
   ON "IntegrationConnection"("tenantId", "status");
+
+-- RLS. FORCE ROW LEVEL SECURITY has been live since 20260727130000_rls_enforce,
+-- so a tenant-owned table added after it without a policy has no DB-layer
+-- boundary at all — only the app guard, which src/lib/db.ts documents as
+-- defence-in-depth rather than the authoritative one. Every other tenant table
+-- added since carries this exact block; this one must too.
+--
+-- No `OR "tenantId" IS NULL` escape hatch. Unlike Role/RolePermission there is
+-- no such thing as a shared, tenantless integration connection — the column is
+-- NOT NULL precisely so there never can be — and a NULL-matching clause would
+-- be a hole rather than a convenience.
+--
+-- The bypass clause is the same one every other policy uses, so the platform
+-- console and the backup job keep working through withSystemScope.
+ALTER TABLE "IntegrationConnection" ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "IntegrationConnection_tenant_isolation" ON "IntegrationConnection";
+CREATE POLICY "IntegrationConnection_tenant_isolation" ON "IntegrationConnection"
+  USING (
+    current_setting('app.bypass_rls', true) = 'on'
+    OR "tenantId" = current_setting('app.current_tenant', true)
+  )
+  WITH CHECK (
+    current_setting('app.bypass_rls', true) = 'on'
+    OR "tenantId" = current_setting('app.current_tenant', true)
+  );
+ALTER TABLE "IntegrationConnection" FORCE ROW LEVEL SECURITY;

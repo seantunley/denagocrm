@@ -65,9 +65,6 @@ function spyDeps(probeResult: ProbeResult) {
     recordVerified: async () => {
       calls.verified++;
     },
-    recordFailure: async () => {
-      calls.failure++;
-    },
   };
   return { deps, calls, saved: () => savedValues };
 }
@@ -115,7 +112,18 @@ test("a failed connection test never persists the credential", async () => {
     "PERSISTED AN UNVERIFIED CREDENTIAL: the connection test failed but saveBundle was still called, which makes the test decorative",
   );
   assert.equal(calls.verified, 0, "a failed test must not mark the integration verified");
-  assert.equal(calls.failure, 1, "a failed test must record why, so the UI can show it");
+  // There is deliberately no recordFailure dependency to call. The probe tested
+  // CANDIDATE values that were never saved, so writing a failure against
+  // IntegrationConnection would stamp the health of the tenant's currently
+  // STORED bundle from a test of entirely different credentials — mistype a
+  // password beside a working integration and the working one flips to
+  // "Reconnect". Stored health is owned by retestIntegration (which probes what
+  // is stored) and noteIntegrationSendOutcome (which reports real sends).
+  assert.equal(
+    (deps as Record<string, unknown>).recordFailure,
+    undefined,
+    "a candidate probe must have no way to write failure state onto the stored bundle",
+  );
   assert.equal(saved(), null, "nothing at all should have been handed to the credential store");
 });
 
@@ -142,7 +150,6 @@ test("only a passing connection test persists, and it persists the whole bundle 
   assert.equal(outcome.kind, "connected");
   assert.equal(calls.save, 1, "a verified credential must be saved exactly once");
   assert.equal(calls.verified, 1, "a verified credential must be marked verified");
-  assert.equal(calls.failure, 0, "a passing test must not record a failure");
   assert.deepEqual(
     Object.keys(saved() ?? {}).sort(),
     Object.keys(GOOD_SMTP).sort(),
@@ -466,20 +473,39 @@ test("a validation message never echoes the value that was submitted", () => {
 });
 
 test("each step validates only its own fields, so a later blank never blocks Next", () => {
-  const errors = validateFlowStep("smtp", "server", { SMTP_HOST: "mail.example.com", SMTP_PORT: "587" });
+  const errors = validateFlowStep("smtp", "server", {
+    SMTP_HOST: "mail.example.com",
+    SMTP_PORT: "587",
+    SMTP_SECURE: "true",
+  });
   assert.deepEqual(errors, {}, "the sign-in step's empty password must not block the mail-server step");
 });
 
-test("the optional encryption field may be left blank but is still shape-checked when set", () => {
-  assert.deepEqual(validateFlowStep("smtp", "server", { SMTP_HOST: "a.example.com", SMTP_PORT: "587", SMTP_SECURE: "" }), {});
+test("encryption must be stated outright — blank is not a value this flow can honestly test", () => {
+  // THE BUNDLE THAT WAS TESTED MUST BE THE BUNDLE THAT IS STORED. Blank broke
+  // that in both directions: the probe read it as `false` and tested an
+  // unencrypted connection, while putTenantCredentialBundle skips empty values,
+  // so an existing SMTP_SECURE=true override survived untouched — verified one
+  // way, stored the other. The flow now refuses to guess.
+  const blank = validateFlowStep("smtp", "server", { SMTP_HOST: "a.example.com", SMTP_PORT: "587", SMTP_SECURE: "" });
+  assert.ok(blank.SMTP_SECURE, "blank encryption must be rejected, not silently probed as off");
+
   const bad = validateFlowStep("smtp", "server", { SMTP_HOST: "a.example.com", SMTP_PORT: "587", SMTP_SECURE: "maybe" });
   assert.ok(bad.SMTP_SECURE, "a supplied encryption value must still be validated");
+
+  for (const value of ["true", "false"]) {
+    assert.deepEqual(
+      validateFlowStep("smtp", "server", { SMTP_HOST: "a.example.com", SMTP_PORT: "587", SMTP_SECURE: value }),
+      {},
+      `an explicit "${value}" is exactly what the flow wants`,
+    );
+  }
 });
 
 test("common setup mistakes get a specific correction rather than a generic rejection", () => {
-  assert.match(validateFlowStep("smtp", "server", { SMTP_HOST: "https://mail.example.com", SMTP_PORT: "587" }).SMTP_HOST, /without a https/i);
-  assert.match(validateFlowStep("smtp", "server", { SMTP_HOST: "user@example.com", SMTP_PORT: "587" }).SMTP_HOST, /email address/i);
-  assert.match(validateFlowStep("smtp", "server", { SMTP_HOST: "a.example.com", SMTP_PORT: "70000" }).SMTP_PORT, /1 and 65535/);
+  assert.match(validateFlowStep("smtp", "server", { SMTP_HOST: "https://mail.example.com", SMTP_PORT: "587", SMTP_SECURE: "true" }).SMTP_HOST, /without a https/i);
+  assert.match(validateFlowStep("smtp", "server", { SMTP_HOST: "user@example.com", SMTP_PORT: "587", SMTP_SECURE: "true" }).SMTP_HOST, /email address/i);
+  assert.match(validateFlowStep("smtp", "server", { SMTP_HOST: "a.example.com", SMTP_PORT: "70000", SMTP_SECURE: "true" }).SMTP_PORT, /1 and 65535/);
   assert.match(
     validateFlowStep("whatsapp", "identity", { WA_PHONE_NUMBER_ID: "+27 21 555 0100" }).WA_PHONE_NUMBER_ID,
     /phone number itself/i,
@@ -559,4 +585,61 @@ test("the wizard masks every secret field it collects", () => {
       );
     }
   }
+});
+
+test("IntegrationConnection carries the same RLS policy every other tenant table does", () => {
+  // FORCE ROW LEVEL SECURITY has been live since 20260727130000_rls_enforce, so a
+  // tenant-owned table added after it without a policy has no database-layer
+  // boundary at all — only the app guard, which src/lib/db.ts documents as
+  // defence-in-depth rather than the authoritative one. This table shipped with
+  // tenantId and tenant indexes but none of the three RLS statements.
+  const migration = readFileSync(
+    join(root, "prisma/migrations/20260804093000_integration_connection/migration.sql"),
+    "utf8",
+  );
+  assert.match(migration, /ALTER TABLE "IntegrationConnection" ENABLE ROW LEVEL SECURITY/);
+  assert.match(migration, /ALTER TABLE "IntegrationConnection" FORCE ROW LEVEL SECURITY/);
+  assert.match(migration, /CREATE POLICY "IntegrationConnection_tenant_isolation"/);
+  assert.match(
+    migration,
+    /"tenantId" = current_setting\('app\.current_tenant', true\)/,
+    "the policy must match on the request's tenant, exactly as RepairIssue's does",
+  );
+  // Comment lines stripped: the migration DISCUSSES the NULL escape hatch in
+  // prose to explain why it is absent, and prose must not fail the check that
+  // the SQL itself never grants one.
+  const sql = migration
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("--"))
+    .join("\n");
+  assert.doesNotMatch(
+    sql,
+    /"tenantId" IS NULL/,
+    "there is no such thing as a tenantless integration connection — a NULL-matching clause would be a hole",
+  );
+});
+
+test("editing a credential by hand drops the verification verdict that was about the old one", () => {
+  // The per-key save/clear controls write TenantIntegrationCredential directly,
+  // never through the wizard — so after one runs, nothing about the stored
+  // bundle is proven. The page ranks lastVerifiedAt above override presence, so
+  // without invalidation a replaced (or deleted) password still reads
+  // "Connected, verified on the 3rd": the worst answer, confidently given.
+  const src = readFileSync(join(root, "src/app/actions/tenantCredentials.ts"), "utf8");
+  const save = src.slice(src.indexOf("export async function saveTenantCredentialOverride"), src.indexOf("export async function clearTenantCredentialOverride"));
+  const clear = src.slice(src.indexOf("export async function clearTenantCredentialOverride"));
+  assert.match(save, /invalidateVerificationForKey/, "saving a credential must invalidate its integration's verdict");
+  assert.match(clear, /invalidateVerificationForKey/, "clearing a credential must invalidate it too — reverting to the platform default changes what the bundle IS");
+
+  // And the invalidation must resolve the key back to its integration(s) rather
+  // than guessing, so a key shared by two flows clears both.
+  const flow = readFileSync(join(root, "src/lib/integrationFlow.ts"), "utf8");
+  assert.match(flow, /export function integrationsUsingCredentialKey/);
+  const conn = readFileSync(join(root, "src/lib/integrationConnection.ts"), "utf8");
+  assert.match(conn, /export async function clearIntegrationVerification/);
+  assert.match(
+    conn,
+    /deleteMany\(\{ where: \{ tenantId, integrationId \} \}\)/,
+    "invalidation must DELETE (never verified) rather than claim the provider rejected anything",
+  );
 });

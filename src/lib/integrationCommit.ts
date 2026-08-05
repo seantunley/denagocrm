@@ -32,8 +32,6 @@ export type CommitDeps = {
   saveBundle: (values: Record<string, string>) => Promise<void>;
   /** Marks the integration verified. Only after a pass. */
   recordVerified: () => Promise<void>;
-  /** Records why it failed (and flags reauth for auth-class failures). */
-  recordFailure: (failure: { code: ProbeFailureCode; message: string; blameStep: string }) => Promise<void>;
 };
 
 /**
@@ -68,7 +66,20 @@ export async function commitVerifiedCredentials(
   const result = await deps.probe(integrationId, values);
 
   if (!result.ok) {
-    await deps.recordFailure({ code: result.code, message: result.message, blameStep: result.blameStep });
+    // A CANDIDATE failure is NOT a verdict on what is stored, and there is
+    // deliberately no `recordFailure` dependency for it to write through.
+    //
+    // These values were typed into the wizard and — by the invariant above —
+    // never saved. Recording the failure against IntegrationConnection would
+    // stamp the health of the tenant's CURRENTLY STORED bundle from a probe of
+    // completely different credentials: mistype a password while a working
+    // integration is live, and the live one flips to "Reconnect" for a secret it
+    // has never seen. The owner already learns what went wrong from the returned
+    // outcome (the wizard renders it) and the action audits it.
+    //
+    // Failure state belongs to two places only: `retestIntegration`, which
+    // probes exactly what is stored, and `noteIntegrationSendOutcome`, which
+    // reports how a real send with the stored bundle actually went.
     return { kind: "failed", code: result.code, message: result.message, blameStep: result.blameStep };
   }
 

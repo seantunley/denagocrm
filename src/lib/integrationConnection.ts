@@ -169,3 +169,30 @@ export async function noteIntegrationSendOutcome(
     // Never let connection bookkeeping break a send.
   }
 }
+
+/**
+ * Drops the verification verdict for one integration, because the credentials
+ * underneath it just changed.
+ *
+ * The per-key save/clear controls on the overrides page write
+ * `TenantIntegrationCredential` directly, never through the wizard, so nothing
+ * about the stored bundle is proven afterwards — but the row here would happily
+ * keep reporting "Connected, verified on the 3rd" about a password that has
+ * since been replaced or deleted. The UI ranks `lastVerifiedAt` above override
+ * presence, so the stale verdict wins on screen: the worst possible answer,
+ * confidently given.
+ *
+ * DELETES rather than flags. "Never verified" is already a state this table
+ * models (a missing row) and it is exactly the true one — the new credentials
+ * have not been tested. Writing `reauth_required` instead would claim the
+ * provider rejected something, which nobody has asked it.
+ *
+ * Deletes by (tenantId, integrationId) with deleteMany, so invalidating an
+ * integration that was never verified is a no-op rather than a P2025.
+ */
+export async function clearIntegrationVerification(
+  tenantId: string,
+  integrationId: string,
+): Promise<void> {
+  await prisma.integrationConnection.deleteMany({ where: { tenantId, integrationId } });
+}
