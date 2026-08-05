@@ -5,6 +5,7 @@ import { logError } from "@/lib/errorLog";
 import { runInTenantScope } from "@/lib/tenantScope";
 import { advanceAfterSignature } from "./workflow";
 import { advanceWorkflow } from "@/lib/signflow/runtime";
+import { notifyApprover } from "./approvals";
 import { notifyCreatorDeclined, notifyCreatorRejected } from "./notify";
 
 const MAX_ATTEMPTS = 12;
@@ -13,7 +14,7 @@ type TransitionJob = {
   id: string;
   tenantId: string;
   requestId: string;
-  jobType: "advance_signature" | "decline_notify" | "advance_approval";
+  jobType: "advance_signature" | "decline_notify" | "advance_approval" | "approval_notify";
   payload: Record<string, unknown>;
   attempts: number;
 };
@@ -79,6 +80,14 @@ async function execute(job: TransitionJob): Promise<void> {
     case "advance_signature":
       await advanceAfterSignature(job.requestId);
       return;
+
+    case "approval_notify": {
+      const stepId = typeof job.payload.approvalStepId === "string" ? job.payload.approvalStepId : null;
+      if (!stepId) throw new Error("Approval-delivery job has no approvalStepId");
+      const result = await notifyApprover(stepId);
+      if (!result.ok) throw new Error(result.error || "Approval-link delivery failed");
+      return;
+    }
 
     case "decline_notify": {
       const recipientId = typeof job.payload.recipientId === "string" ? job.payload.recipientId : null;
