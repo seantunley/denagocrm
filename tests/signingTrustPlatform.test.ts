@@ -104,7 +104,7 @@ test("portable backup includes every signing storage class and trust table", () 
   }
   for (const table of ["SigningJob", "SigningIdentityChallenge", "LegalArtifact", "LegalArtifactValidation"]) {
     assert.match(backup, new RegExp(`data\\.${table}`));
-    assert.match(backup, new RegExp(`Missing signing trust table: \\${required}`));
+    assert.match(backup, new RegExp(`Missing signing trust table: \\${table}`));
   }
   assert.match(backup, /PORTABLE_BACKUP_VERSION = 3/);
 });
