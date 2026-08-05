@@ -256,6 +256,150 @@ test("the dashboard reuses the shared condition evaluator rather than a second o
   );
 });
 
+/* ── the drag actually moves something ────────────────────────────── */
+
+/*
+ * These are source contracts because the grid is a client component driving a
+ * DOM-measuring drag library, and there is no jsdom or renderer in this suite.
+ * What they pin is not styling — it is the one defect that made the feature look
+ * broken: the grid rendered straight from the SERVER's `cards` prop, so a drop
+ * changed nothing on screen until the server action returned. Local state has to
+ * be what is drawn, or there is no optimistic update at all.
+ */
+
+const GRID = () => src("src/components/dashboard/DashboardGrid.tsx");
+
+test("the grid renders from local order, not straight from the server prop", () => {
+  const grid = GRID();
+  assert.match(
+    grid,
+    /const visibleIds = order\.filter\(\(id\) => byId\.has\(id\)\)/,
+    "what is drawn must be derived from the local `order` state",
+  );
+  assert.match(
+    grid,
+    /\{visibleIds\.map\(\(id\) => \{/,
+    "the grid must map the locally-ordered ids, so a drop moves a card immediately",
+  );
+  // The regression itself: mapping the prop puts the server back in charge of
+  // the order and the optimistic update silently does nothing.
+  assert.ok(
+    !/\{cards\.map\(\(card\) => \(?\s*<SortableCard/.test(grid),
+    "the grid must not render by mapping the `cards` prop directly",
+  );
+});
+
+test("the drag reorders on drag-over and only saves on drop", () => {
+  const grid = GRID();
+  // Live reflow under the pointer. Without this the only feedback during a drag
+  // is the overlay chip, and the drop target is invisible.
+  assert.match(grid, /function onDragOver\(event: DragOverEvent\)/, "must handle drag-over");
+  assert.match(
+    grid,
+    /onDragOver=\{onDragOver\}/,
+    "the drag-over handler must be wired to the DndContext",
+  );
+  // Indices come from the FULL order, so a condition-hidden card keeps its slot.
+  const overBody = grid.split("function onDragOver")[1]?.split("function onDragEnd")[0] ?? "";
+  assert.ok(overBody.length > 0, "could not isolate the drag-over handler");
+  assert.match(
+    overBody,
+    /prev\.indexOf\(String\(active\.id\)\)/,
+    "the moved card's index must be resolved against the full order",
+  );
+  assert.match(
+    overBody,
+    /prev\.indexOf\(String\(over\.id\)\)/,
+    "the drop target's index must be resolved against the full order",
+  );
+  assert.ok(
+    !/visibleIds\.indexOf/.test(overBody),
+    "indices must not come from the visible subset, or hidden cards get shuffled to the end",
+  );
+  // A drag that ends where it started must not write.
+  const endBody = grid.split("function onDragEnd")[1]?.split("function onDragCancel")[0] ?? "";
+  assert.ok(endBody.length > 0, "could not isolate the drag-end handler");
+  assert.match(
+    endBody,
+    /every\(\(id, i\) => id === previous\[i\]\)\) return;/,
+    "an unchanged arrangement must not be persisted",
+  );
+});
+
+test("a cancelled drag restores the arrangement the user started from", () => {
+  const grid = GRID();
+  assert.match(grid, /beforeDrag\.current = order;/, "drag-start must snapshot the arrangement");
+  assert.match(
+    grid,
+    /function onDragCancel\(\) \{\s*setActiveId\(null\);\s*setOrder\(beforeDrag\.current\);/,
+    "a cancelled drag must put every card back",
+  );
+  assert.match(grid, /onDragCancel=\{onDragCancel\}/, "the cancel handler must be wired up");
+});
+
+test("the sortable strategy applies no transforms, because the cards are not uniform", () => {
+  const grid = GRID();
+  // rectSortingStrategy and its siblings displace the other items by transform,
+  // which assumes every item has the same rect. These span 1-3 columns with
+  // wildly different heights, so the preview lands in the wrong place.
+  assert.ok(
+    !/rectSortingStrategy|rectSwappingStrategy|verticalListSortingStrategy|horizontalListSortingStrategy/.test(
+      grid,
+    ),
+    "no size-uniform sorting strategy may be used for a mixed-span grid",
+  );
+  assert.match(
+    grid,
+    /const NO_TRANSFORM: SortingStrategy = \(\) => null;/,
+    "the strategy must return no transform",
+  );
+  assert.match(grid, /strategy=\{NO_TRANSFORM\}/, "SortableContext must use it");
+  // Something still has to follow the cursor.
+  assert.match(grid, /<DragOverlay/, "a drag overlay must give the user something in hand");
+});
+
+test("a re-render with an unchanged server layout does not clobber a local drag", () => {
+  const grid = GRID();
+  // `savedOrder` is a fresh array every server render. A reference-compared
+  // effect fires during the save transition — while the server still holds the
+  // OLD order — and yanks the dropped card back.
+  assert.ok(
+    !/\}, \[savedOrder\]\)/.test(grid),
+    "the re-seed effect must not depend on the savedOrder array identity",
+  );
+  assert.match(
+    grid,
+    /const seedKey = `\$\{savedOrder\.join\(","\)\}\|\$\{presentIds\.join\(","\)\}`;/,
+    "the re-seed must be keyed on the layout's contents",
+  );
+  assert.match(
+    grid,
+    /if \(seedRef\.current === seedKey\) return;/,
+    "an unchanged server layout must not reset local state",
+  );
+});
+
+test("a rendered card missing from the saved order is still drawn", () => {
+  const grid = GRID();
+  // Total by construction: the union can only ever grow the list, so no card
+  // can fall off the home screen because the two lists disagreed.
+  assert.match(
+    grid,
+    /function mergeOrder\(saved: readonly string\[\], present: readonly string\[\]\): string\[\] \{/,
+    "the order and the rendered cards must be reconciled",
+  );
+  assert.match(
+    grid,
+    /return \[\.\.\.saved, \.\.\.present\.filter\(\(id\) => !seen\.has\(id\)\)\];/,
+    "cards absent from the saved order must be appended, never dropped",
+  );
+  assert.match(
+    grid,
+    /useState<string\[\]>\(\(\) => mergeOrder\(savedOrder, presentIds\)\)/,
+    "the initial order must be the reconciled one",
+  );
+});
+
 /* ── one user's layout is never served to another ─────────────────── */
 
 test("the layout read is keyed on the session user and takes no arguments", () => {
