@@ -270,7 +270,7 @@ export async function putTenantCredential(tenantId: string, key: string, value: 
 /**
  * Writes a WHOLE integration bundle for a tenant in ONE transaction.
  *
- * The guided config flow (src/app/actions/integrationFlow.ts) commits every
+ * The guided integration setup (src/app/actions/integrationFlow.ts) commits every
  * field of an integration at once, only after a live connection test passed.
  * Looping `putTenantCredential` would make that commit non-atomic: a crash
  * between two keys leaves the tenant with a half-written bundle — precisely the

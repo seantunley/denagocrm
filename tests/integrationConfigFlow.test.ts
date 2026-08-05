@@ -298,7 +298,7 @@ test("the audit entries written by the flow record key names, never values", () 
     assert.doesNotMatch(
       call,
       /\bclean\b|\bvalues\b|\bsecrets\b/,
-      "LEAKED SECRET: an audit entry in the config flow carries the submitted credential values",
+      "LEAKED SECRET: an audit entry in the integration setup carries the submitted credential values",
     );
   }
 });
