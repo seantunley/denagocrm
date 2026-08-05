@@ -4,6 +4,7 @@ import { basePrisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { logSignEvent } from "./events";
 import { signingOtpHash, safeEqualHex } from "./securityPolicy";
+import { resolveSigningRecipientToken } from "./tokenVault";
 
 const OTP_TTL_MS = 10 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
@@ -64,14 +65,10 @@ export function identityStatus(recipient: RecipientIdentity): IdentityStatus {
   };
 }
 
-/**
- * Trusted token lookup before ordinary guarded work. The query is deliberately
- * narrow, rejects revoked links, and returns only the recipient + request facts
- * needed by the identity ceremony. The route has already established the token's
- * tenant scope through tokenTenant.ts; the tenant column is still selected and
- * every later write repeats it explicitly.
- */
+/** Resolve the bearer digest, then load only that tenant-owned recipient. */
 export async function loadRecipientIdentity(token: string): Promise<RecipientIdentity | null> {
+  const owner = await resolveSigningRecipientToken(token);
+  if (!owner) return null;
   const rows = await basePrisma.$queryRaw<RecipientIdentityRow[]>`
     SELECT p."id", p."tenantId", p."name", p."email",
            p."identityVerifiedAt", p."identityMethod",
@@ -81,12 +78,14 @@ export async function loadRecipientIdentity(token: string): Promise<RecipientIde
     FROM "SignatureRecipient" p
     JOIN "SignatureRequest" r
       ON r."id" = p."requestId" AND r."tenantId" = p."tenantId"
-    WHERE p."token" = ${token}
+    WHERE p."id" = ${owner.id}
+      AND p."tenantId" = ${owner.tenantId}
+      AND p."requestId" = ${owner.requestId}
       AND p."tokenRevokedAt" IS NULL
     LIMIT 1
   `;
   const row = rows[0];
-  if (!row?.tenantId) return null;
+  if (!row) return null;
   return {
     id: row.id,
     tenantId: row.tenantId,
