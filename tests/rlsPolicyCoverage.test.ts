@@ -222,11 +222,25 @@ test("the gap migration covers exactly what production was missing", () => {
     0,
     "no top-level ALTER TABLE — every statement must sit inside an existence check",
   );
+  // Guarded on the tenantId COLUMN, not on the table.
+  //
+  // Two CI failures got this here. Unguarded: P1014, the table does not exist —
+  // five of the seven are prod-only orphans. Guarded on pg_tables: `column
+  // "tenantId" does not exist` — BackupRun's table IS created by a migration and
+  // only production has the column. The policy body depends on the column, so
+  // that is the thing to ask for, and information_schema returns no row whether
+  // the column or the whole table is missing.
   assert.equal(
-    (uncommented.match(/IF EXISTS \(SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = '/g) ?? []).length,
+    (uncommented.match(/FROM information_schema\.columns/g) ?? []).length,
     7,
-    "one existence guard per table",
+    "one column guard per table",
   );
+  assert.equal(
+    (uncommented.match(/AND column_name = 'tenantId'/g) ?? []).length,
+    7,
+    "each guard must ask for the column the policy actually reads",
+  );
+  assert.doesNotMatch(uncommented, /FROM pg_tables/, "guarding on the table is the wrong question");
   // Dollar-quoting has to balance or the whole script is one syntax error, and
   // an unbalanced DO block is not something a source test can shrug off.
   assert.equal((uncommented.match(/DO \$\$/g) ?? []).length, 7);
