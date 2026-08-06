@@ -68,7 +68,7 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
   // r.token is the stored DIGEST. Building the URL from it sends the customer a
   // link the public route hashes again and cannot resolve — accepted by SMTP,
   // recorded as sent, and unusable on arrival.
-  const raw = await usableCapability("signatureRecipient", r.id, r.tokenCiphertext);
+  const raw = await usableCapability("signatureRecipient", r.id, r.tokenCiphertext, r.token);
   if (!raw) return { reachable: true, delivered: false };
   const url = signUrl(raw);
   const verb = opts?.reminder ? "Reminder — please sign" : "Please sign your document";

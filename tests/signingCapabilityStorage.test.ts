@@ -263,3 +263,53 @@ test("evidence is append-only and chained by the database, not by convention", (
   // rather than chaining a hash of nothing.
   assert.match(chain, /must arrive with an application-computed payloadHash/);
 });
+
+test("the CRM never presents a stored digest as a usable link", () => {
+  const block = read("src/components/SigningBlock.tsx");
+  // The card built `/signing/${r.token}` from the stored digest, which the public
+  // route hashes again — so email links worked and anything copied from the CRM
+  // was dead. Worse than an obvious failure, because it looks fine until a
+  // customer says otherwise.
+  assert.doesNotMatch(block, /\$\{origin\}\/signing\/\$\{token\}/);
+  assert.doesNotMatch(block, /signerLink\(r\.token\)/);
+  assert.match(block, /recordSigningLink\(kind, id, r\.id\)/, "the link must come from the server");
+
+  const action = read("src/app/actions/recordSigning.ts");
+  const fn = action.slice(action.indexOf("export async function recordSigningLink"));
+  assert.match(fn, /requireRecordSigningAccess\(kind, id\)/, "…under an access check");
+  assert.match(fn, /requestId: request\.requestId/, "…scoped through the request");
+  assert.match(fn, /usableCapability\(/, "…revealing or rotating, never exposing the digest");
+});
+
+test("rotation claims the capability it observed", () => {
+  const vault = read("src/lib/signing/tokenVault.ts");
+  // Two concurrent rotations could both succeed and send different raw links;
+  // only the last digest written resolves, so an already-delivered link is dead.
+  assert.match(vault, /observedDigest\?: string \| null/);
+  assert.match(vault, /\{ id, tokenRevokedAt: null, token: observedDigest \}/);
+  for (const [file, call] of [
+    ["src/lib/signing/approvals.ts", /usableCapability\("approvalStep", step\.id, step\.tokenCiphertext, step\.token\)/],
+    ["src/lib/signing/dispatch.ts", /usableCapability\("signatureRecipient", r\.id, r\.tokenCiphertext, r\.token\)/],
+  ] as const) {
+    assert.match(read(file), call, `${file} must pass the digest it observed`);
+  }
+});
+
+test("the workspace OTP policy is what decides by default", () => {
+  const block = read("src/components/SigningBlock.tsx");
+  const action = read("src/app/actions/recordSigning.ts");
+  // A checkbox always sends an explicit mode, and an explicit mode outranks the
+  // policy by design — so the configured "money" default never decided anything.
+  assert.match(block, /"default" \| "otp" \| "link"/);
+  assert.match(block, /identityChoice === "default" \? undefined : identityChoice/);
+  assert.doesNotMatch(action, /identityMode: SigningIdentityMode = "link"/, "absence, not a default");
+});
+
+test("the timestamp comment does not claim more than the code proves", () => {
+  const source = read("src/lib/signing/timestamp.ts");
+  // Without CMS signature validation, and over plain HTTP, an active attacker
+  // can fabricate a response carrying our imprint and nonce.
+  assert.doesNotMatch(source, /proves the authority ISSUED it/);
+  assert.match(source, /proves NOTHING on its own/);
+  assert.match(source, /fabricate a reply/);
+});

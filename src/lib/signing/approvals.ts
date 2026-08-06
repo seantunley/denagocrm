@@ -81,7 +81,7 @@ export async function notifyApprover(stepId: string): Promise<ApprovalDeliveryRe
   // approval email. The raw capability is recovered from its ciphertext, and if
   // that cannot be read (no key when the row was written, or a rotated key) a
   // fresh capability is minted rather than sending something unusable.
-  const raw = await usableCapability("approvalStep", step.id, step.tokenCiphertext);
+  const raw = await usableCapability("approvalStep", step.id, step.tokenCiphertext, step.token);
   if (!raw) return { ok: false, error: `Could not prepare an approval link for “${step.label}”` };
   // ATOMIC CLAIM, taken as LATE as possible and RELEASED on failure.
   //

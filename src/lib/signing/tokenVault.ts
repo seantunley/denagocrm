@@ -97,12 +97,22 @@ export async function usableCapability(
   model: "signatureRecipient" | "approvalStep",
   id: string,
   ciphertext: string | null | undefined,
+  /**
+   * The digest the caller observed. Rotation is conditioned on it, so two
+   * concurrent rotations cannot both succeed and send DIFFERENT raw links —
+   * only the last digest written would resolve, leaving an already-delivered
+   * link dead on arrival. The loser gets null and reports a failure to prepare
+   * rather than sending something that will not work.
+   */
+  observedDigest?: string | null,
 ): Promise<string | null> {
   const existing = revealSignCapability(ciphertext);
   if (existing) return existing;
   const rotated = newSignCapability();
   const { basePrisma } = await import("@/lib/db");
-  const where = { id, tokenRevokedAt: null };
+  const where = observedDigest
+    ? { id, tokenRevokedAt: null, token: observedDigest }
+    : { id, tokenRevokedAt: null };
   const data = { token: rotated.digest, tokenCiphertext: rotated.ciphertext };
   // Two calls rather than a union-typed delegate: Prisma's per-model argument
   // types are not mutually assignable, and casting them together would give up

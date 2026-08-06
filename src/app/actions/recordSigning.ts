@@ -19,6 +19,8 @@ import { defaultBuilderTemplateId } from "@/lib/docbuilder/store";
 import { resolveEnvelope } from "@/lib/signing/autoEnvelope";
 import { renderEnvelopePdf } from "@/lib/signing/render";
 import { createSignatureRequestFromDoc, type SigningIdentityMode } from "@/lib/signing/service";
+import { usableCapability } from "@/lib/signing/tokenVault";
+import { signUrl } from "@/lib/signing/dispatch";
 import { dispatchRequest, notifyRecipient } from "@/lib/signing/dispatch";
 import { logSignEvent } from "@/lib/signing/events";
 import { activeRecordRequest, isLockedForSigning, type QuoteSigningView } from "@/lib/signing/record";
@@ -166,7 +168,10 @@ export async function startRecordSigning(
    * contact details, so asking for SMS on a signer with no number on file
    * degrades to "we cannot verify you" rather than a code sent nowhere.
    */
-  identityMode: SigningIdentityMode = "link",
+  // NO DEFAULT. Defaulting to "link" here made every caller an explicit choice
+  // and silently disabled the workspace policy — the service treats an explicit
+  // mode as outranking it, correctly, so the default has to be absence.
+  identityMode?: SigningIdentityMode,
 ): Promise<Result> {
   const user = await requireRecordSigningAccess(kind, id);
   const quoteId = kind === "quote" ? id : null;
@@ -794,4 +799,47 @@ export async function voidRecordSigning(
   });
   revalidatePath(recordPath(kind, id));
   return { ok: true, requestId: state.requestId };
+}
+
+
+/**
+ * The shareable signing URL for one recipient, produced on demand.
+ *
+ * The card used to render `recipient.token` straight into a URL. That value is
+ * now the stored DIGEST, and the public route hashes what arrives before it
+ * queries — so the copied link resolved to hash(hash(raw)) and matched nothing.
+ * Email links worked; anything copied from the CRM was dead, which is worse than
+ * an obvious failure because it looks fine until a customer says otherwise.
+ *
+ * The raw capability exists only in ciphertext, so producing a link is a
+ * privileged server operation rather than something the page can assemble: it
+ * re-checks access, then reveals or atomically rotates. Rotation invalidates a
+ * previously emailed link, which is the honest trade — the alternative is
+ * handing someone a URL that cannot work.
+ */
+export async function recordSigningLink(
+  kind: Kind,
+  id: string,
+  recipientId: string,
+): Promise<{ url: string } | { error: string }> {
+  await requireRecordSigningAccess(kind, id);
+  const quoteId = kind === "quote" ? id : null;
+  const jobCardId = kind === "jobcard" ? id : null;
+
+  const request = await activeRecordRequest({ quoteId, jobCardId });
+  if (!request) return { error: "There is no open signing request for this record." };
+
+  const recipient = await prisma.signatureRecipient.findFirst({
+    // Scoped through the request, so a recipient id from another record cannot
+    // be used to mint a link here.
+    where: { id: recipientId, requestId: request.requestId },
+    select: { id: true, token: true, tokenCiphertext: true, tokenRevokedAt: true },
+  });
+  if (!recipient || recipient.tokenRevokedAt) return { error: "That signing link is no longer active." };
+
+  const raw = await usableCapability(
+    "signatureRecipient", recipient.id, recipient.tokenCiphertext, recipient.token,
+  );
+  if (!raw) return { error: "Could not prepare a signing link. Try sending the document again." };
+  return { url: signUrl(raw) };
 }

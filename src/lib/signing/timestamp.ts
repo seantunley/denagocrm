@@ -275,11 +275,20 @@ export async function requestTrustedTimestamp(digest: Buffer): Promise<TrustedTi
  * ── What this still does NOT do ─────────────────────────────────────────────
  *
  * It does not validate the CMS signature, the authority's certificate chain, or
- * the timestamping EKU against trusted roots. Those need a maintained root store
- * and belong in a verification tool rather than on the signing path — so until
- * that exists, a token proves the authority ISSUED it for this hash, not that
- * the issuer is one you have decided to trust. The certificate wording says
- * exactly that and no more.
+ * the timestamping EKU against trusted roots.
+ *
+ * So a stored token currently proves NOTHING on its own. An earlier version of
+ * this comment said it "proves the authority issued it for this hash" — that is
+ * wrong, and wrong in the direction that matters. The response signature is not
+ * checked, and the transport is plain HTTP, so an active network attacker can
+ * fabricate a reply carrying the imprint and nonce we sent and a time of their
+ * choosing. The imprint and nonce checks stop a token for ANOTHER document or a
+ * replayed older response from being accepted; they do not establish that a
+ * timestamp authority produced it at all.
+ *
+ * Until the CMS signature and chain are validated, treat this as a convenience
+ * record, not evidence — and do not let any customer-facing wording imply
+ * otherwise.
  */
 export function timestampCoversDigest(tokenBase64: string, digest: Buffer): boolean {
   try {
