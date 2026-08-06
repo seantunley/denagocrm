@@ -153,6 +153,28 @@ async function checkRecordActive(
   return { error: null, leadId: null, version: jobCard.updatedAt.getTime() };
 }
 
+/**
+ * Is this uploaded file referenced by anything durable?
+ *
+ * Checks BOTH references the preparation transaction files — the request's
+ * unsignedPdfRef and the Document row's storedName — unfiltered, so a
+ * soft-deleted request still counts as a reference. Returns false (retain) on
+ * any error or unexpected answer.
+ */
+async function unsignedPdfIsSafeToDelete(storedName: string): Promise<boolean> {
+  try {
+    const [request, document] = await Promise.all([
+      basePrisma.signatureRequest.findFirst({ where: { unsignedPdfRef: storedName }, select: { id: true } }),
+      basePrisma.document.findFirst({ where: { storedName }, select: { id: true } }),
+    ]);
+    return request === null && document === null;
+  } catch {
+    // The failure that lost the commit acknowledgement is usually the same one
+    // that breaks this probe. Uncertainty retains.
+    return false;
+  }
+}
+
 export async function startRecordSigning(
   kind: Kind,
   id: string,
@@ -311,11 +333,23 @@ export async function startRecordSigning(
     });
     if (outcome.kind === "created") committedRequestId = outcome.requestId;
   } finally {
-    // Retain the rendered (unsigned) PDF only when a request COMMITTED referencing
-    // it. committedRequestId is assigned only AFTER the transaction promise
-    // resolves, so a commit failure (callback returns, commit then throws) also
-    // cleans the blob — no orphaned customer/commercial data.
-    if (!committedRequestId) await deleteFile(storedName).catch(() => {});
+    // ASK THE DATABASE, never infer from the thrown error.
+    //
+    // This used to delete the blob whenever the transaction promise did not
+    // resolve — reasoning that a rejection meant nothing committed. That is the
+    // exact mistake behind the Q-1010 signed-PDF loss: a thrown COMMIT
+    // acknowledgement is not proof of rollback. If PostgreSQL committed and only
+    // the acknowledgement was lost, the Document row and the SignatureRequest
+    // both name this file, and deleting it destroys the document underneath
+    // records that say it exists.
+    //
+    // So the blob is removed only when a positive read proves NOTHING durable
+    // references it. Any uncertainty — an error, an unexpected shape, a broken
+    // connection (usually the same one that lost the acknowledgement) — retains
+    // the file. A stranded blob costs storage; a deleted one loses the contract.
+    if (!committedRequestId && (await unsignedPdfIsSafeToDelete(storedName))) {
+      await deleteFile(storedName).catch(() => {});
+    }
   }
   if (outcome.kind === "stale") {
     return { ok: false, error: "This record changed while the signing document was being prepared — please try again." };

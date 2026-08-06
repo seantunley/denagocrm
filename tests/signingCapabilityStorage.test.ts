@@ -338,3 +338,37 @@ test("exactly one thing sends an approval email", () => {
   const sendAt = approvals.indexOf("const result = await sendEmail");
   assert.ok(sendAt !== -1 && sentAt > sendAt, "evidence follows the send, never precedes it");
 });
+
+test("artifact validation actually validates the evidence chain", () => {
+  const worker = read("src/lib/signing/jobWorker.ts");
+  // The manifest exported the chain columns and then marked itself valid on the
+  // PDF hash alone — a bundle stamped "valid" that never looked at the thing it
+  // was certifying is worse than no bundle.
+  assert.match(worker, /import \{ verifyEvidenceChain \}/);
+  assert.match(worker, /evidence chain broken at \$\{chainResult\.brokenAt\}/);
+  const pushAt = worker.indexOf("evidence chain broken at");
+  const verdictAt = worker.indexOf("${errors.length === 0}");
+  assert.ok(pushAt !== -1 && verdictAt > pushAt, "a chain break must reach the recorded verdict");
+  // sequence is the authoritative order; createdAt can tie and is not what the
+  // chain is built over.
+  assert.match(worker, /ORDER BY "sequence"/);
+});
+
+test("the certificate claims only what the system can show", () => {
+  const complete = read("src/lib/signing/complete.ts");
+  // The wording promised an independent RFC 3161 attestation while nothing
+  // verifies the response signature — so the system cannot establish that any
+  // authority issued it. A customer-facing document must not assert that.
+  assert.doesNotMatch(complete, /independent RFC 3161 timestamp authority/);
+  assert.doesNotMatch(complete, /attestation issued/);
+  assert.match(complete, /times recorded above are this system/);
+});
+
+test("a failed capability does not strand a recipient mid-send", () => {
+  const dispatch = read("src/lib/signing/dispatch.ts");
+  // notifyRecipient claims pending -> sending before preparing the capability.
+  // Returning without undoing that leaves the recipient stuck forever: no retry
+  // picks them up and the card shows a send that never finishes. Newly reachable
+  // now that "Show link" can rotate and win the same compare-and-swap.
+  assert.match(dispatch, /status: "sending" \}, data: \{ status: "pending", sendingAt: null \}/);
+});

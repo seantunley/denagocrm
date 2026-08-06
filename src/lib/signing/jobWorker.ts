@@ -11,6 +11,7 @@ import { runPostCompletion } from "./postComplete";
 import { COMPLETED_EVENT, POST_COMPLETION_EVENT } from "./completionFanout";
 import { sourceSignedByThisRequest } from "./recoveryScope";
 import { signingSecurityMode } from "./securityPolicy";
+import { verifyEvidenceChain } from "./evidenceHash";
 
 const MAX_JOB_ATTEMPTS = 12;
 
@@ -335,9 +336,40 @@ async function executeArtifactVerification(job: SigningJob): Promise<void> {
       SELECT "id", "recipientId", "type", "actor", "channel", "ip", "userAgent", "metadata", "createdAt",
              "sequence", "prevHash", "payloadHash", "eventHash"
       FROM "SignatureEvent" WHERE "requestId" = ${job.requestId} AND "tenantId" = ${job.tenantId}
-      ORDER BY "createdAt", "id"
+      -- SEQUENCE is the authoritative order; createdAt can tie and is not what
+      -- the chain is built over, so verifying in that order can report a break
+      -- that does not exist (or miss one that does).
+      ORDER BY "sequence"
     `,
   ]);
+
+  // THE CHAIN IS THE EVIDENCE, so validation has to check it.
+  //
+  // The manifest exported sequence/prevHash/payloadHash/eventHash and then
+  // marked itself valid on the PDF hash alone — so a broken chain produced a
+  // bundle stamped "valid", which is worse than no bundle: it certifies the one
+  // thing it did not look at.
+  const chainResult = verifyEvidenceChain(
+    (events as Array<Record<string, unknown>>).map((row) => ({
+      id: String(row.id),
+      sequence: Number(row.sequence),
+      prevHash: String(row.prevHash ?? ""),
+      payloadHash: String(row.payloadHash ?? ""),
+      eventHash: String(row.eventHash ?? ""),
+      requestId: job.requestId,
+      recipientId: (row.recipientId as string | null) ?? null,
+      type: String(row.type ?? ""),
+      actor: String(row.actor ?? ""),
+      channel: (row.channel as string | null) ?? null,
+      ip: (row.ip as string | null) ?? null,
+      userAgent: (row.userAgent as string | null) ?? null,
+      metadata: row.metadata ?? {},
+      createdAt: row.createdAt instanceof Date ? row.createdAt : new Date(String(row.createdAt)),
+    })),
+  );
+  if (!chainResult.ok) {
+    errors.push(`evidence chain broken at ${chainResult.brokenAt}: ${chainResult.reason}`);
+  }
 
   const manifest = {
     schema: "denago-signing-evidence/v1",
