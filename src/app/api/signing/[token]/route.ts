@@ -60,8 +60,11 @@ async function handleSign(rawToken: string, request: Request): Promise<Response>
   if (recipient.status === "signed") return new Response("Already signed", { status: 409 });
   if (recipient.status === "declined") return new Response("You have declined this document.", { status: 409 });
   if (recipient.role === "viewer") return new Response("View only", { status: 403 });
+  if (envelope.workflowGraphJson && (!recipient.nodeId || recipient.nodeId !== envelope.currentNodeId)) {
+    return new Response("This workflow has not reached your signing step.", { status: 409 });
+  }
 
-  if (envelope.ordering === "sequential") {
+  if (!envelope.workflowGraphJson && envelope.ordering === "sequential") {
     const earlier = await prisma.signatureRecipient.findFirst({
       where: { requestId: envelope.id, role: { not: "viewer" }, order: { lt: recipient.order }, status: { not: "signed" } },
       select: { id: true },
@@ -111,13 +114,25 @@ async function handleSign(rawToken: string, request: Request): Promise<Response>
     }
 
     await prisma.$transaction(async (tx) => {
-      const rows = await tx.$queryRaw<Array<{ status: string; deletedAt: Date | null; expiresAt: Date | null; ordering: string }>>(Prisma.sql`
-        SELECT status,"deletedAt","expiresAt",ordering FROM "SignatureRequest" WHERE id=${envelope.id} FOR UPDATE
+      const rows = await tx.$queryRaw<Array<{
+        status: string;
+        deletedAt: Date | null;
+        expiresAt: Date | null;
+        ordering: string;
+        hasWorkflow: boolean;
+        currentNodeId: string | null;
+      }>>(Prisma.sql`
+        SELECT status,"deletedAt","expiresAt",ordering,
+          ("workflowGraphJson" IS NOT NULL) AS "hasWorkflow","currentNodeId"
+          FROM "SignatureRequest" WHERE id=${envelope.id} FOR UPDATE
       `);
       const locked = rows[0];
       if (!locked || locked.deletedAt || unavailable(locked.status)) throw new SignAbort(409, "This document can no longer be signed.");
       if (locked.expiresAt && locked.expiresAt < new Date()) throw new SignAbort(409, "This signing link has expired.");
-      if (locked.ordering === "sequential") {
+      if (locked.hasWorkflow && (!recipient.nodeId || recipient.nodeId !== locked.currentNodeId)) {
+        throw new SignAbort(409, "This workflow has not reached your signing step.");
+      }
+      if (!locked.hasWorkflow && locked.ordering === "sequential") {
         const earlier = await tx.signatureRecipient.findFirst({
           where: { requestId: envelope.id, role: { not: "viewer" }, order: { lt: recipient.order }, status: { not: "signed" } }, select: { id: true },
         });
