@@ -77,12 +77,6 @@ function isTrustedBlobRef(ref: string): boolean {
   try { const u = new URL(ref); return u.protocol === "https:" && BLOB_HOST.test(u.hostname); }
   catch { return false; }
 }
-function classifyRef(ref: string): "blob" | "local" {
-  if (isTrustedBlobRef(ref)) return "blob";
-  if (isLocalRef(ref)) return "local";
-  throw new Error("Refusing an unrecognised storage reference");
-}
-const isBlobRef = (ref: string) => classifyRef(ref) === "blob";
 
 export const MAX_BLOB_BYTES = Number(process.env.MAX_BLOB_READ_BYTES ?? 64 * 1024 * 1024);
 export class BlobTooLargeError extends Error {}
@@ -98,12 +92,19 @@ export async function assertOwnedBlob(ref: string): Promise<OwnedBlob> {
       return { size: meta.size, contentType: meta.contentType, pathname: meta.pathname };
     } catch { /* try other owned store */ }
   }
-  throw new Error("Refusing a Blob URL that is not in an application-owned store");
+  throw new Error("Refusing a Blob URL that is not in our store");
 }
 
 function isLocalRef(ref: string): boolean {
   return ref.length > 0 && !ref.includes("/") && !ref.includes("\\") && !ref.includes("\0") && ref !== "." && ref !== ".." && !path.isAbsolute(ref);
 }
+
+function classifyRef(ref: string): "blob" | "local" {
+  if (isTrustedBlobRef(ref)) return "blob";
+  if (isLocalRef(ref)) return "local";
+  throw new Error("Refusing an unrecognised storage reference");
+}
+const isBlobRef = (ref: string) => classifyRef(ref) === "blob";
 
 export function directReadUrl(ref: string): string | null {
   if (!isTrustedBlobRef(ref) || isPrivateBlobRef(ref)) return null;
