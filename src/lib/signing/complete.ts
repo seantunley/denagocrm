@@ -6,12 +6,12 @@ import { parseDocument } from "@/lib/doceditor/model";
 import { renderDocumentHtml, type StampField } from "@/lib/doceditor/serialize";
 import { htmlToPdf } from "@/lib/customDocs";
 import { sealPdfWithEvidence } from "@/lib/pdf/seal";
-import { saveFile, readFile, deleteFile } from "@/lib/storage";
+import { saveFile, readFile } from "@/lib/storage";
 import { formatDateTime } from "@/lib/format";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { logoDataUri } from "./render";
 import { isRequestClosed } from "./status";
-import { registerArtifactUpload, markArtifactState, recordLegalArtifact } from "./artifactCustody";
+import { registerArtifactUpload, markArtifactState, recordLegalArtifact, scheduleOrphanSettlement } from "./artifactCustody";
 import { signingReleaseId } from "./securityConfig";
 import type { FrozenRenderContext } from "./frozenSource";
 
@@ -121,6 +121,7 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   const leaseOwner = crypto.randomUUID();
   if (!(await acquireCompletionLease(requestId, leaseOwner))) return;
 
+  let tenantId: string | null = null;
   let storedName: string | null = null;
   let timestampTokenRef: string | null = null;
   let sourceSigned = false;
@@ -136,6 +137,8 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       `.catch(() => {});
       return;
     }
+    tenantId = req.tenantId;
+    const requestTenantId = tenantId;
     const doc = parseDocument(req.snapshotJson);
     if (!doc) throw new Error("Frozen document snapshot is invalid");
     const extra = await extendedRequest(requestId);
@@ -173,7 +176,7 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       hideOverlays: true,
       stampedFields,
       appendHtml: certificateHtml({
-        title: req.title, requestId, tenantId: req.tenantId, canonicalSourceHash: extra.canonicalSourceHash,
+        title: req.title, requestId, tenantId: requestTenantId, canonicalSourceHash: extra.canonicalSourceHash,
         consentVersion: extra.consentVersion, releaseId: extra.releaseId, rows: recipientRows,
       }) + acknowledgementsHtml(shared.map((field) => ({
         id: field.id, label: field.label, kind: field.kind, page: field.page,
@@ -187,11 +190,11 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     const hash = crypto.createHash("sha256").update(pdf).digest("hex");
     const signedPdfRef = await saveFile(pdf, `${req.title} (signed).pdf`, "application/pdf");
     storedName = signedPdfRef;
-    await registerArtifactUpload({ tenantId: req.tenantId, envelopeId: requestId, kind: "signed_pdf", objectRef: signedPdfRef, bytes: pdf });
+    await registerArtifactUpload({ tenantId: requestTenantId, envelopeId: requestId, kind: "signed_pdf", objectRef: signedPdfRef, bytes: pdf });
     if (seal.timestampToken) {
       const timestampRef = await saveFile(seal.timestampToken, `${req.title}.rfc3161.tsr`, "application/timestamp-reply");
       timestampTokenRef = timestampRef;
-      await registerArtifactUpload({ tenantId: req.tenantId, envelopeId: requestId, kind: "timestamp_token", objectRef: timestampRef, bytes: seal.timestampToken });
+      await registerArtifactUpload({ tenantId: requestTenantId, envelopeId: requestId, kind: "timestamp_token", objectRef: timestampRef, bytes: seal.timestampToken });
     }
 
     const firstSigner = signers.find((row) => row.status === "signed");
@@ -202,7 +205,7 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       await tx.$executeRaw`SELECT id FROM "SignatureRequest" WHERE id=${requestId} FOR UPDATE`;
       const document = await tx.document.create({
         data: {
-          tenantId: req.tenantId,
+          tenantId: requestTenantId,
           fileName: `${req.title} (signed).pdf`, storedName: signedPdfRef, mimeType: "application/pdf", sizeBytes: pdf.length,
           quoteId: req.quoteId, jobCardId: req.jobCardId, contactId: req.contactId, tag: "signed", uploadedById: uploaderId,
         },
@@ -241,16 +244,16 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       }
 
       await recordLegalArtifact({
-        tenantId: req.tenantId, envelopeId: requestId, documentId: document.id, objectRef: signedPdfRef, sha256: hash,
+        tenantId: requestTenantId, envelopeId: requestId, documentId: document.id, objectRef: signedPdfRef, sha256: hash,
         sizeBytes: pdf.length, certificateFingerprint: seal.certificateFingerprint, certificateChain: seal.certificateChain,
         keyId: seal.keyId, trustPolicy: seal.trustPolicy, timestampTokenRef,
         validationReport: seal.validationReport,
       }, tx);
-      await markArtifactState({ tenantId: req.tenantId, objectRef: signedPdfRef, kind: "signed_pdf", envelopeId: requestId, state: "sealed" }, tx);
-      if (timestampTokenRef) await markArtifactState({ tenantId: req.tenantId, objectRef: timestampTokenRef, kind: "timestamp_token", envelopeId: requestId, state: "retained" }, tx);
+      await markArtifactState({ tenantId: requestTenantId, objectRef: signedPdfRef, kind: "signed_pdf", envelopeId: requestId, state: "sealed" }, tx);
+      if (timestampTokenRef) await markArtifactState({ tenantId: requestTenantId, objectRef: timestampTokenRef, kind: "timestamp_token", envelopeId: requestId, state: "retained" }, tx);
       await tx.signatureEvent.create({
         data: {
-          tenantId: req.tenantId, requestId, type: "sealed", actor: "system", channel: "worker",
+          tenantId: requestTenantId, requestId, type: "sealed", actor: "system", channel: "worker",
           metadata: {
             hash, legalDocumentId: document.id, certificateFingerprint: seal.certificateFingerprint,
             trustPolicy: seal.trustPolicy, timestampTokenRef, validation: seal.validationReport,
@@ -278,14 +281,20 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       `;
     });
   } catch (error) {
-    const committed = storedName
-      ? await basePrisma.$queryRaw<Array<{ status: string }>>(Prisma.sql`
+    let committed: boolean | null = null;
+    if (storedName) {
+      try {
+        const rows = await basePrisma.$queryRaw<Array<{ status: string }>>(Prisma.sql`
           SELECT status FROM "SignatureRequest" WHERE id=${requestId} AND "signedPdfRef"=${storedName}
             AND status IN ('sealed','distributing','completed') LIMIT 1
-        `).catch(() => [])
-      : [];
-    if (!committed.length && storedName) await deleteFile(storedName).catch(() => {});
-    if (!committed.length && timestampTokenRef) await deleteFile(timestampTokenRef).catch(() => {});
+        `);
+        committed = rows.length > 0;
+      } catch {
+        committed = null;
+      }
+    }
+    if (tenantId && storedName) await scheduleOrphanSettlement(storedName, tenantId);
+    if (tenantId && timestampTokenRef) await scheduleOrphanSettlement(timestampTokenRef, tenantId);
 
     if (error instanceof SourceCompletionLost) {
       await basePrisma.$executeRaw`
@@ -295,14 +304,14 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       `.catch(() => {});
       return;
     }
-    if (!committed.length) {
+    if (committed !== true) {
       await basePrisma.$executeRaw`
         UPDATE "SignatureRequest" SET status='signatures_complete',"failureCode"=${error instanceof Error ? error.message.slice(0, 200) : "completion_failed"},
           "completionLeaseOwner"=NULL,"completionLeaseExpiresAt"=NULL
          WHERE id=${requestId} AND status='rendering' AND "completionLeaseOwner"=${leaseOwner}
       `.catch(() => {});
     }
-    if (error instanceof CompletionLost || committed.length) return;
+    if (error instanceof CompletionLost || committed === true) return;
     throw error;
   }
 }
