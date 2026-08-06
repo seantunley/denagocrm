@@ -10,6 +10,7 @@ import { logSignEvent } from "./events";
 import { runPostCompletion } from "./postComplete";
 import { COMPLETED_EVENT, POST_COMPLETION_EVENT } from "./completionFanout";
 import { sourceSignedByThisRequest } from "./recoveryScope";
+import { signingSecurityMode } from "./securityPolicy";
 
 const MAX_JOB_ATTEMPTS = 12;
 
@@ -279,9 +280,20 @@ async function executeArtifactVerification(job: SigningJob): Promise<void> {
   const errors: string[] = [];
   if (observedSha256 !== artifact.sha256) errors.push("sealed PDF hash mismatch");
   if (artifact.sizeBytes !== null && artifact.sizeBytes !== bytes.length) errors.push("sealed PDF size mismatch");
-  if (process.env.NODE_ENV === "production" && !certificate.trusted) errors.push("PDF seal is not backed by the configured trusted certificate");
+  // STRICT mode, not merely "production".
+  //
+  // Compat mode is explicitly allowed to run without a purchased certificate —
+  // it seals with a self-signed identity and marks it untrusted. Rejecting that
+  // whenever NODE_ENV happened to be production meant every compat completion
+  // raised an artifact_verify job that retried to dead-letter, and because the
+  // final `completed` event waits for all jobs, the durable workflow never
+  // reached the finished state it reports. The system spent its retries failing
+  // a check its own configuration says is not required yet.
+  if (signingSecurityMode() === "strict" && !certificate.trusted) {
+    errors.push("PDF seal is not backed by the configured trusted certificate");
+  }
   if (
-    process.env.NODE_ENV === "production" &&
+    signingSecurityMode() === "strict" &&
     process.env.BLOB_PRIVATE === "true" &&
     artifact.storageRef.includes(".blob.vercel-storage.com") &&
     !artifact.storageRef.includes(".private.blob.vercel-storage.com")
@@ -316,7 +328,12 @@ async function executeArtifactVerification(job: SigningJob): Promise<void> {
       ORDER BY r."fieldId", r."recipientId"
     `,
     basePrisma.$queryRaw<Array<Record<string, unknown>>>`
-      SELECT "id", "recipientId", "type", "actor", "channel", "ip", "userAgent", "metadata", "createdAt"
+      -- The CHAIN COLUMNS are part of the evidence, not bookkeeping. Without
+      -- them the exported manifest cannot be verified by anyone: the whole point
+      -- of a hash chain is that a third party can recompute it, and a bundle
+      -- missing sequence/prevHash/payloadHash/eventHash is just a list of claims.
+      SELECT "id", "recipientId", "type", "actor", "channel", "ip", "userAgent", "metadata", "createdAt",
+             "sequence", "prevHash", "payloadHash", "eventHash"
       FROM "SignatureEvent" WHERE "requestId" = ${job.requestId} AND "tenantId" = ${job.tenantId}
       ORDER BY "createdAt", "id"
     `,

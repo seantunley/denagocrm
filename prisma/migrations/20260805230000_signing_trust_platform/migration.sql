@@ -162,6 +162,14 @@ BEGIN
     UPDATE "SignatureRecipient"
        SET "tokenRevokedAt" = COALESCE("tokenRevokedAt", now())
      WHERE "requestId" = NEW."id" AND "tokenRevokedAt" IS NULL;
+    -- Approval capabilities as well. Revoking only the signer links left a
+    -- pending approval URL able to keep RENDERING the document after the request
+    -- was completed, declined, expired or rejected. The POST was eventually
+    -- refused, but by then the contract had already been shown — and disclosure
+    -- is the part you cannot take back.
+    UPDATE "ApprovalStep"
+       SET "tokenRevokedAt" = COALESCE("tokenRevokedAt", now())
+     WHERE "requestId" = NEW."id" AND "tokenRevokedAt" IS NULL;
   END IF;
   RETURN NEW;
 END;

@@ -73,6 +73,23 @@ export async function notifyApprover(stepId: string): Promise<ApprovalDeliveryRe
   if (isRequestClosed(step.request.status) || step.status !== "pending") return { ok: true, skipped: true };
   if (await approvalAlreadySent(step.tenantId, step.requestId, step.id)) return { ok: true, skipped: true };
 
+  // ATOMIC CLAIM before the external send.
+  //
+  // Creating the step transactionally enqueues an approval_notify job AND the
+  // runtime calls this inline, so two callers could both pass the "already sent"
+  // check, both send, and the approver would receive the same request twice —
+  // the check and the send were not one operation. Claiming a marker row first
+  // makes exactly one of them the sender; the loser reports skipped, which is
+  // true, rather than an error.
+  const claimKey = `approval-notify:${step.id}`;
+  const claimed = await basePrisma.$queryRaw<Array<{ id: string }>>`
+    INSERT INTO "SigningDeliveryClaim"("key","tenantId","createdAt")
+    VALUES (${claimKey}, ${step.tenantId}, now())
+    ON CONFLICT ("key") DO NOTHING
+    RETURNING "key" AS id
+  `.catch(() => [] as Array<{ id: string }>);
+  if (claimed.length !== 1) return { ok: true, skipped: true };
+
   const who = await resolveApprover(step);
   if (!who.email) return { ok: false, error: `No deliverable email for approval “${step.label}”` };
 

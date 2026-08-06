@@ -16,19 +16,43 @@ const read = (p: string) => readFileSync(path.join(__dirname, "..", p), "utf8");
 
 // ── Independent proof of when ───────────────────────────────────────────────
 
-test("a timestamp token is bound to the exact document it covers", () => {
-  // A real token captured from a live authority would be ideal, but it expires
-  // as evidence and pins a date into the repository. What matters structurally
-  // is that the check is against the digest, so a token filed against the wrong
-  // document is caught.
+test("coverage is read out of the token, not searched for in its bytes", () => {
   const digest = crypto.createHash("sha256").update("a document").digest();
-  const other = crypto.createHash("sha256").update("a different document").digest();
-  const fakeToken = Buffer.concat([Buffer.from("prefix"), digest, Buffer.from("suffix")]).toString("base64");
 
-  assert.equal(timestampCoversDigest(fakeToken, digest), true);
-  assert.equal(timestampCoversDigest(fakeToken, other), false, "a token must not vouch for another document");
+  // THE OLD CHECK, and why it was worthless: a blob that merely CONTAINS the
+  // digest bytes is not a timestamp for that document. The previous
+  // implementation searched the DER and would have accepted this — the earlier
+  // version of this very test asserted that it did, which is how a meaningless
+  // check acquired a passing test.
+  const notAToken = Buffer.concat([Buffer.from("prefix"), digest, Buffer.from("suffix")]).toString("base64");
+  assert.equal(timestampCoversDigest(notAToken, digest), false, "arbitrary bytes containing the digest are not a token");
+
   assert.equal(timestampCoversDigest("not base64 !!", digest), false);
   assert.equal(timestampCoversDigest("", digest), false);
+});
+
+test("the request and the parse agree on what was asked and answered", () => {
+  const source = read("src/lib/signing/timestamp.ts");
+  // The imprint is READ from the TSTInfo and compared, and the nonce we sent
+  // must come back — that is what stops a token for another document, or a
+  // response captured from an earlier exchange, being accepted.
+  assert.match(source, /parsed\.imprint\.equals\(digest\)/);
+  assert.match(source, /parsed\.nonce\.equals\(nonce\)/);
+  assert.match(source, /function readTstInfo/);
+
+  // …and the honest boundary is stated rather than implied: no chain validation
+  // against trusted roots yet.
+  assert.match(source, /does not validate the CMS signature/);
+});
+
+test("transport is HTTP on purpose, and the reason is recorded", () => {
+  const source = read("src/lib/signing/timestamp.ts");
+  // Requiring HTTPS looks like hardening and is the opposite: public authorities
+  // serve RFC 3161 over HTTP, the token is signed anyway, and this path fails
+  // soft — so the requirement silently disables timestamping for every document
+  // with no error. I made that change and only a live call caught it.
+  assert.match(source, /const DEFAULT_TSA = "http:\/\/timestamp\.digicert\.com"/);
+  assert.doesNotMatch(source, /if \(!url\.startsWith\("https:\/\/"\)\) return null;/);
 });
 
 test("the timestamp parser descends into the encapsulated TSTInfo", () => {

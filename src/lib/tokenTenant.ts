@@ -21,9 +21,10 @@ export async function resolveSignRecipientTenant(
 ): Promise<{ tenantId: string | null } | null> {
   const row = await basePrisma.signatureRecipient.findUnique({
     where: { token: hashSignToken(token) },
-    select: { tenantId: true },
+    select: { tenantId: true, tokenRevokedAt: true },
   });
-  return row ? { tenantId: row.tenantId } : null;
+  if (!row || row.tokenRevokedAt) return null;
+  return { tenantId: row.tenantId };
 }
 
 export async function resolveApprovalStepTenant(
@@ -31,9 +32,12 @@ export async function resolveApprovalStepTenant(
 ): Promise<{ tenantId: string | null } | null> {
   const row = await basePrisma.approvalStep.findUnique({
     where: { token: hashSignToken(token) },
-    select: { tenantId: true },
+    select: { tenantId: true, tokenRevokedAt: true },
   });
-  return row ? { tenantId: row.tenantId } : null;
+  // A revoked capability resolves to nothing, so the guarded work never runs and
+  // the page fails closed before it can load a document.
+  if (!row || row.tokenRevokedAt) return null;
+  return { tenantId: row.tenantId };
 }
 
 /** Owning tenant of a campaign tracking/unsubscribe token. */

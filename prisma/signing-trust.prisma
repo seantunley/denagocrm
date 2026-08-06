@@ -89,3 +89,17 @@ model LegalArtifactValidation {
 
   @@index([tenantId, artifactId, createdAt])
 }
+
+/// One sender per message.
+///
+/// An inline caller and a queued worker both ran the same "already sent?" check,
+/// both passed, and both sent — the check and the send were two operations with
+/// a network call between them. A uniquely-keyed claim makes the decision atomic:
+/// exactly one caller gets the row back, and only that one sends.
+model SigningDeliveryClaim {
+  key       String   @id
+  tenantId  String
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}

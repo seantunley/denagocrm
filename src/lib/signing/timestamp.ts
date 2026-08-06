@@ -43,6 +43,19 @@ export type TrustedTimestamp = {
   digestHex: string;
 };
 
+// HTTP, and that is not an oversight.
+//
+// Public timestamp authorities serve RFC 3161 over plain HTTP by design: the
+// token is signed by the authority, so transport gives it no integrity it does
+// not already have, and DigiCert's endpoint does not answer on HTTPS at all.
+// Requiring TLS here therefore does not harden anything — it disables
+// timestamping outright, and because this path fails soft, it would do so
+// silently, leaving every document unstamped with no error anywhere. (I made
+// exactly that change and caught it only by calling the real authority.)
+//
+// What plain HTTP does cost is confidentiality of the exchange: an observer
+// learns that a hash was stamped and when, though not what it is a hash OF.
+// Set SIGNING_TSA_URL to an HTTPS authority if that matters to you.
 const DEFAULT_TSA = "http://timestamp.digicert.com";
 const OID_SHA256 = "2.16.840.1.101.3.4.2.1";
 
@@ -85,7 +98,43 @@ function buildRequest(digest: Buffer, nonce: Buffer): Buffer {
 }
 
 /** Pull the granted token and its genTime out of a TimeStampResp. */
-function parseResponse(der: Buffer): { token: Buffer; genTime: Date } | null {
+/** Pull the message imprint and nonce out of the TSTInfo. */
+function readTstInfo(node: forge.asn1.Asn1, depth = 0): { imprint: Buffer | null; nonce: Buffer | null } {
+  const asn1 = forge.asn1;
+  const out: { imprint: Buffer | null; nonce: Buffer | null } = { imprint: null, nonce: null };
+  if (depth > 12) return out;
+
+  if (node.type === asn1.Type.OCTETSTRING && typeof node.value === "string" && node.value.length > 1) {
+    try {
+      const inner = asn1.fromDer(forge.util.createBuffer(node.value), false);
+      // TSTInfo ::= SEQUENCE { version, policy, messageImprint, serialNumber,
+      //                        genTime, [accuracy], [ordering], [nonce], ... }
+      const seq = inner.value as forge.asn1.Asn1[];
+      if (Array.isArray(seq) && seq.length >= 4) {
+        const imprintSeq = seq[2]?.value as forge.asn1.Asn1[] | undefined;
+        const hashed = Array.isArray(imprintSeq) ? imprintSeq[1] : undefined;
+        if (hashed && typeof hashed.value === "string") out.imprint = Buffer.from(hashed.value, "binary");
+        // The nonce is the INTEGER following genTime, when the responder echoes it.
+        for (let index = 4; index < seq.length; index += 1) {
+          const candidate = seq[index];
+          if (candidate?.type === asn1.Type.INTEGER && typeof candidate.value === "string") {
+            out.nonce = Buffer.from(candidate.value, "binary");
+          }
+        }
+      }
+      if (out.imprint) return out;
+    } catch { /* not a nested structure; keep walking */ }
+  }
+  if (Array.isArray(node.value)) {
+    for (const child of node.value as forge.asn1.Asn1[]) {
+      const found = readTstInfo(child, depth + 1);
+      if (found.imprint) return found;
+    }
+  }
+  return out;
+}
+
+function parseResponse(der: Buffer): { token: Buffer; genTime: Date; imprint: Buffer | null; nonce: Buffer | null } | null {
   const asn1 = forge.asn1;
   let parsed: forge.asn1.Asn1;
   try {
@@ -111,7 +160,8 @@ function parseResponse(der: Buffer): { token: Buffer; genTime: Date } | null {
 
   const genTime = findGenTime(tokenAsn1);
   if (!genTime) return null;
-  return { token, genTime };
+  const { imprint, nonce } = readTstInfo(tokenAsn1);
+  return { token, genTime, imprint, nonce };
 }
 
 /**
@@ -184,6 +234,19 @@ export async function requestTrustedTimestamp(digest: Buffer): Promise<TrustedTi
     const parsed = parseResponse(Buffer.from(await response.arrayBuffer()));
     if (!parsed) return null;
 
+    // WHAT THE TOKEN ACTUALLY SAYS, parsed — not "the bytes appear somewhere".
+    //
+    // An earlier version stored whatever came back and checked coverage by
+    // searching the DER for the digest, which a token for a different document
+    // (or an arbitrary blob containing those bytes) satisfies. That is not proof
+    // of anything, and describing it as independent attestation was wrong.
+    //
+    // The imprint is read out of the TSTInfo and compared, and the nonce we sent
+    // must be echoed — that is what stops a captured response from an earlier
+    // exchange being replayed as an answer to this one.
+    if (!parsed.imprint || !parsed.imprint.equals(digest)) return null;
+    if (!parsed.nonce || !parsed.nonce.equals(nonce)) return null;
+
     // A timestamp far from our own clock is not usable as evidence — it means
     // one of the two is wrong, and we cannot tell which. Refuse it rather than
     // file something that undermines the record it is meant to support.
@@ -202,19 +265,28 @@ export async function requestTrustedTimestamp(digest: Buffer): Promise<TrustedTi
 }
 
 /**
- * Check a stored token still covers the digest it claims to.
+ * Does this stored token attest to this exact document?
  *
- * Confirms the token embeds this exact hash. It does NOT validate the
- * authority's signature chain — that needs the authority's roots and belongs in
- * a verification tool, not on the signing path. What this catches is the case
- * that matters day to day: a token filed against the wrong document.
+ * Reads the message imprint OUT OF the TSTInfo and compares it. An earlier
+ * version searched the DER for the digest bytes, which a token issued for a
+ * different document can satisfy by coincidence and an arbitrary blob can
+ * satisfy on purpose.
+ *
+ * ── What this still does NOT do ─────────────────────────────────────────────
+ *
+ * It does not validate the CMS signature, the authority's certificate chain, or
+ * the timestamping EKU against trusted roots. Those need a maintained root store
+ * and belong in a verification tool rather than on the signing path — so until
+ * that exists, a token proves the authority ISSUED it for this hash, not that
+ * the issuer is one you have decided to trust. The certificate wording says
+ * exactly that and no more.
  */
 export function timestampCoversDigest(tokenBase64: string, digest: Buffer): boolean {
   try {
     const der = Buffer.from(tokenBase64, "base64");
-    // The imprint appears in the token verbatim; finding it is sufficient to
-    // show the token was issued for this hash and not another.
-    return der.includes(digest);
+    const parsed = forge.asn1.fromDer(forge.util.createBuffer(der.toString("binary")), false);
+    const { imprint } = readTstInfo(parsed);
+    return Boolean(imprint && imprint.equals(digest));
   } catch {
     return false;
   }

@@ -97,7 +97,11 @@ export const EVIDENCE_CHAIN_ROOT = "0".repeat(64);
  * honest boundary and this reports it rather than hiding it.
  */
 export function verifyEvidenceChain(
-  events: Array<Pick<SignEventInput, "id"> & { sequence: number; prevHash: string; payloadHash: string; eventHash: string }>,
+  events: Array<
+    Pick<SignEventInput, "id"> & {
+      sequence: number; prevHash: string; payloadHash: string; eventHash: string;
+    } & Partial<SignEventInput>
+  >,
 ): { ok: true } | { ok: false; brokenAt: string; reason: string } {
   let expectedPrev = EVIDENCE_CHAIN_ROOT;
   let expectedSequence = 1;
@@ -111,8 +115,40 @@ export function verifyEvidenceChain(
     if (signEventLinkHash(event.prevHash, event.payloadHash) !== event.eventHash) {
       return { ok: false, brokenAt: event.id, reason: "link hash does not match its own contents" };
     }
+    // RECOMPUTE the content hash when the row's fields are present.
+    //
+    // Checking only prevHash+payloadHash=eventHash verifies that the chain is
+    // internally consistent, which an editor who also recomputed the hashes
+    // would satisfy. It does NOT detect an edited actor, type, timestamp or
+    // metadata behind an unchanged payloadHash — so a bundle carrying the event
+    // contents must be checked against them.
+    //
+    // Skipped only for rows that predate the chain, whose payloadHash is a
+    // documented sentinel rather than a digest of anything.
+    if (event.requestId && event.type && event.createdAt && !isHistoricSentinel(event)) {
+      const recomputed = signEventPayloadHash({
+        id: event.id,
+        requestId: event.requestId,
+        recipientId: event.recipientId ?? null,
+        type: event.type,
+        actor: event.actor ?? "",
+        channel: event.channel ?? null,
+        ip: event.ip ?? null,
+        userAgent: event.userAgent ?? null,
+        metadata: event.metadata ?? {},
+        createdAt: event.createdAt instanceof Date ? event.createdAt : new Date(event.createdAt),
+      });
+      if (recomputed !== event.payloadHash) {
+        return { ok: false, brokenAt: event.id, reason: "event contents do not match their recorded hash" };
+      }
+    }
     expectedPrev = event.eventHash;
     expectedSequence += 1;
   }
   return { ok: true };
+}
+
+/** Rows chained by the migration carry `historic-event:<id>` rather than a content digest. */
+function isHistoricSentinel(event: { id: string; payloadHash: string }): boolean {
+  return event.payloadHash === crypto.createHash("sha256").update(`historic-event:${event.id}`, "utf8").digest("hex");
 }

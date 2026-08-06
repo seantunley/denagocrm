@@ -5,6 +5,7 @@ import { renderRequestDocHtml } from "@/lib/signing/render";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveApprovalStepTenant } from "@/lib/tokenTenant";
 import { ApprovalSurface } from "./ApprovalSurface";
+import { isRequestClosed } from "@/lib/signing/status";
 
 export const dynamic = "force-dynamic";
 
@@ -43,7 +44,11 @@ async function renderApprovalPage(token: string) {
   if (!step) notFound();
   if (step.status === "approved") return <Msg title="Approved ✓" body="You have already approved this document. Thank you." />;
   if (step.status === "rejected") return <Msg title="Rejected" body="You have already rejected this document." />;
-  if (step.request.status === "voided" || step.request.deletedAt) return <Msg title="No longer active" body="This request has been withdrawn." />;
+  // EVERY terminal state, not only voided. A completed or declined request kept
+  // rendering its document to anyone still holding a pending approval link.
+  if (isRequestClosed(step.request.status) || step.request.deletedAt || step.tokenRevokedAt) {
+    return <Msg title="No longer active" body="This request is closed." />;
+  }
 
   const docHtml = await renderRequestDocHtml(step.request);
 
