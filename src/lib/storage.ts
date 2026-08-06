@@ -22,6 +22,17 @@ function storagePrefix(): string {
   return tenantId ? `tenants/${tenantId}/uploads` : "system/uploads";
 }
 
+/** Recover tenant ownership from the immutable object key when async scope is gone. */
+function tenantFromRef(ref: string): string | null {
+  try {
+    const pathname = new URL(ref).pathname.replace(/^\/+/, "");
+    const match = pathname.match(/^tenants\/([^/]+)\/uploads\//);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function saveFile(buffer: Buffer, originalName: string, contentType: string): Promise<string> {
   const ext = path.extname(originalName).slice(0, 12);
   const storedName = `${crypto.randomUUID()}${ext}`;
@@ -146,9 +157,10 @@ async function rawDeleteFile(ref: string): Promise<void> {
 }
 
 /**
- * Safe-by-default deletion. Objects are retained unless an authoritative lookup
- * proves there is no durable reference. Database uncertainty is never treated
- * as proof of rollback.
+ * Retain-not-delete compensation. This function never removes bytes. Once the
+ * reference check proves the object is presently unreferenced it records an
+ * orphan candidate for a later settlement-period collector. If ownership cannot
+ * be recovered, the object is retained and surfaced for reconciliation.
  */
 export async function deleteFile(ref: string): Promise<void> {
   const { isStorageRefReferenced, scheduleOrphanSettlement } = await import("./signing/artifactCustody");
@@ -156,14 +168,12 @@ export async function deleteFile(ref: string): Promise<void> {
     console.warn("[storage] retained referenced object", ref);
     return;
   }
-  const tenantId = currentTenantScope()?.tenantId;
-  if (tenantId) {
-    await scheduleOrphanSettlement(ref, tenantId);
+  const tenantId = currentTenantScope()?.tenantId ?? tenantFromRef(ref);
+  if (!tenantId) {
+    console.error("[storage] retained unclassified object; no tenant could be established", ref);
     return;
   }
-  // Trusted system maintenance can delete only after the authoritative global
-  // reference query above proves the object is unused.
-  await rawDeleteFile(ref);
+  await scheduleOrphanSettlement(ref, tenantId);
 }
 
 /** Only the settlement-period orphan collector and storage self-test may bypass reference checks. */
