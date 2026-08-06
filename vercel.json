@@ -5,6 +5,14 @@
   ],
   "crons": [
     {
+      "path": "/api/cron/signing-outbox",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/signing-reconcile",
+      "schedule": "17 3 * * *"
+    },
+    {
       "path": "/api/cron/journeys",
       "schedule": "*/15 * * * *"
     },
