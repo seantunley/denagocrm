@@ -4,10 +4,10 @@ import { basePrisma } from "@/lib/db";
 import { anchorEvidence } from "./evidenceBundle";
 
 /**
- * Finalize an envelope only after every durable distribution/reconciliation job
- * has succeeded. The completed event is appended before the external evidence
- * anchor so the anchor covers the final state and no later evidence event is
- * written by this operation.
+ * Finalize an envelope only after the jobs that prove the final artifact was
+ * verified, filed, distributed and reconciled have succeeded. Historic signing-
+ * link delivery attempts are not completion dependencies; otherwise an unrelated
+ * old dead letter can strand a correctly sealed contract forever.
  */
 export async function finalizeSigningCompletion(envelopeId: string, finalizerJobId: string): Promise<void> {
   const rows = await basePrisma.$queryRaw<Array<{ tenantId: string; status: string; signedPdfHash: string | null }>>(Prisma.sql`
@@ -24,7 +24,7 @@ export async function finalizeSigningCompletion(envelopeId: string, finalizerJob
   const jobs = await basePrisma.$queryRaw<Array<{ status: string; jobType: string; lastError: string | null }>>(Prisma.sql`
     SELECT status,"jobType","lastError" FROM "SigningOutboxJob"
      WHERE "envelopeId"=${envelopeId} AND id<>${finalizerJobId}
-       AND "jobType" NOT IN ('finalize_completion','anchor_evidence')
+       AND "jobType" IN ('post_complete','deliver_completed','reconcile_envelope')
   `);
   const dead = jobs.filter((job) => job.status === "dead_letter");
   if (dead.length) {
@@ -51,7 +51,6 @@ export async function finalizeSigningCompletion(envelopeId: string, finalizerJob
     throw new Error("Completion dependencies are still pending");
   }
 
-  // Idempotent final evidence event. The DB trigger serializes and hashes it.
   await basePrisma.$executeRaw`
     INSERT INTO "SignatureEvent"(id,"tenantId","requestId",type,actor,channel,metadata,"createdAt")
     SELECT gen_random_uuid()::text,${request.tenantId},${envelopeId},'completed','system','worker',
@@ -62,7 +61,6 @@ export async function finalizeSigningCompletion(envelopeId: string, finalizerJob
     )
   `;
 
-  // Must succeed before the public state can say complete.
   await anchorEvidence(envelopeId);
 
   const updated = await basePrisma.$executeRaw`
