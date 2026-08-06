@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
+import { PageHeader } from "@/components/page-header";
 import { retrySigningJob, queueEnvelopeReconciliation, setLegalHold, approveLegalDestruction, executeLegalDestruction } from "@/app/actions/signingOperations";
 
 export const dynamic = "force-dynamic";
@@ -42,7 +43,10 @@ export default async function SigningOperationsPage() {
   ]);
   const summary = counts[0] || { dead: 0n, retry: 0n, failedDelivery: 0n, integrity: 0n };
   return <div className="space-y-8 p-6">
-    <div><h1 className="text-2xl font-bold">Signing trust operations</h1><p className="text-sm text-muted-foreground">Durable jobs, artifact integrity, legal retention and dual-control destruction.</p></div>
+    <PageHeader
+      title="Signing trust operations"
+      description="Durable jobs, artifact integrity, legal retention and dual-control destruction."
+    />
     <div className="grid gap-3 md:grid-cols-4">{[
       ["Dead letters", summary.dead], ["Jobs retrying", summary.retry], ["Failed deliveries", summary.failedDelivery], ["Integrity alerts", summary.integrity],
     ].map(([label, value]) => <div key={String(label)} className="rounded-xl border p-4"><div className="text-sm text-muted-foreground">{String(label)}</div><div className="text-2xl font-bold">{String(value)}</div></div>)}</div>
