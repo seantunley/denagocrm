@@ -368,19 +368,24 @@ test("turning 2FA on or off does not sign out the person doing it", () => {
   // admin performing the operation is signed out on their next click. The intent
   // is "revoke everyone ELSE", which only holds if the acting session is
   // re-issued at the new version.
-  assert.match(security, /reissueActingPlatformSession/);
   const confirm = security.slice(
     security.indexOf("export async function confirmPlatformTotpEnrolment"),
     security.indexOf("export async function disablePlatformTotp"),
   );
   const disable = security.slice(security.indexOf("export async function disablePlatformTotp"));
-  assert.match(confirm, /reissueActingPlatformSession\(actor\.id\)/, "enabling must re-issue");
-  assert.match(disable, /reissueActingPlatformSession\(actor\.id\)/, "disabling must re-issue");
 
-  // Read back from the row rather than incremented locally: a guessed version
-  // either locks the admin out or outlives somebody else's revocation.
-  assert.match(security, /select: \{ id: true, name: true, email: true, sessionVersion: true, disabledAt: true \}/);
-  assert.match(security, /if \(!fresh \|\| fresh\.disabledAt\) return;/);
+  // The replacement row is created INSIDE the transaction that bumps the
+  // version. Minting it afterwards leaves a window in which another
+  // administrator's revoke-all deletes the existing rows and this then creates a
+  // brand new valid one — silently undoing their revocation, and in the
+  // stolen-session case letting the attacker survive the very action taken to
+  // remove them. My first version did exactly that while claiming otherwise.
+  for (const [name, body] of [["enable", confirm], ["disable", disable]] as const) {
+    assert.match(body, /createPlatformSessionRow\(actor\.id, tx\)/, `${name} must create the row in the transaction`);
+    assert.match(body, /setPlatformSessionCookie\(reissue\.plan\.admin, reissue\.plan\.jti\)/, `${name} sets only the cookie after commit`);
+  }
+  // The post-commit re-read is what made it racy; it must be gone.
+  assert.doesNotMatch(security, /reissueActingPlatformSession/);
 });
 
 test("an authenticator can be replaced without turning 2FA off first", () => {

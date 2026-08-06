@@ -113,31 +113,55 @@ export async function requirePlatformAdminAction(): Promise<PlatformAdminPrincip
 }
 
 /** Issue a session: register it server-side, then set the scoped cookie. */
-export async function createPlatformSessionCookie(admin: {
-  id: string;
-  name: string;
-  email: string;
-  sessionVersion: number;
-}): Promise<void> {
+type SessionRowClient = {
+  platformAdminSession: { create(args: { data: Record<string, unknown> }): Promise<unknown> };
+};
+
+/**
+ * Create the session ROW, optionally inside a caller's transaction.
+ *
+ * Taking a client matters for one specific case: an operation that bumps
+ * sessionVersion and then wants to keep the acting admin signed in. Creating the
+ * replacement AFTER that transaction commits opens a window where another
+ * administrator's "revoke all sessions" can land in between — their revocation
+ * deletes the rows that exist, and then this creates a brand new valid one,
+ * quietly undoing it. Inside the same transaction, the replacement exists before
+ * any revocation can run, so a revoke-all takes it with everything else.
+ */
+export async function createPlatformSessionRow(
+  adminId: string,
+  client: SessionRowClient = basePrisma,
+): Promise<string> {
   const jti = randomUUID();
   const headerList = await headers();
   const ip =
     headerList.get("x-forwarded-for")?.split(",")[0]?.trim() ||
     headerList.get("x-real-ip") ||
     null;
-
-  await basePrisma.platformAdminSession.create({
-    data: {
-      jti,
-      adminId: admin.id,
-      ip,
-      userAgent: headerList.get("user-agent")?.slice(0, 500) ?? null,
-    },
+  await client.platformAdminSession.create({
+    data: { jti, adminId, ip, userAgent: headerList.get("user-agent")?.slice(0, 500) ?? null },
   });
+  return jti;
+}
 
+/** Sign and set the cookie for a session row that already exists. */
+export async function setPlatformSessionCookie(
+  admin: { id: string; name: string; email: string; sessionVersion: number },
+  jti: string,
+): Promise<void> {
   const token = await signPlatformSession(admin, jti);
   const store = await cookies();
   store.set(PLATFORM_SESSION_COOKIE, token, platformCookieOptions());
+}
+
+export async function createPlatformSessionCookie(admin: {
+  id: string;
+  name: string;
+  email: string;
+  sessionVersion: number;
+}): Promise<void> {
+  const jti = await createPlatformSessionRow(admin.id);
+  await setPlatformSessionCookie(admin, jti);
 }
 
 /**

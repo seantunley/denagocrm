@@ -13,7 +13,7 @@ import { generateBackupCodes, generateTotpSecret, totpKeyUri, verifyTotp } from 
 // two-factor feature has no business depending on a per-tenant branding stack.
 // When that chain lands, this collapses back to the shared constant.
 const PLATFORM_NAME = process.env.NEXT_PUBLIC_PLATFORM_NAME?.trim() || "CRM";
-import { createPlatformSessionCookie } from "@/lib/platformAuth";
+import { createPlatformSessionRow, setPlatformSessionCookie } from "@/lib/platformAuth";
 
 /**
  * Two-factor authentication for the platform console.
@@ -50,27 +50,22 @@ import { createPlatformSessionCookie } from "@/lib/platformAuth";
 export type PlatformSecurityState = { error?: string; ok?: string; backupCodes?: string[] };
 
 /**
- * Re-issue the acting admin's cookie at the CURRENT session version.
+ * The replacement session is created INSIDE the transaction that bumps the
+ * version, and only the cookie is set afterwards.
  *
- * Read back from the database rather than incremented locally, so the cookie
- * carries what the row actually says even if something else bumped it in the
- * same window — a guessed version would either lock the admin out or, worse,
- * hand them a cookie that outlives a revocation somebody else performed.
+ * My first attempt read the current version after the transaction and minted a
+ * fresh session then. That is a hole, not a fix: between the commit and the
+ * mint, another administrator can reset the password or revoke all sessions —
+ * their operation deletes the rows that exist, and then this creates a brand new
+ * valid one, silently undoing the revocation. In the stolen-session case the
+ * attacker survives exactly the action taken to remove them.
+ *
+ * Created inside the transaction, the replacement row exists before any
+ * revocation can run, so a revoke-all takes it along with everything else. The
+ * comment I wrote previously claimed this property while the code did the
+ * opposite.
  */
-async function reissueActingPlatformSession(adminId: string): Promise<void> {
-  const fresh = await basePrisma.platformAdmin.findUnique({
-    where: { id: adminId },
-    select: { id: true, name: true, email: true, sessionVersion: true, disabledAt: true },
-  });
-  // A disabled account gets no new cookie — it should be signed out.
-  if (!fresh || fresh.disabledAt) return;
-  await createPlatformSessionCookie({
-    id: fresh.id,
-    name: fresh.name,
-    email: fresh.email,
-    sessionVersion: fresh.sessionVersion,
-  });
-}
+type ReissuePlan = { jti: string; admin: { id: string; name: string; email: string; sessionVersion: number } } | null;
 
 /**
  * Start enrolment: mint a secret, store it DISABLED, and hand back a QR code.
@@ -151,6 +146,7 @@ export async function confirmPlatformTotpEnrolment(
   const hashed = await Promise.all(backupCodes.map((code) => hashBackupCode(code)));
 
   let promoted = false;
+  const reissue: { plan: ReissuePlan } = { plan: null };
   await basePrisma.$transaction(async (tx) => {
     // CONDITIONAL on the exact pending value that was verified.
     //
@@ -180,6 +176,11 @@ export async function confirmPlatformTotpEnrolment(
     // enrolment that did not happen.
     if (claimed.count !== 1) return;
     promoted = true;
+    const updated = await tx.platformAdmin.findUniqueOrThrow({
+      where: { id: actor.id },
+      select: { id: true, name: true, email: true, sessionVersion: true },
+    });
+    reissue.plan = { jti: await createPlatformSessionRow(actor.id, tx), admin: updated };
     await logAuditStrict(
       {
         action: "platform.2fa_enabled",
@@ -198,15 +199,11 @@ export async function confirmPlatformTotpEnrolment(
     return { error: "This setup is no longer active — two-factor authentication was changed elsewhere. Start again." };
   }
 
-  // The admin who just turned 2FA ON must not be the first casualty of it.
-  //
-  // Bumping sessionVersion revokes every session, and platform auth compares the
-  // cookie's version against the row on every request — so without a fresh
-  // cookie the person performing the operation is signed out on their next
-  // click. The intent is "revoke everyone ELSE", and that only happens if the
-  // acting session is re-issued at the new version. Nothing is weakened: every
-  // other cookie still carries the old version and remains dead.
-  await reissueActingPlatformSession(actor.id);
+  // Only the COOKIE is set here; its row was created in the transaction above.
+  // The admin who just turned 2FA on must not be the first casualty of it.
+  // A holder object rather than a bare `let`: TypeScript narrows a variable that
+  // is only assigned inside a callback to `never` at the point of use.
+  if (reissue.plan) await setPlatformSessionCookie(reissue.plan.admin, reissue.plan.jti);
 
   revalidatePath("/platform/admins");
   // Shown ONCE. They are not recoverable — only their hashes are stored.
@@ -236,6 +233,7 @@ export async function disablePlatformTotp(
   }
   if (!ok) return { error: "Enter a current authenticator code to turn 2FA off." };
 
+  const reissue: { plan: ReissuePlan } = { plan: null };
   await basePrisma.$transaction(async (tx) => {
     await tx.platformAdmin.update({
       where: { id: actor.id },
@@ -261,10 +259,18 @@ export async function disablePlatformTotp(
       },
       tx,
     );
+    const updated = await tx.platformAdmin.findUniqueOrThrow({
+      where: { id: actor.id },
+      select: { id: true, name: true, email: true, sessionVersion: true },
+    });
+    // Same reasoning as enabling, and the same atomicity: the replacement row is
+    // created here so a concurrent revoke-all takes it too.
+    reissue.plan = { jti: await createPlatformSessionRow(actor.id, tx), admin: updated };
   });
 
-  // Same reasoning as enabling: revoke everyone else, not the person doing it.
-  await reissueActingPlatformSession(actor.id);
+  // A holder object rather than a bare `let`: TypeScript narrows a variable that
+  // is only assigned inside a callback to `never` at the point of use.
+  if (reissue.plan) await setPlatformSessionCookie(reissue.plan.admin, reissue.plan.jti);
 
   revalidatePath("/platform/admins");
   return { ok: "Two-factor authentication turned off." };
