@@ -5,17 +5,27 @@ import { notifyNextInSequence } from "./dispatch";
 import { isRequestClosed } from "./status";
 import { advanceWorkflow } from "@/lib/signflow/runtime";
 
-/** Called after a recipient signs: complete the request if everyone's done, else advance. */
+/** Called after a signer commits. A DB trigger also enqueues this operation in the
+ * same transaction, so a process death between commit and this call is recoverable. */
 export async function advanceAfterSignature(requestId: string): Promise<void> {
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } });
-  // Never advance a CLOSED request. If a void/decline/expiry/rejection landed
-  // after the signer's claim committed, this stops it short of completion.
   if (!req || isRequestClosed(req.status)) return;
-  // Interpreter-driven workflows (approvals / branches) advance node-by-node.
+  if (req.status === "signatures_complete") { await completeSignatureRequest(requestId); return; }
+  if (["rendering", "sealed", "distributing"].includes(req.status)) return;
   if (req.workflowGraphJson) { await advanceWorkflow(requestId); return; }
-  const signers = req.recipients.filter((r) => r.role !== "viewer");
-  const allSigned = signers.length > 0 && signers.every((r) => r.status === "signed");
-  if (allSigned) { await completeSignatureRequest(requestId); return; }
-  await prisma.signatureRequest.updateMany({ where: { id: requestId, status: { in: ["sent", "viewed"] } }, data: { status: "in_progress" } });
+  const signers = req.recipients.filter((recipient) => recipient.role !== "viewer");
+  const allSigned = signers.length > 0 && signers.every((recipient) => recipient.status === "signed");
+  if (allSigned) {
+    await prisma.signatureRequest.updateMany({
+      where: { id: requestId, status: { in: ["prepared", "dispatching", "active", "sent", "viewed", "signing"] } },
+      data: { status: "signatures_complete" },
+    });
+    await completeSignatureRequest(requestId);
+    return;
+  }
+  await prisma.signatureRequest.updateMany({
+    where: { id: requestId, status: { in: ["sent", "viewed", "active"] } },
+    data: { status: "signing" },
+  });
   if (req.ordering === "sequential") await notifyNextInSequence(requestId);
 }

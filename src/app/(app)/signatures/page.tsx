@@ -1,13 +1,17 @@
 import Link from "next/link";
+import { Prisma } from "@prisma/client";
 import { requireAnyPermission } from "@/lib/permissions";
-import { prisma } from "@/lib/db";
-import { formatDate, formatDateTime } from "@/lib/format";
+import { prisma, basePrisma } from "@/lib/db";
+import { formatDateTime } from "@/lib/format";
 import { ApprovalActions } from "./ApprovalActions";
 import {
+  AlertTriangle,
   CheckCircle2,
   Clock3,
   FileSignature,
   FileText,
+  LockKeyhole,
+  Send,
   ShieldCheck,
   Timer,
   Workflow,
@@ -18,7 +22,6 @@ import { EmptyState, SectionHeading, StatusPill, Surface } from "@/components/vi
 
 export const dynamic = "force-dynamic";
 
-// Per-recipient status → dot colour + label, for the signer chips on each row.
 const RECIPIENT_STATUS: Record<string, { dot: string; label: string }> = {
   signed: { dot: "bg-emerald-400", label: "signed" },
   declined: { dot: "bg-red-400", label: "declined" },
@@ -27,15 +30,10 @@ const RECIPIENT_STATUS: Record<string, { dot: string; label: string }> = {
   pending: { dot: "bg-slate-500", label: "not sent" },
 };
 
-// A precise per-signer state line: signed/declined/opened(not signed)/sent(not
-// opened)/not sent — with the exact date + time so you can see where a request
-// is stuck.
-function signerDetail(x: {
-  status: string;
-  signedAt: Date | null;
-  viewedAt: Date | null;
-  declinedAt: Date | null;
-}): string {
+const ACTIVE = ["prepared", "dispatching", "active", "sent", "viewed", "signing", "signatures_complete", "rendering", "sealed", "distributing"];
+const PROCESSING = ["signatures_complete", "rendering", "sealed", "distributing"];
+
+function signerDetail(x: { status: string; signedAt: Date | null; viewedAt: Date | null; declinedAt: Date | null }): string {
   if (x.status === "signed" && x.signedAt) return `signed ${formatDateTime(x.signedAt)}`;
   if (x.status === "declined") return x.declinedAt ? `declined ${formatDateTime(x.declinedAt)}` : "declined";
   if (x.viewedAt) return `opened ${formatDateTime(x.viewedAt)} · not signed`;
@@ -43,169 +41,122 @@ function signerDetail(x: {
   return "not sent yet";
 }
 
-function median(nums: number[]): number | null {
-  if (nums.length === 0) return null;
-  const s = [...nums].sort((a, b) => a - b);
-  const m = Math.floor(s.length / 2);
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-}
-
 function requestTone(status: string): "neutral" | "info" | "warning" | "success" | "danger" {
   if (status === "completed") return "success";
-  if (["declined", "rejected"].includes(status)) return "danger";
-  if (status === "in_progress") return "warning";
-  if (["sent", "viewed"].includes(status)) return "info";
+  if (["declined", "rejected", "failed_manual_intervention"].includes(status)) return "danger";
+  if (["signing", "signatures_complete", "rendering", "distributing"].includes(status)) return "warning";
+  if (["prepared", "dispatching", "active", "sent", "viewed", "sealed"].includes(status)) return "info";
   return "neutral";
 }
 
+function phaseLabel(status: string): string {
+  const labels: Record<string, string> = {
+    prepared: "Prepared",
+    dispatching: "Dispatching",
+    active: "Awaiting signer",
+    signing: "Signing in progress",
+    signatures_complete: "Signatures captured",
+    rendering: "Rendering final PDF",
+    sealed: "Cryptographically sealed",
+    distributing: "Verifying & distributing",
+    completed: "Completed & anchored",
+    failed_manual_intervention: "Manual intervention required",
+  };
+  return labels[status] || status.replaceAll("_", " ");
+}
+
+function median(nums: number[]): number | null {
+  if (!nums.length) return null;
+  const sorted = [...nums].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+type Ops = { envelopeId: string; pendingJobs: bigint; deadJobs: bigint; failedDeliveries: bigint };
+
 export default async function SignaturesPage() {
   await requireAnyPermission("signing.view", "signing.manage");
-  const requests = await prisma.signatureRequest.findMany({
-    where: { deletedAt: null },
-    orderBy: { updatedAt: "desc" },
-    take: 200,
-    include: { recipients: true },
-  });
-
-  const pendingApprovals = await prisma.approvalStep.findMany({
-    where: { status: "pending", request: { deletedAt: null, status: { notIn: ["voided", "completed", "rejected", "declined"] } } },
-    include: { request: { select: { id: true, title: true } } },
-    orderBy: { createdAt: "asc" },
-    take: 100,
-  });
-
+  const [requests, pendingApprovals, operations] = await Promise.all([
+    prisma.signatureRequest.findMany({
+      where: { deletedAt: null },
+      orderBy: { updatedAt: "desc" },
+      take: 200,
+      include: { recipients: true },
+    }),
+    prisma.approvalStep.findMany({
+      where: { status: "pending", request: { deletedAt: null, status: { notIn: ["voided", "completed", "rejected", "declined", "failed_manual_intervention"] } } },
+      include: { request: { select: { id: true, title: true } } },
+      orderBy: { createdAt: "asc" },
+      take: 100,
+    }),
+    basePrisma.$queryRaw<Ops[]>(Prisma.sql`
+      SELECT q.id AS "envelopeId",
+        count(j.id) FILTER (WHERE j.status IN ('pending','leased','retry'))::bigint AS "pendingJobs",
+        count(j.id) FILTER (WHERE j.status='dead_letter')::bigint AS "deadJobs",
+        (SELECT count(*) FROM "SigningDelivery" d WHERE d."envelopeId"=q.id AND d.status IN ('failed','dead_letter'))::bigint AS "failedDeliveries"
+      FROM "SignatureRequest" q LEFT JOIN "SigningOutboxJob" j ON j."envelopeId"=q.id
+      WHERE q."deletedAt" IS NULL GROUP BY q.id
+    `),
+  ]);
+  const ops = new Map(operations.map((row) => [row.envelopeId, row]));
   const total = requests.length;
-  const completed = requests.filter((r) => r.status === "completed").length;
-  const declined = requests.filter((r) => r.status === "declined").length;
-  const active = requests.filter((r) => ["sent", "viewed", "in_progress"].includes(r.status)).length;
+  const completed = requests.filter((request) => request.status === "completed").length;
+  const active = requests.filter((request) => ACTIVE.includes(request.status)).length;
+  const processing = requests.filter((request) => PROCESSING.includes(request.status)).length;
+  const alerts = requests.filter((request) => request.status === "failed_manual_intervention" || Number(ops.get(request.id)?.deadJobs || 0n) > 0).length;
   const completionRate = total ? Math.round((completed / total) * 100) : 0;
   const times = requests
-    .filter((r) => r.status === "completed" && r.sentAt && r.completedAt)
-    .map((r) => (r.completedAt!.getTime() - r.sentAt!.getTime()) / 3600000);
+    .filter((request) => request.status === "completed" && request.sentAt && request.completedAt)
+    .map((request) => (request.completedAt!.getTime() - request.sentAt!.getTime()) / 3_600_000);
   const medHours = median(times);
 
-  return (
-    <div className="space-y-6">
-      <WorkspaceHero
-        icon={FileSignature}
-        eyebrow="Document execution"
-        title="Signatures"
-        description="Send documents for signing, track progress, and keep a complete in-house audit trail."
-        actions={
-          <>
-            <Link href="/settings/signing-workflows" className="btn-secondary btn-sm">
-              <Workflow className="size-4" /> Workflows
-            </Link>
-            <Link href="/documents" className="btn-primary btn-sm">
-              <FileText className="size-4" /> Open documents
-            </Link>
-          </>
-        }
-        stats={[
-          { label: "Requests", value: total, detail: `${requests.filter((request) => request.status === "draft").length} draft`, icon: FileText },
-          { label: "Awaiting", value: active, detail: active ? "Needs signer action" : "Nothing outstanding", icon: Clock3, tone: active ? "warning" : "success" },
-          { label: "Completed", value: completed, detail: `${completionRate}% completion`, icon: CheckCircle2, tone: "success" },
-          { label: "Median time", value: medHours == null ? "—" : medHours < 1 ? `${Math.round(medHours * 60)}m` : `${medHours.toFixed(1)}h`, detail: "Sent to completed", icon: Timer },
-        ]}
-      />
+  return <div className="space-y-6">
+    <WorkspaceHero
+      icon={FileSignature}
+      eyebrow="High-trust document execution"
+      title="Signatures"
+      description="Identity verification, immutable custody, cryptographic sealing, durable delivery and independently verifiable evidence."
+      actions={<>
+        <Link href="/settings/signing" className="btn-secondary btn-sm"><ShieldCheck className="size-4" /> Trust operations</Link>
+        <Link href="/settings/signing-workflows" className="btn-secondary btn-sm"><Workflow className="size-4" /> Workflows</Link>
+        <Link href="/documents" className="btn-primary btn-sm"><FileText className="size-4" /> Open documents</Link>
+      </>}
+      stats={[
+        { label: "Active", value: active, detail: processing ? `${processing} sealing or distributing` : "Awaiting signer action", icon: Clock3, tone: active ? "warning" : "success" },
+        { label: "Completed", value: completed, detail: `${completionRate}% anchored completion`, icon: CheckCircle2, tone: "success" },
+        { label: "Median time", value: medHours == null ? "—" : medHours < 1 ? `${Math.round(medHours * 60)}m` : `${medHours.toFixed(1)}h`, detail: "Sent to final anchor", icon: Timer },
+        { label: "Alerts", value: alerts, detail: alerts ? "Operator attention required" : "Custody healthy", icon: alerts ? AlertTriangle : ShieldCheck, tone: alerts ? "warning" : "success" },
+      ]}
+    />
 
-      {pendingApprovals.length > 0 && (
-        <Surface className="overflow-hidden border-amber-500/25 bg-amber-500/[0.05]">
-          <div className="border-b border-amber-500/15 p-4">
-            <SectionHeading
-              title={<span className="inline-flex items-center gap-2"><ShieldCheck className="size-4 text-amber-300" /> Pending approvals</span>}
-              description={`${pendingApprovals.length} approval ${pendingApprovals.length === 1 ? "gate is" : "gates are"} holding document delivery.`}
-            />
+    {pendingApprovals.length > 0 && <Surface className="overflow-hidden border-amber-500/25 bg-amber-500/[0.05]">
+      <div className="border-b border-amber-500/15 p-4"><SectionHeading title={<span className="inline-flex items-center gap-2"><ShieldCheck className="size-4 text-amber-300" /> Pending approvals</span>} description={`${pendingApprovals.length} approval gate${pendingApprovals.length === 1 ? "" : "s"} holding workflow progress.`} /></div>
+      <ul className="divide-y divide-border/60 px-4">{pendingApprovals.map((step) => <li key={step.id} className="flex flex-wrap items-center gap-3 py-3.5"><div className="min-w-0 flex-1"><Link href={`/signatures/${step.request.id}`} className="truncate text-[13px] font-medium hover:text-primary">{step.request.title}</Link><div className="text-[11px] text-muted-foreground">{step.label}{step.assigneeName ? ` · ${step.assigneeName}` : ""}</div></div><ApprovalActions stepId={step.id} /></li>)}</ul>
+    </Surface>}
+
+    <Surface className="overflow-hidden">
+      <div className="border-b border-border p-4"><SectionHeading title={<span className="inline-flex items-center gap-2"><FileSignature className="size-4 text-primary" /> Signing requests</span>} description="Signer progress and every trust phase from preparation through external evidence anchoring." /></div>
+      {!requests.length ? <EmptyState icon={FileSignature} title="No signature requests yet" description="Open a document and choose Send for signing to start a tracked request." action={<Link href="/documents" className="btn-primary btn-sm">Open documents</Link>} className="m-4" /> :
+      <ul className="divide-y divide-border/60">{requests.map((request) => {
+        const signers = [...request.recipients].filter((recipient) => recipient.role !== "viewer").sort((a, b) => a.order - b.order);
+        const signed = signers.filter((recipient) => recipient.status === "signed").length;
+        const pct = signers.length ? Math.round((signed / signers.length) * 100) : 0;
+        const state = ops.get(request.id);
+        const dead = Number(state?.deadJobs || 0n);
+        const deliveryFailures = Number(state?.failedDeliveries || 0n);
+        const pending = Number(state?.pendingJobs || 0n);
+        const nextUp = request.ordering === "sequential" && ACTIVE.includes(request.status) ? signers.find((recipient) => !["signed", "declined"].includes(recipient.status)) || null : null;
+        return <RecordContextMenu key={request.id} label={request.title} href={`/signatures/${request.id}`}><li className="group flex flex-col gap-3 p-4 transition-colors hover:bg-muted/20 sm:flex-row sm:items-start">
+          <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-border bg-muted/35 text-muted-foreground group-hover:border-primary/25 group-hover:text-primary">{request.status === "completed" ? <LockKeyhole className="size-4" /> : <FileSignature className="size-4" />}</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2"><Link href={`/signatures/${request.id}`} className="truncate text-[13px] font-medium hover:text-primary">{request.title}</Link><StatusPill tone={requestTone(request.status)}>{phaseLabel(request.status)}</StatusPill>{dead ? <StatusPill tone="danger">{dead} dead letter{dead === 1 ? "" : "s"}</StatusPill> : null}{deliveryFailures ? <StatusPill tone="danger">{deliveryFailures} delivery failure{deliveryFailures === 1 ? "" : "s"}</StatusPill> : null}</div>
+            <div className="mt-0.5 text-[11px] text-muted-foreground">{signed}/{signers.length} signed · {request.ordering}{request.sentAt ? ` · sent ${formatDateTime(request.sentAt)}` : ""}{request.completedAt ? ` · finalized ${formatDateTime(request.completedAt)}` : ` · updated ${formatDateTime(request.updatedAt)}`}{pending ? ` · ${pending} durable job${pending === 1 ? "" : "s"} pending` : ""}</div>
+            {signers.length ? <div className="mt-1.5 h-1 w-full max-w-xs overflow-hidden rounded-full bg-border/60"><div className="h-full rounded-full bg-emerald-500/70" style={{ width: `${pct}%` }} /></div> : null}
+            <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">{signers.map((recipient) => { const meta = RECIPIENT_STATUS[recipient.status] || RECIPIENT_STATUS.pending; const isNext = nextUp?.id === recipient.id; return <span key={recipient.id} className={`inline-flex items-center gap-1.5 text-[11px] ${isNext ? "font-semibold text-amber-200" : "text-muted-foreground"}`}><span className={`size-1.5 rounded-full ${meta.dot}`} />{recipient.name}<span className="text-muted-foreground/60">· {isNext ? "up next · " : ""}{signerDetail(recipient)}</span></span>; })}</div>
           </div>
-          <ul className="divide-y divide-border/60 px-4">
-            {pendingApprovals.map((s) => (
-              <li key={s.id} className="flex flex-wrap items-center gap-3 py-3.5">
-                <div className="min-w-0 flex-1">
-                  <Link href={`/signatures/${s.request.id}`} className="truncate text-[13px] font-medium text-foreground hover:text-primary">{s.request.title}</Link>
-                  <div className="text-[11px] text-muted-foreground">{s.label} · requested {formatDate(s.createdAt)}{s.assigneeName ? ` · ${s.assigneeName}` : ""}</div>
-                </div>
-                <ApprovalActions stepId={s.id} />
-              </li>
-            ))}
-          </ul>
-        </Surface>
-      )}
-
-      <Surface className="overflow-hidden">
-        <div className="border-b border-border p-4">
-          <SectionHeading
-            title={<span className="inline-flex items-center gap-2"><FileSignature className="size-4 text-primary" /> Signing requests</span>}
-            description={declined ? `${declined} declined request${declined === 1 ? "" : "s"} need follow-up.` : "Live progress and signer activity across every request."}
-          />
-        </div>
-        {requests.length === 0 ? (
-          <EmptyState
-            icon={FileSignature}
-            title="No signature requests yet"
-            description="Open a document in the editor and choose “Send for signing” to start a tracked request."
-            action={<Link href="/documents" className="btn-primary btn-sm">Open documents</Link>}
-            className="m-4"
-          />
-        ) : (
-          <ul className="divide-y divide-border/60">
-            {requests.map((r) => {
-              const signers = [...r.recipients]
-                .filter((x) => x.role !== "viewer")
-                .sort((a, b) => a.order - b.order);
-              const viewers = r.recipients.filter((x) => x.role === "viewer");
-              const signed = signers.filter((x) => x.status === "signed").length;
-              const pct = signers.length ? Math.round((signed / signers.length) * 100) : 0;
-              const isActive = ["sent", "viewed", "in_progress"].includes(r.status);
-              // Sequential runs pause on the first unfinished signer — that's who we wait on.
-              const nextUp =
-                r.ordering === "sequential" && isActive
-                  ? signers.find((x) => x.status !== "signed" && x.status !== "declined") ?? null
-                  : null;
-              return (
-                <RecordContextMenu key={r.id} label={r.title} href={`/signatures/${r.id}`}>
-                <li className="group flex flex-col gap-3 p-4 transition-colors hover:bg-muted/20 sm:flex-row sm:items-start">
-                  <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-border bg-muted/35 text-muted-foreground group-hover:border-primary/25 group-hover:text-primary">
-                    <FileSignature className="size-4" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <Link href={`/signatures/${r.id}`} className="truncate text-[13px] font-medium text-foreground hover:text-primary">{r.title}</Link>
-                      <StatusPill tone={requestTone(r.status)}>{r.status.replace("_", " ")}</StatusPill>
-                    </div>
-                    <div className="mt-0.5 text-[11px] text-muted-foreground">
-                      {signed}/{signers.length} signed · {r.ordering}
-                      {viewers.length > 0 ? ` · ${viewers.length} viewer${viewers.length > 1 ? "s" : ""}` : ""}
-                      {r.sentAt ? ` · sent ${formatDateTime(r.sentAt)}` : ""}
-                      {r.completedAt ? ` · completed ${formatDateTime(r.completedAt)}` : ` · updated ${formatDateTime(r.updatedAt)}`}
-                    </div>
-                    {signers.length > 0 && (
-                      <div className="mt-1.5 h-1 w-full max-w-xs overflow-hidden rounded-full bg-border/60" aria-hidden="true">
-                        <div className="h-full rounded-full bg-emerald-500/70" style={{ width: `${pct}%` }} />
-                      </div>
-                    )}
-                    <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
-                      {signers.map((x) => {
-                        const meta = RECIPIENT_STATUS[x.status] ?? RECIPIENT_STATUS.pending;
-                        const isNext = nextUp?.id === x.id;
-                        return (
-                          <span key={x.id} className={`inline-flex items-center gap-1.5 text-[11px] ${isNext ? "font-semibold text-amber-200" : "text-muted-foreground"}`} title={x.email ?? undefined}>
-                            <span className={`size-1.5 shrink-0 rounded-full ${meta.dot}`} aria-hidden="true" />
-                            {x.name}
-                            {x.role === "approver" ? " (approver)" : ""}
-                            <span className="text-muted-foreground/60">· {isNext ? `up next · ${signerDetail(x)}` : signerDetail(x)}</span>
-                          </span>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <Link href={`/signatures/${r.id}`} className="btn-secondary btn-sm shrink-0 self-start">Open</Link>
-                </li>
-                </RecordContextMenu>
-              );
-            })}
-          </ul>
-        )}
-      </Surface>
-    </div>
-  );
+          <Link href={`/signatures/${request.id}`} className="btn-secondary btn-sm shrink-0 self-start">{request.status === "completed" ? <><LockKeyhole className="size-3.5" /> Evidence</> : <><Send className="size-3.5" /> Open</>}</Link>
+        </li></RecordContextMenu>;
+      })}</ul>}
+    </Surface>
+  </div>;
 }

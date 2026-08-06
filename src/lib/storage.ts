@@ -2,211 +2,101 @@ import { promises as fs } from "fs";
 import path from "path";
 import crypto from "crypto";
 import { put, del, get, head, list } from "@vercel/blob";
-import {
-  activeStoreToken,
-  activeWriteTokenPresent,
-  dedupeByPathname,
-} from "./backupBlobs";
-
-/**
- * Document storage that works in both deployment modes:
- * - Vercel (BLOB_READ_WRITE_TOKEN set): files live in Vercel Blob. All downloads
- *   go through our authenticated /api/files route, which streams via readFile().
- * - Self-hosted / local dev: files live on disk under storage/uploads.
- *
- * PRIVATE STORAGE (staged rollout): sensitive assets must not be reachable by a
- * direct public URL. Vercel Blob access is configured at the STORE level, so a
- * private blob belongs in a dedicated private store with its own token. When
- * BLOB_PRIVATE=true AND BLOB_PRIVATE_READ_WRITE_TOKEN is set, new uploads are
- * written to the private store; reads try the private store (authenticated get())
- * first and fall back to a public fetch, so legacy public blobs keep working. The
- * flag is opt-in so it can be verified on a preview deployment before flipping
- * production; existing public blobs are then migrated (scripts/migrate-blobs-private).
- */
+import { activeStoreToken, activeWriteTokenPresent, dedupeByPathname } from "./backupBlobs";
+import { currentTenantScope } from "./tenantScope";
+import { isProductionRuntime } from "./signing/securityConfig";
 
 const UPLOAD_DIR = path.join(process.cwd(), "storage", "uploads");
-
-/** How long a Blob read may take. Node fetch has no default timeout, and a size
- *  cap says nothing about a host that connects and then never sends a byte. */
 const BLOB_FETCH_TIMEOUT_MS = 20_000;
-
 const privateMode = () => process.env.BLOB_PRIVATE === "true";
 const publicToken = () => process.env.BLOB_READ_WRITE_TOKEN;
 const privateToken = () => process.env.BLOB_PRIVATE_READ_WRITE_TOKEN;
 
-// A blob served from a private store lives on a `*.private.blob.vercel-storage.com`
-// host; a legacy public blob lives on `*.blob.vercel-storage.com`. Deletion must use
-// the token for the store the object actually lives in — the SDK otherwise defaults to
-// OIDC / BLOB_READ_WRITE_TOKEN and would silently no-op on a private object.
 const isPrivateBlobRef = (ref: string) => {
-  try {
-    return new URL(ref).hostname.endsWith(".private.blob.vercel-storage.com");
-  } catch {
-    return false;
-  }
+  try { return new URL(ref).hostname.endsWith(".private.blob.vercel-storage.com"); }
+  catch { return false; }
 };
 
-export async function saveFile(
-  buffer: Buffer,
-  originalName: string,
-  contentType: string
-): Promise<string> {
+function storagePrefix(): string {
+  const tenantId = currentTenantScope()?.tenantId;
+  return tenantId ? `tenants/${tenantId}/uploads` : "system/uploads";
+}
+
+export async function saveFile(buffer: Buffer, originalName: string, contentType: string): Promise<string> {
   const ext = path.extname(originalName).slice(0, 12);
-  const storedName = crypto.randomUUID() + ext;
-
-  // Private mode fails CLOSED: if the flag is on we must have a private-store token,
-  // otherwise we'd either write a "private" file into a public store or fall through
-  // to local disk — both silently defeat the privacy guarantee. Throw instead.
-  if (privateMode()) {
-    const token = privateToken();
-    if (!token) {
-      throw new Error("BLOB_PRIVATE=true requires BLOB_PRIVATE_READ_WRITE_TOKEN");
-    }
-    const blob = await put(`uploads/${storedName}`, buffer, {
-      access: "private",
-      contentType,
-      addRandomSuffix: false,
-      token,
-    });
-    return blob.url;
-  }
-
-  if (publicToken()) {
-    const blob = await put(`uploads/${storedName}`, buffer, {
-      access: "public", // unguessable URL; downloads still go through our auth route
-      contentType,
-      addRandomSuffix: false,
-    });
-    return blob.url;
-  }
-
-  await fs.mkdir(UPLOAD_DIR, { recursive: true });
-  await fs.writeFile(path.join(UPLOAD_DIR, storedName), buffer);
-  return storedName;
-}
-
-/**
- * A storage ref is EITHER a Vercel Blob URL we wrote, OR a bare local filename
- * that saveFile generated. Nothing else, ever.
- *
- * This used to be `ref.startsWith("https://")`, with everything else handed to
- * `path.join(UPLOAD_DIR, ref)` and every https ref handed to `fetch`. Both
- * branches trusted the ref completely, which was fine while every ref came from
- * saveFile — and stopped being fine the moment one caller stored a
- * client-supplied URL (registerLibraryDocuments). That turned a ref into two
- * primitives: `../../../../proc/self/environ` read any file the function could
- * see, and `https://anything` made the server fetch it and hand back the body.
- *
- * Validating at the read/delete boundary rather than only at that one caller is
- * deliberate: it protects the next caller too, and there are twenty write sites.
- */
-const BLOB_HOST = /(^|\.)blob\.vercel-storage\.com$/i;
-
-/**
- * Shape check only: an https URL on the Vercel Blob service. It does NOT say the
- * object is ours — every Vercel customer's store lives under this suffix, so a
- * hostname match proves the vendor and nothing else. Ownership is decided by
- * {@link assertOwnedBlob}, which asks OUR store.
- */
-function isTrustedBlobRef(ref: string): boolean {
+  const storedName = `${crypto.randomUUID()}${ext}`;
+  const prefix = storagePrefix();
+  const plannedObjectKey = `${prefix}/${storedName}`;
+  const production = isProductionRuntime();
+  const tenantId = currentTenantScope()?.tenantId ?? null;
+  const custody = tenantId ? await import("./signing/artifactCustody") : null;
+  const intentId = tenantId && custody
+    ? await custody.beginUploadIntent({ tenantId, plannedObjectKey, originalName, mimeType: contentType })
+    : null;
   try {
-    const url = new URL(ref);
-    return url.protocol === "https:" && BLOB_HOST.test(url.hostname);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Largest object we will pull into memory. Enforced twice, deliberately: against
- * the size the store reports, and again while reading, because a Content-Length
- * is a claim and a stream is a fact.
- */
-export const MAX_BLOB_BYTES = Number(process.env.MAX_BLOB_READ_BYTES ?? 64 * 1024 * 1024);
-
-/** Thrown by the cap so the private-store fallback can tell it from a miss. */
-export class BlobTooLargeError extends Error {}
-
-export type OwnedBlob = { size: number; contentType: string; pathname: string };
-
-/**
- * Prove a Blob URL is in a store we hold a token for, and return the size and
- * content type the STORE reports.
- *
- * A hostname allowlist cannot do this. `*.blob.vercel-storage.com` is every
- * Vercel customer's store, so `registerLibraryDocuments` — which takes the URL
- * and its size/type from the client — could point a library document at a
- * stranger's bucket with any metadata it liked, and the server would later fetch
- * it. `head()` resolves through OUR token, so an object in another store is a
- * miss, and the size it returns is the server's number rather than the caller's.
- */
-export async function assertOwnedBlob(ref: string): Promise<OwnedBlob> {
-  if (!isTrustedBlobRef(ref)) throw new Error("Refusing a storage reference that is not a Blob URL");
-  const tokens = [privateToken(), publicToken()].filter((t): t is string => Boolean(t));
-  if (tokens.length === 0) throw new Error("Blob storage is not configured");
-  for (const token of tokens) {
-    try {
-      const meta = await head(ref, { token });
-      return { size: meta.size, contentType: meta.contentType, pathname: meta.pathname };
-    } catch {
-      // Not in this store — try the other one, then refuse.
+    if (production && (!privateMode() || !privateToken())) {
+      throw new Error("Production file writes require private Blob storage; public/local fallback is disabled");
     }
+    let ref: string;
+    if (privateMode()) {
+      const token = privateToken();
+      if (!token) throw new Error("BLOB_PRIVATE=true requires BLOB_PRIVATE_READ_WRITE_TOKEN");
+      const blob = await put(plannedObjectKey, buffer, { access: "private", contentType, addRandomSuffix: false, token });
+      ref = blob.url;
+    } else if (publicToken()) {
+      if (production) throw new Error("Public Blob writes are forbidden for production signing/storage");
+      const blob = await put(plannedObjectKey, buffer, { access: "public", contentType, addRandomSuffix: false });
+      ref = blob.url;
+    } else {
+      if (production) throw new Error("Local-disk storage is forbidden in production");
+      await fs.mkdir(UPLOAD_DIR, { recursive: true });
+      await fs.writeFile(path.join(UPLOAD_DIR, storedName), buffer);
+      ref = storedName;
+    }
+    if (custody) await custody.completeUploadIntent({ id: intentId, objectRef: ref, bytes: buffer });
+    return ref;
+  } catch (error) {
+    if (custody) await custody.failUploadIntent(intentId, error);
+    throw error;
   }
-  throw new Error("Refusing a Blob URL that is not in our store");
 }
 
-/** A bare filename — no directory component, no traversal, not absolute. */
+const BLOB_HOST = /(^|\.)blob\.vercel-storage\.com$/i;
+function isTrustedBlobRef(ref: string): boolean {
+  try { const u = new URL(ref); return u.protocol === "https:" && BLOB_HOST.test(u.hostname); }
+  catch { return false; }
+}
 function isLocalRef(ref: string): boolean {
-  return (
-    ref.length > 0 &&
-    !ref.includes("/") &&
-    !ref.includes("\\") &&
-    !ref.includes("\0") &&
-    ref !== "." &&
-    ref !== ".." &&
-    !path.isAbsolute(ref)
-  );
+  return ref.length > 0 && !ref.includes("/") && !ref.includes("\\") && !ref.includes("\0") && ref !== "." && ref !== ".." && !path.isAbsolute(ref);
 }
-
-/**
- * Classify a ref, or refuse it. Throwing beats returning a boolean here: a
- * caller that forgets to check would otherwise fall through to the local
- * branch, which is the dangerous one.
- */
 function classifyRef(ref: string): "blob" | "local" {
   if (isTrustedBlobRef(ref)) return "blob";
   if (isLocalRef(ref)) return "local";
   throw new Error("Refusing an unrecognised storage reference");
 }
-
 const isBlobRef = (ref: string) => classifyRef(ref) === "blob";
 
-/**
- * A URL the BROWSER can load for itself, or null when the bytes have to be
- * proxied through us.
- *
- * Only a legacy PUBLIC Blob object qualifies: a private blob needs our token,
- * and a local filename is not addressable from outside at all. Rendering an
- * <img> is the use — readFile() would otherwise pull the whole object through
- * the server for no reason, and fail outright in an environment with no Blob
- * token configured, which is every local checkout.
- *
- * Deciding it HERE rather than in the caller keeps the ref-shape rules in the
- * one module that owns them; a caller doing `ref.startsWith("http")` is exactly
- * the check this module's comments explain the cost of.
- */
-export function directReadUrl(ref: string): string | null {
-  if (!isTrustedBlobRef(ref) || isPrivateBlobRef(ref)) return null;
-  return ref;
+export const MAX_BLOB_BYTES = Number(process.env.MAX_BLOB_READ_BYTES ?? 64 * 1024 * 1024);
+export class BlobTooLargeError extends Error {}
+export type OwnedBlob = { size: number; contentType: string; pathname: string };
+
+export async function assertOwnedBlob(ref: string): Promise<OwnedBlob> {
+  if (!isTrustedBlobRef(ref)) throw new Error("Refusing a storage reference that is not a Blob URL");
+  const tokens = [privateToken(), publicToken()].filter((v): v is string => Boolean(v));
+  if (!tokens.length) throw new Error("Blob storage is not configured");
+  for (const token of tokens) {
+    try {
+      const meta = await head(ref, { token });
+      return { size: meta.size, contentType: meta.contentType, pathname: meta.pathname };
+    } catch { /* try other owned store */ }
+  }
+  throw new Error("Refusing a Blob URL that is not in an application-owned store");
 }
 
-/**
- * Read a stream into memory, refusing to exceed `cap`.
- *
- * The cap is checked per chunk rather than from a header: `arrayBuffer()` (what
- * this replaces) buffers whatever arrives, so a large or unbounded object was an
- * out-of-memory lever on a route any authenticated caller could trigger.
- */
+export function directReadUrl(ref: string): string | null {
+  return isTrustedBlobRef(ref) && !isPrivateBlobRef(ref) ? ref : null;
+}
+
 async function streamToBuffer(stream: ReadableStream<Uint8Array>, cap = MAX_BLOB_BYTES): Promise<Buffer> {
   const reader = stream.getReader();
   const chunks: Buffer[] = [];
@@ -218,7 +108,7 @@ async function streamToBuffer(stream: ReadableStream<Uint8Array>, cap = MAX_BLOB
     total += value.byteLength;
     if (total > cap) {
       await reader.cancel().catch(() => {});
-      throw new BlobTooLargeError(`Refusing to read more than ${cap} bytes from Blob storage`);
+      throw new BlobTooLargeError(`Refusing to read more than ${cap} bytes`);
     }
     chunks.push(Buffer.from(value));
   }
@@ -227,69 +117,87 @@ async function streamToBuffer(stream: ReadableStream<Uint8Array>, cap = MAX_BLOB
 
 export async function readFile(ref: string): Promise<Buffer> {
   if (!isBlobRef(ref)) return fs.readFile(path.join(UPLOAD_DIR, ref));
-
-  // Authenticated read from the private store first (blobs written there); fall
-  // back to a public fetch for legacy public blobs. Reaching the private store
-  // with our own token is itself proof of ownership.
   if (privateToken()) {
     try {
       const pathname = new URL(ref).pathname.replace(/^\/+/, "");
       const result = await get(pathname, { access: "private", token: privateToken() });
-      if (result?.stream) return await streamToBuffer(result.stream);
+      if (result?.stream) return streamToBuffer(result.stream);
     } catch (error) {
-      // A miss means "try the public path". The cap is NOT a miss — swallowing it
-      // here would re-download the same oversized object over the public route.
       if (error instanceof BlobTooLargeError) throw error;
     }
   }
-
-  // Public path: ask OUR store first. This both proves the object is ours — a
-  // hostname match does not, every Vercel store shares that suffix — and yields
-  // an authoritative size, so an oversized object is refused before a byte of it
-  // is fetched rather than after it is already in memory.
   const meta = await assertOwnedBlob(ref);
-  if (meta.size > MAX_BLOB_BYTES) {
-    throw new BlobTooLargeError(`Blob is ${meta.size} bytes, over the ${MAX_BLOB_BYTES}-byte read limit`);
-  }
-  const res = await fetch(ref, { signal: AbortSignal.timeout(BLOB_FETCH_TIMEOUT_MS) });
-  if (!res.ok) throw new Error(`Blob fetch failed: ${res.status}`);
-  if (!res.body) return Buffer.alloc(0);
-  return streamToBuffer(res.body);
+  if (meta.size > MAX_BLOB_BYTES) throw new BlobTooLargeError(`Blob exceeds ${MAX_BLOB_BYTES} bytes`);
+  const response = await fetch(ref, { signal: AbortSignal.timeout(BLOB_FETCH_TIMEOUT_MS) });
+  if (!response.ok) throw new Error(`Blob fetch failed: ${response.status}`);
+  return response.body ? streamToBuffer(response.body) : Buffer.alloc(0);
 }
 
-export async function deleteFile(ref: string): Promise<void> {
+async function rawDeleteFile(ref: string): Promise<void> {
   if (isBlobRef(ref)) {
-    // Pick the token for the store the object lives in. A private-file deletion
-    // failure is NOT swallowed — a leaked private object is a real problem.
     const token = isPrivateBlobRef(ref) ? privateToken() : publicToken();
-    if (!token) {
-      throw new Error(`No Blob token available to delete ${isPrivateBlobRef(ref) ? "private" : "public"} object`);
-    }
+    if (!token) throw new Error("No token available for the object's Blob store");
     await del(ref, { token });
     return;
   }
-  await fs.unlink(path.join(UPLOAD_DIR, ref)).catch(() => {});
+  await fs.unlink(path.join(UPLOAD_DIR, ref)).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+  });
+}
+
+/**
+ * Safe-by-default deletion. Objects are retained unless an authoritative lookup
+ * proves there is no durable reference. Database uncertainty is never treated
+ * as proof of rollback.
+ */
+export async function deleteFile(ref: string): Promise<void> {
+  const { isStorageRefReferenced, scheduleOrphanSettlement } = await import("./signing/artifactCustody");
+  if (await isStorageRefReferenced(ref)) {
+    console.warn("[storage] retained referenced object", ref);
+    return;
+  }
+  const tenantId = currentTenantScope()?.tenantId;
+  if (tenantId) {
+    await scheduleOrphanSettlement(ref, tenantId);
+    return;
+  }
+  // Trusted system maintenance can delete only after the authoritative global
+  // reference query above proves the object is unused.
+  await rawDeleteFile(ref);
+}
+
+/** Only the settlement-period orphan collector and storage self-test may bypass reference checks. */
+export async function deleteVerifiedOrphan(ref: string): Promise<void> {
+  const { isStorageRefReferenced } = await import("./signing/artifactCustody");
+  if (await isStorageRefReferenced(ref)) throw new Error("Refusing to purge a referenced object");
+  await rawDeleteFile(ref);
+}
+
+/** Delete bytes only under an approved, independent legal-destruction workflow. */
+export async function deleteApprovedLegalObject(ref: string, requestId: string, tenantId: string): Promise<void> {
+  const { isApprovedLegalDestruction } = await import("./signing/artifactCustody");
+  if (!(await isApprovedLegalDestruction(ref, requestId, tenantId))) {
+    throw new Error("Legal-artifact deletion is not independently approved");
+  }
+  await rawDeleteFile(ref);
+}
+
+export async function verifyPrivateStorage(): Promise<void> {
+  if (!privateMode() || !privateToken()) throw new Error("Private Blob storage is not configured");
+  const marker = Buffer.from(`denago-signing-storage-self-test:${Date.now()}`);
+  const ref = await saveFile(marker, "signing-storage-self-test.txt", "text/plain");
+  const readBack = await readFile(ref);
+  if (!crypto.timingSafeEqual(marker, readBack)) throw new Error("Private Blob storage self-test returned different bytes");
+  await rawDeleteFile(ref);
 }
 
 const storeTokens = () => ({ publicToken: publicToken(), privateToken: privateToken() });
-
-/** Whether the store we currently WRITE to has a usable token (see backupBlobs). */
 export function activeBlobWriteTokenPresent(): boolean {
   return activeWriteTokenPresent(privateMode(), storeTokens());
 }
 
-/**
- * Put a MANAGED blob (backups) at a caller-controlled pathname — content-addressed
- * or timestamped, so never a random suffix and never an overwrite. Writes to the
- * ACTIVE store: private when BLOB_PRIVATE is on (fails closed without its token),
- * else public. Mirrors {@link saveFile}'s private/public split for the backup
- * pipeline, which manages its own paths. Reads go back through {@link readFile}.
- */
-export async function putManagedBlob(
-  pathname: string,
-  data: Buffer | string,
-  contentType: string,
-): Promise<{ url: string; pathname: string }> {
+export async function putManagedBlob(pathname: string, data: Buffer | string, contentType: string): Promise<{ url: string; pathname: string }> {
+  if (isProductionRuntime() && (!privateMode() || !privateToken())) throw new Error("Production managed objects require private Blob storage");
   if (privateMode()) {
     const token = privateToken();
     if (!token) throw new Error("BLOB_PRIVATE=true requires BLOB_PRIVATE_READ_WRITE_TOKEN");
@@ -302,33 +210,21 @@ export async function putManagedBlob(
 }
 
 async function collectBlobs(prefix: string, token: string): Promise<Array<{ pathname: string; url: string }>> {
-  const out: Array<{ pathname: string; url: string }> = [];
+  const output: Array<{ pathname: string; url: string }> = [];
   let cursor: string | undefined;
   do {
     const page = await list({ prefix, cursor, limit: 1000, token });
-    for (const b of page.blobs) out.push({ pathname: b.pathname, url: b.url });
+    output.push(...page.blobs.map((blob) => ({ pathname: blob.pathname, url: blob.url })));
     cursor = page.hasMore ? page.cursor : undefined;
   } while (cursor);
-  return out;
+  return output;
 }
 
-/**
- * List blobs in the ACTIVE store ONLY (private when BLOB_PRIVATE, else public).
- * Use this for existence checks before a new write and for live retention/pruning
- * — those must never cross into the other store, or installing the private token
- * before flipping the flag would already change public-mode behaviour.
- */
 export async function listActiveBackupBlobs(prefix: string): Promise<Array<{ pathname: string; url: string }>> {
   const token = activeStoreToken(privateMode(), storeTokens());
-  if (!token) return [];
-  return collectBlobs(prefix, token);
+  return token ? collectBlobs(prefix, token) : [];
 }
 
-/**
- * List blobs across BOTH stores (deduped by pathname). Use this ONLY for
- * restore/verify selection, where a legacy public backup must remain findable
- * after the cutover to the private store.
- */
 export async function listAllBackupBlobs(prefix: string): Promise<Array<{ pathname: string; url: string }>> {
   const pub = publicToken() ? await collectBlobs(prefix, publicToken()!) : [];
   const priv = privateToken() ? await collectBlobs(prefix, privateToken()!) : [];

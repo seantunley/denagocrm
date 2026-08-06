@@ -1,6 +1,7 @@
 import "server-only";
 import { headers } from "next/headers";
 import { prisma } from "@/lib/db";
+import { signingReleaseId } from "./securityConfig";
 
 export async function reqMeta(): Promise<{ ip: string | null; ua: string | null }> {
   try {
@@ -9,27 +10,40 @@ export async function reqMeta(): Promise<{ ip: string | null; ua: string | null 
   } catch { return { ip: null, ua: null }; }
 }
 
-export async function logSignEvent(requestId: string, e: {
-  type: string; recipientId?: string | null; actor: string; channel?: string | null; ip?: string | null; userAgent?: string | null; metadata?: object;
+export async function logSignEvent(requestId: string, event: {
+  type: string; recipientId?: string | null; actor: string; channel?: string | null;
+  ip?: string | null; userAgent?: string | null; metadata?: object;
 }): Promise<void> {
+  const request = await prisma.signatureRequest.findUnique({ where: { id: requestId }, select: { tenantId: true } });
+  if (!request?.tenantId) throw new Error("Cannot append signing evidence without a tenant-owned envelope");
   await prisma.signatureEvent.create({
     data: {
-      requestId, recipientId: e.recipientId ?? null, type: e.type, actor: e.actor,
-      channel: e.channel ?? null, ip: e.ip ?? null, userAgent: e.userAgent ?? null,
-      metadata: (e.metadata ?? undefined) as object | undefined,
+      tenantId: request.tenantId,
+      requestId,
+      recipientId: event.recipientId ?? null,
+      type: event.type,
+      actor: event.actor,
+      channel: event.channel ?? null,
+      ip: event.ip ?? null,
+      userAgent: event.userAgent ?? null,
+      metadata: { ...(event.metadata ?? {}), releaseId: signingReleaseId() },
     },
   });
 }
 
-/** First-view bookkeeping — logs an "opened" event once and advances status. */
 export async function recordView(recipientId: string, requestId: string, name: string): Promise<void> {
-  const r = await prisma.signatureRecipient.findUnique({ where: { id: recipientId }, select: { viewedAt: true, status: true } });
-  if (r?.viewedAt) return; // already recorded
+  const recipient = await prisma.signatureRecipient.findUnique({ where: { id: recipientId }, select: { viewedAt: true, status: true } });
+  if (recipient?.viewedAt) return;
   const meta = await reqMeta();
-  await prisma.signatureRecipient.update({
-    where: { id: recipientId },
-    data: { viewedAt: new Date(), status: r?.status === "pending" || r?.status === "sent" ? "viewed" : r?.status ?? "viewed" },
+  await prisma.$transaction(async (tx) => {
+    await tx.signatureRecipient.update({
+      where: { id: recipientId },
+      data: { viewedAt: new Date(), status: recipient?.status === "pending" || recipient?.status === "sent" ? "viewed" : recipient?.status ?? "viewed" },
+    });
+    await tx.$executeRaw`UPDATE "SignatureRecipient" SET "firstViewedAt"=COALESCE("firstViewedAt",now()) WHERE id=${recipientId}`;
+    await tx.signatureEvent.create({
+      data: { requestId, recipientId, type: "opened", actor: name, channel: "web", ip: meta.ip, userAgent: meta.ua },
+    });
+    await tx.signatureRequest.updateMany({ where: { id: requestId, status: { in: ["sent", "draft", "active"] } }, data: { status: "viewed" } });
   });
-  await logSignEvent(requestId, { type: "opened", recipientId, actor: name, channel: "web", ip: meta.ip, userAgent: meta.ua });
-  await prisma.signatureRequest.updateMany({ where: { id: requestId, status: { in: ["sent", "draft"] } }, data: { status: "viewed" } });
 }

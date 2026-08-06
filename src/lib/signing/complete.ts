@@ -1,318 +1,305 @@
 import "server-only";
 import crypto from "crypto";
-import { prisma } from "@/lib/db";
+import { Prisma } from "@prisma/client";
+import { prisma, basePrisma } from "@/lib/db";
 import { parseDocument } from "@/lib/doceditor/model";
 import { renderDocumentHtml, type StampField } from "@/lib/doceditor/serialize";
 import { htmlToPdf } from "@/lib/customDocs";
-import { sealPdf } from "@/lib/pdf/seal";
+import { sealPdfWithEvidence } from "@/lib/pdf/seal";
 import { saveFile, readFile, deleteFile } from "@/lib/storage";
-import { sendEmail } from "@/lib/email";
 import { formatDateTime } from "@/lib/format";
 import { resolveTenantActor } from "@/lib/tenantActor";
-import { bindCtx, logoDataUri } from "./render";
-import { logSignEvent } from "./events";
-import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
-import { runPostCompletion } from "./postComplete";
+import { logoDataUri } from "./render";
+import { isRequestClosed } from "./status";
+import { registerArtifactUpload, markArtifactState, recordLegalArtifact } from "./artifactCustody";
+import { signingReleaseId } from "./securityConfig";
 
-/** Internal sentinel: the completion claim was lost to a concurrent close. */
 class CompletionLost extends Error {}
-/** Internal sentinel: the source quote/job card couldn't be signed (ineligible). */
 class SourceCompletionLost extends Error {}
-
-function esc(s: unknown): string {
-  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
+const esc = (value: unknown) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 async function sigImg(ref: string | null): Promise<string | null> {
   if (!ref) return null;
-  try { const buf = await readFile(ref); return `data:image/png;base64,${buf.toString("base64")}`; } catch { return null; }
+  try { return `data:image/png;base64,${(await readFile(ref)).toString("base64")}`; }
+  catch { return null; }
 }
 
-type RecipientRow = { name: string; role: string; signedAt: Date | null; signerIp: string | null; img: string | null };
+type RecipientEvidence = {
+  id: string; name: string; email: string | null; phone: string | null; role: string;
+  signedAt: Date | null; signerIp: string | null; userAgent: string | null; signatureRef: string | null;
+  authMethod: string | null; assuranceLevel: string | null; authTransactionId: string | null;
+};
 
-function certificateHtml(title: string, requestId: string, rows: RecipientRow[]): string {
-  const signers = rows.map((r) => `
+function maskEmail(value: string | null): string {
+  if (!value) return "—";
+  const [local, domain] = value.split("@");
+  return `${local?.slice(0, 2) || "*"}•••@${domain || ""}`;
+}
+function maskPhone(value: string | null): string { return value ? `••••${value.replace(/\D/g, "").slice(-4)}` : "—"; }
+
+function certificateHtml(input: {
+  title: string; requestId: string; tenantId: string; canonicalSourceHash: string | null;
+  consentVersion: string; releaseId: string; rows: Array<RecipientEvidence & { image: string | null }>;
+}): string {
+  const signers = input.rows.map((row) => `
     <div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin:10px 0">
-      <div style="display:flex;justify-content:space-between"><strong>${esc(r.name)}</strong><span style="color:#64748b;font-size:9pt">${esc(r.role)}</span></div>
-      ${r.img ? `<img src="${r.img}" style="height:56px;margin:8px 0"/>` : `<div style="color:#94a3b8;font-size:9pt;margin:8px 0">(accepted without drawn signature)</div>`}
-      <div style="font-size:8.5pt;color:#64748b">Signed ${r.signedAt ? esc(formatDateTime(r.signedAt)) : "—"}${r.signerIp ? ` · IP ${esc(r.signerIp)}` : ""}</div>
+      <div style="display:flex;justify-content:space-between"><strong>${esc(row.name)}</strong><span>${esc(row.role)}</span></div>
+      ${row.image ? `<img src="${row.image}" style="height:56px;margin:8px 0"/>` : `<div style="color:#94a3b8;margin:8px 0">Accepted without a drawn signature</div>`}
+      <div style="font-size:8.5pt;color:#64748b">Signed ${row.signedAt ? esc(formatDateTime(row.signedAt)) : "—"} · IP ${esc(row.signerIp || "—")}</div>
+      <div style="font-size:8.5pt;color:#64748b">Identity ${esc(row.authMethod || "link")} · ${esc(row.assuranceLevel || "ES-1")} · ${esc(row.authTransactionId || "—")}</div>
+      <div style="font-size:8.5pt;color:#64748b">Recipient ${esc(maskEmail(row.email))} · ${esc(maskPhone(row.phone))}</div>
     </div>`).join("");
   return `<div style="page-break-before:always;padding-top:6px">
     <h1 style="font-size:18pt;color:#020617;margin:0 0 4px">Certificate of Completion</h1>
-    <p style="color:#64748b;font-size:10pt;margin:0 0 12px">Audit record for “${esc(title)}” · ref ${esc(requestId)}</p>
+    <p style="color:#64748b;font-size:10pt">Audit record for “${esc(input.title)}” · envelope ${esc(input.requestId)}</p>
     ${signers}
-    <div style="margin-top:14px;background:#f8fafc;border-left:3px solid #ea580c;padding:12px;font-size:9pt;color:#334155">
-      Signed electronically in terms of the Electronic Communications and Transactions Act 25 of 2002 (South Africa).
-      This document carries a PKCS#7 digital seal; any change after sealing invalidates the signature and is detectable
-      by any standard PDF reader.
+    <div style="margin-top:14px;background:#f8fafc;border-left:3px solid #ea580c;padding:12px;font-size:8.5pt;color:#334155">
+      Tenant ${esc(input.tenantId)} · canonical source ${esc(input.canonicalSourceHash || "historic")}
+      · consent ${esc(input.consentVersion)} · release ${esc(input.releaseId)}.
+      The final artifact is cryptographically sealed; the portable evidence bundle contains the event hash chain,
+      certificate chain, validation report, trusted timestamp evidence and delivery ledger.
     </div>
   </div>`;
 }
 
-/** Text form of one shared-field response for the acknowledgements record. */
-function describeResponseValue(kind: string, value: string): string {
-  if (kind === "checkbox") return value === "true" ? "✓ checked" : "✗ unchecked";
-  if (kind === "signature" || kind === "initials" || kind === "stamp") return "signed";
-  return value.length > 120 ? `${value.slice(0, 120)}…` : value;
+type AckField = { id: string; label: string; kind: string; page: number; responses: Array<{ recipientId: string; value: string; filledAt: Date }> };
+function acknowledgementsHtml(fields: AckField[], signers: Array<{ id: string; name: string }>): string {
+  if (!fields.length) return "";
+  return `<div style="page-break-before:always;padding-top:6px"><h1 style="font-size:18pt">Shared field acknowledgements</h1>${fields.map((field) => `
+    <div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin:10px 0">
+      <strong>${esc(field.label || field.kind)}</strong><div style="font-size:8pt;color:#94a3b8">Page ${field.page + 1} · field ${esc(field.id.slice(-8))}</div>
+      <ul>${signers.map((signer) => {
+        const answer = field.responses.find((response) => response.recipientId === signer.id);
+        const text = !answer ? "Not answered" : ["signature", "initials", "stamp"].includes(field.kind) ? "signed" : field.kind === "checkbox" ? (answer.value === "true" ? "checked" : "unchecked") : answer.value.slice(0, 120);
+        return `<li><strong>${esc(signer.name)}</strong> · ${esc(text)}${answer ? ` · ${esc(formatDateTime(answer.filledAt))}` : ""}</li>`;
+      }).join("")}</ul>
+    </div>`).join("")}</div>`;
 }
 
-type AckField = {
-  id: string;
-  label: string;
-  kind: string;
-  page: number;
-  responseByRecipient: Map<string, { value: string; filledAt: Date }>;
-};
-type AckSigner = { id: string; name: string };
-
-/**
- * A "Shared field acknowledgements" page for the certificate. A shared field
- * (recipientId null) has one placed position, so the stamped document shows only
- * the first signer's value — every signer's own answer lives in
- * SignatureFieldResponse. Record all of them here so the sealed PDF's audit
- * pages, not just the live hub, carry the full acknowledgement trail.
- *
- * Every shared field is listed (not only ones with at least one response), and
- * every expected non-viewer signer is listed against it in signer order —
- * "Not answered" where a signer left it blank — so the sealed record can't
- * silently omit a field or a signer. Fields are identified by page + a stable
- * field-id fragment so two identically- or blank-labelled fields are never
- * ambiguous. Returns "" (no page) when the document has no shared fields at all.
- */
-function acknowledgementsHtml(fields: AckField[], signers: AckSigner[]): string {
-  if (fields.length === 0) return "";
-  const blocks = fields.map((f) => {
-    const items = signers.map((signer) => {
-      const who = esc(signer.name);
-      const response = f.responseByRecipient.get(signer.id);
-      if (!response) {
-        return `<li style="font-size:9pt;color:#94a3b8;margin:2px 0"><strong>${who}</strong> · Not answered</li>`;
-      }
-      const when = esc(formatDateTime(response.filledAt));
-      return `<li style="font-size:9pt;color:#334155;margin:2px 0"><strong>${who}</strong> · ${esc(describeResponseValue(f.kind, response.value))} <span style="color:#94a3b8">· ${when}</span></li>`;
-    }).join("");
-    return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin:10px 0">
-      <div style="font-size:10pt;font-weight:600;color:#020617;margin-bottom:2px">${esc(f.label || f.kind)}</div>
-      <div style="font-size:8pt;color:#94a3b8;margin-bottom:6px">Page ${f.page + 1} · field ${esc(f.id.slice(-8))}</div>
-      <ul style="margin:0;padding-left:16px">${items}</ul>
-    </div>`;
-  }).join("");
-  return `<div style="page-break-before:always;padding-top:6px">
-    <h1 style="font-size:18pt;color:#020617;margin:0 0 4px">Shared field acknowledgements</h1>
-    <p style="color:#64748b;font-size:10pt;margin:0 0 12px">Every expected signer’s response to a field any recipient could complete, in signer order. The document stamps the first response; all are recorded here.</p>
-    ${blocks}
-  </div>`;
+async function extendedRequest(requestId: string): Promise<{
+  sourceContext: Record<string, unknown> | null; canonicalSourceHash: string | null; consentVersion: string; releaseId: string;
+  recipients: RecipientEvidence[];
+}> {
+  const meta = await basePrisma.$queryRaw<Array<{ sourceContext: Record<string, unknown> | null; canonicalSourceHash: string | null; consentVersion: string; releaseId: string | null }>>(Prisma.sql`
+    SELECT "sourceContextJson" AS "sourceContext","canonicalSourceHash","consentVersion","releaseId"
+      FROM "SignatureRequest" WHERE id=${requestId} LIMIT 1
+  `);
+  const recipients = await basePrisma.$queryRaw<RecipientEvidence[]>(Prisma.sql`
+    SELECT id,name,email,phone,role,"signedAt","signerIp","signerUserAgent" AS "userAgent","signatureRef",
+      "authMethod","assuranceLevel","authTransactionId"
+      FROM "SignatureRecipient" WHERE "requestId"=${requestId} AND status='signed' ORDER BY "order",id
+  `);
+  return {
+    sourceContext: meta[0]?.sourceContext ?? null,
+    canonicalSourceHash: meta[0]?.canonicalSourceHash ?? null,
+    consentVersion: meta[0]?.consentVersion ?? "historic",
+    releaseId: meta[0]?.releaseId ?? signingReleaseId(),
+    recipients,
+  };
 }
 
-/** Assemble the final signed PDF (document + certificate), seal it, file it, notify everyone. */
+async function acquireCompletionLease(requestId: string, owner: string): Promise<boolean> {
+  const rows = await basePrisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    UPDATE "SignatureRequest" SET status='rendering',"completionLeaseOwner"=${owner},
+      "completionLeaseExpiresAt"=now()+interval '5 minutes',"stateVersion"="stateVersion"+1
+     WHERE id=${requestId} AND "deletedAt" IS NULL
+       AND (
+         (status='signatures_complete' AND ("completionLeaseExpiresAt" IS NULL OR "completionLeaseExpiresAt" < now()))
+         OR (status='rendering' AND ("completionLeaseExpiresAt" < now() OR "completionLeaseOwner"=${owner}))
+       )
+    RETURNING id
+  `);
+  return rows.length === 1;
+}
+
+/** Assemble, seal and atomically register the immutable completed artifact. */
 export async function completeSignatureRequest(requestId: string): Promise<void> {
-  const req = await prisma.signatureRequest.findUnique({
-    where: { id: requestId },
-    include: { recipients: { orderBy: { order: "asc" } } },
-  });
-  // A request that is already closed (completed, voided or declined) must never
-  // be completed. Voiding races with the final signer's transaction: the signer
-  // commits the recipient + fields, then calls this outside that lock, so a void
-  // can land in between. Reject here AND re-check with a conditional claim below.
-  if (!req || isRequestClosed(req.status)) return;
-  const doc = parseDocument(req.snapshotJson);
-  if (!doc) return;
+  const existing = await prisma.signatureRequest.findUnique({ where: { id: requestId }, select: { status: true } });
+  if (!existing || isRequestClosed(existing.status)) return;
+  const leaseOwner = crypto.randomUUID();
+  if (!(await acquireCompletionLease(requestId, leaseOwner))) return;
 
-  // Resolve who owns the signed Document UP FRONT — before rendering or storing
-  // anything. Document.uploadedById is a required FK, so with nobody to
-  // attribute it to the sealed PDF ends up filed against no Document row: the
-  // quote reads as signed and accepted while the contract itself appears on no
-  // Documents tab and in no deliveries chip.
-  //
-  // No creator recorded → a member of THIS request's tenant, never the global
-  // oldest user (resolveTenantActor).
-  //
-  // Resolving here, rather than just before the write, is deliberate. By the
-  // time we reach the write the recipient's signature is already committed by
-  // the caller and the sealed PDF is already in storage — so failing there
-  // strands a request nothing can re-drive (every signer has signed, so
-  // advanceAfterSignature is never called again and the signing endpoint just
-  // answers "Already signed"), and leaks the stored blob past the cleanup
-  // handler below. This costs one query and happens before any of that.
-  const uploaderId = req.createdById || (await resolveTenantActor())?.id || null;
-  if (!uploaderId) {
-    // And we still COMPLETE. The customer has signed — a legal fact that must
-    // not be undone by our own bookkeeping. The sealed PDF stays reachable on
-    // the request (signedPdfRef); what's missing is the Documents-tab entry.
-    // Server log, not logError: an operator-visible anomaly is not a reason to
-    // push an alert to someone's phone.
-    console.error(
-      `[signing] request ${requestId}: no user to attribute the signed document to. ` +
-        `Completing without a Document row — the sealed PDF is on the request (signedPdfRef) ` +
-        `but will not appear on the Documents tab or the deliveries board until it is refiled.`,
-    );
-  }
-
-  const ctx = await bindCtx(req.quoteId, req.jobCardId);
-
-  const rows: RecipientRow[] = [];
-  for (const r of req.recipients.filter((x) => x.status === "signed")) {
-    rows.push({ name: r.signedName || r.name, role: r.role, signedAt: r.signedAt, signerIp: r.signerIp, img: await sigImg(r.signatureRef) });
-  }
-
-  // Stamp each signed field into the document at the exact spot it was placed.
-  const nameByRecipient = new Map(req.recipients.map((r) => [r.id, r.signedName || r.name]));
-  const fieldRows = await prisma.signatureField.findMany({ where: { requestId, filledAt: { not: null } } });
-  const stampedFields: StampField[] = [];
-  for (const f of fieldRows) {
-    const base = { page: f.page, x: f.x, y: f.y, width: f.width, height: f.height, kind: f.kind };
-    if (f.kind === "signature" || f.kind === "initials" || f.kind === "stamp") {
-      const img = await sigImg(f.value); // f.value is a stored file ref for image fields
-      if (img) stampedFields.push({ ...base, image: img, label: f.recipientId ? nameByRecipient.get(f.recipientId) : "" });
-    } else if (f.kind === "checkbox") {
-      stampedFields.push({ ...base, text: f.value === "true" ? "✓" : "" });
-    } else {
-      stampedFields.push({ ...base, text: f.value ?? "" });
-    }
-  }
-
-  // Shared fields (recipientId null) keep only the first value on SignatureField;
-  // pull every recipient's own answer from SignatureFieldResponse so the sealed
-  // PDF's audit pages carry the full acknowledgement trail, not just the stamp.
-  // Every shared field is included here (not filtered to ones with a response)
-  // and ordered deterministically by page/position/id — acknowledgementsHtml
-  // fills in "Not answered" for any expected signer missing from a field's
-  // response set.
-  const sharedFields = await prisma.signatureField.findMany({
-    where: { requestId, recipientId: null },
-    include: { responses: true },
-    orderBy: [{ page: "asc" }, { y: "asc" }, { x: "asc" }, { id: "asc" }],
-  });
-  const ackFields: AckField[] = sharedFields.map((f) => ({
-    id: f.id,
-    label: f.label,
-    kind: f.kind,
-    page: f.page,
-    responseByRecipient: new Map(f.responses.map((r) => [r.recipientId, { value: r.value, filledAt: r.filledAt }])),
-  }));
-  // Every expected non-viewer signer, in signer order — not just those who
-  // ended up signing, so a field they left blank still shows "Not answered"
-  // against their name rather than disappearing.
-  const expectedSigners: AckSigner[] = req.recipients
-    .filter((r) => r.role !== "viewer")
-    .map((r) => ({ id: r.id, name: r.signedName || r.name }));
-
-  const html = renderDocumentHtml(doc, ctx, logoDataUri(), {
-    hideOverlays: true,
-    stampedFields,
-    appendHtml: certificateHtml(req.title, req.id, rows) + acknowledgementsHtml(ackFields, expectedSigners),
-  });
-  let pdf = await htmlToPdf(html);
-  pdf = await sealPdf(pdf, { reason: `Signed: ${req.title}`, name: "Denago Cape Town" });
-  const hash = crypto.createHash("sha256").update(pdf).digest("hex");
-  const storedName = await saveFile(pdf, `${req.title} (signed).pdf`, "application/pdf");
-
-  const firstSigner = req.recipients.find((r) => r.status === "signed" && r.role !== "viewer");
-  const signerName = firstSigner?.signedName || firstSigner?.name || "Customer";
-
-  // Create the signed Document, claim completion, AND sign the SOURCE record
-  // (quote/job card) in ONE transaction. Previously the source was signed
-  // afterwards in a best-effort, error-swallowing step, so a crash could leave
-  // the request "completed" and the PDF distributed while the quote/job card
-  // stayed unsigned — with no retry path (the closed request short-circuits).
-  // Signing the source here (guarded live + unsigned + not-superseded) makes the
-  // core state atomic; only external fan-out (automations, push) is best-effort.
-  // A lost claim rolls the Document row back; the blob is kept only once claimed.
-  let documentId: string | null = null;
+  let storedName: string | null = null;
+  let timestampTokenRef: string | null = null;
   let sourceSigned = false;
   let wonLeadId: string | null = null;
   try {
+    const req = await prisma.signatureRequest.findUnique({
+      where: { id: requestId }, include: { recipients: { orderBy: { order: "asc" } } },
+    });
+    if (!req || !req.tenantId || isRequestClosed(req.status)) {
+      await basePrisma.$executeRaw`
+        UPDATE "SignatureRequest" SET "completionLeaseOwner"=NULL,"completionLeaseExpiresAt"=NULL
+         WHERE id=${requestId} AND "completionLeaseOwner"=${leaseOwner}
+      `.catch(() => {});
+      return;
+    }
+    const doc = parseDocument(req.snapshotJson);
+    if (!doc) throw new Error("Frozen document snapshot is invalid");
+    const extra = await extendedRequest(requestId);
+    if (!extra.sourceContext || !extra.canonicalSourceHash) {
+      throw new Error("Envelope has no frozen canonical source; reissue it before completion");
+    }
+    const signers = req.recipients.filter((recipient) => recipient.role !== "viewer");
+    if (!signers.length || signers.some((recipient) => recipient.status !== "signed")) {
+      throw new Error("Envelope cannot complete until every required signer has signed");
+    }
+    const pendingApprovals = await prisma.approvalStep.count({ where: { requestId, status: "pending" } });
+    if (pendingApprovals) throw new Error("Envelope cannot complete while an approval is pending");
+    const uploaderId = req.createdById || (await resolveTenantActor())?.id || null;
+    if (!uploaderId) throw new Error("No tenant actor can own the filed signed document");
+
+    const recipientRows = await Promise.all(extra.recipients.map(async (row) => ({ ...row, image: await sigImg(row.signatureRef) })));
+    const nameByRecipient = new Map(req.recipients.map((row) => [row.id, row.signedName || row.name]));
+    const fields = await prisma.signatureField.findMany({ where: { requestId, filledAt: { not: null } } });
+    const stampedFields: StampField[] = [];
+    for (const field of fields) {
+      const base = { page: field.page, x: field.x, y: field.y, width: field.width, height: field.height, kind: field.kind };
+      if (["signature", "initials", "stamp"].includes(field.kind)) {
+        const image = await sigImg(field.value);
+        if (image) stampedFields.push({ ...base, image, label: field.recipientId ? nameByRecipient.get(field.recipientId) : "" });
+      } else if (field.kind === "checkbox") stampedFields.push({ ...base, text: field.value === "true" ? "✓" : "" });
+      else stampedFields.push({ ...base, text: field.value ?? "" });
+    }
+    const shared = await prisma.signatureField.findMany({
+      where: { requestId, recipientId: null }, include: { responses: true }, orderBy: [{ page: "asc" }, { y: "asc" }, { x: "asc" }, { id: "asc" }],
+    });
+    const context = extra.sourceContext;
+    const html = renderDocumentHtml(doc, context, logoDataUri(), {
+      hideOverlays: true,
+      stampedFields,
+      appendHtml: certificateHtml({
+        title: req.title, requestId, tenantId: req.tenantId, canonicalSourceHash: extra.canonicalSourceHash,
+        consentVersion: extra.consentVersion, releaseId: extra.releaseId, rows: recipientRows,
+      }) + acknowledgementsHtml(shared.map((field) => ({
+        id: field.id, label: field.label, kind: field.kind, page: field.page,
+        responses: field.responses.map((response) => ({ recipientId: response.recipientId, value: response.value, filledAt: response.filledAt })),
+      })), req.recipients.filter((row) => row.role !== "viewer").map((row) => ({ id: row.id, name: row.signedName || row.name }))),
+    });
+
+    const rendered = await htmlToPdf(html);
+    const seal = await sealPdfWithEvidence(rendered, { reason: `Signed: ${req.title}`, name: "Denago Cape Town" });
+    const pdf = seal.pdf;
+    const hash = crypto.createHash("sha256").update(pdf).digest("hex");
+    storedName = await saveFile(pdf, `${req.title} (signed).pdf`, "application/pdf");
+    await registerArtifactUpload({ tenantId: req.tenantId, envelopeId: requestId, kind: "signed_pdf", objectRef: storedName, bytes: pdf });
+    if (seal.timestampToken) {
+      timestampTokenRef = await saveFile(seal.timestampToken, `${req.title}.rfc3161.tsr`, "application/timestamp-reply");
+      await registerArtifactUpload({ tenantId: req.tenantId, envelopeId: requestId, kind: "timestamp_token", objectRef: timestampTokenRef, bytes: seal.timestampToken });
+    }
+
+    const firstSigner = req.recipients.find((row) => row.status === "signed" && row.role !== "viewer");
+    const signerName = firstSigner?.signedName || firstSigner?.name || "Customer";
     await prisma.$transaction(async (tx) => {
-      // Universal lock order — SOURCE record first, THEN the signature request —
-      // matching quote/job-card deletion and signing start. Completion used to
-      // touch the request before the source while deletion did the reverse, so a
-      // final signature racing a delete could deadlock (each holding what the
-      // other needed). Locking the source row up front makes the order consistent.
-      if (req.quoteId) await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${req.quoteId} FOR UPDATE`;
-      else if (req.jobCardId) await tx.$executeRaw`SELECT id FROM "JobCard" WHERE id = ${req.jobCardId} FOR UPDATE`;
-      // Always created when an uploader exists (the normal path, and what makes
-      // the signed contract findable); null only in the logged anomaly above,
-      // where completing still beats stranding a signature.
-      const document = uploaderId
-        ? await tx.document.create({
-            data: {
-              fileName: `${req.title} (signed).pdf`, storedName, mimeType: "application/pdf", sizeBytes: pdf.length,
-              quoteId: req.quoteId, jobCardId: req.jobCardId, contactId: req.contactId, tag: "signed", uploadedById: uploaderId,
-            },
-          })
-        : null;
-      const claimed = await tx.signatureRequest.updateMany({
-        where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
-        data: { status: "completed", completedAt: new Date(), signedPdfRef: storedName, signedPdfHash: hash, signedDocId: document?.id ?? null },
+      if (req.quoteId) await tx.$executeRaw`SELECT id FROM "Quote" WHERE id=${req.quoteId} FOR UPDATE`;
+      if (req.jobCardId) await tx.$executeRaw`SELECT id FROM "JobCard" WHERE id=${req.jobCardId} FOR UPDATE`;
+      await tx.$executeRaw`SELECT id FROM "SignatureRequest" WHERE id=${requestId} FOR UPDATE`;
+      const document = await tx.document.create({
+        data: {
+          tenantId: req.tenantId,
+          fileName: `${req.title} (signed).pdf`, storedName, mimeType: "application/pdf", sizeBytes: pdf.length,
+          quoteId: req.quoteId, jobCardId: req.jobCardId, contactId: req.contactId, tag: "signed", uploadedById: uploaderId,
+        },
       });
-      if (claimed.count === 0) throw new CompletionLost();
-      documentId = document?.id ?? null;
+      const claimed = await tx.signatureRequest.updateMany({
+        where: { id: requestId, status: "rendering" },
+        data: { status: "sealed", completedAt: null, signedPdfRef: storedName, signedPdfHash: hash, signedDocId: document.id },
+      });
+      if (claimed.count !== 1) throw new CompletionLost();
+      await tx.$executeRaw`UPDATE "SignatureRequest" SET "completionLeaseOwner"=NULL,"completionLeaseExpiresAt"=NULL WHERE id=${requestId}`;
 
       if (req.quoteId) {
-        const signedQuote = await tx.quote.updateMany({
+        const signed = await tx.quote.updateMany({
           where: { id: req.quoteId, deletedAt: null, supersededAt: null, signedAt: null },
           data: { signedAt: new Date(), signedByName: signerName, status: "accepted", declinedAt: null, declineReason: null, signedPdfHash: hash },
         });
-        if (signedQuote.count === 1) {
+        if (signed.count === 1) {
           sourceSigned = true;
-          const q = await tx.quote.findUnique({ where: { id: req.quoteId }, select: { leadId: true } });
-          if (q?.leadId) {
-            // Win the lead in the SAME transaction, locked, so quote-accepted and
-            // lead-won can't diverge under a concurrent decline/accept.
-            await tx.$executeRaw`SELECT id FROM "Lead" WHERE id = ${q.leadId} FOR UPDATE`;
-            const won = await tx.lead.updateMany({ where: { id: q.leadId, deletedAt: null, status: "open" }, data: { status: "won" } });
-            if (won.count === 1) wonLeadId = q.leadId;
+          const quote = await tx.quote.findUnique({ where: { id: req.quoteId }, select: { leadId: true } });
+          if (quote?.leadId) {
+            await tx.$executeRaw`SELECT id FROM "Lead" WHERE id=${quote.leadId} FOR UPDATE`;
+            const won = await tx.lead.updateMany({ where: { id: quote.leadId, deletedAt: null, status: "open" }, data: { status: "won" } });
+            if (won.count === 1) wonLeadId = quote.leadId;
           }
         } else {
-          // Didn't sign it. Completing anyway is only OK if the quote is ALREADY
-          // signed (e.g. the legacy /sign path beat us); a deleted / superseded /
-          // missing quote is ineligible, so roll the whole completion back rather
-          // than complete + distribute a PDF for a quote that never got signed.
-          const q = await tx.quote.findUnique({ where: { id: req.quoteId }, select: { signedAt: true, deletedAt: true, supersededAt: true } });
-          if (!q || q.deletedAt || q.supersededAt || !q.signedAt) throw new SourceCompletionLost();
+          const quote = await tx.quote.findUnique({ where: { id: req.quoteId }, select: { signedAt: true, deletedAt: true, supersededAt: true } });
+          if (!quote || quote.deletedAt || quote.supersededAt || !quote.signedAt) throw new SourceCompletionLost();
         }
       } else if (req.jobCardId) {
-        const signedJc = await tx.jobCard.updateMany({
-          where: { id: req.jobCardId, deletedAt: null, signedAt: null },
-          data: { signedAt: new Date(), signedByName: signerName },
-        });
-        if (signedJc.count === 1) {
-          sourceSigned = true;
-        } else {
-          const jc = await tx.jobCard.findUnique({ where: { id: req.jobCardId }, select: { signedAt: true, deletedAt: true } });
-          if (!jc || jc.deletedAt || !jc.signedAt) throw new SourceCompletionLost();
+        const signed = await tx.jobCard.updateMany({ where: { id: req.jobCardId, deletedAt: null, signedAt: null }, data: { signedAt: new Date(), signedByName: signerName } });
+        if (signed.count === 1) sourceSigned = true;
+        else {
+          const job = await tx.jobCard.findUnique({ where: { id: req.jobCardId }, select: { signedAt: true, deletedAt: true } });
+          if (!job || job.deletedAt || !job.signedAt) throw new SourceCompletionLost();
         }
       }
+
+      await recordLegalArtifact({
+        tenantId: req.tenantId!, envelopeId: requestId, documentId: document.id, objectRef: storedName!, sha256: hash,
+        sizeBytes: pdf.length, certificateFingerprint: seal.certificateFingerprint, certificateChain: seal.certificateChain,
+        keyId: seal.keyId, trustPolicy: seal.trustPolicy, timestampTokenRef,
+        validationReport: seal.validationReport,
+      }, tx);
+      await markArtifactState({ tenantId: req.tenantId!, objectRef: storedName!, kind: "signed_pdf", envelopeId: requestId, state: "sealed" }, tx);
+      if (timestampTokenRef) await markArtifactState({ tenantId: req.tenantId!, objectRef: timestampTokenRef, kind: "timestamp_token", envelopeId: requestId, state: "retained" }, tx);
+      await tx.signatureEvent.create({
+        data: {
+          tenantId: req.tenantId, requestId, type: "sealed", actor: "system", channel: "worker",
+          metadata: {
+            hash, legalDocumentId: document.id, certificateFingerprint: seal.certificateFingerprint,
+            trustPolicy: seal.trustPolicy, timestampTokenRef, validation: seal.validationReport,
+            canonicalSourceHash: extra.canonicalSourceHash,
+          },
+        },
+      });
+      await tx.$executeRaw`
+        UPDATE "SigningOutboxJob" SET payload=${JSON.stringify({
+          id: req.id,
+          title: req.title,
+          quoteId: req.quoteId,
+          jobCardId: req.jobCardId,
+          signedByName: signerName,
+          signedPdfHash: hash,
+          signedDocId: document.id,
+          sourceSigned,
+          wonLeadId,
+        })}::jsonb,"updatedAt"=now()
+        WHERE "idempotencyKey"=${`post-complete:${requestId}`}
+      `;
+      await tx.$executeRaw`
+        UPDATE "SignatureRequest" SET status='distributing',"stateVersion"="stateVersion"+1
+         WHERE id=${requestId} AND status='sealed'
+      `;
     });
-  } catch (err) {
-    await deleteFile(storedName).catch(() => {});
-    if (err instanceof CompletionLost || err instanceof SourceCompletionLost) return;
-    throw err;
-  }
+  } catch (error) {
+    // A transaction error is ambiguous: the database may have committed and only
+    // lost the acknowledgement. Retain both objects whenever authoritative state
+    // says they are referenced, and let reconciliation finish the workflow.
+    const committed = storedName
+      ? await basePrisma.$queryRaw<Array<{ status: string }>>(Prisma.sql`
+          SELECT status FROM "SignatureRequest" WHERE id=${requestId} AND "signedPdfRef"=${storedName}
+            AND status IN ('sealed','distributing','completed') LIMIT 1
+        `).catch(() => [])
+      : [];
+    if (!committed.length && storedName) await deleteFile(storedName).catch(() => {});
+    if (!committed.length && timestampTokenRef) await deleteFile(timestampTokenRef).catch(() => {});
 
-  await logSignEvent(requestId, { type: "completed", actor: "system", metadata: { hash } });
-
-  // External fan-out only (referral, automations, push, audit). The core source
-  // state is already committed above; this is best-effort and never unwinds it.
-  await runPostCompletion({
-    id: req.id,
-    title: req.title,
-    quoteId: req.quoteId,
-    jobCardId: req.jobCardId,
-    signedByName: signerName,
-    signedPdfHash: hash,
-    signedDocId: documentId,
-    sourceSigned,
-    wonLeadId,
-  });
-
-  // Email the sealed PDF to every recipient with an address.
-  for (const r of req.recipients) {
-    if (!r.email) continue;
-    await sendEmail({
-      to: r.email, subject: `Completed & signed: ${req.title}`,
-      text: `Hi ${r.name},\n\nEveryone has signed "${req.title}". The final sealed PDF is attached.\n\nDenago Cape Town`,
-      attachments: [{ filename: `${req.title}.pdf`, content: pdf, contentType: "application/pdf" }],
-    });
+    if (error instanceof SourceCompletionLost) {
+      await basePrisma.$executeRaw`
+        UPDATE "SignatureRequest" SET status='failed_manual_intervention',"failedAt"=now(),
+          "failureCode"='source_completion_lost',"completionLeaseOwner"=NULL,"completionLeaseExpiresAt"=NULL
+         WHERE id=${requestId} AND status='rendering' AND "completionLeaseOwner"=${leaseOwner}
+      `.catch(() => {});
+      return;
+    }
+    if (!committed.length) {
+      await basePrisma.$executeRaw`
+        UPDATE "SignatureRequest" SET status='signatures_complete',"failureCode"=${error instanceof Error ? error.message.slice(0, 200) : "completion_failed"},
+          "completionLeaseOwner"=NULL,"completionLeaseExpiresAt"=NULL
+         WHERE id=${requestId} AND status='rendering' AND "completionLeaseOwner"=${leaseOwner}
+      `.catch(() => {});
+    }
+    if (error instanceof CompletionLost || committed.length) return;
+    throw error;
   }
 }

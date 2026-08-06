@@ -1,71 +1,140 @@
+import crypto from "crypto";
 import forge from "node-forge";
 import { SignPdf } from "@signpdf/signpdf";
 import { P12Signer } from "@signpdf/signer-p12";
 import { plainAddPlaceholder } from "@signpdf/placeholder-plain";
+import { isProductionRuntime } from "@/lib/signing/securityConfig";
 
-/**
- * SPIKE — applies a real PKCS#7 digital seal to a PDF so any reader (Adobe etc.)
- * can detect tampering: change one byte after sealing and the signature reports
- * invalid. This is the OpenSign lesson made in-house.
- *
- * The signing identity comes from getSigner(): the configured P12 secret in
- * production (BUILDER_SIGN_P12_BASE64/_PASSPHRASE) so signatures chain to a
- * trusted identity, or a cached self-signed cert otherwise (mechanism still
- * tamper-evident, validity "unknown"). Not generated per request.
- */
+export type SealMetadata = { reason: string; name: string; location?: string; contactInfo?: string };
+export type SealEvidence = {
+  pdf: Buffer;
+  certificateFingerprint: string;
+  certificateChain: string[];
+  keyId: string | null;
+  trustPolicy: string;
+  timestampToken: Buffer | null;
+  validationReport: { valid: boolean; profile: string; checkedAt: string; details?: unknown };
+};
 
-const PASSPHRASE = "denago-spike";
+type TrustServiceResponse = {
+  sealedPdfBase64: string;
+  certificateFingerprint: string;
+  certificateChainPem: string[];
+  keyId?: string;
+  trustPolicy: string;
+  timestampTokenBase64?: string;
+  validationReport: { valid: boolean; profile: string; checkedAt?: string; details?: unknown };
+};
 
-/**
- * The signing identity. Production: set BUILDER_SIGN_P12_BASE64 (a base64 PKCS#12)
- * and BUILDER_SIGN_P12_PASSPHRASE as secrets → signatures chain to a real,
- * trusted identity (Adobe shows a valid signature). Otherwise a self-signed cert
- * is generated so the tamper-evident mechanism still works (validity "unknown").
- */
-function getSigner(): { p12: Buffer; passphrase: string } {
-  const b64 = process.env.BUILDER_SIGN_P12_BASE64;
-  const pass = process.env.BUILDER_SIGN_P12_PASSPHRASE;
-  if (b64 && pass) return { p12: Buffer.from(b64, "base64"), passphrase: pass };
-  return { p12: makeSelfSignedP12(), passphrase: PASSPHRASE };
+async function sealWithTrustService(pdf: Buffer, meta: SealMetadata): Promise<SealEvidence> {
+  const url = process.env.SIGNING_TRUST_SERVICE_URL;
+  const token = process.env.SIGNING_TRUST_SERVICE_TOKEN;
+  if (!url || !token) throw new Error("Signing trust service is not configured");
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      pdfBase64: pdf.toString("base64"),
+      metadata: meta,
+      requestedProfile: process.env.SIGNING_PADES_PROFILE || "PAdES-B-LT",
+      requireTrustedTimestamp: true,
+      requireIndependentValidation: true,
+    }),
+    signal: AbortSignal.timeout(Number(process.env.SIGNING_TRUST_SERVICE_TIMEOUT_MS || 45_000)),
+  });
+  if (!response.ok) throw new Error(`Trust service failed: ${response.status} ${await response.text()}`);
+  const result = (await response.json()) as TrustServiceResponse;
+  if (!result.sealedPdfBase64 || !result.certificateFingerprint || !result.validationReport?.valid) {
+    throw new Error("Trust service returned an incomplete or invalid signing result");
+  }
+  if (!result.timestampTokenBase64) throw new Error("Trust service omitted the required RFC 3161 timestamp token");
+  const sealed = Buffer.from(result.sealedPdfBase64, "base64");
+  if (!sealed.subarray(0, 5).equals(Buffer.from("%PDF-"))) throw new Error("Trust service returned a non-PDF artifact");
+  return {
+    pdf: sealed,
+    certificateFingerprint: result.certificateFingerprint.toLowerCase().replace(/:/g, ""),
+    certificateChain: result.certificateChainPem || [],
+    keyId: result.keyId || null,
+    trustPolicy: result.trustPolicy || "PAdES-B-LT",
+    timestampToken: Buffer.from(result.timestampTokenBase64, "base64"),
+    validationReport: {
+      ...result.validationReport,
+      checkedAt: result.validationReport.checkedAt || new Date().toISOString(),
+    },
+  };
 }
 
+const DEV_PASSPHRASE = "denago-development-only";
 let selfSignedCache: Buffer | null = null;
-
-function makeSelfSignedP12(): Buffer {
+function makeDevelopmentP12(): Buffer {
   if (selfSignedCache) return selfSignedCache;
   const keys = forge.pki.rsa.generateKeyPair(2048);
   const cert = forge.pki.createCertificate();
   cert.publicKey = keys.publicKey;
-  cert.serialNumber = "01";
+  cert.serialNumber = crypto.randomBytes(16).toString("hex");
   cert.validity.notBefore = new Date();
-  cert.validity.notAfter = new Date();
-  cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 5);
+  cert.validity.notAfter = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
   const attrs = [
-    { name: "commonName", value: "Denago Cape Town" },
+    { name: "commonName", value: "Denago Development Seal" },
     { name: "organizationName", value: "Denago Cape Town" },
     { name: "countryName", value: "ZA" },
   ];
-  cert.setSubject(attrs);
-  cert.setIssuer(attrs);
-  cert.sign(keys.privateKey, forge.md.sha256.create());
-  const asn1 = forge.pkcs12.toPkcs12Asn1(keys.privateKey, [cert], PASSPHRASE, { algorithm: "3des" });
-  const der = forge.asn1.toDer(asn1).getBytes();
-  selfSignedCache = Buffer.from(der, "binary");
+  cert.setSubject(attrs); cert.setIssuer(attrs); cert.sign(keys.privateKey, forge.md.sha256.create());
+  selfSignedCache = Buffer.from(forge.asn1.toDer(forge.pkcs12.toPkcs12Asn1(keys.privateKey, [cert], DEV_PASSPHRASE, { algorithm: "3des" })).getBytes(), "binary");
   return selfSignedCache;
 }
 
-export async function sealPdf(
-  pdfBuffer: Buffer,
-  meta: { reason: string; name: string; location?: string; contactInfo?: string }
-): Promise<Buffer> {
+function localSigner(): { p12: Buffer; passphrase: string; dev: boolean } {
+  const p12 = process.env.BUILDER_SIGN_P12_BASE64;
+  const passphrase = process.env.BUILDER_SIGN_P12_PASSPHRASE;
+  if (p12 && passphrase) return { p12: Buffer.from(p12, "base64"), passphrase, dev: false };
+  if (isProductionRuntime()) throw new Error("Production sealing fails closed without the configured trust service");
+  return { p12: makeDevelopmentP12(), passphrase: DEV_PASSPHRASE, dev: true };
+}
+
+function p12Evidence(p12: Buffer, passphrase: string): { fingerprint: string; chain: string[] } {
+  const asn1 = forge.asn1.fromDer(p12.toString("binary"));
+  const store = forge.pkcs12.pkcs12FromAsn1(asn1, passphrase);
+  const bags = store.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag] || [];
+  const chain = bags.flatMap((bag) => bag.cert ? [forge.pki.certificateToPem(bag.cert)] : []);
+  if (!bags[0]?.cert) throw new Error("PKCS#12 contains no certificate");
+  const der = Buffer.from(forge.asn1.toDer(forge.pki.certificateToAsn1(bags[0].cert)).getBytes(), "binary");
+  return { fingerprint: crypto.createHash("sha256").update(der).digest("hex"), chain };
+}
+
+async function sealLocally(pdf: Buffer, meta: SealMetadata): Promise<SealEvidence> {
+  const identity = localSigner();
   const withPlaceholder = plainAddPlaceholder({
-    pdfBuffer,
+    pdfBuffer: pdf,
     reason: meta.reason,
     contactInfo: meta.contactInfo ?? "sales@denagocpt.co.za",
     name: meta.name,
     location: meta.location ?? "Cape Town, ZA",
   });
-  const { p12, passphrase } = getSigner();
-  const signer = new P12Signer(p12, { passphrase });
-  return new SignPdf().sign(withPlaceholder, signer);
+  const sealed = new SignPdf().sign(withPlaceholder, new P12Signer(identity.p12, { passphrase: identity.passphrase }));
+  const certificate = p12Evidence(identity.p12, identity.passphrase);
+  return {
+    pdf: sealed,
+    certificateFingerprint: certificate.fingerprint,
+    certificateChain: certificate.chain,
+    keyId: null,
+    trustPolicy: identity.dev ? "development-self-signed" : "local-pkcs12-no-timestamp",
+    timestampToken: null,
+    validationReport: {
+      valid: true,
+      profile: identity.dev ? "PKCS7-development" : "PKCS7-local",
+      checkedAt: new Date().toISOString(),
+      details: { sha256: crypto.createHash("sha256").update(sealed).digest("hex"), independentlyValidated: false },
+    },
+  };
+}
+
+export async function sealPdfWithEvidence(pdf: Buffer, meta: SealMetadata): Promise<SealEvidence> {
+  if (process.env.SIGNING_TRUST_SERVICE_URL) return sealWithTrustService(pdf, meta);
+  return sealLocally(pdf, meta);
+}
+
+/** Compatibility wrapper for callers that only need the sealed bytes. */
+export async function sealPdf(pdf: Buffer, meta: SealMetadata): Promise<Buffer> {
+  return (await sealPdfWithEvidence(pdf, meta)).pdf;
 }
