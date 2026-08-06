@@ -220,8 +220,10 @@ export async function scheduleOrphanSettlement(ref: string, tenantId: string): P
           INSERT INTO "SigningArtifact"("tenantId",kind,"objectRef",state,"settlementNotBefore","lastError")
           VALUES (${tenantId},'unclassified_orphan',${ref},'orphan_candidate',now()+interval '24 hours','awaiting authoritative orphan settlement')
           ON CONFLICT ("tenantId","objectRef",kind) DO UPDATE SET
-            state=CASE WHEN "SigningArtifact".state IN ('referenced','sealed','retained') THEN "SigningArtifact".state ELSE 'orphan_candidate' END,
-            "settlementNotBefore"=GREATEST("SigningArtifact"."settlementNotBefore",now()+interval '24 hours')
+            state='orphan_candidate',
+            "settlementNotBefore"=GREATEST("SigningArtifact"."settlementNotBefore",now()+interval '24 hours'),
+            "lastError"='awaiting authoritative orphan settlement'
+          WHERE "SigningArtifact".state NOT IN ('referenced','sealed','retained')
         `;
       }
     });
