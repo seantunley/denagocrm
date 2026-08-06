@@ -8,7 +8,7 @@ import { freezeDocumentGlobals } from "@/lib/signing/freezeDocument";
 import { currentTenantScope } from "@/lib/tenantScope";
 import { newSignCapability } from "./tokens";
 import { captureFrozenSourceContext, canonicalHash } from "./frozenSource";
-import { signingReleaseId } from "./securityConfig";
+import { assertSigningRuntimeConfig, signingReleaseId } from "./securityConfig";
 import { registerArtifactUpload, markArtifactState } from "./artifactCustody";
 
 export type RequestSource = {
@@ -72,6 +72,7 @@ export async function createSignatureRequestFromDoc(opts: {
   identityPolicy?: "ES1_LINK" | "ES2_EMAIL_OTP" | "ES2_SMS_OTP" | "ES2_EMAIL_SMS" | "ES2_AUTHENTICATED_PORTAL" | "ES3_PASSKEY" | "ES3_IDENTITY_PROVIDER" | "AES_ACCREDITED";
   client?: SigningDbClient;
 }): Promise<{ id: string; recipients: number; fields: number }> {
+  assertSigningRuntimeConfig();
   const tenantId = await resolveTenantId(opts);
   const frozenDoc = freezeDocumentGlobals(opts.doc, {
     ...companyTokens(await getCompanyProfile()),
