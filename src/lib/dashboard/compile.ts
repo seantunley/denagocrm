@@ -13,6 +13,7 @@ import { LIMITS, type CardMetric, type CardQuery, type QueryFilter } from "./con
 import {
   OPERATORS_FOR_TYPE,
   canUseField,
+  canUseSource,
   fieldOf,
   sourceById,
   type PeriodId,
@@ -92,6 +93,32 @@ export type ScopeContext = {
   userId: string;
   accessibleIds: string[] | null;
   permissions: ReadonlySet<string>;
+  /**
+   * May this viewer use this source AT ALL — `canUseSource`, which is module AND
+   * permission.
+   *
+   * A separate flag rather than something inferred from the two fields above,
+   * because neither of them can express it. `accessibleIds` answers "which rows",
+   * and for the four sources with a `view_all` grant the answer is `null`,
+   * meaning unrestricted — indistinguishable from a viewer who should not reach
+   * the source at all. `permissions` is consulted per FIELD, not per source.
+   *
+   * The gate this closes was open: `canUseSource` had no callers anywhere on the
+   * read path. It was wired only to `usableSources`, which fills the editor's
+   * dropdowns — so the module half of the rule its own catalogue states ("module
+   * state is a TENANT entitlement no role overrides, permission is WHO, and both
+   * must pass") was enforced in the UI and nowhere else. A card built while a
+   * module was enabled kept rendering after the tenant lost it.
+   *
+   * The permission half happened to hold anyway, by a route it was not designed
+   * for: `getAccessible*Ids` returns `[]` rather than `null` when the viewer
+   * holds neither grant, so those cards came back empty. That is why this never
+   * showed up as a leak — except on `activities`, the one source scoped by an
+   * ownership COLUMN, where nothing consulted the source's permission list and a
+   * viewer holding neither `activities.view` nor `activities.manage` still got
+   * their own diary.
+   */
+  usable: boolean;
 };
 
 export type CompiledRows = { rows: Record<string, unknown>[]; total: number };
@@ -451,6 +478,18 @@ export function compileWhere(
   query: CardQuery,
   ctx: ScopeContext,
 ): Record<string, unknown> {
+  // INVARIANT, and the first one because nothing below can rescue it: a viewer
+  // who may not use this source gets a query matching nothing.
+  //
+  // Returned outright rather than merged into `where`, because the two branches
+  // below are not equivalent for the two kinds of scope. For an `ids` source an
+  // empty `accessibleIds` would already close it — but for an `owner` source
+  // (activities) the id list is never consulted, and the owner predicate would
+  // still hand back the viewer's own rows. A single early return closes both,
+  // and cannot be widened by a filter, a period or a `mine` switch, because none
+  // of them run.
+  if (!ctx.usable) return { ...IMPOSSIBLE };
+
   const where: Record<string, unknown> = {};
 
   // INVARIANT: soft-deleted rows are never in a card. The Trash is a screen with
@@ -519,7 +558,10 @@ export function compileOrderBy(source: SourceDef, query: CardQuery): Record<stri
   // shown, and "the top eight by deal value" discloses the deal values in every
   // way that matters. A gated sort field therefore fails to resolve and the card
   // falls back to the source's default order.
-  const ctx: ScopeContext = { userId: "", accessibleIds: null, permissions: NO_PERMISSIONS };
+  // `usable: true` because this decides the ORDER of rows, never which rows:
+  // whether the viewer may reach the source at all is settled by compileWhere,
+  // and a refused card has no rows for this to order.
+  const ctx: ScopeContext = { userId: "", accessibleIds: null, permissions: NO_PERMISSIONS, usable: true };
   const requested = query.sort ? resolveField(source, query.sort.field, ctx, "sort") : null;
   if (requested && query.sort) {
     const order = nest(requested.path, query.sort.dir);
@@ -695,6 +737,24 @@ function idsFromScope(fragment: Record<string, unknown>): string[] | null {
 export async function scopeContext(source: SourceDef): Promise<ScopeContext> {
   const data = await import("./data");
   const { user, access } = await data.dashboardViewer();
+
+  // THE SOURCE GATE, before any scope is resolved.
+  //
+  // `access` already carries both halves — dashboardViewer() resolves modules
+  // alongside permissions — so this asks the catalogue's own question rather
+  // than re-deriving it here.
+  //
+  // Denied returns a context that is closed three ways over, not one: `usable`
+  // stops compileWhere at its first line, `accessibleIds: []` closes the id
+  // scope even if some future caller builds a `where` without going through
+  // compileWhere, and NO_PERMISSIONS makes every gated column fail to resolve so
+  // a refused source cannot leak a value through compileSelect or an aggregate.
+  // Any one of the three suffices; a gate worth adding is worth not having to
+  // re-derive whether it still holds after the next refactor.
+  if (!canUseSource(source, access)) {
+    return { userId: user.id, accessibleIds: [], permissions: NO_PERMISSIONS, usable: false };
+  }
+
   let accessibleIds: string[] | null = null;
   if (source.scope.by === "ids") {
     switch (source.scope.helper) {
@@ -715,7 +775,7 @@ export async function scopeContext(source: SourceDef): Promise<ScopeContext> {
         break;
     }
   }
-  return { userId: user.id, accessibleIds, permissions: access.permissions };
+  return { userId: user.id, accessibleIds, permissions: access.permissions, usable: true };
 }
 
 /* ── running ──────────────────────────────────────────────────────── */

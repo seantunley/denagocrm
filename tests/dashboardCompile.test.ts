@@ -50,8 +50,11 @@ const EVERY_PERMISSION: ReadonlySet<string> = new Set<string>([
   ...SOURCES.flatMap((s) => s.fields.flatMap((f) => (f.permission ? [f.permission as string] : []))),
 ]);
 
+// `usable: true` by default so a test opts OUT of the source gate the same way
+// it opts out of a permission. The gate itself is exercised in its own block
+// below; every other test here is about what a PERMITTED viewer compiles.
 function ctx(over: Partial<ScopeContext> = {}): ScopeContext {
-  return { userId: "user-1", accessibleIds: null, permissions: EVERY_PERMISSION, ...over };
+  return { userId: "user-1", accessibleIds: null, permissions: EVERY_PERMISSION, usable: true, ...over };
 }
 
 function withoutPermission(key: string): ReadonlySet<string> {
@@ -124,7 +127,7 @@ test("every source is scoped one way or the other, for every query shape", () =>
     const where = compileWhere(
       src,
       query({ source: src.id }),
-      { userId: "user-1", accessibleIds: [], permissions: new Set<string>() },
+      { userId: "user-1", accessibleIds: [], permissions: new Set<string>(), usable: true },
     );
     const scoped =
       JSON.stringify(where.id) === JSON.stringify({ in: [] }) ||
@@ -678,4 +681,121 @@ test("the compiler reuses the shared, memoised scope helpers rather than new one
     "contacts have no helper in data.ts and must call the permissions helper directly",
   );
   assert.ok(text.includes("cache("), "the contact scope must be memoised per request");
+});
+
+/* ── the source gate ──────────────────────────────────────────────── */
+
+/**
+ * `canUseSource` IS THE GATE, AND IT HAD NO CALLERS.
+ *
+ * sources.ts states the rule its catalogue is built on — "module state is a
+ * TENANT entitlement no role overrides, permission is WHO, and both must pass" —
+ * and the function that enforces it was wired only to `usableSources`, which
+ * fills the editor's dropdowns. The read path never consulted it.
+ *
+ * The permission half held anyway, by a route it was not designed for:
+ * getAccessible*Ids returns [] rather than null when the viewer holds neither
+ * grant, so those cards came back empty. That is exactly why this went unnoticed.
+ *
+ * The MODULE half did not hold. `jobcards` and `vehicles` carry
+ * module: "automotive", and a viewer with jobcards.view_all gets
+ * accessibleIds = null — no id predicate — so a card built while the module was
+ * enabled kept rendering workshop data after the tenant lost it. No attacker
+ * required: the editor stops offering the source, and the saved card carries on.
+ */
+
+test("a source the viewer may not use compiles to a query matching nothing", () => {
+  for (const src of SOURCES) {
+    const where = compileWhere(src, query({ source: src.id }), ctx({ usable: false }));
+    assert.deepEqual(
+      where,
+      { id: { in: [] } },
+      `${src.id} compiled something other than the impossible query when refused`,
+    );
+  }
+});
+
+test("nothing in a refused card's config can widen it", () => {
+  // The early return is what makes this true: a filter, a period, a `mine`
+  // switch and a sort are all downstream of it, so none of them runs. Asserted
+  // rather than assumed, because "it returns early" is a property of today's
+  // control flow and this is a property of the output.
+  const where = compileWhere(
+    vehicles,
+    query({
+      source: "vehicles",
+      scope: "mine",
+      period: "30d",
+      filters: [{ field: "model", operator: "contains", value: "Denago" }],
+    }),
+    ctx({ usable: false, accessibleIds: null, permissions: EVERY_PERMISSION }),
+  );
+  // Checked BEFORE the deepEqual: assert.deepEqual is a type assertion, so it
+  // narrows `where` to the expected literal and every property read after it
+  // stops being a question about the value.
+  assert.equal(where.AND, undefined, "no filter, period or scope predicate may survive a refusal");
+  assert.equal(where.deletedAt, undefined, "not even the soft-delete key — the query is closed, not narrowed");
+  assert.deepEqual(where, { id: { in: [] } });
+});
+
+test("a refused OWNER-scoped source stops handing back the viewer's own rows", () => {
+  // Activities are the one source scoped by an ownership column rather than an
+  // accessible-id helper, and the one the indirect enforcement above never
+  // covered: with no activities permission at all, the owner branch still
+  // emitted `assignedToId = me`, so a viewer the record page refuses outright
+  // got their own diary on a card.
+  const refused = compileWhere(activities, query({ source: "activities" }), ctx({ usable: false }));
+  assert.ok(
+    !Object.values(refused).includes("user-1"),
+    "a refused source must not fall back to the viewer's own rows",
+  );
+  assert.deepEqual(refused, { id: { in: [] } });
+
+  // …and the permitted case is untouched: still their own diary, not everyone's.
+  const permitted = compileWhere(
+    activities,
+    query({ source: "activities" }),
+    ctx({ permissions: withoutPermission("activities.manage") }),
+  );
+  assert.equal(permitted.assignedToId, "user-1");
+});
+
+test("the gate is called on the read path, not only in the editor", () => {
+  // The regression that started this: `canUseSource` existed, was correct, was
+  // documented, and had zero callers outside the dropdown helpers. A gate nobody
+  // invokes is decoration, and it reads exactly like a gate that works.
+  const compile = readFileSync(path.join(root, "src/lib/dashboard/compile.ts"), "utf8");
+  assert.match(compile, /canUseSource,/, "compile.ts must import the gate");
+  assert.match(
+    compile,
+    /if \(!canUseSource\(source, access\)\) \{/,
+    "scopeContext must consult it before resolving any scope",
+  );
+  assert.match(compile, /if \(!ctx\.usable\) return \{ \.\.\.IMPOSSIBLE \};/, "compileWhere must honour it");
+
+  // Ordered before the scope resolution, or a denied viewer's accessible ids get
+  // resolved and the early return becomes decoration of a different kind.
+  const gateAt = compile.indexOf("if (!canUseSource(source, access))");
+  const scopeAt = compile.indexOf("let accessibleIds: string[] | null = null;");
+  assert.ok(gateAt !== -1 && scopeAt !== -1 && gateAt < scopeAt, "the gate must precede scope resolution");
+
+  // And it must be the FIRST thing compileWhere does — a soft-delete key or a
+  // row scope written before it would survive into the refused query.
+  const body = compile.slice(compile.indexOf("export function compileWhere("));
+  assert.ok(
+    body.indexOf("if (!ctx.usable)") < body.indexOf("const where: Record<string, unknown> = {}"),
+    "the refusal must come before the where object is built",
+  );
+});
+
+test("a refused context is closed on more than one axis", () => {
+  // Defence in depth at the one place that knows the viewer: `usable` stops
+  // compileWhere, the empty id list closes the scope for any future caller that
+  // builds a where by hand, and NO_PERMISSIONS stops a gated column resolving
+  // into a select or an aggregate.
+  const compile = readFileSync(path.join(root, "src/lib/dashboard/compile.ts"), "utf8");
+  assert.match(
+    compile,
+    /return \{ userId: user\.id, accessibleIds: \[\], permissions: NO_PERMISSIONS, usable: false \};/,
+  );
 });
