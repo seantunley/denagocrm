@@ -6,6 +6,7 @@ import { contactName, formatDate, formatZAR } from "./format";
 import { payableTotalCents } from "./pricing";
 import { type MergeContext } from "./mergeFields";
 import { getCompanyProfile, companyTokens } from "./companyProfile";
+import { escapeHtml } from "./escapeHtml";
 
 /**
  * Build the merge context for a document from its linked CRM records.
@@ -186,6 +187,3 @@ export async function htmlToPdf(html: string, opts?: HtmlPdfOptions): Promise<Bu
   }
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}

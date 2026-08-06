@@ -288,11 +288,37 @@ export function brandStyle(brand: TenantBrand): string | null {
  * on every upload, so the route's `immutable` cache header is honest: a given
  * URL's bytes never change, and a new upload is a new URL.
  */
+/**
+ * The asset name inside a tenant's branding folder.
+ *
+ * Stored refs look like `branding/<tenantId>/logo-<stamp>.<ext>`, and the stamp
+ * plus a no-overwrite upload makes each one immutable — a replacement is a new
+ * object, never a new version of the old one. So the FILENAME is a durable
+ * identifier for a specific set of bytes, which is exactly what a frozen
+ * document needs.
+ */
+export function brandLogoAsset(logoRef: string | null | undefined): string | null {
+  const name = (logoRef ?? "").split("/").pop() ?? "";
+  return /^logo-\d+\.(png|jpe?g|webp|svg)$/i.test(name) ? name : null;
+}
+
+/**
+ * A URL that keeps pointing at the SAME image after the logo is replaced.
+ *
+ * This used to append `?v=<hash of the ref>` and the route ignored it entirely,
+ * reading whatever `Tenant.brandLogoRef` said at request time. So a URL frozen
+ * into a signed document showed the NEW logo once the tenant uploaded one — the
+ * precise thing freezing a brand is supposed to prevent — and replacing a logo
+ * also deleted the old object, so historic renders could break outright.
+ *
+ * `a=` names the immutable asset and the route resolves that. Anything without
+ * it still falls back to the tenant's current logo, which is right for live
+ * surfaces that SHOULD follow a rebrand.
+ */
 export function brandLogoUrl(brand: TenantBrand): string | null {
   if (!brand.tenantId || !brand.logoRef) return null;
-  let hash = 0;
-  for (let i = 0; i < brand.logoRef.length; i++) {
-    hash = (hash * 31 + brand.logoRef.charCodeAt(i)) | 0;
-  }
-  return `/api/brand/logo/${brand.tenantId}?v=${(hash >>> 0).toString(36)}`;
+  const asset = brandLogoAsset(brand.logoRef);
+  return asset
+    ? `/api/brand/logo/${brand.tenantId}?a=${encodeURIComponent(asset)}`
+    : `/api/brand/logo/${brand.tenantId}`;
 }

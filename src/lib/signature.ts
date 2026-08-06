@@ -1,6 +1,7 @@
 /** Email signature: custom HTML if the user set one, else the branded template. */
 import { PLATFORM_NAME } from "./platformIdentity";
 import type { CompanyProfile } from "./companyBrand";
+import { escapeHtml } from "./escapeHtml";
 
 /**
  * Where the signature's static assets (the social glyphs) are served from.
@@ -19,14 +20,6 @@ import type { CompanyProfile } from "./companyBrand";
  */
 const SITE = (process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za").replace(/\/$/, "");
 
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
 
 /**
  * `company` is the workspace this signature is FROM — its name, tagline, logo,

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { basePrisma } from "@/lib/db";
 import { readFile } from "@/lib/storage";
+import { brandLogoAsset } from "@/lib/tenantBrand";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,30 +39,55 @@ const EXT_TYPES: Record<string, string> = {
 };
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ tenantId: string }> },
 ) {
   const { tenantId } = await params;
+  const requested = req.nextUrl.searchParams.get("a");
   // basePrisma: pre-auth, no tenant scope exists, and the bypass GUC keeps this
   // working under the restricted non-BYPASSRLS role the RLS work is heading for.
   const tenant = await basePrisma.tenant.findUnique({
     where: { id: tenantId },
     select: { active: true, brandLogoRef: true },
   });
-  if (!tenant?.active || !tenant.brandLogoRef) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
+  if (!tenant?.active) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const ext = tenant.brandLogoRef.split(".").pop()?.toLowerCase() ?? "";
+  // A SPECIFIC asset when one is named, the tenant's current logo otherwise.
+  //
+  // This route used to serve `brandLogoRef` whatever the URL asked for, so a
+  // logo frozen into a signed document silently became the replacement the day
+  // one was uploaded. Resolving the requested asset is what makes a frozen brand
+  // actually frozen; falling back keeps live surfaces following a rebrand, which
+  // is what they should do.
+  //
+  // The path is REBUILT from the tenant id and a strictly matched filename, so
+  // the parameter cannot walk out of this tenant's folder or name another
+  // tenant's object — nothing from the request is concatenated into a path.
+  let ref: string | null = null;
+  if (requested) {
+    const asset = brandLogoAsset(requested);
+    if (!asset) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    ref = `branding/${tenantId}/${asset}`;
+  } else {
+    ref = tenant.brandLogoRef;
+  }
+  if (!ref) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const ext = ref.split(".").pop()?.toLowerCase() ?? "";
   const contentType = EXT_TYPES[ext];
   if (!contentType) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   try {
-    const buffer = await readFile(tenant.brandLogoRef);
+    const buffer = await readFile(ref);
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
         "Content-Type": contentType,
         "X-Content-Type-Options": "nosniff",
+        // An SVG is a document, not just pixels: it can carry script, and this
+        // route serves it from the application's OWN origin, so anything it ran
+        // would run as the CRM. Neutralised for every type rather than only SVG,
+        // because an image response has no legitimate need for any of it.
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
         "Cache-Control": "public, max-age=31536000, immutable",
       },
     });

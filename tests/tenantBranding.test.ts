@@ -221,7 +221,11 @@ test("the logo URL changes when the logo does, so 'immutable' caching is honest"
   const b = brandLogoUrl(brandFromRow({ ...base, brandLogoRef: "branding/t1/logo-2.png" }));
   assert.ok(a && b);
   assert.notEqual(a, b, "a new upload must be a new URL — the route sends immutable");
-  assert.match(a, /^\/api\/brand\/logo\/t1\?v=/);
+  // `?a=` names the immutable asset the route resolves. It used to be `?v=`, a
+  // hash of the ref that only LOOKED versioned — the route ignored it and served
+  // the current logo, so the immutable cache header was a promise the response
+  // did not keep.
+  assert.match(a, /^\/api\/brand\/logo\/t1\?a=logo-/);
 });
 
 /* ── structural: the properties above must stay true in the shipped code ─── */

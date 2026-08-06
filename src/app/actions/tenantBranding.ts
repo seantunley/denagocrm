@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { basePrisma } from "@/lib/db";
 import { requirePlatformAdminAction } from "@/lib/platformAuth";
 import { logAuditStrict } from "@/lib/audit";
-import { putManagedBlob, deleteFile } from "@/lib/storage";
+import { putManagedBlob } from "@/lib/storage";
 import { isBrandColour, normaliseHost } from "@/lib/tenantBrand";
 import { domainProof, proofMatches } from "@/lib/domainCheck";
 import { safeFetchText } from "@/lib/safeFetch";
@@ -151,15 +151,18 @@ export async function setTenantLogoAction(
 
     await basePrisma.tenant.update({ where: { id: tenantId }, data: { brandLogoRef: pathname } });
 
-    // Delete the OLD object only after the new ref is committed. The other order
-    // leaves a tenant with no logo if the update fails, and a leaked blob is
-    // cheaper than a broken brand.
-    if (previous && previous !== pathname) {
-      await deleteFile(previous).catch(() => {
-        /* the row is already correct; a stranded object is not worth failing the save */
-      });
-    }
-
+    // The OLD object is RETAINED, not deleted.
+    //
+    // A signed document freezes the logo URL it was rendered with, and that URL
+    // names this specific object. Deleting it on replacement broke exactly the
+    // guarantee freezing exists to provide: a historic contract would either
+    // render the new logo or fail to render one at all. Which signed requests
+    // reference which asset is not cheap to determine and is easy to get wrong,
+    // so nothing is deleted here at all — a retained image costs a few kilobytes
+    // and cannot damage a record somebody may have to rely on.
+    //
+    // Removing genuinely unreferenced branding assets is a retention job with
+    // the whole picture, not a side effect of pressing Save.
     await logAuditStrict({
       action: "tenant.brand_logo_changed",
       summary: `Updated logo for tenant “${tenant.name}”`,
@@ -187,8 +190,17 @@ export async function clearTenantLogoAction(
     if (!tenant.brandLogoRef) throw new ActionRefusal("This tenant has no logo to remove.");
 
     const previous = tenant.brandLogoRef;
+    // Detach the pointer; RETAIN the object — the same rule as replacing one.
+    //
+    // Removing a logo used to delete the underlying asset, which breaks every
+    // signed document whose frozen brand names it: the contract renders with a
+    // missing image, permanently, because the bytes are gone. Fixing that on the
+    // replace path and not this one would have left the identical failure behind
+    // a different button.
+    //
+    // "This tenant has no logo" is a statement about the tenant TODAY. It is not
+    // a licence to alter what a document signed last year looks like.
     await basePrisma.tenant.update({ where: { id: tenantId }, data: { brandLogoRef: null } });
-    await deleteFile(previous).catch(() => {});
 
     await logAuditStrict({
       action: "tenant.brand_logo_changed",
