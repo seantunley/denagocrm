@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import Image from "next/image";
+import BrandLogo from "@/components/BrandLogo";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -48,18 +49,16 @@ function initials(name: string) {
     .join("");
 }
 
-function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; enabledModules?: string[] }) {
+function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules, brand }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; enabledModules?: string[]; brand?: { logoUrl: string | null; displayName: string } }) {
   const isOwner = user.role === "owner";
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-sidebar">
       <div className="pointer-events-none absolute -left-28 top-24 size-64 rounded-full bg-orange-500/[0.055] blur-3xl" />
       {/* Brand */}
       <div className="flex h-16 items-center border-b border-sidebar-border px-4">
-        <Image
-          src="/branding/denago-cape-town-logo.png"
-          alt="Denago Cape Town"
-          width={230}
-          height={58}
+        <BrandLogo
+          logoUrl={brand?.logoUrl ?? null}
+          alt={brand?.displayName ?? "Denago Cape Town"}
           className="h-8 w-auto object-contain"
         />
       </div>
@@ -214,12 +213,17 @@ export default function AppShell({
   inboxWaiting = 0,
   casesWaiting = 0,
   enabledModules,
+  brand,
   children,
 }: {
   user: ShellUser;
   inboxWaiting?: number;
   casesWaiting?: number;
   enabledModules?: string[];
+  /** The workspace brand, resolved from the SESSION's tenant by the (app)
+   *  layout. Optional so every existing test render still compiles; undefined
+   *  means the built-in assets, which is what an unbranded tenant gets. */
+  brand?: { logoUrl: string | null; displayName: string };
   children: ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -241,11 +245,9 @@ export default function AppShell({
         >
           <Menu className="size-5" />
         </button>
-        <Image
-          src="/branding/denago-cape-town-logo.png"
-          alt="Denago Cape Town"
-          width={230}
-          height={58}
+        <BrandLogo
+          logoUrl={brand?.logoUrl ?? null}
+          alt={brand?.displayName ?? "Denago Cape Town"}
           className="h-6 w-auto object-contain"
         />
         <button
@@ -261,7 +263,7 @@ export default function AppShell({
       <Sheet key={pathname} open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="left" className="w-72 border-sidebar-border p-0">
           <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} enabledModules={enabledModules} />
+          <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} enabledModules={enabledModules} brand={brand} />
         </SheetContent>
       </Sheet>
 
@@ -275,7 +277,7 @@ export default function AppShell({
 
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 border-r border-sidebar-border lg:flex lg:flex-col">
-        <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} enabledModules={enabledModules} />
+        <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} enabledModules={enabledModules} brand={brand} />
       </aside>
 
       <main className="relative lg:pl-60">
