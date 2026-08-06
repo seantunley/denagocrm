@@ -4,7 +4,6 @@ import { parseGraph, type WorkflowGraph, type SignNode } from "./model";
 import { evalCondition, type WorkflowContext } from "./compile";
 import { newSignCapability } from "@/lib/signing/tokenVault";
 import { notifyRecipient } from "@/lib/signing/dispatch";
-import { notifyApprover } from "@/lib/signing/approvals";
 import { logSignEvent } from "@/lib/signing/events";
 import { completeSignatureRequest } from "@/lib/signing/complete";
 import { notifyCreatorRejected } from "@/lib/signing/notify";
@@ -150,7 +149,15 @@ async function materialise(requestId: string, node: SignNode, notify: boolean): 
     const step = await prisma.approvalStep.findFirst({ where: { requestId, nodeId: node.id } });
     if (!step) return;
     await logSignEvent(requestId, { type: "approval_requested", actor: "system", metadata: { label, stepId: step.id } });
-    await notifyApprover(step.id);
+    // NOT SENT HERE. Creating the step transactionally enqueues the durable
+    // notification job, and the worker owns delivery.
+    //
+    // Sending inline as well made two senders for one message, and no amount of
+    // checking fixes that: a claim taken by one leaves the other reporting
+    // "skipped", which the worker records as a completed job — so if the inline
+    // send then failed, nothing remained to retry and the approval was silently
+    // never delivered. One owner, with retries, is the only shape where a
+    // failure is recoverable.
   }
 }
 

@@ -313,3 +313,28 @@ test("the timestamp comment does not claim more than the code proves", () => {
   assert.match(source, /proves NOTHING on its own/);
   assert.match(source, /fabricate a reply/);
 });
+
+test("exactly one thing sends an approval email", () => {
+  const runtime = read("src/lib/signflow/runtime.ts");
+  const approvals = read("src/lib/signing/approvals.ts");
+
+  // Two senders cannot be made safe by checking. A claim taken by one leaves the
+  // other reporting "skipped", which the worker records as a completed job — so
+  // a failed inline send left nothing to retry and the approval was silently
+  // never delivered. Creating the step transactionally enqueues the durable job;
+  // the worker owns delivery and retries.
+  assert.doesNotMatch(runtime, /await notifyApprover\(/, "the runtime must not send inline");
+  assert.match(runtime, /the worker owns delivery/);
+
+  // …and the claim machinery is gone with it: a permanent claim row with no
+  // lease turned any crash between claim and send into permanent suppression.
+  assert.doesNotMatch(approvals, /signingDeliveryClaim/);
+  assert.doesNotMatch(approvals, /claimKey/);
+
+  // A failed send is REPORTED so the job retries, and the sent event is written
+  // only after SMTP accepted.
+  assert.match(approvals, /if \(!result\.ok\) return \{ ok: false/);
+  const sentAt = approvals.indexOf('type: "approval_sent"');
+  const sendAt = approvals.indexOf("const result = await sendEmail");
+  assert.ok(sendAt !== -1 && sentAt > sendAt, "evidence follows the send, never precedes it");
+});
