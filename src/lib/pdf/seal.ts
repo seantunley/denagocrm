@@ -111,7 +111,7 @@ async function sealLocally(pdf: Buffer, meta: SealMetadata): Promise<SealEvidenc
     name: meta.name,
     location: meta.location ?? "Cape Town, ZA",
   });
-  const sealed = new SignPdf().sign(withPlaceholder, new P12Signer(identity.p12, { passphrase: identity.passphrase }));
+  const sealed = await new SignPdf().sign(withPlaceholder, new P12Signer(identity.p12, { passphrase: identity.passphrase }));
   const certificate = p12Evidence(identity.p12, identity.passphrase);
   return {
     pdf: sealed,
