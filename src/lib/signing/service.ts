@@ -1,5 +1,4 @@
 import "server-only";
-import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { formatDate } from "@/lib/format";
@@ -20,15 +19,28 @@ export type RequestSource = {
   templateId?: string | null;
 };
 
-type SigningDbClient = Pick<
-  Prisma.TransactionClient,
-  "user" | "quote" | "jobCard" | "contact" | "signatureRequest" | "signatureRecipient" | "signatureField" | "signatureEvent" | "$executeRaw"
->;
+/* Prisma's extended tenant client and interactive transaction client expose the
+ * same operations with intentionally different generic signatures. Keep this
+ * boundary structural so both clients are accepted without weakening callers. */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type SigningDbClient = {
+  user: any;
+  quote: any;
+  jobCard: any;
+  contact: any;
+  signatureRequest: any;
+  signatureRecipient: any;
+  signatureField: any;
+  signatureEvent: any;
+  $executeRaw: any;
+  $queryRaw: any;
+};
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 async function resolveTenantId(opts: { tenantId?: string | null; createdById?: string | null; source: RequestSource; client?: SigningDbClient }): Promise<string> {
   const scoped = opts.tenantId ?? currentTenantScope()?.tenantId;
   if (scoped) return scoped;
-  const db: SigningDbClient = opts.client ?? prisma;
+  const db = (opts.client ?? prisma) as SigningDbClient;
   if (opts.createdById) {
     const user = await db.user.findUnique({ where: { id: opts.createdById }, select: { tenantId: true } });
     if (user?.tenantId) return user.tenantId;
@@ -153,7 +165,9 @@ export async function createSignatureRequestFromDoc(opts: {
     return { id: request.id, recipients: frozenDoc.recipients.length, fields: fieldsData.length };
   };
 
-  const result = opts.client ? await writes(opts.client) : await prisma.$transaction((tx) => writes(tx));
+  const result = opts.client
+    ? await writes(opts.client)
+    : await prisma.$transaction((tx) => writes(tx as SigningDbClient));
   await logAudit({
     action: "signing.create",
     summary: `Created signature request “${opts.title}”`,
