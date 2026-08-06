@@ -104,7 +104,8 @@ async function acquireCompletionLease(requestId: string, owner: string): Promise
       "completionLeaseExpiresAt"=now()+interval '5 minutes',"stateVersion"="stateVersion"+1
      WHERE id=${requestId} AND "deletedAt" IS NULL
        AND (
-         (status='signatures_complete' AND ("completionLeaseExpiresAt" IS NULL OR "completionLeaseExpiresAt" < now()))
+         (status IN ('signatures_complete','in_progress','signing','active','sent','viewed')
+           AND ("completionLeaseExpiresAt" IS NULL OR "completionLeaseExpiresAt" < now()))
          OR (status='rendering' AND ("completionLeaseExpiresAt" < now() OR "completionLeaseOwner"=${owner}))
        )
     RETURNING id
@@ -140,7 +141,14 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     if (!extra.sourceContext || !extra.canonicalSourceHash) {
       throw new Error("Envelope has no frozen canonical source; reissue it before completion");
     }
-    const signers = req.recipients.filter((recipient) => recipient.role !== "viewer");
+    const allSigners = req.recipients.filter((recipient) => recipient.role !== "viewer");
+    // Workflow graphs pre-materialise recipients on every possible branch. Once
+    // the interpreter reaches End, untouched pending recipients are off-path and
+    // are not parties to the executed contract. Sent/viewed/declined rows remain
+    // in scope and therefore still block completion unless they signed.
+    const signers = req.workflowGraphJson
+      ? allSigners.filter((recipient) => recipient.status !== "pending")
+      : allSigners;
     if (!signers.length || signers.some((recipient) => recipient.status !== "signed")) {
       throw new Error("Envelope cannot complete until every required signer has signed");
     }
@@ -174,7 +182,7 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       }) + acknowledgementsHtml(shared.map((field) => ({
         id: field.id, label: field.label, kind: field.kind, page: field.page,
         responses: field.responses.map((response) => ({ recipientId: response.recipientId, value: response.value, filledAt: response.filledAt })),
-      })), req.recipients.filter((row) => row.role !== "viewer").map((row) => ({ id: row.id, name: row.signedName || row.name }))),
+      })), signers.map((row) => ({ id: row.id, name: row.signedName || row.name }))),
     });
 
     const rendered = await htmlToPdf(html);
@@ -188,7 +196,7 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       await registerArtifactUpload({ tenantId: req.tenantId, envelopeId: requestId, kind: "timestamp_token", objectRef: timestampTokenRef, bytes: seal.timestampToken });
     }
 
-    const firstSigner = req.recipients.find((row) => row.status === "signed" && row.role !== "viewer");
+    const firstSigner = signers.find((row) => row.status === "signed");
     const signerName = firstSigner?.signedName || firstSigner?.name || "Customer";
     await prisma.$transaction(async (tx) => {
       if (req.quoteId) await tx.$executeRaw`SELECT id FROM "Quote" WHERE id=${req.quoteId} FOR UPDATE`;
@@ -235,13 +243,13 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       }
 
       await recordLegalArtifact({
-        tenantId: req.tenantId!, envelopeId: requestId, documentId: document.id, objectRef: storedName!, sha256: hash,
+        tenantId: req.tenantId, envelopeId: requestId, documentId: document.id, objectRef: storedName!, sha256: hash,
         sizeBytes: pdf.length, certificateFingerprint: seal.certificateFingerprint, certificateChain: seal.certificateChain,
         keyId: seal.keyId, trustPolicy: seal.trustPolicy, timestampTokenRef,
         validationReport: seal.validationReport,
       }, tx);
-      await markArtifactState({ tenantId: req.tenantId!, objectRef: storedName!, kind: "signed_pdf", envelopeId: requestId, state: "sealed" }, tx);
-      if (timestampTokenRef) await markArtifactState({ tenantId: req.tenantId!, objectRef: timestampTokenRef, kind: "timestamp_token", envelopeId: requestId, state: "retained" }, tx);
+      await markArtifactState({ tenantId: req.tenantId, objectRef: storedName!, kind: "signed_pdf", envelopeId: requestId, state: "sealed" }, tx);
+      if (timestampTokenRef) await markArtifactState({ tenantId: req.tenantId, objectRef: timestampTokenRef, kind: "timestamp_token", envelopeId: requestId, state: "retained" }, tx);
       await tx.signatureEvent.create({
         data: {
           tenantId: req.tenantId, requestId, type: "sealed", actor: "system", channel: "worker",
@@ -272,15 +280,14 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       `;
     });
   } catch (error) {
-    // A transaction error is ambiguous: the database may have committed and only
-    // lost the acknowledgement. Retain both objects whenever authoritative state
-    // says they are referenced, and let reconciliation finish the workflow.
     const committed = storedName
       ? await basePrisma.$queryRaw<Array<{ status: string }>>(Prisma.sql`
           SELECT status FROM "SignatureRequest" WHERE id=${requestId} AND "signedPdfRef"=${storedName}
             AND status IN ('sealed','distributing','completed') LIMIT 1
         `).catch(() => [])
       : [];
+    // deleteFile is retain-only: it records delayed orphan candidates and never
+    // treats an ambiguous commit acknowledgement as permission to delete bytes.
     if (!committed.length && storedName) await deleteFile(storedName).catch(() => {});
     if (!committed.length && timestampTokenRef) await deleteFile(timestampTokenRef).catch(() => {});
 
