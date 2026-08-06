@@ -2,6 +2,7 @@ import { renderToBuffer } from "@react-pdf/renderer";
 import { prisma } from "@/lib/db";
 import { requireApiOwner, apiAuthErrorResponse } from "@/lib/auth";
 import QuoteDoc from "@/lib/pdf/QuoteDoc";
+import { loadBillToFleet } from "@/lib/quoteBillTo";
 
 // react-pdf renders in Node (no browser) — keep this handler on the Node runtime.
 export const runtime = "nodejs";
@@ -29,7 +30,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 
   // Unsigned preview only. A signed/sealed PDF is produced solely by the real
   // signing flow after a recipient actually signs — never fabricated here.
-  const buf = Buffer.from(await renderToBuffer(<QuoteDoc quote={{ ...quote, items }} />));
+  const fleet = await loadBillToFleet(prisma, quote.fleetId);
+  const buf = Buffer.from(await renderToBuffer(<QuoteDoc quote={{ ...quote, items }} fleet={fleet} />));
 
   return new Response(new Uint8Array(buf), {
     headers: {

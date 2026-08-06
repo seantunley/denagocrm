@@ -8,6 +8,7 @@ import { logAudit } from "@/lib/audit";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { saveFile } from "@/lib/storage";
 import { contactName } from "@/lib/format";
+import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
 
 const MAX_FILE = 4 * 1024 * 1024;
@@ -122,7 +123,9 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
       await attachStageDocument(quoteId, quote.contactId, "delivery-note", `Delivery paperwork — Q-${quote.number} — ${file.name}`, file, user.id);
     }
     const model = quote.lead?.product?.name ?? quote.items[0]?.description ?? "cart";
-    const who = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
+    // The scheduling task says who the cart is going to; for a fleet order that
+    // is the account, which is what the driver's paperwork will also say.
+    const who = quoteBillTo(quote, await loadBillToFleet(prisma, quote.fleetId)).name;
     await prisma.quote.update({ where: { id: quoteId }, data: { deliveryScheduledFor: when } });
     await prisma.activity.create({
       data: {

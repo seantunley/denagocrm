@@ -81,9 +81,20 @@ export function quoteVersionIndex(allVersions: QuoteVersionRow[]): QuoteVersionI
   };
 }
 
+/**
+ * `fleetNames` maps fleet id → name for the quotes in this batch, already
+ * resolved through the tenant predicate (loadBillToFleets). A miss renders the
+ * quote as an ordinary customer quote rather than inventing a label — which is
+ * exactly what should happen to an id that does not belong to this workspace.
+ *
+ * A MAP rather than a lookup inside this function because the list builds
+ * hundreds of records at once and this function is deliberately synchronous and
+ * database-free; the same reason quoteVersionIndex is precomputed and passed in.
+ */
 export function buildQuoteEditorRecord(
   quote: QuoteForEditor,
   index: QuoteVersionIndex,
+  fleetNames: ReadonlyMap<string, string> = new Map(),
 ): QuoteEditorRecord {
   const lockedReason = quote.signToken
     ? "A signing link is active. Revoke it from the signature card before editing."
@@ -104,6 +115,8 @@ export function buildQuoteEditorRecord(
     status: quote.status,
     contactId: quote.contactId,
     contactLabel: quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "Unlinked quote",
+    fleetId: quote.fleetId,
+    fleetLabel: quote.fleetId ? fleetNames.get(quote.fleetId) ?? null : null,
     leadId: quote.leadId,
     leadLabel: quote.lead?.title ?? null,
     validUntil: quote.validUntil?.toISOString().slice(0, 10) ?? "",

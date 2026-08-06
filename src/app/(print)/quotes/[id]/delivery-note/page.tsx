@@ -4,8 +4,9 @@ import { requireQuoteReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getDocTemplate } from "@/lib/docTemplateStore";
-import { contactName, formatDate } from "@/lib/format";
+import { formatDate } from "@/lib/format";
 import { documentTotals, feeRows, includedLines } from "@/lib/pricing";
+import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 
 export default async function DeliveryNotePrintPage({
@@ -30,10 +31,12 @@ export default async function DeliveryNotePrintPage({
   const tpl = await getDocTemplate("delivery", tplId);
   // Fees and delivery are part of what the customer pays; the subtotal is not.
   const totals = documentTotals(quote);
-  const customer = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
-  const address = quote.contact
-    ? [quote.contact.address, quote.contact.suburb, quote.contact.city].filter(Boolean).join(", ")
-    : "";
+  // "Deliver to" and "bill to" are the same entity here on purpose: six carts
+  // bought by a lodge are delivered to the lodge, and the fleet's address is the
+  // one the driver needs. The manager still appears, as the person to ask for on
+  // arrival, which is exactly what the attention line is.
+  const billTo = quoteBillTo(quote, await loadBillToFleet(prisma, quote.fleetId));
+  const customer = billTo.name;
   const checklist = (quote.deliveryChecklist ?? {}) as Record<string, boolean>;
   const checklistEntries = Object.entries(checklist);
 
@@ -52,7 +55,16 @@ export default async function DeliveryNotePrintPage({
         parties={{ left: "Received in good order — customer · Date", right: "Driver · Date" }}
       >
         <div className="grid grid-cols-2 gap-4 mb-6">
-          <InfoBlock title="Deliver to" accent lines={[customer, quote.contact?.phone ?? quote.lead?.phone, address]} />
+          <InfoBlock
+            title="Deliver to"
+            accent
+            lines={[
+              customer,
+              billTo.attention ? `Ask for: ${billTo.attention}` : "",
+              billTo.phone,
+              billTo.address,
+            ]}
+          />
           <InfoBlock
             title="Delivery details"
             lines={[

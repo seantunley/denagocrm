@@ -147,6 +147,39 @@ function recordsFor(contactId: string, tenantId: string, tag: string) {
       source: "web",
       createdAt: day(2),
     },
+    // A quote filed against the MEMBER — the roll-up arm. The account-billed arm
+    // (`fleetId` set, no member) is seeded separately, because it is the one that
+    // has to survive a fleet with no members at all.
+    quote: {
+      id: `quote_${tag}`,
+      tenantId,
+      contactId,
+      fleetId: null,
+      deletedAt: null,
+      number: 1,
+      status: mine ? "draft" : "THEIRS",
+      createdAt: day(2),
+      signedAt: null,
+      items: [],
+      fees: [],
+    },
+  };
+}
+
+/** A quote billed to the fleet ACCOUNT rather than to any one member. */
+function accountQuote(tenantId: string, tag: string): spy.Row {
+  return {
+    id: `acctquote_${tag}`,
+    tenantId,
+    contactId: null,
+    fleetId: FLEET,
+    deletedAt: null,
+    number: 900,
+    status: tenantId === MINE ? "sent" : "THEIRS",
+    createdAt: day(1),
+    signedAt: null,
+    items: [],
+    fees: [],
   };
 }
 
@@ -178,6 +211,16 @@ function twoTenantFixture(): Record<spy.ModelName, spy.Row[]> {
       mineAlice.consentRecord,
       mineBob.consentRecord,
       theirsAlice.consentRecord,
+    ],
+    quote: [
+      mineAlice.quote,
+      mineBob.quote,
+      theirsAlice.quote,
+      // Same fleet id in BOTH tenants, billed to the account in both. This is the
+      // pair that matters: Quote.fleetId carries no foreign key, so nothing in
+      // the database stops a fleet id from colliding across workspaces.
+      accountQuote(MINE, "mine"),
+      accountQuote(THEIRS, "theirs"),
     ],
   };
 }
@@ -310,7 +353,7 @@ test("referrals follow the member as REFERRER, not as the person referred in", a
 
 // ── the empty and deleted cases ─────────────────────────────────────────────
 
-test("a fleet with no members runs no follow-up queries", async () => {
+test("a fleet with no members runs no member-keyed queries — but still reads its quotes", async () => {
   spy.reset(twoTenantFixture());
   const rollup = await withTenant(MINE, () =>
     loadFleetRollup(spy.prisma, "flt_nobody", { includeReferrals: true }),
@@ -321,8 +364,40 @@ test("a fleet with no members runs no follow-up queries", async () => {
   assert.deepEqual(rollup.activities, []);
   assert.deepEqual(
     spy.calls.map((call) => call.model),
-    ["contact"],
-    "`{ in: [] }` is seven guaranteed-empty round trips, some of them expensive",
+    ["contact", "quote"],
+    "`{ in: [] }` is seven guaranteed-empty round trips, some of them expensive — " +
+      "but quotes are keyed on Quote.fleetId as well as on members, so that one must still run",
+  );
+});
+
+test("a quote billed to the account appears before anyone is linked to it", async () => {
+  // The reason the quotes query sits ahead of the no-members early return. A
+  // fleet can be quoted the day it is created; filing that query under the
+  // members-only branch would have made the first quote you raise for a new
+  // account invisible on the account's own page.
+  spy.reset(twoTenantFixture());
+  const rollup = await withTenant(MINE, () =>
+    loadFleetRollup(spy.prisma, FLEET, { includeReferrals: true }),
+  );
+  const ids = rollup.quotes.map((quote) => quote.id);
+  assert.ok(ids.includes("acctquote_mine"), "a quote billed to this fleet belongs on its page");
+  assert.ok(ids.includes("quote_mine_alice"), "…and so does a member's own quote");
+});
+
+test("no other tenant's quote reaches a fleet page, even on a colliding fleet id", async () => {
+  // Quote.fleetId carries no foreign key by design, so the tenant predicate is
+  // the ONLY thing standing between a colliding id and another operator's quote
+  // appearing on this account's page — with its number, status and total.
+  spy.reset(twoTenantFixture());
+  const rollup = await withTenant(MINE, () =>
+    loadFleetRollup(spy.prisma, FLEET, { includeReferrals: true }),
+  );
+  for (const quote of rollup.quotes) {
+    assert.notEqual(quote.status, "THEIRS", `quote ${quote.id} came from the other tenant`);
+  }
+  assert.ok(
+    spy.wheres("quote").every((where) => where.tenantId === MINE),
+    "the quote query must name the tenant, not filter afterwards",
   );
 });
 
