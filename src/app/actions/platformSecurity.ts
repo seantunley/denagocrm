@@ -8,7 +8,11 @@ import { requirePlatformAdminAction } from "@/lib/platformAuth";
 import { logAuditStrict } from "@/lib/audit";
 import { encryptValue, decryptValue } from "@/lib/settings";
 import { generateBackupCodes, generateTotpSecret, totpKeyUri, verifyTotp } from "@/lib/totp";
-import { PLATFORM_NAME } from "@/lib/platformIdentity";
+// The platform's own name, read straight from the environment rather than from
+// the branding chain's helper — this PR must be mergeable on its own, and a
+// two-factor feature has no business depending on a per-tenant branding stack.
+// When that chain lands, this collapses back to the shared constant.
+const PLATFORM_NAME = process.env.NEXT_PUBLIC_PLATFORM_NAME?.trim() || "CRM";
 import { createPlatformSessionCookie } from "@/lib/platformAuth";
 
 /**
