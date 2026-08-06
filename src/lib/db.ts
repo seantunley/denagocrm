@@ -319,6 +319,54 @@ function buildClient(raw: PrismaClient) {
     },
   });
   ref.c = scoped;
+
+  // Layer 2b: THE SAME GUC, for RAW queries.
+  //
+  // A Prisma query extension intercepts MODEL operations. `$queryRaw` and friends
+  // are not model operations, so everything above — the tenant scoping AND the
+  // SET LOCAL that makes FORCE RLS permit the row — skipped them entirely. The
+  // fourteen raw reads issued through this client therefore ran with NO GUC set
+  // at all, and worked only because the application role still carries
+  // `rolbypassrls`. Under the restricted role the RLS work is heading for they
+  // would have returned zero rows: the leads board empty, the stock dashboard
+  // blank, timeline pins gone, and a job-card write silently matching nothing.
+  //
+  // src/app/actions/portal.ts already documents this exact trap for its own raw
+  // lookup and side-steps it by using basePrisma. That is the right answer for a
+  // PRE-AUTH lookup with no tenant to scope to. It is the wrong answer for a
+  // user-facing read, which is what these are: basePrisma sets bypass, so
+  // "fixing" them that way would have turned fourteen tenant-scoped reads into
+  // fourteen cross-tenant ones the moment isolation was switched on.
+  //
+  // So the GUC is applied here instead, once, with the same rule withRlsScope
+  // uses: the caller's tenant when enforcing with a scope, bypass otherwise.
+  // Fixing it in the client rather than at the call sites also means the next raw
+  // query somebody writes is correct without them knowing any of this.
+  //
+  // The INTERACTIVE form, not the array form withRlsScope uses. That choice is
+  // load-bearing and the opposite of the model-op case: here the raw method is
+  // invoked ON `tx` itself, so it is by construction on the same pinned
+  // connection as the SET LOCAL. (buildBypassClient does exactly this, for
+  // exactly this reason.) An array transaction cannot express it, because the
+  // raw promise would have to be created from the outer client first.
+  //
+  // DORMANT TODAY, byte-for-byte: with enforcement off this sets
+  // `app.bypass_rls='on'`, which is what the current role does implicitly
+  // anyway, so every one of these queries returns exactly what it returns now.
+  const scopedFull = scoped as any;
+  for (const method of ["$executeRaw", "$queryRaw", "$executeRawUnsafe", "$queryRawUnsafe"] as const) {
+    scopedFull[method] = (sql: any, ...values: any[]) =>
+      raw.$transaction(async (tx: any) => {
+        const scope = tenantEnforcing() ? currentTenantScope() : null;
+        if (scope?.tenantId) {
+          await tx.$executeRaw`SELECT set_config('app.current_tenant', ${scope.tenantId}, TRUE)`;
+        } else {
+          await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+        }
+        return tx[method](sql, ...values);
+      });
+  }
+
   return scoped;
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
