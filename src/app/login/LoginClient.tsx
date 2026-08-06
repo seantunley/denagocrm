@@ -1,6 +1,6 @@
 "use client";
+import BrandLogo from "@/components/BrandLogo";
 
-import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useActionState, useRef, useState, useSyncExternalStore } from "react";
 import { motion, useMotionValue, useReducedMotion, useSpring, useTransform } from "framer-motion";
@@ -184,15 +184,21 @@ function Shell({ children, brand }: { children: React.ReactNode; brand: LoginBra
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(249,115,22,0.11),transparent_32%)] lg:hidden" />
       <section className="relative z-10 flex min-h-[100dvh] flex-col px-6 py-7 sm:px-10 lg:px-14 xl:px-20">
         <header className="flex items-center justify-between">
-          {brand.logoUrl ? (
-            // A tenant logo is an arbitrary uploaded image with no recorded
-            // intrinsic size, streamed from our own route — next/image needs
-            // dimensions we do not have. `max-h` bounds it either way.
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={brand.logoUrl} alt={brand.displayName} className="h-8 w-auto object-contain sm:h-9" />
-          ) : (
-            <Image src="/branding/denago-cape-town-logo.png" alt="Denago Cape Town" width={230} height={58} priority className="h-8 w-auto object-contain sm:h-9" />
-          )}
+          {/*
+            * A tenant logo is an arbitrary uploaded image with no recorded
+            * intrinsic size, streamed from our own route — next/image needs
+            * dimensions we do not have. The height class bounds it either way.
+            *
+            * With no logo this sets the workspace NAME rather than the built-in
+            * asset, which was one customer's wordmark shown on every other
+            * customer's login page — see BrandLogo.
+            */}
+          <BrandLogo
+            logoUrl={brand.logoUrl}
+            alt={brand.displayName}
+            className="h-8 w-auto object-contain sm:h-9"
+            wordmarkClassName="text-sm text-white sm:text-base"
+          />
           <span className="rounded-full border border-white/8 bg-white/[0.035] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Secure access</span>
         </header>
         <div className="my-auto w-full max-w-[420px] self-center py-14">{children}</div>
@@ -253,9 +259,7 @@ function BrandScene({ brand }: { brand: LoginBrand }) {
               {brand.logoUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={brand.logoUrl} alt="" className="h-12 w-auto object-contain drop-shadow-[0_12px_25px_rgba(249,115,22,.28)]" />
-              ) : (
-                <Image src="/branding/denago-mark.png" alt="" width={68} height={68} className="h-12 w-auto drop-shadow-[0_12px_25px_rgba(249,115,22,.28)]" />
-              )}
+              ) : null}
             </div>
             <div className="grid grid-cols-3 gap-3">
               <Metric value="14" label="Active leads" accent />

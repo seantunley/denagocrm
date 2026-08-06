@@ -136,20 +136,17 @@ test("a bare brand render is now correct, and the gates are gone", () => {
   }
 });
 
-test("the built-in logo is still rendered when no tenant logo is set", () => {
-  for (const [file, asset] of [
-    [STAFF, "/branding/denago-cape-town-logo.png"],
-    [STAFF, "/branding/denago-mark.png"],
-    [PORTAL, "/branding/denago-cape-town-logo.png"],
-    [PORTAL, "/branding/denago-mark.png"],
-  ] as const) {
+test("no login page renders a built-in customer logo", () => {
+  // The inverse of what this asserted, and the screenshots are why: both login
+  // pages showed the Denago wordmark above correctly-neutralised copy — on
+  // Acme's hostname and on an unrecognised one alike. The portal page is the
+  // worse of the two: it is shown to a tenant's CUSTOMERS.
+  for (const file of [STAFF, PORTAL] as const) {
     const code = shipped(file);
-    assert.ok(code.includes(asset), `${file}: the ${asset} fallback must survive`);
-    assert.match(
-      code,
-      /brand\.logoUrl \? \(/,
-      `${file}: the tenant logo must be a conditional over that fallback, not a replacement`,
-    );
+    assert.doesNotMatch(code, /\/branding\/denago/, `${file}: no customer artwork as a fallback`);
+    assert.match(code, /<BrandLogo\n\s+logoUrl=\{brand\.logoUrl\}/, `${file}: goes through the shared component`);
+    assert.match(code, /alt=\{brand\.displayName\}/, `${file}: which sets the NAME when there is no logo`);
+    assert.match(code, /\) : null\}/, `${file}: the decorative mark renders nothing rather than someone else's`);
   }
 });
 
