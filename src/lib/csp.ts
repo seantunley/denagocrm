@@ -25,6 +25,8 @@ function enforcedDirectives({ nonce, dev }: CspOptions): string[] {
   return [
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${dev ? " 'unsafe-eval'" : ""}`,
     "worker-src 'self'",
+    // Stays permissive, deliberately: React style attributes and exact-position
+    // signing overlays cannot be covered by a script nonce without a UI rewrite.
     `style-src 'self' 'unsafe-inline' ${GOOGLE_FONTS_CSS}`,
     "object-src 'none'",
     "base-uri 'self'",
