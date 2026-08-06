@@ -23,6 +23,7 @@
     "test:security": "tsx --tsconfig tsconfig.scripts.json scripts/test-security.ts",
     "test:rbac": "tsx --tsconfig tsconfig.scripts.json scripts/test-rbac.ts",
     "test:integrity": "tsx --tsconfig tsconfig.scripts.json scripts/test-integrity.ts",
+    "test:signing-upgrade": "tsx --tsconfig tsconfig.scripts.json scripts/test-signing-upgrade.ts",
     "test:tenant-guard": "tsx --tsconfig tsconfig.scripts.json scripts/test-tenant-guard.ts",
     "test:rls-restricted": "tsx --tsconfig tsconfig.scripts.json scripts/test-rls-restricted.ts",
     "test:tenant-e2e": "tsx --tsconfig tsconfig.scripts.json scripts/test-tenant-e2e.ts",
