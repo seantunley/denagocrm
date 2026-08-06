@@ -6,7 +6,7 @@ import { recordView } from "@/lib/signing/events";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
 import { findRecipientIdentity, identitySatisfied, maskedDestination, requiredOtpMethods } from "@/lib/signing/identity";
-import { isRequestClosed } from "@/lib/signing/status";
+import { isRequestClosed, isRequestProcessing } from "@/lib/signing/status";
 import { SignSurface } from "./SignSurface";
 import { IdentityGate } from "./IdentityGate";
 import { PasskeyIdentityGate } from "./PasskeyIdentityGate";
@@ -74,10 +74,17 @@ async function renderSigningPage(token: string) {
   }
   if (recipient.status === "declined") return <Msg title="Declined" body="You declined this document. Contact Denago if this was a mistake." />;
   if (recipient.role === "viewer") return <Msg title="View only" body="You were added as a viewer; no signature is required." />;
-  if (isRequestClosed(req.status)) return <Msg title="No longer active" body="This request has reached a final state." />;
+  if (isRequestClosed(req.status) || isRequestProcessing(req.status)) return <Msg title="No longer active" body="This request has moved into final processing or reached a final state." />;
+
+  // A graph envelope pre-creates recipients for every possible branch. Only the
+  // recipient attached to the interpreter's current node may see or act on the
+  // document; ordinary recipient order is deliberately ignored for graph flows.
+  if (req.workflowGraphJson && (!recipient.nodeId || recipient.nodeId !== req.currentNodeId)) {
+    return <Msg title="Not your turn" body="This signing workflow has not reached your step. You will be notified if the active branch requires your signature." />;
+  }
   if (!identityVerified) return gate();
 
-  if (req.ordering === "sequential") {
+  if (!req.workflowGraphJson && req.ordering === "sequential") {
     const waitingOn = req.recipients.find((row) => row.order < recipient.order && row.role !== "viewer" && row.status !== "signed");
     if (waitingOn) return <Msg title="Not your turn yet" body={`Waiting for ${waitingOn.name} to sign first. You will be notified when the workflow reaches you.`} />;
   }
