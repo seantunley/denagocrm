@@ -33,20 +33,39 @@ function tenantFromRef(ref: string): string | null {
   }
 }
 
-export async function saveFile(buffer: Buffer, originalName: string, contentType: string): Promise<string> {
+export type SaveFileOptions = {
+  /**
+   * Opt in to the signing custody ledger and signing-only production storage
+   * requirements. Ordinary CRM uploads deliberately do not create signing upload
+   * intents and are never eligible for the signing orphan collector.
+   */
+  signingArtifact?: boolean;
+};
+
+export async function saveFile(
+  buffer: Buffer,
+  originalName: string,
+  contentType: string,
+  options: SaveFileOptions = {},
+): Promise<string> {
   const ext = path.extname(originalName).slice(0, 12);
   const storedName = `${crypto.randomUUID()}${ext}`;
   const prefix = storagePrefix();
   const plannedObjectKey = `${prefix}/${storedName}`;
-  const production = isProductionRuntime();
-  const tenantId = currentTenantScope()?.tenantId ?? null;
+  const signingArtifact = options.signingArtifact === true;
+  const productionSigning = signingArtifact && isProductionRuntime();
+  const scopedTenantId = currentTenantScope()?.tenantId ?? null;
+  if (signingArtifact && !scopedTenantId) {
+    throw new Error("Signing uploads require an explicit tenant scope");
+  }
+  const tenantId = signingArtifact ? scopedTenantId : null;
   const custody = tenantId ? await import("./signing/artifactCustody") : null;
   const intentId = tenantId && custody
     ? await custody.beginUploadIntent({ tenantId, plannedObjectKey, originalName, mimeType: contentType })
     : null;
   try {
-    if (production && (!privateMode() || !privateToken())) {
-      throw new Error("Production file writes require private Blob storage; public/local fallback is disabled");
+    if (productionSigning && (!privateMode() || !privateToken())) {
+      throw new Error("Production signing uploads require private Blob storage; public/local fallback is disabled");
     }
     let ref: string;
     if (privateMode()) {
@@ -55,11 +74,10 @@ export async function saveFile(buffer: Buffer, originalName: string, contentType
       const blob = await put(plannedObjectKey, buffer, { access: "private", contentType, addRandomSuffix: false, token });
       ref = blob.url;
     } else if (publicToken()) {
-      if (production) throw new Error("Public Blob writes are forbidden for production signing/storage");
       const blob = await put(plannedObjectKey, buffer, { access: "public", contentType, addRandomSuffix: false });
       ref = blob.url;
     } else {
-      if (production) throw new Error("Local-disk storage is forbidden in production");
+      if (productionSigning) throw new Error("Local-disk storage is forbidden for production signing uploads");
       await fs.mkdir(UPLOAD_DIR, { recursive: true });
       await fs.writeFile(path.join(UPLOAD_DIR, storedName), buffer);
       ref = storedName;
