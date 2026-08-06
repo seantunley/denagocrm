@@ -207,6 +207,40 @@ test("the gap migration covers exactly what production was missing", () => {
   // Additive only. This lands while production still connects as the owner, so
   // it must not be able to change a single row on the way past.
   assert.doesNotMatch(sql, /\b(INSERT|UPDATE|DELETE|DROP TABLE|ALTER COLUMN|TRUNCATE)\b/i);
+
+  // EVERY block guarded on the table existing, and no bare ALTER TABLE anywhere.
+  //
+  // Five of these seven exist in production and in no migration, so a database
+  // built from this repository does not have them. The first version of this
+  // file said `ALTER TABLE "AutomationApprovalRequest" ENABLE ROW LEVEL SECURITY`
+  // unconditionally, and CI failed with P1014 — "the underlying table does not
+  // exist" — which was correct. A migration that only works against one
+  // particular database is not a migration.
+  const uncommented = sql.replace(/^\s*--.*$/gm, "");
+  assert.equal(
+    (uncommented.match(/^ALTER TABLE/gm) ?? []).length,
+    0,
+    "no top-level ALTER TABLE — every statement must sit inside an existence check",
+  );
+  assert.equal(
+    (uncommented.match(/IF EXISTS \(SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = '/g) ?? []).length,
+    7,
+    "one existence guard per table",
+  );
+  // Dollar-quoting has to balance or the whole script is one syntax error, and
+  // an unbalanced DO block is not something a source test can shrug off.
+  assert.equal((uncommented.match(/DO \$\$/g) ?? []).length, 7);
+  assert.equal((uncommented.match(/END \$\$;/g) ?? []).length, 7);
+  assert.equal((uncommented.match(/END IF;/g) ?? []).length, 7);
+
+  // STATIC DDL inside the guard, not EXECUTE'd strings. plpgsql resolves names at
+  // execution rather than compile time, so a branch that is not taken may name a
+  // table that does not exist — which is exactly the case here. Dynamic SQL would
+  // work too, but it needs nested $tag$ quoting to carry the policy's own single
+  // quotes, and no migration in this repository has ever used that. Sticking to
+  // constructs the runner has already executed is worth more than brevity.
+  assert.doesNotMatch(uncommented, /EXECUTE /, "no dynamic SQL");
+  assert.doesNotMatch(uncommented, /\$[a-z]+\$/, "no nested dollar-quoting");
 });
 
 test("no exclusion is stale, and each one says why", () => {

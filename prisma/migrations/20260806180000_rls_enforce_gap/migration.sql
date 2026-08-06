@@ -48,142 +48,184 @@
 --
 -- Whether these five should be DROPPED is a separate question and a destructive
 -- one. It is not answered here.
+--
+-- ── WHY EVERY BLOCK IS GUARDED ON THE TABLE EXISTING ────────────────────────
+--
+-- Because those five orphans exist in PRODUCTION and in no migration, a database
+-- built from this repository does not have them. The first version of this file
+-- said `ALTER TABLE "AutomationApprovalRequest" ENABLE ROW LEVEL SECURITY`
+-- unconditionally and CI failed on the spot with P1014, "the underlying table
+-- for model AutomationApprovalRequest does not exist" — correctly, because in a
+-- fresh database it does not.
+--
+-- That is the same class of drift recorded in the preview-migrations incident:
+-- schema reached the production database without a migration to describe it. A
+-- migration that only works on one particular database is not a migration, so
+-- each block asks first and skips with a NOTICE. On production all seven apply;
+-- on CI, previews and any new environment, five are no-ops. Either way the file
+-- ends in the same state: every table that exists is behind a policy.
 -- =============================================================================
-
 
 -- -----------------------------------------------------------------------------
 -- AutomationApprovalRequest
 -- -----------------------------------------------------------------------------
-ALTER TABLE "AutomationApprovalRequest" ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "AutomationApprovalRequest_tenant_isolation" ON "AutomationApprovalRequest";
-CREATE POLICY "AutomationApprovalRequest_tenant_isolation" ON "AutomationApprovalRequest"
-  USING (
-    current_setting('app.bypass_rls', true) = 'on'
-    OR "tenantId" = current_setting('app.current_tenant', true)
-  )
-  WITH CHECK (
-    current_setting('app.bypass_rls', true) = 'on'
-    OR "tenantId" = current_setting('app.current_tenant', true)
-  );
-ALTER TABLE "AutomationApprovalRequest" FORCE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'AutomationApprovalRequest') THEN
+    ALTER TABLE "AutomationApprovalRequest" ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS "AutomationApprovalRequest_tenant_isolation" ON "AutomationApprovalRequest";
+    CREATE POLICY "AutomationApprovalRequest_tenant_isolation" ON "AutomationApprovalRequest"
+      USING (
+        current_setting('app.bypass_rls', true) = 'on'
+        OR "tenantId" = current_setting('app.current_tenant', true)
+      )
+      WITH CHECK (
+        current_setting('app.bypass_rls', true) = 'on'
+        OR "tenantId" = current_setting('app.current_tenant', true)
+      );
+    ALTER TABLE "AutomationApprovalRequest" FORCE ROW LEVEL SECURITY;
+  ELSE
+    RAISE NOTICE 'skipping % - not present in this database', 'AutomationApprovalRequest';
+  END IF;
+END $$;
 
 -- -----------------------------------------------------------------------------
 -- AutomationOutbox
 -- -----------------------------------------------------------------------------
-ALTER TABLE "AutomationOutbox" ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "AutomationOutbox_tenant_isolation" ON "AutomationOutbox";
-CREATE POLICY "AutomationOutbox_tenant_isolation" ON "AutomationOutbox"
-  USING (
-    current_setting('app.bypass_rls', true) = 'on'
-    OR "tenantId" = current_setting('app.current_tenant', true)
-  )
-  WITH CHECK (
-    current_setting('app.bypass_rls', true) = 'on'
-    OR "tenantId" = current_setting('app.current_tenant', true)
-  );
-ALTER TABLE "AutomationOutbox" FORCE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'AutomationOutbox') THEN
+    ALTER TABLE "AutomationOutbox" ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS "AutomationOutbox_tenant_isolation" ON "AutomationOutbox";
+    CREATE POLICY "AutomationOutbox_tenant_isolation" ON "AutomationOutbox"
+      USING (
+        current_setting('app.bypass_rls', true) = 'on'
+        OR "tenantId" = current_setting('app.current_tenant', true)
+      )
+      WITH CHECK (
+        current_setting('app.bypass_rls', true) = 'on'
+        OR "tenantId" = current_setting('app.current_tenant', true)
+      );
+    ALTER TABLE "AutomationOutbox" FORCE ROW LEVEL SECURITY;
+  ELSE
+    RAISE NOTICE 'skipping % - not present in this database', 'AutomationOutbox';
+  END IF;
+END $$;
 
 -- -----------------------------------------------------------------------------
 -- BackupRun
 -- -----------------------------------------------------------------------------
-ALTER TABLE "BackupRun" ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "BackupRun_tenant_isolation" ON "BackupRun";
-CREATE POLICY "BackupRun_tenant_isolation" ON "BackupRun"
-  USING (
-    current_setting('app.bypass_rls', true) = 'on'
-    OR "tenantId" = current_setting('app.current_tenant', true)
-  )
-  WITH CHECK (
-    current_setting('app.bypass_rls', true) = 'on'
-    OR "tenantId" = current_setting('app.current_tenant', true)
-  );
-ALTER TABLE "BackupRun" FORCE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'BackupRun') THEN
+    ALTER TABLE "BackupRun" ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS "BackupRun_tenant_isolation" ON "BackupRun";
+    CREATE POLICY "BackupRun_tenant_isolation" ON "BackupRun"
+      USING (
+        current_setting('app.bypass_rls', true) = 'on'
+        OR "tenantId" = current_setting('app.current_tenant', true)
+      )
+      WITH CHECK (
+        current_setting('app.bypass_rls', true) = 'on'
+        OR "tenantId" = current_setting('app.current_tenant', true)
+      );
+    ALTER TABLE "BackupRun" FORCE ROW LEVEL SECURITY;
+  ELSE
+    RAISE NOTICE 'skipping % - not present in this database', 'BackupRun';
+  END IF;
+END $$;
 
 -- -----------------------------------------------------------------------------
 -- CampaignEvent
 -- -----------------------------------------------------------------------------
-ALTER TABLE "CampaignEvent" ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "CampaignEvent_tenant_isolation" ON "CampaignEvent";
-CREATE POLICY "CampaignEvent_tenant_isolation" ON "CampaignEvent"
-  USING (
-    current_setting('app.bypass_rls', true) = 'on'
-    OR "tenantId" = current_setting('app.current_tenant', true)
-  )
-  WITH CHECK (
-    current_setting('app.bypass_rls', true) = 'on'
-    OR "tenantId" = current_setting('app.current_tenant', true)
-  );
-ALTER TABLE "CampaignEvent" FORCE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'CampaignEvent') THEN
+    ALTER TABLE "CampaignEvent" ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS "CampaignEvent_tenant_isolation" ON "CampaignEvent";
+    CREATE POLICY "CampaignEvent_tenant_isolation" ON "CampaignEvent"
+      USING (
+        current_setting('app.bypass_rls', true) = 'on'
+        OR "tenantId" = current_setting('app.current_tenant', true)
+      )
+      WITH CHECK (
+        current_setting('app.bypass_rls', true) = 'on'
+        OR "tenantId" = current_setting('app.current_tenant', true)
+      );
+    ALTER TABLE "CampaignEvent" FORCE ROW LEVEL SECURITY;
+  ELSE
+    RAISE NOTICE 'skipping % - not present in this database', 'CampaignEvent';
+  END IF;
+END $$;
 
 -- -----------------------------------------------------------------------------
 -- ErrorLog
 -- -----------------------------------------------------------------------------
-ALTER TABLE "ErrorLog" ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "ErrorLog_tenant_isolation" ON "ErrorLog";
-CREATE POLICY "ErrorLog_tenant_isolation" ON "ErrorLog"
-  USING (
-    current_setting('app.bypass_rls', true) = 'on'
-    OR "tenantId" = current_setting('app.current_tenant', true)
-  )
-  WITH CHECK (
-    current_setting('app.bypass_rls', true) = 'on'
-    OR "tenantId" = current_setting('app.current_tenant', true)
-  );
-ALTER TABLE "ErrorLog" FORCE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'ErrorLog') THEN
+    ALTER TABLE "ErrorLog" ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS "ErrorLog_tenant_isolation" ON "ErrorLog";
+    CREATE POLICY "ErrorLog_tenant_isolation" ON "ErrorLog"
+      USING (
+        current_setting('app.bypass_rls', true) = 'on'
+        OR "tenantId" = current_setting('app.current_tenant', true)
+      )
+      WITH CHECK (
+        current_setting('app.bypass_rls', true) = 'on'
+        OR "tenantId" = current_setting('app.current_tenant', true)
+      );
+    ALTER TABLE "ErrorLog" FORCE ROW LEVEL SECURITY;
+  ELSE
+    RAISE NOTICE 'skipping % - not present in this database', 'ErrorLog';
+  END IF;
+END $$;
 
 -- -----------------------------------------------------------------------------
 -- StockTransferRequest
 -- -----------------------------------------------------------------------------
-ALTER TABLE "StockTransferRequest" ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "StockTransferRequest_tenant_isolation" ON "StockTransferRequest";
-CREATE POLICY "StockTransferRequest_tenant_isolation" ON "StockTransferRequest"
-  USING (
-    current_setting('app.bypass_rls', true) = 'on'
-    OR "tenantId" = current_setting('app.current_tenant', true)
-  )
-  WITH CHECK (
-    current_setting('app.bypass_rls', true) = 'on'
-    OR "tenantId" = current_setting('app.current_tenant', true)
-  );
-ALTER TABLE "StockTransferRequest" FORCE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'StockTransferRequest') THEN
+    ALTER TABLE "StockTransferRequest" ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS "StockTransferRequest_tenant_isolation" ON "StockTransferRequest";
+    CREATE POLICY "StockTransferRequest_tenant_isolation" ON "StockTransferRequest"
+      USING (
+        current_setting('app.bypass_rls', true) = 'on'
+        OR "tenantId" = current_setting('app.current_tenant', true)
+      )
+      WITH CHECK (
+        current_setting('app.bypass_rls', true) = 'on'
+        OR "tenantId" = current_setting('app.current_tenant', true)
+      );
+    ALTER TABLE "StockTransferRequest" FORCE ROW LEVEL SECURITY;
+  ELSE
+    RAISE NOTICE 'skipping % - not present in this database', 'StockTransferRequest';
+  END IF;
+END $$;
 
 -- -----------------------------------------------------------------------------
 -- TenantEmailProvider
 -- -----------------------------------------------------------------------------
-ALTER TABLE "TenantEmailProvider" ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "TenantEmailProvider_tenant_isolation" ON "TenantEmailProvider";
-CREATE POLICY "TenantEmailProvider_tenant_isolation" ON "TenantEmailProvider"
-  USING (
-    current_setting('app.bypass_rls', true) = 'on'
-    OR "tenantId" = current_setting('app.current_tenant', true)
-  )
-  WITH CHECK (
-    current_setting('app.bypass_rls', true) = 'on'
-    OR "tenantId" = current_setting('app.current_tenant', true)
-  );
-ALTER TABLE "TenantEmailProvider" FORCE ROW LEVEL SECURITY;
-
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'TenantEmailProvider') THEN
+    ALTER TABLE "TenantEmailProvider" ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS "TenantEmailProvider_tenant_isolation" ON "TenantEmailProvider";
+    CREATE POLICY "TenantEmailProvider_tenant_isolation" ON "TenantEmailProvider"
+      USING (
+        current_setting('app.bypass_rls', true) = 'on'
+        OR "tenantId" = current_setting('app.current_tenant', true)
+      )
+      WITH CHECK (
+        current_setting('app.bypass_rls', true) = 'on'
+        OR "tenantId" = current_setting('app.current_tenant', true)
+      );
+    ALTER TABLE "TenantEmailProvider" FORCE ROW LEVEL SECURITY;
+  ELSE
+    RAISE NOTICE 'skipping % - not present in this database', 'TenantEmailProvider';
+  END IF;
+END $$;
 
 -- =============================================================================
--- DELIBERATELY NOT HERE: TenantMember
--- =============================================================================
--- TenantMember has a tenantId and no policy, and it stays that way.
---
--- The question it answers is "which tenant does this user belong to?", asked on
--- the login path by resolveActingTenant() before any tenant scope exists. A
--- policy of the form `tenantId = current_setting('app.current_tenant')` would
--- make that question circular: you must already know the tenant to find out what
--- the tenant is.
---
--- It is safe today because every caller — auth.ts, tenants.ts, provisioning.ts,
--- platformHealth.ts — reads it through basePrisma, which sets bypass_rls. But
--- "safe because everyone remembers to use basePrisma" is not the same as "safe",
--- and a policy would convert a future mistake from a visible failure into a
--- silent one: addTenantMembership()'s one-user-one-tenant guard queries
--- `NOT: { tenantId }`, and under a tenant-filtered policy that returns nothing,
--- so the guard would pass and the user would be added to a second tenant.
---
--- The right fix is a policy keyed on the USER rather than the tenant, which is a
--- different shape from every policy in this system and belongs in its own change
--- with its own tests. Recorded in tests/rlsPolicyCoverage.test.ts as an explicit,
--- justified exclusion rather than left to be rediscovered.
+-- DELIBERATELY NOT HERE: TenantMemberundefined
