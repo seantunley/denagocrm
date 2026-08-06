@@ -9,6 +9,7 @@ import { runPostCompletion } from "./postComplete";
 import { anchorEvidence } from "./evidenceBundle";
 import { reconcileEnvelope } from "./reconcile";
 import { finalizeSigningCompletion } from "./finalizeCompletion";
+import { assertSigningRuntimeConfig } from "./securityConfig";
 
 async function handle(job: SigningOutboxJob): Promise<void> {
   switch (job.jobType) {
@@ -67,6 +68,7 @@ async function handle(job: SigningOutboxJob): Promise<void> {
 }
 
 export async function processSigningOutbox(options?: { limit?: number; onlyIds?: string[] }): Promise<{ leased: number; completed: number; failed: number }> {
+  assertSigningRuntimeConfig();
   const jobs = await leaseSigningJobs(options?.limit ?? 20, options?.onlyIds);
   let completed = 0; let failed = 0;
   for (const job of jobs) {
