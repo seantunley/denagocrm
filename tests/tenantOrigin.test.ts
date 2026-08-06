@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -8,7 +8,8 @@ import { buildSignature, DEFAULT_SIGNATURE_COMPANY, signatureCompanyFrom } from 
 import { pdfImageHostAllowed } from "../src/lib/pdfImageHosts";
 import { domainProof, proofMatches } from "../src/lib/domainCheck";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root_ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root = root_;
 const read = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 const shipped = (rel: string) =>
   read(rel)
@@ -255,3 +256,85 @@ const BLANK_PROFILE = {
   instagram: "",
   logoUrl: "",
 };
+
+/* ── 7. the surface this module CLAIMS to cover ──────────────────────────── */
+
+test("campaign links, the open pixel and unsubscribe use the tenant origin", () => {
+  // These were listed in tenantOrigin.ts's own module documentation as part of
+  // the surface, and were not actually changed in the first pass — the doc
+  // described the intent and the code did three quarters of it.
+  //
+  // They matter more than the glyphs the tracked item named. A recipient hovers
+  // any link in a marketing email and reads the hostname in their status bar,
+  // and it read the platform's whoever sent it. The unsubscribe URL most of all:
+  // it is the one link someone clicks when they do not trust the sender, and
+  // pointing it at a company they have never heard of is the worst possible
+  // moment to look like a stranger.
+  const code = shipped("src/lib/campaigns.ts");
+  const start = code.indexOf("export function buildTrackedEmail(");
+  const body = code.slice(start, code.indexOf("\n}", start));
+  assert.match(body, /const base = brand\?\.origin \|\| appBaseUrl\(\);/, "tracked links");
+  assert.match(body, /\$\{base\}\/api\/track\/c\//, "click wrapper");
+  assert.match(body, /\$\{base\}\/api\/track\/o\//, "open pixel");
+  assert.match(body, /\$\{base\}\/api\/unsubscribe\//, "unsubscribe");
+
+  // The shell's built-in logo fallback resolves the same way, so the picture and
+  // the links in one email cannot arrive from two different hosts.
+  const shell = shipped("src/lib/campaigns.ts");
+  const shellStart = shell.indexOf("function emailShell(");
+  assert.match(
+    shell.slice(shellStart, shell.indexOf("return `<!doctype", shellStart)),
+    /const base = brand\?\.origin \|\| appBaseUrl\(\);/,
+  );
+});
+
+test("the origin rides on the brand, because the builders are synchronous", () => {
+  // buildTrackedEmail runs once per recipient in a send loop. An await inside it
+  // would be a database round trip per person on a mailing list. emailBrand()
+  // already resolves per tenant and is cache()d, so carrying it there is free.
+  const code = shipped("src/lib/emailBrand.ts");
+  assert.match(code, /origin: string;/, "EmailBrand carries it");
+  assert.match(code, /const origin = await tenantOrigin\(tenantId\);/, "resolved once");
+  assert.match(code, /logoUrl: relative \? `\$\{origin\}\$\{relative\}` : null,/, "…and reused for the logo");
+  assert.equal(UNBRANDED_EMAIL_ORIGIN_IS_EMPTY(code), true, "empty, never null, so a caller cannot emit `undefined/api/...`");
+  assert.doesNotMatch(shipped("src/lib/campaigns.ts"), /await tenantOrigin\(/, "no per-recipient lookup");
+});
+
+function UNBRANDED_EMAIL_ORIGIN_IS_EMPTY(code: string): boolean {
+  const start = code.indexOf("export const UNBRANDED_EMAIL");
+  return /origin: "",/.test(code.slice(start, code.indexOf("};", start)));
+}
+
+test("no outbound URL builder is left on the platform base by accident", () => {
+  // The backstop for the failure this section documents: a module that sends
+  // something to a customer must not build its URLs from appBaseUrl(). The two
+  // exceptions are named, not pattern-matched, so adding a third is a decision.
+  const ALLOWED: Record<string, string> = {
+    "src/lib/tenantOrigin.ts":
+      "IS the resolver — appBaseUrl() is what it falls back to when a tenant has no verified domain",
+    "src/lib/campaigns.ts":
+      "defines appBaseUrl and uses it as the fallback when a brand has no origin",
+    "src/app/api/track/c/[token]/route.ts":
+      "the fail-closed redirect for a token that resolved to nothing — there is no tenant to resolve an origin from, and home on the platform host is where this surface already sends an unparseable link",
+    "src/app/actions/bot.ts":
+      "the Telegram WEBHOOK we ask Telegram to call. Inbound, not outbound — it must be the platform's own address, and a tenant domain here would break the bot if that domain ever moved",
+  };
+  const root = path.join(root_, "src");
+  const offenders: string[] = [];
+  const walk = (p: string) => {
+    for (const entry of readdirSync(p, { withFileTypes: true })) {
+      const full = path.join(p, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.tsx?$/.test(entry.name) && /appBaseUrl\(\)/.test(readFileSync(full, "utf8"))) {
+        const rel = path.relative(root_, full).split(path.sep).join("/");
+        if (!(rel in ALLOWED)) offenders.push(rel);
+      }
+    }
+  };
+  walk(root);
+  assert.deepEqual(
+    offenders.sort(),
+    [],
+    "these build a URL from the platform base — use tenantOrigin(), or add them to ALLOWED with the reason",
+  );
+});

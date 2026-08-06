@@ -93,7 +93,9 @@ export async function countContacts(
 }
 
 function emailShell(inner: string, unsubUrl: string, brand?: EmailBrand) {
-  const base = appBaseUrl();
+  // Same origin the links use, so the built-in logo fallback does not arrive
+  // from a different host than everything around it.
+  const base = brand?.origin || appBaseUrl();
   // Absolute URL, always: a mail client has no origin to resolve a relative path
   // against. Falls back to the built-in asset when the tenant has no logo.
   const logo = brand?.logoUrl ?? `${base}/branding/denago-cape-town-logo.png`;
@@ -123,7 +125,19 @@ You received this because you're a ${name} customer.
 /** Wrap personalised HTML with the brand shell, rewrite links for click
  *  tracking, and append the open-tracking pixel + unsubscribe footer. */
 export function buildTrackedEmail(personalizedHtml: string, token: string, brand?: EmailBrand) {
-  const base = appBaseUrl();
+  // The tenant's own origin for EVERY link in the mail — the click wrapper, the
+  // open pixel and the unsubscribe URL. This is the most-seen surface of the
+  // lot: a recipient hovers any link in a marketing email and reads the hostname
+  // in their status bar, and it read crm.denagocpt.co.za whoever sent it.
+  //
+  // The unsubscribe URL especially. It is the one link a recipient is invited to
+  // click when they do not trust the sender, and pointing it at a company they
+  // have never heard of is the worst possible moment to look like a stranger.
+  //
+  // Old links keep working: every hostname reaches the same deployment and the
+  // platform origin stays valid forever, so a campaign sent last month tracks
+  // and unsubscribes exactly as before.
+  const base = brand?.origin || appBaseUrl();
   // Same pattern the click route reads the campaign's vouched-for hosts with, so
   // the set of links rewritten here and the set accepted there cannot drift.
   const rewritten = personalizedHtml.replace(

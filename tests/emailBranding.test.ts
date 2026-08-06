@@ -41,7 +41,9 @@ test("an email logo URL is absolute, and on the tenant's own origin", () => {
   // on the TENANT's hostname because a recipient sees it — in the HTML source
   // and in their client's "load remote images" prompt. Same route, same bytes,
   // same deployment; only the name changes.
-  assert.match(code, /\$\{await tenantOrigin\(tenantId\)\}\$\{relative\}/, "the tenant origin is prefixed");
+  assert.match(code, /const origin = await tenantOrigin\(tenantId\);/, "resolved once for this email");
+  assert.match(code, /logoUrl: relative \? `\$\{origin\}\$\{relative\}` : null,/, "the tenant origin is prefixed");
+  assert.match(code, /^\s+origin,$/m, "…and the same one is carried for the tracked links");
   assert.doesNotMatch(code, /appBaseUrl\(\)/, "not the platform's hostname");
   const shell = shipped("src/lib/campaigns.ts");
   assert.match(

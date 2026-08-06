@@ -30,6 +30,18 @@ export type EmailBrand = {
   /** Absolute, or null to use the built-in asset. */
   logoUrl: string | null;
   tagline: string | null;
+  /**
+   * Origin for the tracking, pixel and unsubscribe URLs in this email.
+   *
+   * Carried on the brand rather than looked up by buildTrackedEmail, because
+   * that function is synchronous and is called once per recipient in a loop —
+   * an await there would be a database round trip per person on a mailing list.
+   * emailBrand() already resolves per tenant and is cache()d, so this is free.
+   *
+   * Empty means the platform origin. Never null, so a caller cannot forget to
+   * fall back and produce `undefined/api/track/...`.
+   */
+  origin: string;
 };
 
 export const UNBRANDED_EMAIL: EmailBrand = {
@@ -37,6 +49,7 @@ export const UNBRANDED_EMAIL: EmailBrand = {
   displayName: DEFAULT_BRAND.displayName,
   logoUrl: null,
   tagline: null,
+  origin: "",
 };
 
 /**
@@ -50,14 +63,19 @@ export async function emailBrand(tenantId: string | null | undefined): Promise<E
     const brand = await brandForTenant(tenantId);
     if (!brand.tenantId) return UNBRANDED_EMAIL;
     const relative = brandLogoUrl(brand);
+    // Resolved ONCE and reused for the logo and for every tracked link, so the
+    // picture and the links in one email can never disagree about which host
+    // they came from.
+    const origin = await tenantOrigin(tenantId);
     return {
       branded: true,
       displayName: brand.displayName,
       // The tenant's own origin. Same route, same bytes, same deployment — the
       // only thing that changes is the hostname a recipient sees when their mail
       // client asks whether to load remote images.
-      logoUrl: relative ? `${await tenantOrigin(tenantId)}${relative}` : null,
+      logoUrl: relative ? `${origin}${relative}` : null,
       tagline: brand.tagline,
+      origin,
     };
   } catch {
     return UNBRANDED_EMAIL;
