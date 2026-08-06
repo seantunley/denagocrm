@@ -3,7 +3,8 @@
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { canAccessJobCard, canAccessQuote, requirePermission, type PermissionUser } from "@/lib/permissions";
+import { requirePermission, type PermissionUser } from "@/lib/permissions";
+import { RECORD_UNAVAILABLE, canAccessBuilderRecord } from "@/lib/docbuilder/recordAccess";
 import { logAudit } from "@/lib/audit";
 import { documentSchema } from "@/lib/doceditor/model";
 import { blankDocument, standardQuoteTemplate } from "@/lib/doceditor/factory";
@@ -59,15 +60,13 @@ async function validatedBinding(
         : `The “${template.name}” template requires a quote record.`,
     );
   }
-  if (record) {
-    const permitted =
-      record.kind === "quote"
-        ? await canAccessQuote(user, record.id)
-        : await canAccessJobCard(user, record.id);
-    // Same message either way — "you may not" and "it does not exist" must not
-    // be distinguishable, or this becomes an existence oracle for records the
-    // caller cannot see.
-    if (!permitted) throw new ActionRefusal("That record isn't available.");
+  // Same message either way — "you may not" and "it does not exist" must not be
+  // distinguishable, or this becomes an existence oracle for records the caller
+  // cannot see. The decision itself lives in docbuilder/recordAccess.ts, because
+  // the two API routes that render these same templates from these same ids need
+  // exactly this answer and used to reach it a different way: not at all.
+  if (record && !(await canAccessBuilderRecord(user, record))) {
+    throw new ActionRefusal(RECORD_UNAVAILABLE);
   }
   return {
     template,
