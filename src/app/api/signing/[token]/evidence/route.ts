@@ -4,6 +4,7 @@ import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
 import { requireIdentityForToken } from "@/lib/signing/identity";
 import { prisma } from "@/lib/db";
 import { buildPortableEvidenceBundle } from "@/lib/signing/evidenceBundle";
+import { logSignEvent, reqMeta } from "@/lib/signing/events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +20,16 @@ export async function GET(_request: Request, context: { params: Promise<{ token:
       catch (error) { return new Response(error instanceof Error ? error.message : "Verification required", { status: 403 }); }
       const recipient = await prisma.signatureRecipient.findUnique({ where: { token: hashSignToken(token) }, include: { request: true } });
       if (!recipient || recipient.request.status !== "completed") return new Response("Evidence bundle is available after completion", { status: 409 });
+      const meta = await reqMeta();
+      await logSignEvent(recipient.requestId, {
+        recipientId: recipient.id,
+        type: "downloaded",
+        actor: recipient.signedName || recipient.name,
+        channel: "web",
+        ip: meta.ip,
+        userAgent: meta.ua,
+        metadata: { artifact: "portable_evidence_bundle", format: "json" },
+      });
       const bundle = await buildPortableEvidenceBundle(recipient.requestId);
       return new Response(JSON.stringify(bundle), {
         headers: {
