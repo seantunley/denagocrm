@@ -29,8 +29,12 @@ export type SigningOutboxJob = {
   lastError: string | null;
 };
 
+type RawQueryClient = {
+  $queryRaw<T = unknown>(query: TemplateStringsArray | Prisma.Sql, ...values: unknown[]): Promise<T>;
+};
+
 export async function enqueueSigningJob(
-  tx: Prisma.TransactionClient,
+  tx: RawQueryClient,
   input: {
     tenantId: string;
     envelopeId?: string | null;
@@ -106,5 +110,5 @@ export async function deadLetterCount(tenantId?: string): Promise<number> {
     SELECT count(*)::bigint AS count FROM "SigningOutboxJob"
      WHERE status='dead_letter' AND (${tenantId ?? null}::text IS NULL OR "tenantId"=${tenantId ?? null})
   `);
-  return Number(rows[0]?.count ?? 0n);
+  return Number(rows[0]?.count ?? BigInt(0));
 }
