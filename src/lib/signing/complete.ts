@@ -35,7 +35,31 @@ async function sigImg(ref: string | null): Promise<string | null> {
   try { const buf = await readFile(ref); return `data:image/png;base64,${buf.toString("base64")}`; } catch { return null; }
 }
 
-type RecipientRow = { name: string; role: string; signedAt: Date | null; signerIp: string | null; img: string | null };
+type RecipientRow = {
+  name: string; role: string; signedAt: Date | null; signerIp: string | null; img: string | null;
+  /** How this signer was proved to be the intended recipient, if at all. */
+  identityMethod: string | null; identityVerifiedAt: Date | null;
+};
+
+/**
+ * What the certificate is allowed to claim about a signer's identity.
+ *
+ * Stated plainly and WITHOUT overclaiming, because this is the paragraph that
+ * gets read in a dispute. "Link" is the honest description of possession-only
+ * signing — it is not nothing, but it is not proof of who held the link, and
+ * dressing it up as verification would be worse than saying so.
+ */
+function identityStatement(row: RecipientRow): string {
+  if (row.identityMethod === "email_otp") {
+    return `Identity verified by one-time code sent to the email address on file${
+      row.identityVerifiedAt ? ` at ${formatDateTime(row.identityVerifiedAt)}` : ""}`;
+  }
+  if (row.identityMethod === "sms_otp") {
+    return `Identity verified by one-time code sent to the mobile number on file${
+      row.identityVerifiedAt ? ` at ${formatDateTime(row.identityVerifiedAt)}` : ""}`;
+  }
+  return "Opened using the unique signing link sent to this recipient (no additional identity check was required for this document)";
+}
 
 function certificateHtml(title: string, requestId: string, rows: RecipientRow[]): string {
   const signers = rows.map((r) => `
@@ -43,6 +67,7 @@ function certificateHtml(title: string, requestId: string, rows: RecipientRow[])
       <div style="display:flex;justify-content:space-between"><strong>${esc(r.name)}</strong><span style="color:#64748b;font-size:9pt">${esc(r.role)}</span></div>
       ${r.img ? `<img src="${r.img}" style="height:56px;margin:8px 0"/>` : `<div style="color:#94a3b8;font-size:9pt;margin:8px 0">(accepted without drawn signature)</div>`}
       <div style="font-size:8.5pt;color:#64748b">Signed ${r.signedAt ? esc(formatDateTime(r.signedAt)) : "—"}${r.signerIp ? ` · IP ${esc(r.signerIp)}` : ""}</div>
+      <div style="font-size:8.5pt;color:#64748b">${esc(identityStatement(r))}</div>
     </div>`).join("");
   return `<div style="page-break-before:always;padding-top:6px">
     <h1 style="font-size:18pt;color:#020617;margin:0 0 4px">Certificate of Completion</h1>
@@ -159,7 +184,7 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
 
   const rows: RecipientRow[] = [];
   for (const r of req.recipients.filter((x) => x.status === "signed")) {
-    rows.push({ name: r.signedName || r.name, role: r.role, signedAt: r.signedAt, signerIp: r.signerIp, img: await sigImg(r.signatureRef) });
+    rows.push({ name: r.signedName || r.name, role: r.role, signedAt: r.signedAt, signerIp: r.signerIp, img: await sigImg(r.signatureRef), identityMethod: r.identityMethod, identityVerifiedAt: r.identityVerifiedAt });
   }
 
   // Stamp each signed field into the document at the exact spot it was placed.
