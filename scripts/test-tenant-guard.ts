@@ -30,6 +30,7 @@ import {
   resolveCampaignRecipientTenant,
   resolveSurveyResponseTenant,
 } from "../src/lib/tokenTenant";
+import { hashSignToken } from "../src/lib/signing/tokens";
 import { resolveTenantActor, resolveTenantMemberUser, listTenantStaff } from "../src/lib/tenantActor";
 import { resolveApprover } from "../src/lib/signing/approvals";
 import { hashApiKey, resolveApiKeyTenant, authenticateIntakeKey } from "../src/lib/apiKeys";
@@ -157,10 +158,10 @@ async function main() {
   // recipient owned by tenant A (and a signing recipient owned by tenant B, to prove
   // cross-tenant isolation). Tenant is DERIVED from these rows by public token.
   await basePrisma.signatureRequest.create({ data: { id: srId, title: "Doc A", tenantId: TENANT_A } });
-  await basePrisma.signatureRecipient.create({ data: { id: recId, requestId: srId, name: "Signer A", token: signTokenA, tenantId: TENANT_A } });
+  await basePrisma.signatureRecipient.create({ data: { id: recId, requestId: srId, name: "Signer A", token: hashSignToken(signTokenA), tenantId: TENANT_A } });
   await basePrisma.signatureRequest.create({ data: { id: srIdB, title: "Doc B", tenantId: TENANT_B } });
-  await basePrisma.signatureRecipient.create({ data: { id: recIdB, requestId: srIdB, name: "Signer B", token: signTokenB, tenantId: TENANT_B } });
-  await basePrisma.approvalStep.create({ data: { id: apId, requestId: srId, nodeId: "n1", label: "Approve", assigneeType: "owner", token: apTokenA, tenantId: TENANT_A } });
+  await basePrisma.signatureRecipient.create({ data: { id: recIdB, requestId: srIdB, name: "Signer B", token: hashSignToken(signTokenB), tenantId: TENANT_B } });
+  await basePrisma.approvalStep.create({ data: { id: apId, requestId: srId, nodeId: "n1", label: "Approve", assigneeType: "owner", token: hashSignToken(apTokenA), tenantId: TENANT_A } });
   await basePrisma.campaign.create({ data: { id: campId, name: "Camp A", channel: "email", body: "hi", audience: "all", tenantId: TENANT_A } });
   await basePrisma.campaignRecipient.create({ data: { id: crId, campaignId: campId, contactId: idA, token: crTokenA, tenantId: TENANT_A } });
   // Public survey surface: a survey + response owned by A (and one owned by B).
@@ -442,7 +443,7 @@ async function main() {
       () => resolveSignRecipientTenant(signTokenA),
       async () => {
         signRan = true;
-        return prisma.signatureRecipient.findUnique({ where: { token: signTokenA }, include: { request: true } });
+        return prisma.signatureRecipient.findUnique({ where: { token: hashSignToken(signTokenA) }, include: { request: true } });
       },
       () => null,
     );
