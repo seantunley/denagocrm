@@ -18,6 +18,7 @@ import { signatureCompanyFrom, buildSignature, buildEmailHtml, htmlToText } from
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { readFile } from "@/lib/storage";
 import { resolveActingTenant } from "@/lib/tenantContext";
+import { tenantOrigin } from "@/lib/tenantOrigin";
 
 export type SendEmailState = { ok?: string; error?: string };
 
@@ -56,7 +57,7 @@ export async function sendEmailAction(
     return { error: "You don't have access to that lead." };
   }
   const profile = await getCompanyProfile();
-  const signature = buildSignature(user, signatureCompanyFrom(profile));
+  const signature = buildSignature(user, signatureCompanyFrom(profile, await tenantOrigin(await tenantIdFor(user.id))));
   const html = buildEmailHtml(bodyHtml, signature);
 
   // Library attachments (selected version ids)

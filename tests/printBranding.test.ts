@@ -69,7 +69,7 @@ test("a document logo URL from the tenant brand is absolute", () => {
   // It is embedded in printed HTML and in emailed signatures, neither of which
   // has an origin to resolve a path against.
   const code = shipped("src/lib/companyProfile.ts");
-  assert.match(code, /\$\{appBaseUrl\(\)\}\$\{brandLogoUrl\(tenantBrand\)\}/);
+  assert.match(code, /\$\{await tenantOrigin\(tenantBrand\.tenantId\)\}\$\{brandLogoUrl\(tenantBrand\)\}/);
 });
 
 test("every print page passes the company it is from", () => {
@@ -175,6 +175,7 @@ test("a supplied company replaces every hardcoded part of the signature", () => 
       address: "1 Fairway Road, Somerset West",
       website: "acmegolf.co.za",
       switchboard: "021 555 0100",
+      assetBase: "https://acme-crm.co.za",
       logoUrl: "https://cdn.example.com/acme.png",
       facebook: "https://facebook.com/acmegolf",
       instagram: "https://instagram.com/acmegolf",
@@ -211,7 +212,7 @@ test("the settings preview renders what the send path renders", () => {
   const action = shipped("src/app/actions/emails.ts");
   for (const [file, code] of [["settings", settings], ["emails action", action]] as const) {
     assert.match(code, /getCompanyProfile\(\)/, `${file} must resolve the profile`);
-    assert.match(code, /signatureCompanyFrom\(profile\)/, `${file} must map it through the ONE helper`);
+    assert.match(code, /signatureCompanyFrom\(profile, await tenantOrigin\(/, `${file} must map it through the ONE helper, on the tenant origin`);
   }
   assert.match(settings, /buildSignature\(currentUser, signatureCompany\)/);
 });

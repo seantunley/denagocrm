@@ -1,6 +1,6 @@
 import "server-only";
 import { brandForTenant, brandLogoUrl, DEFAULT_BRAND } from "./tenantBrand";
-import { appBaseUrl } from "./campaigns";
+import { tenantOrigin } from "./tenantOrigin";
 
 /**
  * Brand for an EMAIL, which is a different problem from brand for a page.
@@ -53,7 +53,10 @@ export async function emailBrand(tenantId: string | null | undefined): Promise<E
     return {
       branded: true,
       displayName: brand.displayName,
-      logoUrl: relative ? `${appBaseUrl()}${relative}` : null,
+      // The tenant's own origin. Same route, same bytes, same deployment — the
+      // only thing that changes is the hostname a recipient sees when their mail
+      // client asks whether to load remote images.
+      logoUrl: relative ? `${await tenantOrigin(tenantId)}${relative}` : null,
       tagline: brand.tagline,
     };
   } catch {

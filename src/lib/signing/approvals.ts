@@ -6,11 +6,14 @@ import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
 import { advanceWorkflow } from "@/lib/signflow/runtime";
 import { resolveTenantActor, resolveTenantMemberUser } from "@/lib/tenantActor";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
+import { DEFAULT_BRAND, brandForTenant } from "@/lib/tenantBrand";
+import { tenantOrigin } from "@/lib/tenantOrigin";
 
+/** Platform origin and last resort — see signUrl in ./dispatch for the ordering. */
 const BASE = process.env.SIGN_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za";
 
-export function approvalUrl(token: string): string {
-  return `${BASE}/approvals/${token}`;
+export function approvalUrl(token: string, origin?: string | null): string {
+  return `${process.env.SIGN_BASE_URL || origin || BASE}/approvals/${token}`;
 }
 
 /** Resolve who should be notified for an approval step (name + email). Exported for tests. */
@@ -45,12 +48,19 @@ export async function notifyApprover(stepId: string): Promise<void> {
   // (completed/voided/declined/expired/rejected) — the link would be dead.
   if (isRequestClosed(step.request.status)) return;
   const who = await resolveApprover(step);
-  const url = approvalUrl(step.token);
+  // The workspace this request belongs to — its own domain for the link, and its
+  // own name at the foot of the mail. This said "Denago Cape Town" to every
+  // tenant's approvers, on a mail asking them to approve their own document.
+  const [origin, brand] = await Promise.all([
+    tenantOrigin(step.request.tenantId),
+    brandForTenant(step.request.tenantId).catch(() => DEFAULT_BRAND),
+  ]);
+  const url = approvalUrl(step.token, origin);
   if (who.email) {
     await sendEmail({
       to: who.email,
       subject: `Approval needed: ${step.request.title}`,
-      text: `Hi ${who.name},\n\n"${step.request.title}" needs your approval (${step.label}).\n\nReview and approve or reject here:\n${url}\n\nDenago Cape Town`,
+      text: `Hi ${who.name},\n\n"${step.request.title}" needs your approval (${step.label}).\n\nReview and approve or reject here:\n${url}\n\n${brand.displayName}`,
     }).catch(() => {});
   }
   await logSignEvent(step.requestId, { type: "approval_sent", actor: "system", channel: "email", metadata: { to: who.email, label: step.label } });

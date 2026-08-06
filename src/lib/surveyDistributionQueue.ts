@@ -5,7 +5,8 @@ import { sendSms } from "./sms";
 import { canContactPerson, classifyRetry, nextCommunicationWindow, type CommunicationChannel, type CommunicationPurpose } from "./communicationPolicy";
 import { currentTenantScope } from "./tenantScope";
 
-const APP_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za").replace(/\/$/, "");
+import { DEFAULT_BRAND, brandForTenant } from "./tenantBrand";
+import { tenantOrigin } from "./tenantOrigin";
 const BATCH_SIZE = 75;
 const STALE_MINUTES = 15;
 
@@ -60,10 +61,25 @@ function purposeFor(value: string): CommunicationPurpose {
   return value === "survey_marketing" ? "survey_marketing" : "survey_transactional";
 }
 
-function inviteText(snapshot: SurveySnapshot, name: string | null, token: string, reminder = false) {
+/**
+ * `sender` is the workspace this invitation is FROM — its own domain for the
+ * link, its own name at the foot. Both were the platform's: every tenant's
+ * customers got a survey link to crm.denagocpt.co.za signed "Denago Cape Town".
+ */
+type InviteSender = { origin: string; displayName: string };
+
+async function senderFor(tenantId: string | null): Promise<InviteSender> {
+  const [origin, brand] = await Promise.all([
+    tenantOrigin(tenantId),
+    brandForTenant(tenantId).catch(() => DEFAULT_BRAND),
+  ]);
+  return { origin, displayName: brand.displayName };
+}
+
+function inviteText(snapshot: SurveySnapshot, name: string | null, token: string, sender: InviteSender, reminder = false) {
   const first = (name || "there").split(/\s+/)[0] || "there";
   const lead = reminder ? "A quick reminder" : "We would value your feedback";
-  return `Hi ${first},\n\n${lead}: ${snapshot.intro || snapshot.title}\n\n${APP_URL}/s/${token}\n\nThank you,\nDenago Cape Town`;
+  return `Hi ${first},\n\n${lead}: ${snapshot.intro || snapshot.title}\n\n${sender.origin}/s/${token}\n\nThank you,\n${sender.displayName}`;
 }
 
 export async function createSurveyDistribution(args: {
@@ -281,7 +297,7 @@ async function deliver(invite: ClaimedInvite) {
     return;
   }
 
-  const text = inviteText(invite.snapshot, invite.name, invite.token);
+  const text = inviteText(invite.snapshot, invite.name, invite.token, await senderFor(invite.tenantId));
   const result = requested === "email"
     ? await sendEmail({ to: eligibility.destination, subject: invite.snapshot.title, text })
     : await sendSms(eligibility.destination, text);
@@ -416,7 +432,7 @@ async function sendDueReminders(tid: string | null, limit = 50) {
       await closeReminderLease(invite, `reminder_${reason}`, PERMANENT_REMINDER_BLOCKS.has(reason));
       continue;
     }
-    const text = inviteText(invite.snapshot, invite.name, invite.token, true);
+    const text = inviteText(invite.snapshot, invite.name, invite.token, await senderFor(invite.tenantId), true);
     const result = requested === "email"
       ? await sendEmail({ to: eligibility.destination, subject: `Reminder: ${invite.snapshot.title}`, text })
       : await sendSms(eligibility.destination, text);

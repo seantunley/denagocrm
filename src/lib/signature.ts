@@ -5,15 +5,17 @@ import type { CompanyProfile } from "./companyBrand";
 /**
  * Where the signature's static assets (the social glyphs) are served from.
  *
- * Follows NEXT_PUBLIC_APP_URL rather than being hardcoded, so a deployment on a
- * different domain does not embed Denago's in every outgoing signature. The
- * literal stays as the fallback so an unconfigured environment is unchanged.
+ * This carried a note saying the glyphs were a known white-label gap needing
+ * "per-tenant asset hosting, a bigger change than a logo URL". The note was
+ * wrong about the fix. There is no hosting problem: every tenant domain is
+ * attached to the same deployment, so https://acme-crm.co.za/branding/
+ * social-facebook.png already serves the same bytes from the same public/
+ * directory. The gap was the BASE URL, and `assetBase` closes it — see
+ * lib/tenantOrigin.ts.
  *
- * KNOWN WHITE-LABEL GAP: on a per-tenant domain these images are still fetched
- * from the PLATFORM's host, which a recipient can see in the HTML source and in
- * their client's "load remote images" prompt. Hiding it entirely needs per-tenant
- * asset hosting, which is a bigger change than a logo URL. The company's OWN
- * logo already comes from the tenant brand and is not affected.
+ * Kept as a defaulted parameter rather than a lookup because this is a pure
+ * string builder, called from a client-rendered settings preview as well as from
+ * the send path. An omitted argument is the platform origin, exactly as before.
  */
 const SITE = (process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za").replace(/\/$/, "");
 
@@ -40,6 +42,12 @@ export type SignatureCompany = {
   website: string;
   /** The company's main number, beside the individual's mobile. May be empty. */
   switchboard: string;
+  /**
+   * Origin the social glyphs are fetched from. The tenant's own domain when it
+   * has one — the same deployment either way, so this is a change of NAME, not of
+   * where the bytes come from. Empty falls back to the platform origin.
+   */
+  assetBase: string;
   logoUrl: string;
   facebook: string;
   instagram: string;
@@ -58,6 +66,7 @@ export const DEFAULT_SIGNATURE_COMPANY: SignatureCompany = {
   address: "",
   website: "",
   switchboard: "",
+  assetBase: "",
   logoUrl: "",
   facebook: "",
   instagram: "",
@@ -75,13 +84,14 @@ export const DEFAULT_SIGNATURE_COMPANY: SignatureCompany = {
  * `phone` becomes `switchboard`: the profile's phone is the company's number,
  * and it is what the template used to have hardcoded.
  */
-export function signatureCompanyFrom(profile: CompanyProfile): SignatureCompany {
+export function signatureCompanyFrom(profile: CompanyProfile, assetBase?: string | null): SignatureCompany {
   return {
     name: profile.name,
     tagline: profile.tagline,
     address: profile.address,
     website: profile.website,
     switchboard: profile.phone,
+    assetBase: assetBase ?? "",
     logoUrl: profile.logoUrl || DEFAULT_SIGNATURE_COMPANY.logoUrl,
     facebook: profile.facebook || DEFAULT_SIGNATURE_COMPANY.facebook,
     instagram: profile.instagram || DEFAULT_SIGNATURE_COMPANY.instagram,
@@ -102,6 +112,7 @@ export function buildSignature(user: {
   const safeEmail = escapeHtml(user.email);
   const safeName = escapeHtml(user.name);
   const safeJobTitle = user.jobTitle ? escapeHtml(user.jobTitle) : null;
+  const assets = company.assetBase.trim().replace(/\/$/, "") || SITE;
   const switchboard = company.switchboard.trim();
   const contactBits = [
     safeMobile
@@ -119,7 +130,7 @@ export function buildSignature(user: {
 
   const waIcon =
     waDigits.length >= 10
-      ? `<a href="https://wa.me/${waDigits}" style="text-decoration:none;"><img src="${SITE}/branding/social-whatsapp.png" alt="WhatsApp" width="26" height="26" style="display:block;border:0;" /></a>`
+      ? `<a href="https://wa.me/${waDigits}" style="text-decoration:none;"><img src="${assets}/branding/social-whatsapp.png" alt="WhatsApp" width="26" height="26" style="display:block;border:0;" /></a>`
       : "";
 
   // Every block below is conditional, because the defaults are now EMPTY rather
@@ -145,7 +156,7 @@ export function buildSignature(user: {
 `;
 
   const glyph = (href: string, file: string, alt: string) =>
-    `<td style="padding-right:8px;"><a href="${escapeHtml(href)}" style="text-decoration:none;"><img src="${SITE}/branding/social-${file}.png" alt="${alt}" width="26" height="26" style="display:block;border:0;" /></a></td>`;
+    `<td style="padding-right:8px;"><a href="${escapeHtml(href)}" style="text-decoration:none;"><img src="${assets}/branding/social-${file}.png" alt="${alt}" width="26" height="26" style="display:block;border:0;" /></a></td>`;
 
   const socialCells = [
     facebook ? glyph(facebook, "facebook", "Facebook") : "",

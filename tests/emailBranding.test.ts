@@ -35,9 +35,14 @@ test("the sender identity is already per-tenant — this phase does not touch it
   assert.match(code, /currentTenantScope\(\)\?\.tenantId/, "…from the scope the send is inside");
 });
 
-test("an email logo URL is absolute, because a mail client has no origin", () => {
+test("an email logo URL is absolute, and on the tenant's own origin", () => {
   const code = shipped("src/lib/emailBrand.ts");
-  assert.match(code, /\$\{appBaseUrl\(\)\}\$\{relative\}/, "the app's base URL is prefixed");
+  // Absolute because a mail client has no origin to resolve a path against, and
+  // on the TENANT's hostname because a recipient sees it — in the HTML source
+  // and in their client's "load remote images" prompt. Same route, same bytes,
+  // same deployment; only the name changes.
+  assert.match(code, /\$\{await tenantOrigin\(tenantId\)\}\$\{relative\}/, "the tenant origin is prefixed");
+  assert.doesNotMatch(code, /appBaseUrl\(\)/, "not the platform's hostname");
   const shell = shipped("src/lib/campaigns.ts");
   assert.match(
     shell,

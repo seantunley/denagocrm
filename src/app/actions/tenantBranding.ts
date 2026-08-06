@@ -7,6 +7,8 @@ import { requirePlatformAdminAction } from "@/lib/platformAuth";
 import { logAuditStrict } from "@/lib/audit";
 import { putManagedBlob, deleteFile } from "@/lib/storage";
 import { isBrandColour, normaliseHost } from "@/lib/tenantBrand";
+import { domainProof, proofMatches } from "@/lib/domainCheck";
+import { safeFetchText } from "@/lib/safeFetch";
 
 /**
  * Branding, set by a PLATFORM ADMIN in the console — the depth and the ownership
@@ -205,6 +207,60 @@ export async function clearTenantLogoAction(
 }
 
 /**
+ * Fetch https://<hostname>/api/brand/domain-check and require our own proof back.
+ *
+ * `safeFetchText` rather than bare fetch: the hostname is typed into a form by a
+ * platform admin, and without the SSRF guard "verify this domain" is a request
+ * the server will make to any address, including the metadata endpoint and
+ * anything on the private network. It re-resolves DNS immediately before
+ * connecting, so the check cannot be rebound between resolution and request.
+ *
+ * Every failure is reported as itself. "Could not reach it", "something else is
+ * serving it" and "it answered but is not this deployment" are three different
+ * problems with three different fixes, and collapsing them into "verification
+ * failed" would send someone to check DNS when the domain is simply not attached
+ * to the project yet.
+ */
+async function hostnameServesThisDeployment(
+  hostname: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const url = `https://${hostname}/api/brand/domain-check`;
+  let body: string;
+  try {
+    const res = await safeFetchText(url, { timeoutMs: 8000, maxBytes: 4096, accept: "application/json" });
+    if (res.status < 200 || res.status >= 300) {
+      return {
+        ok: false,
+        error: `${hostname} answered with HTTP ${res.status}. Attach it to the deployment first — DNS alone is not enough.`,
+      };
+    }
+    body = res.text;
+  } catch (err) {
+    return {
+      ok: false,
+      error:
+        `Could not reach https://${hostname} — ${err instanceof Error ? err.message : "no response"}. ` +
+        `Point its DNS at the deployment and add it to the project, then verify.`,
+    };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return { ok: false, error: `${hostname} is serving something else — it did not answer as this application.` };
+  }
+  const proof = (parsed as { proof?: unknown } | null)?.proof;
+  if (!proofMatches(domainProof(hostname), proof)) {
+    return {
+      ok: false,
+      error: `${hostname} responded, but not as this deployment. Check it is not pointed at a different environment.`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
  * Register a hostname for a tenant.
  *
  * ADDED UNVERIFIED. `verifiedAt` stays null until someone proves control, and
@@ -267,6 +323,20 @@ export async function addTenantDomainAction(
  * Deliberately a separate, explicitly-audited step rather than a checkbox on the
  * add form: this is the moment an address starts rendering someone's brand, and
  * it should read that way in the audit trail.
+ *
+ * AND IT NOW PROVES THE HOSTNAME REACHES US. This used to write a timestamp on
+ * the platform admin's word alone. That was fine while `verifiedAt` only decided
+ * whether a login page rendered a logo — if the domain was not wired up, nobody
+ * could reach the login page to notice.
+ *
+ * It is not fine now that outbound links are built from tenant origins
+ * (lib/tenantOrigin.ts). A hostname marked verified but not actually attached to
+ * the deployment sends every signing link, survey invitation and tracked
+ * campaign link for that tenant to an address that does not resolve. The
+ * customer gets a dead link; the tenant gets no signature and no reply; nothing
+ * errors anywhere. The admin asserting ownership is the right person to ask —
+ * they are trusted — but DNS and the Vercel domain attachment are done by
+ * someone else in two other systems, and the console cannot see either.
  */
 export async function verifyTenantDomainAction(
   tenantId: string,
@@ -286,6 +356,9 @@ export async function verifyTenantDomainAction(
     // this verifies another tenant's hostname from a forged POST.
     if (!domain || domain.tenantId !== tenantId) throw new ActionRefusal("Domain not found.");
     if (domain.verifiedAt) throw new ActionRefusal("That hostname is already verified.");
+
+    const reachable = await hostnameServesThisDeployment(domain.hostname);
+    if (!reachable.ok) throw new ActionRefusal(reachable.error);
 
     await basePrisma.tenantDomain.update({
       where: { id: domainId },
