@@ -5,7 +5,7 @@ import { readFile } from "@/lib/storage";
 import { sendEmail } from "@/lib/email";
 import { logError } from "@/lib/errorLog";
 import { runInTenantScope } from "@/lib/tenantScope";
-import { configuredSigningCertificateInfo } from "@/lib/pdf/seal";
+import { configuredSigningCertificateInfo, sealedPdfCertificateInfo } from "@/lib/pdf/seal";
 import { logSignEvent } from "./events";
 import { runPostCompletion } from "./postComplete";
 import { COMPLETED_EVENT, POST_COMPLETION_EVENT } from "./completionFanout";
@@ -277,8 +277,14 @@ async function executeArtifactVerification(job: SigningJob): Promise<void> {
 
   const bytes = await readFile(artifact.storageRef);
   const observedSha256 = crypto.createHash("sha256").update(bytes).digest("hex");
-  const certificate = configuredSigningCertificateInfo();
+  // THE CERTIFICATE IN THE FILE, not the one configured today. Recording the
+  // current identity as evidence about a document sealed years ago is false the
+  // moment a certificate is rotated — and this record exists specifically to say
+  // what sealed it.
+  const embedded = sealedPdfCertificateInfo(bytes);
+  const certificate = embedded ?? configuredSigningCertificateInfo();
   const errors: string[] = [];
+  if (!embedded) errors.push("sealed PDF carries no readable signing certificate");
   if (observedSha256 !== artifact.sha256) errors.push("sealed PDF hash mismatch");
   if (artifact.sizeBytes !== null && artifact.sizeBytes !== bytes.length) errors.push("sealed PDF size mismatch");
   // STRICT mode, not merely "production".

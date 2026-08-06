@@ -372,3 +372,18 @@ test("a failed capability does not strand a recipient mid-send", () => {
   // now that "Show link" can rotate and win the same compare-and-swap.
   assert.match(dispatch, /status: "sending" \}, data: \{ status: "pending", sendingAt: null \}/);
 });
+
+test("validation describes the certificate that sealed the file", () => {
+  const worker = read("src/lib/signing/jobWorker.ts");
+  const seal = read("src/lib/pdf/seal.ts");
+  // Recording the identity configured TODAY as evidence about a document sealed
+  // years ago is false the moment a certificate is rotated — and this record
+  // exists specifically to say what sealed it.
+  assert.match(worker, /sealedPdfCertificateInfo\(bytes\)/);
+  assert.match(worker, /sealed PDF carries no readable signing certificate/);
+  assert.match(seal, /export function sealedPdfCertificateInfo/);
+  // It must not claim trust it has not established: whether the CONFIGURED
+  // identity is trusted says nothing about the one embedded in this file.
+  const fn = seal.slice(seal.indexOf("export function sealedPdfCertificateInfo"));
+  assert.match(fn, /trusted: false/);
+});

@@ -105,3 +105,56 @@ export async function sealPdf(
   const signer = new P12Signer(p12, { passphrase });
   return new SignPdf().sign(withPlaceholder, signer);
 }
+
+
+/**
+ * The certificate that ACTUALLY sealed a PDF, read out of the file.
+ *
+ * Validation recorded `configuredSigningCertificateInfo()` — the identity
+ * configured right now — as evidence about a document sealed possibly years
+ * earlier. After a certificate rotation that is simply false: a historic
+ * contract gets validation metadata describing a certificate that never touched
+ * it, in the record produced precisely to say what did.
+ *
+ * A signed PDF embeds its PKCS#7 blob in the /Contents of the signature
+ * dictionary, hex-encoded. This locates it, parses the CMS, and returns the
+ * signer certificate's own details. Returns null when the file carries no
+ * recognisable signature — the caller records that as an error rather than
+ * silently substituting today's configuration.
+ */
+export function sealedPdfCertificateInfo(pdf: Buffer): SigningCertificateInfo | null {
+  try {
+    const text = pdf.toString("latin1");
+    const marker = text.indexOf("/Contents <");
+    if (marker === -1) return null;
+    const start = text.indexOf("<", marker) + 1;
+    const end = text.indexOf(">", start);
+    if (start <= 0 || end <= start) return null;
+    const hex = text.slice(start, end).replace(/[^0-9a-fA-F]/g, "");
+    if (hex.length < 64) return null;
+    const der = Buffer.from(hex, "hex");
+
+    const asn1 = forge.asn1.fromDer(forge.util.createBuffer(der.toString("binary")), false);
+    const message = forge.pkcs7.messageFromAsn1(asn1) as forge.pkcs7.PkcsSignedData;
+    const cert = message.certificates?.[0];
+    if (!cert) return null;
+
+    const certDer = Buffer.from(forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes(), "binary");
+    const name = (attrs: forge.pki.CertificateField[]) =>
+      attrs.map((attr) => `${attr.shortName || attr.name}=${attr.value}`).join(", ");
+    return {
+      fingerprintSha256: crypto.createHash("sha256").update(certDer).digest("hex"),
+      subject: name(cert.subject.attributes),
+      issuer: name(cert.issuer.attributes),
+      serialNumber: cert.serialNumber,
+      validFrom: cert.validity.notBefore.toISOString(),
+      validTo: cert.validity.notAfter.toISOString(),
+      // Whether the CONFIGURED identity is trusted says nothing about the one
+      // embedded here. Establishing that needs chain validation, which does not
+      // exist yet, so this never claims trust it has not checked.
+      trusted: false,
+    };
+  } catch {
+    return null;
+  }
+}
