@@ -9,6 +9,7 @@ import { htmlToPdf } from "@/lib/customDocs";
 import { readFile } from "@/lib/storage";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import type { SignatureRequest } from "@prisma/client";
+import { assertSigningRuntimeConfig } from "./securityConfig";
 
 let logoCache: string | null | undefined;
 function logoDataUri(): string | undefined {
@@ -59,6 +60,7 @@ export async function renderRequestDocHtml(req: Pick<SignatureRequest, "snapshot
 
 /** Render a bound document to an unsigned print-ready PDF (overlay fields hidden). */
 export async function renderEnvelopePdf(doc: DocumentModel, quoteId: string | null, jobCardId: string | null): Promise<Buffer> {
+  assertSigningRuntimeConfig();
   const ctx = await bindCtx(quoteId, jobCardId);
   const html = renderDocumentHtml(doc, ctx, logoDataUri(), { hideOverlays: true });
   return htmlToPdf(html);
