@@ -14,7 +14,8 @@ import {
 } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
-import { buildSignature, buildEmailHtml, htmlToText } from "@/lib/signature";
+import { DEFAULT_SIGNATURE_COMPANY, buildSignature, buildEmailHtml, htmlToText } from "@/lib/signature";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { readFile } from "@/lib/storage";
 import { resolveActingTenant } from "@/lib/tenantContext";
 
@@ -54,7 +55,16 @@ export async function sendEmailAction(
   if (leadId && !(await canAccessLead(user, leadId))) {
     return { error: "You don't have access to that lead." };
   }
-  const signature = buildSignature(user);
+  const profile = await getCompanyProfile();
+  const signature = buildSignature(user, {
+    name: profile.name,
+    tagline: profile.tagline,
+    address: profile.address,
+    website: profile.website,
+    logoUrl: profile.logoUrl || DEFAULT_SIGNATURE_COMPANY.logoUrl,
+    facebook: profile.facebook || DEFAULT_SIGNATURE_COMPANY.facebook,
+    instagram: profile.instagram || DEFAULT_SIGNATURE_COMPANY.instagram,
+  });
   const html = buildEmailHtml(bodyHtml, signature);
 
   // Library attachments (selected version ids)

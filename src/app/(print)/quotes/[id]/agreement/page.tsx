@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { requireQuoteReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { contactName, formatDate } from "@/lib/format";
 import { documentTotals, feeRows, includedLines } from "@/lib/pricing";
@@ -22,6 +23,9 @@ export default async function AgreementPrintPage({
     include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, contact: true, lead: { include: { product: true } } },
   });
   if (!quote) notFound();
+  // The company this document is FROM. getCompanyProfile now inherits the
+  // platform-set tenant brand when the tenant has not filled in its own profile.
+  const company = await getCompanyProfile();
   const tpl = await getDocTemplate("agreement", tplId);
   // Fees and delivery are part of what the customer pays; the subtotal is not.
   // The rows the customer can see must add up to the price they are agreeing
@@ -36,6 +40,7 @@ export default async function AgreementPrintPage({
     <>
       <PrintActions backHref={`/quotes/${quote.id}`} backLabel="Back to quote" />
       <PrintDocShell
+        company={company}
         template={tpl}
         title="Sales agreement"
         number={`SA-${quote.number}`}

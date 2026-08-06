@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { requireJobCardReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { contactName, formatDate } from "@/lib/format";
 import { jobCardTotals } from "@/lib/workshop-constants";
@@ -27,6 +28,9 @@ export default async function ServiceReportPrintPage({
     },
   });
   if (!jobCard) notFound();
+  // The company this document is FROM. getCompanyProfile now inherits the
+  // platform-set tenant brand when the tenant has not filled in its own profile.
+  const company = await getCompanyProfile();
   const tpl = await getDocTemplate("service-report", tplId);
   const total = jobCardTotals(jobCard.items).totalCents;
   const sr = jobCard.serviceRecord;
@@ -35,6 +39,7 @@ export default async function ServiceReportPrintPage({
     <>
       <PrintActions backHref={`/jobcards/${jobCard.id}`} backLabel="Back to job card" />
       <PrintDocShell
+        company={company}
         template={tpl}
         title="Service report"
         number={`SR-${jobCard.number}`}
