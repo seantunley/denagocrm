@@ -6,12 +6,11 @@ import {
   SESSION_COOKIE,
   sessionCookieOptions,
 } from "@/lib/session";
-import { buildCsp, buildCspReportOnly, newCspNonce } from "@/lib/csp";
+import { buildCsp, buildCspReportOnly, buildPublicSigningCsp, newCspNonce } from "@/lib/csp";
 
-// /api/cron authenticates itself with the intake API key
 const PUBLIC_PATHS = [
   "/login",
-  "/api/auth/passkey/auth", // passkey (WebAuthn) login options + verify — pre-session
+  "/api/auth/passkey/auth",
   "/api/webhooks",
   "/api/intake",
   "/api/cron",
@@ -19,39 +18,26 @@ const PUBLIC_PATHS = [
   "/api/service-lookup",
   "/sign",
   "/api/sign",
-  "/signing", // e-signing hub: per-recipient tokenised public signing pages
+  "/signing",
   "/api/signing",
-  "/approvals", // internal approval gates: tokenised approve/reject pages (email links)
+  "/approvals",
   "/api/approvals",
-  "/api/track", // campaign open/click tracking
-  "/api/unsubscribe", // one-click marketing unsubscribe
-  "/portal", // customer portal has its own OTP session
-  "/api/portal", // portal document/upload routes self-check the portal session
-  // Platform console — "public" to THIS proxy only, because it authenticates with
-  // its OWN identity (PlatformAdmin) and its own cookie, not the CRM session this
-  // proxy checks. Without this entry the proxy bounces /platform to the CRM /login,
-  // making the console reachable only by holding a CRM session — precisely the
-  // coupling the separate identity exists to remove. Not unprotected: /platform/login
-  // is meant to be reachable signed-out, and every page under /platform/(console)
-  // calls requirePlatformAdmin while every console server action re-checks via
-  // requirePlatformAdminAction.
+  "/api/track",
+  "/api/unsubscribe",
+  "/portal",
+  "/api/portal",
   "/platform",
-  "/s", // public survey response pages (token-gated)
+  "/s",
   "/manifest.webmanifest",
-  "/messages/manifest.webmanifest", // Denago Messages PWA manifest (no app data)
+  "/messages/manifest.webmanifest",
   "/icons",
   "/sw.js",
   "/robots.txt",
 ];
 
-// Forward the pathname to server components (the (app) layout reads it to block
-// routes that belong to a disabled module — a check middleware can't do itself
-// because the enabled-module set lives in the database).
-//
-// Also carries the CSP nonce. Next extracts it from the Content-Security-Policy
-// REQUEST header during rendering and stamps it onto its own script tags, so
-// that header is not redundant with the response one — without it the scripts
-// go out un-nonced and the page is blocked by its own policy.
+const SIGNING_TRUST_PATHS = ["/sign", "/api/sign", "/signing", "/api/signing", "/approvals", "/api/approvals"];
+const pathMatches = (pathname: string, prefix: string) => pathname === prefix || pathname.startsWith(prefix + "/");
+
 function allow(req: NextRequest, csp: Csp): NextResponse {
   const requestHeaders = new Headers(req.headers);
   requestHeaders.set("x-pathname", req.nextUrl.pathname);
@@ -59,33 +45,32 @@ function allow(req: NextRequest, csp: Csp): NextResponse {
   requestHeaders.set("Content-Security-Policy", csp.value);
   const res = NextResponse.next({ request: { headers: requestHeaders } });
   res.headers.set("Content-Security-Policy", csp.value);
-  // The resource directives ride along as report-only until a preview deploy
-  // has exercised the weather widget, address autocomplete and library upload.
-  res.headers.set("Content-Security-Policy-Report-Only", csp.reportOnly);
+  if (csp.reportOnly) res.headers.set("Content-Security-Policy-Report-Only", csp.reportOnly);
   return res;
 }
 
-/** CSP on a response that renders no React (redirects, JSON errors). */
 function withCsp<T extends NextResponse>(res: T, csp: Csp): T {
   res.headers.set("Content-Security-Policy", csp.value);
+  if (csp.reportOnly) res.headers.set("Content-Security-Policy-Report-Only", csp.reportOnly);
   return res;
 }
 
-type Csp = { nonce: string; value: string; reportOnly: string };
+type Csp = { nonce: string; value: string; reportOnly?: string };
 
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  // A fresh nonce per request, before anything can return early — the public
-  // signing and portal pages need it as much as the authenticated app does.
   const nonce = newCspNonce();
   const dev = process.env.NODE_ENV === "development";
-  const csp: Csp = {
-    nonce,
-    value: buildCsp({ nonce, dev }),
-    reportOnly: buildCspReportOnly({ nonce, dev }),
-  };
+  const signingTrustSurface = SIGNING_TRUST_PATHS.some((prefix) => pathMatches(pathname, prefix));
+  const csp: Csp = signingTrustSurface
+    ? { nonce, value: buildPublicSigningCsp({ nonce, dev }) }
+    : {
+        nonce,
+        value: buildCsp({ nonce, dev }),
+        reportOnly: buildCspReportOnly({ nonce, dev }),
+      };
 
-  if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
+  if (PUBLIC_PATHS.some((prefix) => pathMatches(pathname, prefix))) {
     return allow(req, csp);
   }
 
@@ -98,19 +83,12 @@ export async function proxy(req: NextRequest) {
     }
     const url = req.nextUrl.clone();
     url.pathname = "/login";
-    // Signal an idle/absolute timeout so the login page can explain the sign-out
     if (result.status === "expired" && token) url.searchParams.set("timeout", "1");
     const res = withCsp(NextResponse.redirect(url), csp);
     res.cookies.delete(SESSION_COOKIE);
     return res;
   }
 
-  // Route gating from the SINGLE authorization table (src/lib/routeAccess.ts).
-  // The edge has the JWT and no database, so it reads the `rg` grant claim that
-  // was derived from RBAC when the session was minted — the same ROUTE_RULES the
-  // page guards evaluate against live RBAC. This is an optimistic pre-filter, not
-  // the boundary: every gated page re-checks with requireRoute/requireOwner.
-  // A pre-`rg` token carries no grants and is denied (fail closed).
   if (
     !routeAllowed(pathname, {
       role: result.payload.role ?? "member",
@@ -125,13 +103,9 @@ export async function proxy(req: NextRequest) {
     return withCsp(NextResponse.redirect(url), csp);
   }
 
-  // Roll the session's last-active forward on activity (idle window slides,
-  // absolute 72h cap does not).
   if (result.needsRefresh) {
     const fresh = await refreshSession(result.payload);
     const res = allow(req, csp);
-    // Match the cookie lifetime to the token — PWA sessions get the 7-day maxAge,
-    // otherwise a refresh would shrink an installed app's cookie back to 72h.
     res.cookies.set(SESSION_COOKIE, fresh, sessionCookieOptions(Boolean(result.payload.pwa)));
     return res;
   }
