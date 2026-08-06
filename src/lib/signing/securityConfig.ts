@@ -43,13 +43,13 @@ export function validateSigningRuntimeConfig(env: EnvLike = process.env): string
   if (!c.production) return [];
   const errors: string[] = [];
   if (!c.privateStorage || !c.privateStorageToken) {
-    errors.push("production signing requires BLOB_PRIVATE=true and BLOB_PRIVATE_READ_WRITE_TOKEN");
+    errors.push("production signing requires private storage: BLOB_PRIVATE=true and BLOB_PRIVATE_READ_WRITE_TOKEN");
   }
   if (!c.tenantEnforcement) errors.push("production signing requires TENANT_ENFORCEMENT=enforce");
   if (!c.tokenEncryptionKey) errors.push("production signing requires SIGNING_TOKEN_ENCRYPTION_KEY");
   if (!c.identitySessionSecret) errors.push("production signing requires SIGNING_IDENTITY_SESSION_SECRET");
   if (!c.trustServiceUrl || !c.trustServiceToken) {
-    errors.push("production sealing requires SIGNING_TRUST_SERVICE_URL and SIGNING_TRUST_SERVICE_TOKEN");
+    errors.push("production sealing requires a trust service: SIGNING_TRUST_SERVICE_URL and SIGNING_TRUST_SERVICE_TOKEN");
   }
   if (!c.anchorServiceUrl || !c.anchorServiceToken) {
     errors.push("production evidence anchoring requires SIGNING_ANCHOR_URL and SIGNING_ANCHOR_TOKEN");
