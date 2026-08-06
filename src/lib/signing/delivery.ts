@@ -4,7 +4,7 @@ import { prisma, basePrisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { sendWhatsAppText, waDigits, isWhatsAppConfigured } from "@/lib/whatsapp";
 import { readFile } from "@/lib/storage";
-import { decryptSignToken, newSignCapability } from "./tokens";
+import { decryptSignToken, hashSignToken, newSignCapability, safeTokenEqual } from "./tokens";
 import { enqueueSigningJob, type SigningOutboxJob } from "./outbox";
 import { logSignEvent } from "./events";
 import { isRequestClosed } from "./status";
@@ -23,28 +23,40 @@ function signingEmailHtml(name: string, title: string, url: string, verb: string
   </div>`;
 }
 
-type RecipientCapability = { tokenCiphertext: string | null };
+type RecipientCapability = {
+  token: string;
+  tokenCiphertext: string | null;
+  tokenExpiresAt: Date | null;
+  tokenRevokedAt: Date | null;
+};
 export async function ensureRawRecipientToken(recipientId: string): Promise<string> {
   const rows = await basePrisma.$queryRaw<RecipientCapability[]>(Prisma.sql`
-    SELECT "tokenCiphertext" FROM "SignatureRecipient" WHERE id=${recipientId} LIMIT 1
+    SELECT token,"tokenCiphertext","tokenExpiresAt","tokenRevokedAt"
+      FROM "SignatureRecipient" WHERE id=${recipientId} LIMIT 1
   `);
-  if (rows[0]?.tokenCiphertext) {
-    try { return decryptSignToken(rows[0].tokenCiphertext); }
-    catch { /* rotate below */ }
+  const capability = rows[0];
+  if (capability?.tokenCiphertext && !capability.tokenRevokedAt && capability.tokenExpiresAt && capability.tokenExpiresAt > new Date()) {
+    try {
+      const raw = decryptSignToken(capability.tokenCiphertext);
+      if (safeTokenEqual(hashSignToken(raw), capability.token)) return raw;
+    } catch { /* rotate below */ }
   }
-  const capability = newSignCapability();
+  const rotated = newSignCapability();
   const updated = await basePrisma.$executeRaw`
-    UPDATE "SignatureRecipient" SET token=${capability.digest},"tokenCiphertext"=${capability.ciphertext},
-      "tokenIssuedAt"=${capability.issuedAt},"tokenExpiresAt"=${capability.expiresAt},"tokenRevokedAt"=NULL
+    UPDATE "SignatureRecipient" SET token=${rotated.digest},"tokenCiphertext"=${rotated.ciphertext},
+      "tokenIssuedAt"=${rotated.issuedAt},"tokenExpiresAt"=${rotated.expiresAt},"tokenRevokedAt"=NULL
     WHERE id=${recipientId} AND status NOT IN ('signed','declined')
   `;
   if (updated !== 1) throw new Error("Recipient capability cannot be rotated");
-  return capability.rawToken;
+  return rotated.rawToken;
 }
 
 export async function queueSigningLinkDeliveries(recipientId: string, reminder = false): Promise<{ jobIds: string[]; reachable: boolean }> {
   const recipient = await prisma.signatureRecipient.findUnique({ where: { id: recipientId }, include: { request: true } });
   if (!recipient || recipient.role === "viewer" || isRequestClosed(recipient.request.status)) return { jobIds: [], reachable: false };
+  if (recipient.request.workflowGraphJson && (!recipient.nodeId || recipient.nodeId !== recipient.request.currentNodeId)) {
+    return { jobIds: [], reachable: false };
+  }
   const channels: string[] = [];
   if (recipient.email) channels.push("email");
   if (recipient.phone && await isWhatsAppConfigured()) channels.push("whatsapp");
@@ -84,8 +96,9 @@ export async function performSigningLinkDelivery(job: SigningOutboxJob): Promise
   const row = await deliveryRow(key);
   if (!row || ["sent", "delivered", "skipped"].includes(row.status)) return;
   const recipient = await prisma.signatureRecipient.findUnique({ where: { id: job.recipientId }, include: { request: true } });
-  if (!recipient || isRequestClosed(recipient.request.status) || ["signed", "declined"].includes(recipient.status)) {
-    await basePrisma.$executeRaw`UPDATE "SigningDelivery" SET status='skipped',"updatedAt"=now() WHERE id=${row.id}`;
+  const staleBranch = Boolean(recipient?.request.workflowGraphJson && (!recipient.nodeId || recipient.nodeId !== recipient.request.currentNodeId));
+  if (!recipient || staleBranch || isRequestClosed(recipient.request.status) || ["signed", "declined"].includes(recipient.status)) {
+    await basePrisma.$executeRaw`UPDATE "SigningDelivery" SET status='skipped',"lastError"=${staleBranch ? "workflow branch no longer active" : null},"updatedAt"=now() WHERE id=${row.id}`;
     return;
   }
   await basePrisma.$executeRaw`UPDATE "SigningDelivery" SET status='sending',attempts=attempts+1,"updatedAt"=now() WHERE id=${row.id}`;
