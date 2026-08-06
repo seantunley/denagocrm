@@ -103,3 +103,42 @@ test("both flows share one definition of a backup code", () => {
     "enrolment must not hash with its own private normalisation",
   );
 });
+
+test("promotion claims the pending secret it verified", () => {
+  const security = code(read("src/app/actions/security.ts"));
+  const confirm = security.slice(
+    security.indexOf("export async function confirmTotpEnrolment"),
+    security.indexOf("export async function disableTotp"),
+  );
+  // An unconditional update loses two races: a disable landing between the read
+  // and the write is undone (2FA silently comes back on), and two confirmations
+  // both issue backup codes while only the last set actually works.
+  assert.match(confirm, /updateMany\(/, "promotion must be conditional");
+  assert.match(confirm, /totpPendingSecret: pending\.totpPendingSecret/, "…on the value that was verified");
+  assert.match(confirm, /claimed\.count !== 1/);
+  assert.doesNotMatch(
+    confirm,
+    /tx\.user\.update\(\{\s*where: \{ id: user\.id \},\s*\n\s*data: \{\s*\n?\s*totpSecret: encryptValue/,
+    "the unconditional promotion must be gone",
+  );
+
+  // …and nothing may be recorded when the claim fails.
+  const claimAt = confirm.indexOf("claimed.count !== 1");
+  const bumpAt = confirm.indexOf("bumpUserSessionVersion");
+  const auditAt = confirm.indexOf("logAuditStrict");
+  assert.ok(claimAt !== -1 && bumpAt !== -1 && auditAt !== -1);
+  assert.ok(claimAt < bumpAt && claimAt < auditAt, "session bump and audit must follow a successful claim");
+});
+
+test("every path that resets 2FA clears a staged authenticator", () => {
+  const security = code(read("src/app/actions/security.ts"));
+  // disableTotp is not the only way 2FA gets reset. An owner reset is a second,
+  // independent path, and a secret staged before it would otherwise survive and
+  // be promoted afterwards — restoring access the owner had just revoked.
+  for (const fn of ["disableTotp", "ownerResetUser2fa"]) {
+    const start = security.indexOf(`export async function ${fn}`);
+    assert.ok(start !== -1, `${fn} must exist`);
+    const body = security.slice(start, start + 2000);
+    assert.match(body, /totpPendingSecret: null/, `${fn} must clear the staged authenticator`);
+  }
+});

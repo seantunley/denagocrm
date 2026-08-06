@@ -71,6 +71,9 @@ export async function beginTotpEnrolment(currentCode?: string): Promise<{
 
 export type SecurityState = { error?: string; ok?: string; backupCodes?: string[] };
 
+/** The staged enrolment was cleared or claimed by something else mid-confirmation. */
+class EnrolmentSuperseded extends Error {}
+
 export async function confirmTotpEnrolment(
   _prev: SecurityState | undefined,
   formData: FormData
@@ -101,11 +104,21 @@ export async function confirmTotpEnrolment(
   // typed as displayed was rejected and the recovery path failed in the one
   // situation it exists for.
   const hashed = await Promise.all(backupCodes.map((item) => hashBackupCode(item)));
-  const updated = await basePrisma.$transaction(async (tx) => {
-    const updated = await tx.user.update({
-      where: { id: user.id },
-      // Promotion: the proven secret becomes the live one and the pending slot
-      // is cleared, so an abandoned enrolment cannot be confirmed later.
+  let updated;
+  try {
+    updated = await basePrisma.$transaction(async (tx) => {
+    // CONDITIONAL on the exact pending value that was verified.
+    //
+    // An unconditional update here loses two races. If disableTotp (or an owner
+    // reset) clears the factor between the read above and this write, the
+    // promotion lands anyway and silently re-enables 2FA after it was turned
+    // off. And two confirmations running together would both issue backup-code
+    // sets while only the last stored set actually works, leaving the user
+    // holding codes that verify against nothing.
+    //
+    // Claiming the pending value makes the second writer match no row.
+    const claimed = await tx.user.updateMany({
+      where: { id: user.id, totpPendingSecret: pending.totpPendingSecret },
       data: {
         totpSecret: encryptValue(secret),
         totpPendingSecret: null,
@@ -113,6 +126,12 @@ export async function confirmTotpEnrolment(
         totpBackupCodes: JSON.stringify(hashed),
       },
     });
+    if (claimed.count !== 1) {
+      // Nothing is written, no session version is bumped and no audit entry is
+      // filed, because none of it happened.
+      throw new EnrolmentSuperseded();
+    }
+    const updated = await tx.user.findUniqueOrThrow({ where: { id: user.id } });
     await bumpUserSessionVersion(user.id, tx);
     await logAuditStrict({
       action: "auth.2fa_enabled",
@@ -122,7 +141,15 @@ export async function confirmTotpEnrolment(
       user,
     }, tx);
     return updated;
-  }, GOVERNANCE_TX);
+    }, GOVERNANCE_TX);
+  } catch (error) {
+    // A superseded enrolment is a normal outcome of two things happening at
+    // once, not a fault — tell the user plainly instead of showing a crash.
+    if (error instanceof EnrolmentSuperseded) {
+      return { error: "This setup is no longer active — two-factor authentication was changed elsewhere. Start again." };
+    }
+    throw error;
+  }
   await createSessionCookie(updated);
   revalidatePath("/settings");
   return { ok: "Two-factor authentication is on.", backupCodes };
@@ -267,7 +294,18 @@ export async function ownerResetUser2fa(userId: string): Promise<ActionResult> {
     await basePrisma.$transaction(async (tx) => {
       const target = await tx.user.update({
         where: { id: userId },
-        data: { totpSecret: null, totpEnabledAt: null, totpBackupCodes: null, emailOtpEnabled: false },
+        data: {
+          totpSecret: null,
+          // Cleared here too. An owner resetting a user's 2FA expects every
+          // authenticator gone, and a secret staged before the reset would
+          // otherwise survive it and be promoted afterwards — quietly restoring
+          // access the owner had just revoked. disableTotp clearing it is not
+          // enough: this is a second, independent path that resets 2FA.
+          totpPendingSecret: null,
+          totpEnabledAt: null,
+          totpBackupCodes: null,
+          emailOtpEnabled: false,
+        },
       });
       await bumpUserSessionVersion(userId, tx);
       await logAuditStrict({
