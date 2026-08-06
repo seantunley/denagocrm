@@ -73,23 +73,6 @@ export async function notifyApprover(stepId: string): Promise<ApprovalDeliveryRe
   if (isRequestClosed(step.request.status) || step.status !== "pending") return { ok: true, skipped: true };
   if (await approvalAlreadySent(step.tenantId, step.requestId, step.id)) return { ok: true, skipped: true };
 
-  // ATOMIC CLAIM before the external send.
-  //
-  // Creating the step transactionally enqueues an approval_notify job AND the
-  // runtime calls this inline, so two callers could both pass the "already sent"
-  // check, both send, and the approver would receive the same request twice —
-  // the check and the send were not one operation. Claiming a marker row first
-  // makes exactly one of them the sender; the loser reports skipped, which is
-  // true, rather than an error.
-  const claimKey = `approval-notify:${step.id}`;
-  const claimed = await basePrisma.$queryRaw<Array<{ id: string }>>`
-    INSERT INTO "SigningDeliveryClaim"("key","tenantId","createdAt")
-    VALUES (${claimKey}, ${step.tenantId}, now())
-    ON CONFLICT ("key") DO NOTHING
-    RETURNING "key" AS id
-  `.catch(() => [] as Array<{ id: string }>);
-  if (claimed.length !== 1) return { ok: true, skipped: true };
-
   const who = await resolveApprover(step);
   if (!who.email) return { ok: false, error: `No deliverable email for approval “${step.label}”` };
 
@@ -100,12 +83,41 @@ export async function notifyApprover(stepId: string): Promise<ApprovalDeliveryRe
   // fresh capability is minted rather than sending something unusable.
   const raw = await usableCapability("approvalStep", step.id, step.tokenCiphertext);
   if (!raw) return { ok: false, error: `Could not prepare an approval link for “${step.label}”` };
+  // ATOMIC CLAIM, taken as LATE as possible and RELEASED on failure.
+  //
+  // Creating the step enqueues a notify job and the runtime also calls this
+  // inline, so both could pass the "already sent?" check and both send. A claim
+  // makes exactly one of them the sender.
+  //
+  // But a claim taken early and never released is worse than the duplicate it
+  // prevents: my first version inserted it before resolving the approver, before
+  // checking an address existed and before SMTP, and never removed it on any
+  // failure path — so one temporary SMTP error, one crash, or one approver with
+  // no email address permanently suppressed that approval, and the worker
+  // recorded the job as done. A missing approval blocks a contract silently;
+  // a duplicate email is an annoyance.
+  //
+  // So: claimed immediately before the send, with everything that can fail
+  // already done, and deleted again if the send fails so a retry can proceed.
+  const claimKey = `approval-notify:${step.id}`;
+  const claimed = await basePrisma.signingDeliveryClaim
+    .createMany({ data: { key: claimKey, tenantId: step.tenantId }, skipDuplicates: true })
+    .catch(() => null);
+  // A claim we could not take is NOT a skip: reporting success for a message
+  // nobody sent is the failure this whole function exists to avoid.
+  if (claimed === null) return { ok: false, error: "Could not claim approval delivery" };
+  if (claimed.count !== 1) return { ok: true, skipped: true };
+
   const result = await sendEmail({
     to: who.email,
     subject: `Approval needed: ${step.request.title}`,
     text: `Hi ${who.name},\n\n"${step.request.title}" needs your approval (${step.label}).\n\nReview and approve or reject here:\n${approvalUrl(raw)}\n\nDenago Cape Town`,
   });
-  if (!result.ok) return { ok: false, error: result.error ?? "Approval email failed" };
+  if (!result.ok) {
+    // Release, so a retry is not permanently locked out by a transient failure.
+    await basePrisma.signingDeliveryClaim.deleteMany({ where: { key: claimKey } }).catch(() => {});
+    return { ok: false, error: result.error ?? "Approval email failed" };
+  }
 
   await logSignEvent(step.requestId, {
     type: "approval_sent",
