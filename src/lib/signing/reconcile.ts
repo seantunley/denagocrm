@@ -2,6 +2,7 @@ import "server-only";
 import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "@/lib/db";
+import { runInTenantScope } from "@/lib/tenantScope";
 import { assertOwnedBlob, readFile, deleteVerifiedOrphan } from "@/lib/storage";
 import { logSignEvent } from "./events";
 
@@ -59,7 +60,9 @@ export async function reconcileEnvelope(envelopeId: string): Promise<{ ok: boole
        WHERE id=${envelopeId} AND status IN ('sealed','distributing','completed')
     `;
   }
-  await logSignEvent(envelopeId, { type: "artifact_reconciled", actor: "system", metadata: { ok, errors } });
+  await runInTenantScope({ tenantId: request.tenantId, system: false }, () =>
+    logSignEvent(envelopeId, { type: "artifact_reconciled", actor: "system", metadata: { ok, errors } }),
+  );
   return { ok, errors };
 }
 
@@ -94,7 +97,6 @@ export async function collectSettledOrphans(limit = 100): Promise<{ checked: num
   }
   return { checked: rows.length, deleted, retained };
 }
-
 
 export async function collectUnregisteredUploadIntents(limit = 100): Promise<{ checked: number; deleted: number; retained: number }> {
   const rows = await basePrisma.$queryRaw<Array<{ id: string; objectRef: string }>>(Prisma.sql`
