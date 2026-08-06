@@ -1,6 +1,7 @@
 "use server";
 
 import bcrypt from "bcryptjs";
+import { matchBackupCode } from "@/lib/backupCodes";
 import { redirect } from "next/navigation";
 import { basePrisma } from "@/lib/db";
 import { createPlatformSessionCookie, destroyPlatformSessionCookie } from "@/lib/platformAuth";
@@ -154,28 +155,32 @@ export async function platformVerifyTotp(
   }
 
   if (!ok && admin.totpBackupCodes) {
-    const codes: string[] = JSON.parse(admin.totpBackupCodes);
-    const normalised = code.toUpperCase().replace(/[\s-]/g, "");
-    for (let index = 0; index < codes.length; index++) {
-      if (await bcrypt.compare(normalised, codes[index])) {
-        // SPENT BEFORE THE SESSION IS ISSUED. Consuming it afterwards would
-        // leave the code reusable if anything below threw.
-        codes.splice(index, 1);
-        await basePrisma.platformAdmin.update({
-          where: { id: admin.id },
-          data: { totpBackupCodes: JSON.stringify(codes) },
-        });
+    const match = await matchBackupCode(admin.totpBackupCodes, code);
+    if (match) {
+      // SPENT BEFORE THE SESSION IS ISSUED, and spent exactly once.
+      //
+      // Consuming afterwards would leave the code reusable if anything below
+      // threw. Read-modify-write would let two requests arriving together match
+      // the same code, write the same shortened list and both receive a session
+      // — one single-use credential, two sign-ins. Conditioning the update on
+      // the exact value read means the second writer matches no row; losing that
+      // race is treated as a failed code, because the code really has been
+      // spent, just not by this request.
+      const claimed = await basePrisma.platformAdmin.updateMany({
+        where: { id: admin.id, totpBackupCodes: admin.totpBackupCodes },
+        data: { totpBackupCodes: match.remainingJson },
+      });
+      if (claimed.count === 1) {
         await logAuditStrict({
           action: "platform.backup_code_used",
-          summary: `Platform backup code used to sign in (${codes.length} remaining)`,
+          summary: `Platform backup code used to sign in (${match.remaining.length} remaining)`,
           entityType: "PlatformAdmin",
           entityId: admin.id,
           userName: admin.name,
           actorType: "platform_admin",
-          metadata: { platformAdminId: admin.id, platformAdminEmail: admin.email, remaining: codes.length },
+          metadata: { platformAdminId: admin.id, platformAdminEmail: admin.email, remaining: match.remaining.length },
         });
         ok = true;
-        break;
       }
     }
   }

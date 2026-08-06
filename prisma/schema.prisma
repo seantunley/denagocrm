@@ -2455,7 +2455,20 @@ model PlatformAdmin {
   email             String    @unique
   name              String
   passwordHash      String
-  totpSecret        String? // encrypted TOTP secret; null until enrolled
+  totpSecret        String? // encrypted TOTP secret; null until enrolled — the LIVE factor
+  /// Encrypted secret for an authenticator being enrolled, not yet trusted.
+  ///
+  /// Without this, beginning an enrolment overwrites the live secret and clears
+  /// `totpEnabledAt` — a working 2FA disable for anyone holding a session, and a
+  /// Server Action is a POST endpoint reachable without the console screen that
+  /// renders the button. Disabling demands a current code precisely so a stolen
+  /// session cannot strip the factor and survive a password rotation; enrolling
+  /// walked around that guard. On an account with no administrator above it,
+  /// that is the difference between a contained incident and a permanent one.
+  ///
+  /// Promoted to `totpSecret` only once a code proves the new authenticator
+  /// holds it. Nothing authenticates against this column.
+  totpPendingSecret String?
   totpEnabledAt     DateTime?
   /// JSON array of bcrypt-hashed one-time backup codes, as on User.
   ///

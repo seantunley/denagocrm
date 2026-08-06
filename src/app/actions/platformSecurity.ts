@@ -1,7 +1,7 @@
 "use server";
 
-import bcrypt from "bcryptjs";
 import QRCode from "qrcode";
+import { hashBackupCode } from "@/lib/backupCodes";
 import { revalidatePath } from "next/cache";
 import { basePrisma } from "@/lib/db";
 import { requirePlatformAdminAction } from "@/lib/platformAuth";
@@ -52,8 +52,34 @@ export type PlatformSecurityState = { error?: string; ok?: string; backupCodes?:
  * lock out anyone whose scan silently failed — which, on this account, means
  * losing the console.
  */
-export async function beginPlatformTotpEnrolment(): Promise<{ secret: string; qr: string; uri: string }> {
+export async function beginPlatformTotpEnrolment(currentCode?: string): Promise<{ secret: string; qr: string; uri: string }> {
   const actor = await requirePlatformAdminAction();
+
+  // REPLACING a live authenticator costs a current code.
+  //
+  // Writing the new secret straight over the old one — as this used to — is a
+  // working 2FA disable for anyone holding a session, and a Server Action is a
+  // POST endpoint reachable without the console screen that renders the button.
+  // disablePlatformTotp demands a code for exactly this reason; without this
+  // check, "enrolling" achieved the same thing one function over. On an account
+  // with nobody above it, that is not recoverable by asking an administrator.
+  //
+  // Enrolling for the FIRST time is still free: there is nothing to protect yet,
+  // and demanding a code nobody has would make 2FA impossible to turn on.
+  const live = await basePrisma.platformAdmin.findUnique({
+    where: { id: actor.id },
+    select: { totpSecret: true, totpEnabledAt: true },
+  });
+  if (live?.totpEnabledAt && live.totpSecret) {
+    let ok = false;
+    try {
+      ok = verifyTotp(String(currentCode ?? "").trim(), decryptValue(live.totpSecret));
+    } catch {
+      // An unreadable stored secret must not become a way past this check.
+    }
+    if (!ok) throw new Error("Enter a current authenticator code to replace your authenticator.");
+  }
+
   const secret = generateTotpSecret();
   // Labelled as the PLATFORM, not a tenant — this identity is not a tenant's,
   // and an authenticator entry naming one would be actively misleading.
@@ -61,7 +87,8 @@ export async function beginPlatformTotpEnrolment(): Promise<{ secret: string; qr
   const qr = await QRCode.toDataURL(uri, { margin: 1, width: 220 });
   await basePrisma.platformAdmin.update({
     where: { id: actor.id },
-    data: { totpSecret: encryptValue(secret), totpEnabledAt: null },
+    // The PENDING slot. The live factor is left exactly as it is.
+    data: { totpPendingSecret: encryptValue(secret) },
   });
   return { secret, qr, uri };
 }
@@ -73,11 +100,13 @@ export async function confirmPlatformTotpEnrolment(
 ): Promise<PlatformSecurityState> {
   const actor = await requirePlatformAdminAction();
   const admin = await basePrisma.platformAdmin.findUnique({ where: { id: actor.id } });
-  if (!admin?.totpSecret) return { error: "Start again — no pending secret found." };
+  // The PENDING secret, not the live one: confirming against the authenticator
+  // already in use would "prove" an enrolment that never happened.
+  if (!admin?.totpPendingSecret) return { error: "Start again — no pending secret found." };
 
   let secret: string;
   try {
-    secret = decryptValue(admin.totpSecret);
+    secret = decryptValue(admin.totpPendingSecret);
   } catch {
     return { error: "Could not read the secret — start again." };
   }
@@ -89,12 +118,18 @@ export async function confirmPlatformTotpEnrolment(
   // The separator is stripped before hashing so a code typed with or without it
   // compares the same, matching how the login step normalises input.
   const backupCodes = generateBackupCodes(8);
-  const hashed = await Promise.all(backupCodes.map((code) => bcrypt.hash(code.replace(/-/g, ""), 10)));
+  // Shared with the login's matcher, so the two cannot drift apart — on the CRM
+  // side they did, and a code typed exactly as displayed was rejected.
+  const hashed = await Promise.all(backupCodes.map((code) => hashBackupCode(code)));
 
   await basePrisma.$transaction(async (tx) => {
     await tx.platformAdmin.update({
       where: { id: actor.id },
       data: {
+        // Promotion: the proven secret becomes live, and the pending slot is
+        // cleared so an abandoned enrolment cannot be confirmed later.
+        totpSecret: encryptValue(secret),
+        totpPendingSecret: null,
         totpEnabledAt: new Date(),
         totpBackupCodes: JSON.stringify(hashed),
         // REVOKES EVERY OTHER SESSION. Turning on 2FA is usually a response to
@@ -150,6 +185,9 @@ export async function disablePlatformTotp(
       where: { id: actor.id },
       data: {
         totpSecret: null,
+        // Cleared too, or a secret staged before the disable survives it and can
+        // be confirmed afterwards, quietly re-enabling a factor just turned off.
+        totpPendingSecret: null,
         totpEnabledAt: null,
         totpBackupCodes: null,
         sessionVersion: { increment: 1 },
