@@ -14,7 +14,7 @@ import { rateLimitSigning } from "@/lib/signing/throttle";
 import { requireIdentityForToken } from "@/lib/signing/identity";
 import { decodeAndValidateSignaturePng } from "@/lib/signing/signatureImage";
 import { registerArtifactUpload, markArtifactState, scheduleOrphanSettlement } from "@/lib/signing/artifactCustody";
-import { signingReleaseId } from "@/lib/signing/securityConfig";
+import { assertSigningRuntimeConfig, signingReleaseId } from "@/lib/signing/securityConfig";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,6 +33,7 @@ const bodySchema = z.object({
 const unavailable = (status: string) => isRequestClosed(status) || isRequestProcessing(status);
 
 export async function POST(request: Request, context: { params: Promise<{ token: string }> }) {
+  assertSigningRuntimeConfig();
   const { token } = await context.params;
   if (!isValidSignToken(token)) return new Response("Invalid link", { status: 400 });
   const length = Number(request.headers.get("content-length") || 0);
@@ -105,7 +106,7 @@ async function handleSign(rawToken: string, request: Request): Promise<Response>
       if (["signature", "initials", "stamp"].includes(field.kind)) {
         if (!value.startsWith("data:image/png;base64,")) throw new SignAbort(400, `Field ${field.label || field.kind} must contain a valid PNG signature`);
         const image = decodeAndValidateSignaturePng(value);
-        const ref = await saveFile(image.buffer, `signature-${recipient.id}.png`, "image/png");
+        const ref = await saveFile(image.buffer, `signature-${recipient.id}.png`, "image/png", { signingArtifact: true });
         savedRefs.push(ref);
         await registerArtifactUpload({ tenantId, envelopeId: envelope.id, kind: "signature_image", objectRef: ref, bytes: image.buffer, sha256: image.sha256 });
         value = ref;
