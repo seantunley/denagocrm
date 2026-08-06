@@ -30,3 +30,12 @@ test("storage deletion is retain-on-uncertainty", () => {
   assert.match(custody, /reference verification failed; retaining object/);
   assert.match(custody, /return true/);
 });
+
+test("outbox completion and failure are fenced by tenant and lease owner", () => {
+  const outbox = read("src/lib/signing/outbox.ts");
+  const worker = read("src/lib/signing/outboxWorker.ts");
+  assert.match(outbox, /WHERE id=\$\{job\.id\} AND "tenantId"=\$\{job\.tenantId\} AND status='leased' AND "leaseOwner"=\$\{job\.leaseOwner\}/);
+  assert.match(worker, /completeSigningJob\(job\)/);
+  assert.doesNotMatch(worker, /completeSigningJob\(job\.id\)/);
+  assert.match(worker, /worker lost lease before completion/);
+});
