@@ -3,6 +3,8 @@ import crypto from "crypto";
 import type { RenderCtx } from "@/lib/doceditor/serialize";
 import { bindCtx } from "./render";
 
+export type FrozenRenderContext = Exclude<RenderCtx, null>;
+
 /**
  * Capture the exact merge context that was used when the envelope was prepared.
  * Completion must render from this frozen value and never re-read a mutable quote,
@@ -11,9 +13,10 @@ import { bindCtx } from "./render";
 export async function captureFrozenSourceContext(
   quoteId: string | null | undefined,
   jobCardId: string | null | undefined,
-): Promise<Record<string, unknown>> {
+): Promise<FrozenRenderContext> {
   const context = await bindCtx(quoteId ?? null, jobCardId ?? null);
-  return cloneJson(context) as Record<string, unknown>;
+  if (!context) throw new Error("Could not capture a frozen signing source context");
+  return cloneJson(context);
 }
 
 /** Deterministic JSON representation used for source/workflow evidence hashes. */
@@ -25,8 +28,8 @@ export function canonicalHash(value: unknown): string {
   return crypto.createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
 }
 
-function cloneJson(value: RenderCtx | unknown): unknown {
-  return JSON.parse(JSON.stringify(value ?? null));
+function cloneJson(value: FrozenRenderContext): FrozenRenderContext {
+  return JSON.parse(JSON.stringify(value)) as FrozenRenderContext;
 }
 
 function canonicalize(value: unknown): unknown {
