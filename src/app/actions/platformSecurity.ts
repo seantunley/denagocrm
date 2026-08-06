@@ -122,9 +122,19 @@ export async function confirmPlatformTotpEnrolment(
   // side they did, and a code typed exactly as displayed was rejected.
   const hashed = await Promise.all(backupCodes.map((code) => hashBackupCode(code)));
 
+  let promoted = false;
   await basePrisma.$transaction(async (tx) => {
-    await tx.platformAdmin.update({
-      where: { id: actor.id },
+    // CONDITIONAL on the exact pending value that was verified.
+    //
+    // An unconditional update loses two races. If disablePlatformTotp clears the
+    // factor between the read above and this write, the promotion lands anyway
+    // and silently switches 2FA back on after it was turned off. And two
+    // confirmations running together would both issue backup-code sets while
+    // only the last stored set actually works, leaving the admin holding codes
+    // that verify against nothing — on the one account with nobody above it to
+    // sort that out.
+    const claimed = await tx.platformAdmin.updateMany({
+      where: { id: actor.id, totpPendingSecret: admin.totpPendingSecret },
       data: {
         // Promotion: the proven secret becomes live, and the pending slot is
         // cleared so an abandoned enrolment cannot be confirmed later.
@@ -138,6 +148,10 @@ export async function confirmPlatformTotpEnrolment(
         sessionVersion: { increment: 1 },
       },
     });
+    // Nothing else in this transaction runs, so no audit entry claims an
+    // enrolment that did not happen.
+    if (claimed.count !== 1) return;
+    promoted = true;
     await logAuditStrict(
       {
         action: "platform.2fa_enabled",
@@ -151,6 +165,10 @@ export async function confirmPlatformTotpEnrolment(
       tx,
     );
   });
+
+  if (!promoted) {
+    return { error: "This setup is no longer active — two-factor authentication was changed elsewhere. Start again." };
+  }
 
   revalidatePath("/platform/admins");
   // Shown ONCE. They are not recoverable — only their hashes are stored.

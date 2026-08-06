@@ -15,11 +15,18 @@ import { SignJWT, jwtVerify } from "jose";
  *
  * ── What is in it, and what is deliberately not ─────────────────────────────
  *
- * The admin's id and nothing else. Not their name, not their email, not whether
- * they have backup codes left: this cookie is held by someone who has proved
- * only a password, and every field it carries is a field they can read. The
- * verify step re-reads the admin row from the database anyway, so anything
- * cached here would be a second copy that could be stale AND disclosive.
+ * The admin's id and the session version it was issued against — nothing else.
+ * Not their name, not their email, not whether they have backup codes left: this
+ * cookie is held by someone who has proved only a password, and every field it
+ * carries is a field they can read. The verify step re-reads the admin row from
+ * the database anyway, so anything cached here would be a second copy that could
+ * be stale AND disclosive.
+ *
+ * The session version is the exception, and it is there to be COMPARED rather
+ * than trusted. Without it, "revoke all sessions" and a password reset both left
+ * a half-finished login sitting in somebody's browser, still able to complete
+ * for the rest of the ten-minute window — so the one action taken when an
+ * account is believed compromised did not actually stop the login in progress.
  *
  * Ten minutes, matching the CRM's window. Long enough to open an authenticator
  * app and find the entry, short enough that a machine left unattended between
@@ -45,8 +52,8 @@ function secret(): Uint8Array {
   return new TextEncoder().encode(value);
 }
 
-export async function issuePlatformPending(adminId: string): Promise<void> {
-  const token = await new SignJWT({ pid: adminId })
+export async function issuePlatformPending(adminId: string, sessionVersion: number): Promise<void> {
+  const token = await new SignJWT({ pid: adminId, sv: sessionVersion })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${TTL_SECONDS}s`)
@@ -61,13 +68,16 @@ export async function issuePlatformPending(adminId: string): Promise<void> {
   });
 }
 
-export async function readPlatformPending(): Promise<string | null> {
+export type PlatformPending = { adminId: string; sessionVersion: number };
+
+export async function readPlatformPending(): Promise<PlatformPending | null> {
   const store = await cookies();
   const token = store.get(PENDING_COOKIE)?.value;
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, secret());
-    return typeof payload.pid === "string" ? payload.pid : null;
+    if (typeof payload.pid !== "string" || typeof payload.sv !== "number") return null;
+    return { adminId: payload.pid, sessionVersion: payload.sv };
   } catch {
     return null;
   }
