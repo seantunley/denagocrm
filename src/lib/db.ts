@@ -197,19 +197,36 @@ function refuseNestedRelationWrite(model: string, data: unknown): void {
  * query, otherwise no rows are returned. bypass_rls='on' is the safe default
  * for any non-tenant context (off, monitor, system scope, rollback).
  */
-async function withRlsScope(client: any, query: () => any): Promise<any> {
+/**
+ * `execRaw` is the client's ORIGINAL `$executeRaw`, captured before Layer 2b
+ * replaces it, and it has to be — this is the one place that cares about the
+ * difference between the two.
+ *
+ * An array transaction requires every element to be a PrismaPromise: Prisma
+ * inspects them and refuses anything else with "All elements of the array need
+ * to be Prisma Client promises". Layer 2b's wrapper returns a plain Promise
+ * (it awaits an interactive transaction internally), so reading `$executeRaw`
+ * off the exported client here made EVERY model operation throw that error.
+ * Which is what it did: unit tests are source assertions and could not see it,
+ * and the restricted-role integration suite caught it on the first CI run.
+ *
+ * It would also have been wrong if it had worked — Layer 2b opens its own
+ * transaction, so the GUC would have been set on a different connection from
+ * the operation it is supposed to scope.
+ */
+async function withRlsScope(client: any, execRaw: any, query: () => any): Promise<any> {
   // Under enforcement with a tenant scope, pin app.current_tenant; otherwise
   // (off/monitor, system scope, or enforce+no-scope — Layer 1 scopeArgs already
   // threw TenantScopeError for any tenant-scoped model before we reach here) bypass.
   const scope = tenantEnforcing() ? currentTenantScope() : null;
   // Batch the GUC write and the operation in ONE array transaction on the SAME
-  // `client` — the documented Prisma RLS-extension pattern. `client.$executeRaw`
-  // (not a model op, so it does not re-enter this extension) sets the GUC first,
-  // then the guarded op runs on the same pinned connection and sees it. The
+  // `client` — the documented Prisma RLS-extension pattern. `execRaw` (not a
+  // model op, so it does not re-enter this extension) sets the GUC first, then
+  // the guarded op runs on the same pinned connection and sees it. The
   // restricted-role (NOSUPERUSER NOBYPASSRLS) proof exercises this under FORCE RLS.
   const setGuc = scope?.tenantId
-    ? client.$executeRaw`SELECT set_config('app.current_tenant', ${scope.tenantId}, TRUE)`
-    : client.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+    ? execRaw`SELECT set_config('app.current_tenant', ${scope.tenantId}, TRUE)`
+    : execRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
   const [, result] = await client.$transaction([setGuc, query()]);
   return result;
 }
@@ -304,7 +321,11 @@ function buildClient(raw: PrismaClient) {
   // via the holder) rather than `scoped` directly, so TS still infers `scoped`'s
   // real client type (referencing it in its own initializer would collapse it to
   // `any` and cascade through `prisma`). `ref.c` is populated before any query runs.
-  const ref: { c: any } = { c: null };
+  // `execRaw` is the same client's UNWRAPPED $executeRaw, captured below before
+  // Layer 2b replaces it. Layer 2 builds an ARRAY transaction, which accepts only
+  // PrismaPromises; Layer 2b's replacement returns a plain Promise. See
+  // withRlsScope for what happens when this distinction is lost.
+  const ref: { c: any; execRaw: any } = { c: null, execRaw: null };
   const scoped = guarded.$extends({
     query: {
       $allModels: {
@@ -313,12 +334,15 @@ function buildClient(raw: PrismaClient) {
           // Prisma's array $transaction loses AsyncLocalStorage context inside its
           // execution callbacks, so currentTenantScope() is unreachable in Layer 1.
           const scopedArgs = applyScopeArgs(model, operation, args);
-          return withRlsScope(ref.c, () => query(scopedArgs));
+          return withRlsScope(ref.c, ref.execRaw, () => query(scopedArgs));
         },
       },
     },
   });
   ref.c = scoped;
+  // BEFORE the loop below overwrites it. Bound, because it is read off the client
+  // here and called as a bare tagged template later.
+  ref.execRaw = (scoped as any).$executeRaw.bind(scoped);
 
   // Layer 2b: THE SAME GUC, for RAW queries.
   //

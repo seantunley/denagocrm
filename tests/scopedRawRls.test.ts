@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const dir = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(dir, "..");
 const read = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 const shipped = (rel: string) =>
   read(rel)
@@ -147,4 +148,82 @@ test("every raw query on the scoped client is now covered by the patch", () => {
   // Not an exact count: new ones are FINE now, which is the point of fixing it in
   // the client. The assertion is that they exist and therefore that the patch is
   // load-bearing, not decorative.
+});
+
+/**
+ * THE BUG THIS FILE DID NOT CATCH.
+ *
+ * Layer 2b replaces `$executeRaw` on the exported client. Layer 2 — the model-op
+ * path, which is every ordinary query in the app — read `$executeRaw` off that
+ * same client to build the first element of an ARRAY transaction.
+ *
+ * An array transaction accepts only PrismaPromises; Prisma inspects each element
+ * and throws "All elements of the array need to be Prisma Client promises" for
+ * anything else. Layer 2b's replacement returns a plain Promise, because it
+ * awaits an interactive transaction internally. So installing the raw patch made
+ * EVERY model operation throw, on the first query of the first test — a total
+ * outage, not a subtle regression.
+ *
+ * Every test above passed. They assert on source text, and the source they
+ * assert on was correct; what was wrong was the interaction between two blocks
+ * that never mention each other. `npm run test:integrity` caught it in CI on the
+ * first run, which is the layer that could.
+ *
+ * These are the source assertions that would have caught it, kept narrow enough
+ * to be about the mechanism rather than the formatting.
+ */
+
+test("the model-op path never uses the patched raw method", () => {
+  const code = read("src/lib/db.ts");
+
+  // withRlsScope takes the raw executor as a parameter instead of reading it off
+  // the client it was handed. Reading it off `client` is the bug.
+  assert.match(code, /async function withRlsScope\(client: any, execRaw: any, query: \(\) => any\)/);
+  const start = code.indexOf("async function withRlsScope(");
+  const body = code.slice(start, code.indexOf("\n}", start));
+  assert.doesNotMatch(body, /client\.\$executeRaw/, "must not read $executeRaw off the patched client");
+  assert.match(body, /execRaw`SELECT set_config\('app\.current_tenant'/);
+  assert.match(body, /execRaw`SELECT set_config\('app\.bypass_rls'/);
+  // The array transaction itself still belongs to the scoped client: both
+  // promises have to come from the same client for Prisma to batch them.
+  assert.match(body, /await client\.\$transaction\(\[setGuc, query\(\)\]\)/);
+});
+
+test("the unpatched executor is captured BEFORE the patch overwrites it", () => {
+  // Order is the whole fix. Captured after the loop, `ref.execRaw` would be the
+  // wrapper and nothing would change.
+  const code = read("src/lib/db.ts");
+  const captureAt = code.indexOf("ref.execRaw = (scoped as any).$executeRaw.bind(scoped);");
+  const patchAt = code.indexOf("for (const method of [\"$executeRaw\"");
+  assert.ok(captureAt !== -1, "the unpatched executor must be captured");
+  assert.ok(patchAt !== -1, "the raw patch loop must still exist");
+  assert.ok(captureAt < patchAt, "capture must happen before the overwrite");
+  assert.match(code, /withRlsScope\(ref\.c, ref\.execRaw, \(\) => query\(scopedArgs\)\)/);
+});
+
+test("no other array transaction is handed a raw promise", () => {
+  // The same trap for any caller doing $transaction([prisma.$queryRaw`…`, …]).
+  // There are none today; this fails if one is added, because it would break the
+  // same way and the error message points at Prisma rather than at this patch.
+  const root = path.join(dir, "..", "src");
+  const offenders: string[] = [];
+  const walk = (p: string) => {
+    for (const entry of readdirSync(p, { withFileTypes: true })) {
+      const full = path.join(p, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.tsx?$/.test(entry.name)) {
+        const src = readFileSync(full, "utf8");
+        if (full.endsWith(path.join("lib", "db.ts"))) continue; // the mechanism itself
+        for (const m of src.matchAll(/\$transaction\(\[([\s\S]{0,600}?)\]\)/g)) {
+          if (/\$(?:query|execute)Raw/.test(m[1])) offenders.push(path.relative(root, full));
+        }
+      }
+    }
+  };
+  walk(root);
+  assert.deepEqual(
+    [...new Set(offenders)],
+    [],
+    "an array $transaction cannot contain a raw promise from the scoped client — use $transaction(async tx => …)",
+  );
 });
