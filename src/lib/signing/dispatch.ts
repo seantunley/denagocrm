@@ -25,8 +25,11 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
     await prisma.signatureRecipient.updateMany({ where: { id: recipientId, status: "sending" }, data: { status: "pending", sendingAt: null } });
     return { reachable: false, delivered: false };
   }
+  // An idempotency conflict means another caller already created or processed the
+  // same delivery. Never turn an empty target list into a global worker sweep.
+  if (queued.jobIds.length === 0) return { reachable: true, delivered: ["sent", "viewed"].includes(recipient.status) };
   const { processSigningOutbox } = await import("./outboxWorker");
-  const result = await processSigningOutbox({ onlyIds: queued.jobIds, limit: Math.max(queued.jobIds.length, 1) });
+  const result = await processSigningOutbox({ onlyIds: queued.jobIds, limit: queued.jobIds.length });
   const delivered = result.completed > 0;
   if (!delivered && !opts?.reminder) {
     await prisma.signatureRecipient.updateMany({ where: { id: recipientId, status: "sending" }, data: { status: "pending", sendingAt: null } });
