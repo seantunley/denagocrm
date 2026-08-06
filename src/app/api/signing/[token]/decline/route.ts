@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { isValidSignToken, hashSignToken } from "@/lib/signing/tokens";
 import { logSignEvent, reqMeta } from "@/lib/signing/events";
@@ -33,6 +34,9 @@ async function handleDecline(token: string, req: Request): Promise<Response> {
   if (recipient.status === "declined") return new Response("Already declined", { status: 409 });
   if (recipient.request.deletedAt || unavailable(recipient.request.status)) return new Response("This document can no longer be declined.", { status: 409 });
   if (recipient.request.expiresAt && recipient.request.expiresAt < new Date()) return new Response("This signing link has expired.", { status: 409 });
+  if (recipient.request.workflowGraphJson && (!recipient.nodeId || recipient.nodeId !== recipient.request.currentNodeId)) {
+    return new Response("This workflow has not reached your step.", { status: 409 });
+  }
 
   const parsed = bodySchema.safeParse(await req.json().catch(() => ({})));
   const reason = parsed.success ? parsed.data.reason : "";
@@ -40,11 +44,23 @@ async function handleDecline(token: string, req: Request): Promise<Response> {
 
   let aborted: string | null = null;
   await prisma.$transaction(async (tx) => {
-    const rows = await tx.$queryRaw<{ status: string; deletedAt: Date | null; expiresAt: Date | null }[]>`
-      SELECT "status", "deletedAt", "expiresAt" FROM "SignatureRequest" WHERE "id" = ${recipient.requestId} FOR UPDATE`;
+    const rows = await tx.$queryRaw<Array<{
+      status: string;
+      deletedAt: Date | null;
+      expiresAt: Date | null;
+      hasWorkflow: boolean;
+      currentNodeId: string | null;
+    }>>(Prisma.sql`
+      SELECT status,"deletedAt","expiresAt",("workflowGraphJson" IS NOT NULL) AS "hasWorkflow","currentNodeId"
+        FROM "SignatureRequest" WHERE id=${recipient.requestId} FOR UPDATE
+    `);
     const request = rows[0];
     if (!request || request.deletedAt || unavailable(request.status)) { aborted = "This document can no longer be declined."; return; }
     if (request.expiresAt && request.expiresAt < new Date()) { aborted = "This signing link has expired."; return; }
+    if (request.hasWorkflow && (!recipient.nodeId || recipient.nodeId !== request.currentNodeId)) {
+      aborted = "This workflow has not reached your step.";
+      return;
+    }
     const claimed = await tx.signatureRecipient.updateMany({
       where: { id: recipient.id, status: { notIn: ["signed", "declined"] } },
       data: { status: "declined", declinedAt: new Date(), declineReason: reason || null },
