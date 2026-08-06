@@ -5,7 +5,7 @@ import { saveFile, deleteFile } from "@/lib/storage";
 import { isValidSignToken, hashSignToken } from "@/lib/signing/tokens";
 import { reqMeta } from "@/lib/signing/events";
 import { advanceAfterSignature } from "@/lib/signing/workflow";
-import { isRequestClosed } from "@/lib/signing/status";
+import { isRequestClosed, isRequestProcessing } from "@/lib/signing/status";
 import { missingRequiredForRecipient } from "@/lib/signing/fieldValidation";
 import { logAudit } from "@/lib/audit";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
@@ -30,6 +30,7 @@ const bodySchema = z.object({
   consent: z.literal(true),
   fields: z.array(fieldSchema).max(100).default([]),
 });
+const unavailable = (status: string) => isRequestClosed(status) || isRequestProcessing(status);
 
 export async function POST(request: Request, context: { params: Promise<{ token: string }> }) {
   const { token } = await context.params;
@@ -54,7 +55,7 @@ async function handleSign(rawToken: string, request: Request): Promise<Response>
   const recipient = await prisma.signatureRecipient.findUnique({ where: { token: digest }, include: { request: true } });
   if (!recipient?.tenantId) return new Response("Not found", { status: 404 });
   const envelope = recipient.request;
-  if (envelope.deletedAt || isRequestClosed(envelope.status)) return new Response("This document can no longer be signed.", { status: 409 });
+  if (envelope.deletedAt || unavailable(envelope.status)) return new Response("This document can no longer be signed.", { status: 409 });
   if (envelope.expiresAt && envelope.expiresAt < new Date()) return new Response("This signing link has expired.", { status: 409 });
   if (recipient.status === "signed") return new Response("Already signed", { status: 409 });
   if (recipient.status === "declined") return new Response("You have declined this document.", { status: 409 });
@@ -114,7 +115,7 @@ async function handleSign(rawToken: string, request: Request): Promise<Response>
         SELECT status,"deletedAt","expiresAt",ordering FROM "SignatureRequest" WHERE id=${envelope.id} FOR UPDATE
       `);
       const locked = rows[0];
-      if (!locked || locked.deletedAt || isRequestClosed(locked.status)) throw new SignAbort(409, "This document can no longer be signed.");
+      if (!locked || locked.deletedAt || unavailable(locked.status)) throw new SignAbort(409, "This document can no longer be signed.");
       if (locked.expiresAt && locked.expiresAt < new Date()) throw new SignAbort(409, "This signing link has expired.");
       if (locked.ordering === "sequential") {
         const earlier = await tx.signatureRecipient.findFirst({
@@ -164,7 +165,7 @@ async function handleSign(rawToken: string, request: Request): Promise<Response>
       await tx.signatureRequest.updateMany({
         where: { id: envelope.id, status: { in: ["prepared", "dispatching", "active", "sent", "viewed"] } }, data: { status: "signing" },
       });
-      for (const ref of savedRefs) await markArtifactState({ tenantId: recipient.tenantId!, objectRef: ref, kind: "signature_image", envelopeId: envelope.id, state: "referenced" }, tx);
+      for (const ref of savedRefs) await markArtifactState({ tenantId: recipient.tenantId, objectRef: ref, kind: "signature_image", envelopeId: envelope.id, state: "referenced" }, tx);
     });
   } catch (error) {
     for (const ref of savedRefs) await deleteFile(ref).catch(() => {});
@@ -177,8 +178,6 @@ async function handleSign(rawToken: string, request: Request): Promise<Response>
     action: "signing.signed", summary: `${name} signed “${envelope.title}”`, contactId: envelope.contactId, leadId,
     userName: name, entityType: "SignatureRequest", entityId: envelope.id,
   });
-  // Immediate best effort for UX; the recipient-status trigger has already
-  // committed a durable advance_after_signature job for crash recovery.
   await advanceAfterSignature(envelope.id).catch(() => {});
   return Response.json({ ok: true, queuedRecovery: true });
 }
