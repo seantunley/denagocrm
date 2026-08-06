@@ -102,17 +102,19 @@ ALTER TABLE "SignatureEvent"
   ADD COLUMN IF NOT EXISTS "schemaVersion" integer NOT NULL DEFAULT 1;
 
 -- Preserve existing links while removing plaintext capability values from the DB:
--- a historic URL still hashes to the migrated digest. A later send/reminder rotates
--- it into a recoverable AES-GCM vault copy managed by the application.
+-- a historic URL still hashes to the migrated digest. The legacy tables do not
+-- carry reliable creation timestamps, so the migration instant is recorded as the
+-- capability issue time and a conservative 30-day expiry is applied. A later send
+-- or reminder rotates the token into the encrypted application vault.
 UPDATE "SignatureRecipient"
 SET token=encode(digest(token,'sha256'),'hex'),
-    "tokenIssuedAt"=COALESCE("tokenIssuedAt","createdAt"),
-    "tokenExpiresAt"=COALESCE("tokenExpiresAt", GREATEST(now()+interval '30 days',"createdAt"+interval '30 days'));
+    "tokenIssuedAt"=COALESCE("tokenIssuedAt",now()),
+    "tokenExpiresAt"=COALESCE("tokenExpiresAt",now()+interval '30 days');
 
 UPDATE "ApprovalStep"
 SET token=encode(digest(token,'sha256'),'hex'),
-    "tokenIssuedAt"=COALESCE("tokenIssuedAt","createdAt"),
-    "tokenExpiresAt"=COALESCE("tokenExpiresAt", GREATEST(now()+interval '30 days',"createdAt"+interval '30 days'));
+    "tokenIssuedAt"=COALESCE("tokenIssuedAt",now()),
+    "tokenExpiresAt"=COALESCE("tokenExpiresAt",now()+interval '30 days');
 
 -- Historic requests get an explicit, non-fabricated migration snapshot marker.
 -- Their existing snapshot remains the canonical source; no certificate facts are
