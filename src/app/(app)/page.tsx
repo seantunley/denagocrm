@@ -26,7 +26,15 @@ import { getAiHealth } from "@/lib/systemHealth";
 import { getLastRun } from "@/lib/securityRunbook";
 import { CompleteActivityButton, FollowUpPrompts } from "@/components/proactive/NextStep";
 import Tabs from "@/components/Tabs";
-import { hasAnyPermission } from "@/lib/permissions";
+import {
+  accessibleInboxWhere,
+  getAccessibleJobCardIds,
+  getAccessibleLeadIds,
+  getAccessibleQuoteIds,
+  getAccessibleVehicleIds,
+  hasAnyPermission,
+} from "@/lib/permissions";
+import { getAccessibleActivityIds } from "@/lib/activityAccess";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import { formatZARCompact, formatDate, formatDateTime, contactName } from "@/lib/format";
 import { computeDue, dueLabels, dueColors } from "@/lib/serviceDue";
@@ -68,6 +76,24 @@ type DashActivity = {
   lead: { id: string; name: string } | null;
   contact: { id: string; firstName: string; lastName: string | null; isCompany: boolean; company: string | null } | null;
 };
+
+/**
+ * Exactly DashActivity, as a Prisma select. The agenda queries used to say
+ * `include: { lead: true, contact: true, assignedTo: true }` — three whole rows
+ * per activity, twenty activities per day column — to render a lead name, a
+ * customer name and a first name. `assignedTo: true` is the worst of them: it
+ * serialises the whole User row, password hash included, into the RSC payload.
+ */
+const AGENDA_SELECT = {
+  id: true,
+  type: true,
+  category: true,
+  summary: true,
+  dueDate: true,
+  assignedTo: { select: { name: true } },
+  lead: { select: { id: true, name: true } },
+  contact: { select: { id: true, firstName: true, lastName: true, isCompany: true, company: true } },
+} as const;
 
 function SectionCard({
   title,
@@ -224,6 +250,37 @@ export default async function DashboardPage() {
   ]);
   const showService = canSeeService && automotiveOn;
 
+  /* ── record scope ────────────────────────────────────────────────────
+   * showSales / showService decide whether a TAB RENDERS. They never decided
+   * whether its queries RAN: every tile below sat in one unconditional
+   * Promise.all, so a workshop tech with no sales permission still made the
+   * server count every open lead, sum the pipeline, and load the customer list —
+   * and a server component serialises what it fetched into the RSC payload
+   * whether or not a component renders it. Not rendering is not a boundary.
+   *
+   * So each group is SKIPPED when its tab is hidden, and each surviving query
+   * carries an explicit record-scope predicate. `null` from a getAccessible*Ids
+   * helper means unrestricted (owner or *.view_all) and contributes no filter;
+   * an empty array means "nothing accessible" and MUST become `in: []` — an
+   * impossible match — rather than an absent `where`.
+   *
+   * The helpers already fail closed on their own: someone holding only
+   * quotes.view_owned makes showSales true, and getAccessibleLeadIds returns []
+   * for them, so the lead tiles come back empty while the quote tiles work. */
+  const NO_ACCESS: Promise<string[] | null> = Promise.resolve([]);
+  const [leadIds, quoteIds, jobCardIds, vehicleIds, activityIds] = await Promise.all([
+    showSales ? getAccessibleLeadIds(user) : NO_ACCESS,
+    showSales ? getAccessibleQuoteIds(user) : NO_ACCESS,
+    showService ? getAccessibleJobCardIds(user) : NO_ACCESS,
+    showService ? getAccessibleVehicleIds(user) : NO_ACCESS,
+    getAccessibleActivityIds(user),
+  ]);
+  const leadScope = leadIds ? { id: { in: leadIds } } : {};
+  const quoteScope = quoteIds ? { id: { in: quoteIds } } : {};
+  const jobCardScope = jobCardIds ? { id: { in: jobCardIds } } : {};
+  const vehicleScope = vehicleIds ? { id: { in: vehicleIds } } : {};
+  const activityScope = activityIds ? { id: { in: activityIds } } : {};
+
   const now = new Date();
   const todayStart = startOfDay(now);
   const tomorrowStart = addDays(todayStart, 1);
@@ -257,96 +314,177 @@ export default async function DashboardPage() {
     noNextLeads,
     staleQuotes,
     newLeadsCount,
+    fleetSize,
   ] = await Promise.all([
-    prisma.lead.count({ where: { status: "open" } }),
-    prisma.lead.aggregate({ where: { status: "open" }, _sum: { valueCents: true } }),
-    prisma.quote.count({ where: { status: "accepted", deliveredAt: null, supersededAt: null } }),
-    prisma.jobCard.count({ where: { status: { not: "completed" } } }),
-    prisma.vehicle.findMany({
-      include: {
-        contact: true,
-        serviceRecords: { orderBy: { serviceDate: "desc" }, take: 1 },
-        mileageLogs: { orderBy: { recordedAt: "desc" }, take: 1 },
+    showSales ? prisma.lead.count({ where: { status: "open", ...leadScope } }) : 0,
+    showSales
+      ? prisma.lead.aggregate({ where: { status: "open", ...leadScope }, _sum: { valueCents: true } })
+      : { _sum: { valueCents: 0 } },
+    showSales
+      ? prisma.quote.count({
+          where: { status: "accepted", deliveredAt: null, supersededAt: null, ...quoteScope },
+        })
+      : 0,
+    showService ? prisma.jobCard.count({ where: { status: { not: "completed" }, ...jobCardScope } }) : 0,
+    // Service-due is computed in JS from the latest service record + mileage log,
+    // so this one genuinely has to walk the accessible fleet — a `take` here would
+    // silently under-report "Service due", which is worse than a slower query.
+    // What it must NOT do is what it used to: `include: { contact: true }` shipped
+    // every customer's full row — phone, email, address, notes — for the entire
+    // fleet into the payload, to print one name. The select is the bound.
+    showService
+      ? prisma.vehicle.findMany({
+          where: { ...vehicleScope },
+          select: {
+            id: true,
+            model: true,
+            serviceIntervalKm: true,
+            serviceIntervalMonths: true,
+            purchaseDate: true,
+            contact: { select: { firstName: true, lastName: true, isCompany: true, company: true } },
+            serviceRecords: {
+              orderBy: { serviceDate: "desc" },
+              take: 1,
+              select: { serviceDate: true, km: true, nextDueKm: true, nextDueDate: true },
+            },
+            mileageLogs: { orderBy: { recordedAt: "desc" }, take: 1, select: { km: true, recordedAt: true } },
+          },
+        })
+      : [],
+    // `include: { user: true }` put the whole User row — password hash included —
+    // into the payload to print nothing; the feed never reads it.
+    showSales
+      ? prisma.communication.findMany({
+          where: { subject: { not: "🔎 AI research" }, ...(await accessibleInboxWhere(user)) },
+          take: 5,
+          orderBy: { occurredAt: "desc" },
+          select: {
+            id: true,
+            type: true,
+            body: true,
+            occurredAt: true,
+            contact: { select: { id: true, firstName: true, lastName: true, isCompany: true, company: true } },
+            lead: { select: { id: true, name: true } },
+          },
+        })
+      : [],
+    showSales
+      ? prisma.lead.findMany({
+          where: { ...leadScope },
+          take: 5,
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true,
+            name: true,
+            source: true,
+            status: true,
+            createdAt: true,
+            product: { select: { name: true } },
+            stage: { select: { name: true, color: true } },
+          },
+        })
+      : [],
+    prisma.activity.findMany({
+      where: { status: "planned", dueDate: { lt: tomorrowStart }, ...activityScope },
+      orderBy: { dueDate: "asc" },
+      select: AGENDA_SELECT,
+      take: 20,
+    }),
+    prisma.activity.findMany({
+      where: {
+        status: "planned",
+        dueDate: { gte: tomorrowStart, lt: dayAfterStart },
+        ...activityScope,
       },
-    }),
-    prisma.communication.findMany({
-      where: { subject: { not: "🔎 AI research" } },
-      take: 5,
-      orderBy: { occurredAt: "desc" },
-      include: { user: true, contact: true, lead: true },
-    }),
-    prisma.lead.findMany({
-      take: 5,
-      orderBy: { createdAt: "desc" },
-      include: { product: true, stage: true },
-    }),
-    prisma.activity.findMany({
-      where: { status: "planned", dueDate: { lt: tomorrowStart } },
       orderBy: { dueDate: "asc" },
-      include: { lead: true, contact: true, assignedTo: true },
+      select: AGENDA_SELECT,
       take: 20,
     }),
-    prisma.activity.findMany({
-      where: { status: "planned", dueDate: { gte: tomorrowStart, lt: dayAfterStart } },
-      orderBy: { dueDate: "asc" },
-      include: { lead: true, contact: true, assignedTo: true },
-      take: 20,
-    }),
-    prisma.lead.findMany({
-      where: { createdAt: { gte: monthStart } },
-      select: { createdAt: true },
-    }),
-    prisma.lead.count({ where: { createdAt: { gte: prevMonthStart, lt: prevSameDay } } }),
+    showSales
+      ? prisma.lead.findMany({
+          where: { createdAt: { gte: monthStart }, ...leadScope },
+          select: { createdAt: true },
+        })
+      : [],
+    showSales
+      ? prisma.lead.count({ where: { createdAt: { gte: prevMonthStart, lt: prevSameDay }, ...leadScope } })
+      : 0,
     // updatedAt ≈ when the deal was marked won
-    prisma.lead.findMany({
-      where: { status: "won", updatedAt: { gte: monthStart } },
-      select: { updatedAt: true, valueCents: true },
-    }),
-    prisma.lead.findMany({
-      where: { status: "won", updatedAt: { gte: prevMonthStart, lt: prevSameDay } },
-      select: { valueCents: true },
-    }),
-    prisma.quote.count({ where: { deliveredAt: { gte: monthStart } } }),
-    prisma.jobCard.findMany({
-      where: { status: "completed", completedAt: { gte: monthStart } },
-      select: { completedAt: true },
-    }),
-    prisma.jobCard.count({
-      where: { status: "completed", completedAt: { gte: prevMonthStart, lt: prevSameDay } },
-    }),
-    prisma.target.findMany({ where: { period } }),
-    prisma.lead.findMany({
-      where: { status: "open" },
-      select: { valueCents: true, stage: { select: { id: true, name: true, color: true, order: true } } },
-    }),
-    // My overdue items — the on-open "did this happen?" queue (capped client-side)
+    showSales
+      ? prisma.lead.findMany({
+          where: { status: "won", updatedAt: { gte: monthStart }, ...leadScope },
+          select: { updatedAt: true, valueCents: true },
+        })
+      : [],
+    showSales
+      ? prisma.lead.findMany({
+          where: { status: "won", updatedAt: { gte: prevMonthStart, lt: prevSameDay }, ...leadScope },
+          select: { valueCents: true },
+        })
+      : [],
+    showSales ? prisma.quote.count({ where: { deliveredAt: { gte: monthStart }, ...quoteScope } }) : 0,
+    showService
+      ? prisma.jobCard.findMany({
+          where: { status: "completed", completedAt: { gte: monthStart }, ...jobCardScope },
+          select: { completedAt: true },
+        })
+      : [],
+    showService
+      ? prisma.jobCard.count({
+          where: {
+            status: "completed",
+            completedAt: { gte: prevMonthStart, lt: prevSameDay },
+            ...jobCardScope,
+          },
+        })
+      : 0,
+    // Targets are workspace goals, not per-record data, so there is nothing to
+    // scope — but the rings only render inside the Sales tab, so skip the read.
+    showSales ? prisma.target.findMany({ where: { period } }) : [],
+    showSales
+      ? prisma.lead.findMany({
+          where: { status: "open", ...leadScope },
+          select: { valueCents: true, stage: { select: { id: true, name: true, color: true, order: true } } },
+        })
+      : [],
+    // My overdue items — the on-open "did this happen?" queue (capped client-side).
+    // Already the narrowest possible scope: activities assigned to the caller.
     prisma.activity.findMany({
       where: { status: "planned", dueDate: { lt: todayStart }, assignedToId: user.id },
       orderBy: { dueDate: "asc" },
       take: 3,
-      include: { lead: true },
+      select: { id: true, type: true, summary: true, dueDate: true, leadId: true, lead: { select: { name: true } } },
     }),
     // Attention: open leads with nothing planned — the #1 cause of pipeline rot
-    prisma.lead.findMany({
-      where: { status: "open", activities: { none: { status: "planned" } } },
-      select: { id: true, name: true, stage: { select: { name: true, color: true } } },
-      orderBy: { createdAt: "asc" },
-      take: 5,
-    }),
+    showSales
+      ? prisma.lead.findMany({
+          where: { status: "open", activities: { none: { status: "planned" } }, ...leadScope },
+          select: { id: true, name: true, stage: { select: { name: true, color: true } } },
+          orderBy: { createdAt: "asc" },
+          take: 5,
+        })
+      : [],
     // Attention: quotes sent but unsigned for 3+ days — time to call
-    prisma.quote.findMany({
-      where: {
-        status: "sent",
-        supersededAt: null,
-        signedAt: null,
-        createdAt: { lt: subDays(now, 3) },
-      },
-      select: { id: true, number: true, createdAt: true, lead: { select: { name: true } }, contact: { select: { firstName: true, lastName: true, isCompany: true, company: true } } },
-      orderBy: { createdAt: "asc" },
-      take: 5,
-    }),
+    showSales
+      ? prisma.quote.findMany({
+          where: {
+            status: "sent",
+            supersededAt: null,
+            signedAt: null,
+            createdAt: { lt: subDays(now, 3) },
+            ...quoteScope,
+          },
+          select: { id: true, number: true, createdAt: true, lead: { select: { name: true } }, contact: { select: { firstName: true, lastName: true, isCompany: true, company: true } } },
+          orderBy: { createdAt: "asc" },
+          take: 5,
+        })
+      : [],
     // Brand-new leads: open and never opened by anyone yet (viewedAt still null).
-    prisma.lead.count({ where: { status: "open", viewedAt: null } }),
+    showSales ? prisma.lead.count({ where: { status: "open", viewedAt: null, ...leadScope } }) : 0,
+    // The "Fleet" stat used to be `vehicles.length` — the length of the array
+    // above. Counting separately keeps the tile honest if that query ever grows a
+    // bound, and costs one cheap count instead of a second full scan.
+    showService ? prisma.vehicle.count({ where: { ...vehicleScope } }) : 0,
   ]);
 
   const salesToday = todayAll.filter((a) => a.category !== "workshop");
@@ -362,29 +500,58 @@ export default async function DashboardPage() {
   // Quote + signing lifecycle events (created, sent, countersigned, signed, …)
   // live in the audit log, not communications — pull them so the feed shows the
   // whole picture, not just calls/notes/new leads.
-  const recentActivity = await prisma.auditLog.findMany({
-    where: { OR: [{ action: { startsWith: "quote." } }, { action: { startsWith: "signing." } }] },
-    orderBy: { createdAt: "desc" },
-    take: 8,
-    select: { id: true, action: true, summary: true, createdAt: true, contactId: true, leadId: true },
-  });
+  //
+  // Scoped through the records the row points at. An audit row that names neither
+  // a lead nor a contact is dropped for a restricted user rather than shown — the
+  // summary text is the payload here, and there is nothing left to check it
+  // against. Unrestricted users (owner / *.view_all) keep the whole feed.
+  const recentActivity = showSales
+    ? await prisma.auditLog.findMany({
+        // AND, not a spread: accessibleInboxWhere returns its own `OR` key, and
+        // spreading it alongside this one would replace the action filter rather
+        // than narrow it — leaving every audit row for an accessible record.
+        where: {
+          AND: [
+            { OR: [{ action: { startsWith: "quote." } }, { action: { startsWith: "signing." } }] },
+            await accessibleInboxWhere(user),
+          ],
+        },
+        orderBy: { createdAt: "desc" },
+        take: 8,
+        select: { id: true, action: true, summary: true, createdAt: true, contactId: true, leadId: true },
+      })
+    : [];
 
   // Quotes currently out for signature → a live-status card. The card is rendered
   // only when at least one quote signing request is active (sent/viewed/in progress).
-  const activeSignRequests = await prisma.signatureRequest.findMany({
-    where: { quoteId: { not: null }, deletedAt: null, status: { in: ["sent", "viewed", "in_progress"] } },
-    orderBy: { updatedAt: "desc" },
-    take: 12,
-    select: {
-      quoteId: true,
-      status: true,
-      recipients: { orderBy: { order: "asc" }, select: { name: true, role: true, status: true, viewedAt: true } },
-    },
-  });
+  //
+  // Scoped by the quote, on the REQUEST query rather than only on the quote
+  // lookup below. Filtering afterwards would still have read every open request's
+  // recipient list — customer names and their signing progress — for anyone who
+  // loaded the dashboard.
+  const activeSignRequests = showSales
+    ? await prisma.signatureRequest.findMany({
+        where: {
+          quoteId: quoteIds ? { in: quoteIds } : { not: null },
+          deletedAt: null,
+          status: { in: ["sent", "viewed", "in_progress"] },
+        },
+        orderBy: { updatedAt: "desc" },
+        take: 12,
+        select: {
+          quoteId: true,
+          status: true,
+          recipients: { orderBy: { order: "asc" }, select: { name: true, role: true, status: true, viewedAt: true } },
+        },
+      })
+    : [];
   const signQuoteIds = [...new Set(activeSignRequests.map((r) => r.quoteId).filter((v): v is string => Boolean(v)))];
-  const signQuotes = signQuoteIds.length
+  // `showSales &&` is redundant — signQuoteIds is empty when the request list
+  // above was skipped — but it keeps the gate legible at the query rather than
+  // two derivations away, and it is what the scope test reads.
+  const signQuotes = showSales && signQuoteIds.length
     ? await prisma.quote.findMany({
-        where: { id: { in: signQuoteIds }, deletedAt: null },
+        where: { id: { in: signQuoteIds }, deletedAt: null, ...quoteScope },
         select: {
           id: true,
           number: true,
@@ -504,7 +671,7 @@ export default async function DashboardPage() {
     },
     {
       icon: <CarFront />,
-      stat: { label: "Fleet", value: vehicles.length, delta: null, href: "/vehicles", spark: [] },
+      stat: { label: "Fleet", value: fleetSize, delta: null, href: "/vehicles", spark: [] },
     },
   ];
 
@@ -535,7 +702,12 @@ export default async function DashboardPage() {
   ];
 
   // Proactive system alerts — problems surface HERE before customers notice
-  const [aiHealth, lastSecurity] = await Promise.all([getAiHealth(), getLastRun()]);
+  // getLastRun reads the security runbook; only the owner's banner uses it, so
+  // only the owner's request should read it.
+  const [aiHealth, lastSecurity] = await Promise.all([
+    getAiHealth(),
+    user.role === "owner" ? getLastRun() : null,
+  ]);
   const systemAlerts: { text: string; href: string }[] = [];
   if (aiHealth && ["billing", "auth", "error"].includes(aiHealth.status)) {
     systemAlerts.push({ text: `AI assistant problem: ${aiHealth.detail}`, href: "/settings/security" });
