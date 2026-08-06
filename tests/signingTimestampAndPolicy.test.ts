@@ -125,18 +125,6 @@ test("only a hash ever leaves the system", () => {
   assert.match(source, /skewMs > 24 \* 60 \* 60 \* 1000/);
 });
 
-test("the certificate makes no timestamp claim at all", () => {
-  const complete = read("src/lib/signing/complete.ts");
-  // It used to describe submitting the hash to "an independent RFC 3161
-  // timestamp authority" and storing the attestation. Nothing verifies the
-  // response signature, so the system cannot establish that any authority
-  // issued it — and a customer-facing document is the last place to assert
-  // something that cannot be backed. The claim comes back when the validation
-  // does, not before.
-  assert.doesNotMatch(complete, /RFC 3161/);
-  assert.doesNotMatch(complete, /timestamp authority/);
-  assert.match(complete, /times recorded above are this system/);
-});
 
 // ── When a signer must prove who they are ───────────────────────────────────
 

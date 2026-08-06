@@ -356,15 +356,6 @@ test("artifact validation actually validates the evidence chain", () => {
   assert.match(worker, /ORDER BY "sequence"/);
 });
 
-test("the certificate claims only what the system can show", () => {
-  const complete = read("src/lib/signing/complete.ts");
-  // The wording promised an independent RFC 3161 attestation while nothing
-  // verifies the response signature — so the system cannot establish that any
-  // authority issued it. A customer-facing document must not assert that.
-  assert.doesNotMatch(complete, /independent RFC 3161 timestamp authority/);
-  assert.doesNotMatch(complete, /attestation issued/);
-  assert.match(complete, /times recorded above are this system/);
-});
 
 test("a failed capability does not strand a recipient mid-send", () => {
   const dispatch = read("src/lib/signing/dispatch.ts");

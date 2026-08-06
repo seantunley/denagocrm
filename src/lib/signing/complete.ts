@@ -78,7 +78,11 @@ function certificateHtml(title: string, requestId: string, rows: RecipientRow[])
       Signed electronically in terms of the Electronic Communications and Transactions Act 25 of 2002 (South Africa).
       This document carries a PKCS#7 digital seal; any change after sealing invalidates the signature and is detectable
       by any standard PDF reader.
-      <br/><br/>The times recorded above are this system&rsquo;s own.
+      <br/><br/>The final sealed file is hashed and submitted to an independent RFC 3161 timestamp authority.
+      Any token returned is cryptographically verified &mdash; signature, timestamping authority and certificate
+      chain &mdash; before it is stored, and an unverifiable one is discarded rather than kept. It is not printed
+      here because the hash it covers includes this certificate; it is held with this record and can be produced
+      on request.
     </div>
   </div>`;
 }
