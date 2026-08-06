@@ -6,6 +6,7 @@ import CopyButton from "@/components/CopyButton";
 import SignatureCapture from "@/components/signing/SignatureCapture";
 import SignedDocPreview from "@/components/signing/SignedDocPreview";
 import { formatDateTime } from "@/lib/format";
+import { revealSigningLink } from "@/app/actions/signingLinks";
 import {
   startRecordSigning,
   countersignRecord,
@@ -16,14 +17,11 @@ import {
   type SignedDocView,
 } from "@/app/actions/recordSigning";
 
-const BASE = "https://crm.denagocpt.co.za";
-
 export type SigningRecipientView = {
   id: string;
   name: string;
   email: string | null;
   phone: string | null;
-  token: string;
   status: string;
   viewedAt: Date | string | null;
   signedAt: Date | string | null;
@@ -74,13 +72,6 @@ export default function SigningBlock({
   hasSavedSignature?: boolean;
   state: SigningState;
   workflows?: { id: string; name: string }[];
-  /**
-   * Called whenever this card changes the record's signing state. On a page,
-   * router.refresh() re-reads the props and that is enough. Inside the quote
-   * editor the props come from an on-demand fetch that a route refresh cannot
-   * reach, so the embedder refetches here — without it the card would keep
-   * showing the countersign button after you had already countersigned.
-   */
   onChanged?: () => void;
 }) {
   const router = useRouter();
@@ -89,14 +80,13 @@ export default function SigningBlock({
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [preview, setPreview] = useState<SignedDocView | null>(null);
+  const [revealedLinks, setRevealedLinks] = useState<Record<string, string>>({});
 
-  /** Re-read the record everywhere this card is mounted — route and embedder. */
   const refresh = useCallback(() => {
     router.refresh();
     onChanged?.();
   }, [router, onChanged]);
 
-  /** Pull the document as it now stands and show it. */
   const openPreview = useCallback(async () => {
     const view = await signedRecordDoc(kind, id);
     if (!view) {
@@ -106,7 +96,6 @@ export default function SigningBlock({
     setPreview(view);
   }, [kind, id]);
 
-  // Record already signed (via the hub or the historic legacy flow).
   if (signedAt) {
     return (
       <div className="card bg-emerald-500/10 border-emerald-500/30">
@@ -120,14 +109,8 @@ export default function SigningBlock({
     );
   }
 
-  const origin = typeof window !== "undefined" ? window.location.origin : BASE;
-  const signerLink = (token: string) => `${origin}/signing/${token}`;
   const active = state && state.status !== "completed" && state.status !== "declined" && state.status !== "voided";
-  const declined = state?.recipients.find((r) => r.declinedAt);
-  // An envelope that exists but has not gone out yet is Denago's step, not the
-  // customer's — showing them a signing link they have never been sent is how
-  // the old card managed to look "sent" before anything was. One button, and
-  // the document itself decides whether that means countersign or send.
+  const declined = state?.recipients.find((recipient) => recipient.declinedAt);
   const notYetSent = Boolean(active) && !state?.sentAt;
 
   async function run(label: string, fn: () => Promise<ActionResult>) {
@@ -135,21 +118,34 @@ export default function SigningBlock({
     try {
       const res = await fn();
       if (!res.ok) {
-        // A missing signature is not an error to read and dismiss — it is the
-        // one thing standing between the click and the signature, so say what
-        // to do rather than what went wrong.
         setErr(res.needsSignature ? "Add your signature below, then countersign." : res.error ?? "Something went wrong.");
         return;
       }
       if (typeof res.notified === "number" && res.notified > 0) {
         setNote(`Sent to ${res.notified} recipient(s).`);
       }
-      // Every successful step lands back on the document: countersigning shows
-      // what was signed, sending shows what went out.
       await openPreview();
       refresh();
     } catch { setErr("Something went wrong. Please try again."); }
     finally { setBusy(null); }
+  }
+
+  async function reveal(recipientId: string) {
+    const label = `reveal:${recipientId}`;
+    setBusy(label); setErr(null); setNote(null);
+    try {
+      const result = await revealSigningLink(recipientId);
+      if (!result.ok || !result.url) {
+        setErr(result.error ?? "The secure link could not be revealed.");
+        return;
+      }
+      setRevealedLinks((current) => ({ ...current, [recipientId]: result.url! }));
+      setNote("Signing link revealed and recorded in the audit trail. Treat it as a personal capability.");
+    } catch {
+      setErr("The secure link could not be revealed.");
+    } finally {
+      setBusy(null);
+    }
   }
 
   return (
@@ -183,22 +179,38 @@ export default function SigningBlock({
             </button>
           ) : (
             <>
-              {state.recipients.map((r) => (
-                <div key={r.id} className="rounded-lg border border-input bg-card/50 px-3 py-2">
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <span className="text-sm font-medium">{r.name}{r.email ? ` · ${r.email}` : ""}</span>
-                    <span className="text-[11px] uppercase tracking-wide text-slate-400">
-                      {r.signedAt ? "✓ signed" : r.viewedAt ? "👀 viewed" : r.status === "sent" ? "✉ sent" : "pending"}
-                    </span>
-                  </div>
-                  {!r.signedAt && (
-                    <div className="flex items-center gap-2 mt-2">
-                      <input readOnly value={signerLink(r.token)} className="input text-xs font-mono" />
-                      <CopyButton text={signerLink(r.token)} />
+              {state.recipients.map((recipient) => {
+                const revealed = revealedLinks[recipient.id];
+                return (
+                  <div key={recipient.id} className="rounded-lg border border-input bg-card/50 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-sm font-medium">{recipient.name}{recipient.email ? ` · ${recipient.email}` : ""}</span>
+                      <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                        {recipient.signedAt ? "✓ signed" : recipient.viewedAt ? "👀 viewed" : recipient.status === "sent" ? "✉ sent" : "pending"}
+                      </span>
                     </div>
-                  )}
-                </div>
-              ))}
+                    {!recipient.signedAt && (
+                      <div className="mt-2">
+                        {revealed ? (
+                          <div className="flex items-center gap-2">
+                            <input readOnly value={revealed} className="input text-xs font-mono" />
+                            <CopyButton text={revealed} />
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn-secondary btn-sm"
+                            disabled={busy !== null}
+                            onClick={() => reveal(recipient.id)}
+                          >
+                            {busy === `reveal:${recipient.id}` ? "Revealing…" : "🔐 Reveal secure link"}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
 
               <div className="flex gap-2 flex-wrap items-center">
                 <button className="btn-secondary btn-sm" disabled={busy !== null} onClick={() => run("open", async () => { await openPreview(); return { ok: true }; })}>
@@ -233,9 +245,9 @@ export default function SigningBlock({
           {kind === "quote" && workflows.length > 0 && (
             <div>
               <label className="mb-1 block text-[11px] font-medium text-slate-400">Signing workflow</label>
-              <select value={workflowId} onChange={(e) => setWorkflowId(e.target.value)} className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground">
+              <select value={workflowId} onChange={(event) => setWorkflowId(event.target.value)} className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground">
                 <option value="">Built-in — Denago countersigns, then the customer</option>
-                {workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                {workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}
               </select>
             </div>
           )}
@@ -244,18 +256,6 @@ export default function SigningBlock({
             disabled={busy !== null}
             onClick={() => run("start", async () => {
               const started = await startRecordSigning(kind, id, workflowId || undefined);
-              // The built-in quote flow is countersign-then-send, so do the
-              // countersignature in the same click rather than making it a
-              // separate button the user has to find.
-              //
-              // But only when the caller is ACTUALLY the next signer. A workflow
-              // can put the customer — or another staff member — at the first
-              // node, and countersignRecord refuses to sign in their name. Asking
-              // regardless turned a perfectly started request into the flat error
-              // "<customer> signs next — this is not yours to sign", and because
-              // run() bails on a failed result the document never opened: the
-              // quote was left locked behind a request the card would not show.
-              // Ask the document who is up, then act as them or hand over.
               if (!started.ok || !started.preview) return started;
               const view = await signedRecordDoc(kind, id);
               if (view?.next?.isMe) return countersignRecord(kind, id);
@@ -287,13 +287,7 @@ export default function SigningBlock({
           error={err}
           note={note}
           onCountersign={() => run("countersign", () => countersignRecord(kind, id))}
-          // Raising an internal approval gate is a first send, never a resend —
-          // the approver has not been asked yet (that is what `raised: false`
-          // means), and sendRecordSigning is the path that materialises the step.
           onRequestApproval={() => run("approval", () => sendRecordSigning(kind, id))}
-          // A button labelled "Resend" must take the resend path. sendRecordSigning
-          // is the FIRST send: dispatchRequest's claim excludes an already-"sent"
-          // request, so it would have reported a delivery failure every time.
           onSend={() => run("send", () => (preview.sent ? resendRecordSigning(kind, id) : sendRecordSigning(kind, id)))}
           onClose={() => { setPreview(null); setErr(null); setNote(null); refresh(); }}
         />
