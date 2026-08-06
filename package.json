@@ -25,6 +25,7 @@
     "test:integrity": "tsx --tsconfig tsconfig.scripts.json scripts/test-integrity.ts",
     "test:tenant-guard": "tsx --tsconfig tsconfig.scripts.json scripts/test-tenant-guard.ts",
     "test:rls-restricted": "tsx --tsconfig tsconfig.scripts.json scripts/test-rls-restricted.ts",
+    "check:rls-role": "tsx --tsconfig tsconfig.scripts.json scripts/check-rls-role.ts",
     "test:tenant-e2e": "tsx --tsconfig tsconfig.scripts.json scripts/test-tenant-e2e.ts",
     "platform:create-admin": "tsx --tsconfig tsconfig.scripts.json scripts/create-platform-admin.ts",
     "test:platform-admins": "tsx --tsconfig tsconfig.scripts.json scripts/test-platform-admin-concurrency.ts",

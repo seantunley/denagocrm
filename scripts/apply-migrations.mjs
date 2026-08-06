@@ -111,6 +111,44 @@ export function buildChildEnv(env) {
     : { ...env };
 }
 
+/**
+ * REFUSE TO MIGRATE AS A ROLE THAT CANNOT CREATE TABLES.
+ *
+ * buildChildEnv falls back to DATABASE_URL when DATABASE_URL_UNPOOLED is unset.
+ * That fallback is right today, and it becomes a trap the moment DATABASE_URL is
+ * repointed at the restricted application role (prisma/rls/app-role.sql), which
+ * deliberately has no DDL: the runner would try to migrate as a role that cannot
+ * CREATE TABLE, and every deploy would fail somewhere in the middle of a
+ * migration rather than before touching anything.
+ *
+ * `prisma db execute` runs a migration.sql as ONE script — a failure part-way
+ * through leaves the statements before it applied and the migration unrecorded.
+ * Idempotent migrations survive that, but it is not a state to walk into on
+ * purpose when a single privilege check upfront says "stop".
+ *
+ * Pure and exported: the message is the whole value of this check, so it is
+ * asserted in tests rather than left to be discovered during an outage.
+ *
+ * @param {{ role: string, canCreate: boolean, unpooledConfigured: boolean }} facts
+ * @returns {string | null} the refusal message, or null when the role is fine
+ */
+export function migrationRoleProblem({ role, canCreate, unpooledConfigured }) {
+  if (canCreate) return null;
+  return (
+    `\n✖ MIGRATIONS REFUSED — the role "${role}" cannot create objects in schema public.\n\n` +
+    `  Migrations need DDL. The restricted application role does not have it, by design:\n` +
+    `  it is the role that does NOT bypass Row Level Security, and giving it DDL would\n` +
+    `  let it drop the policies that isolate tenants.\n\n` +
+    (unpooledConfigured
+      ? `  DATABASE_URL_UNPOOLED is set but resolves to "${role}". Point it at the OWNER\n` +
+        `  role (neondb_owner), not the application role.\n`
+      : `  DATABASE_URL_UNPOOLED is NOT set, so this runner fell back to DATABASE_URL —\n` +
+        `  which is now the application role. Set DATABASE_URL_UNPOOLED to the OWNER\n` +
+        `  role's direct connection string.\n`) +
+    `\n  See docs/RLS-ROLE-CUTOVER.md. Nothing has been applied.\n`
+  );
+}
+
 /** Default schema-diff probe: `prisma migrate diff` (DB → deployed schema). */
 function defaultRunDiff(childEnv) {
   return capture(
@@ -244,6 +282,21 @@ async function main() {
     // Checked AFTER --check (a read-only drift probe is always safe) and BEFORE
     // the lock is taken, so a skipped preview never queues behind a real deploy.
     if (!previewMayMigrate()) return;
+
+    // Checked BEFORE the lock and before any DDL: if the runner has been pointed
+    // at the restricted application role it must stop here, not half way through
+    // a migration script. One round trip.
+    {
+      const [privs] = await prisma.$queryRawUnsafe(
+        `SELECT current_user AS role, has_schema_privilege(current_user, 'public', 'CREATE') AS can_create`,
+      );
+      const problem = migrationRoleProblem({
+        role: String(privs?.role ?? "unknown"),
+        canCreate: privs?.can_create === true,
+        unpooledConfigured: Boolean(process.env.DATABASE_URL_UNPOOLED),
+      });
+      if (problem) throw new Error(problem);
+    }
 
     if (!DRY_RUN) {
       // Blocks until any other in-flight migration run releases the lock.
