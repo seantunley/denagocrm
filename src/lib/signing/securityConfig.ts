@@ -38,6 +38,12 @@ export function inspectSigningRuntimeConfig(env: EnvLike = process.env): Signing
   };
 }
 
+/**
+ * Validate the infrastructure required by signing operations. Tenant enforcement
+ * is intentionally reported by inspectSigningRuntimeConfig but is not a signing
+ * readiness precondition: the app-wide crm_app/RLS cutover has its own rollout
+ * plan and must not be forced by enabling this module.
+ */
 export function validateSigningRuntimeConfig(env: EnvLike = process.env): string[] {
   const c = inspectSigningRuntimeConfig(env);
   if (!c.production) return [];
@@ -45,7 +51,6 @@ export function validateSigningRuntimeConfig(env: EnvLike = process.env): string
   if (!c.privateStorage || !c.privateStorageToken) {
     errors.push("production signing requires private storage: BLOB_PRIVATE=true and BLOB_PRIVATE_READ_WRITE_TOKEN");
   }
-  if (!c.tenantEnforcement) errors.push("production signing requires TENANT_ENFORCEMENT=enforce");
   if (!c.tokenEncryptionKey) errors.push("production signing requires SIGNING_TOKEN_ENCRYPTION_KEY");
   if (!c.identitySessionSecret) errors.push("production signing requires SIGNING_IDENTITY_SESSION_SECRET");
   if (!c.trustServiceUrl || !c.trustServiceToken) {
