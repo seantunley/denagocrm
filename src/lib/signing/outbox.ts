@@ -62,6 +62,7 @@ export async function enqueueSigningJobNow(input: Parameters<typeof enqueueSigni
 }
 
 export async function leaseSigningJobs(limit = 20, onlyIds?: string[]): Promise<SigningOutboxJob[]> {
+  if (onlyIds && onlyIds.length === 0) return [];
   const worker = `${process.env.VERCEL_REGION || "local"}:${process.pid}:${crypto.randomUUID()}`;
   return basePrisma.$transaction(async (tx) => tx.$queryRaw<SigningOutboxJob[]>(Prisma.sql`
     WITH picked AS (
@@ -71,7 +72,7 @@ export async function leaseSigningJobs(limit = 20, onlyIds?: string[]): Promise<
           OR (status = 'leased' AND "leaseExpiresAt" < now())
        )
        AND "availableAt" <= now()
-       AND (${onlyIds?.length ? Prisma.sql`id IN (${Prisma.join(onlyIds)})` : Prisma.sql`TRUE`})
+       AND (${onlyIds ? Prisma.sql`id IN (${Prisma.join(onlyIds)})` : Prisma.sql`TRUE`})
        ORDER BY "availableAt", "createdAt"
        FOR UPDATE SKIP LOCKED
        LIMIT ${Math.max(1, Math.min(limit, 100))}
