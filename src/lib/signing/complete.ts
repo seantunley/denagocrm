@@ -13,6 +13,7 @@ import { logoDataUri } from "./render";
 import { isRequestClosed } from "./status";
 import { registerArtifactUpload, markArtifactState, recordLegalArtifact } from "./artifactCustody";
 import { signingReleaseId } from "./securityConfig";
+import type { FrozenRenderContext } from "./frozenSource";
 
 class CompletionLost extends Error {}
 class SourceCompletionLost extends Error {}
@@ -77,10 +78,10 @@ function acknowledgementsHtml(fields: AckField[], signers: Array<{ id: string; n
 }
 
 async function extendedRequest(requestId: string): Promise<{
-  sourceContext: Record<string, unknown> | null; canonicalSourceHash: string | null; consentVersion: string; releaseId: string;
+  sourceContext: FrozenRenderContext | null; canonicalSourceHash: string | null; consentVersion: string; releaseId: string;
   recipients: RecipientEvidence[];
 }> {
-  const meta = await basePrisma.$queryRaw<Array<{ sourceContext: Record<string, unknown> | null; canonicalSourceHash: string | null; consentVersion: string; releaseId: string | null }>>(Prisma.sql`
+  const meta = await basePrisma.$queryRaw<Array<{ sourceContext: FrozenRenderContext | null; canonicalSourceHash: string | null; consentVersion: string; releaseId: string | null }>>(Prisma.sql`
     SELECT "sourceContextJson" AS "sourceContext","canonicalSourceHash","consentVersion","releaseId"
       FROM "SignatureRequest" WHERE id=${requestId} LIMIT 1
   `);
@@ -142,10 +143,6 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       throw new Error("Envelope has no frozen canonical source; reissue it before completion");
     }
     const allSigners = req.recipients.filter((recipient) => recipient.role !== "viewer");
-    // Workflow graphs pre-materialise recipients on every possible branch. Once
-    // the interpreter reaches End, untouched pending recipients are off-path and
-    // are not parties to the executed contract. Sent/viewed/declined rows remain
-    // in scope and therefore still block completion unless they signed.
     const signers = req.workflowGraphJson
       ? allSigners.filter((recipient) => recipient.status !== "pending")
       : allSigners;
@@ -165,15 +162,14 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       const base = { page: field.page, x: field.x, y: field.y, width: field.width, height: field.height, kind: field.kind };
       if (["signature", "initials", "stamp"].includes(field.kind)) {
         const image = await sigImg(field.value);
-        if (image) stampedFields.push({ ...base, image, label: field.recipientId ? nameByRecipient.get(field.recipientId) : "" });
+        if (image) stampedFields.push({ ...base, image, label: field.recipientId ? nameByRecipient.get(field.recipientId) ?? "" : "" });
       } else if (field.kind === "checkbox") stampedFields.push({ ...base, text: field.value === "true" ? "✓" : "" });
       else stampedFields.push({ ...base, text: field.value ?? "" });
     }
     const shared = await prisma.signatureField.findMany({
       where: { requestId, recipientId: null }, include: { responses: true }, orderBy: [{ page: "asc" }, { y: "asc" }, { x: "asc" }, { id: "asc" }],
     });
-    const context = extra.sourceContext;
-    const html = renderDocumentHtml(doc, context, logoDataUri(), {
+    const html = renderDocumentHtml(doc, extra.sourceContext, logoDataUri(), {
       hideOverlays: true,
       stampedFields,
       appendHtml: certificateHtml({
@@ -189,11 +185,13 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     const seal = await sealPdfWithEvidence(rendered, { reason: `Signed: ${req.title}`, name: "Denago Cape Town" });
     const pdf = seal.pdf;
     const hash = crypto.createHash("sha256").update(pdf).digest("hex");
-    storedName = await saveFile(pdf, `${req.title} (signed).pdf`, "application/pdf");
-    await registerArtifactUpload({ tenantId: req.tenantId, envelopeId: requestId, kind: "signed_pdf", objectRef: storedName, bytes: pdf });
+    const signedPdfRef = await saveFile(pdf, `${req.title} (signed).pdf`, "application/pdf");
+    storedName = signedPdfRef;
+    await registerArtifactUpload({ tenantId: req.tenantId, envelopeId: requestId, kind: "signed_pdf", objectRef: signedPdfRef, bytes: pdf });
     if (seal.timestampToken) {
-      timestampTokenRef = await saveFile(seal.timestampToken, `${req.title}.rfc3161.tsr`, "application/timestamp-reply");
-      await registerArtifactUpload({ tenantId: req.tenantId, envelopeId: requestId, kind: "timestamp_token", objectRef: timestampTokenRef, bytes: seal.timestampToken });
+      const timestampRef = await saveFile(seal.timestampToken, `${req.title}.rfc3161.tsr`, "application/timestamp-reply");
+      timestampTokenRef = timestampRef;
+      await registerArtifactUpload({ tenantId: req.tenantId, envelopeId: requestId, kind: "timestamp_token", objectRef: timestampRef, bytes: seal.timestampToken });
     }
 
     const firstSigner = signers.find((row) => row.status === "signed");
@@ -205,13 +203,13 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       const document = await tx.document.create({
         data: {
           tenantId: req.tenantId,
-          fileName: `${req.title} (signed).pdf`, storedName, mimeType: "application/pdf", sizeBytes: pdf.length,
+          fileName: `${req.title} (signed).pdf`, storedName: signedPdfRef, mimeType: "application/pdf", sizeBytes: pdf.length,
           quoteId: req.quoteId, jobCardId: req.jobCardId, contactId: req.contactId, tag: "signed", uploadedById: uploaderId,
         },
       });
       const claimed = await tx.signatureRequest.updateMany({
         where: { id: requestId, status: "rendering" },
-        data: { status: "sealed", completedAt: null, signedPdfRef: storedName, signedPdfHash: hash, signedDocId: document.id },
+        data: { status: "sealed", completedAt: null, signedPdfRef, signedPdfHash: hash, signedDocId: document.id },
       });
       if (claimed.count !== 1) throw new CompletionLost();
       await tx.$executeRaw`UPDATE "SignatureRequest" SET "completionLeaseOwner"=NULL,"completionLeaseExpiresAt"=NULL WHERE id=${requestId}`;
@@ -243,12 +241,12 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       }
 
       await recordLegalArtifact({
-        tenantId: req.tenantId, envelopeId: requestId, documentId: document.id, objectRef: storedName!, sha256: hash,
+        tenantId: req.tenantId, envelopeId: requestId, documentId: document.id, objectRef: signedPdfRef, sha256: hash,
         sizeBytes: pdf.length, certificateFingerprint: seal.certificateFingerprint, certificateChain: seal.certificateChain,
         keyId: seal.keyId, trustPolicy: seal.trustPolicy, timestampTokenRef,
         validationReport: seal.validationReport,
       }, tx);
-      await markArtifactState({ tenantId: req.tenantId, objectRef: storedName!, kind: "signed_pdf", envelopeId: requestId, state: "sealed" }, tx);
+      await markArtifactState({ tenantId: req.tenantId, objectRef: signedPdfRef, kind: "signed_pdf", envelopeId: requestId, state: "sealed" }, tx);
       if (timestampTokenRef) await markArtifactState({ tenantId: req.tenantId, objectRef: timestampTokenRef, kind: "timestamp_token", envelopeId: requestId, state: "retained" }, tx);
       await tx.signatureEvent.create({
         data: {
@@ -286,8 +284,6 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
             AND status IN ('sealed','distributing','completed') LIMIT 1
         `).catch(() => [])
       : [];
-    // deleteFile is retain-only: it records delayed orphan candidates and never
-    // treats an ambiguous commit acknowledgement as permission to delete bytes.
     if (!committed.length && storedName) await deleteFile(storedName).catch(() => {});
     if (!committed.length && timestampTokenRef) await deleteFile(timestampTokenRef).catch(() => {});
 
