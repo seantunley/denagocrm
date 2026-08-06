@@ -75,3 +75,41 @@ export function revealSignCapability(ciphertext: string | null | undefined): str
     return null;
   }
 }
+
+/**
+ * The raw capability for a link that is about to be sent or shown.
+ *
+ * Every delivery path needs this and none of them may reach for the stored
+ * column: `token` is a DIGEST, and a URL built from it is hashed again by the
+ * public route and resolves to nothing — SMTP accepts the message, the CRM
+ * records the recipient as sent, and the customer receives a dead link.
+ *
+ * That defect was fixed for approvals and missed for recipients, which is
+ * exactly why this is one function taking a table rather than two copies. The
+ * `model` argument is a fixed union, never caller-supplied text.
+ *
+ * Rotation is the safe fallback rather than a failure: the stored digest is
+ * one-way, so an unreadable ciphertext means the old link can never be
+ * reproduced. Minting a new one leaves the previous URL dead, which is the
+ * correct outcome for a link nobody could rebuild anyway.
+ */
+export async function usableCapability(
+  model: "signatureRecipient" | "approvalStep",
+  id: string,
+  ciphertext: string | null | undefined,
+): Promise<string | null> {
+  const existing = revealSignCapability(ciphertext);
+  if (existing) return existing;
+  const rotated = newSignCapability();
+  const { basePrisma } = await import("@/lib/db");
+  const where = { id, tokenRevokedAt: null };
+  const data = { token: rotated.digest, tokenCiphertext: rotated.ciphertext };
+  // Two calls rather than a union-typed delegate: Prisma's per-model argument
+  // types are not mutually assignable, and casting them together would give up
+  // the checking that makes this safe in the first place.
+  const claimed = model === "signatureRecipient"
+    ? await basePrisma.signatureRecipient.updateMany({ where, data })
+    : await basePrisma.approvalStep.updateMany({ where, data });
+  // A revoked or vanished row must never be handed a working link.
+  return claimed.count === 1 ? rotated.raw : null;
+}

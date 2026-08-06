@@ -145,11 +145,11 @@ jobs:
         # seeds a request with events and a legacy plaintext token, applies the
         # signing migrations onto that, and then performs the runtime transitions.
         env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/signing_upgrade
-          DATABASE_URL_UNPOOLED: postgresql://postgres:postgres@localhost:5432/signing_upgrade
+          DATABASE_URL: postgresql://denago:denago_test_password@localhost:5432/signing_upgrade
+          DATABASE_URL_UNPOOLED: postgresql://denago:denago_test_password@localhost:5432/signing_upgrade
         run: |
-          PGPASSWORD=postgres psql -h localhost -U postgres -c 'DROP DATABASE IF EXISTS signing_upgrade'
-          PGPASSWORD=postgres psql -h localhost -U postgres -c 'CREATE DATABASE signing_upgrade'
+          PGPASSWORD=denago_test_password psql -h localhost -U denago -d postgres -c 'DROP DATABASE IF EXISTS signing_upgrade'
+          PGPASSWORD=denago_test_password psql -h localhost -U denago -d postgres -c 'CREATE DATABASE signing_upgrade'
           npm run test:signing-upgrade
 
       - name: Run tenant-guard integration tests

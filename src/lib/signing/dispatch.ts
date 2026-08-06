@@ -4,6 +4,7 @@ import { sendEmail } from "@/lib/email";
 import { sendWhatsAppText, waDigits, isWhatsAppConfigured } from "@/lib/whatsapp";
 import { logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
+import { usableCapability } from "./tokenVault";
 
 const BASE = process.env.SIGN_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za";
 
@@ -64,7 +65,12 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
     if (claimed.count !== 1) return { reachable: true, delivered: false };
   }
 
-  const url = signUrl(r.token);
+  // r.token is the stored DIGEST. Building the URL from it sends the customer a
+  // link the public route hashes again and cannot resolve — accepted by SMTP,
+  // recorded as sent, and unusable on arrival.
+  const raw = await usableCapability("signatureRecipient", r.id, r.tokenCiphertext);
+  if (!raw) return { reachable: true, delivered: false };
+  const url = signUrl(raw);
   const verb = opts?.reminder ? "Reminder — please sign" : "Please sign your document";
   const evType = opts?.reminder ? "reminded" : "sent";
   let delivered = false;

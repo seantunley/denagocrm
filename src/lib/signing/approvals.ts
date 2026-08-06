@@ -3,7 +3,7 @@ import { basePrisma, prisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { logSignEvent, buildSignEvent } from "./events";
 import { isRequestClosed } from "./status";
-import { newSignCapability, revealSignCapability } from "./tokenVault";
+import { usableCapability } from "./tokenVault";
 import { advanceWorkflow } from "@/lib/signflow/runtime";
 import { resolveTenantActor, resolveTenantMemberUser } from "@/lib/tenantActor";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
@@ -16,25 +16,6 @@ export function approvalUrl(token: string): string {
 
 export type ApprovalDeliveryResult = { ok: boolean; skipped?: boolean; error?: string };
 
-/**
- * The raw capability for an approval link, rotating if it cannot be recovered.
- *
- * Rotation is the safe fallback, not a failure: the digest in the row is
- * one-way, so a lost ciphertext means the old link can never be reproduced. A
- * new capability replaces it and the previous URL simply stops resolving —
- * which is the correct outcome for a link nobody can rebuild anyway.
- */
-async function usableApprovalCapability(stepId: string, ciphertext: string | null): Promise<string | null> {
-  const existing = revealSignCapability(ciphertext);
-  if (existing) return existing;
-  const rotated = newSignCapability();
-  const claimed = await basePrisma.approvalStep.updateMany({
-    where: { id: stepId, tokenRevokedAt: null },
-    data: { token: rotated.digest, tokenCiphertext: rotated.ciphertext },
-  });
-  // A revoked or vanished step must not be handed a working link.
-  return claimed.count === 1 ? rotated.raw : null;
-}
 export type ApprovalActor = {
   userId?: string;
   name: string;
@@ -100,7 +81,7 @@ export async function notifyApprover(stepId: string): Promise<ApprovalDeliveryRe
   // approval email. The raw capability is recovered from its ciphertext, and if
   // that cannot be read (no key when the row was written, or a rotated key) a
   // fresh capability is minted rather than sending something unusable.
-  const raw = await usableApprovalCapability(step.id, step.tokenCiphertext);
+  const raw = await usableCapability("approvalStep", step.id, step.tokenCiphertext);
   if (!raw) return { ok: false, error: `Could not prepare an approval link for “${step.label}”` };
   const result = await sendEmail({
     to: who.email,

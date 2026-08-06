@@ -124,15 +124,54 @@ test("revocation marks the row rather than rewriting the capability", () => {
   assert.match(migration, /NEW\."tokenRevokedAt" := COALESCE\(NEW\."tokenRevokedAt", now\(\)\)/);
 });
 
-test("an approval link carries the raw capability, not the stored digest", () => {
-  const approvals = read("src/lib/signing/approvals.ts");
-  // Putting the digest in the URL sends a link the route hashes again, so it
-  // resolves to nothing — a dead link in every approval email.
-  assert.doesNotMatch(approvals, /approvalUrl\(step\.token\)/);
-  assert.match(approvals, /approvalUrl\(raw\)/);
-  assert.match(approvals, /revealSignCapability\(/);
-  // An unrecoverable ciphertext rotates rather than sending something unusable.
-  assert.match(approvals, /newSignCapability\(\)/);
+test("NO delivery path builds a link from the stored digest", () => {
+  // The digest in a URL is hashed again by the public route and resolves to
+  // nothing: SMTP accepts the message, the CRM records "sent", and the customer
+  // or approver receives a dead link.
+  //
+  // Asserted across every path, because fixing the approval one and missing the
+  // recipient one is exactly what happened — the same defect, one file over.
+  const paths: Array<[string, RegExp]> = [
+    ["src/lib/signing/approvals.ts", /approvalUrl\(step\.token\)/],
+    ["src/lib/signing/dispatch.ts", /signUrl\(r\.token\)/],
+  ];
+  for (const [file, forbidden] of paths) {
+    const body = read(file);
+    assert.doesNotMatch(body, forbidden, `${file} builds a link from the stored digest`);
+    assert.match(body, /usableCapability\(/, `${file} must resolve a usable capability`);
+  }
+
+  // One helper, not a copy per caller — the drift is what caused the miss.
+  const vault = read("src/lib/signing/tokenVault.ts");
+  assert.match(vault, /export async function usableCapability\(/);
+  assert.match(vault, /revealSignCapability\(ciphertext\)/);
+  // An unrecoverable ciphertext rotates rather than sending something unusable,
+  // and a revoked row is never handed a working link.
+  assert.match(vault, /newSignCapability\(\)/);
+  assert.match(vault, /tokenRevokedAt: null/);
+});
+
+test("a new signature request writes its owning tenant explicitly", () => {
+  const service = read("src/lib/signing/service.ts");
+  // The stamping trigger fails closed, and basePrisma pins app.bypass_rls rather
+  // than app.current_tenant — so leaving tenantId to be inferred gave the trigger
+  // nothing to infer from and refused EVERY new signature request. A strict
+  // trigger without a way for the ordinary path to satisfy it is a wall.
+  assert.match(service, /tenantId: ownerTenantId/);
+  assert.match(service, /Cannot create a signature request without an owning tenant/);
+});
+
+test("the event ledger can re-run after a half-recorded deploy", () => {
+  const ledger = read("prisma/migrations/20260805232000_signing_event_ledger/migration.sql");
+  // The runner applies SQL and records it as applied in two steps, so a deploy
+  // dying between them re-runs the file. The append-only trigger this migration
+  // installs refuses its own backfill on that second pass.
+  const dropAt = ledger.indexOf('DROP TRIGGER IF EXISTS "SignatureEvent_immutable"');
+  const backfillAt = ledger.indexOf("historic-event:");
+  const recreateAt = ledger.lastIndexOf('CREATE TRIGGER "SignatureEvent_immutable"');
+  assert.ok(dropAt !== -1, "the immutable trigger must be dropped before the backfill");
+  assert.ok(dropAt < backfillAt, "…before it, not after");
+  assert.ok(recreateAt > backfillAt, "…and recreated once the backfill is done");
 });
 
 test("there is exactly one evidence-chain design", () => {

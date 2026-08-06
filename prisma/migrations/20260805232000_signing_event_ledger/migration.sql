@@ -37,6 +37,17 @@
 
 SET app.bypass_rls = 'on';
 
+-- REPLAY SAFETY, FIRST.
+--
+-- The deploy runner executes a migration's SQL and records it as applied in two
+-- separate steps, so a deploy dying between them re-runs this file. On that
+-- second pass the append-only trigger installed at the bottom already exists —
+-- and it refuses the backfill UPDATE below, so the migration blocks its own
+-- replay and the deploy wedges. Dropping it up front makes the file re-runnable;
+-- it is recreated at the end, and nothing outside this transaction sees the gap.
+DROP TRIGGER IF EXISTS "SignatureEvent_immutable" ON "SignatureEvent";
+DROP TRIGGER IF EXISTS "SignatureEvent_append_only" ON "SignatureEvent";
+
 -- Defaults on three of the four ONLY so an ordinary typed insert need not name
 -- them; the BEFORE INSERT trigger overwrites all three, so the defaults are
 -- never the values stored. INTEGER rather than BIGINT deliberately: a bigint
