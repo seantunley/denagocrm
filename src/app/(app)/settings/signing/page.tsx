@@ -41,7 +41,8 @@ export default async function SigningOperationsPage() {
         (SELECT count(*) FROM "SignatureRequest" WHERE "tenantId"=${tenantId} AND "failureCode" IS NOT NULL)::bigint AS integrity
     `),
   ]);
-  const summary = counts[0] || { dead: 0n, retry: 0n, failedDelivery: 0n, integrity: 0n };
+  const zero = BigInt(0);
+  const summary = counts[0] || { dead: zero, retry: zero, failedDelivery: zero, integrity: zero };
   return <div className="space-y-8 p-6">
     <PageHeader
       title="Signing trust operations"
