@@ -2,7 +2,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { isValidSignToken, hashSignToken } from "@/lib/signing/tokens";
 import { logSignEvent, reqMeta } from "@/lib/signing/events";
-import { isRequestClosed } from "@/lib/signing/status";
+import { isRequestClosed, isRequestProcessing } from "@/lib/signing/status";
 import { notifyCreatorDeclined } from "@/lib/signing/notify";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
@@ -12,6 +12,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const bodySchema = z.object({ reason: z.string().max(2000).default("") });
+const unavailable = (status: string) => isRequestClosed(status) || isRequestProcessing(status);
 
 export async function POST(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
@@ -30,7 +31,7 @@ async function handleDecline(token: string, req: Request): Promise<Response> {
   if (!recipient) return new Response("Not found", { status: 404 });
   if (recipient.status === "signed") return new Response("Already signed", { status: 409 });
   if (recipient.status === "declined") return new Response("Already declined", { status: 409 });
-  if (recipient.request.deletedAt || isRequestClosed(recipient.request.status)) return new Response("Closed", { status: 409 });
+  if (recipient.request.deletedAt || unavailable(recipient.request.status)) return new Response("This document can no longer be declined.", { status: 409 });
   if (recipient.request.expiresAt && recipient.request.expiresAt < new Date()) return new Response("This signing link has expired.", { status: 409 });
 
   const parsed = bodySchema.safeParse(await req.json().catch(() => ({})));
@@ -42,7 +43,7 @@ async function handleDecline(token: string, req: Request): Promise<Response> {
     const rows = await tx.$queryRaw<{ status: string; deletedAt: Date | null; expiresAt: Date | null }[]>`
       SELECT "status", "deletedAt", "expiresAt" FROM "SignatureRequest" WHERE "id" = ${recipient.requestId} FOR UPDATE`;
     const request = rows[0];
-    if (!request || request.deletedAt || isRequestClosed(request.status)) { aborted = "Closed"; return; }
+    if (!request || request.deletedAt || unavailable(request.status)) { aborted = "This document can no longer be declined."; return; }
     if (request.expiresAt && request.expiresAt < new Date()) { aborted = "This signing link has expired."; return; }
     const claimed = await tx.signatureRecipient.updateMany({
       where: { id: recipient.id, status: { notIn: ["signed", "declined"] } },
