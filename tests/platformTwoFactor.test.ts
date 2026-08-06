@@ -142,7 +142,7 @@ test("the code step is rate limited in its own right", () => {
 test("a backup code is spent before the session is issued, not after", () => {
   const actions = read("src/app/platform/login/actions.ts");
   const verify = actions.slice(actions.indexOf("export async function platformVerifyTotp"));
-  const consumed = verify.search(/totpBackupCodes:\s*JSON\.stringify|remainingCodes/);
+  const consumed = verify.search(/totpBackupCodes: match\.remainingJson/);
   const issued = verify.search(/completePlatformLogin\(/);
   assert.ok(consumed !== -1, "the verify step must write the remaining codes back");
   assert.ok(issued !== -1, "the verify step must issue the session");
@@ -188,13 +188,21 @@ test("enrolment stores the secret disabled until a code proves it arrived", () =
   // Writing the secret and enabling it in one step locks out anyone whose scan
   // silently failed — and on this account that means losing the console with
   // nobody able to restore it.
-  assert.match(begin, /totpEnabledAt:\s*null/);
-  assert.match(begin, /encryptValue\(secret\)/, "the secret is encrypted at rest");
+  //
+  // Stronger than it was: enrolment no longer writes totpEnabledAt at all. It
+  // stages the secret in a slot that authenticates nothing, so a started-then-
+  // abandoned enrolment cannot disable the factor that is already working.
+  assert.match(begin, /totpPendingSecret: encryptValue\(secret\)/, "the secret is encrypted at rest, and staged");
+  assert.doesNotMatch(begin, /data:[^}]*totpEnabledAt/, "enrolment must not touch whether 2FA is on");
 });
 
 test("backup codes are stored hashed and shown exactly once", () => {
   const security = read("src/app/actions/platformSecurity.ts");
-  assert.match(security, /bcrypt\.hash\(/);
+  // Hashing goes through the shared helper, so the enrolment side and the login
+  // side cannot disagree about what "the same code" means — on the CRM they did,
+  // and a code typed exactly as displayed was rejected.
+  assert.match(security, /hashBackupCode\(/);
+  assert.match(read("src/lib/backupCodes.ts"), /bcrypt\.hash\(normaliseBackupCode\(code\), 10\)/);
   assert.doesNotMatch(
     security,
     /totpBackupCodes:\s*JSON\.stringify\(backupCodes\)/,
@@ -262,3 +270,54 @@ function stripComments(source: string): string {
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
+
+// ── The two defects the #348 review found ───────────────────────────────────
+
+test("starting an enrolment does not disarm the live factor", () => {
+  const security = stripComments(read("src/app/actions/platformSecurity.ts"));
+  const begin = security.slice(
+    security.indexOf("export async function beginPlatformTotpEnrolment"),
+    security.indexOf("export async function confirmPlatformTotpEnrolment"),
+  );
+
+  // Asserted on what the function WRITES: it legitimately READS totpSecret and
+  // totpEnabledAt to decide whether a current code is required, so a blanket
+  // "must not mention" check fails on that select while proving nothing.
+  const writes = [...begin.matchAll(/data:\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.equal(writes.length, 1, "enrolment should perform exactly one write");
+  assert.match(writes[0], /totpPendingSecret: encryptValue\(secret\)/);
+  assert.doesNotMatch(writes[0], /totpEnabledAt/, "enrolment must not change whether 2FA is on");
+  assert.doesNotMatch(writes[0], /(^|[^g])totpSecret\b/, "enrolment must not replace the live secret");
+
+  // Replacing a live authenticator costs a current code; first enrolment does not.
+  assert.match(begin, /totpEnabledAt && live\.totpSecret/);
+  assert.match(begin, /verifyTotp\(/);
+  assert.match(begin, /Enter a current authenticator code to replace/);
+});
+
+test("confirmation promotes the pending secret rather than trusting the live one", () => {
+  const security = stripComments(read("src/app/actions/platformSecurity.ts"));
+  const confirm = security.slice(
+    security.indexOf("export async function confirmPlatformTotpEnrolment"),
+    security.indexOf("export async function disablePlatformTotp"),
+  );
+  assert.match(confirm, /decryptValue\(admin\.totpPendingSecret\)/);
+  assert.match(confirm, /totpSecret: encryptValue\(secret\)/);
+  assert.match(confirm, /totpPendingSecret: null/);
+
+  // Disabling clears the staged secret too, or one staged beforehand survives
+  // the disable and can be confirmed later, re-enabling a factor just removed.
+  const disable = security.slice(security.indexOf("export async function disablePlatformTotp"));
+  assert.match(disable, /totpPendingSecret: null/);
+});
+
+test("a backup code is consumed exactly once, under concurrency", () => {
+  const actions = stripComments(read("src/app/platform/login/actions.ts"));
+  const block = actions.slice(actions.indexOf("matchBackupCode"), actions.indexOf("if (!ok) {"));
+  // Read-modify-write let two simultaneous requests spend the same code and both
+  // receive a session. The write must be conditioned on the value that was read.
+  assert.match(block, /updateMany\(/);
+  assert.match(block, /totpBackupCodes: admin\.totpBackupCodes/);
+  assert.match(block, /count === 1/);
+  assert.doesNotMatch(block, /codes\.splice\(/);
+});
