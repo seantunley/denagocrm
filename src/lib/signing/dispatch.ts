@@ -13,6 +13,9 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
   if (!recipient || recipient.role === "viewer" || isRequestClosed(recipient.request.status) || ["signed", "declined"].includes(recipient.status)) {
     return { reachable: false, delivered: false };
   }
+  if (recipient.request.workflowGraphJson && (!recipient.nodeId || recipient.nodeId !== recipient.request.currentNodeId)) {
+    return { reachable: false, delivered: false };
+  }
   if (!opts?.reminder) {
     const claim = await prisma.signatureRecipient.updateMany({ where: { id: recipientId, status: "pending" }, data: { status: "sending", sendingAt: new Date() } });
     if (claim.count !== 1 && !["sending", "sent", "viewed"].includes(recipient.status)) return { reachable: true, delivered: false };
@@ -41,8 +44,10 @@ export async function dispatchRequest(requestId: string, opts?: { reminder?: boo
     });
     if (claim.count !== 1) return { targeted: 0, notified: 0, unreachable: 0 };
   }
-  const signers = req.recipients.filter((r) => r.role !== "viewer" && !["signed", "declined"].includes(r.status));
-  const targets = req.ordering === "sequential" ? signers.slice(0, 1) : signers;
+  const signers = req.recipients.filter((recipient) => recipient.role !== "viewer" && !["signed", "declined"].includes(recipient.status));
+  const targets = req.workflowGraphJson
+    ? signers.filter((recipient) => recipient.nodeId && recipient.nodeId === req.currentNodeId).slice(0, 1)
+    : req.ordering === "sequential" ? signers.slice(0, 1) : signers;
   let notified = 0; let unreachable = 0;
   for (const target of targets) {
     const outcome = await notifyRecipient(target.id, { reminder: opts?.reminder });
@@ -73,7 +78,7 @@ export async function recoverStaleSigningClaims(): Promise<{ requests: number; r
 
 export async function notifyNextInSequence(requestId: string): Promise<void> {
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: { orderBy: { order: "asc" } } } });
-  if (!req || req.ordering !== "sequential" || isRequestClosed(req.status)) return;
-  const next = req.recipients.find((r) => r.role !== "viewer" && !["signed", "declined"].includes(r.status));
+  if (!req || req.ordering !== "sequential" || req.workflowGraphJson || isRequestClosed(req.status)) return;
+  const next = req.recipients.find((recipient) => recipient.role !== "viewer" && !["signed", "declined"].includes(recipient.status));
   if (next) await notifyRecipient(next.id, { reminder: ["sent", "viewed"].includes(next.status) && !next.viewedAt });
 }
