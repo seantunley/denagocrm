@@ -26,6 +26,8 @@ import {
 export default function TwoFactorPanel({ enabled }: { enabled: boolean }) {
   const [setup, setSetup] = useState<{ qr: string; secret: string } | null>(null);
   const [starting, setStarting] = useState(false);
+  const [replaceCode, setReplaceCode] = useState("");
+  const [replaceError, setReplaceError] = useState<string | null>(null);
   const [confirmState, confirmAction, confirming] = useActionState<PlatformSecurityState, FormData>(
     confirmPlatformTotpEnrolment,
     {},
@@ -63,6 +65,43 @@ export default function TwoFactorPanel({ enabled }: { enabled: boolean }) {
     );
   }
 
+  if (enabled && setup) {
+    return (
+      <section className="card p-5">
+        <h2 className="flex items-center gap-2 font-semibold">
+          <KeyRound className="size-4 text-amber-500" />
+          Confirm your new authenticator
+        </h2>
+        <p className="mt-1.5 text-sm text-muted-foreground">
+          Your existing authenticator still works until you confirm this one.
+        </p>
+        <div className="mt-4 space-y-4">
+          <div className="flex flex-wrap items-start gap-5">
+            <Image src={setup.qr} alt="" width={160} height={160} className="rounded-lg bg-white p-2" unoptimized />
+            <div className="min-w-0 flex-1 space-y-2">
+              <p className="text-sm">Scan this with your authenticator app, then enter the code it shows.</p>
+              <code className="block break-all rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs">
+                {setup.secret}
+              </code>
+            </div>
+          </div>
+          <form action={confirmAction} className="flex flex-wrap items-end gap-2">
+            <div>
+              <label htmlFor="replace-confirm" className="mb-1.5 block text-xs font-medium">
+                Code from your new app
+              </label>
+              <input id="replace-confirm" name="code" required autoFocus className="input w-40 tracking-[0.2em]" />
+            </div>
+            <button type="submit" disabled={confirming} className="btn-primary">
+              {confirming ? "Verifying…" : "Confirm replacement"}
+            </button>
+          </form>
+          {confirmState?.error && <Alert>{confirmState.error}</Alert>}
+        </div>
+      </section>
+    );
+  }
+
   if (enabled) {
     return (
       <section className="card p-5">
@@ -73,6 +112,58 @@ export default function TwoFactorPanel({ enabled }: { enabled: boolean }) {
         <p className="mt-1.5 text-sm text-muted-foreground">
           On. You are asked for a code from your authenticator after your password.
         </p>
+        {/* REPLACING an authenticator, which the action already supports and this
+            panel did not offer. Without it, the only route from a working
+            authenticator to a new phone is "turn 2FA off, then set it up again"
+            — which leaves the account with no second factor in between, and
+            trains the operator to disable the control whenever they change
+            device. Both take a current code, so replacing is strictly safer than
+            the workaround it removes. */}
+        <div className="mt-4 rounded-lg border border-border p-3.5">
+          <div className="text-sm font-medium">Moving to a new phone?</div>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Set up a new authenticator without switching two-factor off in between. Your current
+            authenticator keeps working until the new one is confirmed.
+          </p>
+          <div className="mt-2.5 flex flex-wrap items-end gap-2">
+            <div>
+              <label htmlFor="replace-code" className="mb-1.5 block text-xs font-medium">
+                Current code
+              </label>
+              <input
+                id="replace-code"
+                value={replaceCode}
+                onChange={(event) => setReplaceCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                className="input w-40 tracking-[0.2em]"
+              />
+            </div>
+            <button
+              type="button"
+              disabled={starting || replaceCode.length !== 6}
+              className="btn-secondary"
+              onClick={async () => {
+                setStarting(true);
+                setReplaceError(null);
+                try {
+                  const started = await beginPlatformTotpEnrolment(replaceCode);
+                  setSetup({ qr: started.qr, secret: started.secret });
+                } catch (error) {
+                  setReplaceError(
+                    error instanceof Error && /current authenticator code/i.test(error.message)
+                      ? "That code isn't right. Check your authenticator and try again."
+                      : "Could not start the replacement. Please try again.",
+                  );
+                } finally {
+                  setStarting(false);
+                }
+              }}
+            >
+              {starting ? "Preparing…" : "Replace authenticator"}
+            </button>
+          </div>
+          {replaceError && <Alert>{replaceError}</Alert>}
+        </div>
+
         {/* A current code is required to turn it OFF — otherwise 2FA is
             removable by exactly the attacker it exists to stop: someone holding
             a stolen password and a live session. */}

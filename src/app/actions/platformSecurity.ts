@@ -9,6 +9,7 @@ import { logAuditStrict } from "@/lib/audit";
 import { encryptValue, decryptValue } from "@/lib/settings";
 import { generateBackupCodes, generateTotpSecret, totpKeyUri, verifyTotp } from "@/lib/totp";
 import { PLATFORM_NAME } from "@/lib/platformIdentity";
+import { createPlatformSessionCookie } from "@/lib/platformAuth";
 
 /**
  * Two-factor authentication for the platform console.
@@ -43,6 +44,29 @@ import { PLATFORM_NAME } from "@/lib/platformIdentity";
  */
 
 export type PlatformSecurityState = { error?: string; ok?: string; backupCodes?: string[] };
+
+/**
+ * Re-issue the acting admin's cookie at the CURRENT session version.
+ *
+ * Read back from the database rather than incremented locally, so the cookie
+ * carries what the row actually says even if something else bumped it in the
+ * same window — a guessed version would either lock the admin out or, worse,
+ * hand them a cookie that outlives a revocation somebody else performed.
+ */
+async function reissueActingPlatformSession(adminId: string): Promise<void> {
+  const fresh = await basePrisma.platformAdmin.findUnique({
+    where: { id: adminId },
+    select: { id: true, name: true, email: true, sessionVersion: true, disabledAt: true },
+  });
+  // A disabled account gets no new cookie — it should be signed out.
+  if (!fresh || fresh.disabledAt) return;
+  await createPlatformSessionCookie({
+    id: fresh.id,
+    name: fresh.name,
+    email: fresh.email,
+    sessionVersion: fresh.sessionVersion,
+  });
+}
 
 /**
  * Start enrolment: mint a secret, store it DISABLED, and hand back a QR code.
@@ -170,6 +194,16 @@ export async function confirmPlatformTotpEnrolment(
     return { error: "This setup is no longer active — two-factor authentication was changed elsewhere. Start again." };
   }
 
+  // The admin who just turned 2FA ON must not be the first casualty of it.
+  //
+  // Bumping sessionVersion revokes every session, and platform auth compares the
+  // cookie's version against the row on every request — so without a fresh
+  // cookie the person performing the operation is signed out on their next
+  // click. The intent is "revoke everyone ELSE", and that only happens if the
+  // acting session is re-issued at the new version. Nothing is weakened: every
+  // other cookie still carries the old version and remains dead.
+  await reissueActingPlatformSession(actor.id);
+
   revalidatePath("/platform/admins");
   // Shown ONCE. They are not recoverable — only their hashes are stored.
   return { ok: "Two-factor authentication is on.", backupCodes };
@@ -224,6 +258,9 @@ export async function disablePlatformTotp(
       tx,
     );
   });
+
+  // Same reasoning as enabling: revoke everyone else, not the person doing it.
+  await reissueActingPlatformSession(actor.id);
 
   revalidatePath("/platform/admins");
   return { ok: "Two-factor authentication turned off." };

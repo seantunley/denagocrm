@@ -360,3 +360,38 @@ test("revoking sessions also kills a half-finished login", () => {
   const mismatch = actions.indexOf("admin.sessionVersion !== pending.sessionVersion");
   assert.match(actions.slice(mismatch, mismatch + 300), /clearPlatformPending\(\)/);
 });
+
+test("turning 2FA on or off does not sign out the person doing it", () => {
+  const security = stripComments(read("src/app/actions/platformSecurity.ts"));
+  // Bumping sessionVersion revokes every session, and platform auth compares the
+  // cookie against the row on every request — so without a fresh cookie the
+  // admin performing the operation is signed out on their next click. The intent
+  // is "revoke everyone ELSE", which only holds if the acting session is
+  // re-issued at the new version.
+  assert.match(security, /reissueActingPlatformSession/);
+  const confirm = security.slice(
+    security.indexOf("export async function confirmPlatformTotpEnrolment"),
+    security.indexOf("export async function disablePlatformTotp"),
+  );
+  const disable = security.slice(security.indexOf("export async function disablePlatformTotp"));
+  assert.match(confirm, /reissueActingPlatformSession\(actor\.id\)/, "enabling must re-issue");
+  assert.match(disable, /reissueActingPlatformSession\(actor\.id\)/, "disabling must re-issue");
+
+  // Read back from the row rather than incremented locally: a guessed version
+  // either locks the admin out or outlives somebody else's revocation.
+  assert.match(security, /select: \{ id: true, name: true, email: true, sessionVersion: true, disabledAt: true \}/);
+  assert.match(security, /if \(!fresh \|\| fresh\.disabledAt\) return;/);
+});
+
+test("an authenticator can be replaced without turning 2FA off first", () => {
+  const panel = read("src/app/platform/(console)/admins/TwoFactorPanel.tsx");
+  // The action supported replacement and the panel did not offer it, so the only
+  // route to a new phone was "disable, then re-enrol" — which leaves the account
+  // with no second factor in between and teaches the operator to switch the
+  // control off whenever they change device.
+  assert.match(panel, /Replace authenticator/);
+  assert.match(panel, /beginPlatformTotpEnrolment\(replaceCode\)/);
+  assert.match(panel, /Confirm replacement/);
+  // …and it says plainly that the old one keeps working until confirmed.
+  assert.match(panel, /still works until you confirm/i);
+});
