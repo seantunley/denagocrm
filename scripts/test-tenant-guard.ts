@@ -10,7 +10,7 @@
  * Uses the Contact model — tenant-scoped in Phase B, no tenant FK yet, so
  * arbitrary tenantId strings are valid without seeding Tenant rows.
  */
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { prisma, basePrisma } from "../src/lib/db";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 import { runInTenantScope } from "../src/lib/tenantScope";
@@ -32,6 +32,7 @@ import {
 } from "../src/lib/tokenTenant";
 import { resolveTenantActor, resolveTenantMemberUser, listTenantStaff } from "../src/lib/tenantActor";
 import { resolveApprover } from "../src/lib/signing/approvals";
+import { hashSignToken } from "../src/lib/signing/tokens";
 import { hashApiKey, resolveApiKeyTenant, authenticateIntakeKey } from "../src/lib/apiKeys";
 import { claimSlotCapacity, getSlotConfig, slotInstantOrThrow } from "../src/lib/bookingSlots";
 import { NextRequest } from "next/server";
@@ -66,9 +67,9 @@ const recIdB = `recB_${SFX}`;
 const apId = `ap_${SFX}`;
 const campId = `camp_${SFX}`;
 const crId = `cr_${SFX}`;
-const signTokenA = `signtok_${SFX}`;
-const signTokenB = `signtokB_${SFX}`;
-const apTokenA = `aptok_${SFX}`;
+const signTokenA = createHash("sha256").update(`signtok_${SFX}`).digest("hex");
+const signTokenB = createHash("sha256").update(`signtokB_${SFX}`).digest("hex");
+const apTokenA = createHash("sha256").update(`aptok_${SFX}`).digest("hex");
 const crTokenA = `crtok_${SFX}`;
 const survId = `surv_${SFX}`;
 const survIdB = `survB_${SFX}`;
@@ -157,10 +158,10 @@ async function main() {
   // recipient owned by tenant A (and a signing recipient owned by tenant B, to prove
   // cross-tenant isolation). Tenant is DERIVED from these rows by public token.
   await basePrisma.signatureRequest.create({ data: { id: srId, title: "Doc A", tenantId: TENANT_A } });
-  await basePrisma.signatureRecipient.create({ data: { id: recId, requestId: srId, name: "Signer A", token: signTokenA, tenantId: TENANT_A } });
+  await basePrisma.signatureRecipient.create({ data: { id: recId, requestId: srId, name: "Signer A", token: hashSignToken(signTokenA), tenantId: TENANT_A } });
   await basePrisma.signatureRequest.create({ data: { id: srIdB, title: "Doc B", tenantId: TENANT_B } });
-  await basePrisma.signatureRecipient.create({ data: { id: recIdB, requestId: srIdB, name: "Signer B", token: signTokenB, tenantId: TENANT_B } });
-  await basePrisma.approvalStep.create({ data: { id: apId, requestId: srId, nodeId: "n1", label: "Approve", assigneeType: "owner", token: apTokenA, tenantId: TENANT_A } });
+  await basePrisma.signatureRecipient.create({ data: { id: recIdB, requestId: srIdB, name: "Signer B", token: hashSignToken(signTokenB), tenantId: TENANT_B } });
+  await basePrisma.approvalStep.create({ data: { id: apId, requestId: srId, nodeId: "n1", label: "Approve", assigneeType: "owner", token: hashSignToken(apTokenA), tenantId: TENANT_A } });
   await basePrisma.campaign.create({ data: { id: campId, name: "Camp A", channel: "email", body: "hi", audience: "all", tenantId: TENANT_A } });
   await basePrisma.campaignRecipient.create({ data: { id: crId, campaignId: campId, contactId: idA, token: crTokenA, tenantId: TENANT_A } });
   // Public survey surface: a survey + response owned by A (and one owned by B).
@@ -442,7 +443,7 @@ async function main() {
       () => resolveSignRecipientTenant(signTokenA),
       async () => {
         signRan = true;
-        return prisma.signatureRecipient.findUnique({ where: { token: signTokenA }, include: { request: true } });
+        return prisma.signatureRecipient.findUnique({ where: { token: hashSignToken(signTokenA) }, include: { request: true } });
       },
       () => null,
     );

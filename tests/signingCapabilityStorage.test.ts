@@ -45,8 +45,13 @@ test("no public surface resolves a signing or approval link by its raw value", (
   // Every one of these queries a UNIQUE column, so a plaintext lookup does not
   // error — it silently matches nothing, which is a 404 on a link the customer
   // was told to use rather than a failure anyone would notice in a test.
+  // `scripts/` is included deliberately. It was not, and the omission cost a CI
+  // failure: the tenant-guard harness seeded a recipient with a raw token and
+  // then looked it up by raw value, which this test could not see. Test and
+  // seeding code is exactly where a plaintext capability survives longest,
+  // because nobody reads it as security-relevant.
   const offenders: string[] = [];
-  for (const file of [...walk("src/app"), ...walk("src/lib")]) {
+  for (const file of [...walk("src/app"), ...walk("src/lib"), ...walk("scripts")]) {
     const body = read(file);
     if (!/signatureRecipient|approvalStep/.test(body)) continue;
     // `where: { token }` (shorthand) or `where: { token: token }` — anything
