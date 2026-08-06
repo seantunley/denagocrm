@@ -85,25 +85,31 @@ export async function leaseSigningJobs(limit = 20, onlyIds?: string[]): Promise<
   `));
 }
 
-export async function completeSigningJob(id: string): Promise<void> {
-  await basePrisma.$executeRaw`
+/** Complete only the exact tenant-bound lease that performed the work. */
+export async function completeSigningJob(job: SigningOutboxJob): Promise<boolean> {
+  if (!job.leaseOwner) return false;
+  const updated = await basePrisma.$executeRaw`
     UPDATE "SigningOutboxJob" SET status='completed', "completedAt"=now(),
       "leaseOwner"=NULL, "leaseExpiresAt"=NULL, "lastError"=NULL, "updatedAt"=now()
-    WHERE id=${id} AND status='leased'
+    WHERE id=${job.id} AND "tenantId"=${job.tenantId} AND status='leased' AND "leaseOwner"=${job.leaseOwner}
   `;
+  return updated === 1;
 }
 
-export async function failSigningJob(job: SigningOutboxJob, error: unknown): Promise<void> {
+/** A stale worker may never release or dead-letter a lease now owned by another worker. */
+export async function failSigningJob(job: SigningOutboxJob, error: unknown): Promise<boolean> {
+  if (!job.leaseOwner) return false;
   const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000);
   const terminal = job.attempts >= Number(process.env.SIGNING_OUTBOX_MAX_ATTEMPTS || 12);
   const delaySeconds = Math.min(6 * 60 * 60, Math.max(30, 2 ** Math.min(job.attempts, 10) * 15));
-  await basePrisma.$executeRaw`
+  const updated = await basePrisma.$executeRaw`
     UPDATE "SigningOutboxJob"
        SET status=${terminal ? "dead_letter" : "retry"}, "lastError"=${message},
            "availableAt"=now() + (${delaySeconds}::text || ' seconds')::interval,
            "leaseOwner"=NULL, "leaseExpiresAt"=NULL, "updatedAt"=now()
-     WHERE id=${job.id} AND status='leased'
+     WHERE id=${job.id} AND "tenantId"=${job.tenantId} AND status='leased' AND "leaseOwner"=${job.leaseOwner}
   `;
+  return updated === 1;
 }
 
 export async function deadLetterCount(tenantId?: string): Promise<number> {
