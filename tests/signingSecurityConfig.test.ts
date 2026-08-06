@@ -15,7 +15,7 @@ const production = {
   SIGNING_ANCHOR_TOKEN: "anchor",
   SIGNING_RELEASE_ID: "commit",
   SIGNING_IDENTITY_DEFAULT: "ES2_EMAIL_OTP",
-} as NodeJS.ProcessEnv;
+};
 
 test("production preflight fails closed when trust controls are absent", () => {
   const errors = validateSigningRuntimeConfig({ VERCEL_ENV: "production" });
