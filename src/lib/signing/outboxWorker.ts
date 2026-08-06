@@ -72,10 +72,20 @@ export async function processSigningOutbox(options?: { limit?: number; onlyIds?:
   for (const job of jobs) {
     try {
       await runInTenantScope({ tenantId: job.tenantId, system: false }, () => handle(job));
-      await completeSigningJob(job.id);
-      completed += 1;
+      if (await completeSigningJob(job)) {
+        completed += 1;
+      } else {
+        // The lease expired and was reclaimed while this worker was running.
+        // Never overwrite the new owner's state; all external effects are keyed
+        // idempotently so the current owner can safely reconcile and retry.
+        console.warn("[signing-outbox] worker lost lease before completion", { jobId: job.id, tenantId: job.tenantId });
+        failed += 1;
+      }
     } catch (error) {
-      await failSigningJob(job, error);
+      const recorded = await failSigningJob(job, error);
+      if (!recorded) {
+        console.warn("[signing-outbox] worker lost lease before failure could be recorded", { jobId: job.id, tenantId: job.tenantId });
+      }
       failed += 1;
     }
   }
