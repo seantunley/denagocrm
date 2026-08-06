@@ -56,7 +56,7 @@ export const journeysArticles: HelpArticle[] = [
       ] },
       { type: "h", text: "One thing to check" },
       { type: "p", text: "Converted rules and any journey that existed before re-enrolment control was added were left on the **parallel** run mode, because that is what they had always done. New journeys start on **single**. If a converted rule is now sending twice to the same person, that is the setting to look at first." },
-      { type: "callout", tone: "warning", text: "Journeys are owner/admin-only, from viewing through publishing. If you could edit automation rules before and cannot see Journeys now, ask an owner about your access." },
+      { type: "callout", tone: "warning", text: "Journeys need the \"Manage journeys\" permission (journeys.manage), from viewing through publishing. If you could edit automation rules before and cannot see Journeys now, ask an admin to grant it to your role in Settings → Access." },
       { type: "p", text: "There is still a **Settings → Automations** tab, but it holds only one setting now: **Next-step scheduling**, which controls when a journey's auto-created follow-up task falls due. Everything else lives in the journey builder." },
     ],
   },
@@ -105,7 +105,7 @@ export const journeysArticles: HelpArticle[] = [
         ["Service win-back", "Re-engages owners inactive for 12 months, then follows up"],
       ] },
       { type: "callout", tone: "warning", text: "If the legacy anniversary or win-back toggles are still on in Settings, a banner warns you to disable them before activating equivalent journeys — otherwise customers could receive both versions." },
-      { type: "callout", tone: "info", text: "Journeys are owner/admin-only, from viewing through publishing." },
+      { type: "callout", tone: "info", text: "Journeys need the \"Manage journeys\" permission (journeys.manage), from viewing through publishing." },
     ],
   },
   {
@@ -290,7 +290,7 @@ export const journeysArticles: HelpArticle[] = [
         "It is recorded in the **audit log**, so there is a record of who tested what and when.",
         "It appears in **Activity & traces** like any other run, with its own timeline.",
       ] },
-      { type: "callout", tone: "info", text: "Testing is owner/admin-only, like everything else on the Journeys page." },
+      { type: "callout", tone: "info", text: "Testing needs the same \"Manage journeys\" permission as everything else on the Journeys page." },
     ],
   },
   {
