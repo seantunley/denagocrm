@@ -205,7 +205,41 @@ export async function getAccessibleLeadIds(user: PermissionUser): Promise<string
   return rows.map((row) => row.id);
 }
 
+/**
+ * May this user reach THIS lead?
+ *
+ * THE RULE FOR EVERY canAccess* HELPER IN THIS FILE, stated once here and
+ * repeated in shape by each of them:
+ *
+ *   1. RESOLVE the record on `basePrisma` with an explicit tenant predicate.
+ *   2. A miss is a REFUSAL.
+ *   3. Only then consult the accessible-id list.
+ *
+ * Answering from the id list alone is what made these unsafe. A
+ * getAccessible*Ids helper returns `null` for an unrestricted scope, and
+ * `ids === null || ids.includes(id)` turns that into "true for ANY id at all" —
+ * an id in another tenant, or an id that does not exist. "Unrestricted within my
+ * tenant" is never "unrestricted", and `view_all` is a statement about how much
+ * of MY workspace I may see, not about whose workspace it is.
+ *
+ * That mattered because these helpers are the only record-level gate in front of
+ * writes that run on `basePrisma` and so bypass RLS — the same hole already
+ * closed on canAccessDocument, where a documents.manage holder could soft-delete
+ * another tenant's document by id. `basePrisma` is used deliberately here: the
+ * scoped client would answer the tenant question by hiding the row, which reads
+ * as "no such record" and leaves the predicate untested.
+ *
+ * Deliberately NOT filtered on `deletedAt` — same as canAccessDocument. Trash and
+ * restore ask these helpers about rows that are already soft-deleted, and a
+ * liveness filter here would refuse every restore. Liveness is the id list's job
+ * (each getAccessible*Ids already filters it) and the mutation guard's.
+ */
 export async function canAccessLead(user: PermissionUser, leadId: string): Promise<boolean> {
+  const lead = await basePrisma.lead.findFirst({
+    where: { id: leadId, ...activeTenantPredicate("lead access check") },
+    select: { id: true },
+  });
+  if (!lead) return false;
   const ids = await getAccessibleLeadIds(user);
   return ids === null || ids.includes(leadId);
 }
@@ -262,7 +296,13 @@ export async function getAccessibleContactIds(user: PermissionUser): Promise<str
   return rows.map((row) => row.id);
 }
 
+/** May this user reach THIS contact? Resolve-then-list — see canAccessLead. */
 export async function canAccessContact(user: PermissionUser, contactId: string): Promise<boolean> {
+  const contact = await basePrisma.contact.findFirst({
+    where: { id: contactId, ...activeTenantPredicate("contact access check") },
+    select: { id: true },
+  });
+  if (!contact) return false;
   const ids = await getAccessibleContactIds(user);
   return ids === null || ids.includes(contactId);
 }
@@ -325,7 +365,13 @@ export async function getAccessibleQuoteIds(user: PermissionUser): Promise<strin
   return rows.map((row) => row.id);
 }
 
+/** May this user reach THIS quote? Resolve-then-list — see canAccessLead. */
 export async function canAccessQuote(user: PermissionUser, quoteId: string): Promise<boolean> {
+  const quote = await basePrisma.quote.findFirst({
+    where: { id: quoteId, ...activeTenantPredicate("quote access check") },
+    select: { id: true },
+  });
+  if (!quote) return false;
   const ids = await getAccessibleQuoteIds(user);
   return ids === null || ids.includes(quoteId);
 }
@@ -361,7 +407,13 @@ export async function getAccessibleVehicleIds(user: PermissionUser): Promise<str
   return rows.map((row) => row.id);
 }
 
+/** May this user reach THIS vehicle? Resolve-then-list — see canAccessLead. */
 export async function canAccessVehicle(user: PermissionUser, vehicleId: string): Promise<boolean> {
+  const vehicle = await basePrisma.vehicle.findFirst({
+    where: { id: vehicleId, ...activeTenantPredicate("vehicle access check") },
+    select: { id: true },
+  });
+  if (!vehicle) return false;
   const ids = await getAccessibleVehicleIds(user);
   return ids === null || ids.includes(vehicleId);
 }
@@ -403,7 +455,13 @@ export async function getAccessibleJobCardIds(user: PermissionUser): Promise<str
   return rows.map((row) => row.id);
 }
 
+/** May this user reach THIS job card? Resolve-then-list — see canAccessLead. */
 export async function canAccessJobCard(user: PermissionUser, jobCardId: string): Promise<boolean> {
+  const jobCard = await basePrisma.jobCard.findFirst({
+    where: { id: jobCardId, ...activeTenantPredicate("job card access check") },
+    select: { id: true },
+  });
+  if (!jobCard) return false;
   const ids = await getAccessibleJobCardIds(user);
   return ids === null || ids.includes(jobCardId);
 }
@@ -583,7 +641,13 @@ export async function getAccessibleCaseIds(user: PermissionUser): Promise<string
   return rows.map((row) => row.id);
 }
 
+/** May this user reach THIS case? Resolve-then-list — see canAccessLead. */
 export async function canAccessCase(user: PermissionUser, caseId: string): Promise<boolean> {
+  const supportCase = await basePrisma.customerCase.findFirst({
+    where: { id: caseId, ...activeTenantPredicate("case access check") },
+    select: { id: true },
+  });
+  if (!supportCase) return false;
   const ids = await getAccessibleCaseIds(user);
   return ids === null || ids.includes(caseId);
 }
