@@ -88,6 +88,24 @@ export async function sendEmail(input: {
  */
 export { renderTemplate } from "./template";
 
+/**
+ *  signs off a templated email when no owner is assigned. Passed in,
+ * with the original literal as the default, because these helpers are
+ * SYNCHRONOUS and a brand lookup is not — making them async would ripple through
+ * both call sites and every future one for a sign-off line. An omitted argument
+ * is byte-for-byte the old behaviour.
+ */
+/**
+ * DEFAULT_TEAM_SIGNOFF signs a templated email when no owner is assigned.
+ *
+ * Passed in as a parameter with the original literal as its default, rather than
+ * resolved here, because these helpers are SYNCHRONOUS and a brand lookup is
+ * not. Making them async would ripple through both call sites and every future
+ * one, for a sign-off line. An omitted argument is byte-for-byte the old
+ * behaviour.
+ */
+export const DEFAULT_TEAM_SIGNOFF = "The Denago Cape Town team";
+
 export function leadVars(lead: {
   name: string;
   email?: string | null;
@@ -96,7 +114,7 @@ export function leadVars(lead: {
   valueCents?: number;
   product?: { name: string } | null;
   assignedTo?: { name: string } | null;
-}): Record<string, string> {
+}, teamName: string = DEFAULT_TEAM_SIGNOFF): Record<string, string> {
   const firstName = lead.name.split(/\s+/)[0] ?? lead.name;
   return {
     name: lead.name,
@@ -106,7 +124,7 @@ export function leadVars(lead: {
     model: lead.product?.name ?? "",
     color: lead.color ?? "",
     value: lead.valueCents ? formatZAR(lead.valueCents) : "",
-    user_name: lead.assignedTo?.name ?? "The Denago Cape Town team",
+    user_name: lead.assignedTo?.name ?? teamName,
   };
 }
 
@@ -116,7 +134,7 @@ export function contactVars(contact: {
   company?: string | null;
   email?: string | null;
   phone?: string | null;
-}): Record<string, string> {
+}, teamName: string = DEFAULT_TEAM_SIGNOFF): Record<string, string> {
   const name = [contact.firstName, contact.lastName].filter(Boolean).join(" ");
   return {
     name,
@@ -126,6 +144,6 @@ export function contactVars(contact: {
     model: "",
     color: "",
     value: "",
-    user_name: "The Denago Cape Town team",
+    user_name: teamName,
   };
 }

@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { prisma } from "./db";
 import { sendEmail, renderTemplate } from "./email";
 import { sendSms } from "./sms";
+import { emailBrand, type EmailBrand } from "./emailBrand";
 import { htmlToText } from "./signature";
 import { computeDue } from "./serviceDue";
 import { contactName } from "./format";
@@ -90,19 +91,27 @@ export async function countContacts(
   return (await resolveContacts(tenantId, criteria, channel)).length;
 }
 
-function emailShell(inner: string, unsubUrl: string) {
+function emailShell(inner: string, unsubUrl: string, brand?: EmailBrand) {
   const base = appBaseUrl();
+  // Absolute URL, always: a mail client has no origin to resolve a relative path
+  // against. Falls back to the built-in asset when the tenant has no logo.
+  const logo = brand?.logoUrl ?? `${base}/branding/denago-cape-town-logo.png`;
+  const name = brand?.branded ? brand.displayName : "Denago Cape Town";
+  // The footer line stays EXACTLY as it was for an unbranded send. A tenant
+  // supplies a name, not an address, so the location half is dropped rather than
+  // invented — a wrong address in a marketing footer is a compliance problem.
+  const footer = brand?.branded ? name : "Denago Cape Town &middot; Cape Town, South Africa";
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;background:#f1f5f9;padding:24px 12px;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
 <tr><td style="background:#0f172a;padding:16px 24px;">
-<img src="${base}/branding/denago-cape-town-logo.png" alt="Denago Cape Town" height="26" style="height:26px;">
+<img src="${logo}" alt="${name}" height="26" style="height:26px;">
 </td></tr>
 <tr><td style="padding:24px;font-size:15px;line-height:1.6;">${inner}</td></tr>
 <tr><td style="padding:16px 24px;background:#f8fafc;color:#64748b;font-size:12px;line-height:1.5;">
-Denago Cape Town &middot; Cape Town, South Africa<br>
-You received this because you're a Denago Cape Town customer.
+${footer}<br>
+You received this because you're a ${name} customer.
 <a href="${unsubUrl}" style="color:#64748b;">Unsubscribe</a>.
 </td></tr>
 </table></td></tr></table></body></html>`;
@@ -110,7 +119,7 @@ You received this because you're a Denago Cape Town customer.
 
 /** Wrap personalised HTML with the brand shell, rewrite links for click
  *  tracking, and append the open-tracking pixel + unsubscribe footer. */
-export function buildTrackedEmail(personalizedHtml: string, token: string) {
+export function buildTrackedEmail(personalizedHtml: string, token: string, brand?: EmailBrand) {
   const base = appBaseUrl();
   // Same pattern the click route reads the campaign's vouched-for hosts with, so
   // the set of links rewritten here and the set accepted there cannot drift.
@@ -119,7 +128,7 @@ export function buildTrackedEmail(personalizedHtml: string, token: string) {
     (_m, url) => `href="${base}/api/track/c/${token}?u=${encodeURIComponent(url)}"`,
   );
   const pixel = `<img src="${base}/api/track/o/${token}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;overflow:hidden;">`;
-  return emailShell(rewritten + pixel, `${base}/api/unsubscribe/${token}`);
+  return emailShell(rewritten + pixel, `${base}/api/unsubscribe/${token}`, brand);
 }
 
 export function newToken() {
@@ -165,6 +174,11 @@ export async function sendCampaignBatch(
     });
   }
 
+  // Resolved ONCE per batch, not per recipient: brandForTenant is cache()d, but a
+  // batch is up to 80 sends and the intent should be visible at the loop rather
+  // than relying on the cache to make it cheap.
+  const brand = await emailBrand(tenantId);
+
   let sent = 0;
   let failed = 0;
   for (const r of recipients) {
@@ -174,7 +188,7 @@ export async function sendCampaignBatch(
     if (campaign.channel === "email") {
       const subject = renderTemplate(campaign.subject ?? "", vars);
       const personalized = renderTemplate(campaign.htmlBody ?? campaign.body, vars);
-      const html = buildTrackedEmail(personalized, r.token);
+      const html = buildTrackedEmail(personalized, r.token, brand);
       const text = renderTemplate(campaign.body, vars);
       res = await sendEmail({ to: c.email!, subject, text, html });
     } else {
