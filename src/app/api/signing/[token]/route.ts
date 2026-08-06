@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { saveFile } from "@/lib/storage";
-import { isValidSignToken } from "@/lib/signing/tokens";
-import { reqMeta } from "@/lib/signing/events";
+import { isValidSignToken, hashSignToken } from "@/lib/signing/tokens";
+import { reqMeta, buildSignEvent } from "@/lib/signing/events";
 import { advanceAfterSignature } from "@/lib/signing/workflow";
 import { isRequestClosed } from "@/lib/signing/status";
 import { missingRequiredForRecipient } from "@/lib/signing/fieldValidation";
@@ -120,7 +120,7 @@ async function handleSign(token: string, req: Request): Promise<Response> {
   if (!submission) return new Response("Invalid submission", { status: 400 });
 
   const [recipient, identity] = await Promise.all([
-    prisma.signatureRecipient.findUnique({ where: { token }, include: { request: true } }),
+    prisma.signatureRecipient.findUnique({ where: { token: hashSignToken(token) }, include: { request: true } }),
     loadRecipientIdentity(token),
   ]);
   if (!recipient || !identity || !recipient.tenantId) return new Response("Not found", { status: 404 });
@@ -302,19 +302,17 @@ async function handleSign(token: string, req: Request): Promise<Response> {
           await tx.signatureField.update({ where: { id: update.id }, data: { value: update.value, filledAt } });
         }
         await tx.signatureEvent.create({
-          data: {
-            requestId: request.id,
+          data: buildSignEvent(request.id, {
             recipientId: recipient.id,
             type: "field_filled",
             actor: name,
             channel: "web",
             metadata: { kind: update.kind },
-          },
+          }),
         });
       }
       await tx.signatureEvent.create({
-        data: {
-          requestId: request.id,
+        data: buildSignEvent(request.id, {
           recipientId: recipient.id,
           type: "signed",
           actor: name,
@@ -322,7 +320,7 @@ async function handleSign(token: string, req: Request): Promise<Response> {
           ip: meta.ip,
           userAgent: meta.ua,
           metadata: { identityMode: lockedRequest.identityMode },
-        },
+        }),
       });
       // SignatureRecipient_enqueue_transition runs after the status update and
       // commits the durable continuation job in this same transaction.

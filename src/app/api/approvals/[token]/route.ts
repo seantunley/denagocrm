@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { isValidSignToken } from "@/lib/signing/tokens";
+import { isValidSignToken, hashSignToken } from "@/lib/signing/tokens";
 import { approveStep, rejectStep } from "@/lib/signing/approvals";
 import { reqMeta } from "@/lib/signing/events";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
@@ -31,7 +31,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
 }
 
 async function handleApproval(token: string, req: Request): Promise<Response> {
-  const step = await prisma.approvalStep.findUnique({ where: { token } });
+  const step = await prisma.approvalStep.findUnique({ where: { token: hashSignToken(token) } });
   if (!step || !step.tenantId) return new Response("Not found", { status: 404 });
   if (step.status !== "pending") return new Response("This approval has already been actioned.", { status: 409 });
 

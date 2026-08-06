@@ -1,26 +1,39 @@
 import "server-only";
 import { basePrisma } from "./db";
-import { resolveApprovalToken, resolveSigningRecipientToken } from "./signing/tokenVault";
+import { hashSignToken } from "./signing/tokenVault";
 
 /**
- * Trusted PRE-SCOPE tenant resolvers for no-user token surfaces. Signing and
- * approval secrets are resolved by SHA-256 digest through the token vault; the
- * plaintext token is never compared with ciphertext at rest. Campaign/survey
- * tokens retain their existing model-specific resolver.
+ * Trusted PRE-SCOPE tenant resolvers for no-user token surfaces.
+ *
+ * These run BEFORE a tenant scope exists — they are what decides which tenant
+ * the request belongs to — so they use basePrisma deliberately.
+ *
+ * Signing and approval capabilities are stored as SHA-256 digests, so the raw
+ * value out of the URL is hashed before it is queried. The raw token is never
+ * compared against anything at rest, and no query here can match on a readable
+ * secret. Campaign and survey tokens keep their existing model-specific
+ * resolvers: those are tracking identifiers, not credentials that authorise
+ * signing someone's contract.
  */
 
 export async function resolveSignRecipientTenant(
   token: string,
 ): Promise<{ tenantId: string | null } | null> {
-  const owner = await resolveSigningRecipientToken(token);
-  return owner ? { tenantId: owner.tenantId } : null;
+  const row = await basePrisma.signatureRecipient.findUnique({
+    where: { token: hashSignToken(token) },
+    select: { tenantId: true },
+  });
+  return row ? { tenantId: row.tenantId } : null;
 }
 
 export async function resolveApprovalStepTenant(
   token: string,
 ): Promise<{ tenantId: string | null } | null> {
-  const owner = await resolveApprovalToken(token);
-  return owner ? { tenantId: owner.tenantId } : null;
+  const row = await basePrisma.approvalStep.findUnique({
+    where: { token: hashSignToken(token) },
+    select: { tenantId: true },
+  });
+  return row ? { tenantId: row.tenantId } : null;
 }
 
 /** Owning tenant of a campaign tracking/unsubscribe token. */

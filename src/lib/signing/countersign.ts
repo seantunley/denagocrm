@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 // reqMeta only: the signing events are written on the transaction client now,
 // so logSignEvent (which uses its own) would put them outside the commit —
 // which is the bug this fixed.
-import { reqMeta } from "./events";
+import { reqMeta, buildSignEvent } from "./events";
 import { isRequestClosed } from "./status";
 
 /**
@@ -153,19 +153,17 @@ export async function countersignWithSavedSignature(opts: {
     // durable together or none of it is.
     for (const value of values) {
       await tx.signatureEvent.create({
-        data: {
-          requestId,
+        data: buildSignEvent(requestId, {
           recipientId,
           type: "field_filled",
           actor: signedName,
           channel: "web",
           metadata: { kind: value.kind, via: "countersign" },
-        },
+        }),
       });
     }
     await tx.signatureEvent.create({
-      data: {
-        requestId,
+      data: buildSignEvent(requestId, {
         recipientId,
         type: "identity_verified",
         actor: signedName,
@@ -173,11 +171,10 @@ export async function countersignWithSavedSignature(opts: {
         ip: meta.ip,
         userAgent: meta.ua,
         metadata: { mode: row.identityMode, method: row.identityMode === "link" ? "authenticated_session" : "staff_session" },
-      },
+      }),
     });
     await tx.signatureEvent.create({
-      data: {
-        requestId,
+      data: buildSignEvent(requestId, {
         recipientId,
         type: "signed",
         actor: signedName,
@@ -185,7 +182,7 @@ export async function countersignWithSavedSignature(opts: {
         ip: meta.ip,
         userAgent: meta.ua,
         metadata: { via: "countersign" },
-      },
+      }),
     });
 
     // Keep the quote's own countersignature columns in step. They are what the

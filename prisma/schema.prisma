@@ -1694,6 +1694,24 @@ model SignatureRequest {
   status  String @default("draft") // draft|sent|viewed|in_progress|completed|declined|expired|voided|rejected
   ordering String @default("parallel") // parallel|sequential
 
+  /// How hard a signer has to prove they are the intended recipient.
+  ///
+  ///   link      possession of the emailed URL is enough (the historic behaviour)
+  ///   email_otp a one-time code sent to the email address on file
+  ///   sms_otp   a one-time code sent to the mobile number on file
+  ///   otp       a code to either, whichever the signer still has access to
+  ///
+  /// Defaults to `link` so nothing about existing documents changes and no
+  /// customer is met with a step they were never told about. Turning it on is a
+  /// per-document choice made when the document is prepared: worth it for a
+  /// contract, needless friction for a delivery note.
+  ///
+  /// It is deliberately NOT forced on globally. A forwarded email, a shared
+  /// inbox or a mail-scanning proxy can all open a link-only document, so the
+  /// step-up is a real improvement — but which documents are worth asking a
+  /// customer for a code is a business judgement, not a security default.
+  identityMode String @default("link")
+
   // Workflow runtime — set when driven by a saved signing workflow with approval /
   // branch logic. The graph is frozen at send; currentNodeId is the interpreter position.
   workflowGraphJson Json?
@@ -1776,7 +1794,20 @@ model ApprovalStep {
   assigneeName   String?
   assigneeEmail  String?
 
-  token String @unique // tokenised email approve/reject links
+  /// SHA-256 DIGEST of the approve/reject capability — never the raw value.
+  /// The raw token exists only in the emailed URL; look a link up by hashing what
+  /// arrived (hashSignToken) and querying this column. A database trigger refuses
+  /// any write here that is not a 64-character digest.
+  token String @unique
+
+  /// AES-256-GCM of the raw capability, so a resend can repeat the SAME link
+  /// instead of quietly invalidating the one already in the approver's inbox.
+  /// NULL is normal (historic rows, and any row minted before the key existed) —
+  /// a resend then rotates to a fresh capability rather than failing.
+  tokenCiphertext String?
+  /// Set the moment the step is decided: a spent approval link stops working
+  /// immediately rather than remaining valid until someone notices.
+  tokenRevokedAt  DateTime?
 
   status         String    @default("pending") // pending | approved | rejected
   decidedByUserId String?
@@ -1810,7 +1841,35 @@ model SignatureRecipient {
   color String  @default("#2563eb")
   nodeId String? // workflow signer node this recipient was materialised from
 
-  token  String @unique // per-recipient signing token (hex)
+  /// SHA-256 DIGEST of this recipient's signing capability — never the raw value.
+  ///
+  /// A signing link is a bearer credential: whoever holds it can open and sign
+  /// this contract. Storing it readable meant a backup file, a database dump or
+  /// any read that bypassed row-level security handed over a working ability to
+  /// sign as the customer. The raw token now exists only in the delivered URL;
+  /// resolve a link by hashing what arrived (hashSignToken) and querying here.
+  /// A database trigger refuses any write that is not a 64-character digest.
+  token  String @unique
+
+  /// AES-256-GCM of the raw capability, so a reminder can repeat the SAME link
+  /// rather than silently invalidating the one already in the signer's inbox.
+  /// NULL is normal (historic rows, and any row minted before the key existed) —
+  /// a reminder then rotates to a fresh capability rather than failing.
+  tokenCiphertext String?
+  /// Set when the envelope reaches a terminal state, so a completed or declined
+  /// document's links stop working at once instead of remaining live.
+  tokenRevokedAt  DateTime?
+
+  /// Step-up identity, when the document asks for more than link possession.
+  /// `identityVerifiedAt` is what the signing route actually gates on;
+  /// `identityMethod` records which channel proved it (email_otp | sms_otp) so
+  /// the certificate can state what was proven rather than implying more;
+  /// `identityEvidenceHash` binds that proof to the challenge, IP and user agent
+  /// without keeping a second readable copy of the signer's details.
+  identityVerifiedAt   DateTime?
+  identityMethod       String?
+  identityEvidenceHash String?
+
   status String @default("pending") // pending|sent|viewed|signed|declined
 
   signedAt        DateTime?
@@ -1927,8 +1986,29 @@ model SignatureEvent {
   metadata    Json?
   createdAt   DateTime @default(now())
 
+  /// Tamper-evident chain. Database triggers own all four columns — the table is
+  /// append-only (UPDATE and DELETE are refused) and each row is linked to the
+  /// one before it, so removing or editing any event breaks every hash after it.
+  ///
+  /// `payloadHash` is computed by the APPLICATION (see signEventPayloadHash) and
+  /// is the only one an insert supplies; the trigger refuses a row without it.
+  /// The other three carry defaults purely so an ordinary typed create need not
+  /// name them — the trigger overwrites all three, so the defaults are never the
+  /// values actually stored.
+  ///
+  /// The digest is taken over a canonical string the application builds, NOT over
+  /// a jsonb serialised inside PostgreSQL: the latter ties the chain to the
+  /// server's JSON key ordering and session TimeZone, so a bundle restored onto a
+  /// differently configured server would fail to verify through no fault of the
+  /// evidence.
+  sequence    Int      @default(0)
+  prevHash    String   @default("")
+  payloadHash String
+  eventHash   String   @default("")
+
   @@index([requestId, createdAt])
   @@index([tenantId])
+  @@unique([requestId, sequence])
 }
 
 // ── Document Studio: free-form BlockNote documents ──────────────────

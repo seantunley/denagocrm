@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { isValidSignToken } from "@/lib/signing/tokens";
 import { rateLimitSigning } from "@/lib/signing/throttle";
-import { verifyEmailOtp } from "@/lib/signing/identity";
+import { verifyIdentityChallenge } from "@/lib/signing/identity";
 import { reqMeta } from "@/lib/signing/events";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
@@ -23,7 +23,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
     () => resolveSignRecipientTenant(token),
     async () => {
       const meta = await reqMeta();
-      const result = await verifyEmailOtp(token, parsed.data.code, { ip: meta.ip, userAgent: meta.ua });
+      const result = await verifyIdentityChallenge(token, parsed.data.code, { ip: meta.ip, userAgent: meta.ua });
       return Response.json(result, { status: result.ok ? 200 : 409 });
     },
     () => new Response("Not found", { status: 404 }),

@@ -17,9 +17,9 @@ ALTER TABLE "SignatureRequest" ADD COLUMN IF NOT EXISTS "identityMode" TEXT NOT 
 ALTER TABLE "SignatureRecipient" ADD COLUMN IF NOT EXISTS "identityVerifiedAt" TIMESTAMP(3);
 ALTER TABLE "SignatureRecipient" ADD COLUMN IF NOT EXISTS "identityMethod" TEXT;
 ALTER TABLE "SignatureRecipient" ADD COLUMN IF NOT EXISTS "identityEvidenceHash" TEXT;
-ALTER TABLE "SignatureRecipient" ADD COLUMN IF NOT EXISTS "tokenHash" TEXT;
+ALTER TABLE "SignatureRecipient" ADD COLUMN IF NOT EXISTS "tokenCiphertext" TEXT;
 ALTER TABLE "SignatureRecipient" ADD COLUMN IF NOT EXISTS "tokenRevokedAt" TIMESTAMP(3);
-ALTER TABLE "ApprovalStep" ADD COLUMN IF NOT EXISTS "tokenHash" TEXT;
+ALTER TABLE "ApprovalStep" ADD COLUMN IF NOT EXISTS "tokenCiphertext" TEXT;
 ALTER TABLE "ApprovalStep" ADD COLUMN IF NOT EXISTS "tokenRevokedAt" TIMESTAMP(3);
 
 UPDATE "SignatureRequest" r
@@ -53,10 +53,22 @@ ALTER TABLE "ApprovalStep" ALTER COLUMN "tenantId" SET NOT NULL;
 
 -- Database-side stamping closes the off/monitor-mode hole. Children derive their
 -- owner from the request rather than trusting a caller-supplied tenant.
+--
+-- FAILS CLOSED, with no default tenant. An earlier draft resolved an unknown
+-- tenant to 'tenant_denago_cpt'. That is defensible in a one-time backfill of
+-- rows we know are Denago's, but not in a permanent trigger: this is a
+-- white-label product onboarding other companies, so a trigger that quietly
+-- assigns unscoped inserts to Denago turns every future scope bug into another
+-- tenant's contract filed under Denago — the exact cross-tenant contamination
+-- the tenantId column exists to prevent. Refusing the write is recoverable; a
+-- silently mis-owned signing envelope is not.
 CREATE OR REPLACE FUNCTION signing_stamp_request_tenant() RETURNS trigger AS $$
 BEGIN
   IF NEW."tenantId" IS NULL THEN
-    NEW."tenantId" := COALESCE(NULLIF(current_setting('app.current_tenant', true), ''), 'tenant_denago_cpt');
+    NEW."tenantId" := NULLIF(current_setting('app.current_tenant', true), '');
+  END IF;
+  IF NEW."tenantId" IS NULL THEN
+    RAISE EXCEPTION 'SignatureRequest requires an owning tenant (no app.current_tenant in scope)';
   END IF;
   RETURN NEW;
 END;
@@ -121,26 +133,10 @@ DROP TRIGGER IF EXISTS "Document_stamp_signing_tenant" ON "Document";
 CREATE TRIGGER "Document_stamp_signing_tenant"
 BEFORE INSERT ON "Document" FOR EACH ROW EXECUTE FUNCTION signing_stamp_document_tenant();
 
--- ── Bearer-token digest and revocation ----------------------------------------
-UPDATE "SignatureRecipient" SET "tokenHash" = encode(digest("token", 'sha256'), 'hex')
-WHERE "tokenHash" IS NULL AND "token" IS NOT NULL;
-UPDATE "ApprovalStep" SET "tokenHash" = encode(digest("token", 'sha256'), 'hex')
-WHERE "tokenHash" IS NULL AND "token" IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS "SignatureRecipient_tokenHash_key" ON "SignatureRecipient"("tokenHash") WHERE "tokenHash" IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS "ApprovalStep_tokenHash_key" ON "ApprovalStep"("tokenHash") WHERE "tokenHash" IS NOT NULL;
-
-CREATE OR REPLACE FUNCTION signing_hash_bearer_token() RETURNS trigger AS $$
-BEGIN
-  IF NEW."token" IS NOT NULL THEN NEW."tokenHash" := encode(digest(NEW."token", 'sha256'), 'hex'); END IF;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-DROP TRIGGER IF EXISTS "SignatureRecipient_hash_token" ON "SignatureRecipient";
-CREATE TRIGGER "SignatureRecipient_hash_token" BEFORE INSERT OR UPDATE OF "token" ON "SignatureRecipient"
-FOR EACH ROW EXECUTE FUNCTION signing_hash_bearer_token();
-DROP TRIGGER IF EXISTS "ApprovalStep_hash_token" ON "ApprovalStep";
-CREATE TRIGGER "ApprovalStep_hash_token" BEFORE INSERT OR UPDATE OF "token" ON "ApprovalStep"
-FOR EACH ROW EXECUTE FUNCTION signing_hash_bearer_token();
+-- ── Bearer-token revocation ---------------------------------------------------
+-- The token columns themselves are converted to digests by the later
+-- 20260805235000_signing_token_vault migration, which is the single place that
+-- decides how a capability is stored. Nothing here writes or derives a token.
 
 CREATE OR REPLACE FUNCTION signing_revoke_request_tokens() RETURNS trigger AS $$
 BEGIN
@@ -177,6 +173,16 @@ CREATE TABLE IF NOT EXISTS "SigningIdentityChallenge" (
   "tenantId" TEXT NOT NULL,
   "recipientId" TEXT NOT NULL,
   "purpose" TEXT NOT NULL DEFAULT 'sign',
+  -- Which contact route the code was sent down: 'email' or 'sms'. Recorded
+  -- because it is evidence — the certificate has to be able to say what was
+  -- actually proven, and "a code sent to the mobile number on file" is a
+  -- different assertion from "a code sent to the email address on file".
+  "channel" TEXT NOT NULL DEFAULT 'email',
+  -- Digest of the destination the code went to, never the destination itself.
+  -- Lets a verification prove the code was sent to the address/number that was
+  -- on file at the time, without keeping a second copy of the signer's contact
+  -- details in a table that exists to hold secrets.
+  "destinationHash" TEXT,
   "codeHash" TEXT NOT NULL,
   "expiresAt" TIMESTAMP(3) NOT NULL,
   "attempts" INTEGER NOT NULL DEFAULT 0,

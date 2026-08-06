@@ -6,8 +6,9 @@ import { formatDate } from "@/lib/format";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { freezeDocumentGlobals } from "@/lib/signing/freezeDocument";
-import { signingSecurityMode } from "./securityPolicy";
-import { createProtectedBearerToken } from "./tokenVault";
+import { newSignCapability } from "./tokenVault";
+import { normalizePhone } from "@/lib/sms";
+import { buildSignEvent } from "./events";
 
 export type RequestSource = {
   documentId?: string | null;
@@ -17,7 +18,19 @@ export type RequestSource = {
   templateId?: string | null;
 };
 
-export type SigningIdentityMode = "link" | "email_otp";
+/**
+ * How hard a signer must prove they are the intended recipient.
+ *
+ *   link      possession of the emailed URL is enough (the historic behaviour)
+ *   email_otp a one-time code to the email address on file
+ *   sms_otp   a one-time code to the mobile number on file
+ *   otp       a code to either — the signer picks whichever they still have
+ *
+ * `otp` is usually the right choice when a document matters: it asks for real
+ * proof without betting the signature on one channel still working, which is the
+ * common failure (a stale mobile number, a mailbox the customer has left behind).
+ */
+export type SigningIdentityMode = "link" | "email_otp" | "sms_otp" | "otp";
 
 export async function createSignatureRequestFromDoc(opts: {
   doc: DocumentModel;
@@ -35,16 +48,40 @@ export async function createSignatureRequestFromDoc(opts: {
     ...companyTokens(await getCompanyProfile()),
     "date.today": formatDate(new Date()),
   });
-  const signers = frozenDoc.recipients.filter((recipient) => recipient.role !== "viewer");
-  const allSignersHaveEmail = signers.length > 0 && signers.every((recipient) => Boolean(recipient.email?.trim()));
-  const identityMode: SigningIdentityMode =
-    opts.identityMode ?? (signingSecurityMode() === "strict" && allSignersHaveEmail ? "email_otp" : "link");
+  // Defaults to `link`, and is NOT escalated automatically by any global switch.
+  //
+  // A step-up is a real improvement — a forwarded email, a shared inbox or a
+  // mail-scanning proxy can all open a link-only document — but which documents
+  // are worth asking a customer for a code is a business judgement. Turning it on
+  // for everything by flipping an environment variable would silently add a step
+  // to every delivery note and every signer who was never told to expect one.
+  const identityMode: SigningIdentityMode = opts.identityMode ?? "link";
+
+  // The mobile number "on file" is the linked contact's — the document model
+  // carries a name, an email and a role, but no phone. Resolved once here, at
+  // send time, so an SMS code goes to the number the CRM actually holds for this
+  // customer rather than to something typed into a template months ago.
+  const contactOnFile = source.contactId
+    ? await basePrisma.contact.findUnique({
+        where: { id: source.contactId },
+        select: { phone: true, email: true },
+      })
+    : null;
+  const contactPhone = contactOnFile?.phone ? normalizePhone(contactOnFile.phone) : null;
+  const contactEmail = contactOnFile?.email?.trim().toLowerCase() || null;
+
+  // Raw capabilities, keyed by the recipient row they belong to. They exist here
+  // only for the caller that has to build a URL, and are never written anywhere
+  // in this form — the database holds a digest, so there is no way to recover
+  // them afterwards and no reason to want to.
+  const rawCapabilities = new Map<string, string>();
 
   const writes = async (db: Prisma.TransactionClient) => {
     const request = await db.signatureRequest.create({
       data: {
         title: opts.title,
         status: "draft",
+        identityMode,
         ordering: opts.ordering ?? "parallel",
         message: opts.message ?? null,
         documentId: source.documentId ?? null,
@@ -57,37 +94,39 @@ export async function createSignatureRequestFromDoc(opts: {
         createdById: opts.createdById ?? null,
       },
     });
-    await db.$executeRaw`
-      UPDATE "SignatureRequest" SET "identityMode" = ${identityMode}
-      WHERE "id" = ${request.id}
-    `;
 
     const idMap = new Map<string, string>();
     for (let index = 0; index < frozenDoc.recipients.length; index += 1) {
       const recipient = frozenDoc.recipients[index];
-      const bearer = createProtectedBearerToken();
+      const capability = newSignCapability();
       const row = await db.signatureRecipient.create({
         data: {
           requestId: request.id,
           name: recipient.name || `Recipient ${index + 1}`,
           email: recipient.email || null,
+          // Only the party this contact actually is. Copying the contact's mobile
+          // onto every recipient would send the customer's verification code to
+          // the salesperson's row as well.
+          phone:
+            contactPhone &&
+            (recipient.party === "customer" ||
+              (contactEmail !== null && recipient.email.trim().toLowerCase() === contactEmail))
+              ? contactPhone
+              : null,
           role: recipient.role,
           order: index,
           color: recipient.color,
-          // The URL secret is encrypted at rest; tokenHash is corrected to the
-          // plaintext digest immediately below in this same transaction.
-          token: bearer.stored,
+          // The DIGEST is the stored value and the lookup key; the raw capability
+          // leaves this function only inside the URL that gets delivered. The
+          // ciphertext is kept solely so a reminder can repeat the same link.
+          token: capability.digest,
+          tokenCiphertext: capability.ciphertext,
         },
       });
-      await db.$executeRaw`
-        UPDATE "SignatureRecipient" p
-        SET "tokenHash" = ${bearer.hash}
-        WHERE p."id" = ${row.id}
-          AND p."requestId" = ${request.id}
-          AND p."tenantId" = (
-            SELECT r."tenantId" FROM "SignatureRequest" r WHERE r."id" = ${request.id}
-          )
-      `;
+      // Carried out of the transaction so the delivery step can build the URL
+      // without ever reading the raw value back from the database — there is no
+      // path that does, because nothing readable was written.
+      rawCapabilities.set(row.id, capability.raw);
       idMap.set(recipient.id, row.id);
     }
 
@@ -108,8 +147,7 @@ export async function createSignatureRequestFromDoc(opts: {
     if (fieldsData.length) await db.signatureField.createMany({ data: fieldsData });
 
     await db.signatureEvent.create({
-      data: {
-        requestId: request.id,
+      data: buildSignEvent(request.id, {
         type: "created",
         actor: "system",
         metadata: {
@@ -117,9 +155,9 @@ export async function createSignatureRequestFromDoc(opts: {
           recipients: frozenDoc.recipients.length,
           fields: fieldsData.length,
           identityMode,
-          bearerTokens: "aes-256-gcm+sha256",
+          capabilityStorage: "sha256-digest+aes-256-gcm-ciphertext",
         },
-      },
+      }),
     });
 
     return { id: request.id, recipients: frozenDoc.recipients.length, fields: fieldsData.length, identityMode };

@@ -30,6 +30,18 @@ model SigningIdentityChallenge {
   tenantId    String
   recipientId String
   purpose     String    @default("sign")
+  /// Which route the code was sent down: email | sms. This is evidence — the
+  /// certificate has to state what was actually proven, and "a code sent to the
+  /// mobile number on file" is a different claim from "a code sent to the email
+  /// address on file".
+  channel     String    @default("email")
+  /// Digest of the destination, never the destination itself. Proves the code
+  /// went to the address or number on file at the time without keeping a second
+  /// readable copy of the signer's contact details in a table of secrets.
+  destinationHash String?
+  /// HMAC of the code, salted with tenant and recipient so an identical six
+  /// digits for two signers do not produce the same stored value. The code
+  /// itself is never written down anywhere.
   codeHash    String
   expiresAt   DateTime
   attempts    Int       @default(0)

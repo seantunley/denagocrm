@@ -1,7 +1,7 @@
 import "server-only";
 import { basePrisma, prisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
-import { logSignEvent } from "./events";
+import { logSignEvent, buildSignEvent } from "./events";
 import { isRequestClosed } from "./status";
 import { advanceWorkflow } from "@/lib/signflow/runtime";
 import { resolveTenantActor, resolveTenantMemberUser } from "@/lib/tenantActor";
@@ -154,8 +154,7 @@ async function decideStep(
     if (claimed.count !== 1) return null;
 
     await tx.signatureEvent.create({
-      data: {
-        requestId: step.requestId,
+      data: buildSignEvent(step.requestId, {
         type: decision === "approved" ? "approved" : "rejected",
         actor: by.name,
         channel: by.channel ?? "web",
@@ -168,7 +167,7 @@ async function decideStep(
           ...(decision === "rejected" ? { reason: reason.slice(0, 500) } : {}),
           ...(by.userId ? { userId: by.userId } : {}),
         },
-      },
+      }),
     });
     // ApprovalStep triggers revoke the bearer token and enqueue workflow recovery
     // in this same transaction.

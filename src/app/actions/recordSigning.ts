@@ -18,7 +18,7 @@ import { quoteExpired } from "@/lib/quoteExpiry";
 import { defaultBuilderTemplateId } from "@/lib/docbuilder/store";
 import { resolveEnvelope } from "@/lib/signing/autoEnvelope";
 import { renderEnvelopePdf } from "@/lib/signing/render";
-import { createSignatureRequestFromDoc } from "@/lib/signing/service";
+import { createSignatureRequestFromDoc, type SigningIdentityMode } from "@/lib/signing/service";
 import { dispatchRequest, notifyRecipient } from "@/lib/signing/dispatch";
 import { logSignEvent } from "@/lib/signing/events";
 import { activeRecordRequest, isLockedForSigning, type QuoteSigningView } from "@/lib/signing/record";
@@ -155,6 +155,18 @@ export async function startRecordSigning(
   kind: Kind,
   id: string,
   workflowId?: string | null,
+  /**
+   * Ask the signer to prove who they are with a one-time code, or accept
+   * possession of the link as proof.
+   *
+   * Chosen per document, at the moment it is prepared. It is a real judgement:
+   * a contract is worth the extra step, a delivery note is not, and forcing it
+   * on everything is how a step-up becomes something people route around. The
+   * server re-derives what is actually possible from the recipient's own
+   * contact details, so asking for SMS on a signer with no number on file
+   * degrades to "we cannot verify you" rather than a code sent nowhere.
+   */
+  identityMode: SigningIdentityMode = "link",
 ): Promise<Result> {
   const user = await requireRecordSigningAccess(kind, id);
   const quoteId = kind === "quote" ? id : null;
@@ -270,6 +282,7 @@ export async function startRecordSigning(
           contactId: envelope.contactId,
         },
         ordering: envelope.ordering,
+        identityMode,
         createdById: user.id,
         client: tx,
       });

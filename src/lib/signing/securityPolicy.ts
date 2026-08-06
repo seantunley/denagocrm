@@ -3,13 +3,25 @@ import crypto from "crypto";
 
 export type SigningSecurityMode = "strict" | "compat";
 
+/**
+ * Strict mode is an EXPLICIT choice, never inferred from the environment.
+ *
+ * An earlier draft returned "strict" whenever NODE_ENV was production. That
+ * reads as a safe default and is the opposite: strict additionally requires a
+ * private Blob store, a purchased signing certificate and TENANT_ENFORCEMENT,
+ * none of which are configured today — so merging it would have made the very
+ * next signature completion throw in production, while every test and CI run
+ * (NODE_ENV=test) passed. A security posture that engages on deploy rather than
+ * on decision is a posture nobody has actually agreed to.
+ *
+ * So: opt in with SIGNING_SECURITY_MODE=strict, once the runbook's prerequisites
+ * are in place. Until then signing keeps working exactly as it does now — which
+ * is not "insecure", it is the system that is live today, plus this branch's
+ * hashed capabilities, verified identity and tamper-evident evidence, none of
+ * which are gated on strict mode.
+ */
 export function signingSecurityMode(): SigningSecurityMode {
-  const configured = (process.env.SIGNING_SECURITY_MODE ?? "").trim().toLowerCase();
-  if (configured === "compat") return "compat";
-  if (configured === "strict") return "strict";
-  // New production deployments fail closed. Local/test stays usable without a
-  // private Blob store or production certificate.
-  return process.env.NODE_ENV === "production" ? "strict" : "compat";
+  return (process.env.SIGNING_SECURITY_MODE ?? "").trim().toLowerCase() === "strict" ? "strict" : "compat";
 }
 
 export type SigningReadiness = {
@@ -29,9 +41,13 @@ export function signingReadiness(): SigningReadiness {
   if (!process.env.BUILDER_SIGN_P12_PASSPHRASE) failures.push("PDF signing certificate passphrase is missing");
   if (!process.env.SETTINGS_ENCRYPTION_KEY) failures.push("SETTINGS_ENCRYPTION_KEY is missing");
   if (!process.env.SIGNING_OTP_SECRET && !process.env.SESSION_SECRET) failures.push("signing OTP secret is missing");
-  if ((process.env.TENANT_ENFORCEMENT ?? "").toLowerCase() !== "enforce") {
-    failures.push("TENANT_ENFORCEMENT must be enforce");
-  }
+  // TENANT_ENFORCEMENT is deliberately NOT required here.
+  //
+  // Flipping the platform-wide tenancy enforcement switch is its own project
+  // with its own runbook and its own rollback plan. Making it a precondition of
+  // signing would mean a signing release could only ship by carrying out an
+  // unrelated, higher-risk migration on the same day — and would quietly hand
+  // whoever wants strict sealing the power to trigger it.
   const base = process.env.SIGN_BASE_URL || process.env.NEXT_PUBLIC_APP_URL;
   if (!base || !base.startsWith("https://")) failures.push("SIGN_BASE_URL must be an https URL");
   if (!process.env.CRON_SECRET) failures.push("CRON_SECRET is missing");

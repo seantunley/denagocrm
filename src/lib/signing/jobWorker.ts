@@ -412,7 +412,7 @@ async function finalizeRequestIfDone(job: SigningJob): Promise<void> {
     FROM "SigningJob"
     WHERE "tenantId" = ${job.tenantId} AND "requestId" = ${job.requestId}
   `;
-  if (Number(rows[0]?.unfinished ?? 1n) !== 0 || Number(rows[0]?.dead ?? 1n) !== 0) return;
+  if (Number(rows[0]?.unfinished ?? 1) !== 0 || Number(rows[0]?.dead ?? 1) !== 0) return;
   if (!(await eventExists(job.requestId, job.tenantId, COMPLETED_EVENT))) {
     await logSignEvent(job.requestId, {
       type: COMPLETED_EVENT,

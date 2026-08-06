@@ -61,7 +61,11 @@ test("higher-assurance identity is a database rule, not a UI promise", () => {
   assert.match(identity, /createHmac|signingOtpHash/);
   assert.match(identity, /FOR UPDATE/);
   assert.match(identity, /MAX_ATTEMPTS = 5/);
-  assert.match(identity, /"identityEvidenceHash"/);
+  // The evidence hash is written through the typed client now rather than raw
+  // SQL, so assert the FIELD is set rather than the shape of the statement that
+  // sets it — otherwise this fails on a refactor that changed nothing about the
+  // property being protected.
+  assert.match(identity, /identityEvidenceHash/);
 });
 
 test("terminal requests revoke bearer links", () => {
@@ -104,8 +108,18 @@ test("portable backup includes every signing storage class and trust table", () 
   }
   for (const table of ["SigningJob", "SigningIdentityChallenge", "LegalArtifact", "LegalArtifactValidation"]) {
     assert.match(backup, new RegExp(`data\\.${table}`));
-    assert.match(backup, new RegExp(`Missing signing trust table: \\${table}`));
+    // The verifier names the missing table through a template placeholder, so
+    // the source text is `${required}` and never the table name. The original
+    // assertion searched for the interpolated result and so could not pass for
+    // any input — assert that the table is in the required LIST instead, which
+    // is the thing that actually makes the backup refuse to verify without it.
+    assert.match(
+      backup,
+      new RegExp(`for \\(const required of \\[[^\\]]*"${table}"`, "s"),
+      `${table} is not in backup verification's required list`,
+    );
   }
+  assert.match(backup, /Missing signing trust table: \$\{required\}/);
   assert.match(backup, /PORTABLE_BACKUP_VERSION = 3/);
 });
 
@@ -121,7 +135,11 @@ test("durable worker is tenant explicit, leased, retryable and dead-lettered", (
   assert.match(worker, /manifestHash/);
 
   const cron = read("src/app/api/cron/signing-jobs/route.ts");
-  assert.match(cron, /Bearer \$\{secret\}/);
+  // The shared, timing-safe, fails-closed-without-CRON_SECRET helper rather than
+  // a hand-rolled `!== \`Bearer ${secret}\``, which this previously asserted and
+  // which is neither of those things.
+  assert.match(cron, /isAuthorizedCron\(req\)/);
+  assert.doesNotMatch(cron, /Bearer \$\{secret\}/);
   assert.match(cron, /runCronPerTenant/);
   assert.match(cron, /tenantId \?\? DEFAULT_TENANT_ID/);
   assert.match(read("vercel.json"), /\/api\/cron\/signing-jobs/);

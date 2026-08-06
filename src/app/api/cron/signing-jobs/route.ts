@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
+import { isAuthorizedCron } from "@/lib/cronAuth";
 import { logError } from "@/lib/errorLog";
+import { warmUpForCron } from "@/lib/cronPreflight";
 import { runCronPerTenant } from "@/lib/tenantCron";
 import { runSigningJobs } from "@/lib/signing/jobWorker";
 import { runSigningTransitionJobs } from "@/lib/signing/transitionWorker";
@@ -14,10 +16,10 @@ const MAX_RUNTIME_MS = 280_000;
 const MIN_START_BUDGET_MS = 15_000;
 
 export async function GET(req: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret || req.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  // The shared helper, not a hand-rolled string comparison: it is timing-safe
+  // and fails closed when CRON_SECRET is unset, which a `!==` check is not and
+  // does not.
+  if (!isAuthorizedCron(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const readiness = signingReadiness();
   if (!readiness.ready) {
@@ -26,8 +28,19 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: message, readiness }, { status: 503 });
   }
 
-  const runs = await runCronPerTenant(
-    async (tenantId, budget) => {
+  // Wake a suspended database before sweeping. This worker sends email and
+  // advances workflows and has no internal resume point, so starting it with
+  // the connection still cold spends the whole budget on the wake-up and cuts
+  // the sweep off part way through a send.
+  const routeBudget = await warmUpForCron("signing-jobs", {
+    routeBudgetMs: MAX_RUNTIME_MS,
+    minStartBudgetMs: MIN_START_BUDGET_MS,
+  });
+  if (!routeBudget.ok) {
+    return NextResponse.json({ ok: false, skipped: routeBudget.reason }, { status: 503 });
+  }
+
+  const runs = await runCronPerTenant(async (tenantId, budget) => {
       const concreteTenantId = tenantId ?? DEFAULT_TENANT_ID;
       if (budget.shouldStop(10_000)) {
         return {
@@ -53,7 +66,10 @@ export async function GET(req: NextRequest) {
       return { transitions, completion };
     },
     {
-      maxRuntimeMs: MAX_RUNTIME_MS,
+      // The budget that SURVIVED the warm-up, not the full route allowance —
+      // waking the endpoint costs real wall-clock and it comes out of the same
+      // deadline rather than being added on top of it.
+      maxRuntimeMs: routeBudget.remainingMs,
       minStartBudgetMs: MIN_START_BUDGET_MS,
       concurrency: 2,
       onError: async (tenantId, error) => {

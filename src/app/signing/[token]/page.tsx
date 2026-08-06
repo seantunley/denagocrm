@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { isValidSignToken } from "@/lib/signing/tokens";
+import { isValidSignToken, hashSignToken } from "@/lib/signing/tokens";
 import { renderRequestSigningSheets, signedFieldStamps } from "@/lib/signing/render";
 import { recordView } from "@/lib/signing/events";
 import { identityStatus, loadRecipientIdentity } from "@/lib/signing/identity";
@@ -49,7 +49,7 @@ export default async function SigningPage({ params }: { params: Promise<{ token:
 async function renderSigningPage(token: string) {
   const [recipient, identity] = await Promise.all([
     prisma.signatureRecipient.findUnique({
-      where: { token },
+      where: { token: hashSignToken(token) },
       include: { request: { include: { recipients: { orderBy: { order: "asc" } }, fields: true } } },
     }),
     loadRecipientIdentity(token),

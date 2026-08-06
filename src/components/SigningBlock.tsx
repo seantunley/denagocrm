@@ -85,6 +85,9 @@ export default function SigningBlock({
 }) {
   const router = useRouter();
   const [workflowId, setWorkflowId] = useState("");
+  // Off by default: the customer sees the step only when someone decided this
+  // particular document was worth it.
+  const [requireOtp, setRequireOtp] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -239,11 +242,25 @@ export default function SigningBlock({
               </select>
             </div>
           )}
+          <label className="flex cursor-pointer items-start gap-2 rounded-md border border-input bg-card/50 px-2.5 py-2">
+            <input
+              type="checkbox"
+              checked={requireOtp}
+              onChange={(e) => setRequireOtp(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span className="text-[11px] leading-snug text-slate-400">
+              <span className="font-medium text-slate-300">Verify the signer with a one-time code</span>
+              <br />
+              They enter a six-digit code sent to the email address or mobile number on file before the
+              document opens. Worth it for a contract; skip it for routine paperwork.
+            </span>
+          </label>
           <button
             className="btn-primary"
             disabled={busy !== null}
             onClick={() => run("start", async () => {
-              const started = await startRecordSigning(kind, id, workflowId || undefined);
+              const started = await startRecordSigning(kind, id, workflowId || undefined, requireOtp ? "otp" : "link");
               // The built-in quote flow is countersign-then-send, so do the
               // countersignature in the same click rather than making it a
               // separate button the user has to find.

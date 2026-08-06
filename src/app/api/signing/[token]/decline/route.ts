@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { isValidSignToken } from "@/lib/signing/tokens";
-import { reqMeta } from "@/lib/signing/events";
+import { isValidSignToken, hashSignToken } from "@/lib/signing/tokens";
+import { reqMeta, buildSignEvent } from "@/lib/signing/events";
 import { isRequestClosed } from "@/lib/signing/status";
 import { loadRecipientIdentity, identityStatus } from "@/lib/signing/identity";
 import { notifyCreatorDeclined } from "@/lib/signing/notify";
@@ -34,7 +34,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
 
 async function handleDecline(token: string, req: Request): Promise<Response> {
   const [recipient, identity] = await Promise.all([
-    prisma.signatureRecipient.findUnique({ where: { token }, include: { request: true } }),
+    prisma.signatureRecipient.findUnique({ where: { token: hashSignToken(token) }, include: { request: true } }),
     loadRecipientIdentity(token),
   ]);
   if (!recipient || !identity || !recipient.tenantId) return new Response("Not found", { status: 404 });
@@ -112,8 +112,7 @@ async function handleDecline(token: string, req: Request): Promise<Response> {
       if (closed.count !== 1) throw new DeclineAbort(409, "Closed");
 
       await tx.signatureEvent.create({
-        data: {
-          requestId: recipient.requestId,
+        data: buildSignEvent(recipient.requestId, {
           recipientId: recipient.id,
           type: "declined",
           actor: recipient.name,
@@ -121,7 +120,7 @@ async function handleDecline(token: string, req: Request): Promise<Response> {
           ip: meta.ip,
           userAgent: meta.ua,
           metadata: { reason, identityMode: request.identityMode },
-        },
+        }),
       });
       // Recipient and request triggers enqueue notification recovery and revoke
       // every bearer link in this same commit.
