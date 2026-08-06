@@ -2457,6 +2457,14 @@ model PlatformAdmin {
   passwordHash      String
   totpSecret        String? // encrypted TOTP secret; null until enrolled
   totpEnabledAt     DateTime?
+  /// JSON array of bcrypt-hashed one-time backup codes, as on User.
+  ///
+  /// Not optional for this account in the way it nearly is for a CRM user. A
+  /// tenant user who loses their authenticator asks an owner to reset it; a
+  /// platform admin has nobody above them, so the only recovery is an UPDATE
+  /// against the production database by hand. Codes are issued at enrolment and
+  /// each one is consumed on use.
+  totpBackupCodes   String?
   disabledAt        DateTime? // locks the account out without deleting it
   sessionVersion    Int       @default(0) // bump to revoke every existing session
   lastLoginAt       DateTime?

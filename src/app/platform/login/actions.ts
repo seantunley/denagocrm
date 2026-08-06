@@ -4,6 +4,10 @@ import bcrypt from "bcryptjs";
 import { redirect } from "next/navigation";
 import { basePrisma } from "@/lib/db";
 import { createPlatformSessionCookie, destroyPlatformSessionCookie } from "@/lib/platformAuth";
+import { clearPlatformPending, issuePlatformPending, readPlatformPending } from "@/lib/platformPending";
+import { verifyTotp } from "@/lib/totp";
+import { decryptValue } from "@/lib/settings";
+import { logAuditStrict } from "@/lib/audit";
 import {
   LOGIN_POLICY,
   checkRateLimit,
@@ -13,7 +17,11 @@ import {
   registerRateLimitAttempt,
 } from "@/lib/rateLimit";
 
-export type PlatformLoginState = { error?: string };
+export type PlatformLoginState = {
+  error?: string;
+  /** The password was right and this account has an authenticator enrolled. */
+  need2fa?: boolean;
+};
 
 /**
  * Platform-console login. Deliberately separate from the CRM's staff login: it
@@ -65,18 +73,121 @@ export async function platformLogin(
 
   await clearRateLimit(accountKey);
 
+  // THE SECOND FACTOR. A correct password stops here when one is enrolled — no
+  // session cookie is issued, `lastLoginAt` is not stamped, and nothing is
+  // recorded as a sign-in, because none of that has happened yet.
+  //
+  // The pending cookie carries the admin id and is signed; the verify step
+  // re-reads the row rather than trusting anything cached in it.
+  if (admin!.totpEnabledAt && admin!.totpSecret) {
+    await issuePlatformPending(admin!.id);
+    return { need2fa: true };
+  }
+
+  await completePlatformLogin(admin!);
+  redirect("/platform/tenants");
+}
+
+/**
+ * Issue the session. The ONE place a platform session is created after a
+ * successful login, so the password-only path and the two-factor path cannot
+ * drift on what "signed in" means.
+ */
+async function completePlatformLogin(admin: {
+  id: string;
+  name: string;
+  email: string;
+  sessionVersion: number;
+}): Promise<void> {
   await basePrisma.platformAdmin.update({
-    where: { id: admin!.id },
+    where: { id: admin.id },
     data: { lastLoginAt: new Date() },
   });
-
   await createPlatformSessionCookie({
-    id: admin!.id,
-    name: admin!.name,
-    email: admin!.email,
-    sessionVersion: admin!.sessionVersion,
+    id: admin.id,
+    name: admin.name,
+    email: admin.email,
+    sessionVersion: admin.sessionVersion,
   });
+}
 
+/**
+ * Verify the second factor and finish the login.
+ *
+ * Accepts an authenticator code or a one-time backup code. Deliberately NOT an
+ * emailed code: the CRM offers one, and adding it here would make the account
+ * that governs every tenant only as strong as somebody's mailbox. A platform
+ * admin who loses both their authenticator and their backup codes is recovered
+ * by hand, which is the correct amount of friction for this account.
+ */
+export async function platformVerifyTotp(
+  _prev: PlatformLoginState,
+  formData: FormData,
+): Promise<PlatformLoginState> {
+  const adminId = await readPlatformPending();
+  if (!adminId) return { error: "That took too long — please sign in again." };
+
+  // The six digits are rate-limited in their own right. Without this the pending
+  // cookie is a ten-minute window to try a million codes at whatever rate the
+  // network allows, which is not a second factor.
+  const ip = await getRequestIp();
+  const attemptKey = rateLimitKey("platform-2fa", `${adminId}:${ip}`);
+  if (!(await checkRateLimit(attemptKey)).allowed) {
+    return { error: "Too many incorrect codes. Try again later.", need2fa: true };
+  }
+
+  const code = String(formData.get("code") ?? "").trim();
+  const admin = await basePrisma.platformAdmin.findUnique({ where: { id: adminId } });
+  // Re-checked here, not just at the password step: an account disabled in the
+  // ten minutes between the two steps must not be able to finish signing in.
+  if (!admin || admin.disabledAt || !admin.totpEnabledAt || !admin.totpSecret) {
+    await clearPlatformPending();
+    return { error: "That took too long — please sign in again." };
+  }
+
+  let ok = false;
+  try {
+    ok = verifyTotp(code, decryptValue(admin.totpSecret));
+  } catch {
+    // A secret that will not decrypt means the encryption key changed. Fall
+    // through to the backup codes rather than locking the account out entirely.
+  }
+
+  if (!ok && admin.totpBackupCodes) {
+    const codes: string[] = JSON.parse(admin.totpBackupCodes);
+    const normalised = code.toUpperCase().replace(/[\s-]/g, "");
+    for (let index = 0; index < codes.length; index++) {
+      if (await bcrypt.compare(normalised, codes[index])) {
+        // SPENT BEFORE THE SESSION IS ISSUED. Consuming it afterwards would
+        // leave the code reusable if anything below threw.
+        codes.splice(index, 1);
+        await basePrisma.platformAdmin.update({
+          where: { id: admin.id },
+          data: { totpBackupCodes: JSON.stringify(codes) },
+        });
+        await logAuditStrict({
+          action: "platform.backup_code_used",
+          summary: `Platform backup code used to sign in (${codes.length} remaining)`,
+          entityType: "PlatformAdmin",
+          entityId: admin.id,
+          userName: admin.name,
+          actorType: "platform_admin",
+          metadata: { platformAdminId: admin.id, platformAdminEmail: admin.email, remaining: codes.length },
+        });
+        ok = true;
+        break;
+      }
+    }
+  }
+
+  if (!ok) {
+    await registerRateLimitAttempt(attemptKey, LOGIN_POLICY);
+    return { error: "That code isn't right. Try again, or use a backup code.", need2fa: true };
+  }
+
+  await clearRateLimit(attemptKey);
+  await clearPlatformPending();
+  await completePlatformLogin(admin);
   redirect("/platform/tenants");
 }
 

@@ -12,6 +12,7 @@ import {
   revokePlatformAdminSessionsAction,
 } from "@/app/actions/platformAdmins";
 import ChangeOwnPasswordForm from "./ChangeOwnPasswordForm";
+import TwoFactorPanel from "./TwoFactorPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,10 @@ export default async function PlatformAdminsPage() {
   // Defence-in-depth: the (console) layout gates this route group, but re-check so
   // the queries below can never run without a platform session.
   const me = await requirePlatformAdmin();
+  const myTotp = await basePrisma.platformAdmin.findUnique({
+    where: { id: me.id },
+    select: { totpEnabledAt: true },
+  });
 
   const admins = await basePrisma.platformAdmin.findMany({
     orderBy: { createdAt: "asc" },
@@ -95,6 +100,10 @@ export default async function PlatformAdminsPage() {
           </div>
         </section>
       )}
+
+      {/* Enrolment state read from the row rather than the session claim: the
+          session is minted at login and would not reflect 2FA turned on since. */}
+      <TwoFactorPanel enabled={Boolean(myTotp?.totpEnabledAt)} />
 
       <section className="card p-5">
         <h2 className="font-semibold">Your password</h2>
