@@ -1,5 +1,3 @@
-import "server-only";
-
 type EnvLike = Record<string, string | undefined>;
 
 export type SigningRuntimeConfig = {
