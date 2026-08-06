@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "@/lib/db";
-import { saveFile, deleteFile } from "@/lib/storage";
+import { saveFile } from "@/lib/storage";
 import { isValidSignToken, hashSignToken } from "@/lib/signing/tokens";
 import { reqMeta } from "@/lib/signing/events";
 import { advanceAfterSignature } from "@/lib/signing/workflow";
@@ -13,7 +13,7 @@ import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
 import { rateLimitSigning } from "@/lib/signing/throttle";
 import { requireIdentityForToken } from "@/lib/signing/identity";
 import { decodeAndValidateSignaturePng } from "@/lib/signing/signatureImage";
-import { registerArtifactUpload, markArtifactState } from "@/lib/signing/artifactCustody";
+import { registerArtifactUpload, markArtifactState, scheduleOrphanSettlement } from "@/lib/signing/artifactCustody";
 import { signingReleaseId } from "@/lib/signing/securityConfig";
 
 export const runtime = "nodejs";
@@ -54,6 +54,7 @@ async function handleSign(rawToken: string, request: Request): Promise<Response>
   const digest = hashSignToken(rawToken);
   const recipient = await prisma.signatureRecipient.findUnique({ where: { token: digest }, include: { request: true } });
   if (!recipient?.tenantId) return new Response("Not found", { status: 404 });
+  const tenantId = recipient.tenantId;
   const envelope = recipient.request;
   if (envelope.deletedAt || unavailable(envelope.status)) return new Response("This document can no longer be signed.", { status: 409 });
   if (envelope.expiresAt && envelope.expiresAt < new Date()) return new Response("This signing link has expired.", { status: 409 });
@@ -106,7 +107,7 @@ async function handleSign(rawToken: string, request: Request): Promise<Response>
         const image = decodeAndValidateSignaturePng(value);
         const ref = await saveFile(image.buffer, `signature-${recipient.id}.png`, "image/png");
         savedRefs.push(ref);
-        await registerArtifactUpload({ tenantId: recipient.tenantId, envelopeId: envelope.id, kind: "signature_image", objectRef: ref, bytes: image.buffer, sha256: image.sha256 });
+        await registerArtifactUpload({ tenantId, envelopeId: envelope.id, kind: "signature_image", objectRef: ref, bytes: image.buffer, sha256: image.sha256 });
         value = ref;
         if (field.kind === "signature" && !signatureRef) signatureRef = ref;
       }
@@ -147,19 +148,19 @@ async function handleSign(rawToken: string, request: Request): Promise<Response>
       for (const update of updates) {
         await tx.signatureFieldResponse.upsert({
           where: { fieldId_recipientId: { fieldId: update.id, recipientId: recipient.id } },
-          create: { tenantId: recipient.tenantId, fieldId: update.id, recipientId: recipient.id, value: update.value, filledAt },
+          create: { tenantId, fieldId: update.id, recipientId: recipient.id, value: update.value, filledAt },
           update: { value: update.value, filledAt },
         });
         const field = fillable.get(update.id);
         if (field?.recipientId === null) await tx.signatureField.updateMany({ where: { id: update.id, filledAt: null }, data: { value: update.value, filledAt } });
         else await tx.signatureField.update({ where: { id: update.id }, data: { value: update.value, filledAt } });
         await tx.signatureEvent.create({
-          data: { tenantId: recipient.tenantId, requestId: envelope.id, recipientId: recipient.id, type: "field_filled", actor: name, channel: "web", metadata: { kind: update.kind } },
+          data: { tenantId, requestId: envelope.id, recipientId: recipient.id, type: "field_filled", actor: name, channel: "web", metadata: { kind: update.kind } },
         });
       }
       await tx.signatureEvent.create({
         data: {
-          tenantId: recipient.tenantId, requestId: envelope.id, recipientId: recipient.id, type: "signed", actor: name, channel: "web",
+          tenantId, requestId: envelope.id, recipientId: recipient.id, type: "signed", actor: name, channel: "web",
           ip: meta.ip, userAgent: meta.ua,
           metadata: {
             consent: true,
@@ -180,10 +181,10 @@ async function handleSign(rawToken: string, request: Request): Promise<Response>
       await tx.signatureRequest.updateMany({
         where: { id: envelope.id, status: { in: ["prepared", "dispatching", "active", "sent", "viewed"] } }, data: { status: "signing" },
       });
-      for (const ref of savedRefs) await markArtifactState({ tenantId: recipient.tenantId, objectRef: ref, kind: "signature_image", envelopeId: envelope.id, state: "referenced" }, tx);
+      for (const ref of savedRefs) await markArtifactState({ tenantId, objectRef: ref, kind: "signature_image", envelopeId: envelope.id, state: "referenced" }, tx);
     });
   } catch (error) {
-    for (const ref of savedRefs) await deleteFile(ref).catch(() => {});
+    for (const ref of savedRefs) await scheduleOrphanSettlement(ref, tenantId);
     if (error instanceof SignAbort) return new Response(error.message, { status: error.status });
     throw error;
   }
