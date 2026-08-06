@@ -305,13 +305,15 @@ test("the workspace OTP policy is what decides by default", () => {
   assert.doesNotMatch(action, /identityMode: SigningIdentityMode = "link"/, "absence, not a default");
 });
 
-test("the timestamp comment does not claim more than the code proves", () => {
+test("the timestamp claim matches what the code now does", () => {
   const source = read("src/lib/signing/timestamp.ts");
-  // Without CMS signature validation, and over plain HTTP, an active attacker
-  // can fabricate a response carrying our imprint and nonce.
+  // The wording tracked the implementation through three states: an overclaim,
+  // then an honest admission of the gap, and now a claim the code backs — every
+  // stored token has had its signature, EKU and chain verified.
   assert.doesNotMatch(source, /proves the authority ISSUED it/);
-  assert.match(source, /proves NOTHING on its own/);
-  assert.match(source, /fabricate a reply/);
+  assert.doesNotMatch(source, /proves NOTHING on its own/);
+  assert.match(source, /Every stored token has been fully validated/);
+  assert.match(source, /cannot produce a reply that passes validation/);
 });
 
 test("exactly one thing sends an approval email", () => {

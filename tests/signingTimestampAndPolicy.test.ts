@@ -31,6 +31,35 @@ test("coverage is read out of the token, not searched for in its bytes", () => {
   assert.equal(timestampCoversDigest("", digest), false);
 });
 
+test("a token is fully validated before it is ever stored", () => {
+  const source = read("src/lib/signing/timestamp.ts");
+  const verify = read("src/lib/signing/timestampVerify.ts");
+
+  // Imprint and nonce only establish that the reply answers THIS request. Over
+  // plain HTTP an active attacker can supply a well-formed response carrying
+  // both, so nothing is filed until the CMS signature, the timestamping EKU and
+  // the chain to a trusted root have all been checked. A stored token that
+  // cannot be verified is worse than none: it looks like evidence.
+  assert.match(source, /verifyTimestampToken\(parsed\.token\.toString\("base64"\), digest\)/);
+  assert.match(source, /if \(!verification\.ok\) return null;/);
+
+  // The signature is verified against the reconstructed SignedAttrs SET…
+  assert.match(verify, /createVerify\("RSA-SHA256"\)/);
+  assert.match(verify, /Type\.SET, true, children\(signedAttrs\)/);
+  // …the signer must be authorised to attest to time…
+  assert.match(verify, /not authorised for timestamping/);
+  // …and every link in the chain is a signature check, terminating at a root.
+  assert.match(verify, /checkIssued\(chain\[i \+ 1\]\) \|\| !chain\[i\]\.verify/);
+  assert.match(verify, /chain does not terminate at a trusted root/);
+
+  // forge cannot read these certificates ("unsupported critical extension") and
+  // cannot open the token at all ("Only wrapped ContentType Data"). Verifying
+  // with a library that rejects valid input would reject every genuine token —
+  // the exact failure this file was rewritten to avoid.
+  assert.match(verify, /crypto\.X509Certificate/);
+  assert.doesNotMatch(verify, /forge\.pki\.verifyCertificateChain/);
+});
+
 test("the request and the parse agree on what was asked and answered", () => {
   const source = read("src/lib/signing/timestamp.ts");
   // The imprint is READ from the TSTInfo and compared, and the nonce we sent
@@ -40,9 +69,9 @@ test("the request and the parse agree on what was asked and answered", () => {
   assert.match(source, /parsed\.nonce\.equals\(nonce\)/);
   assert.match(source, /function readTstInfo/);
 
-  // …and the honest boundary is stated rather than implied: no chain validation
-  // against trusted roots yet.
-  assert.match(source, /does not validate the CMS signature/);
+  // The boundary moved: chain validation now exists, so the file must no longer
+  // describe itself as lacking it.
+  assert.doesNotMatch(source, /does not validate the CMS signature/);
 });
 
 test("transport is HTTP on purpose, and the reason is recorded", () => {

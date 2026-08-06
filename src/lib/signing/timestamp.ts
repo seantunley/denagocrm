@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import forge from "node-forge";
+import { verifyTimestampToken } from "./timestampVerify";
 
 /**
  * RFC 3161 trusted timestamps.
@@ -247,6 +248,18 @@ export async function requestTrustedTimestamp(digest: Buffer): Promise<TrustedTi
     if (!parsed.imprint || !parsed.imprint.equals(digest)) return null;
     if (!parsed.nonce || !parsed.nonce.equals(nonce)) return null;
 
+    // FULL CRYPTOGRAPHIC VALIDATION before anything is stored.
+    //
+    // The imprint and nonce checks only establish that the reply answers THIS
+    // request; they say nothing about who produced it. Over plain HTTP an active
+    // attacker can supply a well-formed response carrying both. So the CMS
+    // signature is verified, the signer must hold the timestamping EKU, and the
+    // chain must reach a trusted root — an unverifiable token is not filed at
+    // all, because a stored token that cannot be checked is worse than none: it
+    // looks like evidence.
+    const verification = verifyTimestampToken(parsed.token.toString("base64"), digest);
+    if (!verification.ok) return null;
+
     // A timestamp far from our own clock is not usable as evidence — it means
     // one of the two is wrong, and we cannot tell which. Refuse it rather than
     // file something that undermines the record it is meant to support.
@@ -274,21 +287,17 @@ export async function requestTrustedTimestamp(digest: Buffer): Promise<TrustedTi
  *
  * ── What this still does NOT do ─────────────────────────────────────────────
  *
- * It does not validate the CMS signature, the authority's certificate chain, or
- * the timestamping EKU against trusted roots.
+ * Every stored token has been fully validated (see timestampVerify.ts): the CMS
+ * signature verifies, the signer holds the timestamping EKU, and the chain
+ * reaches a root in the store Node ships. A token that fails any of that is
+ * discarded rather than filed, so a stored token is one an authority we trust
+ * actually issued for this hash.
  *
- * So a stored token currently proves NOTHING on its own. An earlier version of
- * this comment said it "proves the authority issued it for this hash" — that is
- * wrong, and wrong in the direction that matters. The response signature is not
- * checked, and the transport is plain HTTP, so an active network attacker can
- * fabricate a reply carrying the imprint and nonce we sent and a time of their
- * choosing. The imprint and nonce checks stop a token for ANOTHER document or a
- * replayed older response from being accepted; they do not establish that a
- * timestamp authority produced it at all.
- *
- * Until the CMS signature and chain are validated, treat this as a convenience
- * record, not evidence — and do not let any customer-facing wording imply
- * otherwise.
+ * That is what makes plain HTTP acceptable here. Transport gives a signed token
+ * no integrity it does not already carry, and an attacker who intercepts the
+ * exchange cannot produce a reply that passes validation. What HTTP does cost is
+ * confidentiality: an observer learns a hash was stamped and when, though not
+ * what it is a hash of.
  */
 export function timestampCoversDigest(tokenBase64: string, digest: Buffer): boolean {
   try {
