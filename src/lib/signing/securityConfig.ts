@@ -1,5 +1,7 @@
 import "server-only";
 
+type EnvLike = Record<string, string | undefined>;
+
 export type SigningRuntimeConfig = {
   production: boolean;
   privateStorage: boolean;
@@ -16,11 +18,11 @@ export type SigningRuntimeConfig = {
   defaultIdentityPolicy: string;
 };
 
-export function isProductionRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
+export function isProductionRuntime(env: EnvLike = process.env): boolean {
   return env.VERCEL_ENV === "production" || env.APP_ENV === "production" || env.DENAGO_PRODUCTION === "true";
 }
 
-export function inspectSigningRuntimeConfig(env: NodeJS.ProcessEnv = process.env): SigningRuntimeConfig {
+export function inspectSigningRuntimeConfig(env: EnvLike = process.env): SigningRuntimeConfig {
   return {
     production: isProductionRuntime(env),
     privateStorage: env.BLOB_PRIVATE === "true",
@@ -38,7 +40,7 @@ export function inspectSigningRuntimeConfig(env: NodeJS.ProcessEnv = process.env
   };
 }
 
-export function validateSigningRuntimeConfig(env: NodeJS.ProcessEnv = process.env): string[] {
+export function validateSigningRuntimeConfig(env: EnvLike = process.env): string[] {
   const c = inspectSigningRuntimeConfig(env);
   if (!c.production) return [];
   const errors: string[] = [];
@@ -62,7 +64,7 @@ export function validateSigningRuntimeConfig(env: NodeJS.ProcessEnv = process.en
   return errors;
 }
 
-export function assertSigningRuntimeConfig(env: NodeJS.ProcessEnv = process.env): void {
+export function assertSigningRuntimeConfig(env: EnvLike = process.env): void {
   const errors = validateSigningRuntimeConfig(env);
   if (errors.length) throw new Error(`Signing runtime preflight failed:\n- ${errors.join("\n- ")}`);
 }
