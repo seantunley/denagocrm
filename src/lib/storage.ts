@@ -77,9 +77,6 @@ function isTrustedBlobRef(ref: string): boolean {
   try { const u = new URL(ref); return u.protocol === "https:" && BLOB_HOST.test(u.hostname); }
   catch { return false; }
 }
-function isLocalRef(ref: string): boolean {
-  return ref.length > 0 && !ref.includes("/") && !ref.includes("\\") && !ref.includes("\0") && ref !== "." && ref !== ".." && !path.isAbsolute(ref);
-}
 function classifyRef(ref: string): "blob" | "local" {
   if (isTrustedBlobRef(ref)) return "blob";
   if (isLocalRef(ref)) return "local";
@@ -104,8 +101,13 @@ export async function assertOwnedBlob(ref: string): Promise<OwnedBlob> {
   throw new Error("Refusing a Blob URL that is not in an application-owned store");
 }
 
+function isLocalRef(ref: string): boolean {
+  return ref.length > 0 && !ref.includes("/") && !ref.includes("\\") && !ref.includes("\0") && ref !== "." && ref !== ".." && !path.isAbsolute(ref);
+}
+
 export function directReadUrl(ref: string): string | null {
-  return isTrustedBlobRef(ref) && !isPrivateBlobRef(ref) ? ref : null;
+  if (!isTrustedBlobRef(ref) || isPrivateBlobRef(ref)) return null;
+  return ref;
 }
 
 async function streamToBuffer(stream: ReadableStream<Uint8Array>, cap = MAX_BLOB_BYTES): Promise<Buffer> {
