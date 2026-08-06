@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { isValidSignToken } from "@/lib/signing/tokens";
+import { isValidSignToken, hashSignToken } from "@/lib/signing/tokens";
 import { logSignEvent, reqMeta } from "@/lib/signing/events";
 import { isRequestClosed } from "@/lib/signing/status";
 import { notifyCreatorDeclined } from "@/lib/signing/notify";
@@ -16,11 +16,8 @@ const bodySchema = z.object({ reason: z.string().max(2000).default("") });
 export async function POST(req: Request, ctx: { params: Promise<{ token: string }> }) {
   const { token } = await ctx.params;
   if (!isValidSignToken(token)) return new Response("Invalid link", { status: 400 });
-  // Throttle before any database work — same policy as the sign endpoint.
   const throttled = await rateLimitSigning(token);
   if (throttled) return throttled;
-  // Phase C no-user edge: derive the document's tenant first, then run the guarded
-  // decline inside that scope (dormant no-op when off; fails closed under enforcement).
   return withTokenTenantScope(
     () => resolveSignRecipientTenant(token),
     () => handleDecline(token, req),
@@ -29,7 +26,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
 }
 
 async function handleDecline(token: string, req: Request): Promise<Response> {
-  const recipient = await prisma.signatureRecipient.findUnique({ where: { token }, include: { request: true } });
+  const recipient = await prisma.signatureRecipient.findUnique({ where: { token: hashSignToken(token) }, include: { request: true } });
   if (!recipient) return new Response("Not found", { status: 404 });
   if (recipient.status === "signed") return new Response("Already signed", { status: 409 });
   if (recipient.status === "declined") return new Response("Already declined", { status: 409 });
@@ -40,17 +37,13 @@ async function handleDecline(token: string, req: Request): Promise<Response> {
   const reason = parsed.success ? parsed.data.reason : "";
   const meta = await reqMeta();
 
-  // One transaction that locks the request FOR UPDATE, re-checks it isn't already
-  // voided/completed, claims the recipient decline, and sets the request declined
-  // — all together. This stops a concurrent staff void from being silently
-  // overwritten by a decline (and vice-versa).
   let aborted: string | null = null;
   await prisma.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<{ status: string; deletedAt: Date | null; expiresAt: Date | null }[]>`
       SELECT "status", "deletedAt", "expiresAt" FROM "SignatureRequest" WHERE "id" = ${recipient.requestId} FOR UPDATE`;
-    const r = rows[0];
-    if (!r || r.deletedAt || isRequestClosed(r.status)) { aborted = "Closed"; return; }
-    if (r.expiresAt && r.expiresAt < new Date()) { aborted = "This signing link has expired."; return; }
+    const request = rows[0];
+    if (!request || request.deletedAt || isRequestClosed(request.status)) { aborted = "Closed"; return; }
+    if (request.expiresAt && request.expiresAt < new Date()) { aborted = "This signing link has expired."; return; }
     const claimed = await tx.signatureRecipient.updateMany({
       where: { id: recipient.id, status: { notIn: ["signed", "declined"] } },
       data: { status: "declined", declinedAt: new Date(), declineReason: reason || null },
