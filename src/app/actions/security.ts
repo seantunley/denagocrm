@@ -15,23 +15,56 @@ import {
   verifyTotp,
   generateBackupCodes,
 } from "@/lib/totp";
+import { hashBackupCode } from "@/lib/backupCodes";
 import {
   bumpUserSessionVersion,
   setUserDisabledState,
 } from "@/lib/userSecurity";
 
-export async function beginTotpEnrolment(): Promise<{
+/**
+ * Start enrolling an authenticator.
+ *
+ * The new secret goes to `totpPendingSecret`. The LIVE factor is left exactly as
+ * it is, because this used to overwrite `totpSecret` and clear `totpEnabledAt`
+ * on the first call — a working 2FA disable for anyone holding a session, and a
+ * Server Action is a POST endpoint reachable without the settings screen that
+ * renders the button. `disableTotp` demands a current code precisely so that a
+ * stolen session cannot strip the second factor and survive a password reset;
+ * beginning an "enrolment" achieved the same thing one function over.
+ *
+ * So REPLACING an existing factor now costs a current code as well. Enrolling
+ * for the first time does not: there is nothing to protect yet, and asking for a
+ * code nobody has would make 2FA impossible to turn on.
+ */
+export async function beginTotpEnrolment(currentCode?: string): Promise<{
   secret: string;
   qr: string;
   uri: string;
 }> {
   const user = await requireUser();
+
+  const live = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { totpSecret: true, totpEnabledAt: true },
+  });
+  if (live?.totpEnabledAt && live.totpSecret) {
+    let ok = false;
+    try {
+      ok = verifyTotp(String(currentCode ?? "").trim(), decryptValue(live.totpSecret));
+    } catch {
+      // An unreadable stored secret must not become a way past this check.
+    }
+    if (!ok) {
+      throw new Error("Enter a current authenticator code to replace your authenticator.");
+    }
+  }
+
   const secret = generateTotpSecret();
   const uri = totpKeyUri(secret, user.email);
   const qr = await QRCode.toDataURL(uri, { margin: 1, width: 220 });
   await prisma.user.update({
     where: { id: user.id },
-    data: { totpSecret: encryptValue(secret), totpEnabledAt: null },
+    data: { totpPendingSecret: encryptValue(secret) },
   });
   return { secret, qr, uri };
 }
@@ -44,10 +77,17 @@ export async function confirmTotpEnrolment(
 ): Promise<SecurityState> {
   const user = await requireUser();
   const code = String(formData.get("code") ?? "").trim();
-  if (!user.totpSecret) return { error: "Start again — no pending secret found." };
+  // Read the PENDING secret, not the live one. Confirming against the live
+  // secret would let a code from the authenticator already in use "confirm" an
+  // enrolment that never happened.
+  const pending = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { totpPendingSecret: true },
+  });
+  if (!pending?.totpPendingSecret) return { error: "Start again — no pending secret found." };
   let secret: string;
   try {
-    secret = decryptValue(user.totpSecret);
+    secret = decryptValue(pending.totpPendingSecret);
   } catch {
     return { error: "Could not read the secret — start again." };
   }
@@ -56,11 +96,22 @@ export async function confirmTotpEnrolment(
   }
 
   const backupCodes = generateBackupCodes(8);
-  const hashed = await Promise.all(backupCodes.map((item) => bcrypt.hash(item.replace("-", ""), 10)));
+  // hashBackupCode normalises exactly as the login does. They previously
+  // disagreed — enrolment stripped the hyphen, the login did not — so a code
+  // typed as displayed was rejected and the recovery path failed in the one
+  // situation it exists for.
+  const hashed = await Promise.all(backupCodes.map((item) => hashBackupCode(item)));
   const updated = await basePrisma.$transaction(async (tx) => {
     const updated = await tx.user.update({
       where: { id: user.id },
-      data: { totpEnabledAt: new Date(), totpBackupCodes: JSON.stringify(hashed) },
+      // Promotion: the proven secret becomes the live one and the pending slot
+      // is cleared, so an abandoned enrolment cannot be confirmed later.
+      data: {
+        totpSecret: encryptValue(secret),
+        totpPendingSecret: null,
+        totpEnabledAt: new Date(),
+        totpBackupCodes: JSON.stringify(hashed),
+      },
     });
     await bumpUserSessionVersion(user.id, tx);
     await logAuditStrict({
@@ -93,7 +144,7 @@ export async function disableTotp(
   const updated = await basePrisma.$transaction(async (tx) => {
     const updated = await tx.user.update({
       where: { id: user.id },
-      data: { totpSecret: null, totpEnabledAt: null, totpBackupCodes: null },
+      data: { totpSecret: null, totpPendingSecret: null, totpEnabledAt: null, totpBackupCodes: null },
     });
     await bumpUserSessionVersion(user.id, tx);
     await logAuditStrict({

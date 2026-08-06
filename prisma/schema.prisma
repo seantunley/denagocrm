@@ -21,7 +21,19 @@ model User {
   // Column and default left as they are so this needs no migration; drop both once
   // no deployed build reads the field.
   modules           String    @default("crm,workshop,reports,inbox") // RETIRED, inert
-  totpSecret        String? // encrypted TOTP secret
+  totpSecret        String? // encrypted TOTP secret — the LIVE factor
+  /// Encrypted secret for an authenticator being enrolled, not yet trusted.
+  ///
+  /// Enrolment used to overwrite `totpSecret` and clear `totpEnabledAt` on the
+  /// first click, which is a working 2FA disable available to anyone holding a
+  /// session — and a Server Action is a POST endpoint, reachable without the
+  /// screen that renders the button. `disableTotp` demands a current code for
+  /// exactly this reason; starting an "enrolment" walked around it.
+  ///
+  /// A replacement lands here instead and is promoted to `totpSecret` only once
+  /// a code proves the new authenticator holds it. Nothing authenticates against
+  /// this column.
+  totpPendingSecret String?
   totpEnabledAt     DateTime?
   totpBackupCodes   String? // JSON array of bcrypt-hashed one-time backup codes
   sessions          UserSession[]
