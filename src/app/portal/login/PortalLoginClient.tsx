@@ -81,7 +81,7 @@ export default function PortalLoginClient({ brand }: { brand: LoginBrand }) {
               {sent ? <Mail className="size-5" /> : <Sparkles className="size-5" />}
             </div>
             <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-400">
-              {brand.branded ? `Your ${brand.displayName}` : "Your Denago"}
+              {`Your ${brand.displayName}`}
             </p>
             <h1 className="max-w-md text-3xl font-semibold leading-[1.08] tracking-[-0.045em] text-white sm:text-[2.5rem]">
               {sent ? "Your secure code is on its way." : "Your ownership journey, connected."}
@@ -122,7 +122,7 @@ export default function PortalLoginClient({ brand }: { brand: LoginBrand }) {
                     />
                   </div>
                   <p className="mt-2 text-[11px] leading-5 text-slate-600">
-                    {brand.branded ? `Use the address you shared with ${brand.displayName}.` : "Use the address you shared with Denago Cape Town."}
+                    {`Use the address you shared with ${brand.displayName}.`}
                   </p>
                 </div>
 
@@ -212,7 +212,7 @@ export default function PortalLoginClient({ brand }: { brand: LoginBrand }) {
         </div>
 
         <footer className="flex items-center justify-between gap-4 text-[10px] uppercase tracking-[0.14em] text-slate-700">
-          <span>{brand.branded ? brand.displayName : "Denago Cape Town"}</span>
+          <span>{brand.displayName}</span>
           <span className="inline-flex items-center gap-1.5"><ShieldCheck className="size-3" />Private &amp; secure</span>
         </footer>
       </section>
@@ -254,7 +254,7 @@ function CustomerStory({ brand }: { brand: LoginBrand }) {
           <div className="absolute -right-14 -top-14 size-44 rounded-full bg-orange-500/10 blur-3xl" />
           <div className="relative mb-10 flex items-start justify-between gap-6">
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-orange-400">{brand.branded ? `My ${brand.displayName}` : "My Denago"}</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-orange-400">{`My ${brand.displayName}`}</p>
               <p className="mt-2 text-2xl font-medium tracking-[-0.035em] text-white">Everything that moves with you.</p>
             </div>
             <div className="flex size-14 items-center justify-center rounded-2xl border border-orange-400/15 bg-orange-400/10 shadow-[0_18px_45px_rgba(249,115,22,.12)]">
@@ -282,7 +282,7 @@ function CustomerStory({ brand }: { brand: LoginBrand }) {
               <span className="flex size-8 items-center justify-center rounded-full bg-emerald-400/10 text-emerald-400"><ShieldCheck className="size-4" /></span>
               <div><p className="text-xs font-medium text-slate-300">Secure by design</p><p className="mt-0.5 text-[10px] text-slate-600">Passwordless access, protected customer data</p></div>
             </div>
-            <span className="text-[10px] uppercase tracking-[0.16em] text-slate-700">Cape Town</span>
+            <span className="text-[10px] uppercase tracking-[0.16em] text-slate-700">{brand.displayName}</span>
           </div>
         </div>
       </div>
@@ -293,7 +293,7 @@ function CustomerStory({ brand }: { brand: LoginBrand }) {
           <span className="text-slate-500">A better way to stay connected.</span>
         </h2>
         <p className="mt-4 max-w-lg text-sm leading-6 text-slate-500">
-          {brand.branded ? `Your personal window into service, documents and support from ${brand.displayName}.` : "Your personal window into service, documents and support from Denago Cape Town."}
+          {`Your personal window into service, documents and support from ${brand.displayName}.`}
         </p>
       </div>
     </section>
