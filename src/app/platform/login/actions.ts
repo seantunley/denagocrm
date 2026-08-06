@@ -81,7 +81,7 @@ export async function platformLogin(
   // The pending cookie carries the admin id and is signed; the verify step
   // re-reads the row rather than trusting anything cached in it.
   if (admin!.totpEnabledAt && admin!.totpSecret) {
-    await issuePlatformPending(admin!.id);
+    await issuePlatformPending(admin!.id, admin!.sessionVersion);
     return { need2fa: true };
   }
 
@@ -125,8 +125,9 @@ export async function platformVerifyTotp(
   _prev: PlatformLoginState,
   formData: FormData,
 ): Promise<PlatformLoginState> {
-  const adminId = await readPlatformPending();
-  if (!adminId) return { error: "That took too long — please sign in again." };
+  const pending = await readPlatformPending();
+  if (!pending) return { error: "That took too long — please sign in again." };
+  const adminId = pending.adminId;
 
   // The six digits are rate-limited in their own right. Without this the pending
   // cookie is a ten-minute window to try a million codes at whatever rate the
@@ -144,6 +145,15 @@ export async function platformVerifyTotp(
   if (!admin || admin.disabledAt || !admin.totpEnabledAt || !admin.totpSecret) {
     await clearPlatformPending();
     return { error: "That took too long — please sign in again." };
+  }
+  // Revoking every session, or changing the password, must also stop a login
+  // that is already half-finished in somebody's browser. Without this the
+  // password step's result stayed usable for the rest of the ten-minute window,
+  // so the one action taken when an account is believed compromised did not
+  // actually close the door.
+  if (admin.sessionVersion !== pending.sessionVersion) {
+    await clearPlatformPending();
+    return { error: "Your sign-in was cancelled elsewhere. Please sign in again." };
   }
 
   let ok = false;

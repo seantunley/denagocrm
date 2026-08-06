@@ -97,7 +97,9 @@ test("the half-authenticated cookie is the platform's own, never the CRM's", () 
 
   // It carries the admin id and nothing else: it is held by someone who has
   // proved only a password, so every field in it is a field they can read.
-  assert.match(pending, /SignJWT\(\{ pid: adminId \}\)/);
+  // Carries the id and the session version it was issued against, and nothing
+  // else — it is held by someone who has proved only a password.
+  assert.match(pending, /SignJWT\(\{ pid: adminId, sv: sessionVersion \}\)/);
 });
 
 test("an enrolled admin gets no session from a correct password alone", () => {
@@ -320,4 +322,41 @@ test("a backup code is consumed exactly once, under concurrency", () => {
   assert.match(block, /totpBackupCodes: admin\.totpBackupCodes/);
   assert.match(block, /count === 1/);
   assert.doesNotMatch(block, /codes\.splice\(/);
+});
+
+test("promotion claims the pending secret it verified", () => {
+  const security = stripComments(read("src/app/actions/platformSecurity.ts"));
+  const confirm = security.slice(
+    security.indexOf("export async function confirmPlatformTotpEnrolment"),
+    security.indexOf("export async function disablePlatformTotp"),
+  );
+  // Unconditional promotion loses two races: a disable landing between the read
+  // and the write is undone (2FA silently returns), and two confirmations both
+  // issue backup codes while only the last set works — on the one account with
+  // nobody above it to sort that out.
+  assert.match(confirm, /updateMany\(/);
+  assert.match(confirm, /totpPendingSecret: admin\.totpPendingSecret/);
+  assert.match(confirm, /claimed\.count !== 1/);
+  // Nothing may be recorded when the claim fails.
+  assert.ok(
+    confirm.indexOf("claimed.count !== 1") < confirm.indexOf("logAuditStrict"),
+    "the audit entry must follow a successful claim",
+  );
+});
+
+test("revoking sessions also kills a half-finished login", () => {
+  const pending = stripComments(read("src/lib/platformPending.ts"));
+  const actions = stripComments(read("src/app/platform/login/actions.ts"));
+
+  // The pending cookie asserts "this password was already checked". Bound to
+  // nothing else, it stayed usable for its full ten minutes after a password
+  // reset or a revoke-all — so the action taken when an account is believed
+  // compromised did not stop the login already in progress.
+  assert.match(pending, /SignJWT\(\{ pid: adminId, sv: sessionVersion \}\)/);
+  assert.match(pending, /typeof payload\.sv !== "number"/, "a cookie without a version is refused");
+  assert.match(actions, /issuePlatformPending\(admin!\.id, admin!\.sessionVersion\)/);
+  assert.match(actions, /admin\.sessionVersion !== pending\.sessionVersion/);
+  // …and the spent cookie is cleared rather than left to expire.
+  const mismatch = actions.indexOf("admin.sessionVersion !== pending.sessionVersion");
+  assert.match(actions.slice(mismatch, mismatch + 300), /clearPlatformPending\(\)/);
 });
