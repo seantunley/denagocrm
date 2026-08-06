@@ -7,6 +7,7 @@ import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { freezeDocumentGlobals } from "@/lib/signing/freezeDocument";
 import { newSignToken } from "./tokens";
+import { frozenBrand } from "./frozenBrand";
 
 export type RequestSource = {
   documentId?: string | null;
@@ -30,8 +31,14 @@ export async function createSignatureRequestFromDoc(opts: {
   client?: Prisma.TransactionClient;
 }): Promise<{ id: string; recipients: number; fields: number }> {
   const { source } = opts;
+  // Resolved ONCE and used twice: baked into the frozen document's text, AND
+  // stored as brandJson so every later re-render prints the same company the
+  // signer saw. Two lookups could disagree — the second is what the document
+  // would claim about itself afterwards.
+  const profile = await getCompanyProfile();
+  const brand = frozenBrand(profile);
   const frozenDoc = freezeDocumentGlobals(opts.doc, {
-    ...companyTokens(await getCompanyProfile()),
+    ...companyTokens(profile),
     "date.today": formatDate(new Date()),
   });
 
@@ -52,6 +59,8 @@ export async function createSignatureRequestFromDoc(opts: {
         contactId: source.contactId ?? null,
         templateId: source.templateId ?? null,
         snapshotJson: frozenDoc as object,
+        // Frozen beside the document, not resolved at render — see frozenBrand.ts.
+        brandJson: brand as object,
         unsignedPdfRef: opts.unsignedPdfRef,
         createdById: opts.createdById ?? null,
       },
