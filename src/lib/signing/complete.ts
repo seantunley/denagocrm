@@ -12,6 +12,7 @@ import { resolveTenantActor } from "@/lib/tenantActor";
 import { bindCtx, logoDataUri } from "./render";
 import { logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
+import { requestTrustedTimestamp } from "./timestamp";
 import { runPostCompletion } from "./postComplete";
 import { signedPdfIsSafeToDelete } from "./blobReferences";
 import {
@@ -77,6 +78,9 @@ function certificateHtml(title: string, requestId: string, rows: RecipientRow[])
       Signed electronically in terms of the Electronic Communications and Transactions Act 25 of 2002 (South Africa).
       This document carries a PKCS#7 digital seal; any change after sealing invalidates the signature and is detectable
       by any standard PDF reader.
+      <br/><br/>The final sealed file is hashed and submitted to an independent RFC 3161 timestamp authority; any
+      attestation issued is stored against this record and can be produced on request. It is not reproduced here
+      because the hash it covers includes this certificate.
     </div>
   </div>`;
 }
@@ -237,6 +241,17 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   let pdf = await htmlToPdf(html);
   pdf = await sealPdf(pdf, { reason: `Signed: ${req.title}`, name: "Denago Cape Town" });
   const hash = crypto.createHash("sha256").update(pdf).digest("hex");
+
+  // Independent proof of WHEN, requested BEFORE the completion transaction so a
+  // slow authority cannot hold a database transaction open — and awaited rather
+  // than fired off, because a timestamp that arrives after the record is filed
+  // attests to the wrong moment.
+  //
+  // Returns null on any problem, and that is the intended behaviour: the
+  // authority is a third party we do not control, and losing a signed contract
+  // to somebody else's outage would be far worse than filing one without an
+  // external attestation. The certificate says which of the two happened.
+  const stamp = await requestTrustedTimestamp(Buffer.from(hash, "hex"));
   const storedName = await saveFile(pdf, `${req.title} (signed).pdf`, "application/pdf");
 
   const firstSigner = req.recipients.find((r) => r.status === "signed" && r.role !== "viewer");
@@ -275,7 +290,13 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
         : null;
       const claimed = await tx.signatureRequest.updateMany({
         where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
-        data: { status: "completed", completedAt: new Date(), signedPdfRef: storedName, signedPdfHash: hash, signedDocId: document?.id ?? null },
+        data: {
+          status: "completed", completedAt: new Date(), signedPdfRef: storedName,
+          signedPdfHash: hash, signedDocId: document?.id ?? null,
+          timestampToken: stamp?.tokenBase64 ?? null,
+          timestampedAt: stamp?.genTime ?? null,
+          timestampAuthority: stamp?.authority ?? null,
+        },
       });
       if (claimed.count === 0) throw new CompletionLost();
       documentId = document?.id ?? null;

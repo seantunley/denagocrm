@@ -8,6 +8,12 @@ import type { DocumentModel } from "@/lib/doceditor/model";
 import { freezeDocumentGlobals } from "@/lib/signing/freezeDocument";
 import { newSignCapability } from "./tokenVault";
 import { normalizePhone } from "@/lib/sms";
+import { getSetting } from "@/lib/settings";
+import { payableTotalCents } from "@/lib/pricing";
+import {
+  resolveIdentityMode, parseOtpPolicy, parseOtpMinValue,
+  SIGNING_OTP_POLICY_KEY, SIGNING_OTP_MIN_VALUE_KEY,
+} from "./identityPolicy";
 import { buildSignEvent } from "./events";
 
 export type RequestSource = {
@@ -32,6 +38,31 @@ export type RequestSource = {
  */
 export type SigningIdentityMode = "link" | "email_otp" | "sms_otp" | "otp";
 
+/**
+ * What this document is worth, for the money-attached policy.
+ *
+ * Null means "nothing with a value is attached" — a document with no source
+ * record, or a job card, which carries work rather than a price. Returning 0 for
+ * those would make them look like a zero-value quote and quietly pull them into
+ * whatever the threshold is.
+ *
+ * Any failure reads as null rather than throwing: a pricing problem must not
+ * stop a document being sent for signature.
+ */
+async function documentValue(source: RequestSource): Promise<number | null> {
+  if (!source.quoteId) return null;
+  try {
+    const quote = await basePrisma.quote.findUnique({
+      where: { id: source.quoteId },
+      select: { items: true, fees: true, taxInclusive: true, depositType: true, depositValue: true },
+    });
+    if (!quote) return null;
+    return payableTotalCents(quote as Parameters<typeof payableTotalCents>[0]) / 100;
+  } catch {
+    return null;
+  }
+}
+
 export async function createSignatureRequestFromDoc(opts: {
   doc: DocumentModel;
   title: string;
@@ -48,14 +79,25 @@ export async function createSignatureRequestFromDoc(opts: {
     ...companyTokens(await getCompanyProfile()),
     "date.today": formatDate(new Date()),
   });
-  // Defaults to `link`, and is NOT escalated automatically by any global switch.
+  // Whether the signer must prove who they are.
   //
-  // A step-up is a real improvement — a forwarded email, a shared inbox or a
-  // mail-scanning proxy can all open a link-only document — but which documents
-  // are worth asking a customer for a code is a business judgement. Turning it on
-  // for everything by flipping an environment variable would silently add a step
-  // to every delivery note and every signer who was never told to expect one.
-  const identityMode: SigningIdentityMode = opts.identityMode ?? "link";
+  // The workspace policy decides the default — MONEY out of the box, so a quote
+  // asks for a one-time code and a delivery note does not — and whoever prepared
+  // this document can override it for this document. A person looking at the
+  // specific thing in front of them outranks a global setting.
+  //
+  // Never escalated by an environment variable: adding a step every signer was
+  // told nothing about is how a security control turns into a support call.
+  const [policyRaw, minValueRaw] = await Promise.all([
+    getSetting(SIGNING_OTP_POLICY_KEY).catch(() => null),
+    getSetting(SIGNING_OTP_MIN_VALUE_KEY).catch(() => null),
+  ]);
+  const identityMode: SigningIdentityMode = resolveIdentityMode({
+    explicit: opts.identityMode ?? null,
+    policy: parseOtpPolicy(policyRaw),
+    minValue: parseOtpMinValue(minValueRaw),
+    value: { amount: await documentValue(source) },
+  });
 
   // The mobile number "on file" is the linked contact's — the document model
   // carries a name, an email and a role, but no phone. Resolved once here, at

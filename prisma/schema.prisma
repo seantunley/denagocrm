@@ -1728,6 +1728,21 @@ model SignatureRequest {
   unsignedPdfRef String? // storage ref of the PDF sent for signing
   signedPdfRef   String? // storage ref of the sealed, completed PDF
   signedPdfHash  String? // sha-256 of the completed PDF
+
+  /// Independent proof of WHEN, from an RFC 3161 timestamp authority.
+  ///
+  /// The evidence chain shows nobody altered a record without full database
+  /// access; it cannot show a third party when anything happened, because we
+  /// produce and store all of it. A timestamp authority attests that
+  /// `signedPdfHash` existed at `timestampedAt` — and only a hash ever leaves
+  /// the system, so the authority learns nothing about the document.
+  ///
+  /// Nullable by design: a timestamp is evidence ABOUT a signature, not part of
+  /// one. An unreachable authority must never cost a signed contract, so NULL
+  /// means "not timestamped" and is stated as such on the certificate.
+  timestampToken     String?
+  timestampedAt      DateTime?
+  timestampAuthority String?
   signedDocId    String? // Document row of the filed, completed PDF
   message     String? // note shown to recipients
   createdById String?

@@ -122,9 +122,16 @@ BEGIN
       (SELECT "tenantId" FROM "Quote" WHERE "id" = NEW."quoteId"),
       (SELECT "tenantId" FROM "JobCard" WHERE "id" = NEW."jobCardId"),
       (SELECT "tenantId" FROM "Contact" WHERE "id" = NEW."contactId"),
-      NULLIF(current_setting('app.current_tenant', true), ''),
-      'tenant_denago_cpt'
+      NULLIF(current_setting('app.current_tenant', true), '')
     );
+    -- FAILS CLOSED, exactly as signing_stamp_request_tenant does. This branch
+    -- used to end in 'tenant_denago_cpt', so an unscoped Document tagged
+    -- for-signing or signed was quietly filed under Denago — the same
+    -- cross-tenant contamination the request trigger was fixed to prevent,
+    -- surviving one function away because the test only inspected the other one.
+    IF NEW."tenantId" IS NULL THEN
+      RAISE EXCEPTION 'Signing document requires an owning tenant (no app.current_tenant in scope)';
+    END IF;
   END IF;
   RETURN NEW;
 END;
@@ -142,9 +149,18 @@ CREATE OR REPLACE FUNCTION signing_revoke_request_tokens() RETURNS trigger AS $$
 BEGIN
   IF NEW."status" IN ('completed','declined','expired','voided','rejected')
      AND OLD."status" IS DISTINCT FROM NEW."status" THEN
+    -- Revocation is `tokenRevokedAt`, NOT a rewritten token.
+    --
+    -- This used to overwrite the capability with 'revoked_<uuid>'. Once the
+    -- token column holds a SHA-256 digest and a trigger enforces that format,
+    -- such a value is refused — and because this fires on the SAME transaction
+    -- as the status change, the refusal rolled back the whole completion. Every
+    -- attempt to complete, decline, void, expire or reject a request would have
+    -- failed. Blanking the digest is also self-defeating: the stored value is
+    -- already one-way, so scrambling it protects nothing and destroys the only
+    -- link between a delivered URL and the row it belonged to.
     UPDATE "SignatureRecipient"
-       SET "token" = 'revoked_' || gen_random_uuid()::text,
-           "tokenRevokedAt" = COALESCE("tokenRevokedAt", now())
+       SET "tokenRevokedAt" = COALESCE("tokenRevokedAt", now())
      WHERE "requestId" = NEW."id" AND "tokenRevokedAt" IS NULL;
   END IF;
   RETURN NEW;
@@ -157,7 +173,8 @@ FOR EACH ROW EXECUTE FUNCTION signing_revoke_request_tokens();
 CREATE OR REPLACE FUNCTION signing_revoke_approval_token() RETURNS trigger AS $$
 BEGIN
   IF NEW."status" IN ('approved','rejected') AND OLD."status" IS DISTINCT FROM NEW."status" THEN
-    NEW."token" := 'revoked_' || gen_random_uuid()::text;
+    -- Same reasoning as the recipient trigger above: mark it revoked, never
+    -- rewrite the digest into a value the storage guard refuses.
     NEW."tokenRevokedAt" := COALESCE(NEW."tokenRevokedAt", now());
   END IF;
   RETURN NEW;
