@@ -7,6 +7,10 @@ import { currentTenantScope } from "@/lib/tenantScope";
 export type ArtifactKind = "unsigned_pdf" | "signed_pdf" | "signature_image" | "evidence_bundle" | "timestamp_token" | "validation_report";
 export type ArtifactState = "uploaded" | "referenced" | "sealed" | "retained" | "orphan_candidate" | "destroyed";
 
+type RawSqlClient = {
+  $queryRaw<T = unknown>(query: TemplateStringsArray | Prisma.Sql, ...values: unknown[]): Promise<T>;
+  $executeRaw(query: TemplateStringsArray | Prisma.Sql, ...values: unknown[]): Promise<number>;
+};
 
 export async function beginUploadIntent(input: { tenantId: string; plannedObjectKey: string; originalName: string; mimeType: string }): Promise<string | null> {
   try {
@@ -52,8 +56,8 @@ export async function registerArtifactUpload(input: {
   bytes?: Buffer | null;
   sha256?: string | null;
   sizeBytes?: number | null;
-}, tx?: Prisma.TransactionClient): Promise<void> {
-  const db = tx ?? (basePrisma as unknown as Prisma.TransactionClient);
+}, tx?: RawSqlClient): Promise<void> {
+  const db: RawSqlClient = tx ?? basePrisma;
   const digest = input.sha256 ?? (input.bytes ? crypto.createHash("sha256").update(input.bytes).digest("hex") : null);
   const size = input.sizeBytes ?? input.bytes?.length ?? null;
   await db.$executeRaw`
@@ -77,8 +81,8 @@ export async function markArtifactState(input: {
   envelopeId?: string | null;
   state: ArtifactState;
   error?: string | null;
-}, tx?: Prisma.TransactionClient): Promise<void> {
-  const db = tx ?? (basePrisma as unknown as Prisma.TransactionClient);
+}, tx?: RawSqlClient): Promise<void> {
+  const db: RawSqlClient = tx ?? basePrisma;
   await db.$executeRaw`
     UPDATE "SigningArtifact"
        SET state = ${input.state},
@@ -150,24 +154,53 @@ export async function recordLegalArtifact(input: {
   validationReport: unknown;
   retentionClass?: string;
   retainUntil?: Date;
-}, tx: Prisma.TransactionClient): Promise<string> {
-  const rows = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+}, tx: RawSqlClient): Promise<string> {
+  const retentionClass = input.retentionClass ?? "contract-7y";
+  const retainUntil = input.retainUntil ?? new Date(Date.now() + 7 * 365.25 * 24 * 60 * 60 * 1000);
+  const chainJson = JSON.stringify(input.certificateChain);
+  const validationJson = JSON.stringify(input.validationReport);
+  const inserted = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     INSERT INTO "LegalArtifact"(
       "tenantId","envelopeId","documentId","objectRef",sha256,"sizeBytes",
       "certificateFingerprint","certificateChainJson","keyId","trustPolicy",
       "timestampTokenRef","validationReportJson","retentionClass","retainUntil"
     ) VALUES (
       ${input.tenantId}, ${input.envelopeId}, ${input.documentId}, ${input.objectRef}, ${input.sha256}, ${input.sizeBytes},
-      ${input.certificateFingerprint}, ${JSON.stringify(input.certificateChain)}::jsonb, ${input.keyId}, ${input.trustPolicy},
-      ${input.timestampTokenRef}, ${JSON.stringify(input.validationReport)}::jsonb,
-      ${input.retentionClass ?? "contract-7y"}, ${input.retainUntil ?? new Date(Date.now() + 7 * 365.25 * 24 * 60 * 60 * 1000)}
+      ${input.certificateFingerprint}, ${chainJson}::jsonb, ${input.keyId}, ${input.trustPolicy},
+      ${input.timestampTokenRef}, ${validationJson}::jsonb, ${retentionClass}, ${retainUntil}
     )
-    ON CONFLICT ("tenantId","envelopeId","artifactVersion") DO UPDATE SET "envelopeId" = EXCLUDED."envelopeId"
+    ON CONFLICT ("tenantId","envelopeId","artifactVersion") DO NOTHING
     RETURNING id
   `);
-  return rows[0]!.id;
-}
+  if (inserted[0]) return inserted[0].id;
 
+  const existing = await tx.$queryRaw<Array<{
+    id: string; documentId: string | null; objectRef: string; sha256: string; sizeBytes: bigint;
+    certificateFingerprint: string; certificateChainJson: unknown; keyId: string | null; trustPolicy: string;
+    timestampTokenRef: string | null; validationReportJson: unknown; retentionClass: string; retainUntil: Date;
+  }>>(Prisma.sql`
+    SELECT id,"documentId","objectRef",sha256,"sizeBytes","certificateFingerprint","certificateChainJson","keyId",
+      "trustPolicy","timestampTokenRef","validationReportJson","retentionClass","retainUntil"
+      FROM "LegalArtifact" WHERE "tenantId"=${input.tenantId} AND "envelopeId"=${input.envelopeId} AND "artifactVersion"=1
+      LIMIT 1
+  `);
+  const row = existing[0];
+  const same = row
+    && row.documentId === input.documentId
+    && row.objectRef === input.objectRef
+    && row.sha256 === input.sha256
+    && Number(row.sizeBytes) === input.sizeBytes
+    && row.certificateFingerprint === input.certificateFingerprint
+    && JSON.stringify(row.certificateChainJson) === chainJson
+    && row.keyId === input.keyId
+    && row.trustPolicy === input.trustPolicy
+    && row.timestampTokenRef === input.timestampTokenRef
+    && JSON.stringify(row.validationReportJson) === validationJson
+    && row.retentionClass === retentionClass
+    && row.retainUntil.getTime() === retainUntil.getTime();
+  if (!same) throw new Error("Legal artifact idempotency conflict: immutable evidence differs from the existing version");
+  return row.id;
+}
 
 /**
  * Register an apparently unreferenced upload for delayed settlement. This is the
