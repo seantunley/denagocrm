@@ -104,17 +104,20 @@ ALTER TABLE "SignatureEvent"
 -- Preserve existing links while removing plaintext capability values from the DB:
 -- a historic URL still hashes to the migrated digest. The legacy tables do not
 -- carry reliable creation timestamps, so the migration instant is recorded as the
--- capability issue time and a conservative 30-day expiry is applied. A later send
--- or reminder rotates the token into the encrypted application vault.
+-- capability issue time and a conservative 30-day expiry is applied. The digest
+-- predicate makes this data transform replay-safe if a migration runner is ever
+-- recovered from an incorrectly recorded state.
 UPDATE "SignatureRecipient"
 SET token=encode(digest(token,'sha256'),'hex'),
     "tokenIssuedAt"=COALESCE("tokenIssuedAt",now()),
-    "tokenExpiresAt"=COALESCE("tokenExpiresAt",now()+interval '30 days');
+    "tokenExpiresAt"=COALESCE("tokenExpiresAt",now()+interval '30 days')
+WHERE token !~ '^[0-9a-f]{64}$';
 
 UPDATE "ApprovalStep"
 SET token=encode(digest(token,'sha256'),'hex'),
     "tokenIssuedAt"=COALESCE("tokenIssuedAt",now()),
-    "tokenExpiresAt"=COALESCE("tokenExpiresAt",now()+interval '30 days');
+    "tokenExpiresAt"=COALESCE("tokenExpiresAt",now()+interval '30 days')
+WHERE token !~ '^[0-9a-f]{64}$';
 
 -- Historic requests get an explicit, non-fabricated migration snapshot marker.
 -- Their existing snapshot remains the canonical source; no certificate facts are
