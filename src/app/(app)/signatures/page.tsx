@@ -98,12 +98,13 @@ export default async function SignaturesPage() {
       WHERE q."deletedAt" IS NULL GROUP BY q.id
     `),
   ]);
+  const zero = BigInt(0);
   const ops = new Map(operations.map((row) => [row.envelopeId, row]));
   const total = requests.length;
   const completed = requests.filter((request) => request.status === "completed").length;
   const active = requests.filter((request) => ACTIVE.includes(request.status)).length;
   const processing = requests.filter((request) => PROCESSING.includes(request.status)).length;
-  const alerts = requests.filter((request) => request.status === "failed_manual_intervention" || Number(ops.get(request.id)?.deadJobs || 0n) > 0).length;
+  const alerts = requests.filter((request) => request.status === "failed_manual_intervention" || Number(ops.get(request.id)?.deadJobs || zero) > 0).length;
   const completionRate = total ? Math.round((completed / total) * 100) : 0;
   const times = requests
     .filter((request) => request.status === "completed" && request.sentAt && request.completedAt)
@@ -142,9 +143,9 @@ export default async function SignaturesPage() {
         const signed = signers.filter((recipient) => recipient.status === "signed").length;
         const pct = signers.length ? Math.round((signed / signers.length) * 100) : 0;
         const state = ops.get(request.id);
-        const dead = Number(state?.deadJobs || 0n);
-        const deliveryFailures = Number(state?.failedDeliveries || 0n);
-        const pending = Number(state?.pendingJobs || 0n);
+        const dead = Number(state?.deadJobs || zero);
+        const deliveryFailures = Number(state?.failedDeliveries || zero);
+        const pending = Number(state?.pendingJobs || zero);
         const nextUp = request.ordering === "sequential" && ACTIVE.includes(request.status) ? signers.find((recipient) => !["signed", "declined"].includes(recipient.status)) || null : null;
         return <RecordContextMenu key={request.id} label={request.title} href={`/signatures/${request.id}`}><li className="group flex flex-col gap-3 p-4 transition-colors hover:bg-muted/20 sm:flex-row sm:items-start">
           <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-border bg-muted/35 text-muted-foreground group-hover:border-primary/25 group-hover:text-primary">{request.status === "completed" ? <LockKeyhole className="size-4" /> : <FileSignature className="size-4" />}</span>
