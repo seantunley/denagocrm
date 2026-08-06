@@ -20,10 +20,15 @@ export type RequestSource = {
   templateId?: string | null;
 };
 
-async function resolveTenantId(opts: { tenantId?: string | null; createdById?: string | null; source: RequestSource; client?: Prisma.TransactionClient }): Promise<string> {
+type SigningDbClient = Pick<
+  Prisma.TransactionClient,
+  "user" | "quote" | "jobCard" | "contact" | "signatureRequest" | "signatureRecipient" | "signatureField" | "signatureEvent" | "$executeRaw"
+>;
+
+async function resolveTenantId(opts: { tenantId?: string | null; createdById?: string | null; source: RequestSource; client?: SigningDbClient }): Promise<string> {
   const scoped = opts.tenantId ?? currentTenantScope()?.tenantId;
   if (scoped) return scoped;
-  const db = opts.client ?? prisma;
+  const db: SigningDbClient = opts.client ?? prisma;
   if (opts.createdById) {
     const user = await db.user.findUnique({ where: { id: opts.createdById }, select: { tenantId: true } });
     if (user?.tenantId) return user.tenantId;
@@ -53,7 +58,7 @@ export async function createSignatureRequestFromDoc(opts: {
   createdById?: string | null;
   tenantId?: string | null;
   identityPolicy?: "ES1_LINK" | "ES2_EMAIL_OTP" | "ES2_SMS_OTP" | "ES2_EMAIL_SMS" | "ES2_AUTHENTICATED_PORTAL" | "ES3_PASSKEY" | "ES3_IDENTITY_PROVIDER" | "AES_ACCREDITED";
-  client?: Prisma.TransactionClient;
+  client?: SigningDbClient;
 }): Promise<{ id: string; recipients: number; fields: number }> {
   const tenantId = await resolveTenantId(opts);
   const frozenDoc = freezeDocumentGlobals(opts.doc, {
@@ -66,7 +71,7 @@ export async function createSignatureRequestFromDoc(opts: {
   const configuredPolicy = process.env.SIGNING_IDENTITY_DEFAULT as typeof opts.identityPolicy;
   const policy = opts.identityPolicy ?? configuredPolicy ?? "ES2_EMAIL_OTP";
 
-  const writes = async (db: Prisma.TransactionClient) => {
+  const writes = async (db: SigningDbClient) => {
     const request = await db.signatureRequest.create({
       data: {
         tenantId,
