@@ -52,8 +52,8 @@ export const JOURNEY_STEP_TYPES = [
   // See journeyCursor.ts for how a run parked inside one resumes.
   "choose",
   "repeat",
-  // Two more from Home Assistant's script syntax, and like the containers above
-  // they perform no action: `wait_for_trigger` parks the run until a named event
+  // Two more that, like the containers above, perform no action of their own:
+  // `wait_for_trigger` parks the run until a named event
   // arrives for this entity, and `variables` writes into the run context. Both
   // mutate RUN STATE rather than the outside world, so both are executed by the
   // runner — reaching journeyStepExecutor is a routing bug and says so.
@@ -126,8 +126,8 @@ export const CONDITION_FIELDS = [
   "contact.hasVehicle",
   "contact.tags",
   "event.type",
-  // The loop variables a `repeat` publishes, after Home Assistant's `repeat`
-  // template variable. Without these a `while`/`until` condition can only look
+  // The loop variables a `repeat` publishes to its body. Without these a
+  // `while`/`until` condition can only look
   // at the lead or contact, and `for_each` would have no way to test the item it
   // is currently on — which is most of the point of iterating a list.
   "repeat.index",
@@ -203,7 +203,7 @@ export type JourneyStep = {
    */
   nextStepId?: string | null;
   /**
-   * After Home Assistant's per-action `continue_on_error`.
+   * Carry on past a step that throws, instead of failing the whole run.
    *
    * One failed SMS threw, failed the whole run, and burned one of three run
    * attempts — so a provider outage on a "nice to have" notification could
@@ -237,8 +237,8 @@ export type JourneyDefinition = {
  *                           cursor frame stack that has to survive in a JSON
  *                           column between ticks. Five is already deeper than a
  *                           person can hold in their head.
- *  chooseOptions (10)     — matches the ten-branch case in HA's own docs; more
- *                           than that is a lookup table, not a branch.
+ *  chooseOptions (10)     — ten branches is already a lot to hold in your head;
+ *                           more than that is a lookup table, not a branch.
  *  conditionsPerGroup(30) — unchanged, and now bounded overall by depth × steps.
  *  repeatIterations (100) — the runtime ceiling for EVERY repeat mode. A `while`
  *                           whose condition never goes false is the classic
@@ -254,10 +254,9 @@ export type JourneyDefinition = {
  *                           every poll; five is more alternatives than a person
  *                           can reason about in a single wait anyway.
  *  waitDays (30)          — the ceiling on a wait_for_trigger timeout, and the
- *                           reason a timeout is REQUIRED here when Home
- *                           Assistant makes it optional. HA can wait forever
- *                           because its script is a live object you can see and
- *                           cancel; ours is a database row that would poll on
+ *                           reason a timeout is REQUIRED rather than optional.
+ *                           A wait here is not a live object someone can see
+ *                           and cancel; it is a database row that would poll on
  *                           every cron tick until someone noticed. "Forever" is
  *                           not expressible on purpose.
  *  variables (10)         — names one `variables` step may set.
@@ -513,11 +512,11 @@ function parseRepeatConfig(config: Record<string, unknown>, budget: ParseBudget,
 /* ── wait_for_trigger ────────────────────────────────────────────────────── */
 
 export type WaitForTriggerConfig = {
-  /** Event types that may wake the run. Any ONE of them is enough, as in HA. */
+  /** Event types that may wake the run. Any ONE of them is enough. */
   triggers: JourneyEventTrigger[];
-  /** Minutes. REQUIRED — see JOURNEY_LIMITS.waitDays for why HA differs. */
+  /** Minutes. REQUIRED — see JOURNEY_LIMITS.waitDays for why. */
   timeoutMinutes: number;
-  /** HA's `continue_on_timeout`, default true: carry on past a timeout. */
+  /** Default true: carry on past a timeout rather than ending the run. */
   continueOnTimeout: boolean;
 };
 
@@ -801,8 +800,7 @@ export type ConditionExplanation = {
  * "Condition did not match" is true and useless: it sends someone re-reading
  * every clause by hand against a lead whose values have since changed. This
  * records what each clause actually compared, so the trace answers the question
- * instead of posing it. Home Assistant's trace does the same thing — its graph
- * highlights the path taken and each node carries its own result.
+ * instead of posing it.
  *
  * Nested groups are flattened: the field/operator pairs are what a reader is
  * looking for, and the group structure is already visible in the builder.

@@ -24,9 +24,8 @@ import type { WaitForTriggerConfig } from "./journeyTypes";
  *   2. TWO EVENTS IN THE SAME TICK. A pusher would nudge the same run twice and
  *      the second nudge is either a no-op or a double wake, depending on
  *      ordering nobody controls. The poll asks one ordered question — earliest
- *      matching event at or after `since` — and gets one answer. HA behaves the
- *      same way: `wait_for_trigger` resumes on the FIRST trigger that fires and
- *      stops listening.
+ *      matching event at or after `since` — and gets one answer. A wait resumes
+ *      on the FIRST matching event and stops listening.
  *
  *   3. THE RUN BEING PURGED. Push means the event processor holds a reference to
  *      a run row, which is the `blockedByRunId` dangling-id problem again. With
