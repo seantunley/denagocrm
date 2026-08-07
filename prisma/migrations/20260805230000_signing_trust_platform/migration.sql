@@ -147,12 +147,30 @@ FROM "SignatureRequest" p WHERE c."requestId" = p."id" AND c."tenantId" IS NULL;
 UPDATE "ApprovalStep" c SET "tenantId" = p."tenantId"
 FROM "SignatureRequest" p WHERE c."requestId" = p."id" AND c."tenantId" IS NULL;
 
-ALTER TABLE "SignatureRequest" ALTER COLUMN "tenantId" SET NOT NULL;
-ALTER TABLE "SignatureRecipient" ALTER COLUMN "tenantId" SET NOT NULL;
-ALTER TABLE "SignatureField" ALTER COLUMN "tenantId" SET NOT NULL;
-ALTER TABLE "SignatureFieldResponse" ALTER COLUMN "tenantId" SET NOT NULL;
-ALTER TABLE "SignatureEvent" ALTER COLUMN "tenantId" SET NOT NULL;
-ALTER TABLE "ApprovalStep" ALTER COLUMN "tenantId" SET NOT NULL;
+-- NOT NULL IS DELIBERATELY NOT SET HERE.
+--
+-- It was, and it is why production could not deploy. The requirement is only
+-- keepable if every row the signing tables point at carries a tenant, and the
+-- application does not yet produce those: `tenantEnforcing()` is hard-coded
+-- false, so the write guard stamps nothing and every Quote, Document and
+-- Contact created since the July backfill has tenantId NULL.
+--
+-- The backfill above fixes the rows that exist. It cannot fix the ones made
+-- tomorrow. With NOT NULL in place, signing a newly created quote would fail —
+-- the request derives its tenant from its source, the source is unstamped, and
+-- the insert is refused. Trading "signing works" for "signing rows are
+-- guaranteed tenant-owned" is not a trade worth making while the guarantee
+-- cannot actually be met.
+--
+-- It also has to survive a SECOND TENANT being added. Under a fail-closed rule
+-- with enforcement off there is no tenant in scope to fall back to, so signing
+-- would stop working the day another workspace is onboarded — exactly when the
+-- product needs it most.
+--
+-- This belongs to the tenant-enforcement project, which has to happen before a
+-- second tenant regardless: turn on write-time stamping, backfill again while
+-- ownership is still unambiguous, then add NOT NULL as the proof it worked.
+-- Adding it here would only move the outage earlier.
 
 -- Database-side stamping closes the off/monitor-mode hole. Children derive their
 -- owner from the request rather than trusting a caller-supplied tenant.
@@ -170,9 +188,12 @@ BEGIN
   IF NEW."tenantId" IS NULL THEN
     NEW."tenantId" := NULLIF(current_setting('app.current_tenant', true), '');
   END IF;
-  IF NEW."tenantId" IS NULL THEN
-    RAISE EXCEPTION 'SignatureRequest requires an owning tenant (no app.current_tenant in scope)';
-  END IF;
+  -- No exception when it is still NULL. `app.current_tenant` is only set when
+  -- tenant enforcement is on, and it is hard-coded off — so refusing here would
+  -- refuse EVERY signature request whose source record is unstamped, which is
+  -- every quote created from now on. Once enforcement lands the variable is
+  -- always present, the stamp above always succeeds, and this can become a
+  -- refusal again in the same change that adds NOT NULL.
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -185,8 +206,10 @@ CREATE OR REPLACE FUNCTION signing_stamp_child_tenant() RETURNS trigger AS $$
 DECLARE parent_tenant TEXT;
 BEGIN
   SELECT "tenantId" INTO parent_tenant FROM "SignatureRequest" WHERE "id" = NEW."requestId";
-  IF parent_tenant IS NULL THEN RAISE EXCEPTION 'Signing child has no tenant-owned request'; END IF;
-  IF NEW."tenantId" IS NOT NULL AND NEW."tenantId" <> parent_tenant THEN
+  -- A child follows its request, including into NULL. The mismatch check below
+  -- is what actually matters and is kept: a child may never claim a DIFFERENT
+  -- tenant from the request it belongs to.
+  IF NEW."tenantId" IS NOT NULL AND parent_tenant IS NOT NULL AND NEW."tenantId" <> parent_tenant THEN
     RAISE EXCEPTION 'Signing child tenant does not match request tenant';
   END IF;
   NEW."tenantId" := parent_tenant;
