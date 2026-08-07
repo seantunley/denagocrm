@@ -15,6 +15,8 @@ import {
   assignVehicleToFleet,
   removeVehicleFromFleet,
 } from "@/app/actions/fleets";
+import { createQuoteForFleet } from "@/app/actions/quotes";
+import { payableTotalCents } from "@/lib/pricing";
 import { DEFAULT_FLEET_TYPE, FLEET_TYPES, FLEET_TYPE_LABELS, fleetTypeLabel } from "@/lib/fleetTypes";
 import { latestConsentPerMember, loadFleetRollup } from "@/lib/fleetRollup";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
@@ -24,6 +26,7 @@ import CommsTimeline from "@/components/CommsTimeline";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import Tabs from "@/components/Tabs";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 
 export const dynamic = "force-dynamic";
 
@@ -44,9 +47,12 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
   // Offering the button to everyone reproduces the exact defect an open PR is
   // fixing elsewhere in this app — a link rendered on one permission, leading
   // somewhere guarded by another, whose only outcome is a bounce.
-  const [marketingOn, canCreateContacts] = await Promise.all([
+  const [marketingOn, canCreateContacts, canCreateQuotes] = await Promise.all([
     isModuleEnabled("marketing"),
     hasAnyPermission(user, "contacts.create"),
+    // Same reasoning as canCreateContacts: reaching this page needs fleets.view,
+    // raising a quote needs quotes.create, and they are different grants.
+    hasAnyPermission(user, "quotes.create"),
   ]);
 
   // EVERY query on this page names the tenant. The db.ts guard scopes nothing
@@ -93,13 +99,17 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
     listTenantStaff(),
   ]);
 
-  const { members, activities, leads, communications, researchNotes, referrals, documents } = rollup;
+  const { members, activities, leads, communications, researchNotes, referrals, documents, quotes } = rollup;
   // Attribution for every aggregated row. A pooled feed with no "whose?" cannot
   // be acted on — it is a list of things that happened to nobody in particular.
   const nameOf = new Map(members.map((member) => [member.id, contactName(member)]));
   const labelFor = (contactId: string | null) => (contactId ? nameOf.get(contactId) ?? null : null);
 
   const primary = fleet.contactId ? contacts.find((c) => c.id === fleet.contactId) : null;
+  // Who a new quote is addressed to. The manager if there is one, otherwise the
+  // first member — createQuoteForFleet requires one or the other and re-checks
+  // it server-side, so this only decides which valid option the button offers.
+  const quoteRecipient = members.find((member) => member.id === fleet.contactId) ?? members[0] ?? null;
   const consent = latestConsentPerMember(rollup.consentRecords);
 
   const dues = fleet.vehicles.map((v) => computeDue(v));
@@ -518,6 +528,99 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
                       </li>
                     ))}
                   </ul>
+                )}
+              </div>
+            ),
+          },
+          {
+            key: "quotes",
+            label: "Quotes",
+            count: quotes.length,
+            content: (
+              <div className="card p-0 overflow-x-auto">
+                <div className="flex items-center justify-between gap-3 p-4">
+                  <div>
+                    <h2 className="font-semibold">Quotes for this account</h2>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      Quotes billed to {fleet.name} — addressed to the account, with its
+                      registration and VAT numbers — plus quotes filed against its contacts.
+                    </p>
+                  </div>
+                  {/*
+                    Gated on the pair the action itself enforces: quotes.create,
+                    and a contact to address the quote to. Offering the button
+                    without either is a control whose only outcome is a refusal —
+                    the nav/guard disagreement this codebase has been removing
+                    everywhere else.
+                  */}
+                  {canCreateQuotes && quoteRecipient && (
+                    // SaveForm, not a bare <form>: createQuoteForFleet returns its
+                    // refusals as VALUES rather than throwing, because Next replaces
+                    // a thrown server-action message with an opaque digest in
+                    // production — and "add them to the fleet first" is the whole
+                    // point of that message. It also navigates on the returned
+                    // redirectTo instead of inferring success from a throw.
+                    <SaveForm success="Quote created" resetOnSuccess={false} action={createQuoteForFleet}>
+                      <input type="hidden" name="fleetId" value={fleet.id} />
+                      <input type="hidden" name="contactId" value={quoteRecipient.id} />
+                      <SaveButton className="btn-secondary btn-sm shrink-0">+ Quote</SaveButton>
+                    </SaveForm>
+                  )}
+                </div>
+                {quotes.length === 0 ? (
+                  <p className="px-4 pb-5 text-sm text-slate-400">
+                    {canCreateQuotes && !quoteRecipient
+                      ? "Link a contact to this fleet first — a quote is addressed to a person at the account."
+                      : "No quotes for this account yet."}
+                  </p>
+                ) : (
+                  <table className="table-base">
+                    <thead>
+                      <tr>
+                        <th>Quote</th>
+                        <th>Billed to</th>
+                        <th>Attention</th>
+                        <th>Total</th>
+                        <th>Status</th>
+                        <th>Raised</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {quotes.map((quote) => (
+                        <tr key={quote.id}>
+                          <td>
+                            <Link href={`/quotes/${quote.id}`} className="font-medium text-orange-400 hover:underline">
+                              Q-{quote.number}
+                            </Link>
+                          </td>
+                          {/* The distinction the column exists to make: a quote
+                              billed TO the account, versus one that belongs to a
+                              person who happens to work there. */}
+                          <td className="text-slate-400">
+                            {quote.fleetId === fleet.id ? fleet.name : labelFor(quote.contactId) ?? "—"}
+                          </td>
+                          <td className="text-slate-400">{labelFor(quote.contactId) ?? "—"}</td>
+                          <td className="text-slate-400">{formatZAR(payableTotalCents(quote))}</td>
+                          <td>
+                            <StatusPill
+                              tone={
+                                quote.status === "accepted"
+                                  ? "success"
+                                  : quote.status === "declined"
+                                    ? "danger"
+                                    : quote.status === "sent"
+                                      ? "info"
+                                      : "neutral"
+                              }
+                            >
+                              {quote.status}
+                            </StatusPill>
+                          </td>
+                          <td className="text-slate-400">{formatDate(quote.createdAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 )}
               </div>
             ),
