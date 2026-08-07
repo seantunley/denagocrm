@@ -3,6 +3,7 @@ import test from "node:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import ts from "typescript";
 import {
   ROUTE_RULES,
   routeAllowed,
@@ -58,6 +59,19 @@ function walk(dir: string): string[] {
 
 const sourceFiles = walk(path.join(root, "src")).filter((f) => /\.tsx?$/.test(f));
 const rel = (abs: string) => abs.slice(root.length + 1).replace(/\\/g, "/");
+
+/**
+ * The permission catalogue, read from source rather than imported: permissions.ts
+ * pulls in the Prisma client and next/navigation, and a unit test that has to
+ * stand a database up to answer a question about a string list is not a unit test.
+ */
+const CATALOGUE = (() => {
+  const source = shipped("src/lib/permissions.ts");
+  const start = source.indexOf("export const PERMISSIONS = [");
+  if (start === -1) throw new Error("PERMISSIONS not found in src/lib/permissions.ts — was it renamed?");
+  const end = source.indexOf("]", start);
+  return [...source.slice(start, end).matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+})();
 
 /* ── the retired authority is really gone ─────────────────────────────── */
 
@@ -291,31 +305,382 @@ test("a token minted before the grant claim existed fails CLOSED", () => {
 
 /* ── the nav cannot advertise a route the guard refuses ───────────────── */
 
-test("nav links use the same permissions as the route rules they point at", () => {
-  // A link shown by one rule and a page guarded by another is the same class of
-  // bug at a smaller scale: the user clicks something the product offered them
-  // and is redirected away.
-  const nav = shipped("src/components/nav-config.ts");
-  const linked = new Map<string, string[]>();
-  for (const match of nav.matchAll(/can\(([^)]*)\)\)\s*\w+\.push\(\{\s*href:\s*"([^"]+)"/g)) {
-    const keys = [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-    linked.set(match[2], keys);
-  }
-  assert.ok(linked.size > 5, "expected to parse the nav's permission-gated links");
+/**
+ * Every permission-gated nav link, with the permission keys that make it appear.
+ *
+ * Parsed from the AST, not a regex over the text. The regex this replaced only
+ * ever matched a single-line `if (can(…)) list.push({ href: … })`, so the
+ * marketing block, the workshop calendar's two-`can` condition and every link
+ * inside a pushed group were invisible to it — and an invisible link is one
+ * nothing checks.
+ */
+function navLinks(): Array<{ href: string; keys: string[]; admin: boolean }> {
+  const file = path.join(root, "src", "components", "nav-config.ts");
+  const source = ts.createSourceFile(
+    file,
+    readFileSync(file, "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const links: Array<{ href: string; keys: string[]; admin: boolean }> = [];
 
-  for (const rule of ROUTE_RULES) {
-    const keys = linked.get(rule.prefix);
-    if (!keys) continue; // not linked from the sidebar at all
-    assert.deepEqual(
-      [...keys].sort(),
-      "anyOf" in rule ? [...rule.anyOf].sort() : [],
-      `the nav shows ${rule.prefix} on different permissions than the route rule enforces`,
+  /** The `can("a","b")` keys — and whether `isAdmin` alone — guard a branch. */
+  function guardOf(expression: ts.Expression) {
+    const keys: string[] = [];
+    let admin = false;
+    const walk = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "can") {
+        for (const argument of node.arguments) {
+          if (ts.isStringLiteral(argument)) keys.push(argument.text);
+        }
+      }
+      if (ts.isIdentifier(node) && node.text === "isAdmin") admin = true;
+      ts.forEachChild(node, walk);
+    };
+    walk(expression);
+    return { keys, admin };
+  }
+
+  function visit(node: ts.Node, keys: string[], admin: boolean) {
+    if (ts.isIfStatement(node)) {
+      const guard = guardOf(node.expression);
+      visit(node.expression, keys, admin);
+      visit(node.thenStatement, [...keys, ...guard.keys], admin || guard.admin);
+      // The else branch is NOT covered by the condition's grant.
+      if (node.elseStatement) visit(node.elseStatement, keys, admin);
+      return;
+    }
+    if (ts.isObjectLiteralExpression(node)) {
+      for (const property of node.properties) {
+        if (
+          ts.isPropertyAssignment(property) &&
+          ts.isIdentifier(property.name) &&
+          property.name.text === "href" &&
+          ts.isStringLiteral(property.initializer)
+        ) {
+          links.push({ href: property.initializer.text, keys: [...keys], admin });
+        }
+      }
+    }
+    ts.forEachChild(node, (child) => visit(child, keys, admin));
+  }
+
+  const buildNav = source.statements.find(
+    (statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === "buildNav",
+  );
+  assert.ok(buildNav, "buildNav not found in nav-config.ts — was it renamed?");
+  visit(buildNav, [], false);
+  return links;
+}
+
+/**
+ * Permission-gated nav links that deliberately have NO entry in ROUTE_RULES.
+ *
+ * ROUTE_RULES is the EDGE pre-filter: a route earns a rule when there is value
+ * in refusing it before any page code runs. Everything below is gated by its own
+ * page or segment layout instead, on the very permission the nav link uses — so
+ * the link and the guard still answer to one authority, there is simply no
+ * second copy of the answer at the edge.
+ *
+ * An entry here is a claim, not a waiver: the test below opens each route's page
+ * and layout chain and fails unless a real RBAC guard is there. `requireOwner`
+ * deliberately does NOT count — a permission-gated link over an owner-gated page
+ * is exactly the /journeys bug this file exists to prevent.
+ */
+const EDGE_EXEMPT_NAV_ROUTES = new Set([
+  "/reports", "/targets", "/forecast",
+  "/inbox",
+  "/calendar", "/test-drives", "/leads", "/quotes", "/signatures", "/deliveries",
+  "/contacts", "/activities", "/documents",
+  "/cases",
+  "/marketing/overview", "/marketing/campaigns", "/marketing/calendar",
+  "/marketing/audiences", "/marketing/templates",
+  "/marketing/surveys", "/marketing/surveys/insights",
+  "/referrals", "/stock",
+  "/workshop-calendar", "/vehicles", "/service-due", "/warranty",
+  "/jobcards", "/jobcards/insights", "/parts",
+  "/library", "/document-studio",
+  "/audit",
+]);
+
+/**
+ * Exempt routes whose page does NOT in fact enforce the permission its nav link
+ * is shown on — a KNOWN GAP, recorded rather than waved through.
+ *
+ * /leads renders the whole pipeline from `getCurrentUser()` alone: `hasPermission`
+ * appears in it, but only to decide which BUTTONS to draw, so a signed-in user
+ * holding no lead permission at all can open the URL the sidebar hides from them
+ * and read every open lead. That is a lead-scope fix, not a route-rule one, and it
+ * is deliberately out of scope here. Listing it keeps the invariant above sharp
+ * for every other route instead of loosening the guard pattern to accommodate one.
+ *
+ * The test prunes this list: give /leads a real guard and it will tell you to
+ * remove the entry.
+ */
+// Empty, and the assertion below keeps it that way: /leads was the last entry
+// and it now calls requireAnyPermission("leads.view_all", "leads.view_owned"),
+// so listing it as a known gap would be stale documentation of a fixed bug.
+const PAGE_GUARD_GAPS = new Set<string>([]);
+
+/** A guard that resolves live RBAC. requireOwner is not one of these. */
+const RBAC_PAGE_GUARD = /\b(?:requireRoute|requirePermission|requireAnyPermission|require\w+Access)\s*\(/;
+
+/** The page for `href`, plus every layout above it — the whole guard chain. */
+function routeGuardChain(href: string): string[] {
+  const segments = href.slice(1).split("/");
+  const files: string[] = [];
+  for (let depth = 0; depth <= segments.length; depth++) {
+    const dir = path.join(root, "src", "app", "(app)", ...segments.slice(0, depth));
+    for (const name of depth === segments.length ? ["layout.tsx", "page.tsx"] : ["layout.tsx"]) {
+      const file = path.join(dir, name);
+      if (existsSync(file)) files.push(file);
+    }
+  }
+  return files;
+}
+
+test("every permission-gated nav link points at a route whose authority is written down", () => {
+  // THE INVERSION. This used to iterate ROUTE_RULES and look up each rule's nav
+  // link, so a link pointing at a route with NO rule was never examined — which
+  // is precisely how /journeys shipped advertising `journeys.manage` in the
+  // sidebar while its pages demanded requireOwner() and no rule gated the prefix
+  // at all. Iterating the LINKS makes an unruled route a finding, not a blind
+  // spot. Start from what the product offers the user, not from what is already
+  // written down.
+  const links = navLinks();
+  assert.ok(links.length > 20, `expected to parse the nav's links, found ${links.length}`);
+
+  const gated = links.filter((link) => link.keys.length > 0);
+  assert.ok(gated.length > 5, "expected the nav's permission-gated links");
+
+  const unaccounted: string[] = [];
+  const mismatched: string[] = [];
+  const unguarded: string[] = [];
+  const closedGaps: string[] = [];
+  const unusedExemptions = new Set(EDGE_EXEMPT_NAV_ROUTES);
+
+  for (const link of gated) {
+    const rule = ruleFor(link.href);
+    if (!rule) {
+      if (!EDGE_EXEMPT_NAV_ROUTES.has(link.href)) {
+        unaccounted.push(`${link.href} (shown on ${link.keys.join(", ")})`);
+        continue;
+      }
+      unusedExemptions.delete(link.href);
+      const chain = routeGuardChain(link.href);
+      const guarded = chain.some((file) => RBAC_PAGE_GUARD.test(shipped(rel(file))));
+      if (guarded && PAGE_GUARD_GAPS.has(link.href)) closedGaps.push(link.href);
+      if (!guarded && !PAGE_GUARD_GAPS.has(link.href)) {
+        unguarded.push(`${link.href} — ${chain.map(rel).join(", ") || "no page found"}`);
+      }
+      continue;
+    }
+    if (!("anyOf" in rule)) {
+      mismatched.push(`${link.href} is owner-only at the edge but advertised on ${link.keys.join(", ")}`);
+      continue;
+    }
+    const keys = [...new Set(link.keys)].sort();
+    const allowed = [...rule.anyOf].sort();
+    if (keys.join("|") !== allowed.join("|")) {
+      mismatched.push(`${link.href}: nav ${keys.join(", ")} vs rule ${allowed.join(", ")}`);
+    }
+  }
+
+  assert.deepEqual(
+    unaccounted,
+    [],
+    "These nav links are shown on a permission, but the route they point at has no rule in " +
+      "ROUTE_RULES and is not listed in EDGE_EXEMPT_NAV_ROUTES. Decide which it is — a rule (the " +
+      "edge enforces it too) or an exemption (the page enforces it alone):\n  " + unaccounted.join("\n  "),
+  );
+  assert.deepEqual(
+    mismatched,
+    [],
+    "The nav shows these on different permissions than the route rule enforces, so the product " +
+      "offers a link the guard refuses:\n  " + mismatched.join("\n  "),
+  );
+  assert.deepEqual(
+    unguarded,
+    [],
+    "These are exempt from the edge rule on the promise that their own page enforces the " +
+      "permission — and it does not. An owner-only guard under a permission-gated link is the " +
+      "/journeys bug:\n  " + unguarded.join("\n  "),
+  );
+  assert.deepEqual(
+    closedGaps,
+    [],
+    `PAGE_GUARD_GAPS lists routes that now DO enforce their permission — prune them so the list keeps meaning something: ${closedGaps.join(", ")}`,
+  );
+  assert.deepEqual(
+    [...unusedExemptions],
+    [],
+    `EDGE_EXEMPT_NAV_ROUTES lists routes the nav no longer links on a permission — prune them: ${[...unusedExemptions].join(", ")}`,
+  );
+});
+
+test("an owner-only nav link is never advertised on a permission", () => {
+  // The mirror image: a link the sidebar shows only to `isAdmin` may point at an
+  // owner rule or at no rule, but a permission rule would mean the product hides
+  // a screen from someone the guard would have admitted.
+  for (const link of navLinks()) {
+    if (!link.admin || link.keys.length > 0) continue;
+    const rule = ruleFor(link.href);
+    if (!rule) continue;
+    assert.ok(
+      "owner" in rule,
+      `${link.href} is shown only to owners but its route rule grants it on ${
+        "anyOf" in rule ? rule.anyOf.join(", ") : "?"
+      } — the nav hides a screen the guard allows`,
     );
   }
+});
 
+test("the nav is built from RBAC alone", () => {
   assert.doesNotMatch(
-    nav,
+    shipped("src/components/nav-config.ts"),
     /hasModule|permissionList\.length === 0/,
     "the nav must be built from RBAC alone — a module-CSV fallback is a second source",
   );
+});
+
+/* ── journeys: the disagreement this rule was added to end ────────────── */
+
+/**
+ * The page-guard verdict for a member holding `held`.
+ *
+ * Models `requireRoute` (permissions.ts) rather than re-deciding anything: it
+ * reads the SAME rule and applies `requireAnyPermission(...rule.anyOf)`, and the
+ * test above ("requireRoute reads the shared table…") pins that delegation. Its
+ * purpose here is to be compared against `routeAllowed` — the two sides
+ * disagreeing IS the bug.
+ */
+function pageGuardAllows(route: string, role: string, held: Iterable<string>): boolean {
+  const rule = ruleFor(route);
+  if (!rule) return true;
+  if (role === "owner") return true;
+  if ("owner" in rule) return false;
+  const permissions = new Set(held);
+  return rule.anyOf.some((key) => permissions.has(key));
+}
+
+/** The builder, and the trace beneath it — the sub-path must follow the prefix. */
+const JOURNEY_ROUTES = ["/journeys", "/journeys/activity"];
+
+test("a member granted journeys.manage reaches journeys — at the edge AND on the page", () => {
+  // Verbatim the lived failure: an admin ticks journeys.manage for a role, the
+  // sidebar shows "Journeys", the user clicks it and is redirected to "/".
+  const held = ["journeys.manage"];
+  const grants = routeGrants("member", held);
+  for (const route of JOURNEY_ROUTES) {
+    assert.equal(
+      routeAllowed(route, { role: "member", grants }),
+      true,
+      `${route} must open at the edge for a journeys.manage holder`,
+    );
+    assert.equal(
+      pageGuardAllows(route, "member", held),
+      true,
+      `${route} must open at the page guard for a journeys.manage holder`,
+    );
+  }
+  assert.equal(grants.includes("/journeys"), true, "the minted claim must carry the journeys grant");
+});
+
+test("a member holding nothing cannot reach journeys", () => {
+  const grants = routeGrants("member", []);
+  for (const route of JOURNEY_ROUTES) {
+    assert.equal(routeAllowed(route, { role: "member", grants }), false, `${route} must stay closed at the edge`);
+    assert.equal(pageGuardAllows(route, "member", []), false, `${route} must stay closed at the page guard`);
+  }
+});
+
+test("every OTHER permission in the catalogue still leaves journeys closed", () => {
+  // Delegable is not the same as open: journeys send mail and WhatsApp to real
+  // customers, so the one key that opens them must be the only one that does.
+  const others = CATALOGUE.filter((key) => key !== "journeys.manage");
+  assert.ok(others.length > 50, "expected the permission catalogue");
+  const grants = routeGrants("member", others);
+  for (const route of JOURNEY_ROUTES) {
+    assert.equal(
+      routeAllowed(route, { role: "member", grants }),
+      false,
+      `${route} opened for a member holding every permission EXCEPT journeys.manage`,
+    );
+    assert.equal(pageGuardAllows(route, "member", others), false, `${route} opened at the page guard without journeys.manage`);
+  }
+});
+
+test("the edge and the journeys pages cannot answer differently", () => {
+  // The whole point of one table: sweep every subset that matters and assert the
+  // two verdicts agree. A rule change that opens one side alone fails here.
+  const holdings: string[][] = [
+    [],
+    ["journeys.manage"],
+    ["campaigns.manage"],
+    ["journeys.manage", "campaigns.manage"],
+    CATALOGUE.filter((key) => key !== "journeys.manage"),
+    [...CATALOGUE],
+  ];
+  for (const held of holdings) {
+    for (const role of ["member", "owner"]) {
+      const grants = routeGrants(role, held);
+      for (const route of JOURNEY_ROUTES) {
+        assert.equal(
+          routeAllowed(route, { role, grants }),
+          pageGuardAllows(route, role, held),
+          `${route}: edge and page disagree for ${role} holding [${held.slice(0, 3).join(", ")}${held.length > 3 ? ", …" : ""}]`,
+        );
+      }
+    }
+  }
+});
+
+test("the journeys pages apply the route rule instead of the owner role", () => {
+  const pages = [
+    "src/app/(app)/journeys/page.tsx",
+    "src/app/(app)/journeys/activity/page.tsx",
+  ];
+  for (const page of pages) {
+    const code = shipped(page);
+    assert.match(
+      code,
+      /await requireRoute\("\/journeys"\)/,
+      `${page} must apply the same rule the edge applies`,
+    );
+    assert.doesNotMatch(
+      code,
+      /\brequireOwner\s*\(/,
+      `${page} back on requireOwner() — journeys.manage would advertise a screen it then refuses`,
+    );
+  }
+});
+
+test("every journeys server action gates itself on journeys.manage", () => {
+  // A Server Action compiles to a POST endpoint, so the page guard protects the
+  // screen and nothing else: publishing a journey, archiving one, retrying a run
+  // or firing a manual send are each reachable by a direct POST. Each has to ask
+  // for itself, and ask FIRST — before any record is read or written.
+  for (const file of ["src/app/actions/journeys.ts", "src/app/actions/journeyRuns.ts"]) {
+    const code = shipped(file);
+    assert.doesNotMatch(code, /\brequireOwner\s*\(/, `${file} still owner-gates a delegable surface`);
+
+    const names = [...code.matchAll(/export async function (\w+)\(/g)].map((match) => match[1]);
+    assert.ok(names.length >= 4, `expected the exported actions in ${file}, found ${names.length}`);
+    for (const name of names) {
+      const start = code.indexOf(`export async function ${name}(`);
+      const end = code.indexOf("\nexport ", start + 1);
+      const body = end === -1 ? code.slice(start) : code.slice(start, end);
+      assert.match(
+        body,
+        /await requirePermission\("journeys\.manage"\)/,
+        `${file}#${name} is a POST endpoint of its own — it must demand journeys.manage itself`,
+      );
+      assert.equal(
+        /await\s+([A-Za-z_$][\w$]*)/.exec(body)?.[1],
+        "requirePermission",
+        `${file}#${name} does work before it authorises the caller`,
+      );
+    }
+  }
 });

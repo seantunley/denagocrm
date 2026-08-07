@@ -21,3 +21,53 @@ model TenantIntegrationCredential {
   @@unique([tenantId, key])
   @@index([tenantId])
 }
+
+/// Verification state for ONE tenant's ONE outbound integration — the record of
+/// whether its credentials were last seen actually working against the provider.
+///
+/// Deliberately holds NO credential material. `TenantIntegrationCredential`
+/// above stays the only place a secret is stored; this table only ever records
+/// *that* a probe passed or failed and *why*, so it can be read (and rendered)
+/// without decrypting anything. `lastErrorMessage` is written exclusively from
+/// the curated, redacted sentences in src/lib/integrationProbe.ts — never a raw
+/// provider response body, which for Meta/SMTP can echo the token back.
+///
+/// A row appears only once a guided flow has completed a live connection test:
+/// no row means "never verified". Additive and inert — every existing
+/// credential read (resolveTenantCredential / resolveIntegrationBundle) ignores
+/// this table entirely, so an install with zero rows behaves exactly as before.
+///
+/// Scalar tenantId, no FK — same convention as TenantIntegrationCredential /
+/// TenantApiKey / ChannelIdentity: resolution is app-layer, so a dangling
+/// tenantId fails closed to "never verified" rather than a hard DB error.
+model IntegrationConnection {
+  id            String @id @default(cuid())
+  tenantId      String
+  /// Matches TENANT_CREDENTIAL_INTEGRATIONS[].id — "smtp", "whatsapp", …
+  integrationId String
+
+  /// "connected" — the last live probe (or send) succeeded.
+  /// "reauth_required" — a probe or a real send failed with an auth-class error;
+  /// the UI routes the owner back into the flow at `blameStep`.
+  status String @default("connected")
+
+  /// Last time a live probe passed. Never cleared on failure, so the UI can say
+  /// "worked until <date>" rather than just "broken".
+  lastVerifiedAt DateTime?
+  /// Which flow step the owner must revisit to fix `lastError` (see
+  /// integrationFlow.ts). Null when connected.
+  blameStep      String?
+  /// Machine-readable failure class (ProbeFailureCode) for the UI/telemetry.
+  lastErrorCode  String?
+  /// Redacted, human-readable failure sentence. NEVER a raw provider body.
+  lastErrorAt    DateTime?
+  lastErrorText  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, integrationId])
+  @@index([tenantId])
+  /// Powers the "which integrations need attention" sweep across a tenant.
+  @@index([tenantId, status])
+}

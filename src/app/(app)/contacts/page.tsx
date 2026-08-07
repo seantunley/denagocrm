@@ -21,6 +21,8 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { prisma } from "@/lib/db";
+import { fleetPicker } from "@/lib/fleetDirectory";
+import { NO_FLEET_PICKER } from "@/lib/fleetTypes";
 import { contactName, formatDate } from "@/lib/format";
 import {
   getAccessibleContactIds,
@@ -76,7 +78,7 @@ export default async function ContactsPage({
     ],
   };
 
-  const [contacts, users] = await Promise.all([
+  const [contacts, users, picker] = await Promise.all([
     prisma.contact.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -93,6 +95,7 @@ export default async function ContactsPage({
       take: 200,
     }),
     canCreate ? prisma.user.findMany({ orderBy: { name: "asc" } }) : Promise.resolve([]),
+    canCreate ? fleetPicker() : Promise.resolve(NO_FLEET_PICKER),
   ]);
 
   const vehicleCount = contacts.reduce((total, contact) => total + contact._count.vehicles, 0);
@@ -135,6 +138,7 @@ export default async function ContactsPage({
               action={createContact}
               submitLabel="Create contact"
               users={users.map((item) => ({ id: item.id, name: item.name }))}
+              fleetPicker={picker}
               variant="dialog"
             />
           </ModalTrigger>

@@ -9,6 +9,7 @@ import { basePrisma } from "@/lib/db";
 import { createSessionCookie, destroySessionCookie } from "@/lib/auth";
 import { verifySession, SESSION_COOKIE } from "@/lib/session";
 import { verifyTotp } from "@/lib/totp";
+import { matchBackupCode } from "@/lib/backupCodes";
 import { decryptValue } from "@/lib/settings";
 import { sendEmail } from "@/lib/email";
 import { logAudit } from "@/lib/audit";
@@ -187,22 +188,28 @@ export async function verifySecondFactor(
     if (await bcrypt.compare(code, user.loginOtpHash)) ok = true;
   }
   if (!ok && user.totpBackupCodes) {
-    const codes: string[] = JSON.parse(user.totpBackupCodes);
-    const normalized = code.toUpperCase().replace(/\s/g, "");
-    for (let index = 0; index < codes.length; index++) {
-      if (await bcrypt.compare(normalized, codes[index])) {
-        codes.splice(index, 1);
-        await basePrisma.user.update({
-          where: { id: user.id },
-          data: { totpBackupCodes: JSON.stringify(codes) },
-        });
+    const match = await matchBackupCode(user.totpBackupCodes, code);
+    if (match) {
+      // COMPARE-AND-SWAP, not read-modify-write. The old code parsed the list,
+      // spliced the used entry out and wrote it back, so two requests arriving
+      // together both matched the same code, both wrote the same shortened list
+      // and both were handed a session — one single-use code, two sign-ins.
+      //
+      // Conditioning the update on the exact value that was read means the
+      // second writer matches no row. Losing that race is treated as a failed
+      // code rather than a retry: the code really has been spent, just not by
+      // this request.
+      const claimed = await basePrisma.user.updateMany({
+        where: { id: user.id, totpBackupCodes: user.totpBackupCodes },
+        data: { totpBackupCodes: match.remainingJson },
+      });
+      if (claimed.count === 1) {
         await logAudit({
           action: "auth.backup_code_used",
-          summary: `Backup code used to sign in (${codes.length} remaining)`,
+          summary: `Backup code used to sign in (${match.remaining.length} remaining)`,
           userName: user.name,
         });
         ok = true;
-        break;
       }
     }
   }

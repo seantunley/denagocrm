@@ -5,11 +5,19 @@
   ],
   "crons": [
     {
+      "path": "/api/cron/signing-jobs",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/journeys",
       "schedule": "*/15 * * * *"
     },
     {
       "path": "/api/cron/automations",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/statistics",
       "schedule": "*/15 * * * *"
     },
     {

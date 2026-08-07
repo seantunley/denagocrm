@@ -22,6 +22,15 @@ import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { formatDateTime } from "@/lib/format";
 import { MODULE_REGISTRY } from "@/lib/modules/registry";
 import { parseModuleCsv } from "@/lib/modules/entitlement";
+import { brandFromRow, brandLogoUrl } from "@/lib/tenantBrand";
+import {
+  setTenantBrandAction,
+  setTenantLogoAction,
+  clearTenantLogoAction,
+  addTenantDomainAction,
+  verifyTenantDomainAction,
+  removeTenantDomainAction,
+} from "@/app/actions/tenantBranding";
 import {
   getTenantIntegrationHealth,
   integrationVerdict,
@@ -111,9 +120,36 @@ export default async function TenantProfilePage({
 
   const tenant = await basePrisma.tenant.findUnique({
     where: { id },
-    select: { id: true, name: true, slug: true, active: true, modules: true, createdAt: true },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      active: true,
+      modules: true,
+      createdAt: true,
+      brandPrimary: true,
+      brandLogoRef: true,
+      brandDisplayName: true,
+      brandTagline: true,
+      domains: {
+        select: { id: true, hostname: true, verifiedAt: true },
+        orderBy: { hostname: "asc" },
+      },
+    },
   });
   if (!tenant) notFound();
+
+  // What the login page will actually render for this tenant — resolved through
+  // the same brandFromRow the page itself uses, so the preview cannot drift from
+  // the real thing.
+  const brand = brandFromRow({
+    tenantId: tenant.id,
+    brandPrimary: tenant.brandPrimary,
+    brandLogoRef: tenant.brandLogoRef,
+    brandDisplayName: tenant.brandDisplayName,
+    brandTagline: tenant.brandTagline,
+  });
+  const brandLogo = brandLogoUrl(brand);
 
   const since24h = new Date(Date.now() - 24 * 3600_000);
   const since7d = new Date(Date.now() - 7 * 24 * 3600_000);
@@ -397,6 +433,236 @@ export default async function TenantProfilePage({
                 </ul>
                 <SaveButton className="btn-primary btn-sm mt-4">Save modules</SaveButton>
               </SaveForm>
+            ),
+          },
+          {
+            key: "branding",
+            label: "Branding",
+            count: tenant.domains.length,
+            content: (
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="space-y-4">
+                  <SaveForm
+                    action={setTenantBrandAction.bind(null, tenant.id)}
+                    success="Branding updated"
+                    resetOnSuccess={false}
+                    className="card p-5 space-y-3"
+                  >
+                    <div>
+                      <h2 className="font-semibold">Brand</h2>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        What this tenant&apos;s staff and customers see — login pages, app
+                        chrome and documents. Leave a field blank to use the platform default.
+                      </p>
+                    </div>
+                    <label className="block space-y-1">
+                      <span className="text-xs text-muted-foreground">Display name</span>
+                      <input
+                        name="brandDisplayName"
+                        className="input"
+                        defaultValue={tenant.brandDisplayName ?? ""}
+                        placeholder="Acme Golf Carts"
+                        maxLength={120}
+                      />
+                    </label>
+                    <label className="block space-y-1">
+                      <span className="text-xs text-muted-foreground">Tagline</span>
+                      <input
+                        name="brandTagline"
+                        className="input"
+                        defaultValue={tenant.brandTagline ?? ""}
+                        placeholder="Fleet sales & service"
+                        maxLength={160}
+                      />
+                    </label>
+                    <label className="block space-y-1">
+                      <span className="text-xs text-muted-foreground">
+                        Accent colour (six-digit hex; blank keeps the platform accent)
+                      </span>
+                      {/* One control, not two. A `type="color"` picker cannot express
+                          "blank = no override" — it always holds some colour — so
+                          pairing it with the text field would need JS to keep them in
+                          step and would make "clear the accent" unreachable. The text
+                          field is the value; the swatch beside it just shows what is
+                          currently saved. */}
+                      <span className="flex items-center gap-2">
+                        <input
+                          name="brandPrimary"
+                          className="input flex-1"
+                          defaultValue={tenant.brandPrimary ?? ""}
+                          placeholder="#ea580c"
+                          pattern="#[0-9a-fA-F]{6}"
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                        <span
+                          aria-hidden
+                          title={brand.primary ?? "No accent set"}
+                          className="size-9 shrink-0 rounded border border-border"
+                          style={{ backgroundColor: brand.primary ?? "transparent" }}
+                        />
+                      </span>
+                    </label>
+                    <SaveButton className="btn-primary btn-sm">Save branding</SaveButton>
+                  </SaveForm>
+
+                  <div className="card p-5 space-y-3">
+                    <div>
+                      <h2 className="font-semibold">Logo</h2>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        PNG, JPEG, SVG or WebP, up to 1&nbsp;MB. Replacing deletes the old
+                        file after the new one is saved.
+                      </p>
+                    </div>
+                    {/* Plain <img>, not next/image: the logo is streamed from our own
+                        route at an intrinsic size nothing records, and next/image needs
+                        dimensions up front. Optimisation is not the point for a
+                        ≤1 MB brand mark rendered once on an admin screen. */}
+                    {brandLogo ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={brandLogo}
+                        alt={`${brand.displayName} logo`}
+                        className="max-h-16 w-auto rounded bg-white/5 p-2"
+                      />
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        No logo set — surfaces use the platform default.
+                      </p>
+                    )}
+                    <SaveForm
+                      action={setTenantLogoAction.bind(null, tenant.id)}
+                      success="Logo updated"
+                      resetOnSuccess={false}
+                      className="flex items-center gap-2"
+                    >
+                      <input
+                        type="file"
+                        name="logo"
+                        accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                        className="input flex-1"
+                      />
+                      <SaveButton className="btn-secondary btn-sm">Upload</SaveButton>
+                    </SaveForm>
+                    {tenant.brandLogoRef && (
+                      <SaveForm
+                        action={clearTenantLogoAction.bind(null, tenant.id)}
+                        success="Logo removed"
+                        resetOnSuccess={false}
+                      >
+                        <SaveButton className="btn-ghost btn-sm text-muted-foreground">
+                          Remove logo
+                        </SaveButton>
+                      </SaveForm>
+                    )}
+                  </div>
+
+                  <div className="card p-5 space-y-3">
+                    <div>
+                      <h2 className="font-semibold">Domains</h2>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Hostnames that serve this tenant&apos;s white-labelled app. Branding
+                        only applies on <em>verified</em> hostnames — verify one after
+                        confirming the tenant controls its DNS.
+                      </p>
+                    </div>
+                    <ul className="divide-y divide-border/50">
+                      {tenant.domains.length === 0 && (
+                        <li className="py-2 text-xs text-muted-foreground">
+                          No hostnames registered. The tenant is reachable only on the
+                          platform default domain, unbranded.
+                        </li>
+                      )}
+                      {tenant.domains.map((domain) => (
+                        <li key={domain.id} className="flex items-center gap-2 py-2 text-sm">
+                          <span className="min-w-0 flex-1 truncate font-mono text-xs">
+                            {domain.hostname}
+                          </span>
+                          {domain.verifiedAt ? (
+                            <span className="badge bg-emerald-500/15 text-emerald-300">
+                              Verified
+                            </span>
+                          ) : (
+                            <>
+                              <span className="badge bg-amber-500/15 text-amber-300">
+                                Pending
+                              </span>
+                              <SaveForm
+                                action={verifyTenantDomainAction.bind(null, tenant.id, domain.id)}
+                                success={`${domain.hostname} verified`}
+                                resetOnSuccess={false}
+                              >
+                                <SaveButton className="btn-secondary btn-sm">Verify</SaveButton>
+                              </SaveForm>
+                            </>
+                          )}
+                          <SaveForm
+                            action={removeTenantDomainAction.bind(null, tenant.id, domain.id)}
+                            success={`${domain.hostname} removed`}
+                            resetOnSuccess={false}
+                          >
+                            <SaveButton className="btn-ghost btn-sm text-muted-foreground">
+                              Remove
+                            </SaveButton>
+                          </SaveForm>
+                        </li>
+                      ))}
+                    </ul>
+                    <SaveForm
+                      action={addTenantDomainAction.bind(null, tenant.id)}
+                      success="Hostname added"
+                      className="flex items-center gap-2"
+                    >
+                      <input
+                        name="hostname"
+                        className="input flex-1"
+                        placeholder="crm.acme.co.za"
+                        autoComplete="off"
+                      />
+                      <SaveButton className="btn-secondary btn-sm">Add</SaveButton>
+                    </SaveForm>
+                  </div>
+                </div>
+
+                {/* Live preview — rendered from the SAME brandFromRow + brandStyle the
+                    login page uses, so what the admin sees is what ships. A platform
+                    admin setting a brand for someone else cannot check by signing in
+                    as them; this panel is that check. */}
+                <div className="card p-5">
+                  <h2 className="font-semibold">Login preview</h2>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    How this tenant&apos;s sign-in page greets staff on a verified hostname.
+                  </p>
+                  <div
+                    className="mt-4 rounded-xl border border-border bg-[#020617] p-6"
+                    style={
+                      brand.primary
+                        ? ({ "--primary": brand.primary, "--primary-foreground": brand.primaryForeground } as React.CSSProperties)
+                        : undefined
+                    }
+                  >
+                    {brandLogo ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={brandLogo} alt="" className="mb-4 max-h-10 w-auto" />
+                    ) : null}
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-primary">
+                      Staff portal
+                    </p>
+                    <p className="mt-2 text-xl font-semibold tracking-tight text-white">
+                      Welcome back.
+                    </p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Sign in to {brand.displayName}.
+                    </p>
+                    <span className="mt-4 inline-block rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">
+                      Sign in
+                    </span>
+                    {brand.tagline && (
+                      <p className="mt-4 text-[10px] text-slate-500">{brand.tagline}</p>
+                    )}
+                  </div>
+                </div>
+              </div>
             ),
           },
           {

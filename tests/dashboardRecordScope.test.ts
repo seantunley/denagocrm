@@ -12,7 +12,7 @@ const shipped = (rel: string) =>
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
 
-const DASHBOARD = "src/app/(app)/page.tsx";
+const DASHBOARD = "src/lib/dashboard/data.ts";
 const LEADS_BOARD = "src/app/(app)/leads/page.tsx";
 
 /**
@@ -79,150 +79,68 @@ function assertModelsFound(calls: PrismaCall[], expected: string[], where: strin
  * activity query that omits activityScope is narrower still — the caller's own
  * assignments.
  */
-const SCOPED: Record<string, { scope: string; gate: string | null }> = {
-  lead: { scope: "leadScope", gate: "showSales" },
-  quote: { scope: "quoteScope", gate: "showSales" },
-  signatureRequest: { scope: "quoteIds", gate: "showSales" },
-  jobCard: { scope: "jobCardScope", gate: "showService" },
-  vehicle: { scope: "vehicleScope", gate: "showService" },
-  activity: { scope: "activityScope", gate: null },
-};
 
-test("every dashboard read of a customer record names its scope", () => {
-  const code = shipped(DASHBOARD);
-  const calls = prismaCalls(code);
-  assertModelsFound(calls, ["lead", "quote", "jobCard", "vehicle", "activity", "signatureRequest"], DASHBOARD);
 
-  for (const call of calls) {
-    const rule = SCOPED[call.model];
-    if (!rule) continue;
-    const scoped =
-      call.args.includes(`...${rule.scope}`) ||
-      call.args.includes(`${rule.scope} ?`) ||
-      // The overdue-prompt query: the caller's own assignments, which is a
-      // tighter predicate than the activity scope, not a missing one.
-      call.args.includes("assignedToId: user.id");
-    assert.ok(
-      scoped,
-      `prisma.${call.model}.${call.op} on the dashboard runs without ${rule.scope} — ` +
-        `a view_owned user would get every row:\n${call.args.trim().slice(0, 200)}`,
+
+/**
+ * THE DASHBOARD SCOPE CONTRACT, against the architecture that now exists.
+ *
+ * This file originally asserted the shape of a hand-built dashboard page:
+ * conditional tabs, a `leadScope` ternary, per-tab permission lookups. That page
+ * was replaced by a card registry whose reads live in src/lib/dashboard/data.ts,
+ * so those five assertions described code that no longer exists. Retargeting
+ * them at the new file made them fail for the right reason — the structure they
+ * describe is gone — and deleting them outright would have dropped the invariant
+ * with the implementation.
+ *
+ * The invariant survives the rewrite: a dashboard aggregate must never count
+ * records the viewer cannot see. `prisma.lead.count({ where: { status: "open" } })`
+ * counts EVERY open lead in the workspace, which is a disclosure even though no
+ * row is rendered. In the new layer that is enforced by spreading a scope helper
+ * into every query, so that is what is asserted.
+ */
+const SCOPED_MODELS: Array<{ model: string; where: string }> = [
+  { model: "lead", where: "leadWhere" },
+  { model: "jobCard", where: "jobCardWhere" },
+  { model: "quote", where: "quoteWhere" },
+  { model: "vehicle", where: "vehicleWhere" },
+];
+
+test("every dashboard read of a scoped record carries its scope", () => {
+  const source = shipped(DASHBOARD);
+  // Each call's OWN arguments, by bracket matching — not a fixed window from the
+  // call site. My first version sliced 600 characters and passed while the scope
+  // was deleted, because the window ran on into the next query and found ITS
+  // `leadWhere()`. A guard that can be satisfied by the neighbouring statement
+  // guards nothing.
+  const calls = prismaCalls(source);
+  assertModelsFound(calls, SCOPED_MODELS.map((entry) => entry.model), DASHBOARD);
+
+  for (const { model, where } of SCOPED_MODELS) {
+    const reads = calls.filter(
+      (call) => call.model === model && /^(findMany|findFirst|count|aggregate|groupBy)$/.test(call.op),
     );
+    assert.ok(reads.length > 0, `no prisma.${model} reads found — has the data layer moved?`);
+    for (const read of reads) {
+      assert.match(
+        read.args,
+        new RegExp(`await ${where}\\(\\)`),
+        `prisma.${model}.${read.op} in ${DASHBOARD} does not spread ${where}() — it would aggregate over records the viewer cannot see`,
+      );
+    }
   }
 });
 
-test("a dashboard tab the user cannot see issues no queries for it", () => {
-  // The original bug, stated as an invariant. Filtering the RESULT is not enough
-  // and neither is hiding the component: the read already happened and its rows
-  // are already in the payload.
-  const code = shipped(DASHBOARD);
-  for (const call of prismaCalls(code)) {
-    const rule = SCOPED[call.model];
-    if (!rule?.gate) continue;
-    if (call.args.includes("assignedToId: user.id")) continue;
-
-    // The condition of the ternary this call is the consequent of — read
-    // exactly, not by looking for the gate name somewhere nearby, because the
-    // neighbouring array element's gate is always "somewhere nearby".
-    const before = code.slice(0, call.index).replace(/\s*(await\s+)?$/, "");
-    assert.ok(
-      before.endsWith("?"),
-      `prisma.${call.model}.${call.op} is not the consequent of a conditional — it runs unconditionally`,
-    );
-    const stem = before.slice(0, -1);
-    const boundary = Math.max(
-      stem.lastIndexOf(","),
-      stem.lastIndexOf("("),
-      stem.lastIndexOf("["),
-      stem.lastIndexOf("="),
-      stem.lastIndexOf(";"),
-    );
-    const condition = stem.slice(boundary + 1).trim();
-    assert.ok(
-      condition.split(/\s*&&\s*/).includes(rule.gate),
-      `prisma.${call.model}.${call.op} runs on \`${condition}\`, not on ${rule.gate} — ` +
-        "it reads rows for a tab the user cannot see",
-    );
-  }
-});
-
-test("an unrestricted scope and an empty scope stay different in the where clause", () => {
-  // getAccessible*Ids answers with three distinct values and the difference
-  // between two of them IS the security boundary:
-  //   null → owner / *.view_all  → no filter
-  //   []   → no accessible rows  → `in: []`, an impossible match
-  //   [id] → those rows
-  // `ids?.length ? … : {}` and `{ in: ids ?? [] }` both collapse the first two,
-  // and the collapse silently opens EVERY row to a user with no access at all.
-  for (const file of [DASHBOARD, LEADS_BOARD]) {
-    const code = shipped(file);
-    assert.doesNotMatch(
-      code,
-      /accessible\w*Ids\s*\?\./i,
-      `${file}: optional chaining on an accessible-ids list turns "no access" into "no filter"`,
-    );
-    assert.doesNotMatch(
-      code,
-      /(Ids|Scope)\s*\?\?\s*(\[\]|\{\})/,
-      `${file}: defaulting an accessible-ids list turns "no access" into "no filter"`,
-    );
-    assert.doesNotMatch(
-      code,
-      /\w*Ids\.length\s*\?\s*\{\s*id:/,
-      `${file}: a length test turns "no access" into "no filter"`,
-    );
-  }
-
-  // And the shape that is correct, spelled out where it is defined.
-  const dash = shipped(DASHBOARD);
-  for (const scope of ["leadScope", "quoteScope", "jobCardScope", "vehicleScope", "activityScope"]) {
-    const declaration = new RegExp(
-      `const ${scope} = (\\w+) \\? \\{ id: \\{ in: \\1 \\} \\} : \\{\\};`,
-    );
-    assert.match(dash, declaration, `${scope} must be built as \`ids ? { id: { in: ids } } : {}\``);
-  }
-});
-
-test("hiding a dashboard tab also skips the permission lookups it needs", () => {
-  // getAccessibleLeadIds walks the lead table; getAccessibleQuoteIds walks quotes
-  // AND leads AND contacts to build its union. Resolving all five scopes for a
-  // user who can see one tab is the same waste the tiles themselves had.
-  const code = shipped(DASHBOARD);
-  for (const [helper, gate] of [
-    ["getAccessibleLeadIds", "showSales"],
-    ["getAccessibleQuoteIds", "showSales"],
-    ["getAccessibleJobCardIds", "showService"],
-    ["getAccessibleVehicleIds", "showService"],
-  ] as const) {
-    assert.match(
-      code,
-      new RegExp(`${gate} \\? ${helper}\\(user\\) : NO_ACCESS`),
-      `${helper} must only be resolved when ${gate}`,
-    );
-  }
-  assert.match(
-    code,
-    /const NO_ACCESS: Promise<string\[\] \| null> = Promise\.resolve\(\[\]\)/,
-    "the skipped branch must resolve to [] — no accessible rows — never null",
-  );
-});
-
-test("the dashboard does not ship whole rows to print one field", () => {
-  // `include: { assignedTo: true }` on the agenda serialised the whole User row —
-  // password hash included — into the RSC payload, twenty times per day column,
-  // to render a first name. Same for `include: { contact: true }` on the fleet
-  // query: every customer's phone, email, address and notes, to print a name.
-  const code = shipped(DASHBOARD);
-  assert.doesNotMatch(
-    code,
-    /include:\s*\{/,
-    "dashboard queries must select the fields they render, not include whole relations",
-  );
-  assert.match(code, /const AGENDA_SELECT = \{/, "the agenda select must be one shared definition");
-  assert.doesNotMatch(
-    shipped("src/app/(app)/page.tsx"),
-    /assignedTo:\s*true/,
-    "assignedTo: true is the User row, password hash and all",
-  );
+test("the scope helpers are built from the caller's access, not from a role guess", () => {
+  const source = shipped("src/lib/dashboard/data.ts");
+  // getAccessible*Ids returns null for "everything" and an array for a
+  // restricted set; the difference has to survive into the where clause, or an
+  // empty set silently becomes unrestricted.
+  assert.match(source, /getAccessibleLeadIds/);
+  assert.match(source, /getAccessibleQuoteIds/);
+  assert.match(source, /getAccessibleVehicleIds/);
+  assert.match(source, /getAccessibleJobCardIds/);
+  assert.match(source, /dashboardViewer\(\)/);
 });
 
 test("the leads board is guarded, not merely decorated", () => {

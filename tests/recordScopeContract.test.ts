@@ -178,7 +178,7 @@ test("the dashboard and the leads board are the callers this contract exists for
   // A contract with no caller is a comment. Named here so deleting the last use
   // fails this file rather than passing quietly.
   const dashboard = require_("node:fs").readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src/app/(app)/page.tsx"),
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src/lib/dashboard/data.ts"),
     "utf8",
   ) as string;
   for (const helper of ["getAccessibleLeadIds", "getAccessibleQuoteIds", "getAccessibleJobCardIds", "getAccessibleVehicleIds"]) {
