@@ -3,6 +3,7 @@
 import QRCode from "qrcode";
 import { hashBackupCode } from "@/lib/backupCodes";
 import { revalidatePath } from "next/cache";
+import type { Prisma } from "@prisma/client";
 import { basePrisma } from "@/lib/db";
 import { requirePlatformAdminAction } from "@/lib/platformAuth";
 import { logAuditStrict } from "@/lib/audit";
@@ -45,27 +46,53 @@ import { createPlatformSessionCookie } from "@/lib/platformAuth";
 
 export type PlatformSecurityState = { error?: string; ok?: string; backupCodes?: string[] };
 
+/** The identity a replacement cookie is issued for, at an EXACT session version. */
+type ReissueIdentity = { id: string; name: string; email: string; sessionVersion: number };
+
 /**
- * Re-issue the acting admin's cookie at the CURRENT session version.
+ * Read back the exact row this transaction produced, so the replacement cookie
+ * carries the version THIS operation created and no other.
  *
- * Read back from the database rather than incremented locally, so the cookie
- * carries what the row actually says even if something else bumped it in the
- * same window — a guessed version would either lock the admin out or, worse,
- * hand them a cookie that outlives a revocation somebody else performed.
+ * Reading afterwards, outside the transaction, is the bug. The sequence that
+ * breaks it:
+ *
+ *   1. this action commits, bumping sessionVersion to 5;
+ *   2. another administrator resets the password / revokes all sessions,
+ *      bumping it to 6 and killing every live cookie — including this one;
+ *   3. this action then reads "whatever the version is now", gets 6, and mints
+ *      a brand-new valid cookie at 6.
+ *
+ * The revocation in step 2 is silently undone by the older request. Pinning the
+ * version to the one this transaction wrote means a later revocation wins: the
+ * cookie is stale the moment it is issued, and the acting admin is signed out —
+ * which is exactly what a revoke-all is for.
+ *
+ * The read is inside the transaction, after our own write, so it sees our value
+ * and a competing writer is serialised behind our row lock.
  */
-async function reissueActingPlatformSession(adminId: string): Promise<void> {
-  const fresh = await basePrisma.platformAdmin.findUnique({
+async function capturePlatformIdentity(
+  tx: Prisma.TransactionClient,
+  adminId: string,
+): Promise<ReissueIdentity | null> {
+  const row = await tx.platformAdmin.findUnique({
     where: { id: adminId },
     select: { id: true, name: true, email: true, sessionVersion: true, disabledAt: true },
   });
   // A disabled account gets no new cookie — it should be signed out.
-  if (!fresh || fresh.disabledAt) return;
-  await createPlatformSessionCookie({
-    id: fresh.id,
-    name: fresh.name,
-    email: fresh.email,
-    sessionVersion: fresh.sessionVersion,
-  });
+  if (!row || row.disabledAt) return null;
+  return { id: row.id, name: row.name, email: row.email, sessionVersion: row.sessionVersion };
+}
+
+/**
+ * Issue the replacement cookie AFTER the transaction commits.
+ *
+ * Inside it, a rollback would leave a cookie asserting a version the database
+ * never reached. Null means no cookie is issued at all, which fails safe: the
+ * admin is signed out rather than handed a session the write did not earn.
+ */
+async function reissueActingPlatformSession(identity: ReissueIdentity | null): Promise<void> {
+  if (!identity) return;
+  await createPlatformSessionCookie(identity);
 }
 
 /**
@@ -147,6 +174,7 @@ export async function confirmPlatformTotpEnrolment(
   const hashed = await Promise.all(backupCodes.map((code) => hashBackupCode(code)));
 
   let promoted = false;
+  let reissue: ReissueIdentity | null = null;
   await basePrisma.$transaction(async (tx) => {
     // CONDITIONAL on the exact pending value that was verified.
     //
@@ -176,6 +204,8 @@ export async function confirmPlatformTotpEnrolment(
     // enrolment that did not happen.
     if (claimed.count !== 1) return;
     promoted = true;
+    // Captured HERE, at the version this transaction just wrote.
+    reissue = await capturePlatformIdentity(tx, actor.id);
     await logAuditStrict(
       {
         action: "platform.2fa_enabled",
@@ -202,7 +232,7 @@ export async function confirmPlatformTotpEnrolment(
   // click. The intent is "revoke everyone ELSE", and that only happens if the
   // acting session is re-issued at the new version. Nothing is weakened: every
   // other cookie still carries the old version and remains dead.
-  await reissueActingPlatformSession(actor.id);
+  await reissueActingPlatformSession(reissue);
 
   revalidatePath("/platform/admins");
   // Shown ONCE. They are not recoverable — only their hashes are stored.
@@ -232,6 +262,7 @@ export async function disablePlatformTotp(
   }
   if (!ok) return { error: "Enter a current authenticator code to turn 2FA off." };
 
+  let reissue: ReissueIdentity | null = null;
   await basePrisma.$transaction(async (tx) => {
     await tx.platformAdmin.update({
       where: { id: actor.id },
@@ -245,6 +276,8 @@ export async function disablePlatformTotp(
         sessionVersion: { increment: 1 },
       },
     });
+    // Captured HERE, at the version this transaction just wrote.
+    reissue = await capturePlatformIdentity(tx, actor.id);
     await logAuditStrict(
       {
         action: "platform.2fa_disabled",
@@ -259,8 +292,10 @@ export async function disablePlatformTotp(
     );
   });
 
-  // Same reasoning as enabling: revoke everyone else, not the person doing it.
-  await reissueActingPlatformSession(actor.id);
+  // Same reasoning as enabling: revoke everyone else, not the person doing it —
+  // and at the version THIS transaction wrote, so a revocation that lands
+  // afterwards is not undone by a cookie minted from a later read.
+  await reissueActingPlatformSession(reissue);
 
   revalidatePath("/platform/admins");
   return { ok: "Two-factor authentication turned off." };

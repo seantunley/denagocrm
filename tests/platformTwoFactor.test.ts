@@ -374,13 +374,21 @@ test("turning 2FA on or off does not sign out the person doing it", () => {
     security.indexOf("export async function disablePlatformTotp"),
   );
   const disable = security.slice(security.indexOf("export async function disablePlatformTotp"));
-  assert.match(confirm, /reissueActingPlatformSession\(actor\.id\)/, "enabling must re-issue");
-  assert.match(disable, /reissueActingPlatformSession\(actor\.id\)/, "disabling must re-issue");
+  // …at the version the operation's OWN transaction wrote. Passing an id for the
+  // helper to look up again re-reads whatever the row says by then, which
+  // silently undoes a revocation another administrator performed in between.
+  // tests/platformSessionReissue.test.ts drives that race for real.
+  assert.match(confirm, /reissueActingPlatformSession\(reissue\)/, "enabling must re-issue");
+  assert.match(disable, /reissueActingPlatformSession\(reissue\)/, "disabling must re-issue");
+  assert.doesNotMatch(security, /reissueActingPlatformSession\(actor\.id\)/);
 
-  // Read back from the row rather than incremented locally: a guessed version
-  // either locks the admin out or outlives somebody else's revocation.
+  // Read back from the row rather than incremented locally — a guessed version
+  // would lock the admin out — but read INSIDE the transaction, so the version
+  // is the one this write produced and not whatever the row says by the time the
+  // cookie is minted.
   assert.match(security, /select: \{ id: true, name: true, email: true, sessionVersion: true, disabledAt: true \}/);
-  assert.match(security, /if \(!fresh \|\| fresh\.disabledAt\) return;/);
+  assert.match(security, /async function capturePlatformIdentity\(\s*tx: Prisma\.TransactionClient/);
+  assert.match(security, /if \(!row \|\| row\.disabledAt\) return null;/);
 });
 
 test("an authenticator can be replaced without turning 2FA off first", () => {
