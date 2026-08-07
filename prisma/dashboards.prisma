@@ -52,3 +52,100 @@ model DashboardLayout {
   /// every write.
   @@unique([tenantId, userId])
 }
+
+/// One user-built dashboard: a named screen with its own address and its own
+/// arrangement.
+///
+/// HOW THIS RELATES TO DashboardLayout ABOVE.
+///
+/// DashboardLayout is one row per user holding an ordered list of code-defined
+/// card ids — the arrangement of the single fixed home screen. This is its
+/// successor and it generalises in two directions at once: a user may have
+/// SEVERAL dashboards, and each one holds a whole DashboardConfig (views →
+/// sections → cards) rather than a flat list of names, so a card can be
+/// something the user BUILT and not only something a release shipped.
+///
+/// DashboardLayout is deliberately still here. Migration 20260805140000 copies
+/// every layout row into a "Home" dashboard and does NOT drop the old table,
+/// because a migration that destroys the only copy of the data is a migration
+/// that cannot be rolled back: the deploy that follows it either works or costs
+/// every user in the product their arrangement. Retiring the table is a separate
+/// decision for a later release, once the new path has run in production long
+/// enough to be trusted.
+///
+/// WHY `config` IS ONE JSON COLUMN.
+///
+/// The same argument the DashboardLayout doc makes, and it gets stronger with
+/// depth. A config is read whole (the page needs every view, section and card to
+/// render anything) and written whole (moving one card renumbers its siblings and
+/// may reparent it into another section). Normalised into view/section/card
+/// tables, every save becomes a multi-row transaction over three tables with
+/// position columns to keep consistent, and a partial failure leaves a user
+/// looking at a screen that is neither what they had nor what they asked for.
+/// One JSONB value makes a save one atomic UPDATE.
+///
+/// WHAT THE SHAPE OF THAT JSON IS, AND WHERE IT IS DEFINED.
+///
+/// In TypeScript, once, in src/lib/dashboard/config.ts — never in this schema and
+/// never in SQL. Postgres cannot tell a well-formed config from a broken one, and
+/// a CHECK constraint that knew the card catalogue would have to be migrated by
+/// every release that adds or renames a card. Instead both ends defend
+/// themselves: `parseConfigStrict` refuses a malformed config on the way in, and
+/// `parseConfig` drops what it no longer understands on the way out. That is the
+/// whole degradation story for a config written by an older or newer release —
+/// one fewer card, never a home screen that fails to render.
+model Dashboard {
+  id        String  @id @default(cuid())
+  tenantId  String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
+  /// The owning user. A bare id rather than a Prisma @relation, matching
+  /// DashboardLayout and every other domain model here — a relation field would
+  /// mean editing the shared schema.prisma to add the back-reference.
+  userId    String
+  /// URL segment, unique per user. Always the output of `slugify`, so it is safe
+  /// in a path; the create action resolves a collision with a numeric suffix
+  /// rather than refusing, because "you already have a dashboard called Sales" is
+  /// a message about a detail the user never chose to care about.
+  slug      String
+  title     String
+  /// A lucide icon name for the switcher, checked against the render-time
+  /// allowlist rather than here — an icon that was renamed upstream must cost the
+  /// user an icon, not a dashboard.
+  icon      String?
+  /// Position in the dashboard switcher. Duplicated values are legal and simply
+  /// fall back to the creation order; only `reorderDashboards` renumbers, and it
+  /// rewrites the whole set, so there is no gap to keep tidy.
+  sortOrder Int      @default(0)
+  /// A DashboardConfig. See the model doc above for why it is a blob and where
+  /// its shape is defined.
+  config    Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// One dashboard per address per user per tenant.
+  ///
+  /// AND IT DOES NOT BIND YET — which is the entire reason migration
+  /// 20260805140000 carries a second, partial index. `tenantId` is nullable and
+  /// Postgres does not consider two NULLs equal, so while tenancy is dormant and
+  /// every row is written with tenantId NULL, the keys (NULL,'user-1','home') and
+  /// (NULL,'user-1','home') are DISTINCT as far as this constraint is concerned
+  /// and it happily admits both.
+  ///
+  /// That is not a theoretical hole. Two tabs, or one double-click, and the
+  /// create path inserts two rows with the same slug; from then on every lookup
+  /// by slug returns whichever row the planner reached first, so an edit can land
+  /// in one row while the screen renders from the other and the save looks like
+  /// it silently did nothing. The partial unique index over (userId, slug) WHERE
+  /// tenantId IS NULL closes exactly that window, and stops applying on its own
+  /// the moment tenantId is populated — at which point this constraint takes
+  /// over. Both are needed, each for a different period.
+  @@unique([tenantId, userId, slug])
+
+  /// The list query: every dashboard belonging to one user, in switcher order.
+  ///
+  /// Not served by the unique index above, which orders by slug — the switcher
+  /// wants sortOrder, and reading it out of a slug-ordered index means sorting
+  /// the rows again on every request. tenantId LEADS because the tenant extension
+  /// puts it in the `where` of every query, so an index starting at userId could
+  /// not be used as a prefix once enforcement is on.
+  @@index([tenantId, userId, sortOrder])
+}
