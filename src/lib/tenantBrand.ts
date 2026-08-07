@@ -1,5 +1,6 @@
 import { cache } from "react";
 import { basePrisma } from "./db";
+import { PLATFORM_NAME, PLATFORM_TEAM_SIGNOFF } from "./platformIdentity";
 
 /**
  * WHOSE BRAND DOES THIS REQUEST RENDER?
@@ -66,26 +67,31 @@ export type TenantBrand = {
 };
 
 /**
- * What every surface rendered before branding existed.
+ * What renders when no tenant could be named.
  *
- * DELIBERATELY the current Denago values rather than a neutral platform
- * identity. Making the fallback neutral is the right end state for a white-label
- * platform — an unrecognised hostname should not show one customer's brand to
- * another's visitors — but it CANNOT ship in the same change as the schema,
- * because until Denago's own hostnames are registered in TenantDomain the live
- * workspace resolves to nobody and would rebrand itself to "neutral" the moment
- * this deploys. That is a visible production change, and this change is required
- * to have none.
+ * This used to be the Denago values, with a note saying the neutral version
+ * could not ship until Denago's hostnames were registered — because until then
+ * the live workspace resolved to nobody and would have rebranded itself on
+ * deploy. 20260806190000_seed_founding_tenant_brand registers them, in the same
+ * change, and migrations run before the new build serves (vercel.json is
+ * `apply-migrations && next build`). So the precondition is met and this is now
+ * the neutral shell it was always meant to become.
  *
- * Sequence: ship this, register Denago's domains through the console, confirm
- * the live login still says what it says today, and only THEN switch this
- * constant to the neutral shell. That final step is a one-line change with the
- * safety net already in place.
+ * The point is not tidiness. `branded: false` is reachable in exactly three
+ * situations — an unrecognised hostname, a tenant that could not be resolved,
+ * and a database error swallowed by brandForHost — and in all three the previous
+ * value showed ONE customer's trading name to somebody who is not their customer.
+ * The failure mode of a branding system has to be anonymity.
+ *
+ * Denago is unaffected: crm.denagocpt.co.za resolves through TenantDomain to its
+ * own Tenant row, which the migration filled with these exact strings. They now
+ * arrive as data instead of as a default.
  */
 export const DEFAULT_BRAND: TenantBrand = {
   tenantId: null,
-  displayName: "Denago Cape Town",
-  tagline: "Authorized Denago EV Dealer",
+  displayName: PLATFORM_NAME,
+  // No tagline. There is nothing true to say about a company we cannot identify.
+  tagline: null,
   primary: null,
   primaryForeground: null,
   logoRef: null,
@@ -260,13 +266,14 @@ export const brandForTenant = cache(async (tenantId: string | null | undefined):
 /**
  * How a templated email signs off when no individual owner is assigned.
  *
- * "The Acme Golf Carts team" for a branded tenant, and the ORIGINAL LITERAL
- * otherwise — deliberately not `The ${DEFAULT_BRAND.displayName} team`, which
- * reads identically today and would silently become the neutral platform name
- * the moment that default changes.
+ * "The Acme Golf Carts team" for a branded tenant. Unbranded is now the moment
+ * that default changed, and it is NOT `The ${DEFAULT_BRAND.displayName} team` —
+ * a recipient reading "The CRM team" has been told that the sender could not
+ * work out who it was, which is worse than a sign-off naming nobody. Every
+ * branded path passes a real name; this is the one that has none to pass.
  */
 export function teamSignoff(brand: TenantBrand): string {
-  return brand.tenantId ? `The ${brand.displayName} team` : "The Denago Cape Town team";
+  return brand.tenantId ? `The ${brand.displayName} team` : PLATFORM_TEAM_SIGNOFF;
 }
 
 export function brandStyle(brand: TenantBrand): string | null {

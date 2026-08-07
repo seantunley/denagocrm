@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { PLATFORM_TEAM_SIGNOFF } from "./platformIdentity";
 import { resolveIntegrationBundle } from "./settings";
 import { currentTenantScope } from "./tenantScope";
 import { formatZAR } from "./format";
@@ -104,7 +105,7 @@ export { renderTemplate } from "./template";
  * one, for a sign-off line. An omitted argument is byte-for-byte the old
  * behaviour.
  */
-export const DEFAULT_TEAM_SIGNOFF = "The Denago Cape Town team";
+export const DEFAULT_TEAM_SIGNOFF = PLATFORM_TEAM_SIGNOFF;
 
 export function leadVars(lead: {
   name: string;

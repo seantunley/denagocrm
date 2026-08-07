@@ -46,14 +46,15 @@ test("an email logo URL is absolute, because a mail client has no origin", () =>
   );
 });
 
-test("an unbranded send is byte-for-byte the old email", () => {
+test("an unbranded send names the platform, not a customer", () => {
+  // This asserted the reverse — that an unbranded campaign kept Denago's name
+  // and street address. For a MARKETING email that is not just a branding leak:
+  // it goes to a mailing list with an unsubscribe link and a physical address in
+  // the footer, and the address was a company the recipient had never dealt with.
   const shell = shipped("src/lib/campaigns.ts");
-  assert.match(shell, /: "Denago Cape Town";/, "the name falls back to the original literal");
-  assert.match(
-    shell,
-    /: "Denago Cape Town &middot; Cape Town, South Africa";/,
-    "…and so does the whole footer line",
-  );
+  assert.match(shell, /: PLATFORM_NAME;/, "the name falls back to the platform");
+  assert.match(shell, /const footer = name;/, "and claims no address it does not know");
+  assert.doesNotMatch(shell, /Cape Town, South Africa/, "no invented location");
   // emailBrand.ts is `server-only` (Next vendors that marker via an RSC export
   // condition, so the unit runner cannot load it) — asserted on source, like the
   // other server-only modules in this suite.
@@ -63,15 +64,17 @@ test("an unbranded send is byte-for-byte the old email", () => {
   assert.match(brandModule, /logoUrl: null,/);
 });
 
-test("a branded footer drops the address rather than inventing one", () => {
-  // A tenant supplies a NAME, not a postal address. Printing the platform's
-  // address under someone else's brand is a compliance problem in a marketing
-  // footer, so the location half is dropped when branded.
+test("no campaign footer invents an address", () => {
+  // A tenant supplies a NAME, not a postal address, and a wrong address in a
+  // marketing footer is a compliance problem rather than a cosmetic one. The
+  // branded path already dropped it; the UNBRANDED path still printed "Cape
+  // Town, South Africa" under a name that was not the sender's. Now neither does,
+  // so the rule is one line instead of a conditional with an exception.
   const shell = shipped("src/lib/campaigns.ts");
   const start = shell.indexOf("const footer =");
   const line = shell.slice(start, shell.indexOf("\n", start));
-  assert.match(line, /brand\?\.branded \? name :/, "branded → the name alone");
-  assert.doesNotMatch(line, /brand\.\w+ \+ ".*South Africa/, "never the tenant name plus our address");
+  assert.match(line, /const footer = name;/, "the name alone, branded or not");
+  assert.doesNotMatch(shell, /South Africa|Maitland|M5 Freeway/, "no address anywhere in the shell");
 });
 
 test("emailBrand cannot fail a campaign send", () => {
@@ -99,11 +102,14 @@ test("the brand parameter is optional, so an un-updated caller is unchanged", ()
   assert.match(code, /export function buildTrackedEmail\(personalizedHtml: string, token: string, brand\?: EmailBrand\)/);
 });
 
-test("the team sign-off keeps the literal, not the resolved default", () => {
-  // The distinction that survives DEFAULT_BRAND later becoming a neutral shell:
-  // `The ${DEFAULT_BRAND.displayName} team` reads identically today and would
-  // silently change then.
-  assert.equal(teamSignoff(DEFAULT_BRAND), "The Denago Cape Town team");
+test("an unbranded sign-off names nobody at all", () => {
+  // Deliberately NOT `The ${DEFAULT_BRAND.displayName} team`, which would now
+  // read "The CRM team" — telling the recipient that the sender could not work
+  // out who it was. A sign-off that names no one is better than one that
+  // announces the failure, and much better than the old behaviour, which named
+  // a company the recipient may never have dealt with.
+  assert.equal(teamSignoff(DEFAULT_BRAND), "The team");
+  assert.doesNotMatch(teamSignoff(DEFAULT_BRAND), /Denago|CRM/);
   assert.equal(
     teamSignoff({ ...DEFAULT_BRAND, tenantId: "t1", displayName: "Acme Golf Carts" }),
     "The Acme Golf Carts team",
@@ -113,14 +119,14 @@ test("the team sign-off keeps the literal, not the resolved default", () => {
   // To the end of the FUNCTION, not the first `}` — which is the closing brace of
   // the `${brand.displayName}` interpolation, before the literal being asserted.
   const body = code.slice(start, code.indexOf("\n}", start));
-  assert.match(body, /: "The Denago Cape Town team"/, "the literal, not DEFAULT_BRAND.displayName");
+  assert.match(body, /: PLATFORM_TEAM_SIGNOFF;/, "the shared constant, not DEFAULT_BRAND.displayName");
 });
 
 test("the vars helpers stay synchronous, with the sign-off as a defaulted parameter", () => {
   // Making them async to resolve a brand would ripple through both call sites and
   // every future one, for a sign-off line. An omitted argument is the old output.
   const code = shipped("src/lib/email.ts");
-  assert.match(code, /export const DEFAULT_TEAM_SIGNOFF = "The Denago Cape Town team";/);
+  assert.match(code, /export const DEFAULT_TEAM_SIGNOFF = PLATFORM_TEAM_SIGNOFF;/);
   assert.match(code, /teamName: string = DEFAULT_TEAM_SIGNOFF/, "defaulted parameter, not a lookup");
   assert.doesNotMatch(code, /export async function leadVars|export async function contactVars/);
   for (const page of ["src/app/(app)/contacts/[id]/page.tsx", "src/app/(app)/leads/[id]/page.tsx"]) {

@@ -1,5 +1,5 @@
 import { headers } from "next/headers";
-import { brandForHost, brandForTenant, brandLogoUrl, brandStyle, type TenantBrand } from "./tenantBrand";
+import { DEFAULT_BRAND, brandForHost, brandForTenant, brandLogoUrl, brandStyle, type TenantBrand } from "./tenantBrand";
 
 /**
  * The brand for a LOGIN page, resolved from the hostname the request arrived on.
@@ -43,9 +43,19 @@ export type LoginBrand = {
   style: string | null;
 };
 
+/**
+ * `displayName` is the PLATFORM's name, not a tenant's.
+ *
+ * It was "Denago Cape Town" while the fallbacks were allowed to be, and that is
+ * the worst possible place for a customer's trading name to sit: a login page is
+ * served to whoever resolves the hostname, and `branded: false` means precisely
+ * "we could not work out whose hostname this is". Showing one customer's name to
+ * an unknown visitor was the leak; DEFAULT_BRAND now carries PLATFORM_NAME and
+ * this follows it.
+ */
 export const UNBRANDED: LoginBrand = {
   branded: false,
-  displayName: "Denago Cape Town",
+  displayName: DEFAULT_BRAND.displayName,
   tagline: null,
   logoUrl: null,
   style: null,

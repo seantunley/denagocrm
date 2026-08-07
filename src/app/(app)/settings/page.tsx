@@ -13,7 +13,7 @@ import {
   regenerateSetting,
   saveNotificationPrefs,
 } from "@/app/actions/settings";
-import { DEFAULT_SIGNATURE_COMPANY, buildSignature } from "@/lib/signature";
+import { signatureCompanyFrom, buildSignature } from "@/lib/signature";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { AddUserForm, ChangePasswordForm } from "@/components/TeamForms";
 import {
@@ -69,15 +69,7 @@ export default async function SettingsPage({
   // The signature PREVIEW must render what the send path renders, or the screen
   // where you check your signature is the one screen that lies about it.
   const profile = await getCompanyProfile();
-  const signatureCompany = {
-    name: profile.name,
-    tagline: profile.tagline,
-    address: profile.address,
-    website: profile.website,
-    logoUrl: profile.logoUrl || DEFAULT_SIGNATURE_COMPANY.logoUrl,
-    facebook: profile.facebook || DEFAULT_SIGNATURE_COMPANY.facebook,
-    instagram: profile.instagram || DEFAULT_SIGNATURE_COMPANY.instagram,
-  };
+  const signatureCompany = signatureCompanyFrom(profile);
   const enabled = await getEnabledModuleIds();
   const automotiveOn = enabled.has("automotive");
   const commerceOn = enabled.has("commerce");

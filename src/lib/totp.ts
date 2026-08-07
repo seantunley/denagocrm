@@ -1,3 +1,4 @@
+import { PLATFORM_NAME } from "./platformIdentity";
 import crypto from "crypto";
 
 // RFC 4648 base32 (no padding) — what authenticator apps expect.
@@ -40,8 +41,19 @@ export function generateTotpSecret(): string {
   return base32Encode(crypto.randomBytes(20));
 }
 
-/** otpauth:// URI that authenticator QR codes encode. */
-export function totpKeyUri(secret: string, account: string, issuer = "Denago CRM"): string {
+/**
+ * otpauth:// URI that authenticator QR codes encode.
+ *
+ * `issuer` is what the user sees in Google Authenticator or 1Password for the
+ * rest of the time they work there, and it defaulted to "Denago CRM". Callers
+ * pass their tenant's name; the default is the platform's, for anything
+ * enrolling outside a tenant context.
+ *
+ * Changing this default is safe for people already enrolled — the issuer is
+ * baked into the QR at enrolment and lives in their authenticator app, not in
+ * anything we store. Only new enrolments see it.
+ */
+export function totpKeyUri(secret: string, account: string, issuer = PLATFORM_NAME): string {
   const label = encodeURIComponent(`${issuer}:${account}`);
   const params = new URLSearchParams({ secret, issuer, algorithm: "SHA1", digits: "6", period: "30" });
   return `otpauth://totp/${label}?${params.toString()}`;

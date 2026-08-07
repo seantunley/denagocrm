@@ -1,5 +1,8 @@
 import type { Metadata, Viewport } from "next";
+import { headers } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
+import { DEFAULT_BRAND, brandForHost } from "@/lib/tenantBrand";
+import { PLATFORM_NAME } from "@/lib/platformIdentity";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -30,20 +33,39 @@ const geistMono = Geist_Mono({
  */
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "Denago CRM",
-  description: "CRM and EV service management for Denago Cape Town",
-  manifest: "/manifest.webmanifest",
-  icons: {
-    icon: "/icons/icon-192.png",
-    apple: "/icons/apple-touch-icon.png",
-  },
-  appleWebApp: {
-    capable: true,
-    title: "Denago CRM",
-    statusBarStyle: "black-translucent",
-  },
-};
+/**
+ * The browser tab, per tenant.
+ *
+ * Was the literal "Denago CRM" — on every tenant's own domain, in every tab,
+ * bookmark and home-screen shortcut. It is the single most-seen piece of
+ * branding in the product and the one the brand system did not reach, because
+ * metadata is resolved before any page component runs.
+ *
+ * `generateMetadata` can be async and read headers, and this layout already
+ * forces dynamic rendering for nonce-based CSP (see below), so there is no
+ * static variant that could be built with one tenant's title and served to
+ * another. `brandForHost` swallows its own errors and returns DEFAULT_BRAND, so
+ * the worst case is the neutral title rather than a page that fails to render —
+ * metadata that throws would take the whole document with it.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const brand = await brandForHost((await headers()).get("host")).catch(() => DEFAULT_BRAND);
+  const title = brand.tenantId ? brand.displayName : PLATFORM_NAME;
+  return {
+    title,
+    description: brand.tagline ?? `Customer, sales and service management for ${title}`,
+    manifest: "/manifest.webmanifest",
+    icons: {
+      icon: "/icons/icon-192.png",
+      apple: "/icons/apple-touch-icon.png",
+    },
+    appleWebApp: {
+      capable: true,
+      title,
+      statusBarStyle: "black-translucent",
+    },
+  };
+}
 
 export const viewport: Viewport = {
   themeColor: "#020617",

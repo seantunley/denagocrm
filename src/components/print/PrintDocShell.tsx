@@ -1,4 +1,5 @@
 import type { DocTemplate } from "@/lib/docTemplates";
+import { PLATFORM_NAME } from "@/lib/platformIdentity";
 import { formatZAR } from "@/lib/format";
 import { lineNetCents, type TotalLine } from "@/lib/pricing";
 
@@ -159,7 +160,7 @@ export default function PrintDocShell({
   // absent company gives back the exact original string.
   const signingParties = parties ?? {
     left: "Customer signature · Date",
-    right: `For ${company?.name ?? "Denago Cape Town"} · Date`,
+    right: `For ${company?.name || PLATFORM_NAME} · Date`,
   };
   const showBody = bodySection ? tpl.sections[bodySection] !== false && tpl.bodyText : false;
   const sigOn = tpl.sections.signatures !== false;
@@ -189,8 +190,15 @@ export default function PrintDocShell({
         <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={tpl.logoUrl ?? company?.logoUrl ?? "/branding/denago-logo-email.png"}
-            alt={company?.name ?? "Denago Cape Town EV"}
+            // `||`, not `??`. An unset logo is the EMPTY STRING here, not null:
+            // COMPANY_LOGO_URL is a text setting and getCompanyProfile() maps a
+            // missing one to "". `??` only skips null/undefined, so it passed the
+            // empty string straight through and rendered `<img src="">`, which
+            // browsers resolve to the current page and draw as a broken image on
+            // a printed document. Now that unconfigured workspaces are the normal
+            // case rather than the impossible one, this has to fall through.
+            src={tpl.logoUrl || company?.logoUrl || "/branding/denago-logo-email.png"}
+            alt={company?.name || PLATFORM_NAME}
             className="h-11 w-auto object-contain"
           />
           <div className="text-right">
@@ -259,7 +267,7 @@ export default function PrintDocShell({
             <div className="border-t-2 border-orange-600 pt-4 flex items-start justify-between gap-6 flex-wrap no-break">
               <div className="text-[10px] text-slate-500 leading-4">
                 <p className="font-bold text-slate-700 text-[11px]">
-                  {company ? [company.name, company.tagline].filter(Boolean).join(" — ") : "Denago Cape Town — Authorized Denago EV Dealer"}
+                  {[company?.name || PLATFORM_NAME, company?.tagline].filter(Boolean).join(" — ")}
                 </p>
                 {tpl.footerLines.map((l, i) => (
                   <p key={i}>{l}</p>

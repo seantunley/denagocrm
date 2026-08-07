@@ -3,6 +3,7 @@ import { prisma } from "./db";
 import { sendEmail, renderTemplate } from "./email";
 import { sendSms } from "./sms";
 import { emailBrand, type EmailBrand } from "./emailBrand";
+import { PLATFORM_NAME } from "./platformIdentity";
 import { htmlToText } from "./signature";
 import { computeDue } from "./serviceDue";
 import { contactName } from "./format";
@@ -96,11 +97,13 @@ function emailShell(inner: string, unsubUrl: string, brand?: EmailBrand) {
   // Absolute URL, always: a mail client has no origin to resolve a relative path
   // against. Falls back to the built-in asset when the tenant has no logo.
   const logo = brand?.logoUrl ?? `${base}/branding/denago-cape-town-logo.png`;
-  const name = brand?.branded ? brand.displayName : "Denago Cape Town";
-  // The footer line stays EXACTLY as it was for an unbranded send. A tenant
-  // supplies a name, not an address, so the location half is dropped rather than
-  // invented — a wrong address in a marketing footer is a compliance problem.
-  const footer = brand?.branded ? name : "Denago Cape Town &middot; Cape Town, South Africa";
+  // Unbranded no longer means "Denago". A campaign that could not resolve its
+  // tenant used to go out under one customer's trading name and street address —
+  // to another customer's mailing list, with an unsubscribe link, which is a
+  // compliance problem as much as a branding one. It now names the platform and
+  // claims no address, because it does not know one.
+  const name = brand?.branded ? brand.displayName : PLATFORM_NAME;
+  const footer = name;
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;background:#f1f5f9;padding:24px 12px;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">

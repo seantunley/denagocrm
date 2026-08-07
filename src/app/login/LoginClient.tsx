@@ -39,7 +39,7 @@ function LoginInner({ brand }: { brand: LoginBrand }) {
       <div className="mb-8">
         <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-orange-400">Staff portal</p>
         <h1 className="text-3xl font-semibold tracking-[-0.04em] text-white sm:text-4xl">Welcome back.</h1>
-        <p className="mt-2 text-sm leading-6 text-slate-400">{brand.branded ? `Sign in to ${brand.displayName}.` : "Sign in to keep Cape Town moving."}</p>
+        <p className="mt-2 text-sm leading-6 text-slate-400">{`Sign in to ${brand.displayName}.`}</p>
       </div>
 
       {timedOut && (
@@ -58,7 +58,7 @@ function LoginInner({ brand }: { brand: LoginBrand }) {
               name="email"
               type="email"
               autoComplete="email"
-              placeholder={brand.branded ? "you@example.com" : "you@denagocpt.co.za"}
+              placeholder="you@example.com"
               className="login-input"
               autoFocus
               required
@@ -197,7 +197,7 @@ function Shell({ children, brand }: { children: React.ReactNode; brand: LoginBra
         </header>
         <div className="my-auto w-full max-w-[420px] self-center py-14">{children}</div>
         <footer className="flex items-center justify-between text-[10px] uppercase tracking-[0.14em] text-slate-700">
-          <span>{brand.branded ? brand.displayName : "Denago Cape Town"}</span>
+          <span>{brand.displayName}</span>
           <span>v{APP_VERSION}</span>
         </footer>
       </section>
@@ -248,7 +248,7 @@ function BrandScene({ brand }: { brand: LoginBrand }) {
             <div className="mb-10 flex items-start justify-between">
               <div>
                 <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Today’s pulse</p>
-                <p className="mt-2 text-2xl font-medium tracking-tight">{brand.branded ? brand.displayName : "Cape Town hub"}</p>
+                <p className="mt-2 text-2xl font-medium tracking-tight">{brand.displayName}</p>
               </div>
               {brand.logoUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -277,7 +277,7 @@ function BrandScene({ brand }: { brand: LoginBrand }) {
 
         <div>
           <p className="max-w-xl text-3xl font-medium leading-tight tracking-[-0.035em] text-white xl:text-4xl">Every lead. Every vehicle.<br /><span className="text-slate-500">One electric rhythm.</span></p>
-          <p className="mt-4 max-w-md text-sm leading-6 text-slate-500">{brand.branded ? (brand.tagline ?? `The command centre for ${brand.displayName} sales, service and lasting customer relationships.`) : "The command centre for Denago sales, service and lasting customer relationships."}</p>
+          <p className="mt-4 max-w-md text-sm leading-6 text-slate-500">{brand.tagline ?? `The command centre for ${brand.displayName} sales, service and lasting customer relationships.`}</p>
         </div>
       </div>
     </section>

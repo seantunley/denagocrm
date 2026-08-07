@@ -90,7 +90,10 @@ const STILL_HARDCODED: Record<string, string> = {
   "src/components/print/PrintDocShell.tsx": "phase 5 — print",
   "src/components/print/QuotePrintDoc.tsx": "phase 5 — print",
   "src/lib/customDocs.ts": "phase 5 — print",
-  "src/lib/signature.ts": "phase 5 — signed PDFs",
+  // signature.ts is OFF this list now: its Denago name, tagline, address,
+  // website, logo and hardcoded landline all moved to the tenant's own Company
+  // Profile. Only the third-party social GLYPHS remain platform-hosted, and they
+  // are not a brand asset of anyone's.
   "src/lib/campaigns.ts": "phase 4 — email",
   "src/app/(print)/jobcards/[id]/print/page.tsx": "phase 5 — print",
   // Already brand-aware via their own mechanism.
