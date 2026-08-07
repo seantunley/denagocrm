@@ -1721,6 +1721,29 @@ model SignatureRequest {
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
+  /// LEASE held by the one worker re-driving this request's lost fan-out.
+  ///
+  /// recoverStrandedCompletions sends email and fires automations, so exactly one
+  /// worker may be doing that at a time. A lock taken and released around a
+  /// bookkeeping transaction cannot express that — the transaction commits and the
+  /// sending starts afterwards, unprotected — so the claim is a LEASE instead:
+  /// one conditional UPDATE sets `recoveryLeaseUntil` into the future, and a
+  /// second worker's identical UPDATE matches no row until it expires.
+  ///
+  /// It expires because the alternative is worse: a worker killed mid-send (a
+  /// serverless timeout is routine here) would otherwise hold the request
+  /// unrecoverable forever, which is the exact failure this whole sweep exists to
+  /// end. `recoveryLeaseOwner` names the holder, so a release only clears a lease
+  /// we still own and a stuck holder is identifiable in the log.
+  recoveryLeaseUntil DateTime?
+  recoveryLeaseOwner String?
+
+  /// Set when the sweep has spent its attempts and stopped. Two jobs:
+  /// it is the durable "this needs a person" flag, and it takes the request OUT
+  /// of the candidate query — without it, capped requests keep filling the
+  /// oldest-first batch and newer, still-recoverable failures are never selected.
+  recoveryExhaustedAt DateTime?
+
   recipients SignatureRecipient[]
   fields     SignatureField[]
   events     SignatureEvent[]
@@ -1804,6 +1827,16 @@ model SignatureRecipient {
   // or timeout mid-send) — see recoverStaleSigningClaims in signing/dispatch.ts.
   sendingAt       DateTime?
 
+  /// When THIS recipient was successfully sent the final sealed PDF.
+  ///
+  /// The completion fan-out is a loop over recipients and it can fail part way —
+  /// one bad address, one SMTP rejection. Without a per-recipient marker the only
+  /// options are "declare the whole fan-out done" (the recipients who were never
+  /// reached never are) or "retry the whole fan-out" (everyone who already has
+  /// their contract gets it again). This records delivery one address at a time,
+  /// so a retry sends only to whoever is still missing it.
+  completedEmailSentAt DateTime?
+
   fields    SignatureField[]
   responses SignatureFieldResponse[]
 
@@ -1875,7 +1908,18 @@ model SignatureEvent {
   request   SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
   recipientId String?
-  type        String // created|sent|delivered|opened|viewed|field_filled|signed|declined|completed|reminded|downloaded|voided
+  /// created|sent|delivered|opened|viewed|field_filled|signed|declined|completed|reminded|downloaded|voided|recovery_attempt
+  ///
+  /// `completed` is written LAST by completeSignatureRequest — after the
+  /// notification and post-completion fan-out, not before it. Its ABSENCE on a
+  /// request whose status is already `completed` therefore means one specific
+  /// thing: the transaction committed and the external work never finished. That
+  /// is the detector recoverStrandedCompletions() sweeps on, so this event is
+  /// load-bearing and not merely a trail entry.
+  ///
+  /// `recovery_attempt` records one pass of that sweep, written BEFORE the work
+  /// so attempts stay bounded when a request cannot be repaired.
+  type        String
   actor       String // "Denago: <name>" | recipient name | "system"
   channel     String? // email|whatsapp|sms|in_person|web
   ip          String?

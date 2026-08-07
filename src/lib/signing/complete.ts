@@ -6,13 +6,20 @@ import { renderDocumentHtml, type StampField } from "@/lib/doceditor/serialize";
 import { htmlToPdf } from "@/lib/customDocs";
 import { sealPdf } from "@/lib/pdf/seal";
 import { saveFile, readFile, deleteFile } from "@/lib/storage";
-import { sendEmail } from "@/lib/email";
 import { formatDateTime } from "@/lib/format";
+import { logError } from "@/lib/errorLog";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { bindCtx, logoDataUri } from "./render";
 import { logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
 import { runPostCompletion } from "./postComplete";
+import { signedPdfIsSafeToDelete } from "./blobReferences";
+import {
+  COMPLETED_EVENT,
+  POST_COMPLETION_EVENT,
+  deliverCompletionEmails,
+} from "./completionFanout";
+import { exactTenantWhere } from "./recoveryScope";
 
 /** Internal sentinel: the completion claim was lost to a concurrent close. */
 class CompletionLost extends Error {}
@@ -274,7 +281,12 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       } else if (req.jobCardId) {
         const signedJc = await tx.jobCard.updateMany({
           where: { id: req.jobCardId, deletedAt: null, signedAt: null },
-          data: { signedAt: new Date(), signedByName: signerName },
+          // signedPdfHash is written here for the same reason the quote branch
+          // writes it: it is the evidence that THIS request's transaction is the
+          // one that signed the job card. Without it a recovery pass cannot tell
+          // "we signed it" from "somebody else already had", and re-fires the
+          // won-effects for a job that was already booked.
+          data: { signedAt: new Date(), signedByName: signerName, signedPdfHash: hash },
         });
         if (signedJc.count === 1) {
           sourceSigned = true;
@@ -285,16 +297,41 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       }
     });
   } catch (err) {
-    await deleteFile(storedName).catch(() => {});
+    // A thrown error is NOT proof the transaction rolled back. If the COMMIT
+    // succeeded and only its acknowledgement was lost, Postgres has committed:
+    // signedPdfRef and the new Document row both name this blob, and deleting it
+    // destroys the signed artefact underneath a record that says it exists.
+    //
+    // That is what happened to Quote Q-1010 on 2026-08-04 — see
+    // SIGNING-PDF-LOSS-INCIDENT.md. So ASK before deleting, and keep the file on
+    // every ambiguous answer, including a failed check (usually the same broken
+    // connection that lost the acknowledgement).
+    //
+    // Ask about EVERY durable reference, not just the request row. The
+    // transaction files two — `SignatureRequest.signedPdfRef` and the `Document`
+    // whose `storedName` is this blob — and asking only the first reopens the
+    // hole by another door: the request is soft-deletable, so once it is trashed
+    // a filtered lookup answers "no row", the check says "unreferenced", and the
+    // blob is deleted out from under the Document the signed PDF is filed as.
+    // signedPdfIsSafeToDelete does both, unfiltered and tenant-scoped.
+    if (await signedPdfIsSafeToDelete(storedName, req.tenantId)) {
+      await deleteFile(storedName).catch(() => {});
+    }
     if (err instanceof CompletionLost || err instanceof SourceCompletionLost) return;
     throw err;
   }
 
-  await logSignEvent(requestId, { type: "completed", actor: "system", metadata: { hash } });
+  // The owning tenant, taken from the row rather than from ambient scope: the
+  // db.ts guard rewrites nothing while enforcement is dormant, and these are
+  // writes. Parent and children are created in one transaction, so the request's
+  // own tenantId is exactly its recipients'.
+  const tenantWhere = exactTenantWhere(req.tenantId);
 
   // External fan-out only (referral, automations, push, audit). The core source
-  // state is already committed above; this is best-effort and never unwinds it.
-  await runPostCompletion({
+  // state is already committed above; this never unwinds it — but it now REPORTS
+  // what it swallowed, because the marker written at the end of this function is
+  // the flag that stops the request ever being swept again.
+  const post = await runPostCompletion({
     id: req.id,
     title: req.title,
     quoteId: req.quoteId,
@@ -305,14 +342,52 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     sourceSigned,
     wonLeadId,
   });
-
-  // Email the sealed PDF to every recipient with an address.
-  for (const r of req.recipients) {
-    if (!r.email) continue;
-    await sendEmail({
-      to: r.email, subject: `Completed & signed: ${req.title}`,
-      text: `Hi ${r.name},\n\nEveryone has signed "${req.title}". The final sealed PDF is attached.\n\nDenago Cape Town`,
-      attachments: [{ filename: `${req.title}.pdf`, content: pdf, contentType: "application/pdf" }],
-    });
+  // Its own marker, so a retry caused by one undeliverable address does not
+  // re-fire the automations and write a second audit line.
+  if (post.ok) {
+    await logSignEvent(requestId, { type: POST_COMPLETION_EVENT, actor: "system" });
   }
+
+  // Email the sealed PDF to every recipient with an address, recording each
+  // delivery on the recipient. This loop used to be `await sendEmail(...)` with
+  // the result discarded — and sendEmail NEVER THROWS, it returns { ok: false }
+  // — so a fan-out that reached nobody looked exactly like one that reached
+  // everybody, and the completion marker below was written over it.
+  const delivery = await deliverCompletionEmails({
+    title: req.title,
+    pdf,
+    recipients: req.recipients.map((r) => ({
+      id: r.id,
+      name: r.name,
+      email: r.email,
+      completedEmailSentAt: r.completedEmailSentAt,
+    })),
+    tenantWhere,
+  });
+
+  // LAST, not first, and ONLY on success. This event used to be written
+  // immediately after the transaction, which made it a record that the commit
+  // happened — but nothing then recorded whether the work above actually ran,
+  // and nothing could: advanceAfterSignature and completeSignatureRequest both
+  // return early on a closed request, so a completion that committed and failed
+  // to notify anyone was unreachable forever, and silent.
+  //
+  // Written here, its absence means exactly one thing — "committed, but the
+  // fan-out did not finish" — which is what recoverStrandedCompletions() sweeps
+  // for. Writing it anyway after a failed send would be strictly worse than the
+  // original bug: it would mark the request handled and suppress the very
+  // recovery that exists to rescue it. The completion TIME is unaffected:
+  // `completedAt` on the row is set inside the transaction and remains the
+  // authoritative timestamp.
+  if (post.ok && delivery.ok) {
+    await logSignEvent(requestId, { type: COMPLETED_EVENT, actor: "system", metadata: { hash } });
+    return;
+  }
+
+  const failures = [...post.failures, ...delivery.failures];
+  const message =
+    `Signature request ${requestId} completed but its fan-out did not finish: ${failures.join("; ")}. ` +
+    `Left unmarked so the stranded-completion sweep re-drives it.`;
+  console.error(`[signing] ${message}`);
+  await logError("signing-completion-fanout", new Error(message), `request ${requestId}`).catch(() => {});
 }
