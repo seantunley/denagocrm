@@ -1,5 +1,5 @@
 import { prisma } from "./db";
-import { resolveIntegrationBundle, resolveTenantCredential } from "./settings";
+import { credentialOwnerTenantId, resolveIntegrationBundleForTenant, resolveTenantCredential } from "./settings";
 import { sendPushToAll } from "./push";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { resolveTenantActor } from "./tenantActor";
@@ -19,12 +19,83 @@ function ambientTenantId(): string | null {
   return currentTenantScope()?.tenantId ?? null;
 }
 
+/**
+ * The credentials for one WhatsApp call, WITH the tenant they were resolved for.
+ *
+ * The tenant travels with the credentials because it cannot be recovered
+ * afterwards: request tenant scope is a no-op while enforcement is off, so
+ * asking `currentTenantScope()` a second time — inside the send-health hook —
+ * answers null on a normal user-triggered send and the health report is
+ * discarded. `credentialOwnerTenantId` restates the fallback the credential
+ * lookup itself just applied, so this is the tenant whose badge these
+ * credentials are behind.
+ */
+type WhatsAppCredentials = {
+  tenantId: string;
+  /**
+   * Empty ONLY on the media-read path, whose Graph endpoint is addressed by
+   * media id rather than by the phone number — see fetchWhatsAppMedia, which
+   * never reports a failure that would quote it.
+   */
+  phoneNumberId: string;
+  token: string;
+};
+
 /** Resolves the phone-number id + access token, honouring a tenant override. */
-async function waCredentials(): Promise<[string | null, string | null]> {
-  const tenantId = ambientTenantId();
-  const bundle = await resolveIntegrationBundle(tenantId, "whatsapp");
-  if (!bundle) return [null, null];
-  return [bundle.WA_PHONE_NUMBER_ID, bundle.WA_ACCESS_TOKEN];
+async function waCredentials(): Promise<WhatsAppCredentials | null> {
+  const bundle = await resolveIntegrationBundleForTenant(ambientTenantId(), "whatsapp");
+  if (!bundle) return null;
+  const phoneNumberId = bundle.values.WA_PHONE_NUMBER_ID;
+  const token = bundle.values.WA_ACCESS_TOKEN;
+  if (!phoneNumberId || !token) return null;
+  return { tenantId: bundle.tenantId, phoneNumberId, token };
+}
+
+/**
+ * Reports how a real send went to this tenant's integration connection state,
+ * so an expired or revoked WA_ACCESS_TOKEN surfaces as "Reconnect needed" in
+ * Settings → Integration overrides instead of quietly failing every message.
+ *
+ * Reuses the SAME classifier the guided setup's connection test uses
+ * (classifyGraphError), so a token Meta rejects mid-flight is described to the
+ * owner in exactly the words the setup wizard would have used, and is blamed on
+ * the same flow step.
+ *
+ * EVERY call in this file that presents the access token reports through here —
+ * text, image, audio, media upload, interactive and the media read. They share
+ * one credential, so instrumenting only text meant a token that expired while a
+ * tenant happened to be sending brochures and voice notes went on reading
+ * "Connected" indefinitely.
+ *
+ * AWAITED, not fired and forgotten. `noteIntegrationSendOutcome` hands the write
+ * to the platform's post-response mechanism, so awaiting it costs a registration
+ * and not a database round trip inside a request; outside one it runs the write
+ * to completion rather than letting the invocation end on top of it. Errors are
+ * swallowed at both layers: bookkeeping must never change a send's result. Only
+ * auth-class failures flip the status — see REAUTH_FAILURE_CODES.
+ */
+async function noteWhatsAppOutcome(
+  creds: WhatsAppCredentials,
+  res: { ok: boolean; status: number },
+  body: unknown,
+): Promise<void> {
+  try {
+    const [{ noteIntegrationSendOutcome }, { classifyGraphError }] = await Promise.all([
+      import("./integrationConnection"),
+      import("./integrationProbe"),
+    ]);
+    if (res.ok) {
+      await noteIntegrationSendOutcome(creds.tenantId, "whatsapp", { ok: true });
+      return;
+    }
+    const failure = classifyGraphError(res.status, body, {
+      phoneNumberId: creds.phoneNumberId,
+      accessToken: creds.token,
+    });
+    await noteIntegrationSendOutcome(creds.tenantId, "whatsapp", { ok: false, failure }, [creds.token]);
+  } catch {
+    /* bookkeeping must never break a send */
+  }
 }
 
 /** Normalises a phone number to WhatsApp digits (27…). */
@@ -35,8 +106,7 @@ export function waDigits(phone: string): string {
 }
 
 export async function isWhatsAppConfigured(): Promise<boolean> {
-  const [id, token] = await waCredentials();
-  return Boolean(id && token);
+  return (await waCredentials()) !== null;
 }
 
 /** Finds the contact (or open lead) a WhatsApp number belongs to. */
@@ -66,14 +136,14 @@ export async function sendWhatsAppText(
   toDigits: string,
   text: string
 ): Promise<{ ok: boolean; error?: string }> {
-  const [phoneNumberId, token] = await waCredentials();
-  if (!phoneNumberId || !token) {
+  const creds = await waCredentials();
+  if (!creds) {
     return { ok: false, error: "WhatsApp is not configured (Settings → Integrations)." };
   }
-  const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
+  const res = await fetch(`${GRAPH}/${creds.phoneNumberId}/messages`, {
     signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.token}` },
     body: JSON.stringify({
       messaging_product: "whatsapp",
       to: toDigits,
@@ -83,29 +153,33 @@ export async function sendWhatsAppText(
   });
   if (!res.ok) {
     const err = await res.json().catch(() => null);
+    await noteWhatsAppOutcome(creds, res, err);
     const msg: string = err?.error?.message ?? `WhatsApp API error ${res.status}`;
     const friendly = msg.includes("24")
       ? "Outside the 24-hour reply window — the customer must message you first (or use an approved template from WhatsApp Manager)."
       : msg;
     return { ok: false, error: friendly };
   }
+  await noteWhatsAppOutcome(creds, res, null);
   return { ok: true };
 }
 
 /** Sends an image by URL (e.g. a brochure) on WhatsApp. */
 export async function sendWhatsAppImage(toDigits: string, url: string, caption?: string): Promise<{ ok: boolean; error?: string }> {
-  const [phoneNumberId, token] = await waCredentials();
-  if (!phoneNumberId || !token) return { ok: false, error: "WhatsApp is not configured." };
-  const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
+  const creds = await waCredentials();
+  if (!creds) return { ok: false, error: "WhatsApp is not configured." };
+  const res = await fetch(`${GRAPH}/${creds.phoneNumberId}/messages`, {
     signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.token}` },
     body: JSON.stringify({ messaging_product: "whatsapp", to: toDigits, type: "image", image: { link: url, ...(caption ? { caption } : {}) } }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => null);
+    await noteWhatsAppOutcome(creds, res, err);
     return { ok: false, error: err?.error?.message ?? `WhatsApp API error ${res.status}` };
   }
+  await noteWhatsAppOutcome(creds, res, null);
   return { ok: true };
 }
 
@@ -119,56 +193,63 @@ export async function uploadWhatsAppMedia(
   contentType: string,
   filename: string,
 ): Promise<{ id: string } | { error: string }> {
-  const [phoneNumberId, token] = await waCredentials();
-  if (!phoneNumberId || !token) return { error: "WhatsApp is not configured." };
+  const creds = await waCredentials();
+  if (!creds) return { error: "WhatsApp is not configured." };
   const form = new FormData();
   form.append("messaging_product", "whatsapp");
   form.append("type", contentType);
   form.append("file", new Blob([new Uint8Array(buffer)], { type: contentType }), filename);
-  const res = await fetch(`${GRAPH}/${phoneNumberId}/media`, {
+  const res = await fetch(`${GRAPH}/${creds.phoneNumberId}/media`, {
     signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` }, // fetch sets the multipart boundary
+    headers: { Authorization: `Bearer ${creds.token}` }, // fetch sets the multipart boundary
     body: form,
   });
   if (!res.ok) {
     const err = await res.json().catch(() => null);
+    await noteWhatsAppOutcome(creds, res, err);
     return { error: err?.error?.message ?? `WhatsApp media upload error ${res.status}` };
   }
+  await noteWhatsAppOutcome(creds, res, null);
   const json = await res.json().catch(() => null);
   return json?.id ? { id: String(json.id) } : { error: "WhatsApp media upload returned no id" };
 }
 
 /** Sends an audio message (e.g. a synthesised voice-note reply) by uploaded media ID. */
 export async function sendWhatsAppAudioId(toDigits: string, mediaId: string): Promise<{ ok: boolean; error?: string }> {
-  const [phoneNumberId, token] = await waCredentials();
-  if (!phoneNumberId || !token) return { ok: false, error: "WhatsApp is not configured." };
-  const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
+  const creds = await waCredentials();
+  if (!creds) return { ok: false, error: "WhatsApp is not configured." };
+  const res = await fetch(`${GRAPH}/${creds.phoneNumberId}/messages`, {
     signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.token}` },
     body: JSON.stringify({ messaging_product: "whatsapp", to: toDigits, type: "audio", audio: { id: mediaId } }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => null);
+    await noteWhatsAppOutcome(creds, res, err);
     return { ok: false, error: err?.error?.message ?? `WhatsApp API error ${res.status}` };
   }
+  await noteWhatsAppOutcome(creds, res, null);
   return { ok: true };
 }
 
+/** Shared sender behind the button and list messages — both report their outcome. */
 async function sendInteractive(toDigits: string, interactive: unknown): Promise<{ ok: boolean; error?: string }> {
-  const [phoneNumberId, token] = await waCredentials();
-  if (!phoneNumberId || !token) return { ok: false, error: "WhatsApp is not configured." };
-  const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
+  const creds = await waCredentials();
+  if (!creds) return { ok: false, error: "WhatsApp is not configured." };
+  const res = await fetch(`${GRAPH}/${creds.phoneNumberId}/messages`, {
     signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.token}` },
     body: JSON.stringify({ messaging_product: "whatsapp", to: toDigits, type: "interactive", interactive }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => null);
+    await noteWhatsAppOutcome(creds, res, err);
     return { ok: false, error: err?.error?.message ?? `WhatsApp API error ${res.status}` };
   }
+  await noteWhatsAppOutcome(creds, res, null);
   return { ok: true };
 }
 
@@ -215,18 +296,44 @@ export async function sendWhatsAppList(
   });
 }
 
-/** Downloads a WhatsApp media object (e.g. a voice note) by its media id. */
+/**
+ * Downloads a WhatsApp media object (e.g. a voice note) by its media id.
+ *
+ * Reports its outcome like every other path here, with one deliberate narrowing:
+ * this Graph endpoint is addressed by MEDIA id, and Meta expires media after
+ * about 30 days. A 404 / error code 100 from it therefore means "that voice note
+ * is gone", not "your phone number ID is wrong" — but classifyGraphError, which
+ * only ever sees status and body, cannot tell those apart and would classify it
+ * as `identity_mismatch`, a reauth-class code. Re-reading an old voice note would
+ * then demand a reconnect of a perfectly good integration. So a failure here is
+ * reported only for the token-class statuses, which no media id can provoke; a
+ * SUCCESS is always reported, and that is the half that heals a stale badge.
+ */
 export async function fetchWhatsAppMedia(
   mediaId: string
 ): Promise<{ buffer: Buffer; contentType: string } | null> {
-  const token = await resolveTenantCredential(ambientTenantId(), "WA_ACCESS_TOKEN");
+  const tenantId = ambientTenantId();
+  const token = await resolveTenantCredential(tenantId, "WA_ACCESS_TOKEN");
   if (!token) return null;
+  // phoneNumberId is empty on purpose: this endpoint is not scoped to it, and the
+  // only failures reported below are ones classifyGraphError never quotes it in.
+  const creds: WhatsAppCredentials = {
+    tenantId: credentialOwnerTenantId(tenantId),
+    phoneNumberId: "",
+    token,
+  };
   try {
     const metaRes = await fetch(`${GRAPH}/${mediaId}`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(10000),
     });
-    if (!metaRes.ok) return null;
+    if (!metaRes.ok) {
+      if (metaRes.status === 401 || metaRes.status === 403) {
+        await noteWhatsAppOutcome(creds, metaRes, await metaRes.json().catch(() => null));
+      }
+      return null;
+    }
+    await noteWhatsAppOutcome(creds, metaRes, null);
     const meta = await metaRes.json();
     if (!meta.url) return null;
     const fileRes = await fetch(meta.url, {
