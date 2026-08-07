@@ -93,10 +93,6 @@ const STILL_HARDCODED: Record<string, string> = {
   "src/lib/signature.ts": "phase 5 — signed PDFs",
   "src/lib/campaigns.ts": "phase 4 — email",
   "src/app/(print)/jobcards/[id]/print/page.tsx": "phase 5 — print",
-  // Phase 3 (customer-facing): resolved from the portal contact / survey token,
-  // not from a staff session.
-  "src/app/portal/layout.tsx": "phase 3 — customer-facing",
-  "src/app/s/layout.tsx": "phase 3 — customer-facing",
   // Already brand-aware via their own mechanism.
   "src/app/login/LoginClient.tsx": "phase 1b — falls back through BrandLogo's own conditional",
   "src/app/portal/login/PortalLoginClient.tsx": "phase 1b — same",

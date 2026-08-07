@@ -108,7 +108,10 @@ function StampView({ s }: { s: StampField }) {
   return <div style={{ ...box, display: "flex", alignItems: "flex-end", fontSize: 13, color: "#0f172a" }}>{s.text ?? ""}</div>;
 }
 
-export function SignSurface({ token, title, recipientName, sheets, fields, stamps = [] }: { token: string; title: string; recipientName: string; sheets: Sheets; fields: Field[]; stamps?: StampField[] }) {
+export function SignSurface({ token, title, recipientName, sheets, fields, stamps = [], senderName }: { token: string; title: string; recipientName: string; sheets: Sheets; fields: Field[]; stamps?: StampField[]; senderName?: string }) {
+  // The company that sent this document, for the two places the copy names them.
+  // Undefined keeps the original literal — see tests/customerBranding.test.ts.
+  const sender = senderName ?? "Denago";
   const [values, setValues] = useState<Record<string, string>>({});
   const [name, setName] = useState(recipientName);
   const [consent, setConsent] = useState(false);
@@ -179,7 +182,7 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
   };
 
   if (done === "signed") return <Card><h2 style={h2}>Signed ✓</h2><p style={p}>Thank you, {name}. Once everyone has signed, the completed sealed PDF will be emailed to you.</p></Card>;
-  if (done === "declined") return <Card><h2 style={h2}>Declined</h2><p style={p}>You have declined this document. Denago has been notified.</p></Card>;
+  if (done === "declined") return <Card><h2 style={h2}>Declined</h2><p style={p}>You have declined this document. {sender} has been notified.</p></Card>;
 
   return (
     <div style={{ width: "100%", maxWidth: 900, display: "flex", flexDirection: "column", gap: 16, paddingBottom: 84 }}>
@@ -252,7 +255,7 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
             </button>
             <TextPromptDialog
               title="Decline this document?"
-              description="You can add an optional reason. Denago will be notified and the request can no longer be signed by you."
+              description={`You can add an optional reason. ${sender} will be notified and the request can no longer be signed by you.`}
               label="Reason (optional)"
               placeholder="Tell us what needs attention"
               required={false}

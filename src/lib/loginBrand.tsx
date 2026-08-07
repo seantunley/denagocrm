@@ -1,5 +1,5 @@
 import { headers } from "next/headers";
-import { brandForHost, brandLogoUrl, brandStyle, type TenantBrand } from "./tenantBrand";
+import { brandForHost, brandForTenant, brandLogoUrl, brandStyle, type TenantBrand } from "./tenantBrand";
 
 /**
  * The brand for a LOGIN page, resolved from the hostname the request arrived on.
@@ -78,6 +78,36 @@ export async function loginBrand(): Promise<LoginBrand> {
   try {
     const host = (await headers()).get("host");
     return toLoginBrand(await brandForHost(host));
+  } catch {
+    return UNBRANDED;
+  }
+}
+
+/**
+ * The brand for a CUSTOMER-FACING surface — the portal shell and the survey
+ * pages.
+ *
+ * A third resolution rule, because these have a third situation. The CRM knows
+ * its tenant from the staff session; the login pages have nothing but the
+ * hostname; the portal has a CUSTOMER session for some of its pages and nothing
+ * at all for others — its own login sits inside the same layout.
+ *
+ * So: the signed-in customer's tenant when there is one, the hostname otherwise.
+ * Contact-first is the right order, not just a convenient one — a customer who
+ * followed an emailed link to the platform's own domain should still see the
+ * brand of the company they actually deal with.
+ *
+ * `contactTenantId` is passed in rather than read here so this module stays free
+ * of portal-session imports, which pull in cookies, JWT verification and the
+ * module registry — none of which a survey page has any business loading.
+ */
+export async function customerBrand(contactTenantId: string | null | undefined): Promise<LoginBrand> {
+  try {
+    if (contactTenantId) {
+      const brand = await brandForTenant(contactTenantId);
+      if (brand.tenantId) return toLoginBrand(brand);
+    }
+    return toLoginBrand(await brandForHost((await headers()).get("host")));
   } catch {
     return UNBRANDED;
   }
