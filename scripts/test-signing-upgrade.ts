@@ -106,8 +106,8 @@ async function main(): Promise<void> {
     tenantId,
   );
   await prisma.$executeRawUnsafe(
-    `INSERT INTO "Document"(id,"tenantId",name,"storedName","mimeType",size,"createdAt")
-     VALUES ('doc_mixed',NULL,'Unstamped doc','doc_mixed.pdf','application/pdf',1,now())
+    `INSERT INTO "Document"(id,"tenantId","fileName","storedName","mimeType","sizeBytes","createdAt")
+     VALUES ('doc_mixed',NULL,'Unstamped doc.pdf','doc_mixed.pdf','application/pdf',1,now())
      ON CONFLICT (id) DO NOTHING`,
   );
   await prisma.$executeRawUnsafe(
