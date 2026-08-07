@@ -1,4 +1,5 @@
 /** App version — bump on each release. Shown under Sign out in the sidebar. */
-// 0.8 — multi-tenant foundation: tenants + memberships live, tenant carried on
-// the session/audit trail (enforcement + data isolation land in later releases).
-export const APP_VERSION = "0.8";
+// 0.9 — signing trust and audit integrity: hashed signing capabilities, verified
+// signer identity, tamper-evident evidence, and a governance trail that commits
+// with the record it describes.
+export const APP_VERSION = "0.9";
