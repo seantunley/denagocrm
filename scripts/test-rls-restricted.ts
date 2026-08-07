@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { PrismaClient } from "@prisma/client";
 import {
   basePrisma,
@@ -71,23 +75,67 @@ async function main() {
       ],
     });
 
-    // ── Create the restricted role + grants (idempotent) ───────────────────────
+    // ── Create the restricted role + grants ────────────────────────────────────
+    //
+    // By running THE SHIPPED SCRIPT — prisma/rls/app-role.sql, the same file the
+    // production cutover runs — rather than an inline copy of what it is believed
+    // to do. An inline copy is a second definition of the role, and the two would
+    // drift in the direction that makes the test pass: the test grants what the
+    // test needs, production needs something the test never exercised.
+    //
+    // Concretely, that already-real gap is ALTER DEFAULT PRIVILEGES. The inline
+    // grants covered the tables that existed; nothing covered the tables the NEXT
+    // migration creates, so the first deploy after the cutover would have hit
+    // "permission denied for table X" on a code path no test could have caught.
+    // Running the real file means CI executes that line on every pass.
     await basePrisma.$executeRawUnsafe(`DO $$ BEGIN
       IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${ROLE}') THEN
         EXECUTE 'DROP OWNED BY "${ROLE}"';
         EXECUTE 'DROP ROLE "${ROLE}"';
       END IF;
     END $$;`);
-    await basePrisma.$executeRawUnsafe(
-      `CREATE ROLE "${ROLE}" LOGIN PASSWORD '${ROLE_PW}' NOSUPERUSER NOBYPASSRLS`,
+
+    // The role name is substituted so parallel runs cannot collide on one name;
+    // everything else about the script is executed verbatim.
+    const scriptPath = path.join(process.cwd(), "prisma", "rls", "app-role.sql");
+    const source = fs.readFileSync(scriptPath, "utf8");
+    if (!source.includes("crm_app")) {
+      throw new Error(`${scriptPath} no longer mentions crm_app — the substitution below is stale`);
+    }
+    const tmpPath = path.join(os.tmpdir(), `app-role-${SFX}.sql`);
+    fs.writeFileSync(tmpPath, source.replaceAll("crm_app", ROLE), "utf8");
+    try {
+      // `prisma db execute` runs a multi-statement script over the simple
+      // protocol — the same mechanism scripts/apply-migrations.mjs uses to apply
+      // a migration.sql, so a file it can run is a file the migration runner can.
+      execFileSync(
+        "npx",
+        ["prisma", "db", "execute", "--url", process.env.DATABASE_URL as string, "--file", tmpPath],
+        { stdio: "inherit" },
+      );
+    } finally {
+      fs.rmSync(tmpPath, { force: true });
+    }
+
+    // The script deliberately creates the role with a password nobody knows, so
+    // that a credential never lands in the repository. Setting a known one is
+    // step 2 of the cutover runbook, and it is step 2 here for the same reason.
+    await basePrisma.$executeRawUnsafe(`ALTER ROLE "${ROLE}" PASSWORD '${ROLE_PW}'`);
+
+    // The claim the whole suite rests on: this role cannot step over a policy.
+    const [attrs] = await basePrisma.$queryRawUnsafe<{ rolsuper: boolean; rolbypassrls: boolean }[]>(
+      `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = '${ROLE}'`,
     );
-    await basePrisma.$executeRawUnsafe(`GRANT USAGE ON SCHEMA public TO "${ROLE}"`);
-    await basePrisma.$executeRawUnsafe(
-      `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${ROLE}"`,
+    check("shipped app-role.sql produces a NOSUPERUSER NOBYPASSRLS role", attrs?.rolsuper === false && attrs?.rolbypassrls === false);
+
+    // And the line that only production would have discovered was missing: a
+    // table created AFTER the grants must still be reachable.
+    await basePrisma.$executeRawUnsafe(`CREATE TABLE "_future_${SFX}" ("id" text PRIMARY KEY)`);
+    const [futureGrant] = await basePrisma.$queryRawUnsafe<{ ok: boolean }[]>(
+      `SELECT has_table_privilege('${ROLE}', '"_future_${SFX}"', 'SELECT') AS ok`,
     );
-    await basePrisma.$executeRawUnsafe(
-      `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "${ROLE}"`,
-    );
+    check("a table created after the grants is still readable (ALTER DEFAULT PRIVILEGES)", futureGrant?.ok === true);
+    await basePrisma.$executeRawUnsafe(`DROP TABLE "_future_${SFX}"`);
 
     restrictedRaw = new PrismaClient({ datasources: { db: { url: restrictedUrl() } } });
     const scoped = __buildScopedClientForTests(restrictedRaw);
@@ -219,8 +267,14 @@ async function main() {
     await basePrisma.contact.deleteMany({ where: { id: { in: [cA, cB] } } });
     await basePrisma.tenant.deleteMany({ where: { id: { in: [tA, tB] } } });
     // DROP OWNED BY clears the role's grants (ACL entries) so DROP ROLE succeeds.
+    // The default-privilege rules app-role.sql installs are revoked explicitly
+    // first: they are entries in pg_default_acl rather than grants on an object,
+    // and leaving one behind makes DROP ROLE fail with a dependency error that
+    // would then mask the real result of the run.
     await basePrisma.$executeRawUnsafe(`DO $$ BEGIN
       IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${ROLE}') THEN
+        EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM "${ROLE}"';
+        EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM "${ROLE}"';
         EXECUTE 'DROP OWNED BY "${ROLE}"';
         EXECUTE 'DROP ROLE "${ROLE}"';
       END IF;
