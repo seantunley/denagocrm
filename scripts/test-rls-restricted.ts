@@ -169,6 +169,48 @@ async function main() {
     );
     check("bypass client interactive tx over restricted role → sees BOTH ($transaction wrapper)", bypassTx.length === 2);
 
+    // (10) THE SCOPED client's STANDALONE RAW path — the mirror of (8), and the one
+    //      that did not exist. A Prisma query extension intercepts MODEL operations
+    //      only, so `prisma.$queryRaw` skipped both the tenant scoping and the SET
+    //      LOCAL. Fourteen user-facing raw reads went out with no GUC at all and
+    //      worked purely because the app role still carried rolbypassrls; under THIS
+    //      role they returned zero rows (assertion 1 is exactly that).
+    //
+    //      Scoped to A, so seeing ONLY A's row proves two things at once: the GUC is
+    //      being set (or it would be zero), and it is being set to the caller's
+    //      tenant rather than to bypass (or it would be two).
+    const scopedRawA = await runInTenantScope({ tenantId: tA, system: false }, async () =>
+      scoped.$queryRawUnsafe<{ id: string }[]>(
+        `SELECT "id" FROM "Contact" WHERE "id" IN ('${cA}', '${cB}')`,
+      ),
+    );
+    check(
+      "scoped client RAW call, tenant A → only A (raw-method GUC patch)",
+      scopedRawA.length === 1 && scopedRawA[0].id === cA,
+    );
+
+    // (11) The same raw path under tenant B. Together with (10) this is the
+    //      isolation claim itself: the two tenants' raw reads cannot see each other.
+    const scopedRawB = await runInTenantScope({ tenantId: tB, system: false }, async () =>
+      scoped.$queryRawUnsafe<{ id: string }[]>(
+        `SELECT "id" FROM "Contact" WHERE "id" IN ('${cA}', '${cB}')`,
+      ),
+    );
+    check(
+      "scoped client RAW call, tenant B → only B (raw reads are isolated)",
+      scopedRawB.length === 1 && scopedRawB[0].id === cB,
+    );
+
+    // (12) And in off/monitor mode the same raw call must still return everything —
+    //      the bypass branch — because that is what production runs today and this
+    //      change must not alter it.
+    __setTenantEnforcingForTests(false);
+    const scopedRawOff = await scoped.$queryRawUnsafe<{ id: string }[]>(
+      `SELECT "id" FROM "Contact" WHERE "id" IN ('${cA}', '${cB}')`,
+    );
+    check("off-mode scoped RAW call → sees both (unchanged from today)", scopedRawOff.length === 2);
+    __setTenantEnforcingForTests(true);
+
     console.log(`\nRLS restricted-role proof: ${passed} passed, ${failed} failed.`);
     if (failed > 0) process.exit(1);
   } finally {

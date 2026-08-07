@@ -25,18 +25,30 @@ export async function replyToCustomerCase(caseId: string, formData: FormData) {
   const item = rows[0];
   if (!item) throw new Error("Case not found");
 
-  await basePrisma.$transaction([
-    basePrisma.$executeRaw`
+  // INTERACTIVE, not the array form. `basePrisma.$executeRaw` is not a
+  // PrismaPromise — buildBypassClient replaces all four raw methods with wrappers
+  // that open their own transaction to set app.bypass_rls, and those return plain
+  // Promises. Prisma inspects every element of an array transaction and throws
+  // "All elements of the array need to be Prisma Client promises", so this threw
+  // on every staff reply. Found by tests/scopedRawRls.test.ts, which now fails
+  // the build for any array transaction holding a raw promise.
+  //
+  // The interactive form is the path buildBypassClient actually supports: it runs
+  // the whole callback on one `tx` with bypass set once at the top, so both
+  // statements still land in a single transaction — which is what the array form
+  // was reaching for.
+  await basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`
       INSERT INTO "CustomerCaseMessage" ("id", "caseId", "userId", "direction", "body")
       VALUES (${crypto.randomUUID()}, ${caseId}, ${user.id}, 'staff', ${body})
-    `,
-    basePrisma.$executeRaw`
+    `;
+    await tx.$executeRaw`
       UPDATE "CustomerCase"
       SET "status" = CASE WHEN "status" IN ('new', 'waiting_internal') THEN 'open' ELSE "status" END,
           "updatedAt" = CURRENT_TIMESTAMP
       WHERE "id" = ${caseId}
-    `,
-  ]);
+    `;
+  });
   await notifyCustomer(item.contactId, `Update on case C-${item.number.toString()}`, body.slice(0, 180), `/portal/support/${caseId}`);
   await logAudit({
     action: "case.staff_reply",
