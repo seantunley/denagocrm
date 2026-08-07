@@ -9,6 +9,12 @@ import JourneyTestRun from "@/components/JourneyTestRun";
 import { parseRunMode } from "@/lib/journeyArbitration";
 import { JOURNEY_RUN_MODE_COPY } from "@/lib/journeyRunModes";
 import {
+  JOURNEY_TRIGGER_LABELS,
+  isScheduledTrigger,
+  readJourneyTriggers,
+  type JourneyTriggerSpec,
+} from "@/lib/journeyTriggers";
+import {
   installJourneyTemplates,
   publishJourney,
   saveJourneyDraft,
@@ -33,8 +39,7 @@ function record(value: Prisma.JsonValue | null): Record<string, unknown> {
 function defaultsFor(
   journey: { name: string; description: string | null; category: string; runMode: string },
   version: {
-    trigger: string;
-    triggerConfig: Prisma.JsonValue | null;
+    triggers: Prisma.JsonValue;
     entryConditions: Prisma.JsonValue | null;
     definition: Prisma.JsonValue;
   }
@@ -53,8 +58,12 @@ function defaultsFor(
     // Through parseRunMode, not raw: the editor must show what the ENGINE will
     // do with the stored string, and an unrecognised value runs as "single".
     runMode: parseRunMode(journey.runMode),
-    trigger: version.trigger,
-    triggerConfig: record(version.triggerConfig),
+    // Through the TOLERANT reader. This editor opens drafts as well as published
+    // versions, including the unpublishable ones the retired automations engine
+    // left behind — whose trigger names this engine has never had. The strict
+    // parser would throw and take the whole page down rather than show the row
+    // that needs fixing.
+    triggers: readJourneyTriggers(version.triggers),
     conditionSource: String(find("lead.source") ?? ""),
     conditionProvince: String(find("contact.province") ?? ""),
     minValueRands: Number.isFinite(minCents) ? minCents / 100 : null,
@@ -62,8 +71,26 @@ function defaultsFor(
   };
 }
 
-function triggerLabel(trigger: string) {
-  return trigger.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+/**
+ * Every trigger the version listens for, in the author's order.
+ *
+ * A version listens for a LIST now, and showing only the first would put a card
+ * on screen that reads "Trigger: New lead created" over a journey that also
+ * enrols on three other things — the card's whole job is to say what this
+ * journey does without opening the editor.
+ *
+ * Falls back to prettifying the raw name for a trigger this engine does not
+ * know, which is what the converted-rule drafts carry.
+ */
+function triggerLabel(triggers: JourneyTriggerSpec[]) {
+  if (triggers.length === 0) return "unknown";
+  return triggers
+    .map(
+      (spec) =>
+        JOURNEY_TRIGGER_LABELS[spec.type as keyof typeof JOURNEY_TRIGGER_LABELS] ??
+        spec.type.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()),
+    )
+    .join(" or ");
 }
 
 function statusTone(status: string) {
@@ -165,7 +192,7 @@ export default async function JourneysPage() {
                   </div>
                   <p className="text-sm text-muted-foreground mt-1">{journey.description || "No description"}</p>
                   <p className="text-xs text-muted-foreground mt-2">
-                    Trigger: {triggerLabel((published ?? editable)?.trigger ?? "unknown")} · Active version: {journey.activeVersion ?? "none"} · Runs: {journey._count.runs}
+                    Trigger: {triggerLabel(readJourneyTriggers((published ?? editable)?.triggers))} · Active version: {journey.activeVersion ?? "none"} · Runs: {journey._count.runs}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
                     Re-enrolled while a run is open? {runMode.description}
@@ -178,7 +205,11 @@ export default async function JourneysPage() {
                   ) : journey.activeVersion ? (
                     <form action={setJourneyStatus.bind(null, journey.id, "active")}><button className="btn-secondary btn-sm">Resume</button></form>
                   ) : null}
-                  {journey.status === "active" && ["lead_idle", "contact_segment", "purchase_anniversary", "win_back"].includes(published?.trigger ?? "") && (
+                  {/* "Enroll now" runs the cron's record sweep by hand, so it is
+                      offered when ANY of the version's triggers is one the cron
+                      sweeps for — a version that mixes a scheduled trigger with
+                      an event one still has a sweep to run. */}
+                  {journey.status === "active" && readJourneyTriggers(published?.triggers).some((spec) => isScheduledTrigger(spec.type)) && (
                     <form action={runJourneyNowAction.bind(null, journey.id)}><button className="btn-secondary btn-sm">Enroll now</button></form>
                   )}
                   {/* Offered as soon as there is something published to run.

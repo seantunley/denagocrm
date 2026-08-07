@@ -2,7 +2,8 @@
 
 import { useMemo, useRef, useState } from "react";
 import { createJourney } from "@/app/actions/journeys";
-import { JOURNEY_STEP_LABELS } from "@/lib/journeyTypes";
+import { JOURNEY_LIMITS, JOURNEY_STEP_LABELS, JOURNEY_TRIGGERS } from "@/lib/journeyTypes";
+import { JOURNEY_TRIGGER_LABELS, type JourneyTriggerSpec } from "@/lib/journeyTriggers";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 import { JOURNEY_RUN_MODES, RUN_MODE_LEGACY_NOTE } from "@/lib/journeyRunModes";
 
@@ -124,8 +125,12 @@ export type JourneyBuilderDefaults = {
    * would show "single" over a row that says "parallel".
    */
   runMode?: string;
-  trigger?: string;
-  triggerConfig?: Record<string, unknown> | null;
+  /**
+   * Every trigger the version listens for, in the author's order. Read through
+   * the tolerant reader on the server, so a converted-rule draft carrying a
+   * trigger name this engine never had opens for editing instead of throwing.
+   */
+  triggers?: JourneyTriggerSpec[];
   conditionSource?: string;
   conditionProvince?: string;
   minValueRands?: number | null;
@@ -191,22 +196,40 @@ export default function JourneyBuilder({
   submitLabel?: string;
 }) {
   const counter = useRef(100);
-  const [trigger, setTrigger] = useState(defaults.trigger ?? "lead_created");
+  const [triggers, setTriggers] = useState<JourneyTriggerSpec[]>(
+    defaults.triggers?.length ? defaults.triggers : [{ type: "lead_created", config: {} }],
+  );
   const [category, setCategory] = useState(defaults.category ?? "automation");
   // Not parseRunMode() — that lives beside basePrisma and cannot cross into the
   // browser. An unrecognised stored value shows as "nothing selected", which is
   // honest: the server would read it as `single`, and pretending the radio was
   // already on `single` would hide a row that does not say that.
   const [runMode, setRunMode] = useState(defaults.runMode ?? "single");
-  const [triggerConfig, setTriggerConfig] = useState<Record<string, unknown>>(
-    defaults.triggerConfig ?? {}
-  );
   const [conditionSource, setConditionSource] = useState(defaults.conditionSource ?? "");
   const [conditionProvince, setConditionProvince] = useState(defaults.conditionProvince ?? "");
   const [minValueRands, setMinValueRands] = useState(
     defaults.minValueRands == null ? "" : String(defaults.minValueRands)
   );
   const [steps, setSteps] = useState<BuilderStep[]>(cleanSteps(defaults.definition));
+
+  /**
+   * Edit ONE trigger in place. Everything else in the list is left untouched —
+   * including a type this builder has no dropdown entry for, which is how a
+   * converted-rule draft survives being opened and re-saved.
+   */
+  const patchTrigger = (index: number, patch: Partial<JourneyTriggerSpec>) => {
+    setTriggers((current) => current.map((spec, i) => (i === index ? { ...spec, ...patch } : spec)));
+  };
+  // Changing the TYPE clears that trigger's config: `stageId` means nothing to
+  // lead_idle, and carrying it over would save a filter the engine never reads.
+  const setTriggerType = (index: number, type: string) => patchTrigger(index, { type, config: {} });
+  const setTriggerConfig = (index: number, config: Record<string, unknown>) =>
+    patchTrigger(index, { config });
+  // A blank id is stored as ABSENT, not as "". Empty-string ids would all look
+  // identical to parseJourneyTriggers' uniqueness check and be refused as
+  // duplicates the moment a second trigger was added.
+  const setTriggerId = (index: number, id: string) =>
+    patchTrigger(index, { id: id.trim() ? id.trim() : undefined });
 
   const setConfig = (index: number, key: string, value: unknown) => {
     setSteps((current) => current.map((step, i) =>
@@ -310,7 +333,7 @@ export default function JourneyBuilder({
 
   return (
     <form action={submitAction ?? createJourney} className="space-y-5">
-      <input type="hidden" name="triggerConfig" value={JSON.stringify(triggerConfig)} />
+      <input type="hidden" name="triggers" value={JSON.stringify(triggers)} />
       <input type="hidden" name="entryConditions" value={JSON.stringify(entryConditions)} />
       <input type="hidden" name="definition" value={JSON.stringify(definition)} />
 
@@ -343,47 +366,93 @@ export default function JourneyBuilder({
       </div>
 
       <div className="rounded-lg border border-slate-800 p-4 space-y-3">
-        <h3 className="font-semibold">1. Enrollment trigger</h3>
-        <select name="trigger" className="input" value={trigger} onChange={(e) => { setTrigger(e.target.value); setTriggerConfig({}); }}>
-          <option value="lead_created">New lead created</option>
-          <option value="stage_entered">Lead enters a stage</option>
-          <option value="lead_idle">Lead becomes idle</option>
-          <option value="lead_won">Lead is won</option>
-          <option value="lead_lost">Lead is lost</option>
-          <option value="quote_signed">Quote is signed</option>
-          <option value="quote_declined">Quote is declined</option>
-          <option value="delivered">Vehicle is delivered</option>
-          <option value="referral_earned">Referral is earned</option>
-          <option value="contact_segment">Contact joins a saved segment</option>
-          <option value="purchase_anniversary">Purchase anniversary</option>
-          <option value="win_back">Inactive customer win-back</option>
-        </select>
+        <h3 className="font-semibold">1. Enrollment triggers</h3>
+        <p className="text-xs text-muted-foreground">
+          Anyone who matches <strong>any one</strong> of these is enrolled — once, even if
+          several of them fit. Give a trigger an ID to branch on it later with the
+          <code className="mx-1">event.triggerId</code> condition; two triggers of the same
+          kind each need one.
+        </p>
 
-        {trigger === "stage_entered" && (
-          <select className="input" value={String(triggerConfig.stageId ?? "")} onChange={(e) => setTriggerConfig({ stageId: e.target.value })}>
-            <option value="">Any stage</option>
-            {stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
-          </select>
-        )}
-        {trigger === "lead_idle" && (
-          <input className="input" type="number" min={1} value={String(triggerConfig.idleDays ?? 3)} onChange={(e) => setTriggerConfig({ idleDays: Number(e.target.value) })} aria-label="Idle days" />
-        )}
-        {trigger === "contact_segment" && (
-          <div className="grid md:grid-cols-2 gap-2">
-            <select className="input" value={String(triggerConfig.segmentId ?? "")} onChange={(e) => setTriggerConfig((current) => ({ ...current, segmentId: e.target.value }))}>
-              <option value="">Choose segment</option>
-              {segments.map((segment) => <option key={segment.id} value={segment.id}>{segment.name}</option>)}
-            </select>
-            <select className="input" value={String(triggerConfig.repeat ?? "once")} onChange={(e) => setTriggerConfig((current) => ({ ...current, repeat: e.target.value }))}>
-              <option value="once">Enroll each contact once</option>
-              <option value="weekly">Allow weekly re-enrollment</option>
-              <option value="daily">Allow daily re-enrollment</option>
-            </select>
-          </div>
-        )}
-        {trigger === "win_back" && (
-          <input className="input" type="number" min={3} value={String(triggerConfig.inactiveMonths ?? 12)} onChange={(e) => setTriggerConfig({ inactiveMonths: Number(e.target.value) })} aria-label="Inactive months" />
-        )}
+        {triggers.map((spec, index) => {
+          const config = spec.config ?? {};
+          return (
+            <div key={index} className="rounded-lg border border-slate-800/70 p-3 space-y-2">
+              <div className="grid md:grid-cols-[2fr_1fr_auto] gap-2 items-start">
+                {/* Rendered FROM the declared list, not spelled out by hand. The
+                    hand-written copy is how an option could appear here that
+                    nothing in the engine could ever act on. */}
+                <select
+                  className="input"
+                  aria-label="Enrollment trigger"
+                  value={spec.type}
+                  onChange={(e) => setTriggerType(index, e.target.value)}
+                >
+                  {/* A stored type this build does not offer — a draft converted
+                      from the retired rules engine — is shown as itself rather
+                      than silently snapping to the first option on render. */}
+                  {!(JOURNEY_TRIGGERS as readonly string[]).includes(spec.type) && (
+                    <option value={spec.type}>{spec.type} (not available)</option>
+                  )}
+                  {JOURNEY_TRIGGERS.map((type) => (
+                    <option key={type} value={type}>{JOURNEY_TRIGGER_LABELS[type]}</option>
+                  ))}
+                </select>
+                <input
+                  className="input"
+                  aria-label="Trigger ID"
+                  placeholder="ID (optional)"
+                  value={spec.id ?? ""}
+                  onChange={(e) => setTriggerId(index, e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="text-xs text-red-400 px-2 py-2 disabled:opacity-40"
+                  disabled={triggers.length === 1}
+                  title={triggers.length === 1 ? "A journey needs at least one trigger" : "Remove this trigger"}
+                  onClick={() => setTriggers((current) => current.filter((_, i) => i !== index))}
+                >
+                  Remove
+                </button>
+              </div>
+
+              {spec.type === "stage_entered" && (
+                <select className="input" aria-label="Stage" value={String(config.stageId ?? "")} onChange={(e) => setTriggerConfig(index, { stageId: e.target.value })}>
+                  <option value="">Any stage</option>
+                  {stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+                </select>
+              )}
+              {spec.type === "lead_idle" && (
+                <input className="input" type="number" min={1} value={String(config.idleDays ?? 3)} onChange={(e) => setTriggerConfig(index, { idleDays: Number(e.target.value) })} aria-label="Idle days" />
+              )}
+              {spec.type === "contact_segment" && (
+                <div className="grid md:grid-cols-2 gap-2">
+                  <select className="input" aria-label="Segment" value={String(config.segmentId ?? "")} onChange={(e) => setTriggerConfig(index, { ...config, segmentId: e.target.value })}>
+                    <option value="">Choose segment</option>
+                    {segments.map((segment) => <option key={segment.id} value={segment.id}>{segment.name}</option>)}
+                  </select>
+                  <select className="input" aria-label="Re-enrollment window" value={String(config.repeat ?? "once")} onChange={(e) => setTriggerConfig(index, { ...config, repeat: e.target.value })}>
+                    <option value="once">Enroll each contact once</option>
+                    <option value="weekly">Allow weekly re-enrollment</option>
+                    <option value="daily">Allow daily re-enrollment</option>
+                  </select>
+                </div>
+              )}
+              {spec.type === "win_back" && (
+                <input className="input" type="number" min={3} value={String(config.inactiveMonths ?? 12)} onChange={(e) => setTriggerConfig(index, { inactiveMonths: Number(e.target.value) })} aria-label="Inactive months" />
+              )}
+            </div>
+          );
+        })}
+
+        <button
+          type="button"
+          className="btn-secondary btn-sm"
+          disabled={triggers.length >= JOURNEY_LIMITS.triggers}
+          onClick={() => setTriggers((current) => [...current, { type: "lead_created", config: {} }])}
+        >
+          + Add another trigger
+        </button>
       </div>
 
       {/* Re-enrolment. Sits directly under the trigger because it is the same

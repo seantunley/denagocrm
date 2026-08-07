@@ -146,6 +146,22 @@ export const CONDITION_FIELDS = [
   "contact.hasVehicle",
   "contact.tags",
   "event.type",
+  /**
+   * WHICH of a version's triggers enrolled this run, when the author named it.
+   *
+   * `event.type` above already tells two DIFFERENT trigger types apart, and for
+   * most journeys that is the whole question. It cannot separate two triggers of
+   * the SAME type — "entered Quoted" and "entered Won" are both `stage_entered`
+   * — and that pairing is the obvious thing to want once a version may listen
+   * for several things at once. The author's own id is the only thing that
+   * distinguishes them, so it is published here.
+   *
+   * Empty for a trigger the author did not name, and for every version that
+   * predates named triggers. Set once at enrolment and never rewritten: a
+   * `wait_for_trigger` waking a run mid-sequence does not touch `context.event`,
+   * so this keeps meaning "what let this person in".
+   */
+  "event.triggerId",
   // The loop variables a `repeat` publishes. Without these a `while`/`until`
   // condition can only look
   // at the lead or contact, and `for_each` would have no way to test the item it
@@ -299,6 +315,13 @@ export type JourneyDefinition = {
  *  forEachItems (100)     — the list is SNAPSHOT into the cursor at loop entry,
  *                           so this also caps how much JSON one parked run
  *                           carries.
+ *  triggers (5)           — ENROLMENT triggers on one published version. Five is
+ *                           the same judgement as waitTriggers below and for the
+ *                           same reason: a list of alternatives longer than that
+ *                           is not one journey's front door, it is two journeys.
+ *                           The matcher's cost is not the constraint — it walks
+ *                           this list in memory, per active journey, per event —
+ *                           the reader's is.
  *  waitTriggers (5)       — how many event types ONE wait_for_trigger may watch.
  *                           Each one widens an indexed query the waiter runs on
  *                           every poll; five is more alternatives than a person
@@ -326,6 +349,7 @@ export const JOURNEY_LIMITS = {
   conditionsPerGroup: 30,
   repeatIterations: 100,
   forEachItems: 100,
+  triggers: 5,
   waitTriggers: 5,
   waitDays: 30,
   variables: 10,
