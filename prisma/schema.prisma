@@ -1707,6 +1707,19 @@ model SignatureRequest {
   templateId String? // DocBuilderTemplate it was generated from, if any
 
   snapshotJson   Json? // frozen resolved document at send time (what the signer sees)
+  /// The BRAND as it was at send time — the {{company.*}} tokens and the logo.
+  ///
+  /// Frozen for the same reason snapshotJson is. That column freezes the
+  /// document; this one freezes who it says it is FROM. Without it, a re-render
+  /// of a signed request resolved the brand LIVE, so a tenant rebranding — or a
+  /// platform admin changing their logo — retroactively restated whose contract
+  /// a customer had already signed. The sealed PDF at signedPdfRef never
+  /// changed, but the print and preview views disagreed with it.
+  ///
+  /// Null on every row that predates this and on any request created before a
+  /// brand existed; renderers fall back to resolving live, which is exactly
+  /// what they did before. So this is additive in behaviour as well as in schema.
+  brandJson      Json?
   unsignedPdfRef String? // storage ref of the PDF sent for signing
   signedPdfRef   String? // storage ref of the sealed, completed PDF
   signedPdfHash  String? // sha-256 of the completed PDF

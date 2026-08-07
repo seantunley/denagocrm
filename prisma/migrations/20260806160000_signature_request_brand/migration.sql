@@ -1,0 +1,26 @@
+-- Freeze the brand into a signature request, alongside the document it freezes.
+--
+-- ONE nullable column. ADD COLUMN IF NOT EXISTS, nothing dropped, renamed,
+-- retyped or made NOT NULL. Expand-safe: the previously deployed build never
+-- selects it, so it keeps running unchanged while this is applied.
+--
+-- WHY. `snapshotJson` already freezes the DOCUMENT a signature is evidence of —
+-- so that editing a template in Document Studio cannot retroactively change what
+-- an already-signed customer agreed to. The brand was not frozen with it. Every
+-- renderer resolved {{company.*}} live from the Company Profile, so once
+-- branding became per-tenant and editable, a rebrand would restate whose
+-- contract a customer had already signed: same clauses, same signatures, a
+-- different company's name and logo at the top.
+--
+-- The SEALED PDF at signedPdfRef was never at risk — it is bytes in blob
+-- storage with a sha-256 in signedPdfHash, and the Q-1010 work made that
+-- immutability explicit. What was at risk is every RE-RENDER of the snapshot:
+-- the print view of a signed quote, the signing-hub preview, the regenerated
+-- copy. Those would have drifted away from the sealed artifact they are
+-- supposed to depict, which is worse than either being wrong on its own — it
+-- makes the two disagree with no way to tell which is authoritative.
+--
+-- NULL means "resolve live", which is what every existing row and every
+-- pre-branding request needs, and is byte-for-byte the behaviour this replaces.
+
+ALTER TABLE "SignatureRequest" ADD COLUMN IF NOT EXISTS "brandJson" JSONB;
