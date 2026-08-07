@@ -22,16 +22,56 @@ ALTER TABLE "SignatureRecipient" ADD COLUMN IF NOT EXISTS "tokenRevokedAt" TIMES
 ALTER TABLE "ApprovalStep" ADD COLUMN IF NOT EXISTS "tokenCiphertext" TEXT;
 ALTER TABLE "ApprovalStep" ADD COLUMN IF NOT EXISTS "tokenRevokedAt" TIMESTAMP(3);
 
+-- A tenant is only assigned when it AGREES WITH EVERY PARENT this request points
+-- at. SignatureRequest carries composite tenant foreign keys —
+-- (tenantId, documentId) → Document(tenantId, id), and the same for quoteId,
+-- jobCardId, contactId and templateId — so a tenant that is right for one
+-- pointer and wrong for another is not a partial success, it is a constraint
+-- violation that fails the whole deploy.
+--
+-- THIS EXACT ROW BROKE PRODUCTION. Q-1017 and Q-1018 have a NULL-tenant Document
+-- and a NULL-tenant Quote, but a Contact stamped `tenant_denago_cpt`. The old
+-- COALESCE walked past the two NULLs, reached the contact, and wrote
+-- `tenant_denago_cpt` onto a request whose Document is NULL-tenant:
+--
+--   insert or update on table "SignatureRequest" violates foreign key
+--   constraint "SignatureRequest_tenantId_documentId_fkey"
+--
+-- Every deployment after that failed at this statement, so the schema advanced
+-- while the application did not.
+--
+-- A composite key with a NULL column is not enforced (MATCH SIMPLE), so leaving
+-- an inconsistent request NULL is legal and is exactly the state it is in today.
+-- Stamping its parents instead would be a much wider change to reach for while
+-- production cannot deploy, and it is a separate decision from getting the
+-- signing platform out.
 UPDATE "SignatureRequest" r
-SET "tenantId" = COALESCE(
-  r."tenantId",
-  (SELECT d."tenantId" FROM "Document" d WHERE d."id" = r."documentId"),
-  (SELECT q."tenantId" FROM "Quote" q WHERE q."id" = r."quoteId"),
-  (SELECT j."tenantId" FROM "JobCard" j WHERE j."id" = r."jobCardId"),
-  (SELECT c."tenantId" FROM "Contact" c WHERE c."id" = r."contactId"),
-  'tenant_denago_cpt'
-)
-WHERE r."tenantId" IS NULL;
+SET "tenantId" = candidate.value
+FROM (
+  SELECT r2."id",
+         COALESCE(
+           (SELECT d."tenantId" FROM "Document" d WHERE d."id" = r2."documentId"),
+           (SELECT q."tenantId" FROM "Quote" q WHERE q."id" = r2."quoteId"),
+           (SELECT j."tenantId" FROM "JobCard" j WHERE j."id" = r2."jobCardId"),
+           (SELECT c."tenantId" FROM "Contact" c WHERE c."id" = r2."contactId"),
+           'tenant_denago_cpt'
+         ) AS value
+  FROM "SignatureRequest" r2
+  WHERE r2."tenantId" IS NULL
+) AS candidate
+WHERE r."id" = candidate."id"
+  -- IS NOT DISTINCT FROM, not `=`: a NULL-tenant parent must match a NULL
+  -- candidate, and `NULL = NULL` is unknown rather than true.
+  AND (r."documentId" IS NULL
+       OR (SELECT d."tenantId" FROM "Document" d WHERE d."id" = r."documentId") IS NOT DISTINCT FROM candidate.value)
+  AND (r."quoteId" IS NULL
+       OR (SELECT q."tenantId" FROM "Quote" q WHERE q."id" = r."quoteId") IS NOT DISTINCT FROM candidate.value)
+  AND (r."jobCardId" IS NULL
+       OR (SELECT j."tenantId" FROM "JobCard" j WHERE j."id" = r."jobCardId") IS NOT DISTINCT FROM candidate.value)
+  AND (r."contactId" IS NULL
+       OR (SELECT c."tenantId" FROM "Contact" c WHERE c."id" = r."contactId") IS NOT DISTINCT FROM candidate.value)
+  AND (r."templateId" IS NULL
+       OR (SELECT t."tenantId" FROM "DocBuilderTemplate" t WHERE t."id" = r."templateId") IS NOT DISTINCT FROM candidate.value);
 
 UPDATE "SignatureRecipient" c SET "tenantId" = p."tenantId"
 FROM "SignatureRequest" p WHERE c."requestId" = p."id" AND c."tenantId" IS NULL;

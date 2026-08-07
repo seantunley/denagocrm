@@ -88,6 +88,34 @@ async function main(): Promise<void> {
       `sev_upgrade_${index}`, tenantId, requestId, index === 0 ? "created" : "sent", String(index),
     );
   }
+  // THE ROW THAT BROKE PRODUCTION, 2026-08-07.
+  //
+  // A request whose Document is UNSTAMPED but whose Contact carries a real
+  // tenant. The tenant backfill used to COALESCE straight past the NULL document
+  // to the contact's tenant and write it onto the request — violating
+  // SignatureRequest_tenantId_documentId_fkey, which requires the request to
+  // agree with its Document. The migration aborted, and because it runs inside
+  // the Vercel build command every deployment after it failed, so the schema
+  // advanced while the application did not.
+  //
+  // Seeded here because an empty database cannot produce it: it needs a request
+  // pointing at two parents that disagree with each other.
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO "Contact"(id,"tenantId","firstName","createdAt","updatedAt")
+     VALUES ('c_mixed',$1,'Stamped Person',now(),now()) ON CONFLICT (id) DO NOTHING`,
+    tenantId,
+  );
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO "Document"(id,"tenantId",name,"storedName","mimeType",size,"createdAt")
+     VALUES ('doc_mixed',NULL,'Unstamped doc','doc_mixed.pdf','application/pdf',1,now())
+     ON CONFLICT (id) DO NOTHING`,
+  );
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO "SignatureRequest"(id,"tenantId",title,status,ordering,"documentId","contactId","createdAt","updatedAt")
+     VALUES ('sr_mixed',NULL,'Mixed-tenant parents','sent','parallel','doc_mixed','c_mixed',now(),now())
+     ON CONFLICT (id) DO NOTHING`,
+  );
+
   const seeded = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
     `SELECT count(*)::bigint AS count FROM "SignatureEvent" WHERE "requestId" = $1`, requestId,
   );
@@ -120,6 +148,15 @@ async function main(): Promise<void> {
     `SELECT token FROM "SignatureRecipient" WHERE "requestId" = $1`, requestId,
   );
   check("the legacy plaintext token was converted to a digest", /^[0-9a-f]{64}$/.test(tokens[0]?.token ?? ""));
+
+  const mixed = await prisma.$queryRawUnsafe<Array<{ tenantId: string | null }>>(
+    `SELECT "tenantId" FROM "SignatureRequest" WHERE id = 'sr_mixed'`,
+  );
+  check(
+    "a request whose parents disagree is left unstamped, not failed",
+    mixed[0]?.tenantId === null,
+    `expected NULL — stamping it would violate the composite FK to its Document; got ${String(mixed[0]?.tenantId)}`,
+  );
 
   console.log("\n== runtime transitions the empty-database run never reaches");
   let completed = true;
