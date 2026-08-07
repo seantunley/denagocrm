@@ -213,6 +213,39 @@ export const brandForHost = cache(async (host: string | null | undefined): Promi
 });
 
 /**
+ * The brand for a tenant we already know — the SIGNED-IN case.
+ *
+ * The counterpart to brandForHost. Inside the app there is a session, so the
+ * tenant is already resolved and the hostname is irrelevant: a staff member who
+ * reaches the CRM on the platform's own domain must still see their own brand.
+ * Resolving by hostname there would show them the default.
+ *
+ * Same guarantees as brandForHost — never throws, falls back to DEFAULT_BRAND,
+ * validates the colour on read, reads through basePrisma so it survives the
+ * restricted role. `cache()` because the layout renders it on every navigation.
+ */
+export const brandForTenant = cache(async (tenantId: string | null | undefined): Promise<TenantBrand> => {
+  if (!tenantId) return DEFAULT_BRAND;
+  try {
+    const tenant = await basePrisma.tenant.findFirst({
+      where: { id: tenantId, active: true },
+      select: {
+        brandPrimary: true,
+        brandLogoRef: true,
+        brandDisplayName: true,
+        brandTagline: true,
+      },
+    });
+    if (!tenant) return DEFAULT_BRAND;
+    return brandFromRow({ tenantId, ...tenant });
+  } catch {
+    // The CRM shell wraps every page in the app. A brand lookup that raised here
+    // would take the whole workspace down, not one screen.
+    return DEFAULT_BRAND;
+  }
+});
+
+/**
  * The `<style>` body that applies a brand, or null when there is nothing to
  * apply.
  *
