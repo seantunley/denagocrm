@@ -370,6 +370,7 @@ DECLARE
   table_bytes BIGINT;
   approx_rows BIGINT;
   unbuilt     TEXT := '';
+  message     TEXT;
 BEGIN
   IF current_setting('app.allow_blocking_index_build', true) = 'on' THEN
     RAISE NOTICE 'Reporting statistics: blocking index builds explicitly permitted for this session.';
@@ -400,24 +401,38 @@ BEGIN
     unbuilt := unbuilt || E'\n    ' || spec.index_name || '  on "' || spec.table_name || '"';
   END LOOP;
 
-  -- Every literal below carries the E prefix: they are concatenated by the
-  -- lexer into ONE format string, and a literal without it would print its
-  -- backslash-n rather than a newline.
+  -- Assembled with `||` into ONE value, then raised with USING MESSAGE.
+  --
+  -- The previous version relied on adjacent string literals being joined into a
+  -- single format string. That happens in ordinary expressions; it does NOT
+  -- happen in RAISE's format slot, which requires one literal. So this migration
+  -- did not parse at all:
+  --
+  --     syntax error at or near
+  --     E'These indexes are missing, and this migration would build them ...'
+  --
+  -- and because scripts/apply-migrations.mjs runs in the Vercel build command
+  -- and fails closed, that would not merely break reporting — it would block
+  -- every deploy afterwards, including the one carrying the fix.
+  --
+  -- `%s` was wrong as well: PL/pgSQL's placeholder is `%`, so the list would have
+  -- been followed by a stray "s". Interpolating it directly removes the question.
   IF unbuilt <> '' THEN
-    RAISE EXCEPTION
+    message :=
       E'Reporting statistics: refusing to build indexes inline on a busy table.\n'
-      E'These indexes are missing, and this migration would build them while holding a lock '
-      E'that blocks every INSERT, UPDATE and DELETE on the table for the whole build:%s\n\n'
-      E'Build them WITHOUT blocking writes first, then redeploy:\n\n'
-      E'    psql "$DATABASE_URL_UNPOOLED" -f scripts/prebuild-statistics-indexes.sql\n\n'
-      E'That script uses CREATE INDEX CONCURRENTLY, which cannot run inside this migration '
-      E'because Prisma wraps each migration in a transaction. It is safe to re-run. Once the '
-      E'indexes exist, the CREATE INDEX IF NOT EXISTS statements below are no-ops and the '
-      E'deploy takes no lock at all.\n\n'
-      E'To accept the write pause instead - a maintenance window, a restore - run\n'
-      E'    SET app.allow_blocking_index_build = ''on'';\n'
-      E'in the same session before applying migrations.',
-      unbuilt;
+      || E'These indexes are missing, and this migration would build them while holding a lock '
+      || E'that blocks every INSERT, UPDATE and DELETE on the table for the whole build:'
+      || unbuilt || E'\n\n'
+      || E'Build them WITHOUT blocking writes first, then redeploy:\n\n'
+      || E'    psql "$DATABASE_URL_UNPOOLED" -f scripts/prebuild-statistics-indexes.sql\n\n'
+      || E'That script uses CREATE INDEX CONCURRENTLY, which cannot run inside this migration '
+      || E'because Prisma wraps each migration in a transaction. It is safe to re-run. Once the '
+      || E'indexes exist, the CREATE INDEX IF NOT EXISTS statements below are no-ops and the '
+      || E'deploy takes no lock at all.\n\n'
+      || E'To accept the write pause instead - a maintenance window, a restore - run\n'
+      || E'    SET app.allow_blocking_index_build = ''on'';\n'
+      || E'in the same session before applying migrations.';
+    RAISE EXCEPTION USING MESSAGE = message;
   END IF;
 END $$;
 
