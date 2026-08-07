@@ -418,7 +418,10 @@ const EDGE_EXEMPT_NAV_ROUTES = new Set([
  * The test prunes this list: give /leads a real guard and it will tell you to
  * remove the entry.
  */
-const PAGE_GUARD_GAPS = new Set(["/leads"]);
+// Empty, and the assertion below keeps it that way: /leads was the last entry
+// and it now calls requireAnyPermission("leads.view_all", "leads.view_owned"),
+// so listing it as a known gap would be stale documentation of a fixed bug.
+const PAGE_GUARD_GAPS = new Set<string>([]);
 
 /** A guard that resolves live RBAC. requireOwner is not one of these. */
 const RBAC_PAGE_GUARD = /\b(?:requireRoute|requirePermission|requireAnyPermission|require\w+Access)\s*\(/;

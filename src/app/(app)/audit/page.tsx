@@ -1,5 +1,8 @@
 import Link from "next/link";
 import { basePrisma } from "@/lib/db";
+import { getActiveTenantId } from "@/lib/auth";
+import { tenantEnforcing } from "@/lib/tenantEnforcement";
+import { listTenantStaff } from "@/lib/tenantActor";
 import { formatDateTime } from "@/lib/format";
 import { hasPermission, requirePermission } from "@/lib/permissions";
 import { PageHeader } from "@/components/page-header";
@@ -46,6 +49,21 @@ export default async function AuditPage({
   const from = dateParam(params.from);
   const to = dateParam(params.to, true);
 
+  // Multi-tenancy: the four reads below run on `basePrisma`, which DELIBERATELY
+  // bypasses the tenant guard, so the predicate has to be written by hand — the
+  // same reasoning spelled out at permissions.ts (documentTenantWhere) and
+  // settings/page.tsx (the System Log). This page had none, on the table that
+  // records every actor, every entity id and a free-text summary of every change.
+  //
+  // DORMANT while tenantEnforcing() is false, which is every environment today:
+  // `NOT false OR …` is always true, so these are byte-for-byte the old queries.
+  // Historic AuditEvent rows predate tenant stamping and are NULL-tenant, so
+  // filtering unconditionally would blank the page rather than scope it.
+  //
+  // This is the exact clause /api/audit/export/route.ts:64 already carries. The
+  // export was scoped and the page it exports from was not.
+  const enforcing = tenantEnforcing();
+  const activeTenantId = await getActiveTenantId();
   const [events, eventTypes, entityTypes, actors] = await Promise.all([
     basePrisma.$queryRaw<AuditEventRow[]>`
       SELECT * FROM "AuditEvent"
@@ -55,18 +73,28 @@ export default async function AuditPage({
         AND (${query}::text IS NULL OR "summary" ILIKE '%' || ${query} || '%' OR "entityId" ILIKE '%' || ${query} || '%')
         AND (${from}::timestamp IS NULL OR "createdAt" >= ${from})
         AND (${to}::timestamp IS NULL OR "createdAt" <= ${to})
+        AND (NOT ${enforcing}::boolean OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
       ORDER BY "createdAt" DESC LIMIT 500
     `,
+    // The filter dropdowns are scoped too. An unscoped DISTINCT is a smaller leak
+    // than the rows themselves and still a real one: it enumerates which event
+    // types and entity types exist across every workspace on the platform.
     basePrisma.$queryRaw<Array<{ value: string }>>`
-      SELECT DISTINCT "eventType" AS value FROM "AuditEvent" ORDER BY value
+      SELECT DISTINCT "eventType" AS value FROM "AuditEvent"
+      WHERE (NOT ${enforcing}::boolean OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
+      ORDER BY value
     `,
     basePrisma.$queryRaw<Array<{ value: string }>>`
       SELECT DISTINCT "entityType" AS value FROM "AuditEvent"
-      WHERE "entityType" IS NOT NULL ORDER BY value
+      WHERE "entityType" IS NOT NULL
+        AND (NOT ${enforcing}::boolean OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
+      ORDER BY value
     `,
-    basePrisma.$queryRaw<Array<{ id: string; name: string }>>`
-      SELECT "id", "name" FROM "User" ORDER BY "name"
-    `,
+    // The actor dropdown listed every User row on the platform, by name. `User` is
+    // a global model with no tenantId, so no predicate would have helped — the
+    // TenantMember join is the boundary, and listTenantStaff is where it lives. It
+    // also drops disabled accounts, which the raw query did not.
+    listTenantStaff(),
   ]);
 
   const exportQuery = new URLSearchParams();

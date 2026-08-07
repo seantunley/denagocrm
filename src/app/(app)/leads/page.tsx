@@ -2,8 +2,12 @@ import Link from "next/link";
 import { Prisma } from "@prisma/client";
 import { Plus, List, Trophy, Download } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { getCurrentUser } from "@/lib/auth";
-import { hasPermission } from "@/lib/permissions";
+import {
+  getAccessibleContactIds,
+  getAccessibleLeadIds,
+  hasPermission,
+  requireAnyPermission,
+} from "@/lib/permissions";
 import { getDailyForecast } from "@/lib/weather";
 import { listTenantStaff } from "@/lib/tenantActor";
 import { getTimelinePins } from "@/lib/timelinePins";
@@ -25,26 +29,54 @@ type PlannedActivityRow = {
 
 export default async function LeadsPage() {
   const now = new Date();
-  // Gate the Ads export link to the same permission the API route enforces
-  // (owner or reports.view_all), so staff without it don't see a dead link.
-  const currentUser = await getCurrentUser();
-  const [canExportAds, canChangeStage, canAssign, canManageActivities, canMarkWon, canMarkLost] =
-    currentUser
-      ? await Promise.all([
-          hasPermission(currentUser, "reports.view_all"),
-          hasPermission(currentUser, "leads.change_stage"),
-          hasPermission(currentUser, "leads.assign"),
-          hasPermission(currentUser, "activities.manage"),
-          hasPermission(currentUser, "leads.mark_won"),
-          hasPermission(currentUser, "leads.mark_lost"),
-        ])
-      : [false, false, false, false, false, false];
+  // A GUARD, not a render check. This is the leads surface, and it used to run on
+  // whatever getCurrentUser() returned: any signed-in user — a workshop tech, a
+  // finance clerk, someone whose leads permissions had been revoked — got the
+  // entire open pipeline, every value and every assignee. Its own siblings already
+  // demand these keys (/leads/list, /leads/closed, /leads/[id]) and the sidebar
+  // only offers the link to someone holding one of them.
+  //
+  // Deliberately NOT a ROUTE_RULES entry. routeAllowed fails closed on tokens
+  // minted before a rule existed (see routeAccess.ts), so adding "/leads" there
+  // would bounce every already-signed-in rep off the busiest page in the product
+  // until they signed out and back in. The page guard is the authoritative
+  // boundary; the edge table is a pre-filter in front of it.
+  const currentUser = await requireAnyPermission("leads.view_all", "leads.view_owned");
+  const [
+    accessibleLeadIds,
+    accessibleContactIds,
+    // Gate the Ads export link to the same permission the API route enforces
+    // (owner or reports.view_all), so staff without it don't see a dead link.
+    canExportAds,
+    canChangeStage,
+    canAssign,
+    canManageActivities,
+    canMarkWon,
+    canMarkLost,
+  ] = await Promise.all([
+    getAccessibleLeadIds(currentUser),
+    getAccessibleContactIds(currentUser),
+    hasPermission(currentUser, "reports.view_all"),
+    hasPermission(currentUser, "leads.change_stage"),
+    hasPermission(currentUser, "leads.assign"),
+    hasPermission(currentUser, "activities.manage"),
+    hasPermission(currentUser, "leads.mark_won"),
+    hasPermission(currentUser, "leads.mark_lost"),
+  ]);
   const [stages, products, contacts, users, automationRulesByStage] = await Promise.all([
     prisma.pipelineStage.findMany({
       orderBy: { order: "asc" },
       include: {
         leads: {
-          where: { status: "open", deletedAt: null },
+          // `null` from getAccessibleLeadIds means unrestricted (owner or
+          // leads.view_all) — spread nothing. An empty array means "no accessible
+          // leads" and MUST become `in: []`, an impossible match, not an absent
+          // filter. Same shape as /leads/list and /leads/closed.
+          where: {
+            status: "open",
+            deletedAt: null,
+            ...(accessibleLeadIds ? { id: { in: accessibleLeadIds } } : {}),
+          },
           orderBy: { createdAt: "desc" },
           include: {
             product: true,
@@ -60,7 +92,14 @@ export default async function LeadsPage() {
       include: { colors: true },
       orderBy: { name: "asc" },
     }),
-    prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
+    // Customer picker for the "New lead" dialog. Scoped too: unscoped it handed
+    // 500 customer records to anyone who opened the board, including reps whose
+    // contact grant is view_owned.
+    prisma.contact.findMany({
+      where: accessibleContactIds ? { id: { in: accessibleContactIds } } : {},
+      orderBy: { firstName: "asc" },
+      take: 500,
+    }),
     listTenantStaff(),
     stageJourneyNames(),
   ]);

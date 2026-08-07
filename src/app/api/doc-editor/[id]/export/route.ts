@@ -6,6 +6,7 @@ import {
   parseBuilderRecord,
   recordMatchesTemplate,
 } from "@/lib/docbuilder/recordBinding";
+import { RECORD_UNAVAILABLE, canAccessBuilderRecord } from "@/lib/docbuilder/recordAccess";
 import {
   generateDocEditorExport,
   type ExportFormat,
@@ -47,6 +48,13 @@ export async function GET(
     return new Response("Record type does not match this template", {
       status: 400,
     });
+  }
+  // Same missing check as the PDF sibling, and this one hands the quote over as
+  // html / email / doc — copy-pasteable text rather than a rendered page. Placed
+  // ABOVE the `format=json` branch even though that branch ignores the binding, so
+  // the record check cannot be skipped by choosing a format.
+  if (record && !(await canAccessBuilderRecord(user, record))) {
+    return new Response(RECORD_UNAVAILABLE, { status: 404 });
   }
 
   const requested = url.searchParams.get("format");
