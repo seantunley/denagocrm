@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en-ZA">
+<head>
+<meta charset="utf-8">
+<title>REPLACE — document title</title>
+<link rel="stylesheet" href="assets/guide.css">
+</head>
+<!--
+  ═══════════════════════════════════════════════════════════════════════════
+  HOUSE STYLE FOR PRINTED GUIDES — copy this file, replace the content.
+  ═══════════════════════════════════════════════════════════════════════════
+
+  Build:
+    node scripts/render-guide-pdf.mjs docs/<your-guide>.print.html <out>.pdf
+
+  KEEP GUIDES IN docs/, NOT IN docs/assets/. The stylesheet link is relative, so
+  a guide one directory deeper resolves it to assets/assets/ and loads NOTHING —
+  which does not error, it just prints an unstyled document. This template lived
+  in docs/assets/ for exactly one render and came out as a single unstyled page.
+
+  The stylesheet is linked, not inlined, so every guide moves together when the
+  house style changes. Keep this file next to it — a stylesheet with no worked
+  example is a stylesheet nobody can use without reverse-engineering it.
+
+  RULES THAT MATTER FOR PRINT, and are easy to lose:
+
+    * Each `<section class="step">` starts a new page. The FIRST one after the
+      contents needs `class="step first"` or you get a blank page.
+    * Tables and callouts have `break-inside: avoid`. Do not nest a long table
+      inside a callout — it cannot break, so it overflows the page instead.
+    * Headings have `break-after: avoid`, so a heading cannot end a page with its
+      content on the next. This is why sections should not open with a heading
+      immediately followed by 40 rows.
+    * `<pre>` wraps rather than scrolls. There is no horizontal overflow on
+      paper — long command lines must be broken with `\` by hand.
+    * Everything is self-contained. No webfonts, no remote images: the renderer
+      loads from file:// and a missing asset silently prints as nothing.
+-->
+<body>
+
+<!-- ══ COVER — full-bleed, no page number ═════════════════════════════════ -->
+<div class="cover">
+  <div class="eyebrow">Operations guide</div>
+  <h1>Document<br>title here</h1>
+  <div class="rule"></div>
+  <p class="standfirst">
+    One or two sentences saying what this covers and for whom. Keep it under
+    about 25 words — it is set large and long lines look untidy.
+  </p>
+  <dl class="meta">
+    <div><dt>Audience</dt><dd>Who this is for</dd></div>
+    <div><dt>Hands-on time</dt><dd>≈ 40 minutes</dd></div>
+    <div><dt>Issued</dt><dd>6 August 2026</dd></div>
+  </dl>
+</div>
+
+<!-- ══ CONTENTS — numbering is automatic, do not hand-number ══════════════ -->
+<div class="toc">
+  <h1 class="section">Contents</h1>
+  <p class="lede">
+    The one-paragraph orientation a reader needs before the list means anything.
+  </p>
+  <ol>
+    <li><span class="t">First step</span></li>
+    <li><span class="t">Second step</span> <span class="d">— optional sub-note</span></li>
+  </ol>
+
+  <h2>Anything blocking goes here, before step 1</h2>
+  <div class="callout stop">
+    <span class="title">The thing that stops the job dead</span>
+    <p>Say it once, plainly, at the front. Do not bury a blocker in step 6.</p>
+  </div>
+</div>
+
+<!-- ══ A STEP ═════════════════════════════════════════════════════════════ -->
+<section class="step first">
+  <h1 class="section"><span class="num">1</span>Step title</h1>
+  <p class="lede">One line framing what this step achieves.</p>
+
+  <p>Body copy. <strong>Bold</strong> for emphasis, <code>code</code> for literals.</p>
+
+  <h2>A sub-heading</h2>
+
+  <table>
+    <thead><tr><th style="width:30%">Column</th><th>Column</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Row label</strong></td><td>Value or explanation.</td></tr>
+    </tbody>
+  </table>
+
+<pre><code>command --flag value \
+  --continued-on-the-next-line</code></pre>
+
+  <!-- Callout variants: (default) neutral · stop red · note amber · forward blue -->
+  <div class="callout note">
+    <span class="title">Why something is the way it is</span>
+    <p>Reserve these for the reason behind a rule, not for restating the rule.</p>
+  </div>
+
+  <div class="callout forward">
+    <span class="title">A note you can forward to the customer</span>
+    <p>Written in the second person, ready to paste into an email.</p>
+  </div>
+
+  <ul class="checklist">
+    <li>A thing to tick off</li>
+    <li>Another thing</li>
+  </ul>
+
+  <p class="nb">Quieter aside, for cross-references and caveats.</p>
+</section>
+
+</body>
+</html>
