@@ -3,6 +3,7 @@ import type { ModuleId } from "@/lib/modules/registry";
 import { isArticleEnabled } from "./modules";
 import { HELP_CATEGORIES } from "./categories";
 import { gettingStartedArticles } from "./articles/getting-started";
+import { journeysArticles } from "./articles/journeys";
 import crm from "./data/crm.json";
 import sales from "./data/sales.json";
 import stock from "./data/stock.json";
@@ -15,6 +16,17 @@ import commsAutomation from "./data/comms-automation.json";
 import channels from "./data/channels.json";
 import admin from "./data/admin.json";
 
+// data/marketing.json is the original generated marketing set. Where an article
+// has since been re-authored by hand under the SAME slug, the generated one is
+// dropped here rather than edited in place — the hand-authored file is the one
+// source of truth, and a stale duplicate would silently win or lose depending on
+// import order.
+//
+// The journey/automation entries are the second wave of this: the AutomationRule
+// engine was retired and its rules converted into journeys, so the generated
+// "Automations: lead workflow rules" article documented a feature that no longer
+// exists. articles/journeys.ts replaces all three, keeping `automations-rules` as
+// the slug that explains where automation rules went.
 const REPLACED_MARKETING_SLUGS = new Set([
   "campaigns-overview",
   "campaigns-build-and-send",
@@ -23,6 +35,9 @@ const REPLACED_MARKETING_SLUGS = new Set([
   "surveys-overview",
   "surveys-build-and-configure",
   "surveys-send-and-responses",
+  "automations-rules",
+  "journeys-overview",
+  "journeys-build-and-publish",
 ]);
 const preservedLegacyMarketing = (marketing as HelpArticle[]).filter((article) => !REPLACED_MARKETING_SLUGS.has(article.slug));
 
@@ -36,6 +51,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...(documents as HelpArticle[]),
   ...preservedLegacyMarketing,
   ...(marketingGovernance as HelpArticle[]),
+  ...journeysArticles,
   ...(commsAutomation as HelpArticle[]),
   ...(channels as HelpArticle[]),
   ...(admin as HelpArticle[]),
