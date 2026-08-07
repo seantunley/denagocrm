@@ -76,7 +76,7 @@ const client = {
 };
 
 /** The acting tenant, as getActiveTenantId() would report it. */
-let activeTenant: string | null = "tenant_denago_cpt";
+const activeTenant: string | null = "tenant_denago_cpt";
 
 const stubs: Record<string, unknown> = {
   "server-only": {},
