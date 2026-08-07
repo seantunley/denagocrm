@@ -416,12 +416,40 @@ WHERE r."status" = 'completed'
   AND NOT EXISTS (SELECT 1 FROM "SignatureEvent" e WHERE e."requestId" = r."id" AND e."type" = 'completed')
 ON CONFLICT ("tenantId","idempotencyKey") DO NOTHING;
 
-INSERT INTO "SigningJob" ("id","tenantId","requestId","jobType","idempotencyKey","payload")
-SELECT 'sj_' || replace(gen_random_uuid()::text, '-', ''), r."tenantId", r."id", 'completion_email',
-       'email:' || r."id" || ':' || p."id", jsonb_build_object('recipientId', p."id")
-FROM "SignatureRequest" r JOIN "SignatureRecipient" p ON p."requestId" = r."id"
-WHERE r."status" = 'completed' AND p."email" IS NOT NULL
-  AND NOT EXISTS (SELECT 1 FROM "SignatureEvent" e WHERE e."requestId" = r."id" AND e."type" = 'completed')
-ON CONFLICT ("tenantId","idempotencyKey") DO NOTHING;
+-- DELIBERATELY NOT BACKFILLED: completion emails.
+--
+-- The obvious companion to the two backfills above is a `completion_email` job
+-- per recipient of every historic completed request with no `completed` event.
+-- It is the wrong thing for a migration to do, and checking production made
+-- that concrete rather than theoretical.
+--
+-- One request qualifies here: Quote Q-1010, completed 2026-08-04, two
+-- recipients with email addresses. Its evidence chain ends
+--   … signed (04 Aug 16:37) … downloaded (05 Aug 18:48)
+-- so the document exists and somebody has already fetched it. Deploying this
+-- would have sent two customers a contract they signed three days earlier, out
+-- of the blue, one of whom had already downloaded it.
+--
+-- `completedEmailSentAt` does not protect against that. It is added by THIS
+-- migration, so on deploy the column is created empty and no recipient is
+-- marked as already notified — the guard reads NULL for everyone and every mail
+-- goes out. The "already sent" check only starts working for completions that
+-- happen afterwards.
+--
+-- Nor is the risk specific to this database. On any workspace with real signing
+-- history, "requests with no completed event" is an unbounded set, and a schema
+-- migration is not the place to decide to contact customers.
+--
+-- What DOES still happen, and is enough:
+--   - post_completion above recovers the internal effects of a stranded
+--     completion (quote acceptance and the rest);
+--   - once those jobs finish, finalizeRequestIfDone appends the real `completed`
+--     event, so the request reaches a true final state;
+--   - the live completion path notifies normally for everything from now on;
+--   - a genuinely missed notification is one "Resend" away in the UI, which is
+--     a person's decision with the customer in front of them.
+--
+-- No fabricated `completed` events either: writing one would assert in a
+-- tamper-evident chain that a request completed at a time it did not.
 
 RESET app.bypass_rls;

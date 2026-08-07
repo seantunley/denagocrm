@@ -18,6 +18,31 @@ test("completion creates custody and durable jobs in the database transition", (
   assert.match(migration, /ON CONFLICT \("tenantId","idempotencyKey"\) DO NOTHING/);
 });
 
+test("the backfill never queues an email to a customer", () => {
+  // The trigger queues completion emails for completions that happen from now
+  // on. The BACKFILL must not, and the difference is not academic: production
+  // has one qualifying request — Quote Q-1010, completed three days before this
+  // was written, already downloaded — so deploying the backfill would have
+  // emailed two customers a contract out of the blue.
+  //
+  // `completedEmailSentAt` is no protection: this migration ADDS that column, so
+  // on deploy it is empty and every recipient reads as never-notified.
+  //
+  // A schema migration is not the place to decide to contact customers. The
+  // internal recovery (post_completion) still runs, and a genuinely missed
+  // notification is a "Resend" in the UI — a person's call.
+  // Anchored on the backfill section, not on the first INSERT — the trigger
+  // body contains an identical-looking one, and slicing from there would sweep
+  // the trigger's (correct) completion_email into the assertion.
+  const backfill = migration.slice(migration.indexOf("-- Existing completed artifacts enter custody"));
+  assert.ok(backfill.length > 0, "the backfill section must still be findable");
+  assert.doesNotMatch(backfill, /'completion_email'/);
+  assert.match(backfill, /DELIBERATELY NOT BACKFILLED: completion emails/);
+  // The internal recovery is still there — this is a narrowing, not a removal.
+  assert.match(backfill, /'post_completion'/);
+  assert.match(backfill, /'artifact_verify'/);
+});
+
 test("the signing cluster is tenant-owned even before application enforcement", () => {
   for (const table of [
     "SignatureRequest",
