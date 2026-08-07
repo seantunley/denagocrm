@@ -61,12 +61,12 @@ async function main(): Promise<void> {
   for (const name of all.slice(0, firstSigning)) applyMigration(name);
 
   console.log("\n== seeding signing data that predates the upgrade");
-  const tenantId = "t_upgrade";
+  // The tenant `tenant_foundation` already seeded. Inserting a SECOND tenant here
+  // would make the historic backfill skip (ownership is ambiguous with more than
+  // one) and the SET NOT NULL would then fail — a fixture disagreeing with
+  // production about the thing under test.
+  const tenantId = "tenant_denago_cpt";
   const requestId = "sr_upgrade";
-  await prisma.$executeRawUnsafe(
-    `INSERT INTO "Tenant"(id,name,slug,active) VALUES ($1,'Upgrade Co','upgrade-co',true) ON CONFLICT (id) DO NOTHING`,
-    tenantId,
-  );
   await prisma.$executeRawUnsafe(
     `INSERT INTO "SignatureRequest"(id,"tenantId",title,status,ordering,"createdAt","updatedAt")
      VALUES ($1,$2,'Historic contract','sent','parallel',now(),now()) ON CONFLICT (id) DO NOTHING`,
@@ -88,6 +88,41 @@ async function main(): Promise<void> {
       `sev_upgrade_${index}`, tenantId, requestId, index === 0 ? "created" : "sent", String(index),
     );
   }
+  // THE ROW THAT BROKE PRODUCTION, 2026-08-07.
+  //
+  // A request whose Document is UNSTAMPED but whose Contact carries a real
+  // tenant. The tenant backfill used to COALESCE straight past the NULL document
+  // to the contact's tenant and write it onto the request — violating
+  // SignatureRequest_tenantId_documentId_fkey, which requires the request to
+  // agree with its Document. The migration aborted, and because it runs inside
+  // the Vercel build command every deployment after it failed, so the schema
+  // advanced while the application did not.
+  //
+  // Seeded here because an empty database cannot produce it: it needs a request
+  // pointing at two parents that disagree with each other.
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO "Contact"(id,"tenantId","firstName","createdAt","updatedAt")
+     VALUES ('c_mixed',$1,'Stamped Person',now(),now()) ON CONFLICT (id) DO NOTHING`,
+    tenantId,
+  );
+  // Document.uploadedById is NOT NULL, and this scratch database has migrations
+  // but no seed, so the user has to exist first.
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO "User"(id,name,email,"passwordHash")
+     VALUES ('u_mixed','Upgrade Tester','upgrade@example.invalid','x')
+     ON CONFLICT (id) DO NOTHING`,
+  );
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO "Document"(id,"tenantId","fileName","storedName","mimeType","sizeBytes","uploadedById","createdAt")
+     VALUES ('doc_mixed',NULL,'Unstamped doc.pdf','doc_mixed.pdf','application/pdf',1,'u_mixed',now())
+     ON CONFLICT (id) DO NOTHING`,
+  );
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO "SignatureRequest"(id,"tenantId",title,status,ordering,"documentId","contactId","createdAt","updatedAt")
+     VALUES ('sr_mixed',NULL,'Mixed-tenant parents','sent','parallel','doc_mixed','c_mixed',now(),now())
+     ON CONFLICT (id) DO NOTHING`,
+  );
+
   const seeded = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
     `SELECT count(*)::bigint AS count FROM "SignatureEvent" WHERE "requestId" = $1`, requestId,
   );
@@ -120,6 +155,23 @@ async function main(): Promise<void> {
     `SELECT token FROM "SignatureRecipient" WHERE "requestId" = $1`, requestId,
   );
   check("the legacy plaintext token was converted to a digest", /^[0-9a-f]{64}$/.test(tokens[0]?.token ?? ""));
+
+  const mixed = await prisma.$queryRawUnsafe<Array<{ tenantId: string | null }>>(
+    `SELECT "tenantId" FROM "SignatureRequest" WHERE id = 'sr_mixed'`,
+  );
+  check(
+    "a request with an unstamped Document is stamped, not failed",
+    mixed[0]?.tenantId === tenantId,
+    `expected ${tenantId} — the Document must be stamped first so the composite FK agrees; got ${String(mixed[0]?.tenantId)}`,
+  );
+  const mixedDoc = await prisma.$queryRawUnsafe<Array<{ tenantId: string | null }>>(
+    `SELECT "tenantId" FROM "Document" WHERE id = 'doc_mixed'`,
+  );
+  check(
+    "…and so is the Document it points at",
+    mixedDoc[0]?.tenantId === tenantId,
+    `expected ${tenantId}, got ${String(mixedDoc[0]?.tenantId)}`,
+  );
 
   console.log("\n== runtime transitions the empty-database run never reaches");
   let completed = true;
