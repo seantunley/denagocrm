@@ -98,6 +98,10 @@ export async function confirmTotpEnrolment(
     return { error: "That code isn't right. Check your authenticator and try again." };
   }
 
+  // The session version THIS transaction produced. Passing it to the cookie
+  // means a revoke-all landing afterwards is not undone by a later read.
+  let revokedAt: number | null = null;
+
   const backupCodes = generateBackupCodes(8);
   // hashBackupCode normalises exactly as the login does. They previously
   // disagreed — enrolment stripped the hyphen, the login did not — so a code
@@ -132,7 +136,7 @@ export async function confirmTotpEnrolment(
       throw new EnrolmentSuperseded();
     }
     const updated = await tx.user.findUniqueOrThrow({ where: { id: user.id } });
-    await bumpUserSessionVersion(user.id, tx);
+    revokedAt = await bumpUserSessionVersion(user.id, tx);
     await logAuditStrict({
       action: "auth.2fa_enabled",
       summary: "Authenticator-app 2FA enabled; prior sessions revoked",
@@ -150,7 +154,7 @@ export async function confirmTotpEnrolment(
     }
     throw error;
   }
-  await createSessionCookie(updated);
+  await createSessionCookie(updated, { sessionVersion: revokedAt ?? undefined });
   revalidatePath("/settings");
   return { ok: "Two-factor authentication is on.", backupCodes };
 }
@@ -168,12 +172,15 @@ export async function disableTotp(
   } catch {}
   if (!ok) return { error: "Enter a current authenticator code to turn 2FA off." };
 
+  // The session version THIS transaction produced. Passing it to the cookie
+  // means a revoke-all landing afterwards is not undone by a later read.
+  let revokedAt: number | null = null;
   const updated = await basePrisma.$transaction(async (tx) => {
     const updated = await tx.user.update({
       where: { id: user.id },
       data: { totpSecret: null, totpPendingSecret: null, totpEnabledAt: null, totpBackupCodes: null },
     });
-    await bumpUserSessionVersion(user.id, tx);
+    revokedAt = await bumpUserSessionVersion(user.id, tx);
     await logAuditStrict({
       action: "auth.2fa_disabled",
       summary: "Authenticator-app 2FA disabled; prior sessions revoked",
@@ -183,7 +190,7 @@ export async function disableTotp(
     }, tx);
     return updated;
   }, GOVERNANCE_TX);
-  await createSessionCookie(updated);
+  await createSessionCookie(updated, { sessionVersion: revokedAt ?? undefined });
   revalidatePath("/settings");
   return { ok: "Two-factor authentication turned off." };
 }
@@ -195,12 +202,15 @@ export async function setEmailOtp(enabled: boolean): Promise<ActionResult> {
     // transaction: a failed audit must roll the change back rather than leave it
     // committed while the save reports as failed. The cookie write is not
     // database work and stays outside, after the commit.
+    // The session version THIS transaction produced. Passing it to the cookie
+    // means a revoke-all landing afterwards is not undone by a later read.
+  let revokedAt: number | null = null;
     const updated = await basePrisma.$transaction(async (tx) => {
       const updated = await tx.user.update({
         where: { id: user.id },
         data: { emailOtpEnabled: enabled },
       });
-      await bumpUserSessionVersion(user.id, tx);
+      revokedAt = await bumpUserSessionVersion(user.id, tx);
       await logAuditStrict({
         action: enabled ? "auth.email_2fa_enabled" : "auth.email_2fa_disabled",
         summary: `Email sign-in codes ${enabled ? "enabled" : "disabled"}; prior sessions revoked`,
@@ -210,7 +220,7 @@ export async function setEmailOtp(enabled: boolean): Promise<ActionResult> {
       }, tx);
       return updated;
     }, GOVERNANCE_TX);
-    await createSessionCookie(updated);
+    await createSessionCookie(updated, { sessionVersion: revokedAt ?? undefined });
     revalidatePath("/settings");
   });
 }
@@ -220,6 +230,7 @@ export async function saveSessionPolicy(formData: FormData) {
     const owner = await requireOwner();
     const minutes = parseInt(String(formData.get("idleMinutes") ?? "60"), 10);
     const safe = isNaN(minutes) || minutes < 5 ? 60 : Math.min(minutes, 1440);
+    let revokedAt: number | null = null;
     await basePrisma.$transaction(async (tx) => {
       // The setting used to be written and committed BEFORE this transaction.
       // If the revocation or the audit then failed, the new idle timeout was
@@ -227,6 +238,11 @@ export async function saveSessionPolicy(formData: FormData) {
       // existing session stayed valid under a policy nobody knew had changed.
       await putSetting("SESSION_IDLE_MINUTES", String(safe), tx);
       await tx.$executeRaw`UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1`;
+      // The owner's own new version, read inside the same transaction.
+      const rows = await tx.$queryRaw<Array<{ sessionVersion: number }>>`
+        SELECT "sessionVersion" FROM "User" WHERE "id" = ${owner.id}
+      `;
+      revokedAt = rows[0]?.sessionVersion ?? null;
       await logAuditStrict({
         action: "security.policy_changed",
         summary: `Idle-timeout policy set to ${safe} minutes; active sessions revoked`,
@@ -236,7 +252,7 @@ export async function saveSessionPolicy(formData: FormData) {
         after: { idleMinutes: safe },
       }, tx);
     }, GOVERNANCE_TX);
-    await createSessionCookie(owner);
+    await createSessionCookie(owner, { sessionVersion: revokedAt ?? undefined });
     revalidatePath("/settings");
   });
 }
