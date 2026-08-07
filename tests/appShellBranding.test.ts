@@ -52,18 +52,24 @@ test("brandForTenant has the same guarantees as brandForHost", () => {
   assert.match(body, /brandFromRow\(/, "…and revalidates the colour on read, like every other path");
 });
 
-test("the shell logo falls back to the built-in asset", () => {
+test("the shell logo falls back to the workspace NAME, not a built-in asset", () => {
+  // This asserted the reverse: that BrandLogo still HELD the Denago asset as its
+  // fallback. Previewing the chain locally is what killed that. Acme Golf Carts'
+  // login page read "Sign in to Acme Golf Carts" beneath the DENAGO CAPE TOWN EV
+  // wordmark at full size, and an unrecognised hostname did the same — every
+  // string neutralised and the most identifying element on the page untouched.
+  //
+  // A page with no logo says nothing. A page with the WRONG logo tells a
+  // tenant's staff whose system they are really on. A neutral replacement image
+  // was the obvious fix and needs artwork nobody has drawn; the NAME is already
+  // resolved at every call site, because it is what `alt` was set from.
   const shell = shipped("src/components/AppShell.tsx");
   assert.match(shell, /<BrandLogo/, "both logo sites go through the shared component");
-  assert.doesNotMatch(
-    shell,
-    /src="\/branding\/denago-cape-town-logo\.png"/,
-    "AppShell must not hardcode the asset — BrandLogo owns the fallback",
-  );
+  assert.doesNotMatch(shell, /src="\/branding\/denago/, "AppShell must not hardcode an asset");
   const component = shipped("src/components/BrandLogo.tsx");
-  assert.match(component, /\/branding\/denago-cape-town-logo\.png/, "…and BrandLogo still HAS the fallback");
-  assert.match(component, /\/branding\/denago-mark\.png/, "…including the square mark");
-  assert.match(component, /if \(logoUrl\) \{/, "the tenant logo is a conditional over the fallback");
+  assert.doesNotMatch(component, /\/branding\/denago/, "no customer's artwork may be the platform fallback");
+  assert.match(component, /return <Wordmark name=\{alt\}/, "the fallback is the workspace name");
+  assert.match(component, /if \(!logoUrl\) return null;/, "…and the decorative MARK renders nothing at all");
 });
 
 test("brand is optional on AppShell, so an unbranded render is the old render", () => {
@@ -96,10 +102,11 @@ const STILL_HARDCODED: Record<string, string> = {
   // are not a brand asset of anyone's.
   "src/lib/campaigns.ts": "phase 4 — email",
   "src/app/(print)/jobcards/[id]/print/page.tsx": "phase 5 — print",
-  // Already brand-aware via their own mechanism.
-  "src/app/login/LoginClient.tsx": "phase 1b — falls back through BrandLogo's own conditional",
-  "src/app/portal/login/PortalLoginClient.tsx": "phase 1b — same",
-  "src/components/BrandLogo.tsx": "IS the fallback",
+  // The two login pages and BrandLogo are OFF this list: their fallback is the
+  // workspace NAME set as a wordmark, so there is no customer artwork left in
+  // any of them. Removing the built-in image was not tidying — it was the one
+  // element that still showed Denago on Acme's login page and on an
+  // unrecognised hostname, under copy that had been correctly neutralised.
   // Deliberately left: a 16px lead-SOURCE glyph meaning "came in via the web
   // form", sitting in a map beside the Facebook/Instagram/WhatsApp marks. Reaching
   // it means drilling a prop three levels through a 1200-line drag-and-drop board,

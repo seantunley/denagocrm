@@ -1,6 +1,6 @@
 "use client";
+import BrandLogo from "@/components/BrandLogo";
 
-import Image from "next/image";
 import { useActionState, useState } from "react";
 import {
   ArrowRight,
@@ -57,19 +57,15 @@ export default function PortalLoginClient({ brand }: { brand: LoginBrand }) {
 
       <section className="relative z-10 flex min-h-[100dvh] flex-col border-white/[0.07] px-5 py-6 sm:px-10 sm:py-8 lg:border-l lg:bg-[#0a0d0c]/95 lg:px-14 xl:px-20">
         <header className="flex items-center justify-between gap-4">
-          {brand.logoUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={brand.logoUrl} alt={brand.displayName} className="h-8 w-auto object-contain sm:h-9" />
-          ) : (
-            <Image
-              src="/branding/denago-cape-town-logo.png"
-              alt="Denago Cape Town"
-              width={230}
-              height={58}
-              preload
-              className="h-8 w-auto object-contain sm:h-9"
-            />
-          )}
+          {/* No logo sets the workspace NAME, never the built-in asset — see
+            * BrandLogo. This page is shown to a tenant's CUSTOMERS, which makes
+            * it the worst place of all to display a different company's mark. */}
+          <BrandLogo
+            logoUrl={brand.logoUrl}
+            alt={brand.displayName}
+            className="h-8 w-auto object-contain sm:h-9"
+            wordmarkClassName="text-sm text-white sm:text-base"
+          />
           <span className="rounded-full border border-white/[0.09] bg-white/[0.035] px-3 py-1.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500 sm:text-[10px]">
             Customer portal
           </span>
@@ -261,9 +257,7 @@ function CustomerStory({ brand }: { brand: LoginBrand }) {
               {brand.logoUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={brand.logoUrl} alt="" className="h-9 w-auto object-contain" />
-              ) : (
-                <Image src="/branding/denago-mark.png" alt="" width={68} height={68} className="h-9 w-auto object-contain" />
-              )}
+              ) : null}
             </div>
           </div>
 

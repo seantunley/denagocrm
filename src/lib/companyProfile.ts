@@ -2,7 +2,7 @@ import "server-only";
 import { getSetting } from "./settings";
 import { getActiveTenantId } from "./auth";
 import { brandForTenant, brandLogoUrl } from "./tenantBrand";
-import { appBaseUrl } from "./campaigns";
+import { tenantOrigin } from "./tenantOrigin";
 import { COMPANY_DEFAULTS, COMPANY_KEYS, type CompanyProfile } from "./companyBrand";
 
 /**
@@ -59,7 +59,7 @@ export async function getCompanyProfile(): Promise<CompanyProfile> {
         tagline: tenantBrand.tagline ?? "",
         // Absolute: this URL is embedded in printed HTML and in emailed
         // signatures, neither of which has an origin to resolve a path against.
-        logoUrl: brandLogoUrl(tenantBrand) ? `${appBaseUrl()}${brandLogoUrl(tenantBrand)}` : "",
+        logoUrl: brandLogoUrl(tenantBrand) ? `${await tenantOrigin(tenantBrand.tenantId)}${brandLogoUrl(tenantBrand)}` : "",
       }
     : {};
 

@@ -15,6 +15,7 @@ import {
 } from "@/app/actions/settings";
 import { signatureCompanyFrom, buildSignature } from "@/lib/signature";
 import { getCompanyProfile } from "@/lib/companyProfile";
+import { tenantOrigin } from "@/lib/tenantOrigin";
 import { AddUserForm, ChangePasswordForm } from "@/components/TeamForms";
 import {
   saveSmtpSettings,
@@ -69,7 +70,8 @@ export default async function SettingsPage({
   // The signature PREVIEW must render what the send path renders, or the screen
   // where you check your signature is the one screen that lies about it.
   const profile = await getCompanyProfile();
-  const signatureCompany = signatureCompanyFrom(profile);
+  // The preview must render what the send path renders, glyph URLs included.
+  const signatureCompany = signatureCompanyFrom(profile, await tenantOrigin(await getActiveTenantId()));
   const enabled = await getEnabledModuleIds();
   const automotiveOn = enabled.has("automotive");
   const commerceOn = enabled.has("commerce");
