@@ -15,6 +15,7 @@ import {
   type TimelinePinKind,
 } from "@/lib/timelinePins";
 import { compareTimelineItems } from "@/lib/timelineOrdering";
+import { type FieldChange } from "@/lib/auditDetail";
 import { FOLLOW_UP_TYPE } from "@/lib/followUp";
 import PasteImageInput from "@/components/PasteImageInput";
 
@@ -66,7 +67,32 @@ type Item = {
   activityStatus?: string;
   pinnedAt?: Date | null;
   pinTarget?: PinTarget;
+  /** Field-level changes behind an audit entry, when the event recorded any. */
+  changed?: FieldChange[];
 };
+
+/** `firstName` → "First name". Field names are for developers, not for a timeline. */
+function fieldLabel(field: string): string {
+  const spaced = field.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ");
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
+}
+
+/** A stored audit value as something a person can read. */
+function auditValue(value: unknown): string {
+  // "empty" has to be visible, or a cleared field reads as though nothing was
+  // there before — which is the opposite of what the entry records.
+  if (value === null || value === undefined || value === "") return "empty";
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "string") {
+    // An ISO timestamp is stored as a string; showing the raw form is unkind.
+    const asDate = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z?$/.test(value) ? new Date(value) : null;
+    if (asDate && !Number.isNaN(asDate.getTime())) return formatDateTime(asDate);
+    return value.length > 120 ? `${value.slice(0, 117)}…` : value;
+  }
+  if (typeof value === "number") return String(value);
+  const json = JSON.stringify(value);
+  return json.length > 120 ? `${json.slice(0, 117)}…` : json;
+}
 
 function activityStatusLabel(status: string) {
   if (status === "done") return "Completed";
@@ -79,6 +105,7 @@ export default async function LeadTimeline({
   contactId,
   revalidate,
   audit,
+  auditDetail,
   communications,
   activities = [],
   creationNote,
@@ -93,6 +120,8 @@ export default async function LeadTimeline({
     userName: string;
     createdAt: Date;
   }[];
+  /** Detail per audit row id. Absent for entries with no matching event. */
+  auditDetail?: Record<string, { changed: FieldChange[] }>;
   communications: {
     id: string;
     type: string;
@@ -166,6 +195,7 @@ export default async function LeadTimeline({
       title: entry.summary,
       who: entry.userName,
       when: entry.createdAt,
+      changed: auditDetail?.[entry.id]?.changed,
     })),
     ...communications.map((communication): Item => ({
       id: `c-${communication.id}`,
@@ -302,6 +332,31 @@ export default async function LeadTimeline({
               <p className="mt-1 line-clamp-4 break-words whitespace-pre-wrap text-xs text-slate-400 [overflow-wrap:anywhere]">
                 {item.body}
               </p>
+            )}
+            {item.changed && item.changed.length > 0 && (
+              // Collapsed by default: the timeline's job is still the sequence of
+              // events, and a wall of field changes on every row would bury it.
+              // `<details>` keeps this working without client state.
+              <details className="group/detail mt-1.5">
+                <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-xs text-slate-400 transition-colors hover:text-slate-200">
+                  <span className="transition-transform group-open/detail:rotate-90">›</span>
+                  {item.changed.length === 1
+                    ? "1 field changed"
+                    : `${item.changed.length} fields changed`}
+                </summary>
+                <dl className="mt-1.5 space-y-1 border-l border-slate-700 pl-3">
+                  {item.changed.map((change) => (
+                    <div key={change.field} className="text-xs">
+                      <dt className="font-medium text-slate-400">{fieldLabel(change.field)}</dt>
+                      <dd className="flex flex-wrap items-baseline gap-1.5 text-slate-300 [overflow-wrap:anywhere]">
+                        <span className="text-slate-500 line-through">{auditValue(change.before)}</span>
+                        <span className="text-slate-600">→</span>
+                        <span>{auditValue(change.after)}</span>
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </details>
             )}
             <p className="mt-1 text-xs text-slate-500">
               <span className="font-medium text-slate-400">{item.who}</span>{" "}

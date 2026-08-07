@@ -59,6 +59,63 @@ function orderedMigrations() {
     .sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10));
 }
 
+/**
+ * Classify the migration LEDGER against the migrations that actually exist.
+ *
+ * `assertSchemaObjectsPresent` answers "does the database have the tables and
+ * columns the schema needs?" — a different question, and it was the only one
+ * being asked. Nothing looked at the bookkeeping itself, so production
+ * accumulated 15 records for migrations that no longer exist in the repository
+ * and one recorded as rolled back, entirely unnoticed until somebody went
+ * looking by hand.
+ *
+ * Neither is dangerous to THIS runner, which only ever iterates directories it
+ * can see. Both matter anyway:
+ *
+ *   - `prisma migrate deploy` refuses to run at all while a failed or
+ *     rolled-back record is present, so the fallback path is quietly unusable;
+ *   - a ledger nobody reconciles is how "recorded but never executed" hid last
+ *     time, and that one did cause an outage.
+ *
+ * Pure and exported so the classification is testable without a database.
+ */
+export function auditMigrationLedger(recorded, onDisk) {
+  const known = new Set(onDisk);
+  return {
+    phantom: recorded
+      .filter((row) => !known.has(row.migration_name))
+      .map((row) => row.migration_name),
+    unfinished: recorded
+      .filter((row) => !row.finished_at || row.rolled_back_at)
+      .map((row) => row.migration_name),
+  };
+}
+
+/** Report ledger drift. Never fails the deploy: every record here predates the check. */
+async function reportLedgerDrift(prisma) {
+  let rows;
+  try {
+    rows = await prisma.$queryRawUnsafe(
+      'SELECT "migration_name", "finished_at", "rolled_back_at" FROM "_prisma_migrations"',
+    );
+  } catch {
+    return; // brand-new database
+  }
+  const { phantom, unfinished } = auditMigrationLedger(rows, orderedMigrations());
+  if (phantom.length) {
+    console.warn(
+      `::warning::${phantom.length} migration record(s) have no migration in this repository: ` +
+        `${phantom.join(", ")}. Withdrawn or renamed migrations leave these behind.`,
+    );
+  }
+  if (unfinished.length) {
+    console.warn(
+      `::warning::${unfinished.length} migration record(s) are unfinished or rolled back: ` +
+        `${unfinished.join(", ")}. \`prisma migrate deploy\` will refuse to run while these exist.`,
+    );
+  }
+}
+
 async function appliedNames(prisma) {
   try {
     const rows = await prisma.$queryRawUnsafe(
@@ -238,8 +295,13 @@ async function main() {
     // used as a standalone drift probe against any database.
     if (CHECK_ONLY) {
       assertSchemaObjectsPresent(childEnv);
+      await reportLedgerDrift(prisma);
       return;
     }
+
+    // Reported on every run, before anything is applied, so drift surfaces in
+    // the deploy log rather than only when somebody goes looking.
+    await reportLedgerDrift(prisma);
 
     // Checked AFTER --check (a read-only drift probe is always safe) and BEFORE
     // the lock is taken, so a skipped preview never queues behind a real deploy.

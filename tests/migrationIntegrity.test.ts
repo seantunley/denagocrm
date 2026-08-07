@@ -8,6 +8,7 @@ import {
   applyOne,
   assertSchemaObjectsPresent,
   previewMayMigrate,
+  auditMigrationLedger,
 } from "../scripts/apply-migrations.mjs";
 
 // ── classifyDiffScript: the block-vs-warn rule ──────────────────────────────
@@ -161,4 +162,49 @@ test("previewMayMigrate: production and non-Vercel runs always migrate", () => {
   assert.equal(previewMayMigrate({ VERCEL_ENV: "production" }, () => {}), true);
   assert.equal(previewMayMigrate({ VERCEL_ENV: "development" }, () => {}), true);
   assert.equal(previewMayMigrate({}, () => {}), true);
+});
+
+// ── auditMigrationLedger: the bookkeeping nobody was reading ────────────────
+
+/**
+ * `assertSchemaObjectsPresent` asks whether the database has the tables and
+ * columns the schema needs. Nothing asked whether the migration LEDGER made
+ * sense, so production accumulated 15 records for migrations that no longer
+ * exist and one recorded as rolled back — unnoticed until someone looked by
+ * hand. Neither breaks this runner, which only iterates directories it can see,
+ * but `prisma migrate deploy` refuses to run at all while a rolled-back record
+ * exists, so the fallback path was quietly unusable.
+ */
+
+test("a record with no migration on disk is reported", () => {
+  const { phantom } = auditMigrationLedger(
+    [
+      { migration_name: "1_real", finished_at: new Date(), rolled_back_at: null },
+      { migration_name: "55_withdrawn", finished_at: new Date(), rolled_back_at: null },
+    ],
+    ["1_real"],
+  );
+  assert.deepEqual(phantom, ["55_withdrawn"]);
+});
+
+test("an unfinished or rolled-back record is reported", () => {
+  const { unfinished } = auditMigrationLedger(
+    [
+      { migration_name: "1_ok", finished_at: new Date(), rolled_back_at: null },
+      { migration_name: "2_died", finished_at: null, rolled_back_at: null },
+      { migration_name: "3_undone", finished_at: new Date(), rolled_back_at: new Date() },
+    ],
+    ["1_ok", "2_died", "3_undone"],
+  );
+  assert.deepEqual(unfinished, ["2_died", "3_undone"]);
+});
+
+test("a healthy ledger reports nothing", () => {
+  const result = auditMigrationLedger(
+    [{ migration_name: "1_ok", finished_at: new Date(), rolled_back_at: null }],
+    ["1_ok", "2_not_yet_applied"],
+  );
+  // A migration on disk that has NOT been applied is not drift — it is simply
+  // pending, and applying it is this runner's whole job.
+  assert.deepEqual(result, { phantom: [], unfinished: [] });
 });
