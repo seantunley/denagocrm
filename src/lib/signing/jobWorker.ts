@@ -5,7 +5,7 @@ import { readFile } from "@/lib/storage";
 import { sendEmail } from "@/lib/email";
 import { logError } from "@/lib/errorLog";
 import { runInTenantScope } from "@/lib/tenantScope";
-import { configuredSigningCertificateInfo, sealedPdfCertificateInfo } from "@/lib/pdf/seal";
+import { configuredSigningCertificateInfo, sealedPdfSignature } from "@/lib/pdf/seal";
 import { logSignEvent } from "./events";
 import { runPostCompletion } from "./postComplete";
 import { COMPLETED_EVENT, POST_COMPLETION_EVENT } from "./completionFanout";
@@ -122,6 +122,25 @@ async function releaseRequestLease(job: SigningJob, owner: string): Promise<void
        AND "tenantId" = ${job.tenantId}
        AND "recoveryLeaseOwner" = ${owner}
   `.catch(() => 0);
+}
+
+/**
+ * A job that cannot run YET — not one that failed.
+ *
+ * Treating "wait your turn" as a failure would burn the retry budget and
+ * eventually dead-letter a job that was never wrong, which is how the previous
+ * artifact-verification loop consumed twelve attempts.
+ */
+class DeferJob extends Error {}
+
+/** Where a request's evidence chain currently ends. */
+async function chainHead(requestId: string, tenantId: string): Promise<{ eventHash: string; sequence: number }> {
+  const rows = await basePrisma.$queryRaw<Array<{ eventHash: string | null; sequence: number | null }>>`
+    SELECT "eventHash", "sequence" FROM "SignatureEvent"
+    WHERE "requestId" = ${requestId} AND "tenantId" = ${tenantId}
+    ORDER BY "sequence" DESC LIMIT 1
+  `;
+  return { eventHash: rows[0]?.eventHash ?? "", sequence: Number(rows[0]?.sequence ?? 0) };
 }
 
 async function eventExists(requestId: string, tenantId: string, type: string): Promise<boolean> {
@@ -268,12 +287,33 @@ async function executeArtifactVerification(job: SigningJob): Promise<void> {
   const artifact = artifacts[0];
   if (!artifact) throw new Error("Completed request has no immutable LegalArtifact row");
 
-  const prior = await basePrisma.$queryRaw<Array<{ valid: boolean; observedSha256: string | null }>>`
-    SELECT "valid", "observedSha256" FROM "LegalArtifactValidation"
+  // FINALITY FIRST. A manifest sealed before the completion marker exists is a
+  // bundle that ends immediately before the event it was produced to evidence.
+  if (!(await appendCompletionMarkerIfDurableWorkDone(job))) {
+    throw new DeferJob("other durable work for this request has not finished");
+  }
+
+  const head = await chainHead(job.requestId, job.tenantId);
+
+  const prior = await basePrisma.$queryRaw<Array<{
+    valid: boolean; observedSha256: string | null; chainHeadHash: string | null;
+  }>>`
+    SELECT "valid", "observedSha256", "manifest" #>> '{evidence,chainHeadHash}' AS "chainHeadHash"
+    FROM "LegalArtifactValidation"
     WHERE "artifactId" = ${artifact.id} AND "tenantId" = ${artifact.tenantId}
     ORDER BY "createdAt" DESC LIMIT 1
   `;
-  if (prior[0]?.valid && prior[0].observedSha256 === artifact.sha256) return;
+  // Versioned against the EVIDENCE, not only the file. Appending the completion
+  // marker does not change a byte of the PDF, so a check on the PDF hash alone
+  // would treat the earlier, incomplete manifest as still current and never
+  // rebuild it — the bundle would stay one event short forever.
+  if (
+    prior[0]?.valid &&
+    prior[0].observedSha256 === artifact.sha256 &&
+    prior[0].chainHeadHash === head.eventHash
+  ) {
+    return;
+  }
 
   const bytes = await readFile(artifact.storageRef);
   const observedSha256 = crypto.createHash("sha256").update(bytes).digest("hex");
@@ -281,10 +321,14 @@ async function executeArtifactVerification(job: SigningJob): Promise<void> {
   // current identity as evidence about a document sealed years ago is false the
   // moment a certificate is rotated — and this record exists specifically to say
   // what sealed it.
-  const embedded = sealedPdfCertificateInfo(bytes);
-  const certificate = embedded ?? configuredSigningCertificateInfo();
+  const sealed = sealedPdfSignature(bytes);
+  const certificate = sealed?.certificate ?? configuredSigningCertificateInfo();
   const errors: string[] = [];
-  if (!embedded) errors.push("sealed PDF carries no readable signing certificate");
+  if (!sealed) errors.push("sealed PDF carries no readable signing certificate");
+  // "This file has not changed since we filed it" and "this certificate sealed
+  // these bytes" are different assertions. The stored hash only ever proved the
+  // first.
+  else if (!sealed.contentVerified) errors.push(`sealed PDF signature invalid: ${sealed.reason}`);
   if (observedSha256 !== artifact.sha256) errors.push("sealed PDF hash mismatch");
   if (artifact.sizeBytes !== null && artifact.sizeBytes !== bytes.length) errors.push("sealed PDF size mismatch");
   // STRICT mode, not merely "production".
@@ -296,8 +340,15 @@ async function executeArtifactVerification(job: SigningJob): Promise<void> {
   // final `completed` event waits for all jobs, the durable workflow never
   // reached the finished state it reports. The system spent its retries failing
   // a check its own configuration says is not required yet.
+  //
+  // `trusted` now means something: a certification path from the certificate
+  // that actually sealed this file to a root in the trust store, or an exact
+  // match with the configured identity. It was previously hard-coded false for
+  // every embedded certificate, which turned this check into the same
+  // dead-letter loop by a different route — strict mode failed every artifact,
+  // including correctly sealed ones.
   if (signingSecurityMode() === "strict" && !certificate.trusted) {
-    errors.push("PDF seal is not backed by the configured trusted certificate");
+    errors.push("PDF seal is not backed by a trusted certificate");
   }
   if (
     signingSecurityMode() === "strict" &&
@@ -393,6 +444,14 @@ async function executeArtifactVerification(job: SigningJob): Promise<void> {
       createdAt: artifact.createdAt,
     },
     certificate,
+    // What this bundle's evidence ENDS AT. Without it a validation row cannot be
+    // told apart from an earlier one taken over a shorter chain, and the
+    // regeneration check has nothing to compare against.
+    evidence: {
+      chainHeadHash: head.eventHash,
+      chainLength: head.sequence,
+      chainVerified: chainResult.ok,
+    },
     request: request[0] ?? null,
     recipients,
     fields,
@@ -438,6 +497,26 @@ async function markCompleted(job: SigningJob): Promise<void> {
   `;
 }
 
+/**
+ * Put a job back without counting the attempt against it.
+ *
+ * `claimJobs` increments `attempts` when it leases a job, which is right for
+ * work that ran. A job that deferred did not run, so the increment is given
+ * back — otherwise a request waiting on slower sibling jobs would exhaust its
+ * twelve attempts waiting and dead-letter without ever having been tried.
+ */
+async function deferJob(job: SigningJob, reason: string): Promise<void> {
+  await basePrisma.$executeRaw`
+    UPDATE "SigningJob"
+       SET "status" = 'retry',
+           "availableAt" = NOW() + INTERVAL '1 minute',
+           "attempts" = GREATEST(0, "attempts" - 1),
+           "leaseUntil" = NULL, "leaseOwner" = NULL,
+           "lastError" = ${reason.slice(0, 1000)}, "updatedAt" = NOW()
+     WHERE "id" = ${job.id} AND "tenantId" = ${job.tenantId}
+  `;
+}
+
 async function retryOrDead(job: SigningJob, error: unknown): Promise<"retry" | "dead"> {
   const message = safeMessage(error);
   const dead = job.attempts >= MAX_JOB_ATTEMPTS;
@@ -459,22 +538,46 @@ async function retryOrDead(job: SigningJob, error: unknown): Promise<"retry" | "
   return dead ? "dead" : "retry";
 }
 
-async function finalizeRequestIfDone(job: SigningJob): Promise<void> {
+/**
+ * Append the final `completed` event once the durable work is genuinely done —
+ * and do it BEFORE the evidence manifest is built.
+ *
+ * `artifact_verify` is excluded from the count on purpose. It used to be
+ * included, which produced a quiet contradiction: verification ran as one of the
+ * jobs being waited on, so the manifest it sealed always ended one event short
+ * of the chain, and the `completed` marker — the event that says the process
+ * finished — was appended afterwards and never appeared in the evidence bundle
+ * for the completion it describes.
+ *
+ * Ordering it this way costs nothing: verification is the only job that reads
+ * the chain, and nothing appends to the chain after it.
+ *
+ * Returns whether the request is now final, so verification can wait rather than
+ * seal a bundle it knows is premature.
+ */
+async function appendCompletionMarkerIfDurableWorkDone(job: SigningJob): Promise<boolean> {
+  if (await eventExists(job.requestId, job.tenantId, COMPLETED_EVENT)) return true;
+
   const rows = await basePrisma.$queryRaw<Array<{ unfinished: bigint; dead: bigint }>>`
     SELECT
       COUNT(*) FILTER (WHERE "status" <> 'completed') AS "unfinished",
       COUNT(*) FILTER (WHERE "status" = 'dead') AS "dead"
     FROM "SigningJob"
     WHERE "tenantId" = ${job.tenantId} AND "requestId" = ${job.requestId}
+      AND "jobType" <> 'artifact_verify'
   `;
-  if (Number(rows[0]?.unfinished ?? 1) !== 0 || Number(rows[0]?.dead ?? 1) !== 0) return;
-  if (!(await eventExists(job.requestId, job.tenantId, COMPLETED_EVENT))) {
-    await logSignEvent(job.requestId, {
-      type: COMPLETED_EVENT,
-      actor: "system",
-      metadata: { durableJobs: true },
-    });
-  }
+  if (Number(rows[0]?.unfinished ?? 1) !== 0 || Number(rows[0]?.dead ?? 1) !== 0) return false;
+
+  await logSignEvent(job.requestId, {
+    type: COMPLETED_EVENT,
+    actor: "system",
+    metadata: { durableJobs: true },
+  });
+  return true;
+}
+
+async function finalizeRequestIfDone(job: SigningJob): Promise<void> {
+  await appendCompletionMarkerIfDurableWorkDone(job);
 }
 
 export async function runSigningJobs(tenantId: string, limit = 20): Promise<SigningJobRun> {
@@ -501,8 +604,13 @@ export async function runSigningJobs(tenantId: string, limit = 20): Promise<Sign
         await finalizeRequestIfDone(job);
         result.completed += 1;
       } catch (error) {
-        const state = await retryOrDead(job, error);
-        result[state === "dead" ? "dead" : "retried"] += 1;
+        if (error instanceof DeferJob) {
+          await deferJob(job, error.message);
+          result.leased += 1;
+        } else {
+          const state = await retryOrDead(job, error);
+          result[state === "dead" ? "dead" : "retried"] += 1;
+        }
       } finally {
         await releaseRequestLease(job, leaseOwner);
       }

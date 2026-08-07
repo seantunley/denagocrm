@@ -43,21 +43,36 @@ test("a token is fully validated before it is ever stored", () => {
   assert.match(source, /verifyTimestampToken\(parsed\.token\.toString\("base64"\), digest\)/);
   assert.match(source, /if \(!verification\.ok\) return null;/);
 
+  const cms = read("src/lib/signing/cms.ts");
+  const path = read("src/lib/signing/x509Path.ts");
+
   // The signature is verified against the reconstructed SignedAttrs SET…
-  assert.match(verify, /createVerify\("RSA-SHA256"\)/);
-  assert.match(verify, /Type\.SET, true, children\(signedAttrs\)/);
+  assert.match(cms, /createVerify\(`RSA-\$\{digest\.toUpperCase\(\)\}`\)/);
+  assert.match(cms, /Type\.SET,\s*true,\s*children\(attrs\.node\)/);
+  // …against the signer NAMED BY SignerInfo, not whichever certificate happened
+  // to come first in the token.
+  assert.match(verify, /resolveSigner\(signerInfo, certs\)/);
+  assert.match(cms, /IssuerAndSerialNumber ::= SEQUENCE/);
   // …the signer must be authorised to attest to time…
   assert.match(verify, /not authorised for timestamping/);
-  // …and every link in the chain is a signature check, terminating at a root.
-  assert.match(verify, /checkIssued\(chain\[i \+ 1\]\) \|\| !chain\[i\]\.verify/);
-  assert.match(verify, /chain does not terminate at a trusted root/);
+
+  // …and the path is BUILT and validated, not walked in the order the token
+  // listed. Being able to sign is not being allowed to: an ordinary end-entity
+  // certificate must not serve as an intermediate just because its key can
+  // mathematically sign one.
+  assert.match(verify, /verifyCertificatePath\(\{/);
+  assert.match(path, /is not a certificate authority \(basicConstraints cA is not true\)/);
+  assert.match(path, /withholds keyCertSign/);
+  assert.match(path, /permits only \$\{authority\.pathLen\} intermediate/);
+  // The name match must SELECT a candidate, never decide one.
+  assert.match(path, /Name match SELECTS a candidate to examine; it decides nothing/);
 
   // forge cannot read these certificates ("unsupported critical extension") and
   // cannot open the token at all ("Only wrapped ContentType Data"). Verifying
   // with a library that rejects valid input would reject every genuine token —
   // the exact failure this file was rewritten to avoid.
-  assert.match(verify, /crypto\.X509Certificate/);
-  assert.doesNotMatch(verify, /forge\.pki\.verifyCertificateChain/);
+  assert.match(path, /crypto\.X509Certificate/);
+  assert.doesNotMatch(path, /forge\.pki\.verifyCertificateChain/);
 });
 
 test("the request and the parse agree on what was asked and answered", () => {

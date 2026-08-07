@@ -170,6 +170,26 @@ async function main(): Promise<void> {
   } catch { immutable = true; }
   check("evidence cannot be edited", immutable);
 
+  // A signing envelope is a retained business record: the application soft-
+  // deletes it into Trash and purgeTrash excludes it. The database says the same
+  // thing, and it must say it for the RIGHT reason — SigningJob's foreign key
+  // was RESTRICT, so the attempt failed against an internal queue table before
+  // the retention rule was ever reached, and the error named a constraint the
+  // caller has never heard of. The integration suite hit exactly that.
+  console.log("\n== the retention rule is what refuses a hard delete");
+  let refusal = "";
+  try {
+    await prisma.$executeRawUnsafe(`DELETE FROM "SignatureRequest" WHERE id = $1`, requestId);
+  } catch (error) {
+    refusal = String(error);
+  }
+  check("a request carrying evidence cannot be hard-deleted", refusal !== "");
+  check(
+    "…and the refusal names the evidence rule, not an internal queue table",
+    /append-only evidence/.test(refusal),
+    refusal.replace(/\s+/g, " ").slice(0, 200),
+  );
+
   console.log(failures === 0 ? "\nAll upgrade checks passed.\n" : `\n${failures} upgrade check(s) FAILED.\n`);
   if (failures > 0) process.exitCode = 1;
 }

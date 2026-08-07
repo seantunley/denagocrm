@@ -4,6 +4,17 @@ import { SignPdf } from "@signpdf/signpdf";
 import { P12Signer } from "@signpdf/signer-p12";
 import { plainAddPlaceholder } from "@signpdf/placeholder-plain";
 import { assertSigningRuntimeReady, signingSecurityMode } from "@/lib/signing/securityPolicy";
+import {
+  attributesCoverContent,
+  certificatesOf,
+  digestAlgorithmOf,
+  resolveSigner,
+  signedAttributesOf,
+  signedDataOf,
+  signerInfoOf,
+  verifyAttributeSignature,
+} from "@/lib/signing/cms";
+import { verifyCertificatePath } from "@/lib/signing/x509Path";
 
 /**
  * Applies a PKCS#7 digital seal to the completed PDF. Strict production mode
@@ -107,54 +118,159 @@ export async function sealPdf(
 }
 
 
+export type SealedPdfSignature = {
+  /** Whose certificate sealed the file — read from the file, never from config. */
+  certificate: SigningCertificateInfo;
+  /** The PKCS#7 signature verifies over the byte ranges the PDF itself declares. */
+  contentVerified: boolean;
+  /** Why not, when something failed. Null when everything checked out. */
+  reason: string | null;
+};
+
+/** Locate a signed PDF's ByteRange and the PKCS#7 blob sitting in its gap. */
+function sealParts(pdf: Buffer): { der: Buffer; signedBytes: Buffer; wholeFile: boolean } | null {
+  const text = pdf.toString("latin1");
+  const range = /\/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]/.exec(text);
+  if (!range) return null;
+  const [a, b, c, d] = range.slice(1, 5).map(Number);
+  if ([a, b, c, d].some((n) => !Number.isFinite(n) || n < 0) || a + b > c || c + d > pdf.length) return null;
+
+  // The signature blob must sit in the GAP the ByteRange leaves. Picking any
+  // /Contents in the file would let a decoy elsewhere be verified instead.
+  let der: Buffer | null = null;
+  const pattern = /\/Contents\s*<([0-9a-fA-F\s]*)>/g;
+  for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+    // The gap starts at the `<`, not at the `/Contents` key — the key itself is
+    // inside the FIRST covered range. Anchoring on the key skips the real
+    // signature and finds nothing, which reads identically to "unsigned file".
+    const open = match.index + match[0].indexOf("<");
+    const close = match.index + match[0].length - 1;
+    if (open < a + b - 1 || close > c) continue;
+    const hex = match[1].replace(/[^0-9a-fA-F]/g, "");
+    if (hex.length < 64) continue;
+    // The placeholder is zero-padded to a fixed width; DER ignores the tail.
+    der = Buffer.from(hex, "hex");
+    break;
+  }
+  if (!der) return null;
+
+  return {
+    der,
+    signedBytes: Buffer.concat([pdf.subarray(a, a + b), pdf.subarray(c, c + d)]),
+    // Anything outside the two ranges was added AFTER signing and is not covered
+    // by it. For a legal artifact that is a defect, not a detail.
+    wholeFile: a === 0 && c + d === pdf.length,
+  };
+}
+
 /**
- * The certificate that ACTUALLY sealed a PDF, read out of the file.
+ * The certificate that ACTUALLY sealed a PDF, and whether it really did.
  *
- * Validation recorded `configuredSigningCertificateInfo()` — the identity
- * configured right now — as evidence about a document sealed possibly years
- * earlier. After a certificate rotation that is simply false: a historic
- * contract gets validation metadata describing a certificate that never touched
- * it, in the record produced precisely to say what did.
+ * Two separate questions, and the previous version answered neither honestly.
+ * It recorded `configuredSigningCertificateInfo()` — the identity configured
+ * right now — as evidence about a document sealed possibly years earlier, which
+ * after a rotation describes a certificate that never touched the file. Then the
+ * fix for that returned `trusted: false` unconditionally, which in strict mode
+ * failed every artifact and retried it to a dead letter: a validator that
+ * refuses everything is no better than one that believes everything.
  *
- * A signed PDF embeds its PKCS#7 blob in the /Contents of the signature
- * dictionary, hex-encoded. This locates it, parses the CMS, and returns the
- * signer certificate's own details. Returns null when the file carries no
- * recognisable signature — the caller records that as an error rather than
- * silently substituting today's configuration.
+ * So metadata extraction and trust are separated. This function reads WHO
+ * sealed it and checks THAT THEY DID — the PKCS#7 signature is verified over the
+ * exact bytes the PDF's own ByteRange declares. Whether that signer is trusted
+ * is a further question, answered by `sealedPdfTrust` against a real
+ * certification path.
+ *
+ * Returns null when the file carries no recognisable signature, which the caller
+ * records as an error rather than silently substituting today's configuration.
  */
-export function sealedPdfCertificateInfo(pdf: Buffer): SigningCertificateInfo | null {
+export function sealedPdfSignature(pdf: Buffer): SealedPdfSignature | null {
+  let parts: ReturnType<typeof sealParts>;
   try {
-    const text = pdf.toString("latin1");
-    const marker = text.indexOf("/Contents <");
-    if (marker === -1) return null;
-    const start = text.indexOf("<", marker) + 1;
-    const end = text.indexOf(">", start);
-    if (start <= 0 || end <= start) return null;
-    const hex = text.slice(start, end).replace(/[^0-9a-fA-F]/g, "");
-    if (hex.length < 64) return null;
-    const der = Buffer.from(hex, "hex");
-
-    const asn1 = forge.asn1.fromDer(forge.util.createBuffer(der.toString("binary")), false);
-    const message = forge.pkcs7.messageFromAsn1(asn1) as forge.pkcs7.PkcsSignedData;
-    const cert = message.certificates?.[0];
-    if (!cert) return null;
-
-    const certDer = Buffer.from(forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes(), "binary");
-    const name = (attrs: forge.pki.CertificateField[]) =>
-      attrs.map((attr) => `${attr.shortName || attr.name}=${attr.value}`).join(", ");
-    return {
-      fingerprintSha256: crypto.createHash("sha256").update(certDer).digest("hex"),
-      subject: name(cert.subject.attributes),
-      issuer: name(cert.issuer.attributes),
-      serialNumber: cert.serialNumber,
-      validFrom: cert.validity.notBefore.toISOString(),
-      validTo: cert.validity.notAfter.toISOString(),
-      // Whether the CONFIGURED identity is trusted says nothing about the one
-      // embedded here. Establishing that needs chain validation, which does not
-      // exist yet, so this never claims trust it has not checked.
-      trusted: false,
-    };
+    parts = sealParts(pdf);
   } catch {
     return null;
   }
+  if (!parts) return null;
+
+  const signedData = signedDataOf(parts.der);
+  if (!signedData) return null;
+  const certs = certificatesOf(signedData);
+  const signerInfo = signerInfoOf(signedData);
+  if (certs.length === 0 || !signerInfo) return null;
+
+  // The signer NAMED by SignerInfo. `certificates[0]` is a guess, and a PDF may
+  // carry intermediates alongside the signer.
+  const signer = resolveSigner(signerInfo, certs);
+  if (!signer) return null;
+
+  const name = (attrs: forge.pki.CertificateField[]) =>
+    attrs.map((attr) => `${attr.shortName || attr.name}=${attr.value}`).join(", ");
+  const certificate: SigningCertificateInfo = {
+    fingerprintSha256: crypto.createHash("sha256").update(signer.der).digest("hex"),
+    subject: name(signer.parsed.subject.attributes),
+    issuer: name(signer.parsed.issuer.attributes),
+    serialNumber: signer.parsed.serialNumber,
+    validFrom: signer.parsed.validity.notBefore.toISOString(),
+    validTo: signer.parsed.validity.notAfter.toISOString(),
+    // Set below. Extraction never asserts trust it has not established.
+    trusted: false,
+  };
+
+  const digestName = digestAlgorithmOf(signerInfo);
+  const attrs = signedAttributesOf(signerInfo);
+  if (!attrs) return { certificate, contentVerified: false, reason: "the seal carries no signed attributes" };
+
+  const contentDigest = crypto.createHash(digestName).update(parts.signedBytes).digest();
+  if (!attributesCoverContent(attrs.node, contentDigest)) {
+    // THE ASSERTION THAT WAS MISSING. A stored hash proves the blob has not
+    // changed since we filed it; it says nothing about whether this certificate
+    // ever sealed these bytes.
+    return { certificate, contentVerified: false, reason: "the seal does not cover this document's bytes" };
+  }
+  if (!verifyAttributeSignature(attrs, signer.parsed, digestName)) {
+    return { certificate, contentVerified: false, reason: "the seal's signature does not verify" };
+  }
+  if (!parts.wholeFile) {
+    return { certificate, contentVerified: false, reason: "content was appended after the document was sealed" };
+  }
+
+  const trust = sealedPdfTrust(signer.der, certs.map((candidate) => candidate.der), signer.parsed.validity.notBefore);
+  return {
+    certificate: { ...certificate, trusted: trust.trusted },
+    contentVerified: true,
+    reason: trust.trusted ? null : trust.reason,
+  };
+}
+
+/**
+ * Is the signer of a sealed PDF an identity this system should believe?
+ *
+ * Two ways to qualify, and both are needed:
+ *
+ *   - a certification path to a root in the trust store, which is what makes a
+ *     purchased certificate verifiable by anyone, not just by us; or
+ *   - an exact fingerprint match with the configured signing identity, which is
+ *     how an internal CA or a self-signed production identity qualifies without
+ *     asking the operator to install roots.
+ *
+ * The fingerprint route deliberately does NOT survive a certificate rotation for
+ * a self-signed identity: after rotating, historic documents sealed with the old
+ * key stop matching and are reported untrusted. That is honest — nothing in the
+ * system can vouch for them any more — and it is why a certificate that chains
+ * to a public root is the better choice for anything that must outlive its key.
+ */
+function sealedPdfTrust(signerDer: Buffer, poolDer: Buffer[], at: Date): { trusted: boolean; reason: string | null } {
+  const path = verifyCertificatePath({ leafDer: signerDer, poolDer, at });
+  if (path.ok) return { trusted: true, reason: null };
+
+  try {
+    const configured = configuredSigningCertificateInfo();
+    const fingerprint = crypto.createHash("sha256").update(signerDer).digest("hex");
+    if (configured.trusted && configured.fingerprintSha256 === fingerprint) {
+      return { trusted: true, reason: null };
+    }
+  } catch {
+    // No configured identity to compare against; the path result stands.
+  }
+  return { trusted: false, reason: path.ok ? null : path.reason };
 }

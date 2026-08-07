@@ -366,17 +366,28 @@ test("a failed capability does not strand a recipient mid-send", () => {
   assert.match(dispatch, /status: "sending" \}, data: \{ status: "pending", sendingAt: null \}/);
 });
 
-test("validation describes the certificate that sealed the file", () => {
+test("validation describes the certificate that sealed the file, and checks that it did", () => {
   const worker = read("src/lib/signing/jobWorker.ts");
   const seal = read("src/lib/pdf/seal.ts");
   // Recording the identity configured TODAY as evidence about a document sealed
   // years ago is false the moment a certificate is rotated — and this record
   // exists specifically to say what sealed it.
-  assert.match(worker, /sealedPdfCertificateInfo\(bytes\)/);
+  assert.match(worker, /sealedPdfSignature\(bytes\)/);
   assert.match(worker, /sealed PDF carries no readable signing certificate/);
-  assert.match(seal, /export function sealedPdfCertificateInfo/);
-  // It must not claim trust it has not established: whether the CONFIGURED
-  // identity is trusted says nothing about the one embedded in this file.
-  const fn = seal.slice(seal.indexOf("export function sealedPdfCertificateInfo"));
-  assert.match(fn, /trusted: false/);
+  assert.match(seal, /export function sealedPdfSignature/);
+
+  // EXTRACTION AND TRUST ARE SEPARATE QUESTIONS, and answering the second by
+  // hard-coding `trusted: false` was not caution — in strict mode it failed
+  // every artifact, including correctly sealed ones, and retried each to a dead
+  // letter. Trust now comes from a real certification path.
+  assert.match(seal, /verifyCertificatePath\(\{ leafDer: signerDer/);
+  assert.match(worker, /PDF seal is not backed by a trusted certificate/);
+
+  // …and the seal is verified over the bytes the PDF's own ByteRange declares,
+  // which is the assertion the stored hash never made.
+  assert.match(seal, /\/\\\/ByteRange\\s\*\\\[/);
+  assert.match(seal, /the seal does not cover this document's bytes/);
+  assert.match(seal, /content was appended after the document was sealed/);
+  // Behaviour, not just shape: tests/sealedPdfSignature.test.ts seals a real PDF
+  // and attacks it.
 });

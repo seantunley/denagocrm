@@ -144,12 +144,17 @@ jobs:
         # schema they were seeded against. It applies the pre-signing migrations,
         # seeds a request with events and a legacy plaintext token, applies the
         # signing migrations onto that, and then performs the runtime transitions.
-        env:
-          DATABASE_URL: postgresql://denago:denago_test_password@localhost:5432/signing_upgrade
-          DATABASE_URL_UNPOOLED: postgresql://denago:denago_test_password@localhost:5432/signing_upgrade
+        # The scratch URL is DERIVED from the job's DATABASE_URL rather than
+        # written out again. Two more literal connection strings — even to a
+        # throwaway container — are two more things the secret scanner has to be
+        # told to ignore, and an allowlist that grows for convenience stops being
+        # a guard. Gitleaks flagged exactly that here.
         run: |
-          PGPASSWORD=denago_test_password psql -h localhost -U denago -d postgres -c 'DROP DATABASE IF EXISTS signing_upgrade'
-          PGPASSWORD=denago_test_password psql -h localhost -U denago -d postgres -c 'CREATE DATABASE signing_upgrade'
+          admin="${DATABASE_URL%/*}/postgres"
+          psql "$admin" -c 'DROP DATABASE IF EXISTS signing_upgrade'
+          psql "$admin" -c 'CREATE DATABASE signing_upgrade'
+          export DATABASE_URL="${DATABASE_URL%/*}/signing_upgrade"
+          export DATABASE_URL_UNPOOLED="$DATABASE_URL"
           npm run test:signing-upgrade
 
       - name: Run tenant-guard integration tests

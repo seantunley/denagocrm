@@ -996,7 +996,15 @@ async function main() {
     await basePrisma.campaign.deleteMany({ where: { id: campId } });
     await basePrisma.approvalStep.deleteMany({ where: { id: apId } });
     await basePrisma.signatureRecipient.deleteMany({ where: { id: { in: [recId, recIdB] } } });
-    await basePrisma.signatureRequest.deleteMany({ where: { id: { in: [srId, srIdB] } } });
+    // A SignatureRequest is DELIBERATELY not hard-deletable. Its evidence rows
+    // are append-only — the trigger refuses DELETE as well as UPDATE — so the FK
+    // cascade cannot remove them and the parent delete fails with it. That is
+    // the retention rule working, not a defect: the application soft-deletes an
+    // envelope into Trash and purgeTrash excludes signature requests entirely.
+    //
+    // These fixtures are therefore left behind in the throwaway CI database.
+    // Deleting them would mean weakening the one guarantee the evidence chain
+    // exists to provide, to tidy up a test.
     await basePrisma.surveyResponse.deleteMany({ where: { id: { in: [srespId, srespIdB] } } });
     await basePrisma.survey.deleteMany({ where: { id: { in: [survId, survIdB] } } });
     await basePrisma.communication.deleteMany({ where: { contactId: { in: [idA, idB] } } });
