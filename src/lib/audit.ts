@@ -181,7 +181,21 @@ async function auditTenantId(entry: AuditEntry): Promise<string | null> {
  * action means the change lands while the operator is told it failed and no trail
  * exists.
  */
-type AuditTx = Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0];
+/**
+ * Structural, so BOTH clients' transactions qualify.
+ *
+ * Deriving this from `basePrisma.$transaction` alone excluded the SCOPED
+ * client's transaction, whose type differs — which meant a caller doing its
+ * write through `prisma` (as the CRM actions do, to keep the tenant guard in
+ * play) could not hand its transaction to the audit at all, and was pushed back
+ * to auditing after the commit. That is the split this parameter exists to
+ * close, so the type must not be the thing that reopens it.
+ *
+ * Only what the audit write actually touches is named here.
+ */
+type BaseTx = Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0];
+type ScopedTx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+type AuditTx = BaseTx | ScopedTx;
 
 /**
  * Transaction options for a governance change that carries its audit inside the
@@ -208,7 +222,13 @@ async function writeAudit(entry: AuditEntry, tx?: AuditTx) {
   const actorName = entry.userName ?? entry.user?.name ?? "System";
   const tenantId = await auditTenantId(entry);
 
-  const write = async (transaction: AuditTx) => {
+  const write = async (candidate: AuditTx) => {
+    // Both clients' transactions expose the same `$executeRaw` and
+    // `auditLog.create`; only the generic wrappers Prisma puts around them
+    // differ, and a union of those wrappers is not callable. One narrowing here
+    // keeps the two call sites honest rather than pushing the difference back
+    // out to every caller.
+    const transaction = candidate as BaseTx;
     await transaction.$executeRaw`
       INSERT INTO "AuditEvent" (
         "id", "tenantId", "actorUserId", "actorName", "actorType", "eventType", "entityType", "entityId",

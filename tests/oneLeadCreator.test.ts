@@ -95,9 +95,21 @@ test("the creator owns everything a new lead owes the workspace", () => {
   assert.match(core, /emitLeadJourneyEvent\("lead_created", lead\.id/, "the automation trigger");
   assert.doesNotMatch(core, /runLeadAutomations/, "the retired engine must not come back");
   assert.match(core, /sendPushToAll\(/, "the push");
-  assert.match(core, /logAuditStrict\(entry\)/, "a strict audit for staff-facing paths");
-  assert.match(core, /logAudit\(entry\)/, "…and a best-effort one for webhooks");
-  assert.match(core, /position: await topPosition\(stageId\)/, "top-of-column placement");
+  // A strict audit for staff-facing paths — and now INSIDE the transaction that
+  // creates the lead. Auditing after the commit is what turned an audit failure
+  // into duplicate leads in production: the row was already there, the operator
+  // was told it had failed, and they tried again.
+  assert.match(core, /logAuditStrict\(auditFor\(created\), tx\)/, "a strict audit, atomic with the row");
+  // …and a best-effort one for webhooks, deliberately OUTSIDE the transaction:
+  // logAudit swallows its error, and swallowing one inside a transaction is
+  // worse than not catching it — PostgreSQL has already aborted, so the commit
+  // dies anyway and takes the lead with it.
+  assert.match(core, /logAudit\(auditFor\(lead\)\)/, "…and a best-effort one for webhooks");
+  // Top-of-column placement. Resolved BEFORE the transaction now, so the write
+  // does not hold its locks across an extra query — the value it produces is
+  // what matters, not where the call sits.
+  assert.match(core, /const position = await topPosition\(stageId\)/, "top-of-column placement");
+  assert.match(core, /^\s*position,$/m, "…and it reaches the row");
 });
 
 test("a webhook is not failed by its own side effects", () => {
