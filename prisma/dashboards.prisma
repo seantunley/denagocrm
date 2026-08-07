@@ -1,0 +1,54 @@
+/// Per-user home screen layout.
+///
+/// One row per user per tenant. Two people on the same team can arrange
+/// completely different dashboards, so this is keyed by `userId` and never
+/// shared — unlike SavedView, which is deliberately tenant-wide.
+///
+/// WHY A JSON BLOB RATHER THAN A ROW PER CARD.
+///
+/// The layout is only ever read whole (the page needs every card, in order) and
+/// only ever written whole (a drag reorders the entire list; there is no such
+/// thing as moving one card without renumbering its neighbours). A row-per-card
+/// table would turn each of those into a multi-row transaction plus an explicit
+/// position column to keep sorted, and a partial failure mid-reorder would leave
+/// a user's home screen in a state neither they nor the app asked for. A single
+/// JSONB value makes a reorder one atomic UPDATE and a read one row.
+///
+/// The thing rows-per-card would buy is querying ACROSS users — "who still has
+/// the pipeline card?" — and nothing needs that today. If it ever does, JSONB is
+/// queryable in Postgres, so the door is not closed.
+///
+/// `cards` holds an ORDERED array of card-id strings, e.g. ["sales-stats",
+/// "pipeline-snapshot"]. It is deliberately NOT validated against the card
+/// catalogue at the database layer: a release that removes a card would
+/// otherwise have to migrate every saved row, and the id is meaningless to
+/// Postgres anyway. Unknown ids are dropped when the layout is read — see
+/// normaliseLayout() in src/lib/dashboard/registry.ts. That is the whole
+/// degradation story for a card that no longer exists: one fewer card, never a
+/// broken home page.
+model DashboardLayout {
+  id        String   @id @default(cuid())
+  tenantId  String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
+  /// The owning user. A bare id, not a Prisma @relation, matching how every
+  /// other domain model in this schema references a user — adding a relation
+  /// field would mean editing the shared schema.prisma to add the back-reference.
+  userId    String
+  /// Ordered array of dashboard card ids. See the model doc above.
+  cards     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// One layout per user per tenant.
+  ///
+  /// CAVEAT, and the migration compensates for it: `tenantId` is nullable, and
+  /// Postgres does not consider two NULLs equal, so this constraint does NOT
+  /// stop a second row for the same user while tenancy is dormant and every
+  /// tenantId is NULL. Migration 20260804100000 adds a PARTIAL unique index over
+  /// `userId WHERE tenantId IS NULL` to close exactly that gap. Both are needed:
+  /// this one once tenantId is populated, that one until it is.
+  /// No separate @@index: this unique constraint is itself a btree index leading
+  /// with tenantId, which is the only access path — "the layout for this user in
+  /// this tenant". A second index on the same columns would be dead weight on
+  /// every write.
+  @@unique([tenantId, userId])
+}

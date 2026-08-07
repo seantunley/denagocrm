@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { withTenantWrite } from "@/lib/tenantWrite";
-import { requireOwner } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import {
   JOURNEY_TRIGGERS,
@@ -71,7 +71,7 @@ function journeyData(formData: FormData) {
 }
 
 export async function createJourney(formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("journeys.manage");
   const data = journeyData(formData);
   // Atomic: journey + its first version in ONE transaction, tenant-stamped.
   const journey = await withTenantWrite(async (tx, tenantId) => {
@@ -113,7 +113,7 @@ export async function createJourney(formData: FormData) {
 }
 
 export async function saveJourneyDraft(journeyId: string, formData: FormData) {
-  const user = await requireOwner();
+  const user = await requirePermission("journeys.manage");
   const data = journeyData(formData);
   await prisma.$transaction(async (tx) => {
     const journey = await tx.journey.findUniqueOrThrow({
@@ -164,7 +164,7 @@ export async function saveJourneyDraft(journeyId: string, formData: FormData) {
 }
 
 export async function publishJourney(journeyId: string) {
-  const user = await requireOwner();
+  const user = await requirePermission("journeys.manage");
   const journey = await prisma.journey.findUniqueOrThrow({
     where: { id: journeyId },
     include: { versions: { orderBy: { version: "desc" } } },
@@ -196,7 +196,7 @@ export async function publishJourney(journeyId: string) {
 }
 
 export async function setJourneyStatus(journeyId: string, status: "active" | "paused" | "archived") {
-  const user = await requireOwner();
+  const user = await requirePermission("journeys.manage");
   const journey = await prisma.journey.findUniqueOrThrow({ where: { id: journeyId } });
   if (status === "active" && !journey.activeVersion) throw new Error("Publish the journey before activating it");
   await prisma.journey.update({ where: { id: journeyId }, data: { status } });
@@ -209,7 +209,7 @@ export async function setJourneyStatus(journeyId: string, status: "active" | "pa
 }
 
 export async function runJourneyNow(journeyId: string) {
-  await requireOwner();
+  await requirePermission("journeys.manage");
   const scheduled = await enrollJourneyNow(journeyId);
   const events = await processJourneyEvents(100);
   const runs = await processJourneyRuns(50);
@@ -228,7 +228,7 @@ function definition(steps: Array<Record<string, unknown>>) {
 }
 
 export async function installJourneyTemplates() {
-  const user = await requireOwner();
+  const user = await requirePermission("journeys.manage");
   const templates = [
     {
       name: "New lead speed-to-contact",

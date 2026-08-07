@@ -5,9 +5,9 @@ import { JOURNEY_LIMITS } from "./journeyTypes";
  *
  * ── The decision: nested tree, path cursor — NOT compiled-flat ──────────────
  *
- * Home Assistant nests sequences as arrays and walks them with a Python call
- * stack, which it can do because a HA script runs to completion in one process.
- * Ours cannot: `processOneRun` executes at most twenty steps and then PARKS, and
+ * The obvious way to walk nested sequences is a call stack, which works when a
+ * script runs to completion inside one process. Ours does not:
+ * `processOneRun` executes at most twenty steps and then PARKS, and
  * a run can sit on a `wait` for three days before a different cron process picks
  * it up. There is no call stack to resume — the position has to be a value in
  * the database.
@@ -211,7 +211,7 @@ export function frameKeySegment(frame: JourneyFrame): string {
 }
 
 /**
- * The hierarchical trace path, after HA's `"0/sequence/1/conditions"`.
+ * The hierarchical trace path, e.g. `"triage/choose/1/sequence/0"`.
  *
  * For a FLAT journey this is exactly the step id — unchanged from before, which
  * is why every existing JourneyStepLog row and the whole activity trace keep
@@ -251,8 +251,7 @@ export function cloneCursor(cursor: JourneyCursor): JourneyCursor {
 }
 
 /**
- * The `repeat` variables the innermost loop publishes, after HA's `repeat`
- * template variable.
+ * The loop variables the innermost `repeat` publishes to its body.
  *
  * DERIVED from the cursor every step rather than stored in `run.context`, and
  * that is deliberate: `processOneRun` refreshes the context from the database
@@ -266,7 +265,8 @@ export function repeatVars(cursor: JourneyCursor): Record<string, unknown> | nul
     if (frame.kind !== "repeat") continue;
     const total = frame.items?.length ?? null;
     return {
-      // 1-based, like HA's repeat.index — the first pass is "1", not "0".
+      // 1-based: the first pass is "1", not "0". Journey authors are not
+      // programmers, and "iteration 0" reads as a bug in a message body.
       index: frame.iteration + 1,
       first: frame.iteration === 0,
       last: total == null ? false : frame.iteration === total - 1,

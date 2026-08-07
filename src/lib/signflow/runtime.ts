@@ -2,9 +2,8 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { parseGraph, type WorkflowGraph, type SignNode } from "./model";
 import { evalCondition, type WorkflowContext } from "./compile";
-import { newSignToken } from "@/lib/signing/tokens";
+import { newSignCapability } from "@/lib/signing/tokenVault";
 import { notifyRecipient } from "@/lib/signing/dispatch";
-import { notifyApprover } from "@/lib/signing/approvals";
 import { logSignEvent } from "@/lib/signing/events";
 import { completeSignatureRequest } from "@/lib/signing/complete";
 import { notifyCreatorRejected } from "@/lib/signing/notify";
@@ -127,6 +126,12 @@ async function materialise(requestId: string, node: SignNode, notify: boolean): 
     // token) is ever created for a node. Only the call that actually inserted it
     // logs + notifies, so no duplicate approver emails / tokens either.
     const label = node.label || "Approval";
+    // The DIGEST is stored, exactly as for a signing recipient. Writing the raw
+    // capability here was the last path still doing it, and the storage trigger
+    // refuses it — every new decision approval would have failed to insert. The
+    // ciphertext travels with it so the emailed link can be rebuilt without ever
+    // recovering a secret from the lookup column.
+    const capability = newSignCapability();
     const created = await prisma.approvalStep.createMany({
       data: [{
         requestId, nodeId: node.id, label, mode: "decision",
@@ -135,7 +140,8 @@ async function materialise(requestId: string, node: SignNode, notify: boolean): 
         assigneeRole: node.who.role ?? null,
         assigneeName: node.who.name ?? null,
         assigneeEmail: node.who.email ?? null,
-        token: newSignToken(),
+        token: capability.digest,
+        tokenCiphertext: capability.ciphertext,
       }],
       skipDuplicates: true,
     });
@@ -143,7 +149,15 @@ async function materialise(requestId: string, node: SignNode, notify: boolean): 
     const step = await prisma.approvalStep.findFirst({ where: { requestId, nodeId: node.id } });
     if (!step) return;
     await logSignEvent(requestId, { type: "approval_requested", actor: "system", metadata: { label, stepId: step.id } });
-    await notifyApprover(step.id);
+    // NOT SENT HERE. Creating the step transactionally enqueues the durable
+    // notification job, and the worker owns delivery.
+    //
+    // Sending inline as well made two senders for one message, and no amount of
+    // checking fixes that: a claim taken by one leaves the other reporting
+    // "skipped", which the worker records as a completed job — so if the inline
+    // send then failed, nothing remained to retry and the approval was silently
+    // never delivered. One owner, with retries, is the only shape where a
+    // failure is recoverable.
   }
 }
 

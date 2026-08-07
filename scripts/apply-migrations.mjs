@@ -59,6 +59,63 @@ function orderedMigrations() {
     .sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10));
 }
 
+/**
+ * Classify the migration LEDGER against the migrations that actually exist.
+ *
+ * `assertSchemaObjectsPresent` answers "does the database have the tables and
+ * columns the schema needs?" — a different question, and it was the only one
+ * being asked. Nothing looked at the bookkeeping itself, so production
+ * accumulated 15 records for migrations that no longer exist in the repository
+ * and one recorded as rolled back, entirely unnoticed until somebody went
+ * looking by hand.
+ *
+ * Neither is dangerous to THIS runner, which only ever iterates directories it
+ * can see. Both matter anyway:
+ *
+ *   - `prisma migrate deploy` refuses to run at all while a failed or
+ *     rolled-back record is present, so the fallback path is quietly unusable;
+ *   - a ledger nobody reconciles is how "recorded but never executed" hid last
+ *     time, and that one did cause an outage.
+ *
+ * Pure and exported so the classification is testable without a database.
+ */
+export function auditMigrationLedger(recorded, onDisk) {
+  const known = new Set(onDisk);
+  return {
+    phantom: recorded
+      .filter((row) => !known.has(row.migration_name))
+      .map((row) => row.migration_name),
+    unfinished: recorded
+      .filter((row) => !row.finished_at || row.rolled_back_at)
+      .map((row) => row.migration_name),
+  };
+}
+
+/** Report ledger drift. Never fails the deploy: every record here predates the check. */
+async function reportLedgerDrift(prisma) {
+  let rows;
+  try {
+    rows = await prisma.$queryRawUnsafe(
+      'SELECT "migration_name", "finished_at", "rolled_back_at" FROM "_prisma_migrations"',
+    );
+  } catch {
+    return; // brand-new database
+  }
+  const { phantom, unfinished } = auditMigrationLedger(rows, orderedMigrations());
+  if (phantom.length) {
+    console.warn(
+      `::warning::${phantom.length} migration record(s) have no migration in this repository: ` +
+        `${phantom.join(", ")}. Withdrawn or renamed migrations leave these behind.`,
+    );
+  }
+  if (unfinished.length) {
+    console.warn(
+      `::warning::${unfinished.length} migration record(s) are unfinished or rolled back: ` +
+        `${unfinished.join(", ")}. \`prisma migrate deploy\` will refuse to run while these exist.`,
+    );
+  }
+}
+
 async function appliedNames(prisma) {
   try {
     const rows = await prisma.$queryRawUnsafe(
@@ -109,6 +166,44 @@ export function buildChildEnv(env) {
   return directUrl
     ? { ...env, DATABASE_URL: directUrl, DATABASE_URL_UNPOOLED: directUrl }
     : { ...env };
+}
+
+/**
+ * REFUSE TO MIGRATE AS A ROLE THAT CANNOT CREATE TABLES.
+ *
+ * buildChildEnv falls back to DATABASE_URL when DATABASE_URL_UNPOOLED is unset.
+ * That fallback is right today, and it becomes a trap the moment DATABASE_URL is
+ * repointed at the restricted application role (prisma/rls/app-role.sql), which
+ * deliberately has no DDL: the runner would try to migrate as a role that cannot
+ * CREATE TABLE, and every deploy would fail somewhere in the middle of a
+ * migration rather than before touching anything.
+ *
+ * `prisma db execute` runs a migration.sql as ONE script — a failure part-way
+ * through leaves the statements before it applied and the migration unrecorded.
+ * Idempotent migrations survive that, but it is not a state to walk into on
+ * purpose when a single privilege check upfront says "stop".
+ *
+ * Pure and exported: the message is the whole value of this check, so it is
+ * asserted in tests rather than left to be discovered during an outage.
+ *
+ * @param {{ role: string, canCreate: boolean, unpooledConfigured: boolean }} facts
+ * @returns {string | null} the refusal message, or null when the role is fine
+ */
+export function migrationRoleProblem({ role, canCreate, unpooledConfigured }) {
+  if (canCreate) return null;
+  return (
+    `\n✖ MIGRATIONS REFUSED — the role "${role}" cannot create objects in schema public.\n\n` +
+    `  Migrations need DDL. The restricted application role does not have it, by design:\n` +
+    `  it is the role that does NOT bypass Row Level Security, and giving it DDL would\n` +
+    `  let it drop the policies that isolate tenants.\n\n` +
+    (unpooledConfigured
+      ? `  DATABASE_URL_UNPOOLED is set but resolves to "${role}". Point it at the OWNER\n` +
+        `  role (neondb_owner), not the application role.\n`
+      : `  DATABASE_URL_UNPOOLED is NOT set, so this runner fell back to DATABASE_URL —\n` +
+        `  which is now the application role. Set DATABASE_URL_UNPOOLED to the OWNER\n` +
+        `  role's direct connection string.\n`) +
+    `\n  See docs/RLS-ROLE-CUTOVER.md. Nothing has been applied.\n`
+  );
 }
 
 /** Default schema-diff probe: `prisma migrate diff` (DB → deployed schema). */
@@ -238,12 +333,32 @@ async function main() {
     // used as a standalone drift probe against any database.
     if (CHECK_ONLY) {
       assertSchemaObjectsPresent(childEnv);
+      await reportLedgerDrift(prisma);
       return;
     }
+
+    // Reported on every run, before anything is applied, so drift surfaces in
+    // the deploy log rather than only when somebody goes looking.
+    await reportLedgerDrift(prisma);
 
     // Checked AFTER --check (a read-only drift probe is always safe) and BEFORE
     // the lock is taken, so a skipped preview never queues behind a real deploy.
     if (!previewMayMigrate()) return;
+
+    // Checked BEFORE the lock and before any DDL: if the runner has been pointed
+    // at the restricted application role it must stop here, not half way through
+    // a migration script. One round trip.
+    {
+      const [privs] = await prisma.$queryRawUnsafe(
+        `SELECT current_user AS role, has_schema_privilege(current_user, 'public', 'CREATE') AS can_create`,
+      );
+      const problem = migrationRoleProblem({
+        role: String(privs?.role ?? "unknown"),
+        canCreate: privs?.can_create === true,
+        unpooledConfigured: Boolean(process.env.DATABASE_URL_UNPOOLED),
+      });
+      if (problem) throw new Error(problem);
+    }
 
     if (!DRY_RUN) {
       // Blocks until any other in-flight migration run releases the lock.

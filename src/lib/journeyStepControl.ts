@@ -43,7 +43,7 @@ export function resolveTopLevelNext(
 /**
  * A `condition` step.
  *
- * `inSequence` changes what failing MEANS, following Home Assistant exactly:
+ * `inSequence` changes what failing MEANS:
  *
  *  - top level: a two-way branch. trueStepId / falseStepId / nextStepId, as it
  *    has always been, so existing journeys are untouched.
@@ -99,8 +99,9 @@ export function stopStepOutcome(step: JourneyStep): never {
   const reason = typeof step.config.reason === "string" && step.config.reason.trim()
     ? step.config.reason.trim()
     : "Journey stopped";
-  // HA's `stop` takes `error: true` to end the script as a failure. Ours marks
-  // the run failed WITHOUT retrying — an author-declared stop is deterministic,
+  // `error: true` on a stop step ends the run as a FAILURE rather than a normal
+  // finish. It marks the run failed WITHOUT retrying — a declared stop is
+  // deterministic,
   // so three attempts would fail three times.
   if (step.config.error === true) throw new AbortJourney(reason);
   throw new StopJourney(reason);
