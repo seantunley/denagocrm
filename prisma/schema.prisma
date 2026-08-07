@@ -2434,14 +2434,70 @@ model Tenant {
   /// Effective = granted MINUS locally disabled. Empty string = core only, which
   /// is the fail-closed default for a newly created tenant.
   modules     String   @default("")
+
+  /// BRANDING. Every field nullable, and null on ALL of them means "no brand
+  /// set", which renders byte-for-byte what the app rendered before branding
+  /// existed. Nothing changes for an existing tenant until a platform admin
+  /// fills these in — see lib/tenantBrand.ts, which treats a missing brand and a
+  /// blank brand identically.
+  ///
+  /// `brandPrimary` is a plain `#rrggbb` string and is INTERPOLATED INTO A
+  /// STYLESHEET, so it is untrusted input at both ends: validated on write, and
+  /// validated AGAIN on read, so a value that somehow reached the column cannot
+  /// reach the page. The readable text colour is NOT stored — it is computed
+  /// from this one's luminance, so a tenant cannot pick white-on-yellow.
+  brandPrimary     String?
+  /// Blob pathname (not a URL) written through putManagedBlob, resolved at render
+  /// time. Storing the path rather than the URL keeps private-mode blobs working.
+  brandLogoRef     String?
+  /// Replaces the literal "Denago Cape Town" in shells, login pages and documents.
+  brandDisplayName String?
+  /// Replaces "Authorized Denago EV Dealer" and the login page's tagline copy.
+  brandTagline     String?
+
   createdAt   DateTime @default(now())
 
   members  TenantMember[]
   sessions UserSession[]
+  domains  TenantDomain[]
   owner    User?          @relation("TenantOwner", fields: [ownerUserId], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
   @@index([active])
   @@index([ownerUserId])
+}
+
+/// A hostname that serves one tenant's white-labelled app.
+///
+/// SEPARATE TABLE, not a column on Tenant, because a white-label tenant has
+/// SEVERAL hostnames — the platform-issued one, their own custom domain, and
+/// usually apex plus www — each with its own verification state. A single
+/// `Tenant.domain` column cannot express that, and retrofitting it later means a
+/// migration on live routing.
+///
+/// THIS IS THE PRE-AUTH TENANT SIGNAL. The login pages have no session, no
+/// contact and no token, so the hostname is the only thing that identifies a
+/// tenant before anyone signs in. That makes this table an AUTHORIZATION-shaped
+/// record even though it only decides branding today: whoever owns the row owns
+/// what is rendered at that address.
+///
+/// `verifiedAt` is therefore load-bearing and lookups MUST require it. Without
+/// it a tenant could claim a hostname they do not control and have the platform
+/// serve their brand on it. `hostname` is globally unique for the same reason —
+/// one address, one tenant, enforced by the database rather than by a check.
+model TenantDomain {
+  id         String    @id @default(cuid())
+  tenantId   String
+  /// Lower-cased, port- and protocol-free. Normalised by normaliseHost() before
+  /// both write and lookup so "ACME.co.za:443" and "acme.co.za" cannot become two
+  /// rows pointing at different tenants.
+  hostname   String    @unique
+  /// Null until the domain is proven. A null here must never resolve.
+  verifiedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
 }
 
 model TenantMember {
