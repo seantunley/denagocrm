@@ -4,6 +4,7 @@ import { updateContact } from "@/app/actions/contacts";
 import { requireContactAccess } from "@/lib/permissions";
 import { listTenantStaff } from "@/lib/tenantActor";
 import ContactForm from "@/components/ContactForm";
+import { fleetPicker } from "@/lib/fleetDirectory";
 import { contactName } from "@/lib/format";
 
 export default async function EditContactPage({
@@ -23,7 +24,7 @@ export default async function EditContactPage({
   // actions/contacts.ts:104 — so this was an offered form that refused on submit,
   // after showing the record. Same key, same helper, one segment earlier.
   await requireContactAccess(id, "contacts.edit");
-  const [contact, users] = await Promise.all([
+  const [contact, users, picker] = await Promise.all([
     prisma.contact.findUnique({
       where: { id },
       include: { tags: true },
@@ -31,6 +32,7 @@ export default async function EditContactPage({
     // The owner picker: staff of THIS tenant, not every User row. `User` is a
     // global model, so prisma.user.findMany is not tenant-scoped by anything.
     listTenantStaff(),
+    fleetPicker(),
   ]);
   if (!contact) notFound();
 
@@ -42,6 +44,7 @@ export default async function EditContactPage({
         defaults={{ ...contact, tags: contact.tags.map((t) => t.name).join(", ") }}
         submitLabel="Save changes"
         users={users.map((u) => ({ id: u.id, name: u.name }))}
+        fleetPicker={picker}
       />
     </div>
   );

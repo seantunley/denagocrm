@@ -1,43 +1,43 @@
 import "server-only";
 import { basePrisma } from "./db";
+import { hashSignToken } from "./signing/tokenVault";
 
 /**
- * Trusted PRE-SCOPE tenant resolvers for the no-user token surfaces (public
- * signing + approval pages/routes, campaign open/click tracking, unsubscribe).
+ * Trusted PRE-SCOPE tenant resolvers for no-user token surfaces.
  *
- * Each does a DELIBERATELY NARROW `basePrisma` lookup — the owning `tenantId` only,
- * keyed by the public token — so the request's tenant can be established BEFORE any
- * guarded read. This mirrors `resolvePortalTenant` in portal.ts: `basePrisma` (the
- * unguarded client) is correct and REQUIRED here, because the tenant guard has no
- * scope yet and this is the single trusted boundary the public surface crosses
- * before its scope exists. A guarded read at this point would dead-lock (no scope →
- * `TenantScopeError`). Returns null for an unknown token so the caller fails closed.
+ * These run BEFORE a tenant scope exists — they are what decides which tenant
+ * the request belongs to — so they use basePrisma deliberately.
  *
- * These are the ONE resolver per token type shared by the page and its mutation
- * route, so the read surface and the write surface can never drift onto different
- * tenant-derivation logic.
+ * Signing and approval capabilities are stored as SHA-256 digests, so the raw
+ * value out of the URL is hashed before it is queried. The raw token is never
+ * compared against anything at rest, and no query here can match on a readable
+ * secret. Campaign and survey tokens keep their existing model-specific
+ * resolvers: those are tracking identifiers, not credentials that authorise
+ * signing someone's contract.
  */
 
-/** Owning tenant of a per-recipient signing token (from the parent request). */
 export async function resolveSignRecipientTenant(
   token: string,
 ): Promise<{ tenantId: string | null } | null> {
   const row = await basePrisma.signatureRecipient.findUnique({
-    where: { token },
-    select: { request: { select: { tenantId: true } } },
+    where: { token: hashSignToken(token) },
+    select: { tenantId: true, tokenRevokedAt: true },
   });
-  return row ? { tenantId: row.request.tenantId } : null;
+  if (!row || row.tokenRevokedAt) return null;
+  return { tenantId: row.tenantId };
 }
 
-/** Owning tenant of an approval-step token. */
 export async function resolveApprovalStepTenant(
   token: string,
 ): Promise<{ tenantId: string | null } | null> {
   const row = await basePrisma.approvalStep.findUnique({
-    where: { token },
-    select: { tenantId: true },
+    where: { token: hashSignToken(token) },
+    select: { tenantId: true, tokenRevokedAt: true },
   });
-  return row ? { tenantId: row.tenantId } : null;
+  // A revoked capability resolves to nothing, so the guarded work never runs and
+  // the page fails closed before it can load a document.
+  if (!row || row.tokenRevokedAt) return null;
+  return { tenantId: row.tenantId };
 }
 
 /** Owning tenant of a campaign tracking/unsubscribe token. */

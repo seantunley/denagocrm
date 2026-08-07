@@ -1,5 +1,5 @@
 import { requireTenantOwner, getActiveTenantId } from "@/lib/auth";
-import { hasTenantCredentialOverride, isSecretSettingKey } from "@/lib/settings";
+import { hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
 import {
   saveTenantCredentialOverride,
   clearTenantCredentialOverride,
@@ -13,6 +13,9 @@ import { SettingsWorkspace, SettingsIntegrationRow } from "@/components/settings
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
+import { hasIntegrationFlow, getIntegrationFlow, flowFieldKeys } from "@/lib/integrationFlow";
+import { getIntegrationConnections, type IntegrationConnectionState } from "@/lib/integrationConnection";
+import { IntegrationConfigFlow } from "@/components/integration-config-flow";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +46,36 @@ export default async function IntegrationOverridesPage() {
   const hasOverride: Record<string, boolean> = Object.fromEntries(
     allKeys.map((key, index) => [key, overrideFlags[index] ?? false])
   );
+
+  // Verification state — whether these credentials were last seen actually
+  // working, as opposed to merely being present. Empty map when nothing has ever
+  // been through the guided flow.
+  const connections = tenantId ? await getIntegrationConnections(tenantId) : new Map<string, IntegrationConnectionState>();
+
+  // Non-secret values to prefill a reconnect with, so an owner fixing an expired
+  // token doesn't retype their hostname, port and username as well.
+  //
+  // SECRETS ARE FILTERED OUT HERE, and this is the only place stored credential
+  // values are read on this page. isSecretSettingKey is the same predicate that
+  // decides what gets encrypted at rest, so a password or access token can never
+  // reach the client component — a reconnect always requires retyping the secret
+  // itself. Guarded by tests/integrationConfigFlow.test.ts.
+  const prefills: Record<string, Record<string, string>> = {};
+  if (tenantId) {
+    for (const integration of TENANT_CREDENTIAL_INTEGRATIONS) {
+      const flow = getIntegrationFlow(integration.id);
+      if (!flow) continue;
+      const bundle = await resolveIntegrationBundle(tenantId, integration.id);
+      if (!bundle) continue;
+      const safe: Record<string, string> = {};
+      for (const key of flowFieldKeys(flow)) {
+        if (isSecretSettingKey(key)) continue;
+        const value = bundle[key];
+        if (value) safe[key] = value;
+      }
+      prefills[integration.id] = safe;
+    }
+  }
 
   return (
     <SettingsWorkspace
@@ -81,13 +114,25 @@ export default async function IntegrationOverridesPage() {
         <section className="card p-0 divide-y divide-border/50">
           {TENANT_CREDENTIAL_INTEGRATIONS.map((integration) => {
             const status = integrationOverrideStatus(integration, hasOverride);
+            const connection = connections.get(integration.id) ?? null;
+            const needsReauth = connection?.status === "reauth_required";
+            const guided = hasIntegrationFlow(integration.id);
             return (
               <SettingsIntegrationRow
                 key={integration.id}
                 title={integration.label}
+                action={needsReauth ? "Reconnect" : guided ? "Set up" : "Configure"}
                 status={
-                  status === "active" ? (
-                    <span className="badge bg-emerald-500/15 text-emerald-300">Active</span>
+                  // Verification beats presence: an integration whose token has
+                  // expired is "active" by the old field-presence rule but is in
+                  // fact broken, and saying "Active" there is exactly the silent
+                  // failure this feature exists to end.
+                  needsReauth ? (
+                    <span className="badge bg-red-500/15 text-red-400">Reconnect needed</span>
+                  ) : connection?.lastVerifiedAt ? (
+                    <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                  ) : status === "active" ? (
+                    <span className="badge bg-amber-500/15 text-amber-300">Saved, not verified</span>
                   ) : status === "incomplete" ? (
                     <span className="badge bg-amber-500/15 text-amber-300">Incomplete</span>
                   ) : usesPlatformFallback ? (
@@ -98,6 +143,58 @@ export default async function IntegrationOverridesPage() {
                 }
               >
                 <p className="text-xs text-muted-foreground mb-4">{integration.description}</p>
+
+                {connection && (
+                  <div
+                    className={`mb-4 rounded-md border p-3 text-xs ${
+                      needsReauth
+                        ? "border-red-500/30 bg-red-500/10 text-red-300"
+                        : "border-border bg-background/40 text-muted-foreground"
+                    }`}
+                  >
+                    {needsReauth ? (
+                      <>
+                        <p className="font-medium">This integration has stopped working.</p>
+                        {connection.lastErrorText && <p className="mt-1">{connection.lastErrorText}</p>}
+                        <p className="mt-1">
+                          Messages are failing until it is reconnected. The setup below opens at the step that needs
+                          fixing.
+                        </p>
+                      </>
+                    ) : (
+                      <p>
+                        Last verified{" "}
+                        {connection.lastVerifiedAt
+                          ? connection.lastVerifiedAt.toISOString().slice(0, 16).replace("T", " ") + " UTC"
+                          : "never"}
+                        .
+                        {connection.lastErrorText && ` Most recent problem: ${connection.lastErrorText}`}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {guided && (
+                  <div className="mb-6">
+                    <IntegrationConfigFlow
+                      integrationId={integration.id}
+                      startAtStep={needsReauth ? connection?.blameStep : null}
+                      prefill={prefills[integration.id] ?? {}}
+                    />
+                  </div>
+                )}
+
+                {guided && (
+                  <details className="mb-3">
+                    <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+                      Set a single field directly, without the guided test
+                    </summary>
+                    <p className="mt-2 text-xs text-amber-300/80">
+                      Saving a field here skips the connection test, so it will not be verified.
+                    </p>
+                  </details>
+                )}
+
                 <div className="space-y-3">
                   {integration.fields.map((field) => {
                     const isSet = hasOverride[field.key];
