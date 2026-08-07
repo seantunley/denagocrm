@@ -12,6 +12,7 @@ import { resolveTenantActor } from "@/lib/tenantActor";
 import { bindCtx, logoDataUri } from "./render";
 import { logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
+import { requestTrustedTimestamp } from "./timestamp";
 import { runPostCompletion } from "./postComplete";
 import { signedPdfIsSafeToDelete } from "./blobReferences";
 import {
@@ -35,7 +36,31 @@ async function sigImg(ref: string | null): Promise<string | null> {
   try { const buf = await readFile(ref); return `data:image/png;base64,${buf.toString("base64")}`; } catch { return null; }
 }
 
-type RecipientRow = { name: string; role: string; signedAt: Date | null; signerIp: string | null; img: string | null };
+type RecipientRow = {
+  name: string; role: string; signedAt: Date | null; signerIp: string | null; img: string | null;
+  /** How this signer was proved to be the intended recipient, if at all. */
+  identityMethod: string | null; identityVerifiedAt: Date | null;
+};
+
+/**
+ * What the certificate is allowed to claim about a signer's identity.
+ *
+ * Stated plainly and WITHOUT overclaiming, because this is the paragraph that
+ * gets read in a dispute. "Link" is the honest description of possession-only
+ * signing — it is not nothing, but it is not proof of who held the link, and
+ * dressing it up as verification would be worse than saying so.
+ */
+function identityStatement(row: RecipientRow): string {
+  if (row.identityMethod === "email_otp") {
+    return `Identity verified by one-time code sent to the email address on file${
+      row.identityVerifiedAt ? ` at ${formatDateTime(row.identityVerifiedAt)}` : ""}`;
+  }
+  if (row.identityMethod === "sms_otp") {
+    return `Identity verified by one-time code sent to the mobile number on file${
+      row.identityVerifiedAt ? ` at ${formatDateTime(row.identityVerifiedAt)}` : ""}`;
+  }
+  return "Opened using the unique signing link sent to this recipient (no additional identity check was required for this document)";
+}
 
 function certificateHtml(title: string, requestId: string, rows: RecipientRow[]): string {
   const signers = rows.map((r) => `
@@ -43,6 +68,7 @@ function certificateHtml(title: string, requestId: string, rows: RecipientRow[])
       <div style="display:flex;justify-content:space-between"><strong>${esc(r.name)}</strong><span style="color:#64748b;font-size:9pt">${esc(r.role)}</span></div>
       ${r.img ? `<img src="${r.img}" style="height:56px;margin:8px 0"/>` : `<div style="color:#94a3b8;font-size:9pt;margin:8px 0">(accepted without drawn signature)</div>`}
       <div style="font-size:8.5pt;color:#64748b">Signed ${r.signedAt ? esc(formatDateTime(r.signedAt)) : "—"}${r.signerIp ? ` · IP ${esc(r.signerIp)}` : ""}</div>
+      <div style="font-size:8.5pt;color:#64748b">${esc(identityStatement(r))}</div>
     </div>`).join("");
   return `<div style="page-break-before:always;padding-top:6px">
     <h1 style="font-size:18pt;color:#020617;margin:0 0 4px">Certificate of Completion</h1>
@@ -52,6 +78,11 @@ function certificateHtml(title: string, requestId: string, rows: RecipientRow[])
       Signed electronically in terms of the Electronic Communications and Transactions Act 25 of 2002 (South Africa).
       This document carries a PKCS#7 digital seal; any change after sealing invalidates the signature and is detectable
       by any standard PDF reader.
+      <br/><br/>The final sealed file is hashed and submitted to an independent RFC 3161 timestamp authority.
+      Any token returned is cryptographically verified &mdash; signature, timestamping authority and certificate
+      chain &mdash; before it is stored, and an unverifiable one is discarded rather than kept. It is not printed
+      here because the hash it covers includes this certificate; it is held with this record and can be produced
+      on request.
     </div>
   </div>`;
 }
@@ -159,7 +190,7 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
 
   const rows: RecipientRow[] = [];
   for (const r of req.recipients.filter((x) => x.status === "signed")) {
-    rows.push({ name: r.signedName || r.name, role: r.role, signedAt: r.signedAt, signerIp: r.signerIp, img: await sigImg(r.signatureRef) });
+    rows.push({ name: r.signedName || r.name, role: r.role, signedAt: r.signedAt, signerIp: r.signerIp, img: await sigImg(r.signatureRef), identityMethod: r.identityMethod, identityVerifiedAt: r.identityVerifiedAt });
   }
 
   // Stamp each signed field into the document at the exact spot it was placed.
@@ -212,6 +243,17 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   let pdf = await htmlToPdf(html);
   pdf = await sealPdf(pdf, { reason: `Signed: ${req.title}`, name: "Denago Cape Town" });
   const hash = crypto.createHash("sha256").update(pdf).digest("hex");
+
+  // Independent proof of WHEN, requested BEFORE the completion transaction so a
+  // slow authority cannot hold a database transaction open — and awaited rather
+  // than fired off, because a timestamp that arrives after the record is filed
+  // attests to the wrong moment.
+  //
+  // Returns null on any problem, and that is the intended behaviour: the
+  // authority is a third party we do not control, and losing a signed contract
+  // to somebody else's outage would be far worse than filing one without an
+  // external attestation. The certificate says which of the two happened.
+  const stamp = await requestTrustedTimestamp(Buffer.from(hash, "hex"));
   const storedName = await saveFile(pdf, `${req.title} (signed).pdf`, "application/pdf");
 
   const firstSigner = req.recipients.find((r) => r.status === "signed" && r.role !== "viewer");
@@ -250,7 +292,13 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
         : null;
       const claimed = await tx.signatureRequest.updateMany({
         where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
-        data: { status: "completed", completedAt: new Date(), signedPdfRef: storedName, signedPdfHash: hash, signedDocId: document?.id ?? null },
+        data: {
+          status: "completed", completedAt: new Date(), signedPdfRef: storedName,
+          signedPdfHash: hash, signedDocId: document?.id ?? null,
+          timestampToken: stamp?.tokenBase64 ?? null,
+          timestampedAt: stamp?.genTime ?? null,
+          timestampAuthority: stamp?.authority ?? null,
+        },
       });
       if (claimed.count === 0) throw new CompletionLost();
       documentId = document?.id ?? null;

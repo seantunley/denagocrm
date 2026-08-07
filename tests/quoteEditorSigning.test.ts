@@ -145,7 +145,18 @@ test("only one thing countersigns a quote", () => {
   // Those columns still feed the Print/PDF view, so the surviving path keeps
   // them in step rather than leaving the printed quote unsigned.
   const countersign = shipped("src/lib/signing/countersign.ts");
-  assert.match(countersign, /dealerSignedAt: new Date\(\)/, "the envelope countersign must maintain the print columns");
+  // Asserts that the print columns are still WRITTEN, not the exact expression
+  // that supplies the timestamp. The countersign now stamps the same `filledAt`
+  // used by the rest of its transaction, so the printed quote and the signature
+  // evidence agree on when it happened — an improvement the old literal
+  // assertion would have blocked.
+  assert.match(
+    countersign,
+    /dealerSignedAt: \w+/,
+    "the envelope countersign must maintain the print columns",
+  );
+  assert.match(countersign, /dealerSignedByName: signedName/);
+  assert.match(countersign, /dealerSignatureRef: signatureRef/);
   assert.match(countersign, /dealerSignedAt: null/, "…claimed conditionally, so a second call cannot overwrite the first");
 });
 
@@ -246,7 +257,10 @@ test("countersigning fills shared fields, not only its own", () => {
   // …and a shared field is claimed first-write-wins, as the public route does,
   // so an earlier signer's answer is not overwritten.
   assert.match(code, /if \(value\.shared\)/);
-  assert.match(code, /updateMany\(\{\s*where: \{ id: value\.id, filledAt: null \}/);
+  // `filledAt: null` in the predicate is what makes the claim first-write-wins;
+  // the where clause also carries a tenant now, so match on the guard itself
+  // rather than on the whole literal object.
+  assert.match(code, /updateMany\(\{\s*where: \{[^}]*id: value\.id[^}]*filledAt: null[^}]*\}/);
 });
 
 test("a workflow does not reach anyone before the document is reviewed", () => {

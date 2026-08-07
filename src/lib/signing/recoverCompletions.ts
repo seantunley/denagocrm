@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { readFile } from "@/lib/storage";
 import { logError } from "@/lib/errorLog";
 import { runInTenantScope } from "@/lib/tenantScope";
-import { logSignEvent } from "./events";
+import { logSignEvent, buildSignEvent } from "./events";
 import { runPostCompletion } from "./postComplete";
 import {
   COMPLETED_EVENT,
@@ -294,12 +294,11 @@ async function claimLease(requestId: string, where: SweepTenantWhere): Promise<C
   // Recorded BEFORE the work, so a crash mid-send still spends an attempt and
   // the cap holds.
   await prisma.signatureEvent.create({
-    data: {
-      requestId,
+    data: buildSignEvent(requestId, {
       type: RECOVERY_ATTEMPT_EVENT,
       actor: "system",
       metadata: { attempt: attempts + 1, lease: owner },
-    },
+    }),
   });
   return { status: "claimed", owner, attempt: attempts + 1 };
 }
