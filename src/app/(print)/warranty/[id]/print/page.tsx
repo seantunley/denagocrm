@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/auth";
 import { requireVehicleReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { InfoBlock } from "@/components/print/PrintDocShell";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { computeWarranty, warrantyLabels } from "@/lib/warranty";
 import { contactName, formatDate } from "@/lib/format";
@@ -24,6 +25,9 @@ export default async function WarrantyClaimPrintPage({
   });
   if (!claim) notFound();
   await requireVehicleReadAccess(claim.vehicleId);
+  // The company this document is FROM. getCompanyProfile now inherits the
+  // platform-set tenant brand when the tenant has not filled in its own profile.
+  const company = await getCompanyProfile();
   const tpl = await getDocTemplate("warranty-claim", tplId);
   const w = computeWarranty(claim.vehicle);
 
@@ -31,6 +35,7 @@ export default async function WarrantyClaimPrintPage({
     <>
       <PrintActions backHref="/warranty" backLabel="Back to warranty" />
       <PrintDocShell
+        company={company}
         template={tpl}
         title="Warranty claim"
         number={`WC-${claim.id.slice(-6).toUpperCase()}`}

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { requireLeadReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { InfoBlock } from "@/components/print/PrintDocShell";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { formatDate } from "@/lib/format";
 
@@ -21,12 +22,16 @@ export default async function IndemnityPrintPage({
     include: { product: true, contact: true },
   });
   if (!lead) notFound();
+  // The company this document is FROM. getCompanyProfile now inherits the
+  // platform-set tenant brand when the tenant has not filled in its own profile.
+  const company = await getCompanyProfile();
   const tpl = await getDocTemplate("indemnity", tplId);
 
   return (
     <>
       <PrintActions backHref={`/leads/${lead.id}`} backLabel="Back to lead" />
       <PrintDocShell
+        company={company}
         template={tpl}
         title="Test-drive indemnity"
         meta={[`Date: ${formatDate(new Date())}`]}
