@@ -105,9 +105,16 @@ async function main(): Promise<void> {
      VALUES ('c_mixed',$1,'Stamped Person',now(),now()) ON CONFLICT (id) DO NOTHING`,
     tenantId,
   );
+  // Document.uploadedById is NOT NULL, and this scratch database has migrations
+  // but no seed, so the user has to exist first.
   await prisma.$executeRawUnsafe(
-    `INSERT INTO "Document"(id,"tenantId","fileName","storedName","mimeType","sizeBytes","createdAt")
-     VALUES ('doc_mixed',NULL,'Unstamped doc.pdf','doc_mixed.pdf','application/pdf',1,now())
+    `INSERT INTO "User"(id,name,email,"passwordHash")
+     VALUES ('u_mixed','Upgrade Tester','upgrade@example.invalid','x')
+     ON CONFLICT (id) DO NOTHING`,
+  );
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO "Document"(id,"tenantId","fileName","storedName","mimeType","sizeBytes","uploadedById","createdAt")
+     VALUES ('doc_mixed',NULL,'Unstamped doc.pdf','doc_mixed.pdf','application/pdf',1,'u_mixed',now())
      ON CONFLICT (id) DO NOTHING`,
   );
   await prisma.$executeRawUnsafe(
