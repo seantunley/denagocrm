@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit",
     "backup:verify": "tsx scripts/verify-backup.ts",
     "test:unit": "node --import tsx --test \"tests/**/*.test.ts\"",
-    "test:journeys": "node --import tsx --test tests/journeyTypes.test.ts",
+    "test:journeys": "node --import tsx --test tests/journeyTypes.test.ts tests/journeyLeadOutcome.test.ts",
     "check:visual": "node scripts/check-visual-consistency.mjs",
     "prisma:generate": "prisma generate --schema ./prisma",
     "prisma:migrate": "node scripts/apply-migrations.mjs",

@@ -603,6 +603,11 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
           category: run.journey.category,
           journeyName: run.journey.name,
           runId: run.id,
+          // From the RUN ROW, not the ambient scope and not the context. Every
+          // Lead write in the executor names it in its `where`, which is the
+          // only tenant boundary those writes have while the db.ts guard is
+          // dormant — see journeyLeadOutcome.ts.
+          tenantId: run.tenantId,
           inSequence,
         });
       } catch (error) {
