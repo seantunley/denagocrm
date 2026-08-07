@@ -17,6 +17,10 @@
       "schedule": "*/15 * * * *"
     },
     {
+      "path": "/api/cron/statistics",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/cron/backup",
       "schedule": "0 2 * * *"
     },
