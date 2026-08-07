@@ -53,6 +53,16 @@ const { trimToDerLength } = createRequire(import.meta.url)(
 const AT = new Date();
 
 async function sealedDocument(): Promise<Buffer> {
+  // These tests are ABOUT the development identity, so make sure that is what
+  // signs. sealValidationInstant.test.ts configures a PKCS#12 with a deliberately
+  // narrow validity window at module scope; when both files share a process that
+  // leaked in here and the seal was made by a certificate that expired months
+  // ago, so "not trusted because self-signed" arrived as "not valid at the
+  // attested time" — the right refusal for the wrong reason. A test that depends
+  // on which file loaded first is not a test.
+  delete process.env.BUILDER_SIGN_P12_BASE64;
+  delete process.env.BUILDER_SIGN_P12_PASSPHRASE;
+
   const pdf = await PDFDocument.create();
   pdf.addPage([200, 200]);
   const bytes = Buffer.from(await pdf.save({ useObjectStreams: false }));
