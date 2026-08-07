@@ -287,11 +287,26 @@ async function executeArtifactVerification(job: SigningJob): Promise<void> {
   const artifact = artifacts[0];
   if (!artifact) throw new Error("Completed request has no immutable LegalArtifact row");
 
-  // FINALITY FIRST. A manifest sealed before the completion marker exists is a
-  // bundle that ends immediately before the event it was produced to evidence.
-  if (!(await appendCompletionMarkerIfDurableWorkDone(job))) {
+  const errors: string[] = [];
+
+  // FINALITY FIRST. A manifest sealed before the durable work has finished ends
+  // before the events that work is still going to append — including the
+  // completion marker itself, which is the one event the bundle exists to
+  // evidence.
+  //
+  // The wait is on the SIBLING JOBS, not on the marker's existence: the recovery
+  // path can append the marker early, and treating that as "final" would let a
+  // manifest be sealed while post-completion work still had an event to write.
+  //
+  // A permanently failed sibling ends the wait rather than extending it forever
+  // — the request will never reach finality, and recording that is more use than
+  // deferring in silence.
+  const siblings = await siblingWorkState(job);
+  if (siblings.unfinished !== 0 && siblings.dead === 0) {
     throw new DeferJob("other durable work for this request has not finished");
   }
+  const final = await appendCompletionMarkerIfDurableWorkDone(job);
+  if (!final) errors.push("durable work for this request did not complete, so this evidence is not final");
 
   const head = await chainHead(job.requestId, job.tenantId);
 
@@ -323,7 +338,6 @@ async function executeArtifactVerification(job: SigningJob): Promise<void> {
   // what sealed it.
   const sealed = sealedPdfSignature(bytes);
   const certificate = sealed?.certificate ?? configuredSigningCertificateInfo();
-  const errors: string[] = [];
   if (!sealed) errors.push("sealed PDF carries no readable signing certificate");
   // "This file has not changed since we filed it" and "this certificate sealed
   // these bytes" are different assertions. The stored hash only ever proved the
@@ -555,9 +569,8 @@ async function retryOrDead(job: SigningJob, error: unknown): Promise<"retry" | "
  * Returns whether the request is now final, so verification can wait rather than
  * seal a bundle it knows is premature.
  */
-async function appendCompletionMarkerIfDurableWorkDone(job: SigningJob): Promise<boolean> {
-  if (await eventExists(job.requestId, job.tenantId, COMPLETED_EVENT)) return true;
-
+/** How much durable work, other than verification itself, is still outstanding. */
+async function siblingWorkState(job: SigningJob): Promise<{ unfinished: number; dead: number }> {
   const rows = await basePrisma.$queryRaw<Array<{ unfinished: bigint; dead: bigint }>>`
     SELECT
       COUNT(*) FILTER (WHERE "status" <> 'completed') AS "unfinished",
@@ -566,7 +579,13 @@ async function appendCompletionMarkerIfDurableWorkDone(job: SigningJob): Promise
     WHERE "tenantId" = ${job.tenantId} AND "requestId" = ${job.requestId}
       AND "jobType" <> 'artifact_verify'
   `;
-  if (Number(rows[0]?.unfinished ?? 1) !== 0 || Number(rows[0]?.dead ?? 1) !== 0) return false;
+  return { unfinished: Number(rows[0]?.unfinished ?? 1), dead: Number(rows[0]?.dead ?? 1) };
+}
+
+async function appendCompletionMarkerIfDurableWorkDone(job: SigningJob): Promise<boolean> {
+  const state = await siblingWorkState(job);
+  if (state.unfinished !== 0 || state.dead !== 0) return false;
+  if (await eventExists(job.requestId, job.tenantId, COMPLETED_EVENT)) return true;
 
   await logSignEvent(job.requestId, {
     type: COMPLETED_EVENT,
