@@ -12,6 +12,7 @@ import { COMPLETED_EVENT, POST_COMPLETION_EVENT } from "./completionFanout";
 import { sourceSignedByThisRequest } from "./recoveryScope";
 import { signingSecurityMode } from "./securityPolicy";
 import { verifyEvidenceChain } from "./evidenceHash";
+import { verifyTimestampToken } from "./timestampVerify";
 
 const MAX_JOB_ATTEMPTS = 12;
 
@@ -276,6 +277,42 @@ async function executePostCompletion(job: SigningJob): Promise<void> {
   await logSignEvent(request.id, { type: POST_COMPLETION_EVENT, actor: "system", metadata: { job: job.id } });
 }
 
+/**
+ * WHEN the seal must have been valid.
+ *
+ * Certificate validity is a question about an instant, and the instant that
+ * matters is when the document was sealed — not when it is being checked, and
+ * certainly not the certificate's own `notBefore`, which asks whether it was
+ * valid on the first day it was valid and always answers yes.
+ *
+ * In order of how much the answer can be trusted:
+ *
+ *   1. the RFC 3161 attested time, RE-VERIFIED here rather than taken on trust
+ *      from the stored column — an authority outside this system said so;
+ *   2. the recorded completion time, which this system asserts about itself;
+ *   3. the artifact's own creation time, when there is nothing better.
+ *
+ * Falling back is not a weakness as long as it is ordered: a document sealed
+ * while its certificate was in date reads as trusted, and one sealed after
+ * expiry does not, regardless of when anybody happens to look.
+ */
+async function sealValidationInstant(job: SigningJob, artifact: ArtifactRow): Promise<Date> {
+  const rows = await basePrisma.$queryRaw<Array<{
+    timestampToken: string | null; signedPdfHash: string | null; completedAt: Date | null;
+  }>>`
+    SELECT "timestampToken", "signedPdfHash", "completedAt"
+    FROM "SignatureRequest"
+    WHERE "id" = ${job.requestId} AND "tenantId" = ${job.tenantId}
+    LIMIT 1
+  `;
+  const request = rows[0];
+  if (request?.timestampToken && request.signedPdfHash && /^[0-9a-f]{64}$/i.test(request.signedPdfHash)) {
+    const verified = verifyTimestampToken(request.timestampToken, Buffer.from(request.signedPdfHash, "hex"));
+    if (verified.ok) return verified.genTime;
+  }
+  return request?.completedAt ?? artifact.createdAt;
+}
+
 async function executeArtifactVerification(job: SigningJob): Promise<void> {
   const artifacts = await basePrisma.$queryRaw<ArtifactRow[]>`
     SELECT "id", "tenantId", "requestId", "documentId", "storageRef", "sha256",
@@ -302,7 +339,15 @@ async function executeArtifactVerification(job: SigningJob): Promise<void> {
   // — the request will never reach finality, and recording that is more use than
   // deferring in silence.
   const siblings = await siblingWorkState(job);
-  if (siblings.unfinished !== 0 && siblings.dead === 0) {
+  // `unfinished` counts EVERY status other than completed, and `dead` is a
+  // subset of it — so "unfinished && !dead" stopped waiting as soon as any one
+  // sibling died, even with others still running or queued to retry. Those can
+  // still append events, and the snapshot would be taken before them.
+  //
+  // Only when every remaining sibling is permanently dead is there nothing left
+  // to wait for.
+  const stillActive = siblings.unfinished - siblings.dead;
+  if (stillActive > 0) {
     throw new DeferJob("other durable work for this request has not finished");
   }
   const final = await appendCompletionMarkerIfDurableWorkDone(job);
@@ -336,7 +381,7 @@ async function executeArtifactVerification(job: SigningJob): Promise<void> {
   // current identity as evidence about a document sealed years ago is false the
   // moment a certificate is rotated — and this record exists specifically to say
   // what sealed it.
-  const sealed = sealedPdfSignature(bytes);
+  const sealed = sealedPdfSignature(bytes, await sealValidationInstant(job, artifact));
   const certificate = sealed?.certificate ?? configuredSigningCertificateInfo();
   if (!sealed) errors.push("sealed PDF carries no readable signing certificate");
   // "This file has not changed since we filed it" and "this certificate sealed

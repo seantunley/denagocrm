@@ -372,7 +372,6 @@ test("validation describes the certificate that sealed the file, and checks that
   // Recording the identity configured TODAY as evidence about a document sealed
   // years ago is false the moment a certificate is rotated — and this record
   // exists specifically to say what sealed it.
-  assert.match(worker, /sealedPdfSignature\(bytes\)/);
   assert.match(worker, /sealed PDF carries no readable signing certificate/);
   assert.match(seal, /export function sealedPdfSignature/);
 
@@ -388,6 +387,18 @@ test("validation describes the certificate that sealed the file, and checks that
   assert.match(seal, /\/\\\/ByteRange\\s\*\\\[/);
   assert.match(seal, /the seal does not cover this document's bytes/);
   assert.match(seal, /content was appended after the document was sealed/);
+  // Every byte outside the ByteRange is unsigned, so the excluded gap must hold
+  // the signature value and NOTHING else — otherwise kilobytes of content nobody
+  // signed ride along inside a file whose signature verifies.
+  assert.match(seal, /the unsigned gap contains more than the signature value/);
+
+  // Validity is a question about an instant, and the instant is when the
+  // document was sealed. Asking the certificate about its own notBefore cannot
+  // answer no.
+  assert.doesNotMatch(seal, /signer\.parsed\.validity\.notBefore\)/);
+  assert.match(worker, /sealedPdfSignature\(bytes, await sealValidationInstant\(job, artifact\)\)/);
+  assert.match(worker, /verifyTimestampToken\(request\.timestampToken/);
   // Behaviour, not just shape: tests/sealedPdfSignature.test.ts seals a real PDF
-  // and attacks it.
+  // and attacks it; tests/sealValidationInstant.test.ts asks the same seal at two
+  // instants and requires different answers.
 });

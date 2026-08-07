@@ -100,11 +100,41 @@ export function configuredSigningCertificateInfo(): SigningCertificateInfo {
   };
 }
 
+/**
+ * Refuse to seal with a certificate that is not valid RIGHT NOW.
+ *
+ * `assertSigningRuntimeReady` checks that a PKCS#12 identity is configured; it
+ * never asked whether that identity is still in date. An expired key signs bytes
+ * exactly as well as a current one, so nothing fails at signing time — the
+ * document is produced, filed, and only reports as untrusted later, when the
+ * validator asks the question that was never asked here. By then the signature
+ * is on a contract.
+ *
+ * Future-dated is refused for the same reason, in the other direction.
+ */
+function assertConfiguredCertificateInDate(): void {
+  const cert = certificateFrom(getSigner());
+  const now = new Date();
+  if (now < cert.validity.notBefore) {
+    throw new Error(
+      `The configured signing certificate is not valid until ${cert.validity.notBefore.toISOString()}`,
+    );
+  }
+  if (now > cert.validity.notAfter) {
+    throw new Error(
+      `The configured signing certificate expired on ${cert.validity.notAfter.toISOString()}`,
+    );
+  }
+}
+
 export async function sealPdf(
   pdfBuffer: Buffer,
   meta: { reason: string; name: string; location?: string; contactInfo?: string }
 ): Promise<Buffer> {
-  if (signingSecurityMode() === "strict") assertSigningRuntimeReady("PDF sealing");
+  if (signingSecurityMode() === "strict") {
+    assertSigningRuntimeReady("PDF sealing");
+    assertConfiguredCertificateInDate();
+  }
   const withPlaceholder = plainAddPlaceholder({
     pdfBuffer,
     reason: meta.reason,
@@ -127,39 +157,65 @@ export type SealedPdfSignature = {
   reason: string | null;
 };
 
-/** Locate a signed PDF's ByteRange and the PKCS#7 blob sitting in its gap. */
-function sealParts(pdf: Buffer): { der: Buffer; signedBytes: Buffer; wholeFile: boolean } | null {
+type SealParts = { der: Buffer; signedBytes: Buffer; wholeFile: boolean; gapExact: boolean };
+
+/**
+ * Locate a signed PDF's ByteRange and the PKCS#7 blob sitting in its gap.
+ *
+ * ── Why the gap is checked EXACTLY ──────────────────────────────────────────
+ *
+ * Every byte between the two covered ranges is, by definition, unsigned. The
+ * ByteRange numbers themselves sit inside the first covered range, so an
+ * attacker cannot move the gap — but they can rewrite anything INSIDE it and
+ * the signature still verifies.
+ *
+ * The gap is roughly 16 KB of placeholder. An earlier version of this function
+ * only asked that a `/Contents <…>` appear SOMEWHERE within it, which accepts:
+ *
+ *     <  …real DER hex…  >  …arbitrary injected PDF content…  …padding…
+ *
+ * The signature checks out, the certificate is genuine, and several kilobytes of
+ * content nobody signed ride along inside the hole. For a legal artifact that is
+ * the whole ballgame.
+ *
+ * So the container must occupy the gap precisely: `<` as the first excluded
+ * byte, `>` as the last, and nothing but hex and whitespace in between.
+ */
+function sealParts(pdf: Buffer): SealParts | null {
   const text = pdf.toString("latin1");
   const range = /\/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]/.exec(text);
   if (!range) return null;
   const [a, b, c, d] = range.slice(1, 5).map(Number);
   if ([a, b, c, d].some((n) => !Number.isFinite(n) || n < 0) || a + b > c || c + d > pdf.length) return null;
 
-  // The signature blob must sit in the GAP the ByteRange leaves. Picking any
-  // /Contents in the file would let a decoy elsewhere be verified instead.
-  let der: Buffer | null = null;
-  const pattern = /\/Contents\s*<([0-9a-fA-F\s]*)>/g;
-  for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
-    // The gap starts at the `<`, not at the `/Contents` key — the key itself is
-    // inside the FIRST covered range. Anchoring on the key skips the real
-    // signature and finds nothing, which reads identically to "unsigned file".
-    const open = match.index + match[0].indexOf("<");
-    const close = match.index + match[0].length - 1;
-    if (open < a + b - 1 || close > c) continue;
-    const hex = match[1].replace(/[^0-9a-fA-F]/g, "");
-    if (hex.length < 64) continue;
-    // The placeholder is zero-padded to a fixed width; DER ignores the tail.
-    der = Buffer.from(hex, "hex");
-    break;
-  }
-  if (!der) return null;
+  const signedBytes = Buffer.concat([pdf.subarray(a, a + b), pdf.subarray(c, c + d)]);
+  // Anything outside the two ranges was added AFTER signing and is not covered
+  // by it. For a legal artifact that is a defect, not a detail.
+  const wholeFile = a === 0 && c + d === pdf.length;
 
+  // The gap starts at the `<`, not at the `/Contents` key — the key itself is
+  // inside the FIRST covered range. Anchoring on the key skips the real
+  // signature and finds nothing, which reads identically to "unsigned file".
+  const gap = text.slice(a + b, c);
+  const exact = /^<([0-9a-fA-F\s]*)>$/.exec(gap);
+  if (exact) {
+    const hex = exact[1].replace(/\s/g, "");
+    if (hex.length >= 64) {
+      return { der: Buffer.from(hex.length % 2 ? hex.slice(0, -1) : hex, "hex"), signedBytes, wholeFile, gapExact: true };
+    }
+  }
+
+  // The gap is NOT just a signature container. Still recover the certificate, so
+  // the failure is reported as a tampered seal naming who signed it rather than
+  // as "this file is not signed" — those are very different findings.
+  const loose = /<([0-9a-fA-F\s]{64,})>/.exec(gap);
+  if (!loose) return null;
+  const hex = loose[1].replace(/\s/g, "");
   return {
-    der,
-    signedBytes: Buffer.concat([pdf.subarray(a, a + b), pdf.subarray(c, c + d)]),
-    // Anything outside the two ranges was added AFTER signing and is not covered
-    // by it. For a legal artifact that is a defect, not a detail.
-    wholeFile: a === 0 && c + d === pdf.length,
+    der: Buffer.from(hex.length % 2 ? hex.slice(0, -1) : hex, "hex"),
+    signedBytes,
+    wholeFile,
+    gapExact: false,
   };
 }
 
@@ -183,7 +239,7 @@ function sealParts(pdf: Buffer): { der: Buffer; signedBytes: Buffer; wholeFile: 
  * Returns null when the file carries no recognisable signature, which the caller
  * records as an error rather than silently substituting today's configuration.
  */
-export function sealedPdfSignature(pdf: Buffer): SealedPdfSignature | null {
+export function sealedPdfSignature(pdf: Buffer, at: Date): SealedPdfSignature | null {
   let parts: ReturnType<typeof sealParts>;
   try {
     parts = sealParts(pdf);
@@ -233,8 +289,20 @@ export function sealedPdfSignature(pdf: Buffer): SealedPdfSignature | null {
   if (!parts.wholeFile) {
     return { certificate, contentVerified: false, reason: "content was appended after the document was sealed" };
   }
+  if (!parts.gapExact) {
+    // The signature verified — over the bytes it covers. The unsigned gap holds
+    // more than the signature value, and those bytes are part of the document a
+    // reader will render.
+    return {
+      certificate,
+      contentVerified: false,
+      reason: "the unsigned gap contains more than the signature value",
+    };
+  }
 
-  const trust = sealedPdfTrust(signer.der, certs.map((candidate) => candidate.der), signer.parsed.validity.notBefore);
+  // `at` is the instant the document was actually sealed. Asking the certificate
+  // whether it was valid at its own notBefore is a question that answers itself.
+  const trust = sealedPdfTrust(signer.der, certs.map((candidate) => candidate.der), at);
   return {
     certificate: { ...certificate, trusted: trust.trusted },
     contentVerified: true,
@@ -267,10 +335,21 @@ function sealedPdfTrust(signerDer: Buffer, poolDer: Buffer[], at: Date): { trust
     const configured = configuredSigningCertificateInfo();
     const fingerprint = crypto.createHash("sha256").update(signerDer).digest("hex");
     if (configured.trusted && configured.fingerprintSha256 === fingerprint) {
-      return { trusted: true, reason: null };
+      // BEING the configured identity is not a licence to be out of date. An
+      // expired key signs bytes exactly as well as a current one, so without
+      // this the fingerprint route would wave through a document sealed years
+      // after the certificate lapsed — the precise case the validation instant
+      // exists to catch.
+      const from = new Date(configured.validFrom);
+      const to = new Date(configured.validTo);
+      if (at >= from && at <= to) return { trusted: true, reason: null };
+      return {
+        trusted: false,
+        reason: "the configured signing certificate was not valid when this document was sealed",
+      };
     }
   } catch {
     // No configured identity to compare against; the path result stands.
   }
-  return { trusted: false, reason: path.ok ? null : path.reason };
+  return { trusted: false, reason: path.reason };
 }

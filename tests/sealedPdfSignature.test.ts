@@ -26,6 +26,9 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
 const { sealPdf, sealedPdfSignature } = createRequire(import.meta.url)(
   "../src/lib/pdf/seal.ts",
 ) as typeof import("../src/lib/pdf/seal");
+const { trimToDerLength } = createRequire(import.meta.url)(
+  "../src/lib/signing/cms.ts",
+) as typeof import("../src/lib/signing/cms");
 
 /**
  * Does the seal actually seal THESE bytes?
@@ -42,6 +45,13 @@ const { sealPdf, sealedPdfSignature } = createRequire(import.meta.url)(
  * separate questions they are.
  */
 
+/**
+ * The instant the seal must have been valid at. The development certificate is
+ * minted at process start with a one-year window, so "now" is inside it — which
+ * keeps these tests about the SIGNATURE rather than about clock arithmetic.
+ */
+const AT = new Date();
+
 async function sealedDocument(): Promise<Buffer> {
   const pdf = await PDFDocument.create();
   pdf.addPage([200, 200]);
@@ -51,7 +61,7 @@ async function sealedDocument(): Promise<Buffer> {
 
 test("a genuine seal verifies over the bytes the PDF declares", async () => {
   const sealed = await sealedDocument();
-  const result = sealedPdfSignature(sealed);
+  const result = sealedPdfSignature(sealed, AT);
 
   assert.ok(result, "a sealed PDF must be readable");
   assert.equal(result.contentVerified, true, result.reason ?? "");
@@ -66,7 +76,7 @@ test("the development identity is NOT reported as trusted", () => {
   // over its bytes and still be an identity nobody should rely on — which is
   // exactly why strict mode refuses it and compat mode does not.
   return sealedDocument().then((sealed) => {
-    const result = sealedPdfSignature(sealed);
+    const result = sealedPdfSignature(sealed, AT);
     assert.ok(result);
     assert.equal(result.certificate.trusted, false);
     assert.match(String(result.reason ?? ""), /trusted root|certificate authority/);
@@ -85,7 +95,7 @@ test("one altered byte in the signed content breaks the seal", async () => {
   const at = 100;
   tampered[at] ^= 0xff;
 
-  const result = sealedPdfSignature(tampered);
+  const result = sealedPdfSignature(tampered, AT);
   assert.ok(result, "the certificate is still readable");
   assert.equal(result.contentVerified, false, "an altered document must not verify");
 });
@@ -97,10 +107,52 @@ test("content appended after sealing is not treated as sealed", async () => {
   // regardless is how a signed contract acquires pages nobody signed.
   const extended = Buffer.concat([sealed, Buffer.from("\n% appended after signing\n", "latin1")]);
 
-  const result = sealedPdfSignature(extended);
+  const result = sealedPdfSignature(extended, AT);
   assert.ok(result);
   assert.equal(result.contentVerified, false);
   assert.match(String(result.reason ?? ""), /appended after/);
+});
+
+/** The ByteRange the file declares, and the unsigned gap it leaves. */
+function byteRange(pdf: Buffer): { a: number; b: number; c: number; d: number } {
+  const m = /\/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]/.exec(pdf.toString("latin1"));
+  assert.ok(m, "a sealed PDF must declare a ByteRange");
+  const [a, b, c, d] = m!.slice(1, 5).map(Number);
+  return { a, b, c, d };
+}
+
+test("content smuggled into the unsigned gap is refused", async () => {
+  const sealed = await sealedDocument();
+  const { a, b, c } = byteRange(sealed);
+
+  // THE ATTACK. Every byte between the two covered ranges is unsigned, and the
+  // gap is ~16 KB of placeholder. The signature is left completely intact: the
+  // hex is closed early at its true DER length and the freed space is filled
+  // with content nobody signed. A verifier that only asks "is there a
+  // /Contents <…> somewhere in the gap?" accepts this — the signature verifies,
+  // the certificate is genuine, and several kilobytes ride along inside the file.
+  const gap = sealed.subarray(a + b, c).toString("latin1");
+  const allHex = gap.slice(1, -1).replace(/[^0-9a-fA-F]/g, "");
+  const realDer = trimToDerLength(Buffer.from(allHex, "hex"));
+  const realHex = allHex.slice(0, realDer.length * 2);
+
+  const injected = "\n% an object nobody signed\n";
+  const head = `<${realHex}>${injected}`;
+  assert.ok(head.length < gap.length, "the placeholder must leave room to smuggle");
+  const rebuilt = head + " ".repeat(gap.length - head.length);
+  assert.equal(rebuilt.length, gap.length, "the gap size is fixed by the SIGNED ByteRange");
+
+  const tampered = Buffer.concat([
+    sealed.subarray(0, a + b),
+    Buffer.from(rebuilt, "latin1"),
+    sealed.subarray(c),
+  ]);
+  assert.equal(tampered.length, sealed.length);
+
+  const result = sealedPdfSignature(tampered, AT);
+  assert.ok(result, "the certificate is still readable — this is a tampered seal, not an unsigned file");
+  assert.equal(result.contentVerified, false, "the unsigned gap must hold nothing but the signature");
+  assert.match(String(result.reason ?? ""), /unsigned gap/);
 });
 
 test("a file with no signature is reported as unsigned, not as unverified", async () => {
@@ -111,5 +163,5 @@ test("a file with no signature is reported as unsigned, not as unverified", asyn
   // null means "there is nothing here to check", which the caller records as its
   // own error. Returning a certificate with contentVerified:false would imply a
   // seal exists and failed.
-  assert.equal(sealedPdfSignature(unsigned), null);
+  assert.equal(sealedPdfSignature(unsigned, AT), null);
 });
