@@ -60,7 +60,12 @@ test("an unbranded send names the platform, not a customer", () => {
   // the footer, and the address was a company the recipient had never dealt with.
   const shell = shipped("src/lib/campaigns.ts");
   assert.match(shell, /: PLATFORM_NAME;/, "the name falls back to the platform");
-  assert.match(shell, /const footer = name;/, "and claims no address it does not know");
+  // The footer is the NAME alone and nothing else — no street, no city. Matched
+  // on the escaped form, because the name is now HTML-encoded before it reaches
+  // any of the three places it is rendered; what matters here is that the footer
+  // is still just the name.
+  assert.match(shell, /const footer = safeName;/, "and claims no address it does not know");
+  assert.match(shell, /const safeName = escapeHtml\(name\)/, "…encoded, since a tenant sets it");
   assert.doesNotMatch(shell, /Cape Town, South Africa/, "no invented location");
   // emailBrand.ts is `server-only` (Next vendors that marker via an RSC export
   // condition, so the unit runner cannot load it) — asserted on source, like the
@@ -80,7 +85,7 @@ test("no campaign footer invents an address", () => {
   const shell = shipped("src/lib/campaigns.ts");
   const start = shell.indexOf("const footer =");
   const line = shell.slice(start, shell.indexOf("\n", start));
-  assert.match(line, /const footer = name;/, "the name alone, branded or not");
+  assert.match(line, /const footer = safeName;/, "the name alone, branded or not");
   assert.doesNotMatch(shell, /South Africa|Maitland|M5 Freeway/, "no address anywhere in the shell");
 });
 
