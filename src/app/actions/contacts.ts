@@ -109,6 +109,14 @@ export async function updateContact(id: string, formData: FormData) {
     // matches legacy rows regardless of tenantId when enforcement is off). Tag
     // replacement is atomic: clear + re-add in ONE transaction, so a mid-way failure
     // can never leave the contact stripped of its tags.
+    // READ FIRST, so the audit can say WHAT changed.
+    //
+    // Without a before/after pair `changedFields` diffs nothing against nothing
+    // and stores an empty list, so the trail records only that "details were
+    // updated" — no field, no old value, no new one. That is the entry someone
+    // opens months later to find out who changed a phone number, and it could
+    // not answer.
+    const before = await prisma.contact.findUnique({ where: { id } });
     const contact = await prisma.contact.update({ where: { id }, data });
     await withTenantWrite(async (tx, tenantId) => {
       await tx.$executeRaw`DELETE FROM "_ContactToTag" WHERE "A" = ${id}`;
@@ -119,6 +127,8 @@ export async function updateContact(id: string, formData: FormData) {
       summary: `Updated details for ${contactName(contact)}`,
       contactId: id,
       user,
+      before,
+      after: contact,
     });
     revalidatePath("/contacts");
     revalidatePath(`/contacts/${id}`);
