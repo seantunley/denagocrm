@@ -24,6 +24,8 @@ import { contactHealth } from "@/lib/healthData";
 import { healthLabels } from "@/lib/health";
 import { recordConsent, anonymizeContact } from "@/app/actions/privacy";
 import { CONSENT_TYPES } from "@/lib/consent";
+import { brandForTenant, teamSignoff } from "@/lib/tenantBrand";
+import { getActiveTenantId } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, contactVars } from "@/lib/email";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { payableTotalCents } from "@/lib/pricing";
@@ -138,7 +140,7 @@ export default async function ContactDetailPage({
   const libraryDocs = libraryDocuments
     .filter((d) => d.versions[0])
     .map((d) => ({ id: d.versions[0].id, label: `${d.name} (v${d.versions[0].version})` }));
-  const vars = contactVars(contact);
+  const vars = contactVars(contact, teamSignoff(await brandForTenant(await getActiveTenantId())));
   const renderedTemplates = templates.map((t) => ({
     id: t.id,
     name: t.name,

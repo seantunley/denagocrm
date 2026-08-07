@@ -257,6 +257,18 @@ export const brandForTenant = cache(async (tenantId: string | null | undefined):
  * 41-file rewrite), and both values are re-validated above, so the only
  * characters that can reach this string are `#` and six hex digits.
  */
+/**
+ * How a templated email signs off when no individual owner is assigned.
+ *
+ * "The Acme Golf Carts team" for a branded tenant, and the ORIGINAL LITERAL
+ * otherwise — deliberately not `The ${DEFAULT_BRAND.displayName} team`, which
+ * reads identically today and would silently become the neutral platform name
+ * the moment that default changes.
+ */
+export function teamSignoff(brand: TenantBrand): string {
+  return brand.tenantId ? `The ${brand.displayName} team` : "The Denago Cape Town team";
+}
+
 export function brandStyle(brand: TenantBrand): string | null {
   if (!brand.primary || !brand.primaryForeground) return null;
   return `:root{--primary:${brand.primary};--primary-foreground:${brand.primaryForeground}}`;
