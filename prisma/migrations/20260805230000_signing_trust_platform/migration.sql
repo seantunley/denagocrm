@@ -22,6 +22,69 @@ ALTER TABLE "SignatureRecipient" ADD COLUMN IF NOT EXISTS "tokenRevokedAt" TIMES
 ALTER TABLE "ApprovalStep" ADD COLUMN IF NOT EXISTS "tokenCiphertext" TEXT;
 ALTER TABLE "ApprovalStep" ADD COLUMN IF NOT EXISTS "tokenRevokedAt" TIMESTAMP(3);
 
+-- ── Finish the tenant backfill the dormant stamper never did ────────────────
+--
+-- SignatureRequest.tenantId is made NOT NULL below, and it cannot be: the rows
+-- it points at are unstamped. `tenantEnforcing()` returns a hard-coded false, so
+-- the write guard stamps nothing and every record created since the July
+-- backfill carries tenantId NULL. On production that is 8 quotes, 8 documents
+-- and a contact — and two signature requests that cannot be stamped without
+-- them, because SignatureRequest carries COMPOSITE tenant foreign keys:
+--
+--     (tenantId, documentId) → Document(tenantId, id)      … and quoteId,
+--     contactId, jobCardId, templateId
+--
+-- Stamping a request whose Document is NULL-tenant is precisely what failed
+-- every deployment from 13:49 on 2026-08-07:
+--
+--     insert or update on table "SignatureRequest" violates foreign key
+--     constraint "SignatureRequest_tenantId_documentId_fkey"
+--
+-- ORDER MATTERS. Each UPDATE is checked as it runs, so a child stamped before
+-- its parent fails on the parent's composite key. The list below is the real
+-- dependency order, read out of pg_constraint rather than assumed:
+--
+--     Document  → Vehicle, JobCard, Contact, Quote, Document
+--     Quote     → Contact, Lead, Quote
+--     JobCard   → WorkshopBay, Vehicle, Contact, JobCard
+--     Vehicle   → Contact, Product, Fleet
+--     Lead      → PipelineStage, Product, Contact
+--
+-- Self-references (Quote→Quote, Document→Document, JobCard→JobCard) are safe
+-- because each table is stamped in ONE statement: both ends move together.
+--
+-- ONLY WITH A SINGLE TENANT. With more than one, which tenant an orphaned row
+-- belongs to is a question this migration cannot answer, and guessing would put
+-- one workspace's records into another's. It skips instead, and the SET NOT NULL
+-- below then fails loudly — which is the correct outcome for a question that
+-- needs a human.
+DO $tenant_backfill$
+DECLARE
+  founding TEXT;
+  tenants  INT;
+  target   TEXT;
+BEGIN
+  SELECT count(*) INTO tenants FROM "Tenant";
+  IF tenants <> 1 THEN
+    RAISE NOTICE 'skipping historic tenant backfill: % tenants present, ownership is ambiguous', tenants;
+    RETURN;
+  END IF;
+  SELECT id INTO founding FROM "Tenant" LIMIT 1;
+
+  FOREACH target IN ARRAY ARRAY[
+    'Contact','Product','Fleet','PipelineStage','WorkshopBay','SignWorkflow',
+    'Vehicle','Lead','JobCard','Quote','Document','DocBuilderTemplate'
+  ] LOOP
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = target AND column_name = 'tenantId'
+    ) THEN
+      EXECUTE format('UPDATE %I SET "tenantId" = $1 WHERE "tenantId" IS NULL', target) USING founding;
+    END IF;
+  END LOOP;
+END
+$tenant_backfill$;
+
 -- A tenant is only assigned when it AGREES WITH EVERY PARENT this request points
 -- at. SignatureRequest carries composite tenant foreign keys —
 -- (tenantId, documentId) → Document(tenantId, id), and the same for quoteId,

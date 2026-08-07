@@ -61,12 +61,12 @@ async function main(): Promise<void> {
   for (const name of all.slice(0, firstSigning)) applyMigration(name);
 
   console.log("\n== seeding signing data that predates the upgrade");
-  const tenantId = "t_upgrade";
+  // The tenant `tenant_foundation` already seeded. Inserting a SECOND tenant here
+  // would make the historic backfill skip (ownership is ambiguous with more than
+  // one) and the SET NOT NULL would then fail — a fixture disagreeing with
+  // production about the thing under test.
+  const tenantId = "tenant_denago_cpt";
   const requestId = "sr_upgrade";
-  await prisma.$executeRawUnsafe(
-    `INSERT INTO "Tenant"(id,name,slug,active) VALUES ($1,'Upgrade Co','upgrade-co',true) ON CONFLICT (id) DO NOTHING`,
-    tenantId,
-  );
   await prisma.$executeRawUnsafe(
     `INSERT INTO "SignatureRequest"(id,"tenantId",title,status,ordering,"createdAt","updatedAt")
      VALUES ($1,$2,'Historic contract','sent','parallel',now(),now()) ON CONFLICT (id) DO NOTHING`,
@@ -160,9 +160,17 @@ async function main(): Promise<void> {
     `SELECT "tenantId" FROM "SignatureRequest" WHERE id = 'sr_mixed'`,
   );
   check(
-    "a request whose parents disagree is left unstamped, not failed",
-    mixed[0]?.tenantId === null,
-    `expected NULL — stamping it would violate the composite FK to its Document; got ${String(mixed[0]?.tenantId)}`,
+    "a request with an unstamped Document is stamped, not failed",
+    mixed[0]?.tenantId === tenantId,
+    `expected ${tenantId} — the Document must be stamped first so the composite FK agrees; got ${String(mixed[0]?.tenantId)}`,
+  );
+  const mixedDoc = await prisma.$queryRawUnsafe<Array<{ tenantId: string | null }>>(
+    `SELECT "tenantId" FROM "Document" WHERE id = 'doc_mixed'`,
+  );
+  check(
+    "…and so is the Document it points at",
+    mixedDoc[0]?.tenantId === tenantId,
+    `expected ${tenantId}, got ${String(mixedDoc[0]?.tenantId)}`,
   );
 
   console.log("\n== runtime transitions the empty-database run never reaches");
