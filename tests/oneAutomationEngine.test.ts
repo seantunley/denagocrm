@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { Prisma } from "@prisma/client";
 import { JOURNEY_EVENT_TRIGGERS, JOURNEY_SCHEDULED_TRIGGERS, JOURNEY_TRIGGERS } from "../src/lib/journeyTypes";
+import { JOURNEY_TRIGGER_LABELS } from "../src/lib/journeyTriggers";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -223,7 +224,7 @@ for (const trigger of JOURNEY_SCHEDULED_TRIGGERS) {
     const scheduler = shipped("src/lib/journeyScheduling.ts");
     assert.match(
       scheduler,
-      new RegExp(`version\\.trigger === "${trigger}"`),
+      new RegExp(`spec\\.type === "${trigger}"`),
       `"${trigger}" is selectable in the journey builder but runScheduledJourneyEnrollments never sweeps for it`,
     );
   });
@@ -231,24 +232,37 @@ for (const trigger of JOURNEY_SCHEDULED_TRIGGERS) {
 
 test("the two lists above cover exactly the triggers the builder OFFERS", () => {
   // The reachability tests above iterate the two typed halves. They are only a
-  // real guard if those halves are the same set the <select> actually shows —
-  // the builder spells its options out by hand rather than mapping
-  // JOURNEY_TRIGGERS, so the two can drift, and a trigger that drifts into the
-  // dropdown alone would be offered to users while escaping both checks.
+  // real guard if those halves are the same set the dropdown actually shows.
   assert.deepEqual(
     [...JOURNEY_TRIGGERS].sort(),
     [...JOURNEY_EVENT_TRIGGERS, ...JOURNEY_SCHEDULED_TRIGGERS].sort(),
     "a declared trigger belongs to neither the event nor the scheduled half",
   );
 
+  // The dropdown used to spell its twelve options out by hand, which is how one
+  // could drift into the builder alone — offered to users, reachable by nothing,
+  // and invisible to both checks above. It maps the declared list instead, so
+  // the drift is now impossible rather than merely detected. Assert THAT, since
+  // it is the property that replaced the hand-written list.
   const builder = shipped("src/components/JourneyBuilder.tsx");
-  const select = builder.match(/<select name="trigger"[\s\S]*?<\/select>/);
-  assert.ok(select, "the enrolment trigger dropdown is not where this test expects it");
-  const offered = [...select[0].matchAll(/<option value="([a-z_]+)"/g)].map(([, value]) => value);
+  assert.match(
+    builder,
+    /JOURNEY_TRIGGERS\.map\(\(type\) => \([\s\S]*?<option key=\{type\} value=\{type\}>/,
+    "the enrolment dropdown must be rendered FROM JOURNEY_TRIGGERS, not from a hand-written list beside it",
+  );
+  assert.match(
+    builder,
+    /JOURNEY_TRIGGER_LABELS\[type\]/,
+    "…and take its wording from the shared label map, which the journeys list reads too",
+  );
+
+  // The label map is typed Record<JourneyTrigger, string>, so a MISSING label is
+  // a compile error. A stale EXTRA one is not, and would sit there naming a
+  // trigger that no longer exists.
   assert.deepEqual(
-    offered.sort(),
+    Object.keys(JOURNEY_TRIGGER_LABELS).sort(),
     [...JOURNEY_TRIGGERS].sort(),
-    "the builder offers a different set of triggers than the code declares — the extras are unreachable",
+    "the trigger label map and the declared trigger list disagree",
   );
 });
 
@@ -291,7 +305,7 @@ test("a stage_entered event is judged against the stage that was ENTERED", () =>
   // Events are drained by a cron every 15 minutes. Judging the event against
   // the lead's stage NOW means a rep who moves a lead twice inside that window
   // has the first event silently match nothing.
-  const code = shipped("src/lib/journeyEvents.ts");
+  const code = shipped("src/lib/journeyTriggers.ts");
   assert.match(code, /payload\.stageId/, "triggerMatches must prefer the stage recorded on the event");
   assert.match(shipped("src/lib/leadJourneyEvents.ts"), /stageId: lead\.stageId/, "the emitter must record it");
 });

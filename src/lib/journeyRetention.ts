@@ -10,8 +10,8 @@ import { prisma } from "./db";
  * the app, and it is the data with the least long-term value: nobody asks why a
  * journey enrolled someone eleven weeks ago.
  *
- * Keep the most recent N traces PER JOURNEY, not just the recent ones overall.
- * The reason is worth stating: an age-only rule silently empties the trace for a
+ * Keeping the most recent N PER JOURNEY is the right shape, and the reason is
+ * worth stating: an age-only rule silently empties the trace for a
  * quiet journey, which is exactly the journey you are most likely to be
  * debugging. So this does both: an age floor for the bulk, and a per-journey
  * floor so every journey keeps its most recent runs however quiet it is.

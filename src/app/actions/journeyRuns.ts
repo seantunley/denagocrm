@@ -13,6 +13,7 @@ import {
   processOneRun,
 } from "@/lib/journeys";
 import { OPEN_RUN_STATUSES, parseRunMode } from "@/lib/journeyArbitration";
+import { readJourneyTriggers, type JourneyTriggerSpec } from "@/lib/journeyTriggers";
 
 export async function runJourneyNowAction(journeyId: string) {
   await requirePermission("journeys.manage");
@@ -48,11 +49,12 @@ export async function runJourneyOnLead(journeyId: string, leadId: string) {
   // A distinct dedupe key per manual run, or the second test on the same lead
   // would be swallowed as "already seen" and look like the journey ignoring it.
   // Date.now() is fine here: this is an operator action, not a replayed event.
+  const spec = await activeTriggerFor(journeyId);
   const event = await emitJourneyEvent({
-    type: (await activeTriggerFor(journeyId)) ?? "lead_created",
+    type: spec?.type ?? "lead_created",
     entityType: "lead",
     entityId: lead.id,
-    payload: { manual: true, byUserId: user.id },
+    payload: { manual: true, byUserId: user.id, ...(spec?.id ? { triggerId: spec.id } : {}) },
     dedupeKey: `manual:${journeyId}:${lead.id}:${Date.now()}`,
     // Scope the event to THIS journey. A broadcast would enrol the lead into
     // every other active journey listening for the same trigger, which is a
@@ -114,15 +116,25 @@ export async function runJourneyOnLead(journeyId: string, leadId: string) {
   };
 }
 
-/** The trigger the journey's published version listens for. */
-async function activeTriggerFor(journeyId: string): Promise<string | null> {
+/**
+ * The FIRST trigger the journey's published version listens for.
+ *
+ * A version may now listen for several, and a test run has to pick one: it emits
+ * a single event, and an event has one type. The first is the one the author put
+ * first, which is the one the builder shows at the top — and the run is scoped to
+ * this journey, so it cannot spill into anything else listening for the same
+ * type. Its id travels with it so a step branching on `event.triggerId` behaves
+ * in the test exactly as it will in production.
+ */
+async function activeTriggerFor(journeyId: string): Promise<JourneyTriggerSpec | null> {
   const journey = await prisma.journey.findUnique({
     where: { id: journeyId },
-    select: { activeVersion: true, versions: { where: { state: "published" }, select: { version: true, trigger: true } } },
+    select: { activeVersion: true, versions: { where: { state: "published" }, select: { version: true, triggers: true } } },
   });
   if (!journey) return null;
   const active = journey.versions.find((version) => version.version === journey.activeVersion);
-  return active?.trigger ?? journey.versions[0]?.trigger ?? null;
+  const specs = readJourneyTriggers((active ?? journey.versions[0])?.triggers);
+  return specs[0] ?? null;
 }
 
 export async function retryJourneyRun(runId: string) {

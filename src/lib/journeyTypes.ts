@@ -61,12 +61,19 @@ export const JOURNEY_STEP_TYPES = [
   "choose",
   "repeat",
   // Two more that, like the containers above, perform no action of their own:
-  // `wait_for_trigger` parks the run until a named event
-  // arrives for this entity, and `variables` writes into the run context. Both
+  // `wait_for_trigger` parks the run until a named event arrives for this
+  // entity, and `variables` writes into the run context. Both
   // mutate RUN STATE rather than the outside world, so both are executed by the
   // runner — reaching journeyStepExecutor is a routing bug and says so.
   "wait_for_trigger",
   "variables",
+  // Park until something BECOMES true. The other two waits cannot express it —
+  // `wait` is a duration and answers "how long", and
+  // `wait_for_trigger` needs a JourneyEvent somebody writes, so "wait until this
+  // lead reaches Won" was only expressible as a fixed guess at how long that
+  // takes. Like the other wait it parks the run on its own position, so the
+  // runner owns it too.
+  "wait_for_condition",
 ] as const;
 
 export type JourneyStepType = (typeof JOURNEY_STEP_TYPES)[number];
@@ -97,6 +104,7 @@ export const JOURNEY_STEP_LABELS: Record<JourneyStepType, string> = {
   repeat: "Repeat (loop)",
   wait_for_trigger: "Wait for an event",
   variables: "Set variables",
+  wait_for_condition: "Wait until true",
 };
 
 /** Container steps own nested sequences; the runner, not the executor, runs them. */
@@ -114,7 +122,19 @@ export const JOURNEY_RUNNER_STEP_TYPES = [
   ...JOURNEY_CONTAINER_STEP_TYPES,
   "wait_for_trigger",
   "variables",
+  "wait_for_condition",
 ] as const;
+
+/**
+ * The steps that PARK the run on their own position and poll from there.
+ *
+ * Named as a set because the cursor carries exactly ONE armed wait — a run is
+ * at one position, so it can only be waiting for one thing — and `armedWaitFor`
+ * has to recognise every step type entitled to claim it. Spelled out here
+ * rather than as a comparison in journeyWait.ts so adding a third wait cannot
+ * leave a stale wait attached to a step that then re-arms it every tick.
+ */
+export const JOURNEY_WAIT_STEP_TYPES = ["wait_for_trigger", "wait_for_condition"] as const;
 
 export const REPEAT_MODES = ["count", "while", "until", "for_each"] as const;
 export type RepeatMode = (typeof REPEAT_MODES)[number];
@@ -137,8 +157,24 @@ export const CONDITION_FIELDS = [
   "contact.hasVehicle",
   "contact.tags",
   "event.type",
-  // The loop variables a `repeat` publishes to its body. Without these a
-  // `while`/`until` condition can only look
+  /**
+   * WHICH of a version's triggers enrolled this run, when the author named it.
+   *
+   * `event.type` above already tells two DIFFERENT trigger types apart, and for
+   * most journeys that is the whole question. It cannot separate two triggers of
+   * the SAME type — "entered Quoted" and "entered Won" are both `stage_entered`
+   * — and that pairing is the obvious thing to want once a version may listen
+   * for several things at once. The author's own id is the only thing that
+   * distinguishes them, so it is published here.
+   *
+   * Empty for a trigger the author did not name, and for every version that
+   * predates named triggers. Set once at enrolment and never rewritten: a
+   * `wait_for_trigger` waking a run mid-sequence does not touch `context.event`,
+   * so this keeps meaning "what let this person in".
+   */
+  "event.triggerId",
+  // The loop variables a `repeat` publishes. Without these a `while`/`until`
+  // condition can only look
   // at the lead or contact, and `for_each` would have no way to test the item it
   // is currently on — which is most of the point of iterating a list.
   "repeat.index",
@@ -197,8 +233,18 @@ export type JourneyCondition = {
   value?: unknown;
 };
 
+/**
+ * `not` means NONE OF THESE: the group passes when every condition inside it is
+ * invalid. So it is NOR, not "negate the first one" and not `!and(...)`.
+ *
+ * Spelled as a third `logic` rather than a `negate: true` flag on a group. A
+ * flag would have made `{ logic: "or", negate: true }` and
+ * `{ logic: "and", negate: true }` two more shapes to evaluate, explain and
+ * render, for no expressiveness a nested group does not already give: `not` of a
+ * nested `and` is `{ logic: "not", conditions: [{ logic: "and", … }] }`.
+ */
 export type JourneyConditionGroup = {
-  logic: "and" | "or";
+  logic: "and" | "or" | "not";
   conditions: Array<JourneyCondition | JourneyConditionGroup>;
 };
 
@@ -214,7 +260,7 @@ export type JourneyStep = {
    */
   nextStepId?: string | null;
   /**
-   * Carry on past a step that throws, instead of failing the whole run.
+   * Keep the run going when THIS step throws.
    *
    * One failed SMS threw, failed the whole run, and burned one of three run
    * attempts — so a provider outage on a "nice to have" notification could
@@ -224,6 +270,25 @@ export type JourneyStep = {
    * swallowed by it: those are decisions, not faults.
    */
   continueOnError?: boolean;
+  /**
+   * Whether this step runs at all. Absent or true means it runs; only a literal
+   * `false` mutes it.
+   *
+   * The point is to mute a step WITHOUT deleting it — a send that is wrong this
+   * month but right next month, a chase you want off while a promotion runs. The
+   * alternative people actually reach for is deleting the step and retyping it
+   * later, which loses its config, its id, and therefore its trace history.
+   *
+   * A disabled step is SKIPPED AND RECORDED AS SKIPPED. It is never quietly
+   * passed over: the whole argument for the activity trace is that a step which
+   * did nothing and said nothing is indistinguishable from a step that was never
+   * reached, and "why did this customer not get the email" must be answerable
+   * from the trace rather than by re-reading the definition.
+   *
+   * Read as `!== false` rather than `=== true`, like continueOnError, so every
+   * definition written before this flag existed keeps the documented default.
+   */
+  enabled?: boolean;
   config: Record<string, unknown>;
 };
 
@@ -248,8 +313,9 @@ export type JourneyDefinition = {
  *                           cursor frame stack that has to survive in a JSON
  *                           column between ticks. Five is already deeper than a
  *                           person can hold in their head.
- *  chooseOptions (10)     — ten branches is already a lot to hold in your head;
- *                           more than that is a lookup table, not a branch.
+ *  chooseOptions (10)     — more than ten is a lookup table, not a branch, and
+ *                           nobody reviewing a journey can hold it in their
+ *                           head. Past that, use nested chooses or a repeat.
  *  conditionsPerGroup(30) — unchanged, and now bounded overall by depth × steps.
  *  repeatIterations (100) — the runtime ceiling for EVERY repeat mode. A `while`
  *                           whose condition never goes false is the classic
@@ -260,16 +326,24 @@ export type JourneyDefinition = {
  *  forEachItems (100)     — the list is SNAPSHOT into the cursor at loop entry,
  *                           so this also caps how much JSON one parked run
  *                           carries.
+ *  triggers (5)           — ENROLMENT triggers on one published version. Five is
+ *                           the same judgement as waitTriggers below and for the
+ *                           same reason: a list of alternatives longer than that
+ *                           is not one journey's front door, it is two journeys.
+ *                           The matcher's cost is not the constraint — it walks
+ *                           this list in memory, per active journey, per event —
+ *                           the reader's is.
  *  waitTriggers (5)       — how many event types ONE wait_for_trigger may watch.
  *                           Each one widens an indexed query the waiter runs on
  *                           every poll; five is more alternatives than a person
  *                           can reason about in a single wait anyway.
- *  waitDays (30)          — the ceiling on a wait_for_trigger timeout, and the
- *                           reason a timeout is REQUIRED rather than optional.
- *                           A wait here is not a live object someone can see
- *                           and cancel; it is a database row that would poll on
- *                           every cron tick until someone noticed. "Forever" is
- *                           not expressible on purpose.
+ *  waitDays (30)          — the ceiling on a wait_for_trigger OR
+ *                           wait_for_condition timeout, and the reason a
+ *                           timeout is REQUIRED on both. A parked wait is not a
+ *                           live object anybody can see and cancel; it is a
+ *                           database row that would poll on every cron tick,
+ *                           forever, until a person happened to notice it.
+ *                           "Wait indefinitely" is not expressible on purpose.
  *  variables (10)         — names one `variables` step may set.
  *  variableChars (500)    — per rendered value.
  *  variableBytes (4000)   — the WHOLE bag, across every variables step in the
@@ -294,6 +368,7 @@ export const JOURNEY_LIMITS = {
   conditionsPerGroup: 30,
   repeatIterations: 100,
   forEachItems: 100,
+  triggers: 5,
   waitTriggers: 5,
   waitDays: 30,
   variables: 10,
@@ -332,7 +407,11 @@ function cleanId(value: unknown): string | null {
 export function parseConditionGroup(value: unknown): JourneyConditionGroup | null {
   if (value == null) return null;
   if (!isRecord(value)) throw new Error("Conditions must be an object");
-  const logic = value.logic === "or" ? "or" : "and";
+  // Unknown logic falls back to "and", as it always has. That is deliberately
+  // NOT a throw: entryConditions and choose options are stored JSON that
+  // predates this field, and the permissive reading is the one every existing
+  // journey was saved under.
+  const logic = value.logic === "or" ? "or" : value.logic === "not" ? "not" : "and";
   if (!Array.isArray(value.conditions)) throw new Error("Conditions must contain a list");
   if (value.conditions.length > JOURNEY_LIMITS.conditionsPerGroup) {
     throw new Error(`A journey may contain at most ${JOURNEY_LIMITS.conditionsPerGroup} conditions`);
@@ -410,6 +489,11 @@ function parseStepHeader(raw: unknown, budget: ParseBudget, nested: boolean): Jo
     config: isRecord(raw.config) ? raw.config : {},
   };
   if (raw.continueOnError === true) step.continueOnError = true;
+  // Only a literal `false` is stored. `enabled: true` is the default and is
+  // dropped rather than round-tripped, so the saved JSON says nothing about the
+  // steps that are simply on — and an older definition, which says nothing at
+  // all, means the same thing.
+  if (raw.enabled === false) step.enabled = false;
   return step;
 }
 
@@ -433,6 +517,7 @@ function parseStep(raw: unknown, budget: ParseBudget, depth: number, nested: boo
   // of the rules. A wait whose triggers only the save path checks is a wait that
   // parks forever the first time the two drift apart.
   if (type === "wait_for_trigger") parseWaitForTriggerConfig(config);
+  if (type === "wait_for_condition") parseWaitForConditionConfig(config);
   if (type === "variables") parseVariablesConfig(config);
   if (isLeadOutcomeStep(type)) parseLeadOutcomeConfig(type, config);
   return step;
@@ -544,6 +629,25 @@ export type WaitForTriggerConfig = {
 export const WAIT_TIMEOUT_MAX_MINUTES = JOURNEY_LIMITS.waitDays * 24 * 60;
 
 /**
+ * The timeout rule, stated ONCE for every step that parks and polls.
+ *
+ * REQUIRED, and capped, for the reason spelled out at JOURNEY_LIMITS.waitDays:
+ * a parked wait is not a live object somebody can see and cancel, it is a
+ * database row that would poll on every cron tick until a person noticed.
+ * "Wait indefinitely" is not expressible on purpose, and it has to be
+ * un-expressible for BOTH waits or the ceiling is a suggestion.
+ */
+function parseWaitTimeoutMinutes(config: Record<string, unknown>, what: string): number {
+  const timeoutMinutes = Number(config.timeoutMinutes);
+  if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > WAIT_TIMEOUT_MAX_MINUTES) {
+    throw new Error(
+      `A ${what} needs timeoutMinutes between 1 and ${WAIT_TIMEOUT_MAX_MINUTES} (${JOURNEY_LIMITS.waitDays} days)`,
+    );
+  }
+  return timeoutMinutes;
+}
+
+/**
  * A `wait_for_trigger` step's config — the SAME parse the runner uses.
  *
  * Only JOURNEY_EVENT_TRIGGERS are accepted. Those are the event types some
@@ -571,17 +675,46 @@ export function parseWaitForTriggerConfig(config: Record<string, unknown>): Wait
     throw new Error("A wait_for_trigger lists the same trigger twice");
   }
 
-  const timeoutMinutes = Number(config.timeoutMinutes);
-  if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > WAIT_TIMEOUT_MAX_MINUTES) {
-    throw new Error(
-      `A wait_for_trigger needs timeoutMinutes between 1 and ${WAIT_TIMEOUT_MAX_MINUTES} (${JOURNEY_LIMITS.waitDays} days)`,
-    );
-  }
+  const timeoutMinutes = parseWaitTimeoutMinutes(config, "wait_for_trigger");
 
-  // Default TRUE, matching HA: only an explicit `false` stops the run. Written
+  // Default TRUE: only an explicit `false` stops the run. Written
   // as `!== false` rather than `=== true` so a config that predates the flag,
   // or omits it, gets the documented default instead of the strict one.
   return { triggers, timeoutMinutes, continueOnTimeout: config.continueOnTimeout !== false };
+}
+
+/* ── wait_for_condition ──────────────────────────────────────────────────── */
+
+export type WaitForConditionConfig = {
+  /** What has to become true. At least one clause — see below. */
+  condition: JourneyConditionGroup;
+  /** Minutes. REQUIRED, and capped, exactly as wait_for_trigger's is. */
+  timeoutMinutes: number;
+  /** Default true: carry on past a timeout rather than ending the run. */
+  continueOnTimeout: boolean;
+};
+
+/**
+ * A `wait_for_condition` step's config — the SAME parse the runner uses.
+ *
+ * The condition may not be EMPTY, and that is not tidiness. `evaluateConditions`
+ * reads an empty group as "no filter" and returns true, so an empty wait is
+ * satisfied the instant it is reached: a step that renders in the builder as
+ * "wait until…", traces as "condition was already true", and waits for nothing
+ * at all. It is the same trap `repeat while` already refuses, reached from the
+ * other side — there an empty group loops forever, here it never waits — and it
+ * is far cheaper to refuse at save time than to explain a month later.
+ */
+export function parseWaitForConditionConfig(config: Record<string, unknown>): WaitForConditionConfig {
+  const condition = parseConditionGroup(config.condition);
+  if (!condition || condition.conditions.length === 0) {
+    throw new Error("A wait_for_condition needs at least one condition, or it never waits");
+  }
+  return {
+    condition,
+    timeoutMinutes: parseWaitTimeoutMinutes(config, "wait_for_condition"),
+    continueOnTimeout: config.continueOnTimeout !== false,
+  };
 }
 
 /* ── variables ───────────────────────────────────────────────────────────── */
@@ -876,8 +1009,35 @@ export type ConditionExplanation = {
   operator: string;
   expected: unknown;
   actual: unknown;
+  /**
+   * The COMPARISON's own result — did `actual` match `expected`. Unchanged by
+   * negation, on purpose: this field answers "what did the clause see and how
+   * did that compare", which is a fact about the data and must not flip
+   * meaning depending on where the clause sits.
+   */
   passed: boolean;
+  /**
+   * True when an ODD number of enclosing `not` groups apply to this clause.
+   *
+   * Without it the flattened trace is actively misleading under a `not`: the
+   * clause that PASSED is the one that made the group fail, and a reader
+   * scanning for ✗ would find nothing wrong and conclude the engine was broken.
+   * That is the "Condition did not match" defect again, one level down.
+   *
+   * Read together with `passed` through `clauseHeld` — never on its own.
+   */
+  negated: boolean;
 };
+
+/**
+ * Did this clause help its group pass?
+ *
+ * The one place the two fields are combined, so the trace UI and any test agree
+ * on what a tick means. Under a `not`, a clause holds by NOT matching.
+ */
+export function clauseHeld(clause: { passed: boolean; negated?: boolean }): boolean {
+  return clause.negated ? !clause.passed : clause.passed;
+}
 
 /**
  * The per-clause result behind a condition's verdict.
@@ -885,18 +1045,39 @@ export type ConditionExplanation = {
  * "Condition did not match" is true and useless: it sends someone re-reading
  * every clause by hand against a lead whose values have since changed. This
  * records what each clause actually compared, so the trace answers the question
- * instead of posing it.
+ * instead of posing it: the path taken is visible, and each node carries its
+ * own result.
  *
  * Nested groups are flattened: the field/operator pairs are what a reader is
  * looking for, and the group structure is already visible in the builder.
+ *
+ * ── What flattening does and does not promise, now that `not` exists ────────
+ *
+ * These rows are DIAGNOSTIC, not a re-derivation of the verdict. The verdict is
+ * recorded separately, as `output.passed`, by whoever ran the group — and it
+ * has to be, because a flat list cannot express composition: an `or` where one
+ * clause shows ✗ still passed, and that has been true since per-clause results
+ * were added. Nothing here changes that contract.
+ *
+ * What `not` WOULD have broken, and what `negated` fixes, is worse than
+ * imprecision. Under a `not`, a clause that matched is the reason the group
+ * failed — so a reader scanning the rows for a ✗ would find every clause green
+ * beside a step that did not match, and conclude the engine was lying. Carrying
+ * the negation makes each row state what it was actually asked to do: required,
+ * or excluded.
+ *
+ * `depth` is parity, not a count: two `not`s cancel, exactly as they do in the
+ * evaluation.
  */
 export function explainConditions(
   group: JourneyConditionGroup | null,
-  context: Record<string, unknown>
+  context: Record<string, unknown>,
+  negated = false,
 ): ConditionExplanation[] {
   if (!group) return [];
+  const inner = group.logic === "not" ? !negated : negated;
   return group.conditions.flatMap((condition) => {
-    if ("conditions" in condition) return explainConditions(condition, context);
+    if ("conditions" in condition) return explainConditions(condition, context, inner);
     const actual = valueAtPath(context, condition.field);
     return [{
       field: condition.field,
@@ -904,6 +1085,7 @@ export function explainConditions(
       expected: condition.value,
       actual,
       passed: compare(condition, actual),
+      negated: inner,
     }];
   });
 }
@@ -912,12 +1094,20 @@ export function evaluateConditions(
   group: JourneyConditionGroup | null,
   context: Record<string, unknown>
 ): boolean {
+  // An empty group is "no filter" and passes — including an empty `not`, which
+  // agrees with the rule below: NOR of nothing is true. The two must agree, or
+  // deleting the last clause from a `not` would flip an entry filter from
+  // "everyone except X" to "nobody", silently, on save.
   if (!group || group.conditions.length === 0) return true;
   const results = group.conditions.map((condition) =>
     "conditions" in condition
       ? evaluateConditions(condition, context)
       : compare(condition, valueAtPath(context, condition.field))
   );
+  // `not` is NOR — "none of these are valid" — because it takes a LIST. It is
+  // not "negate the first clause", and it is not `!and(...)`: `not` over [a, b]
+  // excludes a AND excludes b.
+  if (group.logic === "not") return !results.some(Boolean);
   return group.logic === "or" ? results.some(Boolean) : results.every(Boolean);
 }
 

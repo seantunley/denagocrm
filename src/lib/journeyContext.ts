@@ -166,7 +166,7 @@ export function journeyTemplateVars(context: JourneyContext): Record<string, str
     // leading letter, and no built-in key starts with "var_"); this is belt and
     // braces on the ordering, so adding a key below can never open the hole.
     ...variableTemplateVars(journeyVars(context)),
-    // 1-based, matching repeat.index. An object item renders as JSON rather
+    // 1-based, like repeat.index. An object item renders as JSON rather
     // than "[object Object]", which is worse than useless in a message body.
     repeat_index: repeat.index == null ? "" : String(repeat.index),
     repeat_item:

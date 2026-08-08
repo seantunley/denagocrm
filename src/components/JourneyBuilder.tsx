@@ -2,7 +2,8 @@
 
 import { useMemo, useRef, useState } from "react";
 import { createJourney } from "@/app/actions/journeys";
-import { JOURNEY_LIMITS, JOURNEY_STEP_LABELS } from "@/lib/journeyTypes";
+import { JOURNEY_LIMITS, JOURNEY_STEP_LABELS, JOURNEY_TRIGGERS } from "@/lib/journeyTypes";
+import { JOURNEY_TRIGGER_LABELS, type JourneyTriggerSpec } from "@/lib/journeyTriggers";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 import { JOURNEY_RUN_MODES, RUN_MODE_LEGACY_NOTE } from "@/lib/journeyRunModes";
 
@@ -11,8 +12,11 @@ export type JourneyOption = { id: string; name: string };
 type BuilderStep = {
   id: string;
   type: string;
-  /** Per-step, round-tripped so saving cannot drop it. */
+  /** Keep going if this step fails. Round-tripped so saving cannot drop it. */
   continueOnError?: boolean;
+  /** Whether this step runs. Round-tripped for the same reason: a step silently
+   *  re-armed by a save is a message sent that nobody asked for. */
+  enabled?: boolean;
   config: Record<string, unknown>;
 };
 
@@ -33,10 +37,67 @@ type BuilderStep = {
  * variables step with an empty `set` would leave every later `{{var_…}}`
  * rendering blank with nothing on screen to explain it.
  */
-const READ_ONLY_STEP_TYPES = new Set(["choose", "repeat", "wait_for_trigger", "variables"]);
+const READ_ONLY_STEP_TYPES = new Set([
+  "choose",
+  "repeat",
+  "wait_for_trigger",
+  "variables",
+  // A wait_for_condition holds a whole condition GROUP, which is more than the
+  // single-clause editor below can express — the same reason a rich `condition`
+  // step is carried rather than edited here.
+  "wait_for_condition",
+]);
+
+/**
+ * A `condition` whose group this form CANNOT represent.
+ *
+ * The editor below is a single clause: one field, one operator, one value,
+ * under `and`. Everything it saves is rebuilt from those three inputs — which
+ * means anything richer that was authored as JSON was, until now, silently
+ * flattened to `conditions[0]` on the next save. Every other clause, every
+ * nested group, and (the reason this became urgent) every `not`, gone; no
+ * error, no undo, and a journey that now enrols the exact set of people it was
+ * written to exclude.
+ *
+ * `not` did not create that hole, it made it reachable: `not` is precisely the
+ * kind of thing someone hand-authors into a condition step. So a group the form
+ * cannot round-trip makes the step read-only, exactly as a container is.
+ *
+ * A step with NO stored group is a new one the form is about to build — that is
+ * the flat field/operator/value shape, and it is editable.
+ */
+function complexCondition(config: Record<string, unknown>): boolean {
+  const group = config.condition;
+  if (!isRecord(group)) return false;
+  if (group.logic != null && group.logic !== "and") return true;
+  const list = group.conditions;
+  if (!Array.isArray(list) || list.length !== 1) return true;
+  return !isRecord(list[0]) || Array.isArray((list[0] as Record<string, unknown>).conditions);
+}
+
+/** Every reason a step is carried through verbatim rather than edited here. */
+function isReadOnlyStep(step: BuilderStep): boolean {
+  if (READ_ONLY_STEP_TYPES.has(step.type)) return true;
+  return step.type === "condition" && complexCondition(step.config);
+}
+
+/** How many leaf clauses a group holds, at every depth. */
+function countClauses(group: unknown): number {
+  if (!isRecord(group) || !Array.isArray(group.conditions)) return 0;
+  return group.conditions.reduce<number>(
+    (total, entry) =>
+      total + (isRecord(entry) && Array.isArray(entry.conditions) ? countClauses(entry) : 1),
+    0,
+  );
+}
 
 /** The one-line summary shown for a step the form cannot edit. */
 function readOnlySummary(step: BuilderStep): string {
+  if (step.type === "condition") {
+    const group = isRecord(step.config.condition) ? step.config.condition : {};
+    const clauses = countClauses(group);
+    return `Condition (${String(group.logic ?? "and")}): ${clauses} clause${clauses === 1 ? "" : "s"}`;
+  }
   if (step.type === "choose") {
     const options = Array.isArray(step.config.options) ? step.config.options.length : 0;
     return `${options} branch${options === 1 ? "" : "es"}${step.config.default ? " + default" : ""}`;
@@ -45,6 +106,10 @@ function readOnlySummary(step: BuilderStep): string {
   if (step.type === "wait_for_trigger") {
     const triggers = Array.isArray(step.config.triggers) ? step.config.triggers : [];
     return `Wait for ${triggers.join(" or ") || "?"} (timeout ${String(step.config.timeoutMinutes ?? "?")} min)`;
+  }
+  if (step.type === "wait_for_condition") {
+    const clauses = countClauses(step.config.condition);
+    return `Wait until ${clauses} condition${clauses === 1 ? "" : "s"} hold (timeout ${String(step.config.timeoutMinutes ?? "?")} min)`;
   }
   const names = isRecord(step.config.set) ? Object.keys(step.config.set) : [];
   return `Sets ${names.join(", ") || "nothing"}`;
@@ -60,8 +125,12 @@ export type JourneyBuilderDefaults = {
    * would show "single" over a row that says "parallel".
    */
   runMode?: string;
-  trigger?: string;
-  triggerConfig?: Record<string, unknown> | null;
+  /**
+   * Every trigger the version listens for, in the author's order. Read through
+   * the tolerant reader on the server, so a converted-rule draft carrying a
+   * trigger name this engine never had opens for editing instead of throwing.
+   */
+  triggers?: JourneyTriggerSpec[];
   conditionSource?: string;
   conditionProvince?: string;
   minValueRands?: number | null;
@@ -87,11 +156,11 @@ function cleanSteps(defaults?: JourneyBuilderDefaults["definition"]): BuilderSte
   }
   return existing.map((step) => {
     const config = { ...step.config };
-    // A container's config holds its nested sequences. Nothing below may touch
-    // it — carry it through byte-for-byte.
-    if (READ_ONLY_STEP_TYPES.has(step.type)) {
-      return { id: step.id, type: step.type, continueOnError: step.continueOnError, config };
-    }
+    const carried = { id: step.id, type: step.type, continueOnError: step.continueOnError, enabled: step.enabled, config };
+    // A container's config holds its nested sequences, and a rich condition's
+    // holds a group this form cannot rebuild. Nothing below may touch either —
+    // carry them through byte-for-byte.
+    if (isReadOnlyStep(carried)) return carried;
     if (step.type === "condition" && isRecord(config.condition)) {
       const group = config.condition;
       const first = Array.isArray(group.conditions) && isRecord(group.conditions[0])
@@ -103,7 +172,7 @@ function cleanSteps(defaults?: JourneyBuilderDefaults["definition"]): BuilderSte
         config.value = first.value;
       }
     }
-    return { id: step.id, type: step.type, continueOnError: step.continueOnError, config };
+    return { id: step.id, type: step.type, continueOnError: step.continueOnError, enabled: step.enabled, config };
   });
 }
 
@@ -127,22 +196,40 @@ export default function JourneyBuilder({
   submitLabel?: string;
 }) {
   const counter = useRef(100);
-  const [trigger, setTrigger] = useState(defaults.trigger ?? "lead_created");
+  const [triggers, setTriggers] = useState<JourneyTriggerSpec[]>(
+    defaults.triggers?.length ? defaults.triggers : [{ type: "lead_created", config: {} }],
+  );
   const [category, setCategory] = useState(defaults.category ?? "automation");
   // Not parseRunMode() — that lives beside basePrisma and cannot cross into the
   // browser. An unrecognised stored value shows as "nothing selected", which is
   // honest: the server would read it as `single`, and pretending the radio was
   // already on `single` would hide a row that does not say that.
   const [runMode, setRunMode] = useState(defaults.runMode ?? "single");
-  const [triggerConfig, setTriggerConfig] = useState<Record<string, unknown>>(
-    defaults.triggerConfig ?? {}
-  );
   const [conditionSource, setConditionSource] = useState(defaults.conditionSource ?? "");
   const [conditionProvince, setConditionProvince] = useState(defaults.conditionProvince ?? "");
   const [minValueRands, setMinValueRands] = useState(
     defaults.minValueRands == null ? "" : String(defaults.minValueRands)
   );
   const [steps, setSteps] = useState<BuilderStep[]>(cleanSteps(defaults.definition));
+
+  /**
+   * Edit ONE trigger in place. Everything else in the list is left untouched —
+   * including a type this builder has no dropdown entry for, which is how a
+   * converted-rule draft survives being opened and re-saved.
+   */
+  const patchTrigger = (index: number, patch: Partial<JourneyTriggerSpec>) => {
+    setTriggers((current) => current.map((spec, i) => (i === index ? { ...spec, ...patch } : spec)));
+  };
+  // Changing the TYPE clears that trigger's config: `stageId` means nothing to
+  // lead_idle, and carrying it over would save a filter the engine never reads.
+  const setTriggerType = (index: number, type: string) => patchTrigger(index, { type, config: {} });
+  const setTriggerConfig = (index: number, config: Record<string, unknown>) =>
+    patchTrigger(index, { config });
+  // A blank id is stored as ABSENT, not as "". Empty-string ids would all look
+  // identical to parseJourneyTriggers' uniqueness check and be refused as
+  // duplicates the moment a second trigger was added.
+  const setTriggerId = (index: number, id: string) =>
+    patchTrigger(index, { id: id.trim() ? id.trim() : undefined });
 
   const setConfig = (index: number, key: string, value: unknown) => {
     setSteps((current) => current.map((step, i) =>
@@ -209,8 +296,10 @@ export default function JourneyBuilder({
     const mapped = steps.map((step, index) => {
       const nextStepId = steps[index + 1]?.id ?? null;
       // Spreading `step` is what preserves a container's nested sequences and
-      // every step's continueOnError. Only `condition` has its config rebuilt.
-      if (step.type !== "condition") return { ...step, nextStepId };
+      // every step's continueOnError. Only a condition the form can actually
+      // represent has its config rebuilt; a richer group is carried, along with
+      // its own trueStepId/falseStepId, rather than rewritten from one clause.
+      if (step.type !== "condition" || isReadOnlyStep(step)) return { ...step, nextStepId };
       const stopId = `${step.id}_false_stop`;
       return {
         ...step,
@@ -229,8 +318,11 @@ export default function JourneyBuilder({
         },
       };
     });
+    // Only for the conditions this form generated a false-branch for. A carried
+    // condition already names its own falseStepId, and minting a second stop
+    // step for it would be an orphan the parser then rejects.
     const generatedStops = steps
-      .filter((step) => step.type === "condition")
+      .filter((step) => step.type === "condition" && !isReadOnlyStep(step))
       .map((step) => ({
         id: `${step.id}_false_stop`,
         type: "stop",
@@ -245,7 +337,7 @@ export default function JourneyBuilder({
 
   return (
     <form action={submitAction ?? createJourney} className="space-y-5">
-      <input type="hidden" name="triggerConfig" value={JSON.stringify(triggerConfig)} />
+      <input type="hidden" name="triggers" value={JSON.stringify(triggers)} />
       <input type="hidden" name="entryConditions" value={JSON.stringify(entryConditions)} />
       <input type="hidden" name="definition" value={JSON.stringify(definition)} />
 
@@ -278,47 +370,93 @@ export default function JourneyBuilder({
       </div>
 
       <div className="rounded-lg border border-slate-800 p-4 space-y-3">
-        <h3 className="font-semibold">1. Enrollment trigger</h3>
-        <select name="trigger" className="input" value={trigger} onChange={(e) => { setTrigger(e.target.value); setTriggerConfig({}); }}>
-          <option value="lead_created">New lead created</option>
-          <option value="stage_entered">Lead enters a stage</option>
-          <option value="lead_idle">Lead becomes idle</option>
-          <option value="lead_won">Lead is won</option>
-          <option value="lead_lost">Lead is lost</option>
-          <option value="quote_signed">Quote is signed</option>
-          <option value="quote_declined">Quote is declined</option>
-          <option value="delivered">Vehicle is delivered</option>
-          <option value="referral_earned">Referral is earned</option>
-          <option value="contact_segment">Contact joins a saved segment</option>
-          <option value="purchase_anniversary">Purchase anniversary</option>
-          <option value="win_back">Inactive customer win-back</option>
-        </select>
+        <h3 className="font-semibold">1. Enrollment triggers</h3>
+        <p className="text-xs text-muted-foreground">
+          Anyone who matches <strong>any one</strong> of these is enrolled — once, even if
+          several of them fit. Give a trigger an ID to branch on it later with the
+          <code className="mx-1">event.triggerId</code> condition; two triggers of the same
+          kind each need one.
+        </p>
 
-        {trigger === "stage_entered" && (
-          <select className="input" value={String(triggerConfig.stageId ?? "")} onChange={(e) => setTriggerConfig({ stageId: e.target.value })}>
-            <option value="">Any stage</option>
-            {stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
-          </select>
-        )}
-        {trigger === "lead_idle" && (
-          <input className="input" type="number" min={1} value={String(triggerConfig.idleDays ?? 3)} onChange={(e) => setTriggerConfig({ idleDays: Number(e.target.value) })} aria-label="Idle days" />
-        )}
-        {trigger === "contact_segment" && (
-          <div className="grid md:grid-cols-2 gap-2">
-            <select className="input" value={String(triggerConfig.segmentId ?? "")} onChange={(e) => setTriggerConfig((current) => ({ ...current, segmentId: e.target.value }))}>
-              <option value="">Choose segment</option>
-              {segments.map((segment) => <option key={segment.id} value={segment.id}>{segment.name}</option>)}
-            </select>
-            <select className="input" value={String(triggerConfig.repeat ?? "once")} onChange={(e) => setTriggerConfig((current) => ({ ...current, repeat: e.target.value }))}>
-              <option value="once">Enroll each contact once</option>
-              <option value="weekly">Allow weekly re-enrollment</option>
-              <option value="daily">Allow daily re-enrollment</option>
-            </select>
-          </div>
-        )}
-        {trigger === "win_back" && (
-          <input className="input" type="number" min={3} value={String(triggerConfig.inactiveMonths ?? 12)} onChange={(e) => setTriggerConfig({ inactiveMonths: Number(e.target.value) })} aria-label="Inactive months" />
-        )}
+        {triggers.map((spec, index) => {
+          const config = spec.config ?? {};
+          return (
+            <div key={index} className="rounded-lg border border-slate-800/70 p-3 space-y-2">
+              <div className="grid md:grid-cols-[2fr_1fr_auto] gap-2 items-start">
+                {/* Rendered FROM the declared list, not spelled out by hand. The
+                    hand-written copy is how an option could appear here that
+                    nothing in the engine could ever act on. */}
+                <select
+                  className="input"
+                  aria-label="Enrollment trigger"
+                  value={spec.type}
+                  onChange={(e) => setTriggerType(index, e.target.value)}
+                >
+                  {/* A stored type this build does not offer — a draft converted
+                      from the retired rules engine — is shown as itself rather
+                      than silently snapping to the first option on render. */}
+                  {!(JOURNEY_TRIGGERS as readonly string[]).includes(spec.type) && (
+                    <option value={spec.type}>{spec.type} (not available)</option>
+                  )}
+                  {JOURNEY_TRIGGERS.map((type) => (
+                    <option key={type} value={type}>{JOURNEY_TRIGGER_LABELS[type]}</option>
+                  ))}
+                </select>
+                <input
+                  className="input"
+                  aria-label="Trigger ID"
+                  placeholder="ID (optional)"
+                  value={spec.id ?? ""}
+                  onChange={(e) => setTriggerId(index, e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="text-xs text-red-400 px-2 py-2 disabled:opacity-40"
+                  disabled={triggers.length === 1}
+                  title={triggers.length === 1 ? "A journey needs at least one trigger" : "Remove this trigger"}
+                  onClick={() => setTriggers((current) => current.filter((_, i) => i !== index))}
+                >
+                  Remove
+                </button>
+              </div>
+
+              {spec.type === "stage_entered" && (
+                <select className="input" aria-label="Stage" value={String(config.stageId ?? "")} onChange={(e) => setTriggerConfig(index, { stageId: e.target.value })}>
+                  <option value="">Any stage</option>
+                  {stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+                </select>
+              )}
+              {spec.type === "lead_idle" && (
+                <input className="input" type="number" min={1} value={String(config.idleDays ?? 3)} onChange={(e) => setTriggerConfig(index, { idleDays: Number(e.target.value) })} aria-label="Idle days" />
+              )}
+              {spec.type === "contact_segment" && (
+                <div className="grid md:grid-cols-2 gap-2">
+                  <select className="input" aria-label="Segment" value={String(config.segmentId ?? "")} onChange={(e) => setTriggerConfig(index, { ...config, segmentId: e.target.value })}>
+                    <option value="">Choose segment</option>
+                    {segments.map((segment) => <option key={segment.id} value={segment.id}>{segment.name}</option>)}
+                  </select>
+                  <select className="input" aria-label="Re-enrollment window" value={String(config.repeat ?? "once")} onChange={(e) => setTriggerConfig(index, { ...config, repeat: e.target.value })}>
+                    <option value="once">Enroll each contact once</option>
+                    <option value="weekly">Allow weekly re-enrollment</option>
+                    <option value="daily">Allow daily re-enrollment</option>
+                  </select>
+                </div>
+              )}
+              {spec.type === "win_back" && (
+                <input className="input" type="number" min={3} value={String(config.inactiveMonths ?? 12)} onChange={(e) => setTriggerConfig(index, { inactiveMonths: Number(e.target.value) })} aria-label="Inactive months" />
+              )}
+            </div>
+          );
+        })}
+
+        <button
+          type="button"
+          className="btn-secondary btn-sm"
+          disabled={triggers.length >= JOURNEY_LIMITS.triggers}
+          onClick={() => setTriggers((current) => [...current, { type: "lead_created", config: {} }])}
+        >
+          + Add another trigger
+        </button>
       </div>
 
       {/* Re-enrolment. Sits directly under the trigger because it is the same
@@ -379,16 +517,27 @@ export default function JourneyBuilder({
           <button type="button" className="btn-secondary btn-sm" onClick={addStep}>+ Add step</button>
         </div>
         {steps.map((step, index) => (
-          <div key={step.id} className="rounded-lg border border-slate-800 bg-slate-900/40 p-4 space-y-3">
+          <div
+            key={step.id}
+            className={`rounded-lg border border-slate-800 bg-slate-900/40 p-4 space-y-3 ${
+              step.enabled === false ? "opacity-60" : ""
+            }`}
+          >
             <div className="flex items-center gap-2">
               <span className="badge bg-slate-800 text-slate-300">{index + 1}</span>
+              {/* A muted step still occupies its place in the sequence, so the
+                  list has to show which one is off. Dimming alone is a hint, not
+                  a statement — the badge is the statement. */}
+              {step.enabled === false && (
+                <span className="badge bg-amber-500/15 text-amber-300">Off</span>
+              )}
               {/* Disabled for containers: changing the type resets config, and a
                   container's config IS its nested sequences. One stray click
                   would delete every branch with no error and no undo. */}
               <select
                 className="input flex-1"
                 value={step.type}
-                disabled={READ_ONLY_STEP_TYPES.has(step.type)}
+                disabled={isReadOnlyStep(step)}
                 onChange={(e) => setType(index, e.target.value)}
               >
                 {Object.entries(stepLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -398,7 +547,7 @@ export default function JourneyBuilder({
               <button type="button" className="text-red-400 text-sm" onClick={() => setSteps((current) => current.filter((_, i) => i !== index))}>Remove</button>
             </div>
 
-            {READ_ONLY_STEP_TYPES.has(step.type) && (
+            {isReadOnlyStep(step) && (
               <div className="rounded border border-amber-500/30 bg-amber-500/[0.06] p-3 text-xs text-amber-200/90">
                 <p className="font-semibold text-amber-300">{readOnlySummary(step)}</p>
                 <p className="mt-1 leading-5">
@@ -480,7 +629,7 @@ export default function JourneyBuilder({
                 that is already open is left alone and the step records itself as skipped.
               </p>
             )}
-            {step.type === "condition" && (
+            {step.type === "condition" && !isReadOnlyStep(step) && (
               <div className="grid md:grid-cols-3 gap-2">
                 <select className="input" value={String(step.config.field ?? "lead.source")} onChange={(e) => setConfig(index, "field", e.target.value)}>
                   <option value="lead.source">Lead source</option><option value="lead.status">Lead status</option><option value="lead.valueCents">Lead value (cents)</option><option value="lead.stageId">Lead stage</option><option value="contact.province">Contact province</option><option value="contact.tags">Contact tag ID</option><option value="contact.hasVehicle">Has vehicle</option>
@@ -494,12 +643,29 @@ export default function JourneyBuilder({
             )}
             {step.type === "stop" && <input className="input" placeholder="Reason" value={String(step.config.reason ?? "")} onChange={(e) => setConfig(index, "reason", e.target.value)} />}
 
+            {/* Offered for EVERY step type including
+                the ones with no visual editor — muting a branch you cannot edit
+                here is exactly when you need this, and the alternative is
+                deleting it and losing its config, its id and its trace history.
+                A disabled step is skipped and RECORDED as skipped, so the
+                activity trace still explains the gap. */}
+            <label className="flex items-center gap-2 text-xs text-slate-400">
+              <input
+                type="checkbox"
+                checked={step.enabled !== false}
+                onChange={(e) => setSteps((current) => current.map((s, i) =>
+                  i === index ? { ...s, enabled: e.target.checked } : s
+                ))}
+              />
+              Step is on
+            </label>
+
             {/* Per step, because only the author knows which of their steps is
                 load-bearing. One failed SMS used to fail the whole run and burn
                 one of its three attempts, so a provider outage on a courtesy
                 notification could permanently kill a journey whose remaining
                 steps were the ones that mattered. */}
-            {!READ_ONLY_STEP_TYPES.has(step.type) && step.type !== "wait" && step.type !== "stop" && (
+            {!isReadOnlyStep(step) && step.type !== "wait" && step.type !== "stop" && (
               <label className="flex items-center gap-2 text-xs text-slate-400">
                 <input
                   type="checkbox"
