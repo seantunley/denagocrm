@@ -1,0 +1,87 @@
+/// Repairs — the issue registry behind /repairs.
+///
+/// The problems that actually hurt this app are the SILENT ones. A journey step
+/// that skips because its email template was deleted does not throw, does not
+/// appear in the System Log, and does not stop the run — it just quietly stops
+/// sending, and you find out when a customer asks why they never got the email.
+///
+/// A detector turns that into a row here, and this page turns the row into a
+/// line with a Fix button. Nothing in this file is a log: a log records that
+/// something happened, an issue records that something is STILL WRONG, and it
+/// disappears by itself when it stops being wrong.
+///
+/// Kept in its own Prisma schema file so the domain can evolve independently —
+/// the same convention as journeys.prisma.
+model RepairIssue {
+  id String @id @default(cuid())
+
+  /// Owning tenant. NOT NULL, unlike the older models whose tenantId was added
+  /// by an additive backfill: this table is new, so there is no legacy
+  /// untenanted row to accommodate and no reason to allow one. Every write goes
+  /// through `repairsTenantId()` (src/lib/repairs.ts), which resolves the
+  /// founding tenant while enforcement is dormant and throws when enforcement
+  /// is on with no scope — so a tenantless row cannot be written.
+  tenantId String
+
+  /// WHICH detector owns this row, e.g. "journey.email_template_missing".
+  ///
+  /// Stored as its own column rather than being parsed back out of `key`,
+  /// because it is the leading predicate of the auto-clear sweep ("resolve every
+  /// open issue of MINE that I did not just re-raise"). Recovering it from `key`
+  /// would make that sweep a LIKE 'prefix%' scan, which a plain btree only
+  /// serves under the C collation — an index that silently stops being used is
+  /// worse than a column.
+  detector String
+
+  /// STABLE IDENTITY. Derived only from the detector and the thing that is
+  /// wrong — `journey.email_template_missing:<journeyId>:<templateId>` — never
+  /// from the run that found it and never from a MEASUREMENT of it.
+  ///
+  /// That second exclusion is the sharp edge. Putting the failure count in the
+  /// key would mint a brand-new issue every time the count moved, so one broken
+  /// journey would become a hundred rows nobody could dismiss. Measurements
+  /// belong in `description`, which is refreshed on every re-detection.
+  key String
+
+  /// critical — something is silently not happening (mail not sent, journey
+  ///            enrolling nobody). warning — degraded, worth a look.
+  severity String
+
+  title       String
+  description String
+
+  /// Where the problem is FIXED — an in-app path, e.g. "/journeys". Optional
+  /// because not every issue has one place to go.
+  fixRoute String?
+
+  /// When this problem was first raised, and when a detector last confirmed it
+  /// is still true. `lastSeenAt` is what makes an issue different from a log
+  /// line: it is refreshed, not appended.
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  /// Set when a detector runs and does NOT re-raise this key — the problem went
+  /// away. Clearing is automatic and nobody has to remember to do it.
+  resolvedAt DateTime?
+
+  /// Set by a person: "I know, stop telling me." Hides the row while the
+  /// problem PERSISTS, and is cleared automatically if the problem resolves and
+  /// later recurs. A dismissal is an answer to the problem in front of you; a
+  /// recurrence is new information, and a click from before the thing healed is
+  /// not consent to hide it the next time it breaks.
+  ignoredAt   DateTime?
+  ignoredById String?
+
+  /// One row per problem, per tenant. This is the whole idempotency guarantee:
+  /// re-running a detector upserts on it, so a detector cannot duplicate itself
+  /// however many times the cron ticks.
+  @@unique([tenantId, key])
+  /// The auto-clear sweep: `tenantId = $1 AND detector = $2 AND resolvedAt IS NULL`.
+  /// tenantId leads for the same reason it does on the journey retention
+  /// indexes — the sweep runs inside a per-tenant cron slice, and a
+  /// detector-leading index would make the busiest workspace set the cost of
+  /// the quietest one's sweep.
+  @@index([tenantId, detector, resolvedAt])
+  /// The page: open issues for this tenant, newest confirmation first.
+  @@index([tenantId, resolvedAt, lastSeenAt])
+}

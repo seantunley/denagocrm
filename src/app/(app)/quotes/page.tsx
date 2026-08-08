@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { FileText, Plus } from "lucide-react";
+import { CheckCircle2, CircleDollarSign, FileText, Plus, Search, Send } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireAnyPermission, getAccessibleQuoteIds, hasPermission } from "@/lib/permissions";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
@@ -13,8 +13,9 @@ import {
 import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
 import { getSetting } from "@/lib/settings";
 import { PageHeader } from "@/components/page-header";
-import { buttonVariants } from "@/components/ui/button";
-import { EmptyState, StatusPill } from "@/components/visual-system";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { EmptyState, MetricCard, MetricStrip, StatusPill, Surface, WorkspaceToolbar } from "@/components/visual-system";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { deleteQuote } from "@/app/actions/quotes";
 import {
@@ -50,11 +51,11 @@ function inputDate(daysFromNow: number) {
 export default async function QuotesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ edit?: string }>;
+  searchParams: Promise<{ edit?: string; q?: string; status?: string }>;
 }) {
   const user = await requireAnyPermission("quotes.view_all", "quotes.view_owned");
   const accessibleQuoteIds = await getAccessibleQuoteIds(user);
-  const { edit } = await searchParams;
+  const { edit, q, status } = await searchParams;
   const [quotes, contacts, openLeads, products, allVersions, validDaysRaw, quoteTerms] = await Promise.all([
     prisma.quote.findMany({
       // Only current heads appear in the list. Older revisions remain available
@@ -119,6 +120,28 @@ export default async function QuotesPage({
     basePriceCents: product.basePriceCents,
     colors: product.colors.map((colour) => colour.name),
   }));
+  const needle = q?.trim().toLowerCase() ?? "";
+  const visibleQuotes = quotes.filter((quote) => {
+    const matchesStatus = !status || quote.status === status;
+    // The SAME resolver the row renders with, not a second copy of the rule.
+    // Deciding the addressee here independently meant a fleet quote could not be
+    // found by the fleet's name — the row showed "Acme Logistics" and the search
+    // only ever matched the manager whose contact record is attached to it.
+    const customer = quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name;
+    const matchesSearch = !needle || [
+      `q-${quote.number}`,
+      customer,
+      quote.lead?.title ?? "",
+    ].some((value) => value.toLowerCase().includes(needle));
+    return matchesStatus && matchesSearch;
+  });
+  const draftCount = quotes.filter((quote) => quote.status === "draft").length;
+  const sentCount = quotes.filter((quote) => quote.status === "sent").length;
+  const acceptedCount = quotes.filter((quote) => quote.status === "accepted").length;
+  const pipelineValue = quotes
+    .filter((quote) => quote.status !== "declined")
+    .reduce((total, quote) => total + payableTotalCents(quote), 0);
+  const filtersActive = Boolean(needle || status);
 
   return (
     <QuoteEditorProvider
@@ -173,30 +196,54 @@ export default async function QuotesPage({
       </MobileOnly>
       <DesktopOnly>
       <div className="space-y-5">
-        <PageHeader title="Quotes" description={`${quotes.length} current quotes · Create, price and send every customer proposal.`}>
+        <PageHeader title="Quotes" description="Create, price and progress every customer proposal from one commercial workspace.">
           <QuoteEditorTrigger className={buttonVariants({ size: "sm" })}>
             <Plus className="size-4" />
             New quote
           </QuoteEditorTrigger>
         </PageHeader>
 
-        {quotes.length === 0 ? (
+        <MetricStrip>
+          <MetricCard icon={FileText} label="Draft" value={draftCount} detail="Proposals being prepared" />
+          <MetricCard icon={Send} label="Sent" value={sentCount} detail="With customers for review" accent={sentCount > 0} />
+          <MetricCard icon={CheckCircle2} label="Accepted" value={acceptedCount} detail="Current accepted quotes" />
+          <MetricCard icon={CircleDollarSign} label="Open value" value={formatZAR(Math.round(pipelineValue))} detail={`${quotes.length} current quote${quotes.length === 1 ? "" : "s"}`} />
+        </MetricStrip>
+
+        <WorkspaceToolbar>
+          <form action="/quotes" role="search" className="flex flex-col gap-2 lg:flex-row lg:items-center">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input name="q" defaultValue={q ?? ""} placeholder="Search quote, customer or lead" className="h-10 rounded-xl bg-background/50 pl-9" />
+            </div>
+            <select name="status" defaultValue={status ?? ""} className="input h-10 rounded-xl bg-background/50 lg:w-44">
+              <option value="">All statuses</option>
+              <option value="draft">Draft</option>
+              <option value="sent">Sent</option>
+              <option value="accepted">Accepted</option>
+              <option value="declined">Declined</option>
+            </select>
+            <Button variant="secondary" type="submit">Filter</Button>
+            {filtersActive && <Link href="/quotes" className={buttonVariants({ variant: "ghost" })}>Clear</Link>}
+          </form>
+        </WorkspaceToolbar>
+
+        {visibleQuotes.length === 0 ? (
           <EmptyState
-            icon={FileText}
-            title="No quotes yet"
-            description="Build the first customer proposal without leaving this page."
+            icon={filtersActive ? Search : FileText}
+            title={filtersActive ? "No matching quotes" : "No quotes yet"}
+            description={filtersActive ? "Try a broader search, another status, or clear the current filters." : "Build the first customer proposal without leaving this page."}
             action={
-              <QuoteEditorTrigger className={buttonVariants({ size: "sm" })}>
-                <Plus className="size-4" />
-                Create quote
-              </QuoteEditorTrigger>
+              filtersActive
+                ? <Link href="/quotes" className={buttonVariants({ variant: "outline", size: "sm" })}>Clear filters</Link>
+                : <QuoteEditorTrigger className={buttonVariants({ size: "sm" })}><Plus className="size-4" />Create quote</QuoteEditorTrigger>
             }
           />
         ) : (
           <ResponsiveDataView
             mobile={
               <MobileDataList>
-                {quotes.map((quote) => {
+                {visibleQuotes.map((quote) => {
                   const total = payableTotalCents(quote);
                   return (
                     <RecordContextMenu
@@ -243,7 +290,7 @@ export default async function QuotesPage({
               </MobileDataList>
             }
             desktop={
-              <div className="card overflow-x-auto p-0">
+              <Surface className="overflow-x-auto">
                 <table className="table-base">
                   <thead>
                     <tr>
@@ -258,7 +305,7 @@ export default async function QuotesPage({
                     </tr>
                   </thead>
                   <tbody>
-                    {quotes.map((quote) => {
+                    {visibleQuotes.map((quote) => {
                       const total = payableTotalCents(quote);
                       return (
                         <RecordContextMenu
@@ -296,7 +343,7 @@ export default async function QuotesPage({
                     })}
                   </tbody>
                 </table>
-              </div>
+              </Surface>
             }
           />
         )}

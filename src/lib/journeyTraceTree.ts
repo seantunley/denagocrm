@@ -478,6 +478,9 @@ export function parseClauses(output: unknown): ConditionExplanation[] | null {
       expected: row.expected,
       actual: row.actual,
       passed: row.passed === true,
+      // Absent on every row written before `not` existed, and false is the
+      // right reading for those: they were all plain requirements.
+      negated: row.negated === true,
     }];
   });
 }

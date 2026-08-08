@@ -410,8 +410,8 @@ test("the early-out query has an index to use", () => {
 
 test("a quiet journey still keeps a trace", () => {
   // An age-only rule empties the trace for a journey that rarely runs, which is
-  // exactly the journey someone is most likely to be debugging, so the most
-  // recent N runs of every journey are kept regardless of age.
+  // exactly the journey someone is most likely to be debugging — so a floor of
+  // the last N runs per journey sits underneath the age rule.
   const code = shipped("src/lib/journeyRetention.ts");
   assert.match(code, /RUNS_KEPT_PER_JOURNEY/, "a per-journey floor must exist");
   assert.match(code, /take: RUNS_KEPT_PER_JOURNEY/);

@@ -5,9 +5,9 @@ import { JOURNEY_LIMITS } from "./journeyTypes";
  *
  * ── The decision: nested tree, path cursor — NOT compiled-flat ──────────────
  *
- * The obvious way to walk nested sequences is a call stack, which works when a
- * script runs to completion inside one process. Ours does not:
- * `processOneRun` executes at most twenty steps and then PARKS, and
+ * The obvious way to walk nested sequences is a call stack, and it works when a
+ * script runs to completion inside one process. Ours cannot: `processOneRun`
+ * executes at most twenty steps and then PARKS, and
  * a run can sit on a `wait` for three days before a different cron process picks
  * it up. There is no call stack to resume — the position has to be a value in
  * the database.
@@ -251,7 +251,7 @@ export function cloneCursor(cursor: JourneyCursor): JourneyCursor {
 }
 
 /**
- * The loop variables the innermost `repeat` publishes to its body.
+ * The `repeat` variables the innermost loop publishes.
  *
  * DERIVED from the cursor every step rather than stored in `run.context`, and
  * that is deliberate: `processOneRun` refreshes the context from the database
@@ -265,8 +265,8 @@ export function repeatVars(cursor: JourneyCursor): Record<string, unknown> | nul
     if (frame.kind !== "repeat") continue;
     const total = frame.items?.length ?? null;
     return {
-      // 1-based: the first pass is "1", not "0". Journey authors are not
-      // programmers, and "iteration 0" reads as a bug in a message body.
+      // 1-based — the first pass is "1", not "0", because the number is read by
+      // a person writing a message, not by an array.
       index: frame.iteration + 1,
       first: frame.iteration === 0,
       last: total == null ? false : frame.iteration === total - 1,

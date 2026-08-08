@@ -50,15 +50,18 @@ const { trimToDerLength } = createRequire(import.meta.url)(
  * sealed, never before.
  *
  * The development certificate is generated lazily, on the first seal, with
- * `notBefore = new Date()`. Capturing this at module load put it a few
- * milliseconds BEFORE that notBefore, so the certificate was legitimately "not
- * yet valid" at the instant being asked about and the test failed at random
- * depending on scheduling. It looked like cross-file env pollution and was not;
- * `node --test` gives each file its own process, so the env fix I first reached
- * for could not have mattered either way.
+ * `notBefore = new Date()`. Capturing this at module load put it BEFORE that
+ * notBefore, so the certificate was legitimately "not yet valid" at the instant
+ * being asked about and the test failed at random.
+ *
+ * X.509 validity is stored to the second, so notBefore is rounded — which is
+ * why a gap of a few milliseconds is enough whenever certificate creation
+ * crosses a one-second boundary. A trust-path test became a clock race.
+ *
+ * (Diagnosed independently on this branch and on main. The mechanism above is
+ * this branch's, which is the more precise of the two; the name is main's.)
  */
 const sealedAt = () => new Date();
-
 async function sealedDocument(): Promise<Buffer> {
   // These tests are ABOUT the development identity, so make sure that is what
   // signs. sealValidationInstant.test.ts configures a PKCS#12 with a deliberately

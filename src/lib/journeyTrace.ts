@@ -44,8 +44,8 @@ export type TraceEvent = {
 /**
  * A run's step timeline.
  *
- * `steps` is a FLAT list carrying the hierarchical path, e.g.
- * `"triage/choose/1/sequence/0"`. For a flat journey the path is identical to the step id —
+ * `steps` is a FLAT list carrying the hierarchical path. For a flat journey the
+ * path is identical to the step id —
  * which is why every trace written before nesting existed still reads
  * correctly. Inside a container it names the branch and the ITERATION, so
  * `blast/repeat/2/sequence/1` and `blast/repeat/0/sequence/1` are

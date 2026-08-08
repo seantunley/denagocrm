@@ -25,9 +25,8 @@ import {
 /**
  * LAZY SUB-SCRIPT PREPARATION.
  *
- * A branch is prepared only when it is first reached, and cached from then on.
- * The problem this solves is sharp here, because `processOneRun` re-parses the
- * definition from JSON
+ * A branch is prepared only when it is first reached, and then memoised. The
+ * problem is sharp here because `processOneRun` re-parses the definition from JSON
  * EVERY TICK for EVERY run: a `choose` with ten branches would validate ten
  * sequences and ten condition groups to execute one of them, on every tick, for
  * every enrolled person.

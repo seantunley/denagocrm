@@ -50,8 +50,12 @@ test("every enrolment outcome is recorded, including the passed-over ones", () =
 
   for (const reason of [
     /no published version/,
-    /listens for/,
-    /trigger filters did not match/,
+    // Two of the causes moved out with the trigger LIST: "does not listen for
+    // that at all" and "listens, but that trigger's filter said no" are decided
+    // by decideTrigger, which returns the reason it used. The loop must carry
+    // that reason through rather than flatten it — `verdict.reason`, not a
+    // string of its own.
+    /reason: verdict\.reason/,
     // The enrolment refusals moved into REFUSAL_REASONS, where they are one
     // string per cause rather than one string for all of them. The loop looks
     // them up instead of spelling any single one out.
@@ -59,6 +63,14 @@ test("every enrolment outcome is recorded, including the passed-over ones", () =
   ]) {
     assert.match(loop, reason, `each distinct cause needs its own reason: ${reason}`);
   }
+
+  // …and the two reasons it delegates are still two. Collapsing them would make
+  // "this journey does not listen for that" and "it does, but not for this one"
+  // the same sentence — which is the defect this whole file exists to prevent,
+  // simply moved one module along.
+  const triggers = shipped("src/lib/journeyTriggers.ts");
+  assert.match(triggers, /listens for \$\{describeTriggers\(specs\)\}, not "\$\{eventType\}"/);
+  assert.match(triggers, /reason: "trigger filters did not match"/);
   assert.match(code, /data: \{ status: "processed", processedAt: new Date\(\), decisions \}/);
 });
 
@@ -75,11 +87,11 @@ test("the merged loop keeps BOTH the decision record and payload-aware matching"
   assert.ok(loop.length > 0, "the slice ran backwards");
 
   assert.match(loop, /decisions\.push\(/, "decision tracing must survive the merge");
-  // `[^)]*` would stop at jsonObject(...)'s own closing paren — match on the
+  // `[^)]*` would stop at an inner call's own closing paren — match on the
   // argument tail instead, which is the part that actually carries the fix.
   assert.match(
     loop,
-    /triggerMatches\([\s\S]*?context,\s*eventPayload\)/,
+    /decideTrigger\([\s\S]*?context,\s*eventPayload,?\s*\)/,
     "payload-aware matching must survive the merge — without eventPayload a stage_entered event is judged against the wrong stage",
   );
 });

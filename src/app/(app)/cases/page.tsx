@@ -24,8 +24,10 @@ import { Input } from "@/components/ui/input";
 import {
   EmptyState,
   MetricCard,
+  MetricStrip,
   StatusPill,
   Surface,
+  WorkspaceToolbar,
 } from "@/components/visual-system";
 import { prisma } from "@/lib/db";
 import { contactName, formatDateTime } from "@/lib/format";
@@ -209,7 +211,7 @@ export default async function CasesPage({
 
       <DesktopOnly className="space-y-6">
       <PageHeader
-        title="Customer cases"
+        title="Help desk"
         description="Resolve customer questions, service concerns and ownership requests from one shared workspace."
       >
         {canCreate && (
@@ -237,9 +239,7 @@ export default async function CasesPage({
         )}
       </PageHeader>
 
-      <section className="relative overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-        <div className="pointer-events-none absolute -left-20 -top-24 size-72 rounded-full bg-primary/[0.08] blur-3xl" />
-        <div className="relative grid grid-cols-2 gap-px bg-border lg:grid-cols-4">
+      <MetricStrip glow="left">
           <MetricCard
             icon={Inbox}
             label="Open"
@@ -270,8 +270,7 @@ export default async function CasesPage({
             detail={`In ${folderLabel.toLowerCase()}`}
             className="rounded-none border-0 shadow-none"
           />
-        </div>
-      </section>
+      </MetricStrip>
 
       <div className="grid gap-5 lg:grid-cols-[16rem_minmax(0,1fr)]">
         <aside className="space-y-4 lg:sticky lg:top-4 lg:self-start">
@@ -376,7 +375,7 @@ export default async function CasesPage({
         </aside>
 
         <main className="min-w-0 space-y-4">
-          <section className="rounded-2xl border border-border bg-card/70 p-3 shadow-sm">
+          <WorkspaceToolbar>
             <form className="flex flex-col gap-2 sm:flex-row" action="/cases" role="search">
               {filters.folder && <input type="hidden" name="folder" value={filters.folder} />}
               {filters.mailboxSlug && <input type="hidden" name="mailbox" value={filters.mailboxSlug} />}
@@ -405,7 +404,7 @@ export default async function CasesPage({
                 </Link>
               )}
             </form>
-          </section>
+          </WorkspaceToolbar>
 
           <div className="flex items-center justify-between gap-4 px-1">
             <div>

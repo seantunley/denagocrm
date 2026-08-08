@@ -40,6 +40,39 @@ model JourneyVersion {
   journey         Journey   @relation(fields: [journeyId], references: [id], onDelete: Cascade)
   version         Int
   state           String    @default("draft") // draft | published | retired
+  /// WHAT ENROLS SOMEONE — a list, `[{ id?, type, config }]`. See journeyTriggers.ts.
+  ///
+  /// Replaces a single `trigger` string plus one shared `triggerConfig`, under
+  /// which "enrol when a lead is created OR when one is imported" was two
+  /// identical journeys maintained side by side.
+  ///
+  /// JSON rather than a child table because a published version is IMMUTABLE:
+  /// no row of this list is ever updated after publish, so there is no
+  /// independent lifetime for a child row to have. It is part of the version
+  /// document, exactly as `definition` and `entryConditions` are. Nor does the
+  /// matcher query by trigger — `processOneEvent` loads the ACTIVE journeys once
+  /// per event and compares in memory — so a child table would add a join to
+  /// every read, plus a fourth journey table needing its own tenant column and
+  /// RLS policy, to speed up a filter that does not exist.
+  ///
+  /// Config is PER trigger, not shared. Every key the old shared bag held
+  /// qualified exactly one trigger type (`stageId`, `idleDays`, `segmentId`,
+  /// `inactiveMonths`), so one bag could not express the first thing anyone
+  /// wants out of this: "entered Quoted OR entered Won".
+  triggers        Json
+  /// EXPAND PHASE — the old single-trigger pair, kept for exactly one release.
+  ///
+  /// vercel.json runs `apply-migrations && next build`, so the schema changes
+  /// while the PREVIOUS deployment is still serving production, and that build
+  /// reads these two columns. Dropping them in the same release would break the
+  /// app that is live at that moment, and keep it broken if the build failed.
+  /// So both representations exist, every writer populates both (dual-write),
+  /// and a follow-up CONTRACT migration removes these — plus the dual-write and
+  /// the index below — once this release is deployed and verified.
+  ///
+  /// Nothing READS these any more: `triggers` is the single source of truth for
+  /// what a version listens for. They are written only so the older build stays
+  /// correct for the length of the rollout.
   trigger         String
   triggerConfig   Json?
   entryConditions Json?
@@ -52,6 +85,13 @@ model JourneyVersion {
 
   @@unique([journeyId, version])
   @@index([journeyId, state])
+  /// Kept for the expand phase only — the previous build still issues
+  /// `WHERE "trigger" = … AND "state" = …` and must not start seq-scanning
+  /// mid-rollout. Nothing on THIS build filters versions by trigger any more:
+  /// the enrolment matcher and the pipeline stage badges both load the active
+  /// journeys they already need and choose in memory, over a list of at most
+  /// JOURNEY_LIMITS.triggers entries. The contract migration drops it with the
+  /// column.
   @@index([trigger, state])
   @@index([tenantId])
 }
@@ -192,7 +232,8 @@ model JourneyStepLog {
   tenantId    String?
   runId       String
   run         JourneyRun @relation(fields: [runId], references: [id], onDelete: Cascade)
-  /// The hierarchical trace path.
+  /// The hierarchical trace path: the step id, plus one segment per container
+  /// the run had entered when it executed.
   ///
   ///   welcome                     a top-level step — identical to its id, which
   ///                               is why every pre-existing row backfills

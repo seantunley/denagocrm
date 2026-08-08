@@ -1,0 +1,56 @@
+name: Merged PRs are actually on main
+
+# "Merged" and "shipped" are different claims, and on 2026-08-07 the difference
+# cost an afternoon: thirty-four pull requests were merged and fifteen never
+# reached production. They were stacked PRs whose base was the branch below
+# them, so each merged into its parent branch exactly as instructed. GitHub
+# showed MERGED. CI was green. The features were not on main, and it surfaced
+# hours later as "where is the dashboard editor?".
+#
+# Nothing in GitHub can raise this, because by its lights every merge succeeded.
+# Only git can, by asking whether each merge commit is an ancestor of main.
+#
+# Runs after every push to main — so a stranded PR is reported within minutes of
+# the merge that was supposed to ship it, not when someone goes looking for a
+# missing button — and daily, to catch anything merged while this was failing
+# for another reason.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: prs-landed
+  cancel-in-progress: true
+
+jobs:
+  landed:
+    name: Every merged PR reached main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Ancestry needs real history: a shallow clone cannot answer
+          # `merge-base --is-ancestor` and would report every PR as stranded.
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Check that merged pull requests are on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # --open also lists open PRs that do not target main. Those are legal
+        # (a stack in progress) and are printed as information, never a failure;
+        # the job fails only when something MERGED is missing from main.
+        run: node scripts/check-prs-landed.mjs --limit 100 --open --deploy

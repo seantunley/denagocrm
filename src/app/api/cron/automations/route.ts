@@ -18,6 +18,7 @@ import { runAutoResearch } from "@/lib/ai";
 import { runActivityReminders } from "@/lib/activityReminders";
 import { runSafeCampaignQueue } from "@/lib/marketingCampaignQueue";
 import { runSafeSurveyDistributionQueue } from "@/lib/surveyDistributionQueue";
+import { runRepairsDetectors } from "@/lib/repairsDetectors";
 import { runAiHealthIfDue, runBackupWatchdog } from "@/lib/systemHealth";
 import { basePrisma } from "@/lib/db";
 import { expireReservations } from "@/lib/stockPlatform";
@@ -100,6 +101,12 @@ async function runOperationalQueues(tenantId: string | null, budget: CronSliceCo
     : stockActor
       ? await phase("stock-reservation-expiry", () => expireReservations(stockActor), -1)
       : 0;
+  // LAST, and through the same budget gate as everything above it. The repairs
+  // detectors read; the queues above them SEND. A tick that spent its last
+  // seconds noticing a problem instead of delivering a message would be the
+  // wrong trade every time, and `phase` skipping this is harmless — the next
+  // tick asks the same questions and gets the same answers.
+  const repairs = await phase("repairs-detectors", runRepairsDetectors, null);
   return {
     remindersSent,
     signingReminders,
@@ -113,6 +120,7 @@ async function runOperationalQueues(tenantId: string | null, budget: CronSliceCo
     surveyQueue,
     activityReminders,
     stockReservationsExpired,
+    repairs,
     // Visible in the response so a truncated run is diagnosable rather than
     // looking like a clean sweep that found nothing to do.
     skipped,

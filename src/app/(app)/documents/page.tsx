@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { FileText, Search, Settings2, Upload } from "lucide-react";
+import { Clock3, FileText, FolderTree, HardDrive, Search, Settings2, Upload } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { contactName, formatDate } from "@/lib/format";
 import {
@@ -26,8 +26,14 @@ import {
   MobileTaskList,
   MobileWorkspaceHeader,
 } from "@/components/mobile-workspace";
+import { EmptyState, MetricCard, MetricStrip, Surface, WorkspaceToolbar } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024)).toLocaleString()} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
 
 export default async function DocumentsPage({
   searchParams,
@@ -152,6 +158,11 @@ export default async function DocumentsPage({
             ? `Job card · #${doc.jobCard.number}`
             : null,
   }));
+  const recentCutoff = new Date();
+  recentCutoff.setDate(recentCutoff.getDate() - 30);
+  const filedCount = rows.filter((document) => document.filedOn).length;
+  const recentCount = docs.filter((document) => document.createdAt >= recentCutoff).length;
+  const totalSize = docs.reduce((bytes, document) => bytes + document.sizeBytes, 0);
 
   return (
     <>
@@ -206,7 +217,7 @@ export default async function DocumentsPage({
       <DesktopOnly className="space-y-6">
       <PageHeader
         title="Documents"
-        description={`${rows.length} accessible file${rows.length === 1 ? "" : "s"}. Downloads and management actions are checked again on the server.`}
+        description="Find, file and manage customer paperwork from one secure document workspace."
       >
         {canTemplates && (
           <Link href="/document-studio" className={buttonVariants({ variant: "outline", size: "sm" })}>
@@ -216,7 +227,14 @@ export default async function DocumentsPage({
         )}
       </PageHeader>
 
-      <div className="grid gap-4 lg:grid-cols-[1fr_auto]">
+      <MetricStrip>
+        <MetricCard icon={FileText} label="Files in view" value={rows.length} detail={versions === "all" ? "Including version history" : "Current versions only"} />
+        <MetricCard icon={FolderTree} label="Filed" value={filedCount} detail="Linked to a CRM record" />
+        <MetricCard icon={Clock3} label="Added · 30 days" value={recentCount} detail="Recently uploaded files" accent={recentCount > 0} />
+        <MetricCard icon={HardDrive} label="Storage in view" value={formatFileSize(totalSize)} detail="Across accessible files" />
+      </MetricStrip>
+
+      <WorkspaceToolbar className="grid gap-3 lg:grid-cols-[1fr_auto]">
         <form className="flex items-center gap-2" role="search">
           {versions === "all" && <input type="hidden" name="versions" value="all" />}
           <div className="relative flex-1">
@@ -230,27 +248,31 @@ export default async function DocumentsPage({
         </form>
 
         {canUpload && (
-          <form action={uploadDocument} className="flex items-center gap-2 rounded-lg border border-border bg-card p-2">
+          <form action={uploadDocument} className="flex items-center gap-2 rounded-xl border border-border bg-background/40 p-1.5">
             <input type="hidden" name="revalidate" value="/documents" />
             <input type="file" name="file" required className="max-w-56 text-xs text-muted-foreground" />
             <Button size="sm" type="submit"><Upload className="size-4" />Upload</Button>
           </form>
         )}
-      </div>
+      </WorkspaceToolbar>
 
-      <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
+      <Surface className="p-4">
         {rows.length === 0 ? (
-          <div className="py-14 text-center">
-            <FileText className="mx-auto size-8 text-muted-foreground" />
-            <p className="mt-3 text-sm text-muted-foreground">No accessible documents match this view.</p>
-          </div>
+          <EmptyState
+            icon={q ? Search : FileText}
+            title={q ? "No matching documents" : "No documents in this view"}
+            description={q ? "Try another file name or clear the current search." : "Uploaded customer and business files will appear here."}
+            action={q ? <Link href={versions === "all" ? "/documents?versions=all" : "/documents"} className={buttonVariants({ variant: "outline", size: "sm" })}>Clear search</Link> : undefined}
+            className="border-0 bg-transparent"
+          />
         ) : (
           <ul className="divide-y divide-border/50">
             {rows.map((doc) => <RepoRow key={doc.id} doc={doc} targets={targets} canManage={canManage} />)}
           </ul>
         )}
-      </div>
+      </Surface>
       </DesktopOnly>
     </>
+
   );
 }

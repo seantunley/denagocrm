@@ -527,8 +527,14 @@ test("an owner-only nav link is never advertised on a permission", () => {
     if (!link.admin || link.keys.length > 0) continue;
     const rule = ruleFor(link.href);
     if (!rule) continue;
+    // `tenantOwner` counts as an ownership predicate here, not a permission.
+    // The rule this test enforces is "an owner-only link must not point at a
+    // rule the guard would open on a PERMISSION" — a workspace-owner rule is
+    // still ownership, so it satisfies that. Without this the repairs inbox,
+    // which is a tenantOwner surface, reads as a nav link hiding a screen the
+    // guard allows.
     assert.ok(
-      "owner" in rule,
+      "owner" in rule || "tenantOwner" in rule,
       `${link.href} is shown only to owners but its route rule grants it on ${
         "anyOf" in rule ? rule.anyOf.join(", ") : "?"
       } — the nav hides a screen the guard allows`,
@@ -542,6 +548,154 @@ test("the nav is built from RBAC alone", () => {
     /hasModule|permissionList\.length === 0/,
     "the nav must be built from RBAC alone — a module-CSV fallback is a second source",
   );
+});
+
+/* ── tenant-owner routes: a workspace's own screen, its own owner ────── */
+
+/**
+ * `owner: true` means the PLATFORM owner — one person, globally. Applied to a
+ * screen that shows a workspace its own data, that is the wrong predicate in
+ * both directions: the provisioned owner of tenant B cannot open tenant B's
+ * screen, and the platform owner opens whichever tenant their session happens
+ * to be scoped to. `tenantOwner: true` is the predicate those screens want.
+ */
+
+test("a tenantOwner route opens for the workspace's owner and for nobody else's RBAC", () => {
+  const rules = ROUTE_RULES.filter((rule) => "tenantOwner" in rule);
+  assert.ok(
+    rules.length > 0,
+    "no tenantOwner rule exists — this suite would be asserting nothing",
+  );
+
+  // Every permission the catalogue can grant, held by someone who is NOT the
+  // owner of their workspace. Tenant ownership is a row, and no amount of RBAC
+  // is a substitute for it.
+  const everyPermission = ROUTE_RULES.flatMap((r) => ("anyOf" in r ? [...r.anyOf] : []));
+
+  for (const rule of rules) {
+    const tenantOwner = routeGrants("member", [], { tenantOwner: true });
+    assert.equal(
+      routeAllowed(rule.prefix, { role: "member", grants: tenantOwner }),
+      true,
+      `the provisioned owner of a tenant must reach ${rule.prefix} without the platform role`,
+    );
+    assert.equal(
+      routeAllowed(`${rule.prefix}/anything`, { role: "member", grants: tenantOwner }),
+      true,
+      `${rule.prefix} sub-paths must follow the same rule`,
+    );
+
+    for (const [label, grants] of [
+      ["holding every permission in the catalogue", routeGrants("member", everyPermission)],
+      ["explicitly not the tenant owner", routeGrants("member", everyPermission, { tenantOwner: false })],
+      ["with the flag omitted entirely", routeGrants("member", everyPermission, {})],
+      ["with no options argument at all", routeGrants("member", everyPermission)],
+    ] as const) {
+      assert.equal(
+        routeAllowed(rule.prefix, { role: "member", grants }),
+        false,
+        `${rule.prefix} opened for a non-owner ${label} — tenant ownership is not a permission`,
+      );
+    }
+
+    assert.equal(
+      routeAllowed(rule.prefix, { role: "member", grants: "" }),
+      false,
+      `a token minted before ${rule.prefix} existed must fail CLOSED, exactly as permission grants do`,
+    );
+    assert.equal(
+      routeAllowed(rule.prefix, { role: "owner", grants: "" }),
+      true,
+      `the platform owner must still reach ${rule.prefix}`,
+    );
+  }
+});
+
+test("no rule declares two predicates", () => {
+  for (const rule of ROUTE_RULES) {
+    const declared = ["owner", "tenantOwner", "anyOf"].filter((key) => key in rule);
+    assert.equal(
+      declared.length,
+      1,
+      `${rule.prefix} declares ${declared.join(" + ")} — one rule, one predicate, or the edge and the page can diverge again`,
+    );
+  }
+});
+
+test("the tenant-owner grant is decided against THIS session's tenant", () => {
+  // The edge has no database, so this is the one place the row can be read. It
+  // must be the tenant the session is actually stamped with (sessionTenantId,
+  // which the tenantless fallback may have just cleared) — not the tenant that
+  // was resolved earlier — or a session could carry a grant for a workspace it
+  // is not scoped to.
+  const auth = shipped("src/lib/auth.ts");
+  const start = auth.indexOf("let tenantOwner = false;");
+  assert.notEqual(start, -1, "the mint site no longer resolves tenant ownership");
+  const mint = auth.slice(start, auth.indexOf("signFreshSession", start));
+
+  assert.match(
+    mint,
+    /where:\s*\{\s*id:\s*sessionTenantId\s*\}/,
+    "the ownership row must be read for the tenant this session is stamped with",
+  );
+  assert.match(
+    mint,
+    /ownerUserId === user\.id/,
+    "the grant must be the identity comparison requireTenantOwner() makes, not a looser one",
+  );
+  assert.match(
+    mint,
+    /routeGrants\(\s*user\.role,\s*usablePermissions\([^)]*\)\),?\s*\{\s*tenantOwner\s*\}/,
+    "the resolved flag must be what routeGrants is given",
+  );
+  // A read that throws must cost the owner a screen, never the login.
+  assert.match(mint, /catch \(e\) \{/, "a failed ownership read must not break sign-in");
+});
+
+test("requireRoute enforces tenantOwner rules live, against the database", () => {
+  // The grant in the token is a cache of a decision made at sign-in. Someone who
+  // stopped owning their workspace still carries it until the token expires, so
+  // the page guard has to re-resolve rather than trust it.
+  const permissions = shipped("src/lib/permissions.ts");
+  assert.match(
+    permissions,
+    /if \("tenantOwner" in rule\) return requireTenantOwner\(\);/,
+    "requireRoute must answer a tenantOwner rule with requireTenantOwner() — a restated predicate is a second source",
+  );
+});
+
+test("the repairs surface is guarded as a tenant-owner surface, everywhere", () => {
+  // The page is not the boundary: a server action is reachable by direct POST,
+  // so each one states the rule where the mutation happens.
+  const page = shipped("src/app/(app)/repairs/page.tsx");
+  assert.match(
+    page,
+    /await requireRoute\("\/repairs"\)/,
+    "the page must consult ROUTE_RULES rather than restate a predicate",
+  );
+
+  const actions = shipped("src/app/actions/repairs.ts");
+  const exported = [...actions.matchAll(/export async function (\w+)\(/g)].map((m) => m[1]);
+  assert.ok(exported.length >= 2, "expected the repairs actions to still be exported");
+  for (const name of exported) {
+    const start = actions.indexOf(`export async function ${name}(`);
+    const rest = actions.slice(start + 1);
+    const next = rest.indexOf("\nexport async function ");
+    const body = next === -1 ? rest : rest.slice(0, next);
+    assert.match(
+      body,
+      /await requireTenantOwner\(\)/,
+      `${name} is reachable by direct POST and must apply the same rule the page does`,
+    );
+  }
+
+  for (const [label, source] of [["page", page], ["actions", actions]] as const) {
+    assert.doesNotMatch(
+      source,
+      /\brequireOwner\(/,
+      `the repairs ${label} must not require the PLATFORM role — that locks every other workspace's owner out of their own inbox`,
+    );
+  }
 });
 
 /* ── journeys: the disagreement this rule was added to end ────────────── */
@@ -560,8 +714,15 @@ function pageGuardAllows(route: string, role: string, held: Iterable<string>): b
   if (!rule) return true;
   if (role === "owner") return true;
   if ("owner" in rule) return false;
+  // A tenantOwner rule is decided by an ownership ROW, which this helper has no
+  // way to know about — it is given permissions, not a tenant. requireRoute
+  // answers such a rule with requireTenantOwner(), so no set of permissions
+  // opens it, and false is the honest answer here. (Only permission-based routes
+  // are compared through this helper; the tenantOwner rules have their own tests
+  // above.)
+  if ("tenantOwner" in rule) return false;
   const permissions = new Set(held);
-  return rule.anyOf.some((key) => permissions.has(key));
+  return rule.anyOf.some((key: string) => permissions.has(key));
 }
 
 /** The builder, and the trace beneath it — the sub-path must follow the prefix. */

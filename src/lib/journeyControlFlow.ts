@@ -1,9 +1,9 @@
 /**
  * Control flow, raised rather than returned.
  *
- * Raising beats threading a status flag back through every caller. We threaded
- * a status union, and it had already started lying: `StepResult.nextStepId`
- * meant THREE things on one
+ * Three exception classes — stop, condition-failed, abort — instead of a status
+ * flag threaded back through every caller. We threaded a status union, and it
+ * had already started lying: `StepResult.nextStepId` meant THREE things on one
  * field — absent said "follow the step's own nextStepId", `null` said "there is
  * no successor, end the run", and a string said "jump here". The `stop` step
  * used the `null` spelling, so "the author asked to stop" and "this branch

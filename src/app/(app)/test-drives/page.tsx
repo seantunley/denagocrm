@@ -16,7 +16,7 @@ import { createTestDriveBooking } from "@/app/actions/testDrives";
 import ModalTrigger from "@/components/Modal";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
-import { EmptyState, MetricCard, Surface } from "@/components/visual-system";
+import { EmptyState, MetricCard, MetricStrip, StatusPill, Surface, WorkspaceToolbar } from "@/components/visual-system";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import {
   DesktopOnly,
@@ -33,13 +33,13 @@ export const dynamic = "force-dynamic";
 
 type SearchParams = { status?: string };
 
-const statusClass: Record<string, string> = {
-  booked: "bg-blue-500/15 text-blue-300",
-  confirmed: "bg-emerald-500/15 text-emerald-300",
-  checked_out: "bg-amber-500/15 text-amber-300",
-  completed: "bg-emerald-500/15 text-emerald-300",
-  cancelled: "bg-muted text-muted-foreground",
-  no_show: "bg-red-500/15 text-red-300",
+const statusTone: Record<string, "neutral" | "success" | "warning" | "danger" | "info"> = {
+  booked: "info",
+  confirmed: "success",
+  checked_out: "warning",
+  completed: "success",
+  cancelled: "neutral",
+  no_show: "danger",
 };
 
 const inputDate = (date: Date) => format(date, "yyyy-MM-dd'T'HH:mm");
@@ -147,7 +147,7 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
                   title={contactMap.get(booking.contactId) ?? "Customer"}
                   detail={`${booking.reference} · ${booking.demoVehicle?.name ?? (booking.productId ? productMap.get(booking.productId) : null) ?? "Vehicle not assigned"}`}
                   meta={`${formatDateTime(booking.scheduledStart)} · ${booking.branch}`}
-                  aside={<span className={`badge ${statusClass[booking.status] ?? "bg-muted text-muted-foreground"}`}>{testDriveStatusLabel(booking.status)}</span>}
+                  aside={<StatusPill tone={statusTone[booking.status] ?? "neutral"}>{testDriveStatusLabel(booking.status)}</StatusPill>}
                   href={`/test-drives/${booking.id}`}
                 />
               ))}
@@ -229,14 +229,14 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
         )}
       </PageHeader>
 
-      <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <MetricStrip>
         <MetricCard icon={CalendarDays} label="Bookings · 30 days" value={metrics.bookings} detail={`${metrics.bookedLeads} unique new leads · ${metrics.bookingRate}% booking rate`} />
         <MetricCard icon={UserCheck} label="Attendance" value={`${metrics.attendanceRate}%`} detail={`${metrics.attended} attended · ${metrics.noShows} no-shows`} />
         <MetricCard icon={Route} label="Quote conversion" value={`${metrics.quoteConversionRate}%`} detail={`${metrics.saleConversionRate}% of attended drives became sales`} />
         <MetricCard icon={TriangleAlert} label="Incidents" value={`${metrics.incidentRate}%`} detail={`${metrics.incidents} damage / incident records`} accent={metrics.incidents > 0} />
-      </section>
+      </MetricStrip>
 
-      <Surface className="p-4">
+      <WorkspaceToolbar>
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Status</span>
           {["", "booked", "confirmed", "checked_out", "completed", "cancelled", "no_show"].map((value) => (
@@ -250,12 +250,12 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
           ))}
           <span className="ml-auto flex items-center gap-1 text-xs text-muted-foreground"><Gauge className="size-3.5" />Demo utilisation: {metrics.utilisationRate}% · {metrics.bookedHours} booked hours</span>
         </div>
-      </Surface>
+      </WorkspaceToolbar>
 
       {bookings.length === 0 ? (
         <EmptyState icon={CalendarDays} title="No test drives in this view" description="Book a customer drive or choose another status filter." />
       ) : (
-        <ResponsiveEntityTable>
+        <Surface><ResponsiveEntityTable>
           <table className="table-base">
             <thead><tr><th>Booking</th><th>Customer</th><th>Vehicle</th><th>Schedule</th><th>Salesperson</th><th>Status</th></tr></thead>
             <tbody>
@@ -275,12 +275,12 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
                     <p className="text-xs text-muted-foreground">Return {format(booking.expectedReturnAt, "HH:mm")}</p>
                   </td>
                   <td data-label="Salesperson">{staffMap.get(booking.salespersonId) ?? "Unavailable user"}</td>
-                  <td data-label="Status"><span className={`badge ${statusClass[booking.status] ?? "bg-muted text-muted-foreground"}`}>{testDriveStatusLabel(booking.status)}</span></td>
+                  <td data-label="Status"><StatusPill tone={statusTone[booking.status] ?? "neutral"}>{testDriveStatusLabel(booking.status)}</StatusPill></td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </ResponsiveEntityTable>
+        </ResponsiveEntityTable></Surface>
       )}
       </DesktopOnly>
     </>

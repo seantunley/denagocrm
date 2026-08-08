@@ -23,6 +23,7 @@ import {
   type TraceNode,
   type TraceStep,
 } from "../src/lib/journeyTraceTree";
+import { clauseHeld } from "../src/lib/journeyTypes";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const shipped = (rel: string) =>
@@ -446,8 +447,30 @@ test("a clause keeps the value it actually SAW", () => {
     ],
   });
   assert.deepEqual(clauses, [
-    { field: "lead.source", operator: "equals", expected: "web", actual: "phone", passed: false },
+    { field: "lead.source", operator: "equals", expected: "web", actual: "phone", passed: false, negated: false },
   ]);
+});
+
+test("a clause under a `not` is read back as negated, and older rows are not", () => {
+  // `negated` says whether the clause was REQUIRED or EXCLUDED. Without it the
+  // trace is worse than imprecise under a `not`: the clause that matched is the
+  // one that made the group fail, so every row would show green beside a step
+  // that did not match.
+  //
+  // Absent on every row written before `not` existed, and `false` is the right
+  // reading for those — they were all plain requirements. Anything that is not
+  // literally true reads as not-negated, so a hand-edited row cannot invert a
+  // historic verdict.
+  const clauses = parseClauses({
+    passed: false,
+    clauses: [
+      { field: "lead.source", operator: "equals", expected: "web", actual: "web", passed: true, negated: true },
+      { field: "lead.status", operator: "equals", expected: "open", actual: "open", passed: true },
+      { field: "lead.status", operator: "equals", expected: "open", actual: "open", passed: true, negated: "yes" },
+    ],
+  });
+  assert.deepEqual(clauses?.map((clause) => clause.negated), [true, false, false]);
+  assert.deepEqual(clauses?.map(clauseHeld), [false, true, true], "a negated clause holds by NOT matching");
 });
 
 test("a missing field reads as words, not as the string 'undefined'", () => {

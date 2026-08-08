@@ -32,6 +32,7 @@ import {
   PenLine,
   Radar,
   Route,
+  Hammer,
   type LucideIcon,
 } from "lucide-react";
 import { isPathEnabled } from "@/lib/modules/registry";
@@ -144,6 +145,10 @@ export function buildNav(
 
   const governanceLinks: NavLink[] = [];
   if (can("audit.view")) governanceLinks.push({ href: "/audit", label: "Audit log", icon: ScrollText });
+  // `isAdmin`, not `can(...)`, to match ROUTE_RULES' `{ prefix: "/repairs",
+  // owner: true }`. A `can(...)` list here would be a second, independently
+  // authored answer to a question the route table already answers.
+  if (isAdmin) governanceLinks.push({ href: "/repairs", label: "Repairs", icon: Hammer });
   if (governanceLinks.length) groups.push({ key: "governance", label: "Governance", links: governanceLinks });
 
   if (enabledModules) {
