@@ -82,8 +82,13 @@ CREATE TABLE IF NOT EXISTS "ConversationNote" (
 -- That is the same "green in CI, broken only in production" shape that took
 -- deployments down for three hours on 2026-08-07. Adding the column explicitly
 -- makes both paths converge on the same schema.
+-- Each table's compatibility ALTER sits immediately after its OWN create. Both
+-- were placed here in the first attempt, which meant altering ConversationDraft
+-- eleven statements before it is created — `relation "ConversationDraft" does not
+-- exist`, and the whole migration step died. Fixing one blind spot by introducing
+-- an ordering bug is not an improvement; keeping each ALTER next to its CREATE is
+-- what makes that hard to do again.
 ALTER TABLE "ConversationNote" ADD COLUMN IF NOT EXISTS "tenantId" TEXT;
-ALTER TABLE "ConversationDraft" ADD COLUMN IF NOT EXISTS "tenantId" TEXT;
 -- Present in this migration's own CREATE TABLE, absent from the 2026-07 one.
 ALTER TABLE "ConversationNote" ALTER COLUMN "mentions" SET DEFAULT ARRAY[]::TEXT[];
 
@@ -114,6 +119,11 @@ CREATE TABLE IF NOT EXISTS "ConversationDraft" (
   "createdAt"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "ConversationDraft_pkey" PRIMARY KEY ("id")
 );
+
+-- Same reason as ConversationNote above: production has this table from the
+-- unrecorded July migration, so the CREATE is a no-op there and the column has to
+-- be added explicitly before anything names it.
+ALTER TABLE "ConversationDraft" ADD COLUMN IF NOT EXISTS "tenantId" TEXT;
 
 -- One draft per conversation, by design: the collision warning depends on there
 -- being a single answer to "who is replying to this right now?".
