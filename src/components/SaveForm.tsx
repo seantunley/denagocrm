@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { unstable_rethrow } from "next/navigation";
 import { toast } from "sonner";
 import { useCloseModal } from "@/components/Modal";
+import { ACTION_NOT_DELIVERED } from "@/components/actionError";
 import { cn } from "@/lib/utils";
 import type { ActionResult } from "@/lib/actionResultTypes";
 
@@ -43,17 +44,18 @@ export function useSavePending(): boolean {
   return useContext(PendingContext);
 }
 
-const GENERIC_FAILURE = "Something went wrong. Please try again.";
-
 /**
  * A THROWN server-action error never carries a usable message to the browser.
  *
  * Next.js replaces it with an opaque digest in production, so there is nothing
  * here worth showing — trying to render it would leak a build artefact like
- * `aBc123` or, worse in development, an internal database message. Expected
- * refusals therefore travel as VALUES (`{ error }`, see lib/actionResult.ts) and
- * anything that reaches this function is by definition unexpected: it gets one
- * generic sentence, and the real detail stays in the server logs where it belongs.
+ * `aBc123` or, worse in development, an internal database message.
+ *
+ * That is why the message is not taken from the error. It is not, however, why
+ * it used to be "Something went wrong. Please try again.": a failure INSIDE the
+ * action now returns as a value carrying its own log reference, so anything
+ * still thrown here is a call that never arrived. ACTION_NOT_DELIVERED says that,
+ * and says the thing that actually fixes it. See components/actionError.ts.
  */
 /**
  * A THROWN redirect is NOT evidence of a successful save.
@@ -162,7 +164,7 @@ export function SaveForm({
           // as a save. A guard redirect landing here means the mutation did not
           // run — silence plus navigation is the honest outcome.
           unstable_rethrow(error);
-          toast.error(GENERIC_FAILURE);
+          toast.error(ACTION_NOT_DELIVERED);
         } finally {
           setPending(false);
         }
