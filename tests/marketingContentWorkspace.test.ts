@@ -11,6 +11,7 @@ const audienceEngine = read("src", "lib", "marketingAudiences.ts");
 const marketingActions = read("src", "app", "actions", "marketingContent.ts");
 const templatePage = read("src", "app", "(app)", "marketing", "templates", "page.tsx");
 const templateWorkspace = read("src", "components", "marketing", "TemplateWorkspace.tsx");
+const confirmationDialog = read("src", "components", "marketing", "ConfirmActionDialog.tsx");
 
 test("marketing audience workspace replaces raw JSON editing with the visual builder", () => {
   assert.match(audiencePage, /<AudienceWorkspace/);
@@ -38,9 +39,23 @@ test("audience rule ids are revalidated server-side by tenant", () => {
   assert.match(marketingActions, /await validateAudienceReferences\(tree, tenantId\)/);
 });
 
-test("audience evaluation still enforces tenant ownership and marketing consent", () => {
+test("audience evaluation scopes root and related records to the active tenant", () => {
   assert.match(audienceEngine, /where: \{ tenantId, deletedAt: null, marketingOptOut: false \}/);
+  assert.match(audienceEngine, /tags: \{ where: \{ tenantId: tenantId \?\? "__no_tenant__" \} \}/);
+  assert.match(audienceEngine, /vehicles: \{[\s\S]*?where: \{ tenantId, deletedAt: null \}/);
+  assert.match(audienceEngine, /serviceRecords: \{ where: \{ tenantId \} \}/);
+  assert.match(audienceEngine, /mileageLogs: \{ where: \{ tenantId \} \}/);
+  assert.match(audienceEngine, /leads: \{ where: \{ tenantId, deletedAt: null \} \}/);
+  assert.match(audienceEngine, /quotes: \{ where: \{ tenantId, deletedAt: null \} \}/);
   assert.match(audienceEngine, /await validateAudienceReferences\(tree, tenantId\)/);
+});
+
+test("audience and template destructive actions use product dialogs, not native browser confirms", () => {
+  assert.match(audienceWorkspace, /ConfirmActionDialog/);
+  assert.match(templateWorkspace, /ConfirmActionDialog/);
+  assert.match(confirmationDialog, /ResponsiveDialogContent/);
+  assert.doesNotMatch(audienceWorkspace, /window\.confirm|\bconfirm\s*\(/);
+  assert.doesNotMatch(templateWorkspace, /window\.confirm|\bconfirm\s*\(/);
 });
 
 test("template workspace is tenant-scoped and uses a structured draft/publish UX", () => {
