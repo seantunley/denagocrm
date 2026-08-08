@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,10 @@ import {
   assertSchemaObjectsPresent,
   previewMayMigrate,
   auditMigrationLedger,
+  executeMigrationSql,
+  withSingleConnection,
 } from "../scripts/apply-migrations.mjs";
+import { splitSqlStatements } from "../scripts/lib/splitSqlStatements.mjs";
 
 // ── classifyDiffScript: the block-vs-warn rule ──────────────────────────────
 
@@ -92,10 +95,12 @@ test("buildChildEnv: no DB url configured → does not invent one, returns a cop
 // ── applyOne: execute-before-resolve ordering ───────────────────────────────
 
 /**
- * The recording step used to be a second `npx prisma migrate resolve` process.
- * It is now a direct insert on the runner's own connection — the same connection
- * that just applied the SQL, which is what the header's split-brain warning was
- * really asking for. The ORDER is unchanged and is what these tests protect.
+ * Both halves of applying a migration used to be child processes: `prisma db
+ * execute` for the SQL, `prisma migrate resolve` for the ledger. Both are now
+ * issued by the runner itself, on one connection — which is what the header's
+ * split-brain warning was really asking for, and is only now actually true.
+ * (An earlier version of this comment claimed it while the SQL was still running
+ * in a child process.) The ORDER is unchanged and is what these tests protect.
  */
 
 /** Enough of a Prisma client to observe whether the ledger row was written. */
@@ -116,7 +121,11 @@ function fakePrisma() {
 test("applyOne: executes the SQL BEFORE recording it as applied", async () => {
   const order: string[] = [];
   const prisma = fakePrisma();
-  const spy = (_cmd: string, args: string[]) => order.push(args.slice(0, 2).join(" "));
+  const noSpawn = () => assert.fail("applyOne must not spawn a process to run the SQL");
+  const execute = async () => {
+    order.push("execute");
+    return 1;
+  };
   const wrapped = {
     ...prisma,
     $executeRaw: (s: TemplateStringsArray, ...v: unknown[]) => {
@@ -124,8 +133,8 @@ test("applyOne: executes the SQL BEFORE recording it as applied", async () => {
       return prisma.$executeRaw(s, ...v);
     },
   };
-  await applyOne("77_custom_fields", { DATABASE_URL: "x" }, wrapped, spy);
-  assert.deepEqual(order, ["prisma db", "record"], "SQL first, ledger second");
+  await applyOne("77_custom_fields", { DATABASE_URL: "x" }, wrapped, noSpawn, execute);
+  assert.deepEqual(order, ["execute", "record"], "SQL first, ledger second");
   assert.equal(prisma.writes.length, 1, "exactly one ledger row");
   assert.match(prisma.writes[0], /77_custom_fields/, "and it names this migration");
 });
@@ -134,14 +143,88 @@ test("applyOne: if execute throws, the migration is NEVER recorded (stays pendin
   // The July outage in one line: a migration recorded as applied whose SQL never
   // ran leaves a missing column and a database that believes it is up to date.
   const prisma = fakePrisma();
-  const spy = (_cmd: string, args: string[]) => {
-    if (args[1] === "db") throw new Error("SQL failed");
+  const execute = async () => {
+    throw new Error("SQL failed");
   };
   await assert.rejects(
-    () => applyOne("77_custom_fields", { DATABASE_URL: "x" }, prisma, spy),
+    () => applyOne("77_custom_fields", { DATABASE_URL: "x" }, prisma, () => {}, execute),
     /SQL failed/,
   );
   assert.deepEqual(prisma.writes, [], "the ledger must not be written after a failed execute");
+});
+
+test("executeMigrationSql: sends each statement separately, in file order", async () => {
+  // The extended query protocol carries one statement per round trip, so this
+  // must not hand the whole file over in a single call.
+  const sent: string[] = [];
+  const prisma = { $executeRawUnsafe: async (sql: string) => void sent.push(sql) };
+  const count = await executeMigrationSql(prisma as never, "77_custom_fields");
+
+  assert.equal(count, sent.length, "the reported count is what was actually sent");
+  assert.ok(sent.length > 1, "a real migration is more than one statement");
+  for (const statement of sent) {
+    assert.ok(!statement.trim().endsWith(";"), `statement should not carry its separator: ${statement.slice(0, 40)}`);
+  }
+  const file = readFileSync(join(root, "prisma", "migrations", "77_custom_fields", "migration.sql"), "utf8");
+  let cursor = 0;
+  for (const statement of sent) {
+    const at = file.indexOf(statement, cursor);
+    assert.notEqual(at, -1, "each statement comes verbatim from the file");
+    cursor = at + statement.length;
+  }
+});
+
+test("withSingleConnection: pins the runner to one session", () => {
+  // Ten migrations SET a session GUC and RESET it many statements later — up to
+  // 80 statements apart. Pooling would put those statements on different
+  // sessions, so the SET would not apply and RLS would silently filter the
+  // writes it was protecting.
+  assert.equal(withSingleConnection("postgres://h/db"), "postgres://h/db?connection_limit=1");
+  assert.equal(
+    withSingleConnection("postgres://h/db?sslmode=require"),
+    "postgres://h/db?sslmode=require&connection_limit=1",
+  );
+  assert.equal(
+    withSingleConnection("postgres://h/db?connection_limit=5"),
+    "postgres://h/db?connection_limit=5",
+    "an explicit choice is left alone",
+  );
+  assert.equal(withSingleConnection(undefined), undefined);
+});
+
+test("session GUCs really do span separate statements, in every migration that uses one", () => {
+  // This is the evidence for withSingleConnection, recomputed rather than
+  // asserted from memory — my first pass at this counted three migrations by
+  // grepping for SET at column 0, and missed seven indented ones.
+  //
+  // The property that matters is not the count: it is that a SET and the
+  // statements it protects land in DIFFERENT statements, so pooling could put
+  // them on different sessions. If a migration ever contains a SET with nothing
+  // after it, it does not need pinning and this test should say so.
+  const dir = join(root, "prisma", "migrations");
+  const spans: { name: string; between: number }[] = [];
+
+  for (const name of readdirSync(dir).filter((n) => existsSync(join(dir, n, "migration.sql")))) {
+    const parts = splitSqlStatements(readFileSync(join(dir, name, "migration.sql"), "utf8"));
+    const isSet: number[] = [];
+    const isReset: number[] = [];
+    parts.forEach((p, i) => {
+      const body = p.replace(/^(\s|--[^\n]*\n)*/, "");
+      if (/^SET\s+app\./i.test(body)) isSet.push(i);
+      if (/^RESET\s+app\./i.test(body)) isReset.push(i);
+    });
+    if (!isSet.length) continue;
+    const last = isReset.length ? isReset[isReset.length - 1] : parts.length - 1;
+    spans.push({ name, between: last - isSet[0] - 1 });
+  }
+
+  assert.equal(spans.length, 10, "ten migrations set a session GUC");
+  for (const { name, between } of spans) {
+    assert.ok(between > 0, `${name}: a SET with no following statement would not need session pinning`);
+  }
+  const widest = spans.reduce((a, b) => (b.between > a.between ? b : a));
+  assert.equal(widest.name, "20260805230000_signing_trust_platform");
+  assert.ok(widest.between >= 80, `widest span should be ~80 statements, saw ${widest.between}`);
 });
 
 test("the recorded checksum is the SHA-256 of the migration file", () => {

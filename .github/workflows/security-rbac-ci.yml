@@ -293,6 +293,17 @@ jobs:
       - name: Isolation -- a delivery receipt cannot reach another tenant
         run: npm run test:receipt-isolation
 
+      # The migration runner now executes each migration.sql statement by
+      # statement from its own client instead of shelling out to `db execute`.
+      # Ten migrations SET a session GUC and RESET it up to 80 statements later,
+      # so every statement has to reach the SAME backend. Pooling would break
+      # that silently: the SET lands on one session, the writes it protects on
+      # another, RLS filters them to nothing, and the migration is recorded as
+      # applied having written nothing. Only a real database can show the pin
+      # holds, so it is checked here rather than argued for in a comment.
+      - name: Migrations run every statement on one session
+        run: npm run test:migration-session
+
   # -- LANE 3: migrating a database that already has data ----------------------
   #
   # Its own job and its own scratch database, so its four minutes overlap the

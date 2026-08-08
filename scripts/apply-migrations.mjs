@@ -34,6 +34,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { PrismaClient } from "@prisma/client";
+import { splitSqlStatements } from "./lib/splitSqlStatements.mjs";
 
 const DRY_RUN = process.argv.includes("--dry-run");
 const CHECK_ONLY = process.argv.includes("--check");
@@ -298,6 +299,70 @@ async function insertLedgerRow(prisma, name) {
 }
 
 /**
+ * Force a Prisma datasource URL to use ONE pooled connection.
+ *
+ * THIS IS A CORRECTNESS REQUIREMENT, NOT A TUNING KNOB.
+ *
+ * Migrations are now executed statement by statement from this process instead
+ * of being handed to `prisma db execute` as a whole file. That is what removes
+ * the per-migration process spawn — but `db execute` ran the entire file on a
+ * single connection, and TEN migrations depend on exactly that. Each opens with
+ * `SET app.bypass_rls = 'on'` and resets it many statements later:
+ *
+ *     20260805230000_signing_trust_platform          80 statements between SET and RESET
+ *     20260804120000_reporting_statistics            36
+ *     20260805232000_signing_event_ledger            19
+ *     20260802120000_retire_automation_rules         17
+ *     20260805235000_signing_token_vault             14
+ *     …and five more (signing_*, dashboard_config, journey_multiple_triggers)
+ *
+ * `app.bypass_rls` is a SESSION setting, and it is what lets those migrations
+ * write past the row-level security policies. Prisma pools connections, so
+ * consecutive statements can otherwise land on different sessions: the SET
+ * applies to one connection while the UPDATEs it was protecting run on another,
+ * where RLS silently filters them to nothing. The migration then succeeds, gets
+ * recorded, and has written nothing — the same "recorded as applied but the SQL
+ * never really ran" shape that took production's login down in July, but quieter.
+ *
+ * One connection also makes the advisory lock behave: pg_advisory_lock is
+ * session-scoped, so taking it on one pooled connection and releasing it on
+ * another leaves it held until disconnect.
+ *
+ * Pure and exported so the URL rewriting is covered by tests.
+ */
+export function withSingleConnection(url) {
+  if (!url) return url;
+  if (/[?&]connection_limit=/.test(url)) return url;
+  return url + (url.includes("?") ? "&" : "?") + "connection_limit=1";
+}
+
+/**
+ * Execute one migration's SQL, statement by statement, on this process's client.
+ *
+ * `$executeRawUnsafe` speaks the extended query protocol, which carries exactly
+ * one statement per round trip, so the file is split by {@link splitSqlStatements}
+ * — a dollar-quote-aware splitter, because 412 of these statements live inside
+ * PL/pgSQL bodies whose internal semicolons must not split.
+ *
+ * No transaction is opened. That matches what `db execute` did, and it is
+ * deliberate: changing to all-or-nothing here would be a behaviour change to the
+ * production migration path, and belongs in its own change with its own argument.
+ * Every migration.sql in this repository is written to be idempotent precisely
+ * because a partial application has always been possible.
+ *
+ * Exported and injectable so the execute-before-record ordering stays testable
+ * without a database.
+ */
+export async function executeMigrationSql(prisma, name) {
+  const sql = readFileSync(join(migrationsDir, name, "migration.sql"), "utf8");
+  const statements = splitSqlStatements(sql);
+  for (const statement of statements) {
+    await prisma.$executeRawUnsafe(statement);
+  }
+  return statements.length;
+}
+
+/**
  * Apply ONE migration: execute its SQL, THEN record it.
  *
  * EXECUTE BEFORE RECORD IS THE WHOLE POINT. If execute throws, the record never
@@ -305,11 +370,17 @@ async function insertLedgerRow(prisma, name) {
  * migration.sql is idempotent). The reverse order would mark a migration applied
  * that never ran — the failure that took production's login down in July.
  *
- * `runner(cmd, args, env)` is injectable so the ordering stays covered by tests.
+ * The SQL and the ledger row now genuinely run on the same connection. Earlier
+ * versions of this file claimed that when it was not yet true — the SQL was still
+ * running in a `prisma db execute` child process — and that claim was corrected
+ * rather than left standing. It is true as of this change: both halves are issued
+ * by this process, against the database it checked and locked.
+ *
+ * `execute` and `runner` are injectable so the ordering stays covered by tests.
  * Exported.
  */
-export async function applyOne(name, childEnv, prisma, runner = run) {
-  runner(NPX, ["prisma", "db", "execute", "--schema", schemaPath, "--file", join(migrationsDir, name, "migration.sql")], childEnv);
+export async function applyOne(name, childEnv, prisma, runner = run, execute = executeMigrationSql) {
+  await execute(prisma, name);
   await recordApplied(prisma, name, childEnv, runner);
 }
 
@@ -412,7 +483,12 @@ async function main() {
   // where no unpooled URL is configured (e.g. CI's direct Postgres).
   const directUrl = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
   const childEnv = buildChildEnv(process.env);
-  const prisma = new PrismaClient(directUrl ? { datasources: { db: { url: directUrl } } } : undefined);
+  // connection_limit=1: see withSingleConnection. Migrations that SET a session
+  // GUC and RESET it hundreds of statements later require one session, and this
+  // process now issues those statements itself.
+  const prisma = new PrismaClient(
+    directUrl ? { datasources: { db: { url: withSingleConnection(directUrl) } } } : undefined,
+  );
   let locked = false;
 
   try {
