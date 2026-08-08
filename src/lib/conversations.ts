@@ -89,6 +89,11 @@ export async function bumpConversation(
     select: { firstResponseAt: true, lastInboundAt: true },
   });
   const data: Record<string, unknown> = { lastMessageAt: when, messageCount: { increment: 1 } };
+  // Kept current here, not only backfilled by the migration that added it: the
+  // column answers "is a customer waiting on us?", and a value that stops
+  // updating after deployment is worse than no column, because it reads as
+  // current. Written on every message, including the outbound one that clears it.
+  if (msg.direction) data.lastDirection = msg.direction;
   if (inbound) {
     data.unread = true;
     data.lastInboundAt = when;

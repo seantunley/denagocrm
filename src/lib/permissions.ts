@@ -339,6 +339,58 @@ export async function accessibleInboxWhere(
   };
 }
 
+/**
+ * May this user act on THIS conversation?
+ *
+ * The per-thread guard the inbox never had. `accessibleInboxWhere` scopes the
+ * LIST, so a scoped user cannot see a thread they have no record access to — but
+ * nothing stopped them naming its id in an action. The original shared-inbox
+ * Phase 2 assigned, noted and drafted against any conversation id a caller sent,
+ * checking only that they held an inbox permission at all.
+ *
+ * Deliberately the same shape as accessibleInboxWhere rather than a new rule:
+ * both null id lists means fully privileged, which that function expresses as no
+ * filter, and a conversation is reachable through EITHER its contact or its lead.
+ * A rule that disagreed with the list query would show a thread it then refused
+ * to act on, or worse.
+ */
+export async function canAccessConversation(
+  user: PermissionUser,
+  conversationId: string,
+): Promise<boolean> {
+  // findFirst on basePrisma WITH the tenant predicate named, like every sibling.
+  // basePrisma bypasses RLS, so a lookup by id alone would happily resolve another
+  // tenant's conversation and then answer the permission question about it. The
+  // scoped client is not the fix either: it would hide the row, which reads as
+  // "no such conversation" and leaves the tenant check untested.
+  const conversation = await basePrisma.conversation.findFirst({
+    where: { id: conversationId, ...activeTenantPredicate("conversation access check") },
+    select: { contactId: true, leadId: true },
+  });
+  if (!conversation) return false;
+  const [contactIds, leadIds] = await Promise.all([
+    getAccessibleContactIds(user),
+    getAccessibleLeadIds(user),
+  ]);
+  if (contactIds === null && leadIds === null) return true;
+  if (conversation.contactId && (contactIds === null || contactIds.includes(conversation.contactId))) {
+    return true;
+  }
+  if (conversation.leadId && (leadIds === null || leadIds.includes(conversation.leadId))) return true;
+  // Neither linkage is reachable — including a thread attached to no record at
+  // all, which a scoped user has no basis to act on.
+  return false;
+}
+
+export async function requireConversationAccess(
+  conversationId: string,
+  permission: PermissionKey,
+): Promise<PermissionUser> {
+  const user = await requirePermission(permission);
+  if (!(await canAccessConversation(user, conversationId))) redirect("/inbox");
+  return user;
+}
+
 export async function requireContactReadAccess(contactId: string): Promise<PermissionUser> {
   const user = await requireAnyPermission("contacts.view_all", "contacts.view_owned");
   if (!(await canAccessContact(user, contactId))) redirect("/contacts");

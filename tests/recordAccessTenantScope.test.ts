@@ -307,6 +307,10 @@ test("no canAccess* helper may answer from the id list alone", () => {
     [
       "canAccessCase",
       "canAccessContact",
+      // Added with shared-inbox collaboration. The inbox had no per-record helper
+      // at all: the LIST was scoped and the actions took a conversation id on
+      // trust, so this rule is the reason the rebuild has one.
+      "canAccessConversation",
       "canAccessDocument",
       "canAccessJobCard",
       "canAccessLead",
@@ -348,7 +352,13 @@ test("no canAccess* helper may answer from the id list alone", () => {
     );
 
     const tenantCheck = body.search(predicate);
-    const shortCircuit = body.indexOf("ids === null");
+    // A pattern rather than the literal `ids === null`: canAccessConversation
+    // consults TWO lists (contactIds and leadIds, mirroring accessibleInboxWhere,
+    // because a conversation is reachable through either linkage) so its variable
+    // is not named `ids`. The rule is unchanged — there must still be a
+    // short-circuit on a null accessible-id list, and the tenant check must come
+    // first.
+    const shortCircuit = body.search(/\w*[Ii]ds === null/);
     assert.ok(
       shortCircuit !== -1,
       `${name} no longer consults an accessible-id list — has the rule moved? Update this guard.`,

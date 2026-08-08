@@ -93,3 +93,31 @@ export function buildInboxThreads(comms: CommRow[]): InboxThread[] {
       b.lastAt.getTime() - a.lastAt.getTime()
   );
 }
+
+/**
+ * How a thread is identified for anything hung off it — assignment, notes.
+ *
+ * Stated HERE, beside buildInboxThreads, because the two must agree and this is
+ * the file that decides. Collaboration lives on Conversation rows keyed by cuid;
+ * a thread's identity is the composed string below. Nothing connects them except
+ * both grouping the same way: one per contact-or-lead per channel, contact
+ * winning when both are present.
+ */
+export type ThreadIdentity = {
+  contactId: string | null;
+  leadId: string | null;
+  channel: string;
+};
+
+export function threadCollaborationKey(thread: ThreadIdentity): string | null {
+  if (thread.contactId) return `c:${thread.contactId}:${thread.channel}`;
+  if (thread.leadId) return `l:${thread.leadId}:${thread.channel}`;
+  return null;
+}
+
+/** Assignment and staff notes for one thread. */
+export type ThreadCollaboration = {
+  conversationId: string;
+  assignee: { id: string; name: string } | null;
+  notes: { id: string; body: string; authorName: string; createdAt: Date }[];
+};

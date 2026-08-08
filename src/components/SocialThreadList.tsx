@@ -4,7 +4,8 @@ import RowModal from "@/components/RowModal";
 import InboxReply from "@/components/InboxReply";
 import { markThreadRead, setThreadArchived } from "@/app/actions/communications";
 import { formatDateTime } from "@/lib/format";
-import type { InboxThread } from "@/lib/inboxThreads";
+import { threadCollaborationKey, type InboxThread, type ThreadCollaboration } from "@/lib/inboxThreads";
+import ConversationCollab from "@/components/ConversationCollab";
 import { EmptyState, StatusPill } from "@/components/visual-system";
 
 export const CHANNEL_META: Record<string, { label: string; icon: React.ReactNode }> = {
@@ -29,10 +30,17 @@ export default function SocialThreadList({
   list,
   empty,
   revalidate = "/inbox",
+  collaboration,
+  staff = [],
+  canCollaborate = false,
 }: {
   list: InboxThread[];
   empty: string;
   revalidate?: string;
+  /** Assignment and notes per thread key. Absent → the panel is not rendered. */
+  collaboration?: Map<string, ThreadCollaboration>;
+  staff?: { id: string; name: string }[];
+  canCollaborate?: boolean;
 }) {
   if (list.length === 0) {
     return <EmptyState icon={MessageCircle} title="No conversations here" description={empty} className="max-w-4xl" />;
@@ -110,6 +118,17 @@ export default function SocialThreadList({
                   </div>
                 ))}
               </div>
+
+              {/* Collaboration sits ABOVE the reply box: an internal note and a
+                  customer reply are one slip apart, and the owner plus the
+                  handover context is what you want to have read before typing. */}
+              {(() => {
+                const key = threadCollaborationKey(thread);
+                const collab = key ? collaboration?.get(key) : undefined;
+                return collab ? (
+                  <ConversationCollab collaboration={collab} staff={staff} canAct={canCollaborate} />
+                ) : null;
+              })()}
 
               {thread.archived ? <p className="mt-3 text-xs text-muted-foreground">Archived — restore this conversation to reply.</p> : <InboxReply channel={thread.channel} contactId={thread.contactId} leadId={thread.leadId} phone={thread.phone} revalidate={revalidate} />}
             </div>
