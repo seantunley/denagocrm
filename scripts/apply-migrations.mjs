@@ -329,11 +329,88 @@ async function insertLedgerRow(prisma, name) {
  * another leaves it held until disconnect.
  *
  * Pure and exported so the URL rewriting is covered by tests.
+ *
+ * THERE IS NO OPTING OUT. An earlier version of this function returned the URL
+ * unchanged when it already carried a connection_limit, with a test blessing
+ * `connection_limit=5` as "an explicit choice left alone". Those two ideas
+ * cannot both be true: if one session is a correctness requirement, a
+ * configured 5 is not a preference to respect, it is the bug. Any existing
+ * value is replaced, and replacing a non-1 value is reported rather than done
+ * quietly, so a deliberate setting does not vanish without trace.
+ *
+ * The query string is rebuilt by hand rather than through the URL parser so the
+ * credential portion is never re-encoded.
  */
-export function withSingleConnection(url) {
+export function withSingleConnection(url, warn = console.warn) {
   if (!url) return url;
-  if (/[?&]connection_limit=/.test(url)) return url;
-  return url + (url.includes("?") ? "&" : "?") + "connection_limit=1";
+  const q = url.indexOf("?");
+  const base = q === -1 ? url : url.slice(0, q);
+  const params = q === -1 ? [] : url.slice(q + 1).split("&").filter(Boolean);
+
+  const kept = params.filter((p) => !/^connection_limit=/.test(p));
+  const existing = params.filter((p) => /^connection_limit=/.test(p)).pop();
+  const had = existing ? existing.slice("connection_limit=".length) : null;
+
+  if (had !== null && had !== "1") {
+    warn(
+      `::warning::migration runner: overriding connection_limit=${had} with 1. ` +
+        "Migrations must run every statement on one PostgreSQL session — ten of them hold " +
+        "SET app.bypass_rls across up to 80 statements, and the advisory lock is session-scoped.",
+    );
+  }
+  return `${base}?${[...kept, "connection_limit=1"].join("&")}`;
+}
+
+/**
+ * REFUSE TO MIGRATE PRODUCTION THROUGH A POOLER.
+ *
+ * buildChildEnv falls back from DATABASE_URL_UNPOOLED to DATABASE_URL, which is
+ * right for CI (a direct Postgres container, no unpooled variable) and wrong for
+ * production, where DATABASE_URL is Neon's POOLED endpoint. connection_limit=1
+ * bounds this process to one client connection; it cannot make an external
+ * transaction pooler keep that connection pinned to one backend session.
+ *
+ * That matters more now than it did. Previously the whole migration file went to
+ * one `prisma db execute`; now the runner issues the statements itself, and both
+ * `SET app.bypass_rls` and `pg_advisory_lock()` depend on physical session
+ * continuity. Through a pooler those can silently land on different backends —
+ * the writes they protect get filtered by RLS, the migration is recorded as
+ * applied, and nothing errors.
+ *
+ * Scoped to VERCEL_ENV=production deliberately: CI has no unpooled URL by design
+ * and connects directly, and previews are already handled by previewMayMigrate.
+ *
+ * Pure and exported. Returns the refusal message, or null when the URL is fine.
+ */
+export function directMigrationUrlProblem({ vercelEnv, unpooled, resolved }) {
+  if (vercelEnv !== "production") return null;
+
+  if (!unpooled) {
+    return (
+      "\n✖ MIGRATIONS REFUSED — DATABASE_URL_UNPOOLED is not set on production.\n\n" +
+      "  Migrations are applied statement by statement and depend on every statement\n" +
+      "  reaching the SAME PostgreSQL session: ten migrations hold `SET app.bypass_rls`\n" +
+      "  across up to 80 statements, and pg_advisory_lock is session-scoped.\n\n" +
+      "  Without this variable the runner would fall back to DATABASE_URL, which is the\n" +
+      "  POOLED endpoint. A transaction pooler does not guarantee one backend, so the\n" +
+      "  SET could apply to one session while the writes it protects run on another —\n" +
+      "  RLS filters them away, the migration is recorded as applied, and nothing fails.\n\n" +
+      "  Set DATABASE_URL_UNPOOLED to the owner role's DIRECT connection string.\n" +
+      "  Nothing has been applied.\n"
+    );
+  }
+
+  if (/-pooler\./.test(resolved ?? "")) {
+    return (
+      "\n✖ MIGRATIONS REFUSED — the migration URL points at a POOLED endpoint.\n\n" +
+      `  Resolved host looks pooled (contains "-pooler"). Migrations need a direct\n` +
+      "  connection so that session state — SET app.bypass_rls, pg_advisory_lock —\n" +
+      "  stays on one backend for the whole run.\n\n" +
+      "  Point DATABASE_URL_UNPOOLED at the DIRECT (non-pooler) host. Nothing has been applied.\n"
+    );
+  }
+
+  return null;
 }
 
 /**
@@ -370,11 +447,20 @@ export async function executeMigrationSql(prisma, name) {
  * migration.sql is idempotent). The reverse order would mark a migration applied
  * that never ran — the failure that took production's login down in July.
  *
- * The SQL and the ledger row now genuinely run on the same connection. Earlier
- * versions of this file claimed that when it was not yet true — the SQL was still
- * running in a `prisma db execute` child process — and that claim was corrected
- * rather than left standing. It is true as of this change: both halves are issued
- * by this process, against the database it checked and locked.
+ * The SQL and the ledger row now run on the same connection, with ONE documented
+ * exception. Earlier versions of this file claimed "same connection" while the SQL
+ * was still running in a `prisma db execute` child process; that claim was
+ * corrected rather than left standing, so it is worth being exact again here.
+ *
+ * Normal case: both halves are issued by this process, on the single pinned
+ * connection, against the database it checked and locked.
+ *
+ * Exception: on a BRAND-NEW database `_prisma_migrations` does not exist yet, and
+ * recordApplied falls back to spawning `prisma migrate resolve` — which is what
+ * creates that table. So the very first migration of a fresh database records
+ * itself from a child process, pinned by childEnv to the same database but not
+ * the same connection. It happens once per database, on a database that by
+ * definition has nothing to corrupt.
  *
  * `execute` and `runner` are injectable so the ordering stays covered by tests.
  * Exported.
@@ -519,6 +605,19 @@ async function main() {
         role: String(privs?.role ?? "unknown"),
         canCreate: privs?.can_create === true,
         unpooledConfigured: Boolean(process.env.DATABASE_URL_UNPOOLED),
+      });
+      if (problem) throw new Error(problem);
+    }
+
+    // Checked alongside the role, for the same reason: refuse BEFORE the lock and
+    // before any DDL. connection_limit=1 bounds this client to one connection, but
+    // it cannot make an external pooler pin that connection to one backend — and
+    // statement-by-statement execution now depends on exactly that.
+    {
+      const problem = directMigrationUrlProblem({
+        vercelEnv: process.env.VERCEL_ENV,
+        unpooled: process.env.DATABASE_URL_UNPOOLED,
+        resolved: directUrl,
       });
       if (problem) throw new Error(problem);
     }

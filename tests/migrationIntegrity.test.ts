@@ -20,6 +20,7 @@ import {
   auditMigrationLedger,
   executeMigrationSql,
   withSingleConnection,
+  directMigrationUrlProblem,
 } from "../scripts/apply-migrations.mjs";
 import { splitSqlStatements } from "../scripts/lib/splitSqlStatements.mjs";
 
@@ -97,10 +98,15 @@ test("buildChildEnv: no DB url configured → does not invent one, returns a cop
 /**
  * Both halves of applying a migration used to be child processes: `prisma db
  * execute` for the SQL, `prisma migrate resolve` for the ledger. Both are now
- * issued by the runner itself, on one connection — which is what the header's
- * split-brain warning was really asking for, and is only now actually true.
- * (An earlier version of this comment claimed it while the SQL was still running
- * in a child process.) The ORDER is unchanged and is what these tests protect.
+ * issued by the runner itself, on one pinned connection — which is what the
+ * header's split-brain warning was really asking for.
+ *
+ * With one exception, stated because this comment has twice claimed more than
+ * was true: on a brand-new database `_prisma_migrations` does not exist, and
+ * recordApplied falls back to spawning `migrate resolve` to create it. The first
+ * migration of a fresh database therefore records itself from a child process.
+ *
+ * The ORDER is unchanged and is what these tests protect.
  */
 
 /** Enough of a Prisma client to observe whether the ledger row was written. */
@@ -179,17 +185,78 @@ test("withSingleConnection: pins the runner to one session", () => {
   // 80 statements apart. Pooling would put those statements on different
   // sessions, so the SET would not apply and RLS would silently filter the
   // writes it was protecting.
-  assert.equal(withSingleConnection("postgres://h/db"), "postgres://h/db?connection_limit=1");
+  const quiet = () => {};
+  assert.equal(withSingleConnection("postgres://h/db", quiet), "postgres://h/db?connection_limit=1");
   assert.equal(
-    withSingleConnection("postgres://h/db?sslmode=require"),
+    withSingleConnection("postgres://h/db?sslmode=require", quiet),
     "postgres://h/db?sslmode=require&connection_limit=1",
   );
-  assert.equal(
-    withSingleConnection("postgres://h/db?connection_limit=5"),
+  assert.equal(withSingleConnection(undefined, quiet), undefined);
+});
+
+test("withSingleConnection: a configured connection_limit can NEVER survive", () => {
+  // The first version of this returned the URL untouched when it already had a
+  // connection_limit, and a test blessed connection_limit=5 as "an explicit
+  // choice left alone". That contradicts the whole reason the pin exists: if one
+  // session is a correctness requirement, a configured 5 is the bug, not a
+  // preference. Five connections reopen exactly the silent failure this closes.
+  const quiet = () => {};
+  for (const url of [
     "postgres://h/db?connection_limit=5",
-    "an explicit choice is left alone",
+    "postgres://h/db?connection_limit=0",
+    "postgres://h/db?sslmode=require&connection_limit=17",
+    "postgres://h/db?connection_limit=5&sslmode=require",
+    "postgres://h/db?connection_limit=5&connection_limit=9",
+  ]) {
+    const out = withSingleConnection(url, quiet);
+    assert.equal(
+      [...out.matchAll(/connection_limit=(\d+)/g)].map((m) => m[1]).join(","),
+      "1",
+      `exactly one connection_limit, and it must be 1 — got ${out}`,
+    );
+  }
+  // Other parameters survive the rewrite.
+  assert.match(withSingleConnection("postgres://h/db?connection_limit=5&sslmode=require", quiet), /sslmode=require/);
+  // A credential is never re-encoded on the way through.
+  assert.match(
+    withSingleConnection("postgres://user:pass%40word@db.example.com/x?connection_limit=5", quiet),
+    /user:pass%40word@db\.example\.com/,
   );
-  assert.equal(withSingleConnection(undefined), undefined);
+});
+
+test("withSingleConnection: overriding a deliberate value is reported, not silent", () => {
+  const warnings: string[] = [];
+  withSingleConnection("postgres://h/db?connection_limit=5", (m: string) => warnings.push(m));
+  assert.equal(warnings.length, 1, "an override should say so");
+  assert.match(warnings[0], /connection_limit=5/);
+
+  const quiet: string[] = [];
+  withSingleConnection("postgres://h/db?connection_limit=1", (m: string) => quiet.push(m));
+  assert.deepEqual(quiet, [], "already correct — nothing to report");
+});
+
+test("directMigrationUrlProblem: production refuses to migrate through a pooler", () => {
+  // connection_limit=1 bounds this client to one connection; it cannot make an
+  // external transaction pooler keep that connection on one backend.
+  const pooled = "postgres://user:pass@ep-x-pooler.example.neon.tech/db";
+  const direct = "postgres://user:pass@ep-x.example.neon.tech/db";
+
+  assert.match(
+    directMigrationUrlProblem({ vercelEnv: "production", unpooled: undefined, resolved: pooled }) ?? "",
+    /DATABASE_URL_UNPOOLED is not set/,
+    "production with no direct URL must refuse rather than fall back",
+  );
+  assert.match(
+    directMigrationUrlProblem({ vercelEnv: "production", unpooled: pooled, resolved: pooled }) ?? "",
+    /POOLED endpoint/,
+    "a direct URL that is actually pooled must refuse too",
+  );
+  assert.equal(directMigrationUrlProblem({ vercelEnv: "production", unpooled: direct, resolved: direct }), null);
+
+  // CI connects straight to a Postgres container and has no unpooled variable by
+  // design; previews are handled by previewMayMigrate. Neither may be blocked.
+  assert.equal(directMigrationUrlProblem({ vercelEnv: undefined, unpooled: undefined, resolved: "postgres://localhost:5432/denagocrm_test" }), null);
+  assert.equal(directMigrationUrlProblem({ vercelEnv: "preview", unpooled: undefined, resolved: pooled }), null);
 });
 
 test("session GUCs really do span separate statements, in every migration that uses one", () => {
