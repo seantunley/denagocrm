@@ -7,6 +7,8 @@
  * the editor's `BlockView` can render the brand footer with real default values.
  */
 
+import { PLATFORM_NAME } from "./platformIdentity";
+
 export type CompanyProfile = {
   name: string;
   tagline: string;
@@ -19,15 +21,33 @@ export type CompanyProfile = {
   logoUrl: string;
 };
 
+/**
+ * The company a document is from when NOTHING is configured.
+ *
+ * These were Denago's real details — name, address, landline, sales inbox — and
+ * they were the last resort of getCompanyProfile(), so a tenant who had not
+ * filled in Settings → Company printed quotes with another company's address and
+ * phone number on them. Not a cosmetic default: a customer reading that document
+ * would have called Denago about a machine Denago had never seen.
+ *
+ * They now live where they belong, as that tenant's own Company Profile, seeded
+ * by 20260806190000_seed_founding_tenant_brand. Confirmed necessary rather than
+ * assumed: production had ZERO COMPANY_* settings when this was written, so
+ * every Denago document was resolving through this constant.
+ *
+ * Empty is the right neutral, not a placeholder. brandFooterContent() drops
+ * empty fields and closes up the separators, so an unconfigured workspace prints
+ * a footer with just its name rather than one with "Your Address Here" in it.
+ */
 export const COMPANY_DEFAULTS: CompanyProfile = {
-  name: "Denago Cape Town",
-  tagline: "Authorized Denago EV Dealer",
-  address: "Unit 55, M5 Freeway Business Park, Maitland, Cape Town",
-  phone: "073 789 3438",
-  email: "sales@denagocpt.co.za",
-  website: "denagocpt.co.za",
+  name: PLATFORM_NAME,
+  tagline: "",
+  address: "",
+  phone: "",
+  email: "",
+  website: "",
   facebook: "",
-  instagram: "@denago_capetown",
+  instagram: "",
   logoUrl: "",
 };
 

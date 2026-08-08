@@ -44,6 +44,11 @@ test("the backfill never queues an email to a customer", () => {
 });
 
 test("the signing cluster is tenant-owned even before application enforcement", () => {
+  // NOT NULL is DEFERRED, not forgotten. It shipped once and took production
+  // down: the requirement can only hold if every row the signing tables point at
+  // carries a tenant, and with `tenantEnforcing()` hard-coded false nothing
+  // stamps them. Asserting its absence here so it cannot come back on its own,
+  // ahead of the write-time stamping that makes it keepable.
   for (const table of [
     "SignatureRequest",
     "SignatureRecipient",
@@ -52,8 +57,15 @@ test("the signing cluster is tenant-owned even before application enforcement", 
     "SignatureEvent",
     "ApprovalStep",
   ]) {
-    assert.match(migration, new RegExp(`ALTER TABLE "${table}" ALTER COLUMN "tenantId" SET NOT NULL`));
+    assert.doesNotMatch(
+      migration,
+      new RegExp(`ALTER TABLE "${table}" ALTER COLUMN "tenantId" SET NOT NULL`),
+      `${table} NOT NULL is unkeepable until writes are stamped — see docs/TENANT-ENFORCEMENT-PREREQUISITES.md`,
+    );
   }
+  // What DOES hold today: the historic rows are stamped, and new rows inherit
+  // from their request rather than from a guess.
+  assert.match(migration, /Finish the tenant backfill the dormant stamper never did/);
   assert.match(migration, /CREATE TRIGGER "SignatureRequest_stamp_tenant"/);
   assert.match(migration, /signing_stamp_child_tenant/);
   assert.match(migration, /signing_stamp_response_tenant/);

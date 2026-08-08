@@ -2,11 +2,14 @@ import crypto from "crypto";
 import { prisma } from "./db";
 import { sendEmail, renderTemplate } from "./email";
 import { sendSms } from "./sms";
+import { emailBrand, type EmailBrand } from "./emailBrand";
+import { PLATFORM_NAME } from "./platformIdentity";
 import { htmlToText } from "./signature";
 import { computeDue } from "./serviceDue";
 import { contactName } from "./format";
 import { currentTenantScope } from "./tenantScope";
 import { trackedLinkPattern } from "./trackRedirect";
+import { escapeHtml } from "./escapeHtml";
 
 export type SegmentCriteria = {
   source?: string;
@@ -90,28 +93,57 @@ export async function countContacts(
   return (await resolveContacts(tenantId, criteria, channel)).length;
 }
 
-function emailShell(inner: string, unsubUrl: string) {
-  const base = appBaseUrl();
+function emailShell(inner: string, unsubUrl: string, brand?: EmailBrand) {
+  // Same origin the links use, so the built-in logo fallback does not arrive
+  // from a different host than everything around it.
+  const base = brand?.origin || appBaseUrl();
+  // Absolute URL, always: a mail client has no origin to resolve a relative path
+  // against. Falls back to the built-in asset when the tenant has no logo.
+  const logo = brand?.logoUrl ?? `${base}/branding/denago-cape-town-logo.png`;
+  // Unbranded no longer means "Denago". A campaign that could not resolve its
+  // tenant used to go out under one customer's trading name and street address —
+  // to another customer's mailing list, with an unsubscribe link, which is a
+  // compliance problem as much as a branding one. It now names the platform and
+  // claims no address, because it does not know one.
+  const name = brand?.branded ? brand.displayName : PLATFORM_NAME;
+  // Escaped once, here, for every position it is used in below: an alt
+  // attribute, the footer, and the "you received this because" sentence. The
+  // tenant display name is operator-controlled but it still reaches this
+  // tenant's customers, and nothing else in this template is unescaped.
+  const safeName = escapeHtml(name);
+  const footer = safeName;
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;background:#f1f5f9;padding:24px 12px;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
 <tr><td style="background:#0f172a;padding:16px 24px;">
-<img src="${base}/branding/denago-cape-town-logo.png" alt="Denago Cape Town" height="26" style="height:26px;">
+<img src="${escapeHtml(logo)}" alt="${safeName}" height="26" style="height:26px;">
 </td></tr>
 <tr><td style="padding:24px;font-size:15px;line-height:1.6;">${inner}</td></tr>
 <tr><td style="padding:16px 24px;background:#f8fafc;color:#64748b;font-size:12px;line-height:1.5;">
-Denago Cape Town &middot; Cape Town, South Africa<br>
-You received this because you're a Denago Cape Town customer.
-<a href="${unsubUrl}" style="color:#64748b;">Unsubscribe</a>.
+${footer}<br>
+You received this because you're a ${safeName} customer.
+<a href="${escapeHtml(unsubUrl)}" style="color:#64748b;">Unsubscribe</a>.
 </td></tr>
 </table></td></tr></table></body></html>`;
 }
 
 /** Wrap personalised HTML with the brand shell, rewrite links for click
  *  tracking, and append the open-tracking pixel + unsubscribe footer. */
-export function buildTrackedEmail(personalizedHtml: string, token: string) {
-  const base = appBaseUrl();
+export function buildTrackedEmail(personalizedHtml: string, token: string, brand?: EmailBrand) {
+  // The tenant's own origin for EVERY link in the mail — the click wrapper, the
+  // open pixel and the unsubscribe URL. This is the most-seen surface of the
+  // lot: a recipient hovers any link in a marketing email and reads the hostname
+  // in their status bar, and it read crm.denagocpt.co.za whoever sent it.
+  //
+  // The unsubscribe URL especially. It is the one link a recipient is invited to
+  // click when they do not trust the sender, and pointing it at a company they
+  // have never heard of is the worst possible moment to look like a stranger.
+  //
+  // Old links keep working: every hostname reaches the same deployment and the
+  // platform origin stays valid forever, so a campaign sent last month tracks
+  // and unsubscribes exactly as before.
+  const base = brand?.origin || appBaseUrl();
   // Same pattern the click route reads the campaign's vouched-for hosts with, so
   // the set of links rewritten here and the set accepted there cannot drift.
   const rewritten = personalizedHtml.replace(
@@ -119,7 +151,7 @@ export function buildTrackedEmail(personalizedHtml: string, token: string) {
     (_m, url) => `href="${base}/api/track/c/${token}?u=${encodeURIComponent(url)}"`,
   );
   const pixel = `<img src="${base}/api/track/o/${token}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;overflow:hidden;">`;
-  return emailShell(rewritten + pixel, `${base}/api/unsubscribe/${token}`);
+  return emailShell(rewritten + pixel, `${base}/api/unsubscribe/${token}`, brand);
 }
 
 export function newToken() {
@@ -165,6 +197,11 @@ export async function sendCampaignBatch(
     });
   }
 
+  // Resolved ONCE per batch, not per recipient: brandForTenant is cache()d, but a
+  // batch is up to 80 sends and the intent should be visible at the loop rather
+  // than relying on the cache to make it cheap.
+  const brand = await emailBrand(tenantId);
+
   let sent = 0;
   let failed = 0;
   for (const r of recipients) {
@@ -174,7 +211,7 @@ export async function sendCampaignBatch(
     if (campaign.channel === "email") {
       const subject = renderTemplate(campaign.subject ?? "", vars);
       const personalized = renderTemplate(campaign.htmlBody ?? campaign.body, vars);
-      const html = buildTrackedEmail(personalized, r.token);
+      const html = buildTrackedEmail(personalized, r.token, brand);
       const text = renderTemplate(campaign.body, vars);
       res = await sendEmail({ to: c.email!, subject, text, html });
     } else {

@@ -1,4 +1,5 @@
 import type { DocTemplate } from "@/lib/docTemplates";
+import { PLATFORM_NAME } from "@/lib/platformIdentity";
 import { formatZAR } from "@/lib/format";
 import { lineNetCents, type TotalLine } from "@/lib/pricing";
 
@@ -135,11 +136,16 @@ export default function PrintDocShell({
   title,
   number,
   meta = [],
-  parties = { left: "Customer signature · Date", right: "For Denago Cape Town · Date" },
+  parties,
   bodySection, // section id that gates tpl.bodyText (e.g. "clauses", "waiver", "banking")
   bodyTitle,
+  company,
   children,
 }: {
+  /** The company this document is FROM — resolved from the Company Profile,
+   *  which now inherits the platform-set tenant brand. Optional so an
+   *  un-updated caller renders exactly what it rendered before. */
+  company?: { name: string; tagline: string; logoUrl: string };
   template: DocTemplate;
   title: string;
   number?: string;
@@ -149,10 +155,17 @@ export default function PrintDocShell({
   bodyTitle?: string;
   children?: React.ReactNode;
 }) {
+  // The counter-signature label names the SELLER, so it moved out of the
+  // parameter default and into the body — a default cannot see `company`. An
+  // absent company gives back the exact original string.
+  const signingParties = parties ?? {
+    left: "Customer signature · Date",
+    right: `For ${company?.name || PLATFORM_NAME} · Date`,
+  };
   const showBody = bodySection ? tpl.sections[bodySection] !== false && tpl.bodyText : false;
   const sigOn = tpl.sections.signatures !== false;
   const pos = tpl.signature.position;
-  const rightLabel = tpl.signature.dealerCounterSign ? parties.right : null;
+  const rightLabel = tpl.signature.dealerCounterSign ? signingParties.right : null;
 
   const line = (label: string) => (
     <div className="border-t-2 border-slate-900 pt-2 mt-14">
@@ -177,8 +190,15 @@ export default function PrintDocShell({
         <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={tpl.logoUrl ?? "/branding/denago-logo-email.png"}
-            alt="Denago Cape Town EV"
+            // `||`, not `??`. An unset logo is the EMPTY STRING here, not null:
+            // COMPANY_LOGO_URL is a text setting and getCompanyProfile() maps a
+            // missing one to "". `??` only skips null/undefined, so it passed the
+            // empty string straight through and rendered `<img src="">`, which
+            // browsers resolve to the current page and draw as a broken image on
+            // a printed document. Now that unconfigured workspaces are the normal
+            // case rather than the impossible one, this has to fall through.
+            src={tpl.logoUrl || company?.logoUrl || "/branding/denago-logo-email.png"}
+            alt={company?.name || PLATFORM_NAME}
             className="h-11 w-auto object-contain"
           />
           <div className="text-right">
@@ -231,11 +251,11 @@ export default function PrintDocShell({
               {pos === "right-left" && rightLabel ? (
                 <>
                   {line(rightLabel)}
-                  {line(parties.left)}
+                  {line(signingParties.left)}
                 </>
               ) : (
                 <>
-                  {line(parties.left)}
+                  {line(signingParties.left)}
                   {rightLabel && line(rightLabel)}
                 </>
               )}
@@ -247,7 +267,7 @@ export default function PrintDocShell({
             <div className="border-t-2 border-orange-600 pt-4 flex items-start justify-between gap-6 flex-wrap no-break">
               <div className="text-[10px] text-slate-500 leading-4">
                 <p className="font-bold text-slate-700 text-[11px]">
-                  Denago Cape Town — Authorized Denago EV Dealer
+                  {[company?.name || PLATFORM_NAME, company?.tagline].filter(Boolean).join(" — ")}
                 </p>
                 {tpl.footerLines.map((l, i) => (
                   <p key={i}>{l}</p>

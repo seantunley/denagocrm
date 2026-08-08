@@ -1,4 +1,5 @@
 import { notFound, redirect } from "next/navigation";
+import { portalBrand } from "@/lib/portalBrand";
 import Link from "next/link";
 import { ArrowLeft, Download, MessageCircle, Paperclip, Send } from "lucide-react";
 import { basePrisma } from "@/lib/db";
@@ -35,6 +36,8 @@ type UploadRow = {
 export default async function PortalCasePage({ params }: { params: Promise<{ id: string }> }) {
   const contact = await getPortalContact();
   if (!contact) redirect("/portal/login");
+  // Cached per request — the layout and every page share one resolution.
+  const brand = await portalBrand();
   const { id } = await params;
   if (!(await portalCanAccessCase(id))) notFound();
 
@@ -71,11 +74,11 @@ export default async function PortalCasePage({ params }: { params: Promise<{ id:
         <p className="text-xs text-slate-500 mt-3">Opened {formatDateTime(item.createdAt)}</p>
       </Surface>
       <section className="space-y-3">
-        <SectionHeading title="Conversation" description="Messages between you and the Denago team." action={<MessageCircle className="size-5 text-muted-foreground" />} />
+        <SectionHeading title="Conversation" description={brand.branded ? `Messages between you and the ${brand.displayName} team.` : "Messages between you and the Denago team."} action={<MessageCircle className="size-5 text-muted-foreground" />} />
         <div className="space-y-3">
           {messages.map((message) => (
             <div key={message.id} className={`max-w-3xl rounded-2xl border p-4 shadow-sm ${message.direction === "staff" ? "border-white/[0.07] bg-white/[0.045]" : "ml-auto border-orange-500/20 bg-orange-500/[0.08]"}`}>
-              <p className="text-xs font-semibold text-slate-400 mb-1">{message.direction === "staff" ? "Denago Cape Town" : "You"}</p>
+              <p className="text-xs font-semibold text-slate-400 mb-1">{message.direction === "staff" ? (brand.branded ? brand.displayName : "Denago Cape Town") : "You"}</p>
               <p className="text-sm whitespace-pre-wrap">{message.body}</p>
               <p className="text-[11px] text-slate-500 mt-2">{formatDateTime(message.createdAt)}</p>
             </div>

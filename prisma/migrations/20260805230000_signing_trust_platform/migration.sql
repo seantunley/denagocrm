@@ -22,16 +22,119 @@ ALTER TABLE "SignatureRecipient" ADD COLUMN IF NOT EXISTS "tokenRevokedAt" TIMES
 ALTER TABLE "ApprovalStep" ADD COLUMN IF NOT EXISTS "tokenCiphertext" TEXT;
 ALTER TABLE "ApprovalStep" ADD COLUMN IF NOT EXISTS "tokenRevokedAt" TIMESTAMP(3);
 
+-- ── Finish the tenant backfill the dormant stamper never did ────────────────
+--
+-- SignatureRequest.tenantId is made NOT NULL below, and it cannot be: the rows
+-- it points at are unstamped. `tenantEnforcing()` returns a hard-coded false, so
+-- the write guard stamps nothing and every record created since the July
+-- backfill carries tenantId NULL. On production that is 8 quotes, 8 documents
+-- and a contact — and two signature requests that cannot be stamped without
+-- them, because SignatureRequest carries COMPOSITE tenant foreign keys:
+--
+--     (tenantId, documentId) → Document(tenantId, id)      … and quoteId,
+--     contactId, jobCardId, templateId
+--
+-- Stamping a request whose Document is NULL-tenant is precisely what failed
+-- every deployment from 13:49 on 2026-08-07:
+--
+--     insert or update on table "SignatureRequest" violates foreign key
+--     constraint "SignatureRequest_tenantId_documentId_fkey"
+--
+-- ORDER MATTERS. Each UPDATE is checked as it runs, so a child stamped before
+-- its parent fails on the parent's composite key. The list below is the real
+-- dependency order, read out of pg_constraint rather than assumed:
+--
+--     Document  → Vehicle, JobCard, Contact, Quote, Document
+--     Quote     → Contact, Lead, Quote
+--     JobCard   → WorkshopBay, Vehicle, Contact, JobCard
+--     Vehicle   → Contact, Product, Fleet
+--     Lead      → PipelineStage, Product, Contact
+--
+-- Self-references (Quote→Quote, Document→Document, JobCard→JobCard) are safe
+-- because each table is stamped in ONE statement: both ends move together.
+--
+-- ONLY WITH A SINGLE TENANT. With more than one, which tenant an orphaned row
+-- belongs to is a question this migration cannot answer, and guessing would put
+-- one workspace's records into another's. It skips instead, and the SET NOT NULL
+-- below then fails loudly — which is the correct outcome for a question that
+-- needs a human.
+DO $tenant_backfill$
+DECLARE
+  founding TEXT;
+  tenants  INT;
+  target   TEXT;
+BEGIN
+  SELECT count(*) INTO tenants FROM "Tenant";
+  IF tenants <> 1 THEN
+    RAISE NOTICE 'skipping historic tenant backfill: % tenants present, ownership is ambiguous', tenants;
+    RETURN;
+  END IF;
+  SELECT id INTO founding FROM "Tenant" LIMIT 1;
+
+  FOREACH target IN ARRAY ARRAY[
+    'Contact','Product','Fleet','PipelineStage','WorkshopBay','SignWorkflow',
+    'Vehicle','Lead','JobCard','Quote','Document','DocBuilderTemplate'
+  ] LOOP
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = target AND column_name = 'tenantId'
+    ) THEN
+      EXECUTE format('UPDATE %I SET "tenantId" = $1 WHERE "tenantId" IS NULL', target) USING founding;
+    END IF;
+  END LOOP;
+END
+$tenant_backfill$;
+
+-- A tenant is only assigned when it AGREES WITH EVERY PARENT this request points
+-- at. SignatureRequest carries composite tenant foreign keys —
+-- (tenantId, documentId) → Document(tenantId, id), and the same for quoteId,
+-- jobCardId, contactId and templateId — so a tenant that is right for one
+-- pointer and wrong for another is not a partial success, it is a constraint
+-- violation that fails the whole deploy.
+--
+-- THIS EXACT ROW BROKE PRODUCTION. Q-1017 and Q-1018 have a NULL-tenant Document
+-- and a NULL-tenant Quote, but a Contact stamped `tenant_denago_cpt`. The old
+-- COALESCE walked past the two NULLs, reached the contact, and wrote
+-- `tenant_denago_cpt` onto a request whose Document is NULL-tenant:
+--
+--   insert or update on table "SignatureRequest" violates foreign key
+--   constraint "SignatureRequest_tenantId_documentId_fkey"
+--
+-- Every deployment after that failed at this statement, so the schema advanced
+-- while the application did not.
+--
+-- A composite key with a NULL column is not enforced (MATCH SIMPLE), so leaving
+-- an inconsistent request NULL is legal and is exactly the state it is in today.
+-- Stamping its parents instead would be a much wider change to reach for while
+-- production cannot deploy, and it is a separate decision from getting the
+-- signing platform out.
 UPDATE "SignatureRequest" r
-SET "tenantId" = COALESCE(
-  r."tenantId",
-  (SELECT d."tenantId" FROM "Document" d WHERE d."id" = r."documentId"),
-  (SELECT q."tenantId" FROM "Quote" q WHERE q."id" = r."quoteId"),
-  (SELECT j."tenantId" FROM "JobCard" j WHERE j."id" = r."jobCardId"),
-  (SELECT c."tenantId" FROM "Contact" c WHERE c."id" = r."contactId"),
-  'tenant_denago_cpt'
-)
-WHERE r."tenantId" IS NULL;
+SET "tenantId" = candidate.value
+FROM (
+  SELECT r2."id",
+         COALESCE(
+           (SELECT d."tenantId" FROM "Document" d WHERE d."id" = r2."documentId"),
+           (SELECT q."tenantId" FROM "Quote" q WHERE q."id" = r2."quoteId"),
+           (SELECT j."tenantId" FROM "JobCard" j WHERE j."id" = r2."jobCardId"),
+           (SELECT c."tenantId" FROM "Contact" c WHERE c."id" = r2."contactId"),
+           'tenant_denago_cpt'
+         ) AS value
+  FROM "SignatureRequest" r2
+  WHERE r2."tenantId" IS NULL
+) AS candidate
+WHERE r."id" = candidate."id"
+  -- IS NOT DISTINCT FROM, not `=`: a NULL-tenant parent must match a NULL
+  -- candidate, and `NULL = NULL` is unknown rather than true.
+  AND (r."documentId" IS NULL
+       OR (SELECT d."tenantId" FROM "Document" d WHERE d."id" = r."documentId") IS NOT DISTINCT FROM candidate.value)
+  AND (r."quoteId" IS NULL
+       OR (SELECT q."tenantId" FROM "Quote" q WHERE q."id" = r."quoteId") IS NOT DISTINCT FROM candidate.value)
+  AND (r."jobCardId" IS NULL
+       OR (SELECT j."tenantId" FROM "JobCard" j WHERE j."id" = r."jobCardId") IS NOT DISTINCT FROM candidate.value)
+  AND (r."contactId" IS NULL
+       OR (SELECT c."tenantId" FROM "Contact" c WHERE c."id" = r."contactId") IS NOT DISTINCT FROM candidate.value)
+  AND (r."templateId" IS NULL
+       OR (SELECT t."tenantId" FROM "DocBuilderTemplate" t WHERE t."id" = r."templateId") IS NOT DISTINCT FROM candidate.value);
 
 UPDATE "SignatureRecipient" c SET "tenantId" = p."tenantId"
 FROM "SignatureRequest" p WHERE c."requestId" = p."id" AND c."tenantId" IS NULL;
@@ -44,12 +147,30 @@ FROM "SignatureRequest" p WHERE c."requestId" = p."id" AND c."tenantId" IS NULL;
 UPDATE "ApprovalStep" c SET "tenantId" = p."tenantId"
 FROM "SignatureRequest" p WHERE c."requestId" = p."id" AND c."tenantId" IS NULL;
 
-ALTER TABLE "SignatureRequest" ALTER COLUMN "tenantId" SET NOT NULL;
-ALTER TABLE "SignatureRecipient" ALTER COLUMN "tenantId" SET NOT NULL;
-ALTER TABLE "SignatureField" ALTER COLUMN "tenantId" SET NOT NULL;
-ALTER TABLE "SignatureFieldResponse" ALTER COLUMN "tenantId" SET NOT NULL;
-ALTER TABLE "SignatureEvent" ALTER COLUMN "tenantId" SET NOT NULL;
-ALTER TABLE "ApprovalStep" ALTER COLUMN "tenantId" SET NOT NULL;
+-- NOT NULL IS DELIBERATELY NOT SET HERE.
+--
+-- It was, and it is why production could not deploy. The requirement is only
+-- keepable if every row the signing tables point at carries a tenant, and the
+-- application does not yet produce those: `tenantEnforcing()` is hard-coded
+-- false, so the write guard stamps nothing and every Quote, Document and
+-- Contact created since the July backfill has tenantId NULL.
+--
+-- The backfill above fixes the rows that exist. It cannot fix the ones made
+-- tomorrow. With NOT NULL in place, signing a newly created quote would fail —
+-- the request derives its tenant from its source, the source is unstamped, and
+-- the insert is refused. Trading "signing works" for "signing rows are
+-- guaranteed tenant-owned" is not a trade worth making while the guarantee
+-- cannot actually be met.
+--
+-- It also has to survive a SECOND TENANT being added. Under a fail-closed rule
+-- with enforcement off there is no tenant in scope to fall back to, so signing
+-- would stop working the day another workspace is onboarded — exactly when the
+-- product needs it most.
+--
+-- This belongs to the tenant-enforcement project, which has to happen before a
+-- second tenant regardless: turn on write-time stamping, backfill again while
+-- ownership is still unambiguous, then add NOT NULL as the proof it worked.
+-- Adding it here would only move the outage earlier.
 
 -- Database-side stamping closes the off/monitor-mode hole. Children derive their
 -- owner from the request rather than trusting a caller-supplied tenant.
@@ -67,9 +188,12 @@ BEGIN
   IF NEW."tenantId" IS NULL THEN
     NEW."tenantId" := NULLIF(current_setting('app.current_tenant', true), '');
   END IF;
-  IF NEW."tenantId" IS NULL THEN
-    RAISE EXCEPTION 'SignatureRequest requires an owning tenant (no app.current_tenant in scope)';
-  END IF;
+  -- No exception when it is still NULL. `app.current_tenant` is only set when
+  -- tenant enforcement is on, and it is hard-coded off — so refusing here would
+  -- refuse EVERY signature request whose source record is unstamped, which is
+  -- every quote created from now on. Once enforcement lands the variable is
+  -- always present, the stamp above always succeeds, and this can become a
+  -- refusal again in the same change that adds NOT NULL.
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -82,8 +206,10 @@ CREATE OR REPLACE FUNCTION signing_stamp_child_tenant() RETURNS trigger AS $$
 DECLARE parent_tenant TEXT;
 BEGIN
   SELECT "tenantId" INTO parent_tenant FROM "SignatureRequest" WHERE "id" = NEW."requestId";
-  IF parent_tenant IS NULL THEN RAISE EXCEPTION 'Signing child has no tenant-owned request'; END IF;
-  IF NEW."tenantId" IS NOT NULL AND NEW."tenantId" <> parent_tenant THEN
+  -- A child follows its request, including into NULL. The mismatch check below
+  -- is what actually matters and is kept: a child may never claim a DIFFERENT
+  -- tenant from the request it belongs to.
+  IF NEW."tenantId" IS NOT NULL AND parent_tenant IS NOT NULL AND NEW."tenantId" <> parent_tenant THEN
     RAISE EXCEPTION 'Signing child tenant does not match request tenant';
   END IF;
   NEW."tenantId" := parent_tenant;

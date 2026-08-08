@@ -27,6 +27,8 @@ import ResearchButton from "@/components/ResearchButton";
 import { isAiConfigured } from "@/lib/ai";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { requireUser } from "@/lib/auth";
+import { brandForTenant, teamSignoff } from "@/lib/tenantBrand";
+import { getActiveTenantId } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { payableTotalCents } from "@/lib/pricing";
@@ -90,7 +92,7 @@ export default async function LeadDetailPage({
   const libraryDocs = libraryDocuments
     .filter((d) => d.versions[0])
     .map((d) => ({ id: d.versions[0].id, label: `${d.name} (v${d.versions[0].version})` }));
-  const vars = leadVars(lead);
+  const vars = leadVars(lead, teamSignoff(await brandForTenant(await getActiveTenantId())));
   const renderedTemplates = templates.map((t) => ({
     id: t.id,
     name: t.name,

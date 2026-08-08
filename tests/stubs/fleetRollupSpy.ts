@@ -34,7 +34,8 @@ export type ModelName =
   | "researchNote"
   | "referral"
   | "document"
-  | "consentRecord";
+  | "consentRecord"
+  | "quote";
 
 export const MODELS: ModelName[] = [
   "contact",
@@ -45,6 +46,7 @@ export const MODELS: ModelName[] = [
   "referral",
   "document",
   "consentRecord",
+  "quote",
 ];
 
 type Where = Record<string, unknown>;
@@ -75,6 +77,18 @@ export function wheres(model: ModelName): Where[] {
 
 function matches(row: Row, where: Where = {}): boolean {
   for (const [field, condition] of Object.entries(where)) {
+    // `OR` is a list of alternative where-clauses, not a column. The quotes
+    // roll-up needs it: a quote belongs to a fleet's page either because it is
+    // BILLED to the fleet or because it belongs to one of its members, and those
+    // are different columns. Everything outside the OR still has to match, so
+    // the tenant predicate cannot be satisfied by an OR arm.
+    if (field === "OR") {
+      if (!Array.isArray(condition)) {
+        throw new Error("fleetRollupSpy: OR must be an array of where-clauses");
+      }
+      if (!condition.some((clause) => matches(row, clause as Where))) return false;
+      continue;
+    }
     const value = row[field];
     // `deletedAt: null` and `tenantId: "t1"` are plain equality. Dates compare by
     // instant, not by identity, so two equal Dates match.

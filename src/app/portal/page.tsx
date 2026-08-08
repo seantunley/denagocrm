@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { portalBrand } from "@/lib/portalBrand";
 import { redirect } from "next/navigation";
 import { Bell, CarFront, FileCheck2, Headphones, LogOut } from "lucide-react";
 import { basePrisma, prisma } from "@/lib/db";
@@ -42,6 +43,8 @@ function deliveryLabel(quote: {
 export default async function PortalHome() {
   const contact = await getPortalContact();
   if (!contact) redirect("/portal/login");
+  // Cached per request — the layout and every page share one resolution.
+  const brand = await portalBrand();
   const scope = await requirePortalScope();
   // When the automotive pack is switched off the portal must drop all
   // vehicle/service/warranty UI too, even while the portal itself stays on.
@@ -146,7 +149,7 @@ export default async function PortalHome() {
         <div className="pointer-events-none absolute -right-16 -top-20 size-64 rounded-full bg-orange-500/[0.09] blur-3xl" />
         <div className="relative flex flex-wrap items-start justify-between gap-5">
         <div>
-          <Eyebrow>Your Denago garage</Eyebrow>
+          <Eyebrow>{brand.branded ? `Your ${brand.displayName} garage` : "Your Denago garage"}</Eyebrow>
           <h1 className="mt-2 text-3xl font-semibold tracking-[-0.045em] sm:text-4xl">Hello, {contact.firstName}</h1>
           <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">{automotiveOn ? "Everything about your vehicles, service, warranty, quotes and deliveries—kept together and easy to follow." : "Your quotes, documents and support—kept together and easy to follow."}</p>
         </div>

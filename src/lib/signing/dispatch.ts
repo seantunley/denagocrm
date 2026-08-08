@@ -4,24 +4,64 @@ import { sendEmail } from "@/lib/email";
 import { sendWhatsAppText, waDigits, isWhatsAppConfigured } from "@/lib/whatsapp";
 import { logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
+import { DEFAULT_BRAND, brandForTenant } from "@/lib/tenantBrand";
+import { tenantOrigin } from "@/lib/tenantOrigin";
 import { usableCapability } from "./tokenVault";
 
+/**
+ * The platform origin, and the LAST resort.
+ *
+ * SIGN_BASE_URL stays first: it is an explicit operator override and an explicit
+ * override should not be second-guessed by a lookup. Below it, a tenant with a
+ * verified domain of its own gets that instead — see lib/tenantOrigin.ts for why
+ * this needs no new hosting, and why old links keep working.
+ */
 const BASE = process.env.SIGN_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za";
 
-export function signUrl(token: string): string {
-  return `${BASE}/signing/${token}`;
+export function signUrl(token: string, origin?: string | null): string {
+  return `${process.env.SIGN_BASE_URL || origin || BASE}/signing/${token}`;
 }
 
-function emailHtml(name: string, title: string, url: string, verb: string): string {
+/**
+ * The email a customer receives asking them to sign a contract.
+ *
+ * It had "DENAGO CAPE TOWN" as a wordmark at the top and "Denago Cape Town —
+ * Authorised Denago EV Dealer" at the bottom, typed in. Every tenant's customers
+ * received it, above a document from a company they had never dealt with, next
+ * to a link to a hostname that was not their supplier's. Of everything the brand
+ * work has touched this is the least excusable place for it: a request to sign a
+ * legal document should say who is asking.
+ */
+function emailHtml(name: string, title: string, url: string, verb: string, brand: SignBrand): string {
+  const wordmark = brand.tagline
+    ? `${escapeText(brand.displayName)} — ${escapeText(brand.tagline)}`
+    : escapeText(brand.displayName);
   return `<div style="font-family:Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#1e293b">
-    <div style="font-weight:800;letter-spacing:1px">DENAGO <span style="color:#ea580c">CAPE TOWN</span></div>
+    <div style="font-weight:800;letter-spacing:1px">${escapeText(brand.displayName.toUpperCase())}</div>
     <h2 style="font-size:18px;margin:18px 0 6px">${verb}</h2>
     <p>Hi ${escapeText(name)},</p>
     <p>Please review and sign <strong>${escapeText(title)}</strong>.</p>
     <p style="margin:22px 0"><a href="${url}" style="background:#ea580c;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:700">Open &amp; sign</a></p>
     <p style="font-size:12px;color:#64748b">Or paste this link into your browser:<br>${url}</p>
-    <p style="font-size:12px;color:#94a3b8;margin-top:20px">Denago Cape Town — Authorised Denago EV Dealer</p>
+    <p style="font-size:12px;color:#94a3b8;margin-top:20px">${wordmark}</p>
   </div>`;
+}
+
+type SignBrand = { displayName: string; tagline: string | null };
+
+/**
+ * Who this request is from, and where its links should point.
+ *
+ * Resolved together because they answer the same question and both fail the same
+ * way — a lookup that throws must never stop a signing invitation going out, so
+ * both fall back to the platform's own identity rather than propagating.
+ */
+async function senderFor(tenantId: string | null): Promise<{ brand: SignBrand; origin: string }> {
+  const [brand, origin] = await Promise.all([
+    brandForTenant(tenantId).catch(() => DEFAULT_BRAND),
+    tenantOrigin(tenantId),
+  ]);
+  return { brand: { displayName: brand.displayName, tagline: brand.tagline }, origin };
 }
 function escapeText(s: string): string { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
@@ -65,6 +105,8 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
     if (claimed.count !== 1) return { reachable: true, delivered: false };
   }
 
+  const { brand, origin } = await senderFor(r.request.tenantId);
+
   // r.token is the stored DIGEST. Building the URL from it sends the customer a
   // link the public route hashes again and cannot resolve — accepted by SMTP,
   // recorded as sent, and unusable on arrival.
@@ -84,7 +126,10 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
       .catch(() => ({ count: 0 }));
     return { reachable: true, delivered: false };
   }
-  const url = signUrl(raw);
+  // The RAW capability, on the TENANT's own domain — the two fixes are
+  // independent and both required: a digest in the link is unusable, and the
+  // platform hostname on a branded workspace's mail is the wrong sender.
+  const url = signUrl(raw, origin);
   const verb = opts?.reminder ? "Reminder — please sign" : "Please sign your document";
   const evType = opts?.reminder ? "reminded" : "sent";
   let delivered = false;
@@ -92,8 +137,8 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
   if (hasEmail) {
     const res = await sendEmail({
       to: r.email!, subject: `${verb}: ${r.request.title}`,
-      text: `Hi ${r.name},\n\n${verb}: "${r.request.title}" from Denago Cape Town.\n\nOpen and sign here:\n${url}\n\nThank you,\nDenago Cape Town`,
-      html: emailHtml(r.name, r.request.title, url, verb),
+      text: `Hi ${r.name},\n\n${verb}: "${r.request.title}" from ${brand.displayName}.\n\nOpen and sign here:\n${url}\n\nThank you,\n${brand.displayName}`,
+      html: emailHtml(r.name, r.request.title, url, verb, brand),
     });
     if (res.ok) delivered = true;
     await logSignEvent(r.requestId, { type: evType, recipientId: r.id, actor: "system", channel: "email", metadata: { ok: res.ok, error: res.error } });

@@ -1,10 +1,12 @@
 import "server-only";
 import { pdfImageHostAllowed } from "./pdfImageHosts";
+import { verifiedTenantHosts } from "./tenantOrigin";
 import { prisma } from "./db";
 import { contactName, formatDate, formatZAR } from "./format";
 import { payableTotalCents } from "./pricing";
 import { type MergeContext } from "./mergeFields";
 import { getCompanyProfile, companyTokens } from "./companyProfile";
+import { escapeHtml } from "./escapeHtml";
 
 /**
  * Build the merge context for a document from its linked CRM records.
@@ -122,6 +124,10 @@ export type HtmlPdfOptions = {
 
 /** HTML → PDF buffer. Serverless Chromium on Vercel, local Chrome in dev. */
 export async function htmlToPdf(html: string, opts?: HtmlPdfOptions): Promise<Buffer> {
+  // Resolved BEFORE the browser launches: the request interceptor below is
+  // synchronous, and an async lookup inside it would let the first image request
+  // through — or, worse, abort it while the lookup was still pending.
+  const tenantHosts = await verifiedTenantHosts();
   const puppeteer = await import("puppeteer-core");
   let browser;
   if (process.env.VERCEL) {
@@ -157,7 +163,7 @@ export async function htmlToPdf(html: string, opts?: HtmlPdfOptions): Promise<Bu
       try {
         const u = new URL(url);
         if (u.protocol !== "https:" || u.username || u.password) return void r.abort();
-        if (!pdfImageHostAllowed(u.hostname, { appUrl: process.env.NEXT_PUBLIC_APP_URL, configured: process.env.PDF_IMAGE_HOSTS })) return void r.abort();
+        if (!pdfImageHostAllowed(u.hostname, { appUrl: process.env.NEXT_PUBLIC_APP_URL, configured: process.env.PDF_IMAGE_HOSTS, tenantHosts })) return void r.abort();
         return void r.continue();
       } catch { return void r.abort(); }
     });
@@ -181,6 +187,3 @@ export async function htmlToPdf(html: string, opts?: HtmlPdfOptions): Promise<Bu
   }
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}

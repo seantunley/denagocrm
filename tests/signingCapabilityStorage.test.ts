@@ -245,9 +245,32 @@ test("signing tenancy fails closed rather than defaulting to one tenant", () => 
   const triggerBodies = [...readSqlCode("prisma/migrations/20260805230000_signing_trust_platform/migration.sql").matchAll(/CREATE OR REPLACE FUNCTION (signing_stamp_\w+)\(\)[\s\S]*?\$\$ LANGUAGE plpgsql;/g)];
   assert.ok(triggerBodies.length >= 3, `expected several stamping triggers, found ${triggerBodies.length}`);
   for (const [body, name] of triggerBodies) {
+    // THE RULE THAT MATTERS, and it is unchanged: no trigger may file a row
+    // under a tenant it cannot derive. A named fallback is how an unscoped
+    // insert ends up as another company's contract stored under Denago.
     assert.doesNotMatch(body, /tenant_denago_cpt/, `${name} still falls back to a named tenant`);
-    assert.match(body, /RAISE EXCEPTION/, `${name} must fail closed`);
   }
+
+  // "Fails closed" NO LONGER means raising when no tenant can be found.
+  //
+  // It did, and it could not survive contact with the product. A request derives
+  // its tenant from its source record; `tenantEnforcing()` is hard-coded false so
+  // nothing stamps those records; therefore every quote created from now on is
+  // unstamped, and refusing would refuse to sign it. Adding a second tenant makes
+  // it total — `app.current_tenant` is only set under enforcement, so there would
+  // be no fallback at all.
+  //
+  // Leaving tenantId NULL is not a guess and cannot mis-file anything. Claiming a
+  // tenant that is not provably the row's own is the danger, and that is still
+  // refused: the child trigger raises on a MISMATCH, which is the one case where
+  // a wrong owner is actually on offer.
+  const child = triggerBodies.find(([, name]) => name === "signing_stamp_child_tenant");
+  assert.ok(child, "the child stamping trigger is gone");
+  assert.match(child![0], /RAISE EXCEPTION/, "a child claiming a different tenant from its request must be refused");
+  assert.match(child![0], /does not match request tenant/);
+
+  // See docs/TENANT-ENFORCEMENT-PREREQUISITES.md — NOT NULL and a refusing
+  // trigger come back in the same change that turns write-time stamping on.
 });
 
 test("evidence is append-only and chained by the database, not by convention", () => {
