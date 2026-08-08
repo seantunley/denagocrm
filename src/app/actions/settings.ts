@@ -181,8 +181,11 @@ export async function changeOwnPassword(
     where: { id: user.id },
     data: { passwordHash: await bcrypt.hash(next, 12), passwordChangedAt: new Date() },
   });
-  await bumpUserSessionVersion(user.id);
-  await createSessionCookie(updated);
+  // Pin the cookie to the version this bump produced. Letting
+  // createSessionCookie re-read means a revoke-all landing in between is undone
+  // by the older request, handing back the access it just removed.
+  const revokedAt = await bumpUserSessionVersion(user.id);
+  await createSessionCookie(updated, { sessionVersion: revokedAt });
   await logAuditStrict({
     action: "security.password_changed",
     summary: "Password changed; all other sessions revoked",
@@ -311,8 +314,11 @@ export async function updateOwnEmail(
     before: { email: user.email },
     after: { email },
   });
-  await bumpUserSessionVersion(user.id);
-  await createSessionCookie(updated);
+  // Pin the cookie to the version this bump produced. Letting
+  // createSessionCookie re-read means a revoke-all landing in between is undone
+  // by the older request, handing back the access it just removed.
+  const revokedAt = await bumpUserSessionVersion(user.id);
+  await createSessionCookie(updated, { sessionVersion: revokedAt });
   revalidatePath("/settings");
   revalidatePath("/", "layout");
   return { ok: "Email updated. Other signed-in devices have been signed out." };

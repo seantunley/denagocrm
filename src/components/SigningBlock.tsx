@@ -8,6 +8,7 @@ import SignedDocPreview from "@/components/signing/SignedDocPreview";
 import { formatDateTime } from "@/lib/format";
 import {
   startRecordSigning,
+  recordSigningLink,
   countersignRecord,
   sendRecordSigning,
   resendRecordSigning,
@@ -16,7 +17,6 @@ import {
   type SignedDocView,
 } from "@/app/actions/recordSigning";
 
-const BASE = "https://crm.denagocpt.co.za";
 
 export type SigningRecipientView = {
   id: string;
@@ -85,6 +85,20 @@ export default function SigningBlock({
 }) {
   const router = useRouter();
   const [workflowId, setWorkflowId] = useState("");
+  // Off by default: the customer sees the step only when someone decided this
+  // particular document was worth it.
+  // THREE states, because two cannot express "let the workspace decide".
+  //
+  // A checkbox always sends an explicit mode, so the money-attached policy
+  // configured in Settings never got to decide the ordinary quote flow: the box
+  // was unticked, the client sent "link", and an explicit choice outranks the
+  // policy by design. The default is now the policy, and overriding it is a
+  // deliberate act rather than the consequence of not touching a control.
+  const [identityChoice, setIdentityChoice] = useState<"default" | "otp" | "link">("default");
+  // The raw capability is not on this object and must not be: the row stores a
+  // digest. Ask the server, which reveals or rotates under an access check.
+  const [links, setLinks] = useState<Record<string, string>>({});
+  const [linkBusy, setLinkBusy] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -120,8 +134,6 @@ export default function SigningBlock({
     );
   }
 
-  const origin = typeof window !== "undefined" ? window.location.origin : BASE;
-  const signerLink = (token: string) => `${origin}/signing/${token}`;
   const active = state && state.status !== "completed" && state.status !== "declined" && state.status !== "voided";
   const declined = state?.recipients.find((r) => r.declinedAt);
   // An envelope that exists but has not gone out yet is Denago's step, not the
@@ -193,8 +205,30 @@ export default function SigningBlock({
                   </div>
                   {!r.signedAt && (
                     <div className="flex items-center gap-2 mt-2">
-                      <input readOnly value={signerLink(r.token)} className="input text-xs font-mono" />
-                      <CopyButton text={signerLink(r.token)} />
+                      {links[r.id] ? (
+                        <>
+                          <input readOnly value={links[r.id]} className="input text-xs font-mono" />
+                          <CopyButton text={links[r.id]} />
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn-secondary text-xs"
+                          disabled={linkBusy === r.id}
+                          onClick={async () => {
+                            setLinkBusy(r.id);
+                            try {
+                              const result = await recordSigningLink(kind, id, r.id);
+                              if ("url" in result) setLinks((prev) => ({ ...prev, [r.id]: result.url }));
+                              else setErr(result.error);
+                            } finally {
+                              setLinkBusy(null);
+                            }
+                          }}
+                        >
+                          {linkBusy === r.id ? "Preparing…" : "Show link"}
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -239,11 +273,31 @@ export default function SigningBlock({
               </select>
             </div>
           )}
+          <div className="rounded-md border border-input bg-card/50 px-2.5 py-2">
+            <label className="mb-1 block text-[11px] font-medium text-slate-400">Verifying the signer</label>
+            <select
+              value={identityChoice}
+              onChange={(e) => setIdentityChoice(e.target.value as "default" | "otp" | "link")}
+              className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground"
+            >
+              <option value="default">Workspace default</option>
+              <option value="otp">Require a one-time code</option>
+              <option value="link">Link only</option>
+            </select>
+            <p className="mt-1 text-[11px] leading-snug text-slate-500">
+              The default follows your Signing security setting — normally a code for documents with
+              money attached. A code goes to the email address or mobile number on file.
+            </p>
+          </div>
           <button
             className="btn-primary"
             disabled={busy !== null}
             onClick={() => run("start", async () => {
-              const started = await startRecordSigning(kind, id, workflowId || undefined);
+              // undefined means "no explicit mode" — the workspace policy decides.
+              const started = await startRecordSigning(
+                kind, id, workflowId || undefined,
+                identityChoice === "default" ? undefined : identityChoice,
+              );
               // The built-in quote flow is countersign-then-send, so do the
               // countersignature in the same click rather than making it a
               // separate button the user has to find.

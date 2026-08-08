@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import {
   emitJourneyEvent,
@@ -15,7 +15,7 @@ import {
 import { OPEN_RUN_STATUSES, parseRunMode } from "@/lib/journeyArbitration";
 
 export async function runJourneyNowAction(journeyId: string) {
-  await requireOwner();
+  await requirePermission("journeys.manage");
   await enrollJourneyNow(journeyId);
   await processJourneyEvents(100);
   await processJourneyRuns(50);
@@ -25,8 +25,7 @@ export async function runJourneyNowAction(journeyId: string) {
 /**
  * Run a journey against ONE chosen lead, now.
  *
- * After Home Assistant's "Run actions", and for the same reason: testing a
- * journey otherwise means waiting for the real event to happen to a real
+ * Testing a journey otherwise means waiting for the real event to happen to a real
  * customer, so the usual method is to enrol yourself and hope the copy is
  * right. This drives the genuine path — same emit, same entry conditions, same
  * run mode, same steps — against a lead you pick.
@@ -37,7 +36,7 @@ export async function runJourneyNowAction(journeyId: string) {
  * exercises those. So this genuinely sends, and says so at the call site.
  */
 export async function runJourneyOnLead(journeyId: string, leadId: string) {
-  const user = await requireOwner();
+  const user = await requirePermission("journeys.manage");
   const [journey, lead] = await Promise.all([
     prisma.journey.findUniqueOrThrow({ where: { id: journeyId }, select: { id: true, name: true, status: true } }),
     prisma.lead.findUniqueOrThrow({ where: { id: leadId }, select: { id: true, title: true, contactId: true } }),
@@ -127,7 +126,7 @@ async function activeTriggerFor(journeyId: string): Promise<string | null> {
 }
 
 export async function retryJourneyRun(runId: string) {
-  const user = await requireOwner();
+  const user = await requirePermission("journeys.manage");
   const run = await prisma.journeyRun.findUniqueOrThrow({
     where: { id: runId },
     include: { journey: true },
@@ -186,7 +185,7 @@ export async function retryJourneyRun(runId: string) {
 }
 
 export async function cancelJourneyRun(runId: string) {
-  const user = await requireOwner();
+  const user = await requirePermission("journeys.manage");
   const run = await prisma.journeyRun.findUniqueOrThrow({
     where: { id: runId },
     include: { journey: true },

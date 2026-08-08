@@ -18,7 +18,9 @@ import { quoteExpired } from "@/lib/quoteExpiry";
 import { defaultBuilderTemplateId } from "@/lib/docbuilder/store";
 import { resolveEnvelope } from "@/lib/signing/autoEnvelope";
 import { renderEnvelopePdf } from "@/lib/signing/render";
-import { createSignatureRequestFromDoc } from "@/lib/signing/service";
+import { createSignatureRequestFromDoc, type SigningIdentityMode } from "@/lib/signing/service";
+import { usableCapability } from "@/lib/signing/tokenVault";
+import { signUrl } from "@/lib/signing/dispatch";
 import { dispatchRequest, notifyRecipient } from "@/lib/signing/dispatch";
 import { logSignEvent } from "@/lib/signing/events";
 import { activeRecordRequest, isLockedForSigning, type QuoteSigningView } from "@/lib/signing/record";
@@ -151,10 +153,47 @@ async function checkRecordActive(
   return { error: null, leadId: null, version: jobCard.updatedAt.getTime() };
 }
 
+/**
+ * Is this uploaded file referenced by anything durable?
+ *
+ * Checks BOTH references the preparation transaction files — the request's
+ * unsignedPdfRef and the Document row's storedName — unfiltered, so a
+ * soft-deleted request still counts as a reference. Returns false (retain) on
+ * any error or unexpected answer.
+ */
+async function unsignedPdfIsSafeToDelete(storedName: string): Promise<boolean> {
+  try {
+    const [request, document] = await Promise.all([
+      basePrisma.signatureRequest.findFirst({ where: { unsignedPdfRef: storedName }, select: { id: true } }),
+      basePrisma.document.findFirst({ where: { storedName }, select: { id: true } }),
+    ]);
+    return request === null && document === null;
+  } catch {
+    // The failure that lost the commit acknowledgement is usually the same one
+    // that breaks this probe. Uncertainty retains.
+    return false;
+  }
+}
+
 export async function startRecordSigning(
   kind: Kind,
   id: string,
   workflowId?: string | null,
+  /**
+   * Ask the signer to prove who they are with a one-time code, or accept
+   * possession of the link as proof.
+   *
+   * Chosen per document, at the moment it is prepared. It is a real judgement:
+   * a contract is worth the extra step, a delivery note is not, and forcing it
+   * on everything is how a step-up becomes something people route around. The
+   * server re-derives what is actually possible from the recipient's own
+   * contact details, so asking for SMS on a signer with no number on file
+   * degrades to "we cannot verify you" rather than a code sent nowhere.
+   */
+  // NO DEFAULT. Defaulting to "link" here made every caller an explicit choice
+  // and silently disabled the workspace policy — the service treats an explicit
+  // mode as outranking it, correctly, so the default has to be absence.
+  identityMode?: SigningIdentityMode,
 ): Promise<Result> {
   const user = await requireRecordSigningAccess(kind, id);
   const quoteId = kind === "quote" ? id : null;
@@ -270,6 +309,7 @@ export async function startRecordSigning(
           contactId: envelope.contactId,
         },
         ordering: envelope.ordering,
+        identityMode,
         createdById: user.id,
         client: tx,
       });
@@ -293,11 +333,23 @@ export async function startRecordSigning(
     });
     if (outcome.kind === "created") committedRequestId = outcome.requestId;
   } finally {
-    // Retain the rendered (unsigned) PDF only when a request COMMITTED referencing
-    // it. committedRequestId is assigned only AFTER the transaction promise
-    // resolves, so a commit failure (callback returns, commit then throws) also
-    // cleans the blob — no orphaned customer/commercial data.
-    if (!committedRequestId) await deleteFile(storedName).catch(() => {});
+    // ASK THE DATABASE, never infer from the thrown error.
+    //
+    // This used to delete the blob whenever the transaction promise did not
+    // resolve — reasoning that a rejection meant nothing committed. That is the
+    // exact mistake behind the Q-1010 signed-PDF loss: a thrown COMMIT
+    // acknowledgement is not proof of rollback. If PostgreSQL committed and only
+    // the acknowledgement was lost, the Document row and the SignatureRequest
+    // both name this file, and deleting it destroys the document underneath
+    // records that say it exists.
+    //
+    // So the blob is removed only when a positive read proves NOTHING durable
+    // references it. Any uncertainty — an error, an unexpected shape, a broken
+    // connection (usually the same one that lost the acknowledgement) — retains
+    // the file. A stranded blob costs storage; a deleted one loses the contract.
+    if (!committedRequestId && (await unsignedPdfIsSafeToDelete(storedName))) {
+      await deleteFile(storedName).catch(() => {});
+    }
   }
   if (outcome.kind === "stale") {
     return { ok: false, error: "This record changed while the signing document was being prepared — please try again." };
@@ -781,4 +833,47 @@ export async function voidRecordSigning(
   });
   revalidatePath(recordPath(kind, id));
   return { ok: true, requestId: state.requestId };
+}
+
+
+/**
+ * The shareable signing URL for one recipient, produced on demand.
+ *
+ * The card used to render `recipient.token` straight into a URL. That value is
+ * now the stored DIGEST, and the public route hashes what arrives before it
+ * queries — so the copied link resolved to hash(hash(raw)) and matched nothing.
+ * Email links worked; anything copied from the CRM was dead, which is worse than
+ * an obvious failure because it looks fine until a customer says otherwise.
+ *
+ * The raw capability exists only in ciphertext, so producing a link is a
+ * privileged server operation rather than something the page can assemble: it
+ * re-checks access, then reveals or atomically rotates. Rotation invalidates a
+ * previously emailed link, which is the honest trade — the alternative is
+ * handing someone a URL that cannot work.
+ */
+export async function recordSigningLink(
+  kind: Kind,
+  id: string,
+  recipientId: string,
+): Promise<{ url: string } | { error: string }> {
+  await requireRecordSigningAccess(kind, id);
+  const quoteId = kind === "quote" ? id : null;
+  const jobCardId = kind === "jobcard" ? id : null;
+
+  const request = await activeRecordRequest({ quoteId, jobCardId });
+  if (!request) return { error: "There is no open signing request for this record." };
+
+  const recipient = await prisma.signatureRecipient.findFirst({
+    // Scoped through the request, so a recipient id from another record cannot
+    // be used to mint a link here.
+    where: { id: recipientId, requestId: request.requestId },
+    select: { id: true, token: true, tokenCiphertext: true, tokenRevokedAt: true },
+  });
+  if (!recipient || recipient.tokenRevokedAt) return { error: "That signing link is no longer active." };
+
+  const raw = await usableCapability(
+    "signatureRecipient", recipient.id, recipient.tokenCiphertext, recipient.token,
+  );
+  if (!raw) return { error: "Could not prepare a signing link. Try sending the document again." };
+  return { url: signUrl(raw) };
 }

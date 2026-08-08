@@ -22,6 +22,14 @@ const PUBLIC_PREFIXES = [
   "intake",         // website form intake (X-Api-Key)
   "webhooks/",      // provider webhooks (signature verified)
   "cron/",          // cron routes (CRON_SECRET)
+  // Tenant brand logo. PUBLIC BY NECESSITY: its consumer is the LOGIN page, which
+  // renders before any session exists — the same reason /login itself is public.
+  // It is not a file reader: the caller supplies a tenant id, never a blob ref,
+  // and the only object it will stream is whatever a platform admin stored in
+  // Tenant.brandLogoRef (content type allow-listed on upload, pinned on
+  // response, nosniff). It discloses what that tenant's own login page already
+  // shows the world. Suspended tenants 404. See the route's header comment.
+  "brand/logo",
 ];
 
 // NOTE: this proves an authENTICATION guard is invoked; it does not prove

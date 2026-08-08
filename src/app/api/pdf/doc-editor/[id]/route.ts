@@ -6,6 +6,7 @@ import {
   parseBuilderRecord,
   recordMatchesTemplate,
 } from "@/lib/docbuilder/recordBinding";
+import { RECORD_UNAVAILABLE, canAccessBuilderRecord } from "@/lib/docbuilder/recordAccess";
 import { generateDocEditorPdf } from "@/lib/doceditor/generate";
 
 export const runtime = "nodejs";
@@ -41,6 +42,14 @@ export async function GET(
     return new Response("Record type does not match this template", {
       status: 400,
     });
+  }
+  // docbuilder.view above answers "may this person work with templates". It says
+  // nothing about the quote or job card whose id just arrived on the query string,
+  // and this endpoint renders that record's pricing, line items and customer block
+  // into a PDF. 404, not 403, and the same body as a missing template: a distinct
+  // refusal would confirm the record exists to someone enumerating ids.
+  if (record && !(await canAccessBuilderRecord(user, record))) {
+    return new Response(RECORD_UNAVAILABLE, { status: 404 });
   }
 
   const result = await generateDocEditorPdf({

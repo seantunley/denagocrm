@@ -157,13 +157,30 @@ export async function getIdleMinutes(): Promise<number> {
 
 export async function createSessionCookie(
   user: { id: string; name: string; email: string; role: string },
-  opts?: { pwa?: boolean }
+  opts?: { pwa?: boolean; sessionVersion?: number }
 ) {
   // Fresh (uncached) read: this runs after a session-version bump in the same
   // request, so the memoised value would be stale and mint a cookie that logs
   // the user straight back out.
   const security = await getUserSecurityStateFresh(user.id);
   if (!security || security.disabledAt) throw new Error("User is disabled or no longer exists");
+
+  // WHICH version the replacement cookie asserts.
+  //
+  // The fresh read answers "whatever the row says right now", which is correct
+  // at login and wrong immediately after a security change. The losing sequence:
+  //
+  //   1. the security action commits, bumping the version to 5;
+  //   2. an owner resets the password or revokes every session, bumping it to 6
+  //      and killing every live cookie, including this user's;
+  //   3. this call reads 6 and mints a brand-new valid cookie at 6.
+  //
+  // Step 3 restores exactly the access step 2 removed, and the older request
+  // beats the newer revocation. A caller that has just bumped the version knows
+  // the number its own transaction produced and passes it, so a revocation
+  // landing afterwards leaves this cookie stale — which is the point of a
+  // revoke-all. Callers with nothing to pin (login) keep the fresh read.
+  const sessionVersion = opts?.sessionVersion ?? security.sessionVersion;
   const pwa = Boolean(opts?.pwa);
   const jti = crypto.randomUUID();
   const h = await headers();
@@ -261,7 +278,7 @@ export async function createSessionCookie(
       usablePermissions(await getUserPermissions(user.id)),
     );
     const token = await signFreshSession(
-      { ...user, grants, sessionVersion: security.sessionVersion },
+      { ...user, grants, sessionVersion },
       idle,
       { jti, pwa, ...(sessionTenantId ? { tid: sessionTenantId } : {}) }
     );

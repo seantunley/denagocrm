@@ -1,0 +1,69 @@
+-- Make the stranded-completion sweep safe to run more than once at a time, and
+-- able to stop.
+--
+-- Quote Q-1010 (SIGNING-PDF-LOSS-INCIDENT.md) committed its completion and never
+-- fanned out: no email, no automation, no audit. recoverStrandedCompletions
+-- re-drives exactly that shape. Re-driving SENDS THINGS, so it needs three
+-- durable facts the schema did not carry.
+--
+-- ── "recoveryLeaseUntil" / "recoveryLeaseOwner" ────────────────────────────
+--
+-- Exactly one worker may re-drive a request at a time. A row lock cannot say
+-- that: the lock lives inside a transaction, and the transaction commits before
+-- the sending starts — so two overlapping cron passes could both claim, both
+-- commit, and both email every recipient. A LEASE can: one conditional UPDATE
+-- moves "recoveryLeaseUntil" into the future, and the second worker's identical
+-- UPDATE matches zero rows for as long as it is held.
+--
+-- The lease EXPIRES, deliberately. A worker killed mid-send — a serverless
+-- timeout, which is how this request got stranded in the first place — would
+-- otherwise hold it unrecoverable forever, recreating the exact silence the
+-- sweep exists to end. "recoveryLeaseOwner" names the holder so a release only
+-- clears a lease that is still ours, and so a stuck holder is identifiable.
+--
+-- ── "recoveryExhaustedAt" ──────────────────────────────────────────────────
+--
+-- The sweep takes the OLDEST 20 candidates. A request that can never be repaired
+-- automatically (Q-1010 is one: its sealed PDF no longer exists to attach) stays
+-- a candidate forever, so once 20 of those accumulate the batch is permanently
+-- full and a NEW, still-recoverable failure is never even looked at. Recording
+-- the exhausted state removes it from the candidate query and gives an operator
+-- a durable row to find, rather than a console line in a serverless log.
+--
+-- ── "completedEmailSentAt" ─────────────────────────────────────────────────
+--
+-- Per-RECIPIENT delivery. The fan-out is a loop and it fails part way: one bad
+-- address, one SMTP rejection. Without this the retry is all-or-nothing — either
+-- the unreached recipients are written off, or everyone who already has their
+-- signed contract is sent it again.
+--
+-- ── SAFETY ─────────────────────────────────────────────────────────────────
+--
+-- Four nullable columns, nothing dropped, nothing narrowed, no data rewritten.
+-- vercel.json runs apply-migrations before next build, so the PREVIOUS
+-- deployment serves production against this schema for the length of the build;
+-- it reads none of these columns and is unaffected.
+--
+-- There is deliberately NO backfill, so no "SET app.bypass_rls" is needed here
+-- (SignatureRequest and SignatureRecipient are FORCE ROW LEVEL SECURITY, which
+-- applies to the owner, so a backfill WOULD have needed it). NULL is already the
+-- correct value for every existing row:
+--
+--   * no request holds a lease, and none has been given up on;
+--   * "completedEmailSentAt" NULL means "not yet sent", which is true of every
+--     recipient of a request that never fanned out — they are precisely the
+--     people still owed their contract. Marking them sent would write off the
+--     loss this fixes.
+--
+--   A request that DID fan out already carries its `completed` SignatureEvent,
+--   which keeps it out of the candidate query entirely, so leaving its
+--   recipients NULL cannot cause a resend.
+--
+-- Every statement is IF NOT EXISTS: the runner applies SQL first and records it
+-- second, so a crash between the two re-runs this file.
+
+ALTER TABLE "SignatureRequest" ADD COLUMN IF NOT EXISTS "recoveryLeaseUntil" TIMESTAMP(3);
+ALTER TABLE "SignatureRequest" ADD COLUMN IF NOT EXISTS "recoveryLeaseOwner" TEXT;
+ALTER TABLE "SignatureRequest" ADD COLUMN IF NOT EXISTS "recoveryExhaustedAt" TIMESTAMP(3);
+
+ALTER TABLE "SignatureRecipient" ADD COLUMN IF NOT EXISTS "completedEmailSentAt" TIMESTAMP(3);

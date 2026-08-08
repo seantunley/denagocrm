@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
 
 export const PORTABLE_BACKUP_FORMAT = "denagocrm-portable-backup";
-export const PORTABLE_BACKUP_VERSION = 2;
+export const PORTABLE_BACKUP_VERSION = 3;
 
 export type AssetReference = {
   ref: string;
@@ -29,9 +29,8 @@ const sha256 = (value: string | Buffer) => crypto.createHash("sha256").update(va
 
 // Some columns are BigInt (e.g. CustomerCase.number autoincrement, Passkey.counter).
 // Plain JSON.stringify throws "Do not know how to serialize a BigInt" the moment
-// such a row exists, which silently broke every nightly backup. Encode BigInt as a
-// self-describing tag so the export succeeds AND a restore can reconstruct the exact
-// value. Both export and verify MUST use this so their checksums agree.
+// such a row exists. Encode BigInt as a self-describing tag so export, verification
+// and restore all reconstruct the exact value.
 const BIGINT_TAG = "$bigint";
 function backupReplacer(_key: string, value: unknown) {
   return typeof value === "bigint" ? { [BIGINT_TAG]: value.toString() } : value;
@@ -58,9 +57,9 @@ export function reviveBackupBigInts<T>(value: T): T {
 }
 
 /**
- * Exports every Prisma model through the raw client. This intentionally uses the
- * Prisma DMMF so newly-added models are included automatically instead of being
- * silently omitted from a hand-maintained backup list.
+ * Export every Prisma model automatically. New trust-platform tables are raw SQL
+ * by design until the next generated-client expansion; they are appended below
+ * so being absent from the DMMF can never make them absent from disaster recovery.
  */
 async function exportAllModels(): Promise<Record<string, unknown[]>> {
   const client = basePrisma as unknown as Record<string, { findMany: () => Promise<unknown[]> }>;
@@ -72,6 +71,17 @@ async function exportAllModels(): Promise<Record<string, unknown[]>> {
     if (!delegate?.findMany) throw new Error(`Backup delegate missing for Prisma model ${model.name}`);
     data[model.name] = await delegate.findMany();
   }
+
+  const [jobs, challenges, artifacts, validations] = await Promise.all([
+    basePrisma.$queryRaw<unknown[]>`SELECT * FROM "SigningJob" ORDER BY "createdAt", "id"`,
+    basePrisma.$queryRaw<unknown[]>`SELECT * FROM "SigningIdentityChallenge" ORDER BY "createdAt", "id"`,
+    basePrisma.$queryRaw<unknown[]>`SELECT * FROM "LegalArtifact" ORDER BY "createdAt", "id"`,
+    basePrisma.$queryRaw<unknown[]>`SELECT * FROM "LegalArtifactValidation" ORDER BY "createdAt", "id"`,
+  ]);
+  data.SigningJob = jobs;
+  data.SigningIdentityChallenge = challenges;
+  data.LegalArtifact = artifacts;
+  data.LegalArtifactValidation = validations;
 
   return data;
 }
@@ -85,7 +95,14 @@ async function exportContactTagLinks() {
   );
 }
 
-function collectAssetReferences(data: Record<string, unknown[]>): AssetReference[] {
+/**
+ * Every database field that may durably reference stored bytes. Signing evidence
+ * is explicitly included rather than inferred from its filed Document: an
+ * in-progress envelope has signature PNGs and an unsigned PDF before a final
+ * Document exists, while an anomalous completion may have signedPdfRef without a
+ * Document row. Missing either is an incomplete legal-evidence restore.
+ */
+export function collectAssetReferences(data: Record<string, unknown[]>): AssetReference[] {
   const refs = new Map<string, AssetReference>();
   const add = (ref: unknown, kind: string) => {
     if (typeof ref !== "string" || !ref.trim()) return;
@@ -107,6 +124,22 @@ function collectAssetReferences(data: Record<string, unknown[]>): AssetReference
   }
   for (const row of (data.JobCard ?? []) as Array<Record<string, unknown>>) add(row.signatureRef, "jobcard-signature");
   for (const row of (data.PortalUpload ?? []) as Array<Record<string, unknown>>) add(row.storedName, "portal-upload");
+
+  for (const row of (data.SignatureRequest ?? []) as Array<Record<string, unknown>>) {
+    add(row.unsignedPdfRef, "signing-unsigned-pdf");
+    add(row.signedPdfRef, "signing-sealed-pdf");
+  }
+  for (const row of (data.SignatureRecipient ?? []) as Array<Record<string, unknown>>) {
+    add(row.signatureRef, "signing-recipient-signature");
+  }
+  for (const row of (data.SignatureField ?? []) as Array<Record<string, unknown>>) {
+    if (["signature", "initials", "stamp", "attachment"].includes(String(row.kind ?? ""))) {
+      add(row.value, `signing-field-${String(row.kind ?? "asset")}`);
+    }
+  }
+  for (const row of (data.LegalArtifact ?? []) as Array<Record<string, unknown>>) {
+    add(row.storageRef, "legal-artifact");
+  }
 
   return [...refs.values()].sort((a, b) => a.kind.localeCompare(b.kind) || a.ref.localeCompare(b.ref));
 }
@@ -153,6 +186,13 @@ export function verifyPortableBackup(backup: PortableBackup): { ok: boolean; err
   if (actualHash !== backup.metadata?.dataSha256) errors.push("Backup checksum mismatch");
   if ((backup.assetReferences?.length ?? 0) !== backup.metadata?.assetReferenceCount) {
     errors.push("Asset reference count does not match the manifest");
+  }
+
+  // A backup containing signing state but not the custody tables is not a valid
+  // version-3 paperless-system backup, even if its JSON checksum is internally
+  // consistent.
+  for (const required of ["SigningJob", "SigningIdentityChallenge", "LegalArtifact", "LegalArtifactValidation"]) {
+    if (!Array.isArray(backup.data?.[required])) errors.push(`Missing signing trust table: ${required}`);
   }
 
   return { ok: errors.length === 0, errors };

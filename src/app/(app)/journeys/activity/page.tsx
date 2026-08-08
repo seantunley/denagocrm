@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Activity, ArrowLeft, ListTree, TriangleAlert } from "lucide-react";
-import { requireOwner } from "@/lib/auth";
+import { requireRoute } from "@/lib/permissions";
 import { formatDateTime } from "@/lib/format";
 import { recentRunSummaries, recentTraceEvents, traceRun, triggerHealth } from "@/lib/journeyTrace";
 import JourneyRunTrace from "@/components/JourneyRunTrace";
@@ -18,7 +18,7 @@ function runTone(status: string) {
 }
 
 /**
- * The journey activity trace, after Home Assistant's automation traces.
+ * The journey activity trace.
  *
  * The engine already recorded every event, run and step; nothing showed them.
  * So a journey that never ran looked exactly like one that ran and matched
@@ -39,7 +39,7 @@ export default async function JourneyActivityPage({
 }: {
   searchParams: Promise<{ run?: string }>;
 }) {
-  await requireOwner();
+  await requireRoute("/journeys");
   const { run: runId } = await searchParams;
   const [health, events, runs, selected] = await Promise.all([
     triggerHealth(),
