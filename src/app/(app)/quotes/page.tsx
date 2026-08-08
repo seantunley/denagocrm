@@ -31,6 +31,15 @@ import {
   type QuoteEditorRecord,
 } from "@/components/quotes/QuoteEditorDialog";
 import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
+import {
+  DesktopOnly,
+  MobileOnly,
+  MobileSection,
+  MobileStatPair,
+  MobileTaskCard,
+  MobileTaskList,
+  MobileWorkspaceHeader,
+} from "@/components/mobile-workspace";
 
 function inputDate(daysFromNow: number) {
   const date = new Date();
@@ -128,6 +137,41 @@ export default async function QuotesPage({
       // quote that isn't there.
       initialQuoteId={edit}
     >
+      <MobileOnly className="space-y-4">
+        <MobileWorkspaceHeader
+          title="Quotes"
+          description="Create a proposal or check the latest customer decisions."
+          action={
+            <QuoteEditorTrigger className={buttonVariants({ size: "sm" })}>
+              <Plus className="size-4" /> New
+            </QuoteEditorTrigger>
+          }
+        />
+        <MobileStatPair items={[
+          { label: "Current", value: quotes.length },
+          { label: "Awaiting decision", value: quotes.filter((quote) => quote.status === "sent").length },
+        ]} />
+        <MobileSection title="Recent quotes" detail="Tap to review">
+          {quotes.length === 0 ? (
+            <EmptyState icon={FileText} title="No quotes yet" description="Create the first customer proposal." />
+          ) : (
+            <MobileTaskList>
+              {quotes.map((quote) => (
+                <MobileTaskCard
+                  key={quote.id}
+                  icon={FileText}
+                  title={`Quote Q-${quote.number}`}
+                  detail={quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name || "Unlinked quote"}
+                  meta={`${formatZAR(Math.round(payableTotalCents(quote)))} · valid ${formatDate(quote.validUntil)}`}
+                  aside={<StatusPill tone={quote.status === "accepted" ? "success" : quote.status === "declined" ? "danger" : quote.status === "sent" ? "info" : "neutral"}>{quote.status}</StatusPill>}
+                  href={`/quotes?edit=${quote.id}`}
+                />
+              ))}
+            </MobileTaskList>
+          )}
+        </MobileSection>
+      </MobileOnly>
+      <DesktopOnly>
       <div className="space-y-5">
         <PageHeader title="Quotes" description={`${quotes.length} current quotes · Create, price and send every customer proposal.`}>
           <QuoteEditorTrigger className={buttonVariants({ size: "sm" })}>
@@ -257,6 +301,7 @@ export default async function QuotesPage({
           />
         )}
       </div>
+      </DesktopOnly>
     </QuoteEditorProvider>
   );
 }

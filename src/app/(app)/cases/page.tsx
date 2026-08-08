@@ -52,6 +52,16 @@ import {
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { cn } from "@/lib/utils";
 import RecordContextMenu from "@/components/RecordContextMenu";
+import {
+  DesktopOnly,
+  MobileOnly,
+  MobileSection,
+  MobileSegmentNav,
+  MobileStatPair,
+  MobileTaskCard,
+  MobileTaskList,
+  MobileWorkspaceHeader,
+} from "@/components/mobile-workspace";
 
 export const dynamic = "force-dynamic";
 
@@ -141,7 +151,63 @@ export default async function CasesPage({
   const folderLabel = FOLDERS.find((folder) => folder.key === activeFolder)?.label ?? "Cases";
 
   return (
-    <div className="space-y-6">
+    <>
+      <MobileOnly className="space-y-4">
+        <MobileWorkspaceHeader
+          title="Help desk"
+          description="Triage replies and move customer cases forward."
+          action={canCreate ? (
+            <ModalTrigger label={<><Plus className="size-4" />New</>} title="New customer case" buttonClass={buttonVariants({ size: "sm" })}>
+              <NewTicketForm
+                contacts={newTicketContacts.map((contact) => ({ id: contact.id, label: contactName(contact) }))}
+                mailboxes={mailboxes.map((mailbox) => ({ id: mailbox.id, label: mailbox.name }))}
+              />
+            </ModalTrigger>
+          ) : undefined}
+        />
+        <MobileStatPair items={[
+          { label: "Open", value: counts.open },
+          { label: "Awaiting you", value: awaitingReply, tone: awaitingReply > 0 ? "attention" : "default" },
+        ]} />
+        <MobileSegmentNav items={FOLDERS.slice(0, 5).map((folder) => ({
+          label: folder.label,
+          href: qs(sp, { folder: folder.key }),
+          active: activeFolder === folder.key,
+          count: folder.key === "all" ? counts.open + counts.pending + counts.closed : counts[folder.key],
+        }))} />
+        <form className="flex gap-2" action="/cases" role="search">
+          {filters.folder && <input type="hidden" name="folder" value={filters.folder} />}
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input name="q" defaultValue={sp.q ?? ""} placeholder="Find a case…" className="pl-9" />
+          </div>
+          <button className={buttonVariants({ variant: "secondary" })}>Find</button>
+        </form>
+        <MobileSection title={folderLabel} detail={`${tickets.length} case${tickets.length === 1 ? "" : "s"}`}>
+          {tickets.length === 0 ? (
+            <EmptyState icon={activeFilterCount > 0 ? Search : LifeBuoy} title={activeFilterCount > 0 ? "No matching cases" : "This queue is clear"} description="There is nothing waiting in this view." />
+          ) : (
+            <MobileTaskList>
+              {tickets.map((ticket) => {
+                const status = statusMeta(ticket.status);
+                return (
+                  <MobileTaskCard
+                    key={ticket.id}
+                    icon={LifeBuoy}
+                    title={ticket.subject}
+                    detail={`C-${ticket.number} · ${ticket.contactName}`}
+                    meta={`${ticket.lastReplyBy === "customer" ? "Customer replied · " : ""}${formatDateTime(ticket.lastMessageAt ?? ticket.updatedAt)}`}
+                    aside={<StatusPill tone={status.tone}>{status.label}</StatusPill>}
+                    href={`/cases/${ticket.id}`}
+                  />
+                );
+              })}
+            </MobileTaskList>
+          )}
+        </MobileSection>
+      </MobileOnly>
+
+      <DesktopOnly className="space-y-6">
       <PageHeader
         title="Customer cases"
         description="Resolve customer questions, service concerns and ownership requests from one shared workspace."
@@ -375,7 +441,8 @@ export default async function CasesPage({
           )}
         </main>
       </div>
-    </div>
+      </DesktopOnly>
+    </>
   );
 }
 
