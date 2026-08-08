@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   MAX_PHOTOS,
   PHOTO_JPEG_QUALITY,
@@ -42,6 +42,14 @@ export default function PhotoUploadField({
   const [status, setStatus] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
+  /**
+   * Have the CURRENT files been through resizing?
+   *
+   * A ref, not state: the submit handler below reads it during the event, and a
+   * state value captured in a closure could be a render behind — which is exactly
+   * the race this exists to close.
+   */
+  const preparedRef = useRef(false);
 
   async function shrink(file: File): Promise<File> {
     // Anything that is not an image, or that the browser cannot decode, is passed
@@ -80,12 +88,19 @@ export default function PhotoUploadField({
     return new File([blob], `${renamed}.jpg`, { type: "image/jpeg", lastModified: file.lastModified });
   }
 
-  async function onPick(event: React.ChangeEvent<HTMLInputElement>) {
-    const picked = [...(event.target.files ?? [])];
+  /**
+   * Resize the current selection and replace the input's files with the results.
+   * Returns whether the batch is sendable. Safe to call twice — the second call
+   * finds already-small files and leaves them alone.
+   */
+  async function prepare(): Promise<boolean> {
+    const input = inputRef.current;
+    const picked = [...(input?.files ?? [])];
     if (picked.length === 0) {
       setStatus(null);
       setProblem(null);
-      return;
+      preparedRef.current = true;
+      return true;
     }
     setWorking(true);
     setProblem(null);
@@ -98,12 +113,15 @@ export default function PhotoUploadField({
       // submits these and the Server Action needs no knowledge of any of this.
       const transfer = new DataTransfer();
       for (const file of shrunk) transfer.items.add(file);
-      if (inputRef.current) inputRef.current.files = transfer.files;
+      if (input) input.files = transfer.files;
 
       if (!verdict.ok) {
         setProblem(verdict.reason);
         setStatus(null);
-        return;
+        // NOT prepared: an over-limit batch must keep being stopped at submit,
+        // not waved through on the second attempt.
+        preparedRef.current = false;
+        return false;
       }
       const before = picked.reduce((sum, file) => sum + file.size, 0);
       const saved = before - verdict.total;
@@ -112,9 +130,73 @@ export default function PhotoUploadField({
           ? `${shrunk.length} photo${shrunk.length === 1 ? "" : "s"} ready · ${fmt(verdict.total)} (was ${fmt(before)})`
           : `${shrunk.length} photo${shrunk.length === 1 ? "" : "s"} ready · ${fmt(verdict.total)}`,
       );
+      preparedRef.current = true;
+      return true;
     } finally {
       setWorking(false);
     }
+  }
+
+  /** Always the CURRENT prepare, so the once-bound submit listener cannot go stale. */
+  const prepareRef = useRef(prepare);
+  useEffect(() => {
+    prepareRef.current = prepare;
+  });
+
+  /**
+   * THE SUBMIT BOUNDARY.
+   *
+   * Resizing on `change` alone was a race: on a phone the decode of five camera
+   * photos takes a moment, and nothing stopped the person tapping Upload during
+   * it. The form then submitted the ORIGINAL files — tens of megabytes, refused by
+   * the framework before the action ran — and the resize finished afterwards,
+   * pointlessly. `working` only changed a status line; it disabled nothing.
+   *
+   * So the component owns submission instead of decorating it. On the capture
+   * phase, before the form's own handler runs: if the selected files have not been
+   * prepared, stop the event, prepare them, and submit again. The second submit
+   * finds `preparedRef` true and passes straight through.
+   *
+   * Capture phase matters — a bubble-phase listener would run after React's own
+   * form handling had already started the action.
+   *
+   * `prepare` is reached through a ref rather than captured: the listener is bound
+   * once, and a closure over the first render's function would go stale the moment
+   * a prop it reads changed. eslint's react-hooks/immutability caught that.
+   */
+  useEffect(() => {
+    const form = inputRef.current?.form;
+    if (!form) return;
+
+    const onSubmit = (event: Event) => {
+      const input = inputRef.current;
+      if (!input) return;
+      // Nothing chosen, or already prepared: this submit is fine as it stands.
+      if (!input.files || input.files.length === 0) return;
+      if (preparedRef.current) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      void (async () => {
+        const ok = await prepareRef.current();
+        // Only submit if the payload is actually sendable. Re-submitting a batch
+        // that is over the limit would just reproduce the failure it was caught to
+        // prevent, and the reason is already on screen.
+        if (ok) form.requestSubmit();
+      })();
+    };
+
+    form.addEventListener("submit", onSubmit, { capture: true });
+    return () => form.removeEventListener("submit", onSubmit, { capture: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function onPick() {
+    // A new selection is unprepared by definition. Preparing eagerly here keeps
+    // the common case instant — by the time Upload is tapped the work is usually
+    // done — but the submit handler is what GUARANTEES it, not this.
+    preparedRef.current = false;
+    void prepare();
   }
 
   return (

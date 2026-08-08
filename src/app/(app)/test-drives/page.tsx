@@ -14,9 +14,8 @@ import { listTenantStaff } from "@/lib/tenantActor";
 import { calculateTestDriveMetrics, testDriveStatusLabel } from "@/lib/testDriveMetrics";
 import { createTestDriveBooking } from "@/app/actions/testDrives";
 import ModalTrigger from "@/components/Modal";
-import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
-import { EmptyState, MetricCard, MetricStrip, StatusPill, Surface, WorkspaceToolbar } from "@/components/visual-system";
+import { EmptyState, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import {
   DesktopOnly,
@@ -28,6 +27,7 @@ import {
   MobileTaskList,
   MobileWorkspaceHeader,
 } from "@/components/mobile-workspace";
+import { WorkspaceHero } from "@/components/workspace-hero";
 
 export const dynamic = "force-dynamic";
 
@@ -157,7 +157,18 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
       </MobileOnly>
 
       <DesktopOnly className="space-y-6">
-      <PageHeader title="Test drives" description="Book, control and measure every customer drive from vehicle assignment to return.">
+      <WorkspaceHero
+        icon={CarFront}
+        eyebrow="Showroom operations"
+        title="Test drives"
+        description="Control the customer drive from vehicle assignment and handover through return, outcome and conversion."
+        stats={[
+          { label: "Bookings · 30 days", value: metrics.bookings, detail: `${metrics.bookingRate}% of eligible leads`, icon: CalendarDays, tone: "primary" },
+          { label: "Attendance", value: `${metrics.attendanceRate}%`, detail: `${metrics.attended} attended · ${metrics.noShows} no-shows`, icon: UserCheck, tone: "success" },
+          { label: "Quote conversion", value: `${metrics.quoteConversionRate}%`, detail: `${metrics.saleConversionRate}% became sales`, icon: Route },
+          { label: "Incidents", value: metrics.incidents, detail: `${metrics.incidentRate}% incident rate`, icon: TriangleAlert, tone: metrics.incidents > 0 ? "danger" : "default" },
+        ]}
+        actions={<>
         <Link href="/test-drives/demo-fleet" className={buttonVariants({ variant: "secondary", size: "sm" })}>
           <CarFront className="size-4" /> Demo fleet
         </Link>
@@ -227,35 +238,32 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
             </form>
           </ModalTrigger>
         )}
-      </PageHeader>
+        </>}
+      />
 
-      <MetricStrip>
-        <MetricCard icon={CalendarDays} label="Bookings · 30 days" value={metrics.bookings} detail={`${metrics.bookedLeads} unique new leads · ${metrics.bookingRate}% booking rate`} />
-        <MetricCard icon={UserCheck} label="Attendance" value={`${metrics.attendanceRate}%`} detail={`${metrics.attended} attended · ${metrics.noShows} no-shows`} />
-        <MetricCard icon={Route} label="Quote conversion" value={`${metrics.quoteConversionRate}%`} detail={`${metrics.saleConversionRate}% of attended drives became sales`} />
-        <MetricCard icon={TriangleAlert} label="Incidents" value={`${metrics.incidentRate}%`} detail={`${metrics.incidents} damage / incident records`} accent={metrics.incidents > 0} />
-      </MetricStrip>
-
-      <WorkspaceToolbar>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Status</span>
+      <Surface className="overflow-visible">
+        <div className="flex flex-col gap-4 border-b border-border p-4 xl:flex-row xl:items-end xl:justify-between xl:p-5">
+          <SectionHeading title="Booking ledger" description={`${bookings.length} booking${bookings.length === 1 ? "" : "s"} in this view · ${metrics.bookedHours} fleet hours reserved`} />
+          <nav className="flex max-w-full gap-1 overflow-x-auto rounded-xl border border-border bg-background/40 p-1" aria-label="Test drive status">
           {["", "booked", "confirmed", "checked_out", "completed", "cancelled", "no_show"].map((value) => (
             <Link
               key={value || "all"}
               href={value ? `/test-drives?status=${value}` : "/test-drives"}
-              className={`rounded-full border px-3 py-1 text-xs ${status === value || (!status && !value) ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
+              className={`shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-colors ${status === value || (!status && !value) ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
             >
               {value ? testDriveStatusLabel(value) : "All"}
             </Link>
           ))}
-          <span className="ml-auto flex items-center gap-1 text-xs text-muted-foreground"><Gauge className="size-3.5" />Demo utilisation: {metrics.utilisationRate}% · {metrics.bookedHours} booked hours</span>
+          </nav>
         </div>
-      </WorkspaceToolbar>
+
+        <div className="grid gap-px bg-border xl:grid-cols-[minmax(0,1fr)_17rem]">
+          <div className="min-w-0 bg-card">
 
       {bookings.length === 0 ? (
-        <EmptyState icon={CalendarDays} title="No test drives in this view" description="Book a customer drive or choose another status filter." />
+        <EmptyState icon={CalendarDays} title="No test drives in this view" description="Book a customer drive or choose another status filter." className="m-4 border-0 bg-transparent" />
       ) : (
-        <Surface><ResponsiveEntityTable>
+        <ResponsiveEntityTable>
           <table className="table-base">
             <thead><tr><th>Booking</th><th>Customer</th><th>Vehicle</th><th>Schedule</th><th>Salesperson</th><th>Status</th></tr></thead>
             <tbody>
@@ -280,8 +288,23 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
               ))}
             </tbody>
           </table>
-        </ResponsiveEntityTable></Surface>
+        </ResponsiveEntityTable>
       )}
+          </div>
+          <aside className="space-y-5 bg-background/35 p-5">
+            <div>
+              <p className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground"><Gauge className="size-3.5" />Fleet readiness</p>
+              <p className="mt-2 text-3xl font-semibold tracking-tight text-foreground">{metrics.utilisationRate}%</p>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">Demo utilisation across {activeDemoVehicleCount} active vehicle{activeDemoVehicleCount === 1 ? "" : "s"}.</p>
+            </div>
+            <div className="grid grid-cols-2 gap-2 xl:grid-cols-1">
+              <div className="rounded-xl border border-border bg-card/70 p-3"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">New leads booked</p><p className="mt-1 text-lg font-semibold tabular-nums">{metrics.bookedLeads}</p></div>
+              <div className="rounded-xl border border-border bg-card/70 p-3"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">Booked hours</p><p className="mt-1 text-lg font-semibold tabular-nums">{metrics.bookedHours}</p></div>
+            </div>
+            <Link href="/test-drives/demo-fleet" className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"><CarFront className="size-3.5" />Manage demo fleet</Link>
+          </aside>
+        </div>
+      </Surface>
       </DesktopOnly>
     </>
   );

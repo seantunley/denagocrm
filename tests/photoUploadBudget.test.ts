@@ -166,3 +166,58 @@ test("the capture menu asks for the WRITE permission it leads to", () => {
   assert.match(nav, /can\("deliveries\.manage"\) && packOn\("\/deliveries"\)/);
   assert.doesNotMatch(nav, /can\("deliveries\.view", "deliveries\.manage"\)/, "view is not enough to upload");
 });
+
+/**
+ * THE SUBMIT RACE.
+ *
+ * Resizing on `change` alone was not enough, and review was right about why. On a
+ * phone the decode of five camera photos takes a moment, and nothing stopped the
+ * person tapping Upload during it:
+ *
+ *   select 5 photos → resize starts → user taps Upload
+ *     → FORM SUBMITS THE ORIGINALS → resize finishes, too late
+ *
+ * `working` only changed a status line. It disabled no button and blocked no
+ * submission, so the originals — tens of megabytes — went to a framework that
+ * refuses anything over the declared limit, and the upload action never ran.
+ *
+ * The component now owns the submit boundary rather than decorating it.
+ */
+
+test("submission is intercepted until the files have been prepared", () => {
+  const code = src("src/components/PhotoUploadField.tsx");
+  assert.match(code, /form\.addEventListener\("submit", onSubmit, \{ capture: true \}\)/,
+    "the boundary must be the submit event, not the change event");
+  // Capture phase: a bubble-phase listener runs after React has already begun the
+  // form action, which is too late to swap the files.
+  assert.match(code, /\{ capture: true \}/);
+  assert.match(code, /event\.preventDefault\(\)/);
+  assert.match(code, /if \(preparedRef\.current\) return;/, "a prepared batch must pass straight through");
+  assert.match(code, /form\.requestSubmit\(\)/, "and be resubmitted once ready");
+});
+
+test("an over-limit batch is not resubmitted", () => {
+  // Re-submitting a payload the budget just refused would reproduce the exact
+  // failure the check exists to prevent, and the reason is already on screen.
+  const code = src("src/components/PhotoUploadField.tsx");
+  assert.match(code, /if \(ok\) form\.requestSubmit\(\)/);
+  const prepare = code.slice(code.indexOf("async function prepare("), code.indexOf("function onPick("));
+  assert.match(prepare, /preparedRef\.current = false;\s*\n\s*return false;/,
+    "a refused batch must stay unprepared so the next submit is stopped too");
+});
+
+test("a new selection is unprepared again", () => {
+  // Otherwise picking new photos after a successful prepare would submit the new
+  // originals under the old batch's clearance.
+  const code = src("src/components/PhotoUploadField.tsx");
+  const onPick = code.slice(code.indexOf("function onPick("));
+  assert.match(onPick, /preparedRef\.current = false;/);
+});
+
+test("readiness is a ref, not state", () => {
+  // The submit handler reads it DURING the event. A state value captured in a
+  // closure can be a render behind, which is the race this exists to close.
+  const code = src("src/components/PhotoUploadField.tsx");
+  assert.match(code, /const preparedRef = useRef\(false\)/);
+  assert.doesNotMatch(code, /const \[prepared, setPrepared\]/);
+});
