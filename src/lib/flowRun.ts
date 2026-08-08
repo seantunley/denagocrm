@@ -16,7 +16,7 @@ import { resolveTenantActor } from "./tenantActor";
 import { crmActions } from "./flowActions";
 import { runFlow, DEFAULT_FLOW, type Flow, type FlowInput, type FlowSession, type FlowCtx } from "./flow";
 
-const FLOW_MARKER = "🤖 Flow";
+export const FLOW_MARKER = "🤖 Flow";
 
 export async function isFlowEnabled(): Promise<boolean> {
   return (
