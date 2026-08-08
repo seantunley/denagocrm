@@ -43,3 +43,13 @@ test("workshop calendar and social inbox retain their existing shared hero", () 
   assert.match(calendar, /<WorkspaceHero/);
   assert.match(inbox, /<WorkspaceHero/);
 });
+
+test("the shared workspace hero keeps its visual system in a compact footprint", () => {
+  const hero = read("src", "components", "workspace-hero.tsx");
+
+  assert.match(hero, /p-4 sm:px-5 sm:py-4/);
+  assert.match(hero, /xl:flex xl:items-center xl:gap-4/);
+  assert.match(hero, /mt-3 grid grid-cols-2/);
+  assert.match(hero, /px-3 py-2 backdrop-blur-sm/);
+  assert.doesNotMatch(hero, /sm:p-6|mt-6 grid/);
+});
