@@ -233,19 +233,27 @@ export function migrationChecksum(name) {
 }
 
 /**
- * Record a migration as applied, on the connection that just applied it.
+ * Record a migration as applied, from the parent process rather than a second CLI.
  *
  * This replaces a second `npx prisma migrate resolve` child process. That spawn
  * cost about 1.4 seconds of CLI startup, and with 178 migrations the pair of them
  * accounted for 491 of CI's ~900 seconds — almost none of it spent on SQL.
  *
- * It is also STRICTLY SAFER than the process it replaces. The header of this file
- * records why the child commands are pinned to one database: `db execute` and
- * `migrate resolve` used to resolve their connections independently, so a
- * migration could be RECORDED against one database while its SQL ran against
- * another, leaving a missing column that 500'd login. Writing the ledger row on
- * the runner's own already-checked, already-locked connection removes the second
- * connection entirely, rather than pinning it and hoping.
+ * It is also safer than the process it replaces, though it is worth being exact
+ * about how — an earlier version of this comment overstated it.
+ *
+ * The SQL still runs in the `npx prisma db execute` CHILD process. Only the ledger
+ * write moved here, to the parent's Prisma client. So this is NOT "the same
+ * connection that applied the SQL": it is two connections, to a database this
+ * process has already checked and locked, one of which it now controls directly.
+ *
+ * What that buys is real but narrower than "same connection". The header of this
+ * file records why the child commands are pinned: `db execute` and
+ * `migrate resolve` used to RESOLVE THEIR TARGET independently, so a migration
+ * could be recorded against one database while its SQL ran against another,
+ * leaving a missing column that 500'd login. One of those two resolutions is now
+ * gone — the ledger write cannot land anywhere but the database this runner
+ * connected to. The remaining child is still pinned by childEnv, as before.
  *
  * applied_steps_count is 1, matching `migrate deploy`, because the whole file was
  * applied. `migrate resolve` writes 0 — it means "assume this ran", which is not

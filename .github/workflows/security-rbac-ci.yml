@@ -89,6 +89,33 @@ jobs:
         # data-seeding INSERTs (RBAC in 52/53) the governance checks depend on.
         run: node scripts/apply-migrations.mjs
 
+      # PRISMA MUST ACCEPT THE LEDGER WE WROTE.
+      #
+      # The runner now inserts _prisma_migrations rows itself instead of shelling
+      # out to `migrate resolve` for each one. Our own tests prove the row looks as
+      # intended and that our runner reads it back. They do NOT prove that Prisma
+      # agrees — and Prisma is still part of the disaster-recovery story.
+      #
+      # `migrate status` is Prisma's own opinion of that table. It fails on a
+      # pending migration, on a checksum that does not match the file, and on a
+      # ledger it considers failed or partially applied. Running it here, against a
+      # database this runner has just populated from empty, is the compatibility
+      # proof: a row we accept but Prisma reads differently would surface now
+      # rather than months later, during an incident, when someone reaches for
+      # Prisma tooling to recover.
+      - name: Prisma agrees the migration ledger is complete
+        run: |
+          out=$(npx prisma migrate status --schema ./prisma 2>&1) || {
+            echo "$out"
+            echo "::error::prisma migrate status rejected the ledger this runner wrote"
+            exit 1
+          }
+          echo "$out"
+          echo "$out" | grep -q "Database schema is up to date" || {
+            echo "::error::prisma migrate status did not report a complete, unmodified ledger"
+            exit 1
+          }
+
       - name: Migration replay-safety — re-apply the tenant migration (must be reentrant)
         # The runner executes a migration's SQL and records it with `migrate resolve`
         # as SEPARATE steps; if a deploy dies between them the next run re-executes
