@@ -9,6 +9,7 @@ import {
   UserRoundX,
   Wrench,
 } from "lucide-react";
+import PhotoUploadField from "@/components/PhotoUploadField";
 import { prisma } from "@/lib/db";
 import ModalTrigger from "@/components/Modal";
 import JobCardForm from "@/components/JobCardForm";
@@ -33,6 +34,8 @@ import {
   requireAnyPermission,
 } from "@/lib/permissions";
 import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
+import { SaveButton, SaveForm } from "@/components/SaveForm";
+import { uploadJobCardPhotos } from "@/app/actions/jobcards";
 
 const FILTERS = [
   { value: "all", label: "All" },
@@ -217,6 +220,13 @@ export default async function JobCardsPage({
                         <MobileDataField label="Estimate">{formatZAR(Math.round(total))}</MobileDataField>
                         <MobileDataField label="Priority">{priorityMeta(job.priority).label}</MobileDataField>
                       </MobileDataFields>
+                      {canManage && (
+                        <SaveForm action={uploadJobCardPhotos.bind(null, job.id)} className="mt-3 rounded-xl border border-primary/20 bg-primary/[0.05] p-2.5">
+                          <label className="mb-2 block text-xs font-semibold text-foreground">Add condition photos</label>
+                          <PhotoUploadField required className="block w-full text-xs text-muted-foreground file:mr-2 file:rounded-lg file:border-0 file:bg-muted file:px-2.5 file:py-1.5 file:text-xs file:text-foreground" />
+                          <SaveButton className="btn-primary btn-sm mt-2 w-full">Take or choose photos</SaveButton>
+                        </SaveForm>
+                      )}
                       <Link href={`/jobcards/${job.id}`} className="inline-flex items-center gap-1 text-xs font-semibold text-primary">Open workspace <ArrowRight className="size-3.5" /></Link>
                     </MobileDataCard>
                     </RecordContextMenu>

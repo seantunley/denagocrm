@@ -16,6 +16,15 @@ import { nonAutomotiveDocumentWhere } from "@/lib/modules/registry";
 import RepoRow, { type MoveTargets, type RepoDoc } from "@/components/RepoRow";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  DesktopOnly,
+  MobileOnly,
+  MobileSection,
+  MobileSegmentNav,
+  MobileTaskCard,
+  MobileTaskList,
+  MobileWorkspaceHeader,
+} from "@/components/mobile-workspace";
 import { EmptyState, SectionHeading, Surface, WorkspaceToolbar } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
 
@@ -156,7 +165,56 @@ export default async function DocumentsPage({
   const totalSize = docs.reduce((bytes, document) => bytes + document.sizeBytes, 0);
 
   return (
-    <div className="space-y-6">
+    <>
+      <MobileOnly className="space-y-4">
+        <MobileWorkspaceHeader
+          title="Documents"
+          description="Capture a file quickly or find the document you need."
+          action={canTemplates ? <Link href="/document-studio" className={buttonVariants({ variant: "outline", size: "sm" })}><Settings2 className="size-4" />Studio</Link> : undefined}
+        />
+        {canUpload && (
+          <form action={uploadDocument} className="rounded-2xl border border-primary/20 bg-primary/[0.06] p-3">
+            <input type="hidden" name="revalidate" value="/documents" />
+            <label className="mb-2 block text-xs font-semibold text-foreground">Capture a document</label>
+            <div className="flex items-center gap-2">
+              <input type="file" name="file" required className="min-w-0 flex-1 text-xs text-muted-foreground file:mr-2 file:rounded-lg file:border-0 file:bg-muted file:px-2.5 file:py-1.5 file:text-xs file:text-foreground" />
+              <Button size="sm" type="submit"><Upload className="size-4" />Upload</Button>
+            </div>
+          </form>
+        )}
+        <form className="flex gap-2" role="search">
+          {versions === "all" && <input type="hidden" name="versions" value="all" />}
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input name="q" defaultValue={q ?? ""} placeholder="Find a file…" className="pl-9" />
+          </div>
+          <Button variant="secondary" type="submit">Find</Button>
+        </form>
+        <MobileSegmentNav items={[
+          { label: "Current", href: "/documents", active: versions !== "all" },
+          { label: "History", href: "/documents?versions=all", active: versions === "all" },
+        ]} />
+        <MobileSection title="Files" detail={`${rows.length} result${rows.length === 1 ? "" : "s"}`}>
+          {rows.length === 0 ? (
+            <div className="rounded-2xl border border-border bg-card py-10 text-center text-sm text-muted-foreground">No documents match this view.</div>
+          ) : (
+            <MobileTaskList>
+              {rows.map((doc) => (
+                <MobileTaskCard
+                  key={doc.id}
+                  icon={FileText}
+                  title={doc.fileName}
+                  detail={doc.filedOn ?? "General document"}
+                  meta={`${doc.sizeKB} KB · ${doc.createdAt}${doc.superseded ? " · Replaced" : ""}`}
+                  href={`/api/files/${doc.id}`}
+                />
+              ))}
+            </MobileTaskList>
+          )}
+        </MobileSection>
+      </MobileOnly>
+
+      <DesktopOnly className="space-y-6">
       <WorkspaceHero
         icon={FolderTree}
         eyebrow="Business records"
@@ -218,6 +276,8 @@ export default async function DocumentsPage({
           </ul>
         )}
       </Surface>
-    </div>
+      </DesktopOnly>
+    </>
+
   );
 }

@@ -36,6 +36,16 @@ import { prisma } from "@/lib/db";
 import { contactName, formatDue } from "@/lib/format";
 import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
+import {
+  DesktopOnly,
+  MobileOnly,
+  MobileSection,
+  MobileSegmentNav,
+  MobileStatPair,
+  MobileTaskCard,
+  MobileTaskList,
+  MobileWorkspaceHeader,
+} from "@/components/mobile-workspace";
 
 type ActivityMeta = {
   label: string;
@@ -224,7 +234,56 @@ export default async function ActivitiesPage({
   const filtersActive = Boolean(needle || type);
 
   return (
-    <div className="space-y-6">
+    <>
+      <MobileOnly className="space-y-4">
+        <MobileWorkspaceHeader
+          title="Activities"
+          description={mine ? "Work through what needs attention today." : "Check planned work across your accessible team."}
+          action={canManage ? <QuickCreateButton kind="calendar" className={buttonVariants({ size: "sm" })}><CalendarPlus className="size-4" />New</QuickCreateButton> : undefined}
+        />
+        <MobileStatPair items={[
+          { label: "Overdue", value: overdue.length, tone: overdue.length > 0 ? "attention" : "default" },
+          { label: "Due today", value: today.length },
+        ]} />
+        <MobileSegmentNav items={[
+          { label: "Mine", href: scopeParams("mine"), active: mine, count: mine ? activities.length : undefined },
+          { label: "Accessible", href: scopeParams("all"), active: !mine, count: !mine ? activities.length : undefined },
+          { label: "Calendar", href: "/calendar" },
+        ]} />
+        {activities.length === 0 ? (
+          <EmptyState icon={filtersActive ? Search : CalendarClock} title={filtersActive ? "No activities match" : "Your queue is clear"} description="Capture the next customer touchpoint when you are ready." />
+        ) : groups.map((group) => group.items.length > 0 && (
+          <MobileSection key={group.title} title={group.title} detail={`${group.items.length}`}>
+            <MobileTaskList>
+              {group.items.map((activity) => {
+                const meta = ACTIVITY_TYPES[activity.type] ?? DEFAULT_ACTIVITY;
+                const relatedLabel = activity.lead
+                  ? `${activity.lead.name} — ${activity.lead.title}`
+                  : activity.contact
+                    ? contactName(activity.contact)
+                    : "General activity";
+                return (
+                  <MobileTaskCard
+                    key={activity.id}
+                    icon={meta.icon}
+                    title={activity.summary}
+                    detail={relatedLabel}
+                    meta={`${formatDue(activity.dueDate)} · ${activity.assignedTo.name}`}
+                    action={canManage ? (
+                      <form action={completeActivity.bind(null, activity.id)}>
+                        <input type="hidden" name="revalidate" value="/activities" />
+                        <button className={buttonVariants({ variant: "outline", size: "sm" })} aria-label={`Complete ${activity.summary}`}><Check className="size-4" />Done</button>
+                      </form>
+                    ) : undefined}
+                  />
+                );
+              })}
+            </MobileTaskList>
+          </MobileSection>
+        ))}
+      </MobileOnly>
+
+      <DesktopOnly className="space-y-6">
       <WorkspaceHero
         icon={CalendarClock}
         eyebrow="Daily execution"
@@ -535,6 +594,7 @@ export default async function ActivitiesPage({
           )}
         </div>
       )}
-    </div>
+      </DesktopOnly>
+    </>
   );
 }
