@@ -1,4 +1,17 @@
 /**
+ * ADVISORY ONLY. The DATABASE decides who owns a draft.
+ *
+ * `claimConversationDraft` in conversationDraftStore.ts makes the real decision
+ * inside one conditional statement, because deciding here and writing afterwards
+ * is a race two people hit routinely once autosave is involved. What is left in
+ * this file is the same rule expressed for the CLIENT, so the reply box can show
+ * "Thandi is replying" on first render without a round trip.
+ *
+ * The two cannot drift on the only value they share: the SQL derives its window
+ * from DRAFT_COLLISION_WINDOW_MS below, and a test asserts it does not restate it.
+ * If they ever disagree about an edge, the database wins and the UI corrects
+ * itself on the next save.
+ *
  * When does saving a reply draft collide with a colleague's?
  *
  * A shared inbox's characteristic failure is two people answering the same

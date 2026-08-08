@@ -188,10 +188,75 @@ test("the assignee must be a member of the acting tenant's staff", () => {
 
 test("discarding a draft cannot clobber a colleague's", () => {
   // The send-success path calls discard unconditionally, so a plain delete would
-  // destroy the very draft the collision check exists to protect.
-  const code = src("src/app/actions/conversations.ts");
-  const discard = code.slice(code.indexOf("export async function discardConversationDraft"));
-  assert.match(discard, /deleteMany\(\{\s*where:\s*\{\s*conversationId,\s*ownerId: actor\.id/);
+  // destroy the very draft the claim exists to protect. The scoping moved into
+  // lib/conversationDraftStore.ts with the atomic rewrite; both ends are checked
+  // because either one alone can be right while the pair is wrong.
+  const action = src("src/app/actions/conversations.ts");
+  const discard = action.slice(action.indexOf("export async function discardConversationDraft"));
+  assert.match(discard, /discardOwnConversationDraft\(conversationId, actor\.id\)/);
+
+  const store = src("src/lib/conversationDraftStore.ts");
+  const impl = store.slice(store.indexOf("export async function discardOwnConversationDraft"));
+  assert.match(impl, /deleteMany\(\{ where: \{ conversationId, ownerId \} \}\)/, "must be scoped to the owner");
+});
+
+/**
+ * THE RACE. Reported in review: read-then-decide-then-upsert is three steps, and
+ * two people autosaving 1.5s after each keystroke interleave them routinely. Both
+ * passed the check, the second overwrote the first, and neither was warned — the
+ * exact outcome the feature exists to prevent, failing quietly.
+ *
+ * The decision now happens inside one statement, where the row lock is. What can
+ * be checked without a database is that the statement has the right shape; that
+ * it actually behaves under contention is scripts/test-conversation-draft-concurrency.ts,
+ * which races two real claims.
+ */
+
+test("the draft claim decides and writes in ONE statement", () => {
+  const store = src("src/lib/conversationDraftStore.ts");
+  const claim = store.slice(store.indexOf("export async function claimConversationDraft"));
+  assert.match(claim, /ON CONFLICT \("conversationId"\) DO UPDATE/, "must be a conditional upsert");
+  // The WHERE is the whole mechanism: it is what makes the update conditional
+  // rather than unconditional last-write-wins.
+  assert.match(claim, /WHERE "ConversationDraft"\."ownerId" = EXCLUDED\."ownerId"/);
+  assert.match(claim, /OR "ConversationDraft"\."updatedAt" <= now\(\) - make_interval/);
+  // Zero rows affected IS the collision signal. Without the count check the
+  // statement is atomic and the caller still cannot tell it was refused.
+  assert.match(claim, /if \(affected > 0\) return \{ ok: true \}/);
+});
+
+test("the claim never reads-then-writes", () => {
+  const store = src("src/lib/conversationDraftStore.ts");
+  const claim = store.slice(
+    store.indexOf("export async function claimConversationDraft"),
+    store.indexOf("if (affected > 0)"),
+  );
+  // A findUnique/findFirst before the write is the defect returning. The read-back
+  // AFTER a refusal is fine — that is naming the holder, not deciding.
+  assert.doesNotMatch(claim, /findUnique|findFirst/, "deciding on a prior read is the race");
+});
+
+test("staleness is measured with the database clock on both sides", () => {
+  // Comparing the app clock against a database timestamp makes two instances with
+  // skewed clocks disagree about whether a draft has expired.
+  const store = src("src/lib/conversationDraftStore.ts");
+  assert.match(store, /now\(\) - make_interval/);
+  assert.doesNotMatch(store, /Date\.now\(\)/, "no app clock in the decision");
+});
+
+test("the window lives in ONE place, so SQL and UI cannot drift", () => {
+  const store = src("src/lib/conversationDraftStore.ts");
+  assert.match(store, /DRAFT_COLLISION_WINDOW_MS/, "the SQL must derive its window from the shared constant");
+  assert.doesNotMatch(store, /5 \* 60 \* 1000|300000/, "and must not restate it");
+});
+
+test("tenantId comes from the parent conversation, not the caller", () => {
+  // The composite FK (tenantId, conversationId) -> Conversation(tenantId, id) is
+  // then satisfied by construction. A stamped child pointing at a NULL-tenant
+  // parent is what broke lead creation on 2026-08-07.
+  const store = src("src/lib/conversationDraftStore.ts");
+  assert.match(store, /SELECT [\s\S]*c\."tenantId"/);
+  assert.match(store, /FROM "Conversation" c/);
 });
 
 /**

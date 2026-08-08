@@ -7,7 +7,8 @@ import { listTenantStaff } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { markConversationRead } from "@/lib/conversations";
 import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
-import { draftCollision, type DraftCollision } from "@/lib/conversationDraft";
+import { type DraftCollision } from "@/lib/conversationDraft";
+import { claimConversationDraft, discardOwnConversationDraft } from "@/lib/conversationDraftStore";
 
 /**
  * Shared-inbox collaboration: assignment, staff notes, reply drafts.
@@ -118,27 +119,20 @@ export async function saveConversationDraft(
 ): Promise<DraftSaveResult> {
   return asActionResult(async () => {
     const actor = await requireConversationAccess(conversationId, "inbox.reply");
-    const existing = await prisma.conversationDraft.findUnique({
-      where: { conversationId },
-      select: { ownerId: true, updatedAt: true, owner: { select: { name: true } } },
-    });
 
-    const collision = draftCollision(
-      existing ? { ownerId: existing.ownerId, ownerName: existing.owner.name, updatedAt: existing.updatedAt } : null,
-      actor.id,
-      new Date(),
-    );
-    if (collision) {
+    // ONE statement decides and writes. This used to read, decide in JavaScript,
+    // then upsert — three steps two people can interleave, so both passed the
+    // check and the second overwrote the first with no warning to either. See
+    // lib/conversationDraftStore.ts.
+    const claim = await claimConversationDraft(conversationId, actor.id, body);
+    if (!claim.ok) {
       // NOT a refusal: nothing is wrong with what the user typed, and the caller
       // needs the owner's name to say who is already replying.
-      return { collision, error: `${collision.ownerName} is already replying to this conversation.` };
+      return {
+        collision: claim.collision,
+        error: `${claim.collision.ownerName} is already replying to this conversation.`,
+      };
     }
-
-    await prisma.conversationDraft.upsert({
-      where: { conversationId },
-      create: { conversationId, ownerId: actor.id, body },
-      update: { ownerId: actor.id, body },
-    });
     return {};
   }) as Promise<DraftSaveResult>;
 }
@@ -147,10 +141,10 @@ export async function saveConversationDraft(
 export async function discardConversationDraft(conversationId: string): Promise<ActionResult> {
   return asActionResult(async () => {
     const actor = await requireConversationAccess(conversationId, "inbox.reply");
-    // deleteMany scoped to the actor's OWN draft. The send-success path calls this
+    // Scoped to the actor's OWN draft. The send-success path calls this
     // unconditionally, and a plain delete would clobber the teammate's draft that
-    // the collision check just went to the trouble of protecting.
-    await prisma.conversationDraft.deleteMany({ where: { conversationId, ownerId: actor.id } });
+    // the claim just went to the trouble of protecting.
+    await discardOwnConversationDraft(conversationId, actor.id);
     return {};
   });
 }
