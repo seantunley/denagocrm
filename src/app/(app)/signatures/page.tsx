@@ -33,16 +33,16 @@ const RECIPIENT_STATUS: Record<string, { dot: string; label: string }> = {
 };
 
 const REQUEST_VIEWS: Array<{ value: SignatureRequestView; label: string }> = [
+  { value: "in-progress", label: "In Progress" },
   { value: "completed", label: "Completed" },
   { value: "voided", label: "Voided" },
-  { value: "in-progress", label: "In Progress" },
+  { value: "declined", label: "Declined" },
+  { value: "rejected", label: "Rejected" },
+  { value: "expired", label: "Expired" },
 ];
 
 const PAGE_SIZE = 50;
 const RECENT_COMPLETION_SAMPLE_SIZE = 200;
-const UNSUCCESSFUL_CLOSED_REQUEST_STATUSES = CLOSED_REQUEST_STATUSES.filter(
-  (status) => status !== "completed",
-);
 
 function signaturesHref(view: SignatureRequestView, page = 1): string {
   const params = new URLSearchParams({ status: view });
@@ -133,11 +133,10 @@ export default async function SignaturesPage({
       counts[signatureRequestView(group.status)] += group._count._all;
       return counts;
     },
-    { completed: 0, voided: 0, "in-progress": 0 },
+    { completed: 0, voided: 0, declined: 0, rejected: 0, expired: 0, "in-progress": 0 },
   );
   const total = [...statusCounts.values()].reduce((sum, count) => sum + count, 0);
   const completed = requestCounts.completed;
-  const declined = statusCounts.get("declined") ?? 0;
   const active = ["sent", "viewed", "in_progress"].reduce(
     (sum, status) => sum + (statusCounts.get(status) ?? 0),
     0,
@@ -151,11 +150,9 @@ export default async function SignaturesPage({
   const totalPages = Math.max(1, Math.ceil(activeViewCount / PAGE_SIZE));
   const currentPage = Math.min(safeRequestedPage, totalPages);
   const viewStatusFilter =
-    activeView === "completed"
-      ? { status: "completed" }
-      : activeView === "voided"
-        ? { status: { in: [...UNSUCCESSFUL_CLOSED_REQUEST_STATUSES] } }
-        : { status: { notIn: [...CLOSED_REQUEST_STATUSES] } };
+    activeView === "in-progress"
+      ? { status: { notIn: [...CLOSED_REQUEST_STATUSES] } }
+      : { status: activeView };
   const visibleRequests = await prisma.signatureRequest.findMany({
     where: { deletedAt: null, ...viewStatusFilter },
     orderBy: { updatedAt: "desc" },
@@ -224,7 +221,7 @@ export default async function SignaturesPage({
                 ? `${activeViewCount} request${activeViewCount === 1 ? "" : "s"} currently moving through the signing workflow.`
                 : activeView === "completed"
                   ? `${activeViewCount} request${activeViewCount === 1 ? "" : "s"} completed successfully.`
-                  : `${activeViewCount} request${activeViewCount === 1 ? "" : "s"} closed without completion${declined ? `, including ${declined} declined` : ""}.`
+                  : `${activeViewCount} request${activeViewCount === 1 ? "" : "s"} ${activeViewLabel.toLowerCase()}.`
             }
           />
           <nav className="flex max-w-full gap-1 overflow-x-auto rounded-lg border border-border bg-muted/25 p-1" aria-label="Signing request status">
