@@ -9,13 +9,19 @@ import {
 const page = readFileSync("src/app/(app)/signatures/page.tsx", "utf8");
 
 test("signature request tabs keep the requested order and URL-backed state", () => {
+  const inProgress = page.indexOf('{ value: "in-progress", label: "In Progress" }');
   const completed = page.indexOf('{ value: "completed", label: "Completed" }');
   const voided = page.indexOf('{ value: "voided", label: "Voided" }');
-  const inProgress = page.indexOf('{ value: "in-progress", label: "In Progress" }');
+  const declined = page.indexOf('{ value: "declined", label: "Declined" }');
+  const rejected = page.indexOf('{ value: "rejected", label: "Rejected" }');
+  const expired = page.indexOf('{ value: "expired", label: "Expired" }');
 
-  assert.ok(completed >= 0, "Completed tab should exist");
+  assert.ok(inProgress >= 0, "In Progress should be the first tab");
+  assert.ok(completed > inProgress, "Completed should follow In Progress");
   assert.ok(voided > completed, "Voided should follow Completed");
-  assert.ok(inProgress > voided, "In Progress should follow Voided");
+  assert.ok(declined > voided, "Declined should follow Voided");
+  assert.ok(rejected > declined, "Rejected should follow Declined");
+  assert.ok(expired > rejected, "Expired should follow Rejected");
   assert.match(page, /href={signaturesHref\(view\.value\)}/, "each tab should update the URL");
   assert.match(page, /aria-current={active \? "page" : undefined}/);
 });
@@ -27,10 +33,10 @@ test("signature request tabs execute the complete lifecycle contract", () => {
     viewed: "in-progress",
     in_progress: "in-progress",
     completed: "completed",
-    declined: "voided",
+    declined: "declined",
     voided: "voided",
-    expired: "voided",
-    rejected: "voided",
+    expired: "expired",
+    rejected: "rejected",
   } as const;
 
   for (const [status, view] of Object.entries(expected)) {
