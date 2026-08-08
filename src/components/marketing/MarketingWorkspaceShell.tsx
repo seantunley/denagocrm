@@ -3,19 +3,34 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, CalendarDays, FileStack, Megaphone, MessagesSquare, Target } from "lucide-react";
+import {
+  BarChart3,
+  CalendarDays,
+  FileStack,
+  Megaphone,
+  MessagesSquare,
+  Target,
+  type LucideIcon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { MarketingWorkspaceSection } from "@/components/marketing/marketing-workspace-nav";
 
-const sections = [
-  { href: "/marketing/overview", label: "Overview", icon: BarChart3 },
-  { href: "/marketing/campaigns", label: "Campaigns", icon: Megaphone },
-  { href: "/marketing/audiences", label: "Audiences", icon: Target },
-  { href: "/marketing/calendar", label: "Calendar", icon: CalendarDays },
-  { href: "/marketing/surveys", label: "Surveys", icon: MessagesSquare },
-  { href: "/marketing/templates", label: "Templates", icon: FileStack },
-] as const;
+const sectionIcons: Record<string, LucideIcon> = {
+  "/marketing/overview": BarChart3,
+  "/marketing/campaigns": Megaphone,
+  "/marketing/audiences": Target,
+  "/marketing/calendar": CalendarDays,
+  "/marketing/surveys": MessagesSquare,
+  "/marketing/templates": FileStack,
+};
 
-export default function MarketingWorkspaceShell({ children }: { children: ReactNode }) {
+export default function MarketingWorkspaceShell({
+  children,
+  sections,
+}: {
+  children: ReactNode;
+  sections: MarketingWorkspaceSection[];
+}) {
   const pathname = usePathname();
   const active = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
@@ -33,19 +48,22 @@ export default function MarketingWorkspaceShell({ children }: { children: ReactN
             </div>
           </div>
           <nav className="flex max-w-full gap-1 overflow-x-auto" aria-label="Marketing workspace">
-            {sections.map(({ href, label, icon: Icon }) => (
-              <Link
-                key={href}
-                href={href}
-                aria-current={active(href) ? "page" : undefined}
-                className={cn(
-                  "flex shrink-0 items-center gap-2 border-b-2 px-3 py-3 text-xs font-semibold transition-colors",
-                  active(href) ? "border-fuchsia-300 text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Icon className="size-3.5" />{label}
-              </Link>
-            ))}
+            {sections.map(({ href, label }) => {
+              const Icon = sectionIcons[href] ?? Megaphone;
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  aria-current={active(href) ? "page" : undefined}
+                  className={cn(
+                    "flex shrink-0 items-center gap-2 border-b-2 px-3 py-3 text-xs font-semibold transition-colors",
+                    active(href) ? "border-fuchsia-300 text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Icon className="size-3.5" />{label}
+                </Link>
+              );
+            })}
           </nav>
         </div>
       </section>
