@@ -29,7 +29,8 @@
 //   node scripts/apply-migrations.mjs --check    run ONLY the integrity check
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { PrismaClient } from "@prisma/client";
@@ -216,14 +217,100 @@ function defaultRunDiff(childEnv) {
 }
 
 /**
- * Apply ONE migration: execute its SQL, THEN record it (execute-before-resolve).
- * If execute throws, resolve never runs, so the migration stays pending and
- * re-runs next time (every migration.sql is idempotent). `runner(cmd, args, env)`
- * is injectable so the ordering is covered by tests. Exported.
+ * The checksum Prisma stores for a migration: SHA-256 of migration.sql, exactly
+ * as `migrate resolve` and `migrate deploy` compute it.
+ *
+ * Verified against production before this was relied on: rows written by Prisma
+ * itself carry precisely this digest of the file on disk. Getting it wrong would
+ * not fail here — it would make a LATER `prisma migrate` run report the migration
+ * as modified, which is a confusing way to find out. Exported so a test can
+ * compare it against a real file.
  */
-export function applyOne(name, childEnv, runner = run) {
+export function migrationChecksum(name) {
+  return createHash("sha256")
+    .update(readFileSync(join(migrationsDir, name, "migration.sql")))
+    .digest("hex");
+}
+
+/**
+ * Record a migration as applied, from the parent process rather than a second CLI.
+ *
+ * This replaces a second `npx prisma migrate resolve` child process. That spawn
+ * cost about 1.4 seconds of CLI startup, and with 178 migrations the pair of them
+ * accounted for 491 of CI's ~900 seconds — almost none of it spent on SQL.
+ *
+ * It is also safer than the process it replaces, though it is worth being exact
+ * about how — an earlier version of this comment overstated it.
+ *
+ * The SQL still runs in the `npx prisma db execute` CHILD process. Only the ledger
+ * write moved here, to the parent's Prisma client. So this is NOT "the same
+ * connection that applied the SQL": it is two connections, to a database this
+ * process has already checked and locked, one of which it now controls directly.
+ *
+ * What that buys is real but narrower than "same connection". The header of this
+ * file records why the child commands are pinned: `db execute` and
+ * `migrate resolve` used to RESOLVE THEIR TARGET independently, so a migration
+ * could be recorded against one database while its SQL ran against another,
+ * leaving a missing column that 500'd login. One of those two resolutions is now
+ * gone — the ledger write cannot land anywhere but the database this runner
+ * connected to. The remaining child is still pinned by childEnv, as before.
+ *
+ * applied_steps_count is 1, matching `migrate deploy`, because the whole file was
+ * applied. `migrate resolve` writes 0 — it means "assume this ran", which is not
+ * what happened here.
+ */
+export function isMissingLedgerTable(error) {
+  // Prisma wraps the Postgres code rather than exposing it directly. Both signals
+  // are checked, and anything else is rethrown: a catch-all here would turn a real
+  // database failure into a silent fallback, which is the opposite of the point.
+  const meta = error?.meta ?? {};
+  return (
+    meta.code === "42P01" ||
+    /relation "_prisma_migrations" does not exist/i.test(String(error?.message ?? ""))
+  );
+}
+
+export async function recordApplied(prisma, name, childEnv, runner = run) {
+  try {
+    await insertLedgerRow(prisma, name);
+  } catch (error) {
+    if (!isMissingLedgerTable(error)) throw error;
+    // A BRAND-NEW DATABASE has no _prisma_migrations table yet — `migrate resolve`
+    // is what creates it, which is why the old two-spawn version never hit this.
+    // CI found it on the first run against an empty database, which is exactly
+    // where it should be found.
+    //
+    // Prisma creates the table with ITS OWN definition rather than one written out
+    // here. Hand-copying that DDL would work until Prisma changed a column type
+    // and left this repository quietly holding a table Prisma no longer expects.
+    // One extra spawn, once per fresh database.
+    runner(NPX, ["prisma", "migrate", "resolve", "--schema", schemaPath, "--applied", name], childEnv);
+  }
+}
+
+async function insertLedgerRow(prisma, name) {
+  await prisma.$executeRaw`
+    INSERT INTO "_prisma_migrations"
+      ("id", "checksum", "finished_at", "migration_name", "logs", "rolled_back_at", "started_at", "applied_steps_count")
+    VALUES
+      (${randomUUID()}, ${migrationChecksum(name)}, now(), ${name}, NULL, NULL, now(), 1)
+  `;
+}
+
+/**
+ * Apply ONE migration: execute its SQL, THEN record it.
+ *
+ * EXECUTE BEFORE RECORD IS THE WHOLE POINT. If execute throws, the record never
+ * happens, so the migration stays pending and re-runs next time (every
+ * migration.sql is idempotent). The reverse order would mark a migration applied
+ * that never ran — the failure that took production's login down in July.
+ *
+ * `runner(cmd, args, env)` is injectable so the ordering stays covered by tests.
+ * Exported.
+ */
+export async function applyOne(name, childEnv, prisma, runner = run) {
   runner(NPX, ["prisma", "db", "execute", "--schema", schemaPath, "--file", join(migrationsDir, name, "migration.sql")], childEnv);
-  runner(NPX, ["prisma", "migrate", "resolve", "--schema", schemaPath, "--applied", name], childEnv);
+  await recordApplied(prisma, name, childEnv, runner);
 }
 
 /**
@@ -382,7 +469,7 @@ async function main() {
         continue;
       }
       console.log(`applying     ${name}`);
-      applyOne(name, childEnv);
+      await applyOne(name, childEnv, prisma);
     }
 
     if (pending.length === 0) console.log("Database is up to date — nothing to apply.");
