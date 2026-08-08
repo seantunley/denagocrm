@@ -1,7 +1,7 @@
 import { basePrisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
 import { requirePermission } from "@/lib/permissions";
-import { PageHeader } from "@/components/page-header";
+import MarketingPageHeader from "@/components/marketing/MarketingPageHeader";
 import TemplateWorkspace from "@/components/marketing/TemplateWorkspace";
 
 type TemplateRow = {
@@ -27,7 +27,7 @@ export default async function MarketingTemplatesPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
+      <MarketingPageHeader
         title="Templates"
         description="Create, preview, version and publish reusable email, SMS and operational content."
       />

@@ -14,10 +14,10 @@ import { uploadDocument } from "@/app/actions/documents";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { nonAutomotiveDocumentWhere } from "@/lib/modules/registry";
 import RepoRow, { type MoveTargets, type RepoDoc } from "@/components/RepoRow";
-import { PageHeader } from "@/components/page-header";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { EmptyState, MetricCard, MetricStrip, Surface, WorkspaceToolbar } from "@/components/visual-system";
+import { EmptyState, SectionHeading, Surface, WorkspaceToolbar } from "@/components/visual-system";
+import { WorkspaceHero } from "@/components/workspace-hero";
 
 export const dynamic = "force-dynamic";
 
@@ -157,24 +157,24 @@ export default async function DocumentsPage({
 
   return (
     <div className="space-y-6">
-      <PageHeader
+      <WorkspaceHero
+        icon={FolderTree}
+        eyebrow="Business records"
         title="Documents"
-        description="Find, file and manage customer paperwork from one secure document workspace."
-      >
-        {canTemplates && (
+        description="Find customer paperwork, understand where every file belongs and manage the repository without losing record context."
+        stats={[
+          { label: "Files in view", value: rows.length, detail: versions === "all" ? "Including version history" : "Current versions only", icon: FileText, tone: "primary" },
+          { label: "Filed", value: filedCount, detail: "Linked to a CRM record", icon: FolderTree, tone: "success" },
+          { label: "Added · 30 days", value: recentCount, detail: "Recently uploaded", icon: Clock3, tone: recentCount > 0 ? "primary" : "default" },
+          { label: "Storage in view", value: formatFileSize(totalSize), detail: "Across accessible files", icon: HardDrive },
+        ]}
+        actions={canTemplates ? (
           <Link href="/document-studio" className={buttonVariants({ variant: "outline", size: "sm" })}>
             <Settings2 className="size-4" />
             Templates & Studio
           </Link>
-        )}
-      </PageHeader>
-
-      <MetricStrip>
-        <MetricCard icon={FileText} label="Files in view" value={rows.length} detail={versions === "all" ? "Including version history" : "Current versions only"} />
-        <MetricCard icon={FolderTree} label="Filed" value={filedCount} detail="Linked to a CRM record" />
-        <MetricCard icon={Clock3} label="Added · 30 days" value={recentCount} detail="Recently uploaded files" accent={recentCount > 0} />
-        <MetricCard icon={HardDrive} label="Storage in view" value={formatFileSize(totalSize)} detail="Across accessible files" />
-      </MetricStrip>
+        ) : undefined}
+      />
 
       <WorkspaceToolbar className="grid gap-3 lg:grid-cols-[1fr_auto]">
         <form className="flex items-center gap-2" role="search">
@@ -199,6 +199,11 @@ export default async function DocumentsPage({
       </WorkspaceToolbar>
 
       <Surface className="p-4">
+        <SectionHeading
+          title="Document register"
+          description={`${rows.length} accessible file${rows.length === 1 ? "" : "s"} · downloads and management actions are rechecked on the server.`}
+          className="mb-3"
+        />
         {rows.length === 0 ? (
           <EmptyState
             icon={q ? Search : FileText}

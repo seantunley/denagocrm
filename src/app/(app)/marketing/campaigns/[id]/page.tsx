@@ -1,9 +1,10 @@
 import Link from "next/link";
+import { CheckCircle2, MousePointerClick, Send, UsersRound } from "lucide-react";
 import { notFound } from "next/navigation";
 import { basePrisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
 import { requirePermission } from "@/lib/permissions";
-import { StatusPill } from "@/components/visual-system";
+import { MetricCard, MetricStrip, StatusPill } from "@/components/visual-system";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { formatDateTime } from "@/lib/format";
 import { archiveCampaign, cancelCampaign, pauseCampaign, resumeCampaign, retryCampaignFailures } from "@/app/actions/marketingCampaignOperations";
@@ -57,9 +58,12 @@ export default async function MarketingCampaignDetail({ params }: { params: Prom
     description={campaign.objective ?? campaign.audience}
     actions={<>{editable && <Link href={`/marketing/campaigns/${id}/edit`} className="btn-secondary">Edit</Link>}<Link href={`/marketing/campaigns/${id}/review`} className="btn-secondary">Review</Link></>}
   >
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-6">{[
-      ["Recipients", campaign.recipientCount], ["Sent", campaign.sentCount], ["Delivery", `${rate(campaign.sentCount, campaign.recipientCount)}%`], ["Open", `${rate(campaign.openCount, campaign.sentCount)}%`], ["Click", `${rate(campaign.clickCount, campaign.sentCount)}%`], ["Conversions", campaign.conversionCount]
-    ].map(([label, value]) => <div className="card" key={String(label)}><p className="text-xs font-semibold uppercase text-muted-foreground">{String(label)}</p><p className="mt-1 text-2xl font-semibold">{String(value)}</p></div>)}</div>
+    <MetricStrip glow="left">
+      <MetricCard icon={UsersRound} label="Recipients" value={campaign.recipientCount} detail={`${campaign.sentCount} sent`} />
+      <MetricCard icon={Send} label="Delivery" value={`${rate(campaign.sentCount, campaign.recipientCount)}%`} detail={`${campaign.openCount} opened`} />
+      <MetricCard icon={MousePointerClick} label="Engagement" value={`${rate(campaign.clickCount, campaign.sentCount)}%`} detail={`${campaign.clickCount} tracked clicks`} />
+      <MetricCard icon={CheckCircle2} label="Conversions" value={campaign.conversionCount} detail="Attributed commercial outcomes" accent={campaign.conversionCount > 0} />
+    </MetricStrip>
 
     <div className="grid gap-4 lg:grid-cols-2"><section className="card space-y-3"><h2 className="font-semibold">Campaign brief</h2><dl className="grid gap-3 text-sm md:grid-cols-2"><div><dt className="text-muted-foreground">Audience</dt><dd>{campaign.audience}</dd></div><div><dt className="text-muted-foreground">Channel</dt><dd>{String(campaign.channel).toUpperCase()}</dd></div><div><dt className="text-muted-foreground">Offer</dt><dd>{campaign.offer ?? "—"}</dd></div><div><dt className="text-muted-foreground">CTA</dt><dd>{campaign.primaryCtaLabel ?? "—"}</dd></div><div><dt className="text-muted-foreground">Scheduled</dt><dd>{campaign.scheduledFor ? formatDateTime(campaign.scheduledFor) : "—"}</dd></div><div><dt className="text-muted-foreground">Budget</dt><dd>{campaign.budgetCents == null ? "—" : `R ${(campaign.budgetCents / 100).toLocaleString("en-ZA")}`}</dd></div></dl></section><section className="card space-y-3"><h2 className="font-semibold">Content preview</h2>{campaign.subject && <p className="font-medium">{campaign.subject}</p>}<div className="max-h-72 overflow-auto whitespace-pre-wrap text-sm text-muted-foreground">{campaign.channel === "email" ? campaign.htmlBody ?? campaign.body : campaign.body}</div></section></div>
 

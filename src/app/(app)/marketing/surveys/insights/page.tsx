@@ -1,11 +1,12 @@
 import Link from "next/link";
+import { Clock3, Gauge, MessagesSquare, SmilePlus } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
 import { getActiveTenantId } from "@/lib/auth";
 import { loadSurveyAnalytics } from "@/lib/surveyAnalytics";
 import { listTenantStaff } from "@/lib/tenantActor";
-import { StatusPill } from "@/components/visual-system";
-import { PageHeader } from "@/components/page-header";
+import { MetricCard, MetricStrip, StatusPill, WorkspaceToolbar } from "@/components/visual-system";
+import MarketingPageHeader from "@/components/marketing/MarketingPageHeader";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { assignSurveyFollowUp, createCaseFromSurveyFollowUp, resolveSurveyFollowUp } from "@/app/actions/surveyFollowUps";
 
@@ -53,28 +54,26 @@ export default async function SurveyInsightsPage({ searchParams }: { searchParam
   return <div className="space-y-6">
     <div>
       <Link href="/marketing/surveys" className="text-sm text-primary hover:underline">← Survey governance</Link>
-      <PageHeader className="mt-2" title="Survey insights" description="Response quality, NPS, CSAT, completion speed and unresolved customer recovery.">
+      <MarketingPageHeader className="mt-2" title="Survey insights" description="Response quality, NPS, CSAT, completion speed and unresolved customer recovery.">
         <Link href="/marketing/surveys/distributions" className="btn-secondary">Distribution queue</Link>
-      </PageHeader>
+      </MarketingPageHeader>
     </div>
 
-    <form className="card grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-6">
+    <WorkspaceToolbar><form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
       <input type="date" name="from" defaultValue={from.toISOString().slice(0, 10)} className="input-base" />
       <input type="date" name="to" defaultValue={toInput.toISOString().slice(0, 10)} className="input-base" />
       <select name="surveyId" defaultValue={surveyId ?? ""} className="input-base"><option value="">All surveys</option>{surveys.map((survey) => <option key={survey.id} value={survey.id}>{survey.title}</option>)}</select>
       <select name="distributionId" defaultValue={distributionId ?? ""} className="input-base"><option value="">All distributions</option>{distributions.map((distribution) => <option key={distribution.id} value={distribution.id}>{distribution.name}</option>)}</select>
       <select name="type" defaultValue={type ?? ""} className="input-base"><option value="">All types</option><option value="nps">NPS</option><option value="csat">CSAT</option><option value="sales">Post-sale</option><option value="adhoc">Ad hoc</option></select>
       <div className="flex gap-2"><select name="channel" defaultValue={channel ?? ""} className="input-base min-w-0 flex-1"><option value="">All channels</option><option value="email">Email</option><option value="sms">SMS</option></select><button className="btn-primary">Apply</button></div>
-    </form>
+    </form></WorkspaceToolbar>
 
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Delivered invites</p><p className="mt-1 text-2xl font-semibold">{metrics.delivered}</p></div>
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Responses</p><p className="mt-1 text-2xl font-semibold">{metrics.completed}</p></div>
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Response rate</p><p className="mt-1 text-2xl font-semibold">{metrics.responseRate}%</p></div>
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">NPS</p><p className="mt-1 text-2xl font-semibold">{metrics.nps ?? "—"}</p><p className="text-xs text-muted-foreground">{metrics.npsResponses} scored</p></div>
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">CSAT</p><p className="mt-1 text-2xl font-semibold">{metrics.csat === null ? "—" : `${metrics.csat}%`}</p><p className="text-xs text-muted-foreground">{metrics.csatResponses} scored</p></div>
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Average response</p><p className="mt-1 text-2xl font-semibold">{metrics.averageResponseHours === null ? "—" : `${metrics.averageResponseHours}h`}</p></div>
-    </div>
+    <MetricStrip glow="left">
+      <MetricCard icon={MessagesSquare} label="Response rate" value={`${metrics.responseRate}%`} detail={`${metrics.completed} of ${metrics.delivered} delivered invites`} />
+      <MetricCard icon={Gauge} label="Net promoter score" value={metrics.nps ?? "—"} detail={`${metrics.npsResponses} scored response${metrics.npsResponses === 1 ? "" : "s"}`} accent={metrics.nps !== null} />
+      <MetricCard icon={SmilePlus} label="Customer satisfaction" value={metrics.csat === null ? "—" : `${metrics.csat}%`} detail={`${metrics.csatResponses} scored response${metrics.csatResponses === 1 ? "" : "s"}`} />
+      <MetricCard icon={Clock3} label="Average response" value={metrics.averageResponseHours === null ? "—" : `${metrics.averageResponseHours}h`} detail="Time from invite to completion" />
+    </MetricStrip>
 
     <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
       <ResponsiveEntityTable>

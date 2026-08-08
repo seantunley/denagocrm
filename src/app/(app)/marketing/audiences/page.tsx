@@ -1,7 +1,7 @@
 import { basePrisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
 import { requirePermission } from "@/lib/permissions";
-import { PageHeader } from "@/components/page-header";
+import MarketingPageHeader from "@/components/marketing/MarketingPageHeader";
 import AudienceWorkspace from "@/components/marketing/AudienceWorkspace";
 
 type AudienceRow = {
@@ -58,7 +58,7 @@ export default async function MarketingAudiencesPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader
+      <MarketingPageHeader
         title="Audiences"
         description="Build reusable, consent-safe customer groups with live reach and version history."
       />

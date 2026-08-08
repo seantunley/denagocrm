@@ -1,9 +1,10 @@
 import Link from "next/link";
+import { AlertTriangle, CheckCircle2, MessagesSquare, Send } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
 import { getActiveTenantId } from "@/lib/auth";
-import { StatusPill } from "@/components/visual-system";
-import { PageHeader } from "@/components/page-header";
+import { MetricCard, MetricStrip, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
+import MarketingPageHeader from "@/components/marketing/MarketingPageHeader";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { createDistribution } from "@/app/actions/surveyDistributions";
 
@@ -31,14 +32,26 @@ export default async function SurveyDistributionsPage() {
     ORDER BY d."createdAt" DESC
     LIMIT 200
   `;
+  const sent = distributions.reduce((total, item) => total + item.sentCount, 0);
+  const completed = distributions.reduce((total, item) => total + item.completedCount, 0);
+  const issues = distributions.reduce((total, item) => total + item.failedCount + item.suppressedCount, 0);
 
   return <div className="space-y-6">
     <div>
       <Link href="/marketing/surveys" className="text-sm text-primary hover:underline">← Survey governance</Link>
-      <PageHeader className="mt-2" title="Survey distributions" description="Create bounded, consent-aware survey sends with reminders and operational controls." />
+      <MarketingPageHeader className="mt-2" title="Survey distributions" description="Create bounded, consent-aware survey sends with reminders and operational controls." />
     </div>
 
-    <form action={createDistribution} className="card grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-4">
+    <MetricStrip glow="left">
+      <MetricCard icon={MessagesSquare} label="Distributions" value={distributions.length} detail={`${surveys.length} published survey${surveys.length === 1 ? "" : "s"} available`} />
+      <MetricCard icon={Send} label="Sent" value={sent} detail="Across recent distributions" />
+      <MetricCard icon={CheckCircle2} label="Completed" value={completed} detail={sent ? `${Math.round((completed / sent) * 100)}% response rate` : "No sends yet"} />
+      <MetricCard icon={AlertTriangle} label="Delivery issues" value={issues} detail="Failures and policy suppressions" accent={issues > 0} />
+    </MetricStrip>
+
+    <Surface className="overflow-visible p-5">
+      <SectionHeading title="Create a distribution" description="Choose a published survey, bounded audience, channel and reminder policy." />
+    <form action={createDistribution} className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
       <div><label className="text-xs font-medium uppercase text-muted-foreground">Distribution name</label><input name="name" className="input-base mt-1 w-full" placeholder="July service follow-up" required /></div>
       <div><label className="text-xs font-medium uppercase text-muted-foreground">Published survey</label><select name="surveyId" className="input-base mt-1 w-full" required>{surveys.map((survey) => <option key={survey.id} value={survey.id}>{survey.title} · v{survey.publishedVersion}</option>)}</select></div>
       <div><label className="text-xs font-medium uppercase text-muted-foreground">Audience</label><select name="segment" className="input-base mt-1 w-full"><option value="customers">All reachable contacts</option><option value="vehicle_owners">Vehicle owners</option><option value="won_leads">Won customers</option></select></div>
@@ -49,6 +62,7 @@ export default async function SurveyDistributionsPage() {
       <div><label className="text-xs font-medium uppercase text-muted-foreground">Maximum reminders</label><input type="number" name="maxReminders" min="0" max="3" defaultValue="1" className="input-base mt-1 w-full" /></div>
       <div className="md:col-span-2 xl:col-span-4"><button className="btn-primary" disabled={surveys.length === 0}>Create queued distribution</button>{surveys.length === 0 && <span className="ml-3 text-sm text-muted-foreground">Publish a survey first.</span>}</div>
     </form>
+    </Surface>
 
     <ResponsiveEntityTable>
       <table className="table-base">

@@ -2,8 +2,8 @@ import Link from "next/link";
 import { requirePermission } from "@/lib/permissions";
 import { getActiveTenantId } from "@/lib/auth";
 import { loadMarketingOverview } from "@/lib/marketingOverview";
-import { StatusPill } from "@/components/visual-system";
-import { PageHeader } from "@/components/page-header";
+import { StatusPill, WorkspaceToolbar } from "@/components/visual-system";
+import MarketingPageHeader from "@/components/marketing/MarketingPageHeader";
 
 function monthRange(raw?: string) {
   const match = raw?.match(/^(\d{4})-(\d{2})$/);
@@ -35,9 +35,9 @@ export default async function MarketingCalendarPage({ searchParams }: { searchPa
   const monthValue = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 
   return <div className="space-y-6">
-    <div><Link href="/marketing/overview" className="text-sm text-primary hover:underline">← Marketing overview</Link><PageHeader className="mt-2" title="Marketing calendar" description="One schedule for governed campaign launches and survey distributions."><Link href={`/marketing/calendar?month=${monthValue(previous)}&kind=${kind}`} className="btn-secondary">Previous</Link><Link href={`/marketing/calendar?month=${monthValue(next)}&kind=${kind}`} className="btn-secondary">Next</Link></PageHeader></div>
+    <div><Link href="/marketing/overview" className="text-sm text-primary hover:underline">← Marketing overview</Link><MarketingPageHeader className="mt-2" title="Marketing calendar" description="One schedule for governed campaign launches and survey distributions."><Link href={`/marketing/calendar?month=${monthValue(previous)}&kind=${kind}`} className="btn-secondary">Previous</Link><Link href={`/marketing/calendar?month=${monthValue(next)}&kind=${kind}`} className="btn-secondary">Next</Link></MarketingPageHeader></div>
 
-    <form className="card flex flex-wrap items-end gap-3 p-4"><label className="space-y-1"><span className="text-xs uppercase text-muted-foreground">Month</span><input type="month" name="month" defaultValue={value} className="input-base" /></label><label className="space-y-1"><span className="text-xs uppercase text-muted-foreground">Type</span><select name="kind" defaultValue={kind} className="input-base"><option value="all">Campaigns and surveys</option><option value="campaign">Campaigns</option><option value="survey">Surveys</option></select></label><button className="btn-primary">Apply</button></form>
+    <WorkspaceToolbar><form className="flex flex-wrap items-end gap-3"><div className="mr-auto"><p className="text-sm font-semibold">Calendar view</p><p className="mt-0.5 text-xs text-muted-foreground">Focus the operational schedule by month and launch type.</p></div><label className="space-y-1"><span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Month</span><input type="month" name="month" defaultValue={value} className="input-base" /></label><label className="space-y-1"><span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Type</span><select name="kind" defaultValue={kind} className="input-base"><option value="all">Campaigns and surveys</option><option value="campaign">Campaigns</option><option value="survey">Surveys</option></select></label><button className="btn-primary">Apply view</button></form></WorkspaceToolbar>
 
     <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
       <section className="space-y-4">

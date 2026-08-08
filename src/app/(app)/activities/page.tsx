@@ -21,18 +21,16 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cancelActivity, completeActivity } from "@/app/actions/activities";
-import { PageHeader } from "@/components/page-header";
 import { QuickCreateButton } from "@/components/QuickCreateButton";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   EmptyState,
-  MetricCard,
-  MetricStrip,
   StatusPill,
   Surface,
   WorkspaceToolbar,
 } from "@/components/visual-system";
+import { WorkspaceHero } from "@/components/workspace-hero";
 import { getAccessibleActivityIds } from "@/lib/activityAccess";
 import { prisma } from "@/lib/db";
 import { contactName, formatDue } from "@/lib/format";
@@ -227,14 +225,22 @@ export default async function ActivitiesPage({
 
   return (
     <div className="space-y-6">
-      <PageHeader
+      <WorkspaceHero
+        icon={CalendarClock}
+        eyebrow="Daily execution"
         title="Activities"
         description={
           mine
-            ? "Your follow-ups, appointments and next steps in one focused queue."
-            : "Every planned activity you can access across the dealership."
+            ? "Work the next customer commitment, recover overdue follow-ups and keep today’s plan moving."
+            : "Coordinate every planned customer touchpoint you can access across the dealership."
         }
-      >
+        stats={[
+          { label: "Planned", value: activities.length, detail: mine ? "Assigned to you" : "Accessible scope", icon: ListTodo, tone: "primary" },
+          { label: "Overdue", value: overdue.length, detail: overdue.length ? "Needs an outcome" : "Nothing overdue", icon: CircleAlert, tone: overdue.length > 0 ? "danger" : "default" },
+          { label: "Due today", value: today.length, detail: "Before day end", icon: Clock3, tone: today.length > 0 ? "warning" : "default" },
+          { label: "Upcoming", value: upcoming.length, detail: "Scheduled ahead", icon: CalendarClock },
+        ]}
+        actions={<>
         <Link
           href="/calendar"
           className={buttonVariants({ variant: "outline", size: "sm" })}
@@ -251,39 +257,8 @@ export default async function ActivitiesPage({
             New activity
           </QuickCreateButton>
         )}
-      </PageHeader>
-
-      <MetricStrip>
-          <MetricCard
-            icon={ListTodo}
-            label="Planned"
-            value={activities.length}
-            detail={mine ? "Assigned to you" : "In accessible scope"}
-            className="rounded-none border-0 shadow-none"
-          />
-          <MetricCard
-            icon={CircleAlert}
-            label="Overdue"
-            value={overdue.length}
-            detail={overdue.length ? "Needs attention" : "Nothing overdue"}
-            accent={overdue.length > 0}
-            className="rounded-none border-0 shadow-none"
-          />
-          <MetricCard
-            icon={Clock3}
-            label="Today"
-            value={today.length}
-            detail="Due before day end"
-            className="rounded-none border-0 shadow-none"
-          />
-          <MetricCard
-            icon={CalendarClock}
-            label="Upcoming"
-            value={upcoming.length}
-            detail="Scheduled ahead"
-            className="rounded-none border-0 shadow-none"
-          />
-      </MetricStrip>
+        </>}
+      />
 
       <WorkspaceToolbar>
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">

@@ -17,18 +17,16 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import ModalTrigger from "@/components/Modal";
-import { PageHeader } from "@/components/page-header";
 import { NewTicketForm } from "@/components/helpdesk/NewTicketForm";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   EmptyState,
-  MetricCard,
-  MetricStrip,
   StatusPill,
   Surface,
   WorkspaceToolbar,
 } from "@/components/visual-system";
+import { WorkspaceHero } from "@/components/workspace-hero";
 import { prisma } from "@/lib/db";
 import { contactName, formatDateTime } from "@/lib/format";
 import {
@@ -144,11 +142,18 @@ export default async function CasesPage({
 
   return (
     <div className="space-y-6">
-      <PageHeader
+      <WorkspaceHero
+        icon={LifeBuoy}
+        eyebrow="Customer care operations"
         title="Help desk"
-        description="Resolve customer questions, service concerns and ownership requests from one shared workspace."
-      >
-        {canCreate && (
+        description="Triage customer questions, take ownership and resolve every service or ownership concern from one queue."
+        stats={[
+          { label: "Open", value: counts.open, detail: "Active customer cases", icon: Inbox, tone: "primary" },
+          { label: "Awaiting reply", value: awaitingReply, detail: "Customer spoke last", icon: MessageCircleReply, tone: awaitingReply > 0 ? "warning" : "default" },
+          { label: "Unassigned", value: counts.unassigned, detail: "Needs an owner", icon: UserRoundX, tone: counts.unassigned > 0 ? "danger" : "default" },
+          { label: "Unread", value: unread, detail: `In ${folderLabel.toLowerCase()}`, icon: MailOpen },
+        ]}
+        actions={canCreate ? (
           <ModalTrigger
             label={
               <>
@@ -170,41 +175,8 @@ export default async function CasesPage({
               }))}
             />
           </ModalTrigger>
-        )}
-      </PageHeader>
-
-      <MetricStrip glow="left">
-          <MetricCard
-            icon={Inbox}
-            label="Open"
-            value={counts.open}
-            detail="Active customer cases"
-            className="rounded-none border-0 shadow-none"
-          />
-          <MetricCard
-            icon={MessageCircleReply}
-            label="Awaiting reply"
-            value={awaitingReply}
-            detail="Customer spoke last"
-            accent={awaitingReply > 0}
-            className="rounded-none border-0 shadow-none"
-          />
-          <MetricCard
-            icon={UserRoundX}
-            label="Unassigned"
-            value={counts.unassigned}
-            detail="Needs an owner"
-            accent={counts.unassigned > 0}
-            className="rounded-none border-0 shadow-none"
-          />
-          <MetricCard
-            icon={MailOpen}
-            label="Unread"
-            value={unread}
-            detail={`In ${folderLabel.toLowerCase()}`}
-            className="rounded-none border-0 shadow-none"
-          />
-      </MetricStrip>
+        ) : undefined}
+      />
 
       <div className="grid gap-5 lg:grid-cols-[16rem_minmax(0,1fr)]">
         <aside className="space-y-4 lg:sticky lg:top-4 lg:self-start">

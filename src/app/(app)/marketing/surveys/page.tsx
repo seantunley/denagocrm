@@ -1,9 +1,10 @@
 import Link from "next/link";
+import { CheckCircle2, FilePenLine, MessagesSquare, Search } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
 import { requirePermission } from "@/lib/permissions";
-import { StatusPill } from "@/components/visual-system";
-import { PageHeader } from "@/components/page-header";
+import { MetricCard, MetricStrip, StatusPill } from "@/components/visual-system";
+import MarketingPageHeader from "@/components/marketing/MarketingPageHeader";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { createMarketingSurvey } from "@/app/actions/marketingSurveys";
 
@@ -26,19 +27,20 @@ export default async function MarketingSurveysPage() {
   }, {});
 
   return <div className="space-y-6">
-    <PageHeader title="Survey governance" description="Draft, review, approve and publish immutable customer-feedback forms.">
+    <MarketingPageHeader title="Survey governance" description="Draft, review, approve and publish immutable customer-feedback forms.">
       <form action={createMarketingSurvey} className="flex flex-wrap gap-2">
         <input name="title" className="input-base min-w-52" placeholder="New survey name" required />
         <select name="type" className="input-base"><option value="csat">CSAT</option><option value="sales">Post-sale</option><option value="nps">NPS</option><option value="adhoc">Ad hoc</option></select>
         <button className="btn-primary">Create inactive draft</button>
       </form>
-    </PageHeader>
+    </MarketingPageHeader>
 
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-      {[["draft","Drafts"],["in_review","In review"],["approved","Approved"],["published","Published"],["inactive","Inactive"]].map(([key,label]) =>
-        <div className="card p-4" key={key}><p className="text-xs uppercase text-muted-foreground">{label}</p><p className="mt-1 text-2xl font-semibold">{counts[key] ?? 0}</p></div>
-      )}
-    </div>
+    <MetricStrip glow="left">
+      <MetricCard icon={FilePenLine} label="Drafts" value={counts.draft ?? 0} detail={`${counts.changes_requested ?? 0} with changes requested`} />
+      <MetricCard icon={Search} label="In review" value={counts.in_review ?? 0} detail="Awaiting a governance decision" accent={(counts.in_review ?? 0) > 0} />
+      <MetricCard icon={CheckCircle2} label="Approved" value={counts.approved ?? 0} detail="Ready to publish" />
+      <MetricCard icon={MessagesSquare} label="Published" value={counts.published ?? 0} detail={`${counts.inactive ?? 0} inactive survey${(counts.inactive ?? 0) === 1 ? "" : "s"}`} />
+    </MetricStrip>
 
     <ResponsiveEntityTable>
       <table className="table-base">

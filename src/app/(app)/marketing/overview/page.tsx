@@ -1,9 +1,10 @@
 import Link from "next/link";
+import { BadgePoundSterling, ChartNoAxesCombined, MousePointerClick, UsersRound } from "lucide-react";
 import { requirePermission } from "@/lib/permissions";
 import { getActiveTenantId } from "@/lib/auth";
 import { loadMarketingOverview } from "@/lib/marketingOverview";
-import { StatusPill } from "@/components/visual-system";
-import { PageHeader } from "@/components/page-header";
+import { MetricCard, MetricStrip, StatusPill, WorkspaceToolbar } from "@/components/visual-system";
+import MarketingPageHeader from "@/components/marketing/MarketingPageHeader";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 
 function money(cents: number) {
@@ -27,22 +28,20 @@ export default async function MarketingOverviewPage({ searchParams }: { searchPa
   const data = await loadMarketingOverview({ tenantId, from, to });
 
   return <div className="space-y-6">
-    <PageHeader title="Performance overview" description="Campaign execution, attributable pipeline, survey health and the work that needs attention.">
+    <MarketingPageHeader title="Performance overview" description="Campaign execution, attributable pipeline, survey health and the work that needs attention.">
       <Link href="/marketing/campaigns/new" className="btn-primary">Create campaign</Link><Link href="/marketing/calendar" className="btn-secondary">Marketing calendar</Link>
-    </PageHeader>
+    </MarketingPageHeader>
 
-    <form className="card flex flex-wrap items-end gap-3 p-4"><label className="space-y-1"><span className="text-xs uppercase text-muted-foreground">From</span><input type="date" name="from" defaultValue={from.toISOString().slice(0,10)} className="input-base" /></label><label className="space-y-1"><span className="text-xs uppercase text-muted-foreground">To</span><input type="date" name="to" defaultValue={toInput.toISOString().slice(0,10)} className="input-base" /></label><button className="btn-primary">Apply</button></form>
+    <WorkspaceToolbar>
+      <form className="flex flex-wrap items-end gap-3"><div className="mr-auto"><p className="text-sm font-semibold">Reporting window</p><p className="mt-0.5 text-xs text-muted-foreground">All attribution and feedback metrics below use this period.</p></div><label className="space-y-1"><span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">From</span><input type="date" name="from" defaultValue={from.toISOString().slice(0,10)} className="input-base" /></label><label className="space-y-1"><span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">To</span><input type="date" name="to" defaultValue={toInput.toISOString().slice(0,10)} className="input-base" /></label><button className="btn-primary">Apply period</button></form>
+    </WorkspaceToolbar>
 
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Campaigns</p><p className="mt-1 text-2xl font-semibold">{data.campaigns.campaigns}</p></div>
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Delivered</p><p className="mt-1 text-2xl font-semibold">{data.campaigns.delivered || data.campaigns.sent}</p></div>
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Clicks</p><p className="mt-1 text-2xl font-semibold">{data.campaigns.clicked}</p></div>
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Attributed leads</p><p className="mt-1 text-2xl font-semibold">{data.campaigns.conversions}</p></div>
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Attributed sales</p><p className="mt-1 text-2xl font-semibold">{data.campaigns.sales}</p></div>
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Revenue</p><p className="mt-1 text-xl font-semibold">{money(data.campaigns.attributedRevenueCents)}</p></div>
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">ROAS</p><p className="mt-1 text-2xl font-semibold">{data.efficiency.roas === null ? "—" : `${data.efficiency.roas}×`}</p></div>
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Cost per lead</p><p className="mt-1 text-xl font-semibold">{data.efficiency.costPerLeadCents === null ? "—" : money(data.efficiency.costPerLeadCents)}</p></div>
-    </div>
+    <MetricStrip glow="left">
+      <MetricCard icon={ChartNoAxesCombined} label="Campaign activity" value={data.campaigns.campaigns} detail={`${data.campaigns.delivered || data.campaigns.sent} delivered`} />
+      <MetricCard icon={UsersRound} label="Attributed outcomes" value={data.campaigns.conversions} detail={`${data.campaigns.sales} sales from campaign leads`} accent={data.campaigns.conversions > 0} />
+      <MetricCard icon={BadgePoundSterling} label="Attributed revenue" value={money(data.campaigns.attributedRevenueCents)} detail={data.efficiency.roas === null ? "ROAS not available" : `${data.efficiency.roas}× return on spend`} />
+      <MetricCard icon={MousePointerClick} label="Engagement" value={data.campaigns.clicked} detail={data.efficiency.costPerLeadCents === null ? "Cost per lead not available" : `${money(data.efficiency.costPerLeadCents)} per lead`} />
+    </MetricStrip>
 
     <div className="grid gap-4 lg:grid-cols-[1.35fr_1fr]">
       <ResponsiveEntityTable>
