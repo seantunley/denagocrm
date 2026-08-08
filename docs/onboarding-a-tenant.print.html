@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en-ZA">
+<head>
+<meta charset="utf-8">
+<title>Onboarding a new tenant</title>
+<link rel="stylesheet" href="assets/guide.css">
+</head>
+<body>
+
+<!-- ══ COVER ══════════════════════════════════════════════════════════════ -->
+<div class="cover">
+  <div class="eyebrow">Operations guide</div>
+  <h1>Onboarding<br>a new tenant</h1>
+  <div class="rule"></div>
+  <p class="standfirst">
+    Standing up a customer workspace from end to end — platform account, domain,
+    branding, activation and handover.
+  </p>
+  <dl class="meta">
+    <div>
+      <dt>Audience</dt>
+      <dd>Onboarding operators</dd>
+    </div>
+    <div>
+      <dt>Hands-on time</dt>
+      <dd>≈ 40 minutes</dd>
+    </div>
+    <div>
+      <dt>Issued</dt>
+      <dd>6 August 2026</dd>
+    </div>
+  </dl>
+</div>
+
+<!-- ══ CONTENTS ═══════════════════════════════════════════════════════════ -->
+<div class="toc">
+  <h1 class="section">Contents</h1>
+  <p class="lede">
+    A tenant is one customer's entire workspace — their staff, their customers,
+    their documents, their branding and their web address. Tenants cannot see
+    each other's data.
+  </p>
+  <ol>
+    <li><span class="t">Collect what you need from the customer</span></li>
+    <li><span class="t">Sign in to the platform console</span></li>
+    <li><span class="t">Create the tenant</span></li>
+    <li><span class="t">Set up their web address</span> <span class="d">— Vercel, DNS, verification</span></li>
+    <li><span class="t">Choose their modules</span></li>
+    <li><span class="t">Apply their branding</span></li>
+    <li><span class="t">Activate the tenant</span></li>
+    <li><span class="t">Hand over</span></li>
+    <li><span class="t">Confirm it works</span></li>
+  </ol>
+
+  <h2>Before you begin — the one blocking prerequisite</h2>
+  <div class="callout stop">
+    <span class="title">Tenant isolation enforcement must be on before a second tenant can be activated</span>
+    <p>
+      This is not a formality. Until <code>TENANT_ENFORCEMENT=enforce</code> is
+      live, the platform console will refuse to activate a new tenant:
+    </p>
+    <p class="quote-refusal">
+      Tenant isolation enforcement must be enabled before activating additional
+      tenants — activating now would expose existing data.
+    </p>
+    <p>
+      You can still create the tenant, brand it and register its domain. All of
+      that is inert and safe. It simply cannot be switched on. The refusal is
+      deliberate: without enforcement there is no boundary between workspaces, so
+      an active second tenant would be able to see the first one's records.
+    </p>
+    <p>
+      Enabling enforcement is separate, carefully ordered work with its own
+      runbook — <strong>DEPLOYMENT-SEQUENCE.md</strong>. <strong>Confirm
+      enforcement is live before promising a customer a go-live date.</strong>
+    </p>
+  </div>
+  <p class="nb">
+    <strong>Related:</strong> <em>RLS-ROLE-CUTOVER.md</em> covers the database
+    role change that makes isolation enforceable at the database level rather
+    than only in the application. Recommended before onboarding real customers.
+  </p>
+</div>
+
+<!-- ══ 1 ══════════════════════════════════════════════════════════════════ -->
+<section class="step first">
+  <h1 class="section"><span class="num">1</span>Collect what you need from the customer</h1>
+  <p class="lede">Four things. Everything else you can decide, or change later.</p>
+
+  <table>
+    <thead><tr><th style="width:26%">What</th><th style="width:30%">Example</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Workspace name</strong></td><td><code>Acme Golf Carts</code></td><td>Appears on their sign-in page, documents and emails.</td></tr>
+      <tr><td><strong>Web address</strong></td><td><code>crm.acmegolf.co.za</code></td><td>A subdomain they control. They will need to add one DNS record.</td></tr>
+      <tr><td><strong>First administrator</strong></td><td><code>jane@acmegolf.co.za</code></td><td>One named person. They can add colleagues themselves afterwards.</td></tr>
+      <tr><td><strong>Which modules</strong></td><td>Marketing, Workshop…</td><td>See section 5. Can be changed at any time.</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    Optional, and easy to add later: their logo (PNG, JPEG, SVG or WebP, under
+    1&nbsp;MB) and a brand accent colour as a six-digit hex code, for example
+    <code>#ea580c</code>.
+  </p>
+
+  <div class="callout forward">
+    <span class="title">A note you can forward to the customer</span>
+    <p>
+      To set up your workspace we need: the name you want it to trade under, the
+      web address you would like it on (for example
+      <code>crm.yourcompany.co.za</code>), and the name and email address of the
+      first administrator. If you have a logo and a brand colour, send those too —
+      otherwise we can add them later without any disruption.
+    </p>
+    <p>
+      You will need someone with access to your domain's DNS to add a single
+      record. It takes a few minutes; we will send you the exact value.
+    </p>
+  </div>
+</section>
+
+<!-- ══ 2 ══════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">2</span>Sign in to the platform console</h1>
+  <p class="lede">
+    The platform console is separate from the CRM — its own login page, its own
+    accounts, its own passwords.
+  </p>
+
+  <table>
+    <thead><tr><th style="width:22%">Surface</th><th>Address</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Console</strong></td><td><code>https://&lt;your-platform-domain&gt;/platform/login</code></td></tr>
+      <tr><td><strong>CRM</strong></td><td><code>https://&lt;your-platform-domain&gt;/login</code></td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    Signing in to one does not sign you in to the other. This is intentional. A
+    tenant's administrator — including your own — has no access to the console.
+  </p>
+
+  <h2>If you do not have a platform administrator account yet</h2>
+  <p>
+    There is no signup page and no “create the first admin” screen, on purpose —
+    such a page would be a takeover route the moment it misbehaved. Accounts are
+    created from the command line, which requires database credentials:
+  </p>
+<pre><code>npm run platform:create-admin -- \
+  --email ops@yourcompany.com \
+  --name "Platform Operations" \
+  --yes</code></pre>
+  <p>
+    Leave <code>--password</code> off and a strong one is generated and printed
+    <strong>once</strong>. Save it immediately. Passwords must be at least 12
+    characters and contain both a letter and a digit.
+  </p>
+
+  <div class="callout stop">
+    <span class="title">Treat this password as the only lock on the door</span>
+    <p>
+      The platform console has <strong>no two-factor authentication</strong>. The
+      database columns for it exist, but there is no screen to enrol one, so it
+      cannot currently be switched on.
+    </p>
+    <p>
+      A platform administrator can create, brand and suspend every tenant on the
+      platform, and a password is all that stands in front of that. Use a long
+      generated one, store it in a password manager, and issue platform accounts
+      sparingly.
+    </p>
+    <p>
+      Tenant <em>users</em> are unaffected — the CRM has full two-factor support,
+      including passkeys, at <strong>Settings → My Account</strong>.
+    </p>
+  </div>
+</section>
+
+<!-- ══ 3 ══════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">3</span>Create the tenant</h1>
+  <p class="lede">In the console, go to <strong>Tenants → Create tenant</strong>.</p>
+
+  <table>
+    <thead><tr><th style="width:30%">Field</th><th>Rules</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Name</strong></td><td>Free text. The trading name.</td></tr>
+      <tr><td><strong>Slug</strong></td><td>Lowercase letters, numbers and single hyphens only — <code>acme-golf-carts</code>. Permanent identifier; choose carefully.</td></tr>
+      <tr><td><strong>Owner name</strong></td><td>The first administrator's full name.</td></tr>
+      <tr><td><strong>Owner email</strong></td><td>Must not already exist anywhere on the platform.</td></tr>
+      <tr><td><strong>Owner password</strong></td><td>At least 12 characters, with letters and numbers.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>What happens when you submit</h2>
+  <p>
+    The tenant is created <strong>inert</strong>, and this is worth understanding
+    before you tell the customer anything:
+  </p>
+  <ul>
+    <li>The workspace exists but is <strong>suspended</strong>.</li>
+    <li>The administrator account exists but is <strong>disabled</strong> and cannot sign in.</li>
+    <li>Nothing is reachable, and nothing has been sent to anyone.</li>
+  </ul>
+  <p>
+    That is the correct and safe state. You now have somewhere to put their
+    branding and their domain, with no live door into the platform. The account
+    becomes usable at section 7 and not before.
+  </p>
+
+  <div class="callout">
+    <span class="title">Command-line alternative</span>
+    <p>The same result, useful for scripted setups:</p>
+<pre><code>tsx scripts/create-tenant.ts \
+  --name "Acme Golf Carts" --slug acme-golf-carts \
+  --owner-email jane@acmegolf.co.za --owner-name "Jane Doe" \
+  --yes</code></pre>
+    <p>
+      It prints the target database host and refuses to write without
+      <code>--yes</code>. Check that host before confirming.
+    </p>
+  </div>
+</section>
+
+<!-- ══ 4 ══════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">4</span>Set up their web address</h1>
+  <p class="lede">
+    Three parts, in this order. Getting the order wrong is the most common cause
+    of a failed setup, because the platform refuses to verify a domain that does
+    not yet answer.
+  </p>
+
+  <h2>4a &nbsp;Add the domain to the Vercel project</h2>
+  <p>
+    In Vercel, open the project and go to <strong>Settings → Domains → Add</strong>.
+    Enter the customer's hostname, for example <code>crm.acmegolf.co.za</code>.
+    Vercel will show you the DNS record it needs — usually a <code>CNAME</code>
+    pointing at <code>cname.vercel-dns.com</code>.
+  </p>
+  <p>
+    <strong>This step cannot be skipped or done later.</strong> Every tenant
+    domain serves the same deployment — that is what makes per-customer branding
+    work at all — so the address has to be attached to the project before
+    anything will answer on it.
+  </p>
+
+  <h2>4b &nbsp;Have the customer add the DNS record</h2>
+  <p>
+    Send them the exact record Vercel displayed. They add it with their registrar
+    or DNS provider. Changes usually take a few minutes, occasionally a few
+    hours. Wait until <code>https://crm.acmegolf.co.za</code> loads a sign-in
+    page before continuing — it will be unbranded at this stage, which is
+    expected.
+  </p>
+
+  <h2>4c &nbsp;Register and verify the domain in the console</h2>
+  <p>
+    Open the tenant, go to the <strong>Branding</strong> tab and scroll to
+    <strong>Domains</strong>.
+  </p>
+  <ol>
+    <li><strong>Add the hostname.</strong> Enter it bare — no <code>https://</code>, no port, no trailing path. It is saved <strong>unverified</strong>, which changes nothing: an unverified hostname serves no branding.</li>
+    <li><strong>Click Verify.</strong> The platform makes a live request to that address and checks the response came from this deployment.</li>
+  </ol>
+
+  <p>Verification either succeeds, or tells you exactly what is wrong:</p>
+  <table>
+    <thead><tr><th style="width:34%">Message</th><th style="width:34%">What it means</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td>Could not reach <code>https://…</code></td><td>DNS is not pointing here yet, or has not propagated</td><td>Wait, then re-check the DNS record</td></tr>
+      <tr><td>… answered with HTTP 404</td><td>DNS resolves, but the domain is not attached to the project</td><td>Do step 4a</td></tr>
+      <tr><td>… is serving something else</td><td>Another site is on that address</td><td>Check the record points where Vercel asked</td></tr>
+      <tr><td>… responded, but not as this deployment</td><td>It reached a different environment</td><td>Check it is not pointed at staging</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout note">
+    <span class="title">Why this check exists</span>
+    <p>
+      Once a domain is verified, the platform starts putting it in outgoing email
+      — signing links, survey invitations, marketing links, unsubscribe links. A
+      domain marked verified but not actually working sends every one of those to
+      an address that does not resolve, and <strong>nothing anywhere reports an
+      error</strong>. The customer would find out when someone told them a link
+      was broken.
+    </p>
+  </div>
+</section>
+
+<!-- ══ 5 ══════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">5</span>Choose their modules</h1>
+  <p class="lede">
+    Open the tenant's <strong>Modules</strong> tab and switch on what they have
+    bought.
+  </p>
+
+  <table>
+    <thead><tr><th style="width:34%">Module</th><th>What it gives them</th></tr></thead>
+    <tbody>
+      <tr><td><strong>CRM core</strong></td><td>Contacts, leads, quotes, activities. Always on.</td></tr>
+      <tr><td><strong>Social inbox</strong></td><td>WhatsApp, Messenger, Instagram and Telegram conversations</td></tr>
+      <tr><td><strong>Help desk</strong></td><td>Customer support ticketing</td></tr>
+      <tr><td><strong>Marketing</strong></td><td>Campaigns, segments, journeys</td></tr>
+      <tr><td><strong>Automation &amp; AI</strong></td><td>Automated workflows and assistants</td></tr>
+      <tr><td><strong>Automotive / Workshop</strong></td><td>Job cards, vehicles, service scheduling</td></tr>
+      <tr><td><strong>Stock &amp; inventory</strong></td><td>Stock units, transfers, purchase orders</td></tr>
+      <tr><td><strong>Customer portal</strong></td><td>A self-service area for their customers</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    Modules can be changed at any time, including after go-live. Switching one
+    off hides it; it does not delete anything.
+  </p>
+</section>
+
+<!-- ══ 6 ══════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">6</span>Apply their branding</h1>
+  <p class="lede">Open the tenant's <strong>Branding</strong> tab.</p>
+
+  <table>
+    <thead><tr><th style="width:28%">Setting</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Display name</strong></td><td>Up to 120 characters. Replaces the platform name everywhere the customer's people and their customers see it.</td></tr>
+      <tr><td><strong>Tagline</strong></td><td>Up to 160 characters. The line under the name on their sign-in page. Optional.</td></tr>
+      <tr><td><strong>Accent colour</strong></td><td>Six-digit hex, <code>#ea580c</code>. Leave blank to keep the default. Text colour on it is calculated automatically, so it is always readable.</td></tr>
+      <tr><td><strong>Logo</strong></td><td>PNG, JPEG, SVG or WebP, under 1&nbsp;MB.</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    Branding applies <strong>only on a verified hostname</strong>. If you set it
+    before finishing section 4, nothing appears to change — that is not a fault,
+    it is the same rule that stops an unproven address serving someone's brand.
+  </p>
+
+  <p>Once verified, the branding reaches:</p>
+  <ul>
+    <li>their staff sign-in page and the whole CRM</li>
+    <li>their customer portal and their signing pages</li>
+    <li>documents — quotes, job cards, agreements</li>
+    <li>outgoing email, including the logo and the links</li>
+  </ul>
+
+  <div class="callout note">
+    <span class="title">Documents already signed never change</span>
+    <p>
+      The brand a signed document was issued under is frozen into it at the
+      moment of signing, so a later rebrand cannot alter what a customer already
+      agreed to.
+    </p>
+  </div>
+</section>
+
+<!-- ══ 7 ══════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">7</span>Activate the tenant</h1>
+  <p class="lede">
+    On the tenant's page, click <strong>Activate</strong>.
+  </p>
+
+  <p>
+    This does two things at once: it switches the workspace on, and it re-enables
+    the administrator account you created in section 3. Until this moment neither
+    could be used.
+  </p>
+
+  <div class="callout stop">
+    <span class="title">If you get the enforcement refusal</span>
+    <p>
+      Stop. The tenant is fine and nothing is lost — but it cannot go live until
+      tenant isolation enforcement is enabled. See the note at the front of this
+      guide.
+    </p>
+  </div>
+</section>
+
+<!-- ══ 8 ══════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">8</span>Hand over</h1>
+  <p class="lede">Send the administrator three things.</p>
+
+  <ul>
+    <li>Their sign-in address — <code>https://crm.acmegolf.co.za/login</code></li>
+    <li>Their email address and the password you set</li>
+    <li>A request to change that password immediately</li>
+  </ul>
+
+  <h2>What they should do first</h2>
+  <p>
+    Point them at <strong>Settings → Company profile</strong> and ask them to
+    fill it in: trading name, address, phone, email, website, socials.
+  </p>
+  <p>
+    This is worth insisting on. Those details print on every quote, job card and
+    signed agreement they issue. Until the profile is filled in, documents show
+    their name and little else — not wrong, but sparse.
+  </p>
+
+  <p>Then:</p>
+  <table>
+    <thead><tr><th style="width:34%">Where</th><th>What for</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Settings → Team &amp; access</strong></td><td>Add colleagues and set permissions</td></tr>
+      <tr><td><strong>Settings → Email</strong></td><td>Connect their own mail server, so email goes out from their address rather than the platform's</td></tr>
+      <tr><td><strong>Settings → Documents</strong></td><td>Adjust quote and agreement templates</td></tr>
+      <tr><td><strong>Settings → My Account</strong></td><td>Enrol two-factor authentication or a passkey</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══ 9 ══════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">9</span>Confirm it works</h1>
+  <p class="lede">
+    Before you call it done, do this yourself on the customer's domain.
+  </p>
+
+  <ul class="checklist">
+    <li>Open <code>https://&lt;their-domain&gt;/login</code> — their name, logo and colour are there</li>
+    <li>Sign in as the administrator</li>
+    <li>Create a test contact and a test quote</li>
+    <li>Print the quote — the header and footer carry their details</li>
+    <li>Email something from the CRM — check the signature</li>
+    <li>Open the customer portal sign-in page and confirm it is branded</li>
+    <li><strong>Sign in as your own account on your own domain and confirm you see only your own data</strong></li>
+  </ul>
+
+  <p>Two workspaces, no overlap. That last check is the one that matters.</p>
+
+  <h2>Removing a tenant</h2>
+  <p>
+    Use <strong>Suspend</strong> rather than deletion. It closes every door —
+    nobody can sign in — while leaving the data intact for as long as you need
+    it.
+  </p>
+  <p>
+    The founding tenant cannot be suspended. It underpins the platform's own
+    accounts and sessions, and switching it off would lock everyone out, so the
+    console refuses.
+  </p>
+</section>
+
+<!-- ══ QUICK REFERENCE ════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section">Quick reference</h1>
+  <p class="lede">Everything marked blocking will stop the onboarding dead.</p>
+
+  <table>
+    <thead><tr><th style="width:32%">Step</th><th style="width:38%">Where</th><th>Blocking?</th></tr></thead>
+    <tbody>
+      <tr><td>Enforcement enabled</td><td>DEPLOYMENT-SEQUENCE.md</td><td class="blocking">Yes — activation fails without it</td></tr>
+      <tr><td>Platform admin account</td><td>Command line</td><td class="blocking">Yes</td></tr>
+      <tr><td>Create tenant</td><td>Console → Tenants → Create tenant</td><td class="nb">—</td></tr>
+      <tr><td>Domain added to Vercel</td><td>Vercel → Settings → Domains</td><td class="blocking">Yes — verification fails without it</td></tr>
+      <tr><td>DNS record added</td><td>Customer's DNS provider</td><td class="blocking">Yes — verification fails without it</td></tr>
+      <tr><td>Domain verified</td><td>Console → tenant → Branding → Domains</td><td class="blocking">Yes — no branding without it</td></tr>
+      <tr><td>Modules chosen</td><td>Console → tenant → Modules</td><td class="nb">No</td></tr>
+      <tr><td>Branding applied</td><td>Console → tenant → Branding</td><td class="nb">No</td></tr>
+      <tr><td>Tenant activated</td><td>Console → tenant → Activate</td><td class="blocking">Yes — nobody can sign in without it</td></tr>
+      <tr><td>Company profile completed</td><td>Customer, in Settings → Company profile</td><td class="nb">No, but documents look bare</td></tr>
+    </tbody>
+  </table>
+</section>
+
+</body>
+</html>

@@ -13,7 +13,9 @@ import {
   regenerateSetting,
   saveNotificationPrefs,
 } from "@/app/actions/settings";
-import { buildSignature } from "@/lib/signature";
+import { signatureCompanyFrom, buildSignature } from "@/lib/signature";
+import { getCompanyProfile } from "@/lib/companyProfile";
+import { tenantOrigin } from "@/lib/tenantOrigin";
 import { AddUserForm, ChangePasswordForm } from "@/components/TeamForms";
 import {
   saveSmtpSettings,
@@ -65,6 +67,11 @@ export default async function SettingsPage({
 }) {
   const currentUser = await requireUser();
   const isAdmin = currentUser.role === "owner";
+  // The signature PREVIEW must render what the send path renders, or the screen
+  // where you check your signature is the one screen that lies about it.
+  const profile = await getCompanyProfile();
+  // The preview must render what the send path renders, glyph URLs included.
+  const signatureCompany = signatureCompanyFrom(profile, await tenantOrigin(await getActiveTenantId()));
   const enabled = await getEnabledModuleIds();
   const automotiveOn = enabled.has("automotive");
   const commerceOn = enabled.has("commerce");
@@ -313,7 +320,7 @@ export default async function SettingsPage({
               <div className="px-5 pb-5 space-y-4">
                 <div
                   className="rounded-lg bg-white p-4 overflow-x-auto"
-                  dangerouslySetInnerHTML={{ __html: buildSignature(currentUser) }}
+                  dangerouslySetInnerHTML={{ __html: buildSignature(currentUser, signatureCompany) }}
                 />
                 <SaveForm success="Profile saved" resetOnSuccess={false} action={saveMyProfile} className="space-y-3 max-w-md">
                   <div>

@@ -3,9 +3,11 @@ import { prisma } from "@/lib/db";
 import { requireQuoteReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { getDocTemplate } from "@/lib/docTemplateStore";
-import { contactName, formatDate } from "@/lib/format";
+import { formatDate } from "@/lib/format";
 import { documentTotals, feeRows, includedLines } from "@/lib/pricing";
+import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 
 export default async function AgreementPrintPage({
   params,
@@ -22,20 +24,24 @@ export default async function AgreementPrintPage({
     include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, contact: true, lead: { include: { product: true } } },
   });
   if (!quote) notFound();
+  // The company this document is FROM. getCompanyProfile now inherits the
+  // platform-set tenant brand when the tenant has not filled in its own profile.
+  const company = await getCompanyProfile();
   const tpl = await getDocTemplate("agreement", tplId);
   // Fees and delivery are part of what the customer pays; the subtotal is not.
   // The rows the customer can see must add up to the price they are agreeing
   // to — in either tax mode. See documentTotals().
   const totals = documentTotals(quote);
-  const customer = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
-  const address = quote.contact
-    ? [quote.contact.address, quote.contact.suburb, quote.contact.city].filter(Boolean).join(", ")
-    : "";
+  // The PURCHASER on a sales agreement is the entity that owes the money — the
+  // fleet account when there is one, not the person who happens to sign for it.
+  const billTo = quoteBillTo(quote, await loadBillToFleet(prisma, quote.fleetId));
+  const customer = billTo.name;
 
   return (
     <>
       <PrintActions backHref={`/quotes/${quote.id}`} backLabel="Back to quote" />
       <PrintDocShell
+        company={company}
         template={tpl}
         title="Sales agreement"
         number={`SA-${quote.number}`}
@@ -50,9 +56,12 @@ export default async function AgreementPrintPage({
             accent
             lines={[
               customer,
-              quote.contact?.phone ?? quote.lead?.phone,
-              quote.contact?.email ?? quote.lead?.email,
-              address,
+              billTo.attention ? `Attention: ${billTo.attention}` : "",
+              billTo.phone,
+              billTo.email,
+              billTo.address,
+              billTo.registrationNumber ? `Reg. no: ${billTo.registrationNumber}` : "",
+              billTo.vatNumber ? `VAT no: ${billTo.vatNumber}` : "",
             ]}
           />
           <InfoBlock

@@ -13,6 +13,7 @@ import {
   normaliseHost,
   textOn,
 } from "../src/lib/tenantBrand";
+import { PLATFORM_NAME } from "../src/lib/platformIdentity";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -66,15 +67,67 @@ test("blank strings are treated as unset, not as content", () => {
   assert.equal(brand.logoRef, null);
 });
 
-test("the default brand is today's output, NOT a neutral platform shell", () => {
-  // Deliberate and temporary. A neutral fallback is right for a white-label
-  // platform, but shipping it in the same change as the schema would rebrand the
-  // LIVE workspace the moment this deploys — because its hostnames are not
-  // registered yet. This test is what stops that being changed by accident.
-  assert.equal(DEFAULT_BRAND.displayName, "Denago Cape Town");
-  assert.equal(DEFAULT_BRAND.tagline, "Authorized Denago EV Dealer");
+test("the default brand names the PLATFORM, never a tenant", () => {
+  // This test used to assert the reverse, and said so: a neutral fallback is
+  // right for a white-label platform, but could not ship in the same change as
+  // the schema, because until Denago's hostnames were registered the live
+  // workspace resolved to nobody and would have rebranded itself on deploy.
+  //
+  // 20260806190000_seed_founding_tenant_brand registers them, in the same change,
+  // and migrations run before the new build serves. The precondition is met.
+  //
+  // `branded: false` is reachable in exactly three situations — an unrecognised
+  // hostname, a tenant that could not be resolved, and a swallowed database
+  // error. In all three the old value showed ONE customer's trading name to
+  // somebody who is not their customer.
+  assert.equal(DEFAULT_BRAND.displayName, PLATFORM_NAME);
+  assert.equal(DEFAULT_BRAND.tagline, null, "nothing true to say about a company we cannot identify");
   assert.equal(DEFAULT_BRAND.primary, null);
   assert.equal(DEFAULT_BRAND.tenantId, null);
+
+  // The specific regression: no customer's identity anywhere in the fallback.
+  const source = read("src/lib/tenantBrand.ts").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const block = source.slice(source.indexOf("export const DEFAULT_BRAND"), source.indexOf("const HEX"));
+  assert.doesNotMatch(block, /Denago/i);
+});
+
+test("Denago keeps its brand because it is seeded, not because it is the default", () => {
+  // The whole safety argument for the change above. If this migration did not
+  // exist, or stopped setting these, the live workspace would go neutral on the
+  // next deploy — silently, because every test would still pass.
+  const sql = read("prisma/migrations/20260806190000_seed_founding_tenant_brand/migration.sql");
+  assert.match(sql, /UPDATE "Tenant"/);
+  assert.match(sql, /'Denago Cape Town'/, "the display name it renders today");
+  assert.match(sql, /'Authorized Denago EV Dealer'/, "…and the tagline");
+
+  // Without a VERIFIED hostname row, brandForHost resolves nobody and the login
+  // page goes neutral. This row is what stops that.
+  assert.match(sql, /INSERT INTO "TenantDomain"/);
+  assert.match(sql, /'crm\.denagocpt\.co\.za', NOW\(\)/, "verified, not pending");
+
+  // Production had ZERO COMPANY_* settings when this was written, so every
+  // document was resolving through COMPANY_DEFAULTS. Neutralising that constant
+  // without these rows blanks the footer of every quote and signed agreement.
+  assert.match(sql, /INSERT INTO "AppSetting"/);
+  for (const key of ["COMPANY_NAME", "COMPANY_ADDRESS", "COMPANY_PHONE", "COMPANY_EMAIL", "COMPANY_WEBSITE"]) {
+    assert.match(sql, new RegExp(`'${key}'`), `${key} must be seeded`);
+  }
+
+  // The one row that is not a straight copy of COMPANY_DEFAULTS, and the only
+  // part of this change that would DEGRADE rather than rename. The signature
+  // resolved `profile.logoUrl || DEFAULT_SIGNATURE_COMPANY.logoUrl`, and that
+  // second operand was the built-in Denago asset — now empty. Without this row
+  // every Denago email signature goes out with no logo.
+  assert.match(
+    sql,
+    /'COMPANY_LOGO_URL',\s+'https:\/\/crm\.denagocpt\.co\.za\/branding\/denago-logo-email\.png'/,
+    "the signature logo must survive the neutral default",
+  );
+
+  // Nothing overwrites a value a human has already set.
+  assert.match(sql, /COALESCE\("brandDisplayName"/);
+  assert.match(sql, /ON CONFLICT \("hostname"\) DO NOTHING/);
+  assert.match(sql, /ON CONFLICT \("tenantId", "key"\) DO NOTHING/);
 });
 
 /* ── 2. the colour is untrusted at both ends ─────────────────────────────── */
@@ -168,7 +221,11 @@ test("the logo URL changes when the logo does, so 'immutable' caching is honest"
   const b = brandLogoUrl(brandFromRow({ ...base, brandLogoRef: "branding/t1/logo-2.png" }));
   assert.ok(a && b);
   assert.notEqual(a, b, "a new upload must be a new URL — the route sends immutable");
-  assert.match(a, /^\/api\/brand\/logo\/t1\?v=/);
+  // `?a=` names the immutable asset the route resolves. It used to be `?v=`, a
+  // hash of the ref that only LOOKED versioned — the route ignored it and served
+  // the current logo, so the immutable cache header was a promise the response
+  // did not keep.
+  assert.match(a, /^\/api\/brand\/logo\/t1\?a=logo-/);
 });
 
 /* ── structural: the properties above must stay true in the shipped code ─── */

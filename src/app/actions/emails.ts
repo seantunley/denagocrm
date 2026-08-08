@@ -14,9 +14,11 @@ import {
 } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
-import { buildSignature, buildEmailHtml, htmlToText } from "@/lib/signature";
+import { signatureCompanyFrom, buildSignature, buildEmailHtml, htmlToText } from "@/lib/signature";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { readFile } from "@/lib/storage";
 import { resolveActingTenant } from "@/lib/tenantContext";
+import { tenantOrigin } from "@/lib/tenantOrigin";
 
 export type SendEmailState = { ok?: string; error?: string };
 
@@ -54,7 +56,8 @@ export async function sendEmailAction(
   if (leadId && !(await canAccessLead(user, leadId))) {
     return { error: "You don't have access to that lead." };
   }
-  const signature = buildSignature(user);
+  const profile = await getCompanyProfile();
+  const signature = buildSignature(user, signatureCompanyFrom(profile, await tenantOrigin(await tenantIdFor(user.id))));
   const html = buildEmailHtml(bodyHtml, signature);
 
   // Library attachments (selected version ids)
@@ -89,7 +92,12 @@ export async function sendEmailAction(
   const result = await sendEmail({
     to,
     subject,
-    text: `${bodyText}\n\n--\n${user.name} · Denago Cape Town · 073 789 3438`,
+    // The plain-text alternative every client falls back to, and the one place
+    // the company was still named by a literal after the HTML signature stopped
+    // doing it. It carried Denago's trading name and landline out of every
+    // workspace. Built from the same profile the HTML signature uses, with empty
+    // parts dropped rather than left as dangling separators.
+    text: `${bodyText}\n\n--\n${[user.name, profile.name, profile.phone].filter((s) => s && s.trim()).join(" · ")}`,
     html,
     attachments,
   });

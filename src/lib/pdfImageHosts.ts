@@ -56,9 +56,20 @@ export function configuredPdfImageHosts(raw: string | undefined): string[] {
 }
 
 /** Whether Chromium may load from `hostname`, given the app origin and config. */
+/**
+ * `tenantHosts` are the VERIFIED tenant domains, passed in by the caller rather
+ * than looked up here so this stays a pure function.
+ *
+ * Once a document logo URL is built from a tenant origin (lib/tenantOrigin.ts),
+ * a renderer that only trusts NEXT_PUBLIC_APP_URL aborts the request and the PDF
+ * is generated, stored and emailed with no logo — silently, because an aborted
+ * image is not an error. Every one of these hostnames is the SAME deployment
+ * under a different name, so trusting them widens nothing: any URL they can
+ * serve, appHost could already serve.
+ */
 export function pdfImageHostAllowed(
   hostname: string,
-  opts: { appUrl?: string; configured?: string } = {},
+  opts: { appUrl?: string; configured?: string; tenantHosts?: string[] } = {},
 ): boolean {
   const host = hostname.toLowerCase();
   let appHost = "crm.denagocpt.co.za";
@@ -70,6 +81,7 @@ export function pdfImageHostAllowed(
   const allowed = [
     appHost, // our own origin (the logo and any /branding asset)
     ".blob.vercel-storage.com", // uploaded assets
+    ...(opts.tenantHosts ?? []).map((h) => h.toLowerCase()),
     ...configuredPdfImageHosts(opts.configured),
   ];
   return allowed.some((entry) => (entry.startsWith(".") ? host.endsWith(entry) : host === entry));

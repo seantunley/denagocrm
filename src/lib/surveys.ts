@@ -6,11 +6,13 @@ import { sendSms } from "./sms";
 import { logAudit } from "./audit";
 import { resolveTenantActor } from "./tenantActor";
 import { defaultIntro, type SurveyType } from "./surveyTypes";
+import { DEFAULT_BRAND, brandForTenant } from "./tenantBrand";
+import { tenantOrigin } from "./tenantOrigin";
 import { createSurveyDistribution } from "./surveyDistributionQueue";
 import { submitFrozenSurveyResponse, triggerGovernedSurvey } from "./governedSurveyRuntime";
 
 const APP_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za").replace(/\/$/, "");
-export const surveyUrl = (token: string) => `${APP_URL}/s/${token}`;
+export const surveyUrl = (token: string, origin?: string | null) => `${origin || APP_URL}/s/${token}`;
 
 type SurveyLite = { id: string; title: string; type: string; intro: string | null };
 type PublishedSurvey = SurveyLite & { tenantId: string | null; publishedVersion: number; delayHours: number };
@@ -24,11 +26,21 @@ export type SurveyTarget = {
   phone?: string | null;
 };
 
-function subjectFor(type: SurveyType, title: string): string {
+/**
+ * The SUBJECT LINE of a survey invitation — the part a customer reads before
+ * they open anything. Two of the four named Denago outright ("Enjoying your new
+ * Denago?", "One quick question from Denago Cape Town"), so every tenant's
+ * customers were asked about a brand they had not bought.
+ *
+ * `sender` is the workspace's own name. The sales subject drops the brand
+ * reference entirely rather than substituting into it — "Enjoying your new Acme
+ * Golf Carts?" reads as a question about the company, not the machine.
+ */
+function subjectFor(type: SurveyType, title: string, sender: string): string {
   switch (type) {
     case "csat": return "How was your service? A quick question ⭐";
-    case "sales": return "Enjoying your new Denago? Tell us how we did ⭐";
-    case "nps": return "One quick question from Denago Cape Town";
+    case "sales": return "Enjoying your purchase? Tell us how we did ⭐";
+    case "nps": return `One quick question from ${sender}`;
     default: return title;
   }
 }
@@ -84,7 +96,13 @@ async function deliverInvite(
   survey: PublishedSurvey,
   recipient: { name: string | null; email: string | null; phone: string | null },
 ): Promise<"email" | "sms" | null> {
-  const link = surveyUrl(response.token);
+  // The survey lives on the workspace's own domain, and the mail is signed with
+  // its own name — this said "Denago Cape Town" to every tenant's customers.
+  const [origin, brand] = await Promise.all([
+    tenantOrigin(survey.tenantId),
+    brandForTenant(survey.tenantId).catch(() => DEFAULT_BRAND),
+  ]);
+  const link = surveyUrl(response.token, origin);
   const first = (recipient.name ?? "there").split(/\s+/)[0] || "there";
   const intro = survey.intro || defaultIntro(survey.type as SurveyType);
   let channel: "email" | "sms" | null = null;
@@ -92,8 +110,8 @@ async function deliverInvite(
   if (recipient.email) {
     const result = await sendEmail({
       to: recipient.email,
-      subject: subjectFor(survey.type as SurveyType, survey.title),
-      text: `Hi ${first},\n\n${intro}\n\nTap here to answer (it takes under a minute):\n${link}\n\nThank you,\nDenago Cape Town`,
+      subject: subjectFor(survey.type as SurveyType, survey.title, brand.displayName),
+      text: `Hi ${first},\n\n${intro}\n\nTap here to answer (it takes under a minute):\n${link}\n\nThank you,\n${brand.displayName}`,
     });
     if (result.ok) channel = "email";
   } else if (recipient.phone) {

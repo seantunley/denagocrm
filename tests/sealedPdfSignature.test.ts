@@ -46,11 +46,18 @@ const { trimToDerLength } = createRequire(import.meta.url)(
  */
 
 /**
- * The instant the seal must have been valid at. The development certificate is
- * minted at process start with a one-year window, so "now" is inside it — which
- * keeps these tests about the SIGNATURE rather than about clock arithmetic.
+ * The instant the seal must have been valid at — read AFTER the document is
+ * sealed, never before.
+ *
+ * The development certificate is generated lazily, on the first seal, with
+ * `notBefore = new Date()`. Capturing this at module load put it a few
+ * milliseconds BEFORE that notBefore, so the certificate was legitimately "not
+ * yet valid" at the instant being asked about and the test failed at random
+ * depending on scheduling. It looked like cross-file env pollution and was not;
+ * `node --test` gives each file its own process, so the env fix I first reached
+ * for could not have mattered either way.
  */
-const AT = new Date();
+const sealedAt = () => new Date();
 
 async function sealedDocument(): Promise<Buffer> {
   // These tests are ABOUT the development identity, so make sure that is what
@@ -71,7 +78,7 @@ async function sealedDocument(): Promise<Buffer> {
 
 test("a genuine seal verifies over the bytes the PDF declares", async () => {
   const sealed = await sealedDocument();
-  const result = sealedPdfSignature(sealed, AT);
+  const result = sealedPdfSignature(sealed, sealedAt());
 
   assert.ok(result, "a sealed PDF must be readable");
   assert.equal(result.contentVerified, true, result.reason ?? "");
@@ -86,7 +93,7 @@ test("the development identity is NOT reported as trusted", () => {
   // over its bytes and still be an identity nobody should rely on — which is
   // exactly why strict mode refuses it and compat mode does not.
   return sealedDocument().then((sealed) => {
-    const result = sealedPdfSignature(sealed, AT);
+    const result = sealedPdfSignature(sealed, sealedAt());
     assert.ok(result);
     assert.equal(result.certificate.trusted, false);
     assert.match(String(result.reason ?? ""), /trusted root|certificate authority/);
@@ -105,7 +112,7 @@ test("one altered byte in the signed content breaks the seal", async () => {
   const at = 100;
   tampered[at] ^= 0xff;
 
-  const result = sealedPdfSignature(tampered, AT);
+  const result = sealedPdfSignature(tampered, sealedAt());
   assert.ok(result, "the certificate is still readable");
   assert.equal(result.contentVerified, false, "an altered document must not verify");
 });
@@ -117,7 +124,7 @@ test("content appended after sealing is not treated as sealed", async () => {
   // regardless is how a signed contract acquires pages nobody signed.
   const extended = Buffer.concat([sealed, Buffer.from("\n% appended after signing\n", "latin1")]);
 
-  const result = sealedPdfSignature(extended, AT);
+  const result = sealedPdfSignature(extended, sealedAt());
   assert.ok(result);
   assert.equal(result.contentVerified, false);
   assert.match(String(result.reason ?? ""), /appended after/);
@@ -159,7 +166,7 @@ test("content smuggled into the unsigned gap is refused", async () => {
   ]);
   assert.equal(tampered.length, sealed.length);
 
-  const result = sealedPdfSignature(tampered, AT);
+  const result = sealedPdfSignature(tampered, sealedAt());
   assert.ok(result, "the certificate is still readable — this is a tampered seal, not an unsigned file");
   assert.equal(result.contentVerified, false, "the unsigned gap must hold nothing but the signature");
   assert.match(String(result.reason ?? ""), /unsigned gap/);
@@ -173,5 +180,5 @@ test("a file with no signature is reported as unsigned, not as unverified", asyn
   // null means "there is nothing here to check", which the caller records as its
   // own error. Returning a certificate with contentVerified:false would imply a
   // seal exists and failed.
-  assert.equal(sealedPdfSignature(unsigned, AT), null);
+  assert.equal(sealedPdfSignature(unsigned, sealedAt()), null);
 });

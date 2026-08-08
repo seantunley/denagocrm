@@ -9,7 +9,8 @@ import {
   uploadDeliveryPhotos,
 } from "@/app/actions/fulfilment";
 import ProofOfDelivery from "@/components/ProofOfDelivery";
-import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { formatDate, formatZAR } from "@/lib/format";
+import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
 import { quotePricing } from "@/lib/pricing";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import {
@@ -53,6 +54,8 @@ export default async function DeliveriesPage() {
     include: { contact: true, lead: { include: { product: true } }, items: true, fees: true },
     orderBy: { updatedAt: "asc" },
   });
+  // One batched, tenant-scoped lookup for the board — see lib/quoteBillTo.ts.
+  const fleetsById = await loadBillToFleets(prisma, quotes.map((quote) => quote.fleetId));
   const docs = await prisma.document.findMany({
     where: { quoteId: { in: quotes.map((quote) => quote.id) }, deletedAt: null },
     select: { quoteId: true, tag: true },
@@ -175,7 +178,10 @@ export default async function DeliveriesPage() {
                   {cards.map((quote) => {
                     const total = quoteTotal(quote);
                     const model = quote.lead?.product?.name ?? quote.items[0]?.description ?? "—";
-                    const who = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "—";
+                    // The account the delivery is for, resolved the same way the
+                    // delivery note resolves it — a board naming the manager
+                    // while the paperwork names the lodge is two answers.
+                    const who = quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name || "—";
                     const photos = photoCount(quote.id);
                     return (
                       <div key={quote.id} className="rounded-xl border border-border bg-card p-3 shadow-sm transition-colors hover:border-primary/30">
