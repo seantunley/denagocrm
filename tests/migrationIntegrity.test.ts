@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 // The migration runner's integrity guard. Importing must be side-effect-free
 // (the runner only executes main() when invoked directly), so this is safe.
 import {
   classifyDiffScript,
   buildChildEnv,
   applyOne,
+  migrationChecksum,
   assertSchemaObjectsPresent,
   previewMayMigrate,
   auditMigrationLedger,
@@ -82,21 +89,68 @@ test("buildChildEnv: no DB url configured → does not invent one, returns a cop
 
 // ── applyOne: execute-before-resolve ordering ───────────────────────────────
 
-test("applyOne: executes the SQL BEFORE recording it as applied", () => {
-  const calls: string[] = [];
-  const spy = (_cmd: string, args: string[]) => calls.push(args.slice(0, 2).join(" "));
-  applyOne("77_custom_fields", { DATABASE_URL: "x" }, spy);
-  assert.deepEqual(calls, ["prisma db", "prisma migrate"]);
+/**
+ * The recording step used to be a second `npx prisma migrate resolve` process.
+ * It is now a direct insert on the runner's own connection — the same connection
+ * that just applied the SQL, which is what the header's split-brain warning was
+ * really asking for. The ORDER is unchanged and is what these tests protect.
+ */
+
+/** Enough of a Prisma client to observe whether the ledger row was written. */
+function fakePrisma() {
+  const writes: string[] = [];
+  return {
+    writes,
+    $executeRaw: (strings: TemplateStringsArray, ...values: unknown[]) => {
+      void strings;
+      // Every interpolated value, not a fixed index: `now()` is literal SQL and
+      // not a parameter, so counting positions is a mistake waiting to happen.
+      writes.push(values.map(String).join("|"));
+      return Promise.resolve(1);
+    },
+  };
+}
+
+test("applyOne: executes the SQL BEFORE recording it as applied", async () => {
+  const order: string[] = [];
+  const prisma = fakePrisma();
+  const spy = (_cmd: string, args: string[]) => order.push(args.slice(0, 2).join(" "));
+  const wrapped = {
+    ...prisma,
+    $executeRaw: (s: TemplateStringsArray, ...v: unknown[]) => {
+      order.push("record");
+      return prisma.$executeRaw(s, ...v);
+    },
+  };
+  await applyOne("77_custom_fields", { DATABASE_URL: "x" }, wrapped, spy);
+  assert.deepEqual(order, ["prisma db", "record"], "SQL first, ledger second");
+  assert.equal(prisma.writes.length, 1, "exactly one ledger row");
+  assert.match(prisma.writes[0], /77_custom_fields/, "and it names this migration");
 });
 
-test("applyOne: if execute throws, the migration is NEVER recorded (stays pending)", () => {
-  const calls: string[] = [];
+test("applyOne: if execute throws, the migration is NEVER recorded (stays pending)", async () => {
+  // The July outage in one line: a migration recorded as applied whose SQL never
+  // ran leaves a missing column and a database that believes it is up to date.
+  const prisma = fakePrisma();
   const spy = (_cmd: string, args: string[]) => {
-    calls.push(args[1]);
     if (args[1] === "db") throw new Error("SQL failed");
   };
-  assert.throws(() => applyOne("77_custom_fields", { DATABASE_URL: "x" }, spy), /SQL failed/);
-  assert.deepEqual(calls, ["db"], "resolve must not run after a failed execute");
+  await assert.rejects(
+    () => applyOne("77_custom_fields", { DATABASE_URL: "x" }, prisma, spy),
+    /SQL failed/,
+  );
+  assert.deepEqual(prisma.writes, [], "the ledger must not be written after a failed execute");
+});
+
+test("the recorded checksum is the SHA-256 of the migration file", () => {
+  // Prisma computes it this way, verified against production rows before relying
+  // on it. A wrong checksum does not fail here — it makes a LATER `prisma migrate`
+  // run report the migration as modified, which is a confusing way to find out.
+  const name = "77_custom_fields";
+  const file = readFileSync(join(root, "prisma", "migrations", name, "migration.sql"));
+  const expected = createHash("sha256").update(file).digest("hex");
+  assert.equal(migrationChecksum(name), expected);
+  assert.match(migrationChecksum(name), /^[0-9a-f]{64}$/);
 });
 
 // ── assertSchemaObjectsPresent: fail-closed + block/pass ────────────────────
