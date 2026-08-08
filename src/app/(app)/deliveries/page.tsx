@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight } from "lucide-react";
+import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight, Camera } from "lucide-react";
+import PhotoUploadField from "@/components/PhotoUploadField";
 import { prisma } from "@/lib/db";
 import {
   markInvoiced,
@@ -18,6 +19,13 @@ import {
   hasPermission,
   requireAnyPermission,
 } from "@/lib/permissions";
+import {
+  DesktopOnly,
+  MobileOnly,
+  MobileSection,
+  MobileStatPair,
+  MobileWorkspaceHeader,
+} from "@/components/mobile-workspace";
 
 export const metadata = { title: "Deliveries — DenagoCRM" };
 
@@ -108,7 +116,55 @@ export default async function DeliveriesPage() {
   const chip = "inline-flex items-center gap-1 rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground";
 
   return (
-    <div className="space-y-6">
+    <>
+      <MobileOnly className="space-y-4">
+        <MobileWorkspaceHeader
+          title="Deliveries"
+          description="Capture handover photos and check what each delivery needs next."
+          action={<Link href="/quotes" className="btn-secondary btn-sm"><FileText className="size-4" />Quotes</Link>}
+        />
+        <MobileStatPair items={[
+          { label: "Active handovers", value: quotes.length },
+          { label: "Ready / scheduled", value: count("schedule") + count("deliver") },
+        ]} />
+        <MobileSection title="Handover queue" detail={`${quotes.length} vehicle${quotes.length === 1 ? "" : "s"}`}>
+          {quotes.length === 0 ? (
+            <div className="rounded-2xl border border-border bg-card py-10 text-center text-sm text-muted-foreground">No handovers in progress.</div>
+          ) : (
+            <div className="space-y-2.5">
+              {quotes.map((quote) => {
+                const model = quote.lead?.product?.name ?? quote.items[0]?.description ?? "Vehicle";
+                const who = quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name || "Customer";
+                const stage = columns.find((column) => column.key === colOf(quote));
+                const photos = photoCount(quote.id);
+                return (
+                  <article key={quote.id} className="rounded-2xl border border-border bg-card p-3.5">
+                    <div className="flex items-start gap-3">
+                      <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-emerald-400/10 text-emerald-300"><Truck className="size-4" /></span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0"><Link href={`/quotes/${quote.id}`} className="text-sm font-semibold text-primary">Q-{quote.number} · {who}</Link><p className="mt-0.5 truncate text-xs text-muted-foreground">{model}</p></div>
+                          <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-[10px] font-medium text-muted-foreground">{stage?.title}</span>
+                        </div>
+                        <p className="mt-2 text-[11px] text-muted-foreground">{photos} handover photo{photos === 1 ? "" : "s"}{quote.deliveryScheduledFor ? ` · ${formatDate(quote.deliveryScheduledFor)}` : ""}</p>
+                      </div>
+                    </div>
+                    {canManage && (
+                      <SaveForm action={uploadDeliveryPhotos.bind(null, quote.id)} className="mt-3 rounded-xl border border-primary/20 bg-primary/[0.05] p-2.5">
+                        <label className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-foreground"><Camera className="size-3.5" />Add handover photos</label>
+                        <PhotoUploadField required className="block w-full text-xs text-muted-foreground file:mr-2 file:rounded-lg file:border-0 file:bg-muted file:px-2.5 file:py-1.5 file:text-xs file:text-foreground" />
+                        <SaveButton className="btn-primary btn-sm mt-2 w-full">Take or choose photos</SaveButton>
+                      </SaveForm>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </MobileSection>
+      </MobileOnly>
+
+      <DesktopOnly className="space-y-6">
       <WorkspaceHero
         icon={Truck}
         eyebrow="Fulfilment operations"
@@ -258,7 +314,7 @@ export default async function DeliveriesPage() {
                                 again. The action returns its own count-aware
                                 message, so no `success` prop is needed here. */}
                             <SaveForm action={uploadDeliveryPhotos.bind(null, quote.id)} className="mt-1.5 space-y-1.5">
-                              <input type="file" name="files" multiple accept="image/*" capture="environment" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
+                              <PhotoUploadField className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
                               <SaveButton className="btn-secondary btn-sm w-full">📷 Add delivery photos</SaveButton>
                             </SaveForm>
                           </div>
@@ -272,6 +328,7 @@ export default async function DeliveriesPage() {
           })}
         </div>
       )}
-    </div>
+      </DesktopOnly>
+    </>
   );
 }

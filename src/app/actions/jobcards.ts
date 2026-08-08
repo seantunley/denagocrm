@@ -11,6 +11,7 @@ import { nextJobCardNumber } from "@/lib/numbering";
 import { sendReviewRequest } from "@/lib/reviewRequests";
 import { triggerSurvey } from "@/lib/surveys";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
+import { MAX_PHOTOS, MAX_PHOTO_BYTES, checkUploadPayload } from "@/lib/photoBudget";
 import { saveFile, deleteFile } from "@/lib/storage";
 import { parseRands } from "@/lib/format";
 import { Prisma } from "@prisma/client";
@@ -43,14 +44,18 @@ export async function uploadJobCardPhotos(jobCardId: string, formData: FormData)
     // The input is not `required`, and invalid files were skipped silently — so
     // "Photos uploaded" could report saving nothing at all.
     if (files.length === 0) refuse("Choose at least one photo.");
-    const MAX_PHOTOS = 12;
-    const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
     const accepted = files.filter(
       (file) => file.size <= MAX_PHOTO_BYTES && file.type.startsWith("image/"),
     );
     if (accepted.length === 0) {
       refuse("None of those files could be used — photos must be images under 4 MB.");
     }
+    // The TOTAL, not just each file. Twelve files individually under 4 MB is 48 MB,
+    // which the framework refuses before this function runs — so without this the
+    // per-file limit was the only one enforced and the real ceiling was invisible.
+    // checkUploadPayload states the same budget the client resizes against.
+    const payload = checkUploadPayload(accepted.slice(0, MAX_PHOTOS).map((file) => file.size));
+    if (!payload.ok) refuse(payload.reason);
     const skipped = (files.length - accepted.length) + Math.max(0, accepted.length - MAX_PHOTOS);
     let saved = 0;
     for (const file of accepted.slice(0, MAX_PHOTOS)) {
@@ -495,14 +500,18 @@ export async function uploadCheckoutPhotos(jobCardId: string, formData: FormData
     // The input is not `required`, and invalid files were skipped silently — so
     // "Photos uploaded" could report saving nothing at all.
     if (files.length === 0) refuse("Choose at least one photo.");
-    const MAX_PHOTOS = 12;
-    const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
     const accepted = files.filter(
       (file) => file.size <= MAX_PHOTO_BYTES && file.type.startsWith("image/"),
     );
     if (accepted.length === 0) {
       refuse("None of those files could be used — photos must be images under 4 MB.");
     }
+    // The TOTAL, not just each file. Twelve files individually under 4 MB is 48 MB,
+    // which the framework refuses before this function runs — so without this the
+    // per-file limit was the only one enforced and the real ceiling was invisible.
+    // checkUploadPayload states the same budget the client resizes against.
+    const payload = checkUploadPayload(accepted.slice(0, MAX_PHOTOS).map((file) => file.size));
+    if (!payload.ok) refuse(payload.reason);
     const skipped = (files.length - accepted.length) + Math.max(0, accepted.length - MAX_PHOTOS);
     let saved = 0;
     for (const file of accepted.slice(0, MAX_PHOTOS)) {

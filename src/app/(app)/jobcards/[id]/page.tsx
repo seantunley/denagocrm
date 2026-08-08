@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { notFound } from "next/navigation";
+import PhotoUploadField from "@/components/PhotoUploadField";
 import { prisma } from "@/lib/db";
 import {
   addJobCardItem,
@@ -318,7 +319,7 @@ export default async function JobCardDetailPage({
               <div className="flex items-center gap-2 flex-wrap">
                 <CameraCapture action={uploadJobCardPhotos.bind(null, jobCard.id)} />
                 <SaveForm success="Photos uploaded" resetOnSuccess={false} action={uploadJobCardPhotos.bind(null, jobCard.id)} className="flex items-center gap-2">
-                  <input type="file" name="files" multiple required accept="image/*" capture="environment" className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
+                  <PhotoUploadField required className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
                   <SaveButton className="btn-primary btn-sm">Upload</SaveButton>
                 </SaveForm>
               </div>
@@ -691,7 +692,7 @@ export default async function JobCardDetailPage({
               <div className="flex items-center gap-2 flex-wrap">
                 <CameraCapture action={uploadCheckoutPhotos.bind(null, jobCard.id)} />
                 <SaveForm success="Photos uploaded" resetOnSuccess={false} action={uploadCheckoutPhotos.bind(null, jobCard.id)} className="flex items-center gap-2">
-                  <input type="file" name="files" multiple required accept="image/*" capture="environment" className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
+                  <PhotoUploadField required className="block text-xs text-slate-400 file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
                   <SaveButton className="btn-primary btn-sm">Upload</SaveButton>
                 </SaveForm>
               </div>

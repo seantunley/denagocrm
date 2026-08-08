@@ -5,12 +5,8 @@ import BrandLogo from "@/components/BrandLogo";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard,
-  Menu,
-  MessageSquare,
   Search,
   Settings,
-  SquareKanban,
   Trash2,
   LogOut,
   ChevronsUpDown,
@@ -21,6 +17,7 @@ import ClockWeather from "@/components/ClockWeather";
 import CommandMenu, { openCommandMenu } from "@/components/CommandMenu";
 import QuickActions from "@/components/QuickActions";
 import QuickCreateDialog from "@/components/QuickCreateDialog";
+import MobileCompanionNav from "@/components/MobileCompanionNav";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -35,8 +32,6 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { logout } from "@/app/login/actions";
 import { APP_VERSION } from "@/lib/version";
-import { cn } from "@/lib/utils";
-import { isPathEnabled } from "@/lib/modules/registry";
 
 type ShellUser = { name: string; role: string; permissions: string[]; avatarVersion?: string | null };
 
@@ -142,71 +137,6 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules
   );
 }
 
-function MobilePrimaryNav({
-  user,
-  pathname,
-  inboxWaiting,
-  enabledModules,
-  onMore,
-}: {
-  user: ShellUser;
-  pathname: string;
-  inboxWaiting: number;
-  enabledModules?: string[];
-  onMore: () => void;
-}) {
-  // Same RBAC keys the sidebar (nav-config.ts) uses for these two links — the
-  // mobile bar used to read the per-user module CSV instead, so it could offer a
-  // shortcut to a screen the user's permissions did not open.
-  const granted = new Set(user.permissions);
-  const can = (...keys: string[]) => user.role === "owner" || keys.some((key) => granted.has(key));
-  const enabledSet = enabledModules ? new Set(enabledModules) : undefined;
-  const packOn = (href: string) => !enabledSet || isPathEnabled(href, enabledSet);
-  const items = [
-    { href: "/", label: "Dashboard", icon: LayoutDashboard, show: true },
-    { href: "/leads", label: "Leads", icon: SquareKanban, show: can("leads.view_all", "leads.view_owned") && packOn("/leads") },
-    { href: "/inbox", label: "Inbox", icon: MessageSquare, show: can("inbox.view", "inbox.reply") && packOn("/inbox"), badge: inboxWaiting },
-  ].filter((item) => item.show);
-  const active = (href: string) => href === "/" ? pathname === "/" : pathname.startsWith(href);
-
-  return (
-    <nav
-      data-mobile-navigation="true"
-      className="fixed inset-x-3 bottom-[max(.75rem,env(safe-area-inset-bottom))] z-50 grid rounded-2xl border border-sidebar-border bg-sidebar/95 p-1.5 shadow-[0_22px_60px_rgba(0,0,0,.55)] backdrop-blur-xl lg:hidden"
-      style={{ gridTemplateColumns: `repeat(${items.length + 1}, minmax(0, 1fr))` }}
-      aria-label="Primary navigation"
-    >
-      {items.map(({ href, label, icon: Icon, badge }) => (
-        <Link
-          key={href}
-          href={href}
-          aria-current={active(href) ? "page" : undefined}
-          className={cn(
-            "relative flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-medium transition-colors",
-            active(href) ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
-          )}
-        >
-          <Icon className="size-[18px]" />
-          {label}
-          {badge ? (
-            <span className="absolute right-[22%] top-1.5 min-w-4 rounded-full bg-primary px-1 text-center text-[8px] font-bold leading-4 text-primary-foreground">
-              {badge > 99 ? "99+" : badge}
-            </span>
-          ) : null}
-        </Link>
-      ))}
-      <button
-        type="button"
-        onClick={onMore}
-        className="flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-      >
-        <Menu className="size-[18px]" />
-        More
-      </button>
-    </nav>
-  );
-}
-
 export default function AppShell({
   user,
   inboxWaiting = 0,
@@ -236,26 +166,12 @@ export default function AppShell({
       <Toaster />
 
       {/* Mobile top bar */}
-      <header className="fixed inset-x-0 top-0 z-40 flex h-14 items-center gap-3 border-b border-sidebar-border bg-sidebar/90 px-4 backdrop-blur-xl lg:hidden">
-        <button
-          onClick={() => setMobileOpen(true)}
-          aria-label="Open menu"
-          className="-ml-2 flex size-10 items-center justify-center rounded-lg text-sidebar-foreground transition hover:bg-sidebar-accent"
-        >
-          <Menu className="size-5" />
-        </button>
+      <header className="fixed inset-x-0 top-0 z-40 flex h-12 items-center justify-center border-b border-sidebar-border bg-sidebar/90 px-4 backdrop-blur-xl lg:hidden">
         <BrandLogo
           logoUrl={brand?.logoUrl ?? null}
           alt={brand?.displayName ?? "Denago Cape Town"}
           className="h-6 w-auto object-contain"
         />
-        <button
-          onClick={openCommandMenu}
-          aria-label="Search"
-          className="-mr-2 ml-auto flex size-10 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-sidebar-accent hover:text-foreground"
-        >
-          <Search className="size-5" />
-        </button>
       </header>
 
       {/* Mobile drawer */}
@@ -266,10 +182,11 @@ export default function AppShell({
         </SheetContent>
       </Sheet>
 
-      <MobilePrimaryNav
+      <MobileCompanionNav
         user={user}
         pathname={pathname}
         inboxWaiting={inboxWaiting}
+        casesWaiting={casesWaiting}
         enabledModules={enabledModules}
         onMore={() => setMobileOpen(true)}
       />
@@ -281,7 +198,7 @@ export default function AppShell({
 
       <main className="relative lg:pl-60">
         <div className="pointer-events-none fixed inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(circle_at_65%_0%,rgba(249,115,22,.045),transparent_42%)] lg:left-60" />
-        <div className="denago-workspace mx-auto max-w-[1800px] p-4 pb-24 pt-[4.5rem] lg:p-7 lg:pt-6">
+        <div className="denago-workspace mx-auto max-w-[1800px] p-4 pb-24 pt-16 lg:p-7 lg:pt-6">
           {/* Desktop-only furniture — takes real estate on phones */}
           <div className="mb-5 hidden lg:block">
             <ClockWeather />

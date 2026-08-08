@@ -17,6 +17,16 @@ import ModalTrigger from "@/components/Modal";
 import { buttonVariants } from "@/components/ui/button";
 import { EmptyState, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
+import {
+  DesktopOnly,
+  MobileOnly,
+  MobileSection,
+  MobileSegmentNav,
+  MobileStatPair,
+  MobileTaskCard,
+  MobileTaskList,
+  MobileWorkspaceHeader,
+} from "@/components/mobile-workspace";
 import { WorkspaceHero } from "@/components/workspace-hero";
 
 export const dynamic = "force-dynamic";
@@ -108,7 +118,45 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
   const defaultEnd = addHours(defaultStart, 1);
 
   return (
-    <div className="space-y-6">
+    <>
+      <MobileOnly className="space-y-4">
+        <MobileWorkspaceHeader
+          title="Test drives"
+          description="Check today’s handovers and returns. Open a booking to capture the outcome."
+          action={<Link href="/test-drives/demo-fleet" className={buttonVariants({ variant: "outline", size: "sm" })}><CarFront className="size-4" />Fleet</Link>}
+        />
+        <MobileStatPair items={[
+          { label: "Bookings · 30 days", value: metrics.bookings },
+          { label: "Incidents", value: metrics.incidents, tone: metrics.incidents > 0 ? "attention" : "default" },
+        ]} />
+        <MobileSegmentNav items={[
+          { label: "All", href: "/test-drives", active: !status },
+          { label: "Booked", href: "/test-drives?status=booked", active: status === "booked" },
+          { label: "Confirmed", href: "/test-drives?status=confirmed", active: status === "confirmed" },
+          { label: "Out", href: "/test-drives?status=checked_out", active: status === "checked_out" },
+        ]} />
+        <MobileSection title="Drive queue" detail={`${bookings.length} booking${bookings.length === 1 ? "" : "s"}`}>
+          {bookings.length === 0 ? (
+            <EmptyState icon={CalendarDays} title="No drives here" description="Choose another status or capture a new booking." />
+          ) : (
+            <MobileTaskList>
+              {bookings.map((booking) => (
+                <MobileTaskCard
+                  key={booking.id}
+                  icon={CarFront}
+                  title={contactMap.get(booking.contactId) ?? "Customer"}
+                  detail={`${booking.reference} · ${booking.demoVehicle?.name ?? (booking.productId ? productMap.get(booking.productId) : null) ?? "Vehicle not assigned"}`}
+                  meta={`${formatDateTime(booking.scheduledStart)} · ${booking.branch}`}
+                  aside={<StatusPill tone={statusTone[booking.status] ?? "neutral"}>{testDriveStatusLabel(booking.status)}</StatusPill>}
+                  href={`/test-drives/${booking.id}`}
+                />
+              ))}
+            </MobileTaskList>
+          )}
+        </MobileSection>
+      </MobileOnly>
+
+      <DesktopOnly className="space-y-6">
       <WorkspaceHero
         icon={CarFront}
         eyebrow="Showroom operations"
@@ -257,6 +305,7 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
           </aside>
         </div>
       </Surface>
-    </div>
+      </DesktopOnly>
+    </>
   );
 }
