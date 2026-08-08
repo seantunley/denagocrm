@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { addHours, addDays, differenceInCalendarDays, format, startOfDay, subDays } from "date-fns";
-import { CalendarDays, CarFront, Gauge, Plus, Route, TriangleAlert, UserCheck } from "lucide-react";
+import { CalendarDays, CarFront, Gauge, Route, TriangleAlert, UserCheck } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { contactName, formatDateTime } from "@/lib/format";
 import {
@@ -12,9 +12,8 @@ import {
 import { accessibleTestDriveWhere } from "@/lib/testDriveAccess";
 import { listTenantStaff } from "@/lib/tenantActor";
 import { calculateTestDriveMetrics, testDriveStatusLabel } from "@/lib/testDriveMetrics";
-import { createTestDriveBooking } from "@/app/actions/testDrives";
-import ModalTrigger from "@/components/Modal";
 import { buttonVariants } from "@/components/ui/button";
+import { TestDriveBookingTrigger } from "@/components/test-drives/TestDriveBookingTrigger";
 import { EmptyState, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import {
@@ -43,6 +42,8 @@ const statusTone: Record<string, "neutral" | "success" | "warning" | "danger" | 
 };
 
 const inputDate = (date: Date) => format(date, "yyyy-MM-dd'T'HH:mm");
+
+const TEST_DRIVE_FILTERS = ["", "booked", "confirmed", "checked_out", "completed", "cancelled", "no_show"] as const;
 
 export default async function TestDrivesPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const user = await requireAnyPermission("activities.view", "activities.manage");
@@ -123,17 +124,31 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
         <MobileWorkspaceHeader
           title="Test drives"
           description="Check today’s handovers and returns. Open a booking to capture the outcome."
-          action={<Link href="/test-drives/demo-fleet" className={buttonVariants({ variant: "outline", size: "sm" })}><CarFront className="size-4" />Fleet</Link>}
+          action={canCreate ? (
+            <TestDriveBookingTrigger
+              contacts={contacts}
+              leads={leads}
+              demos={demos}
+              products={products}
+              staff={staff}
+              salespersonId={user.id}
+              defaultStart={inputDate(defaultStart)}
+              defaultEnd={inputDate(defaultEnd)}
+              compact
+            />
+          ) : undefined}
         />
         <MobileStatPair items={[
           { label: "Bookings · 30 days", value: metrics.bookings },
           { label: "Incidents", value: metrics.incidents, tone: metrics.incidents > 0 ? "attention" : "default" },
         ]} />
         <MobileSegmentNav items={[
-          { label: "All", href: "/test-drives", active: !status },
-          { label: "Booked", href: "/test-drives?status=booked", active: status === "booked" },
-          { label: "Confirmed", href: "/test-drives?status=confirmed", active: status === "confirmed" },
-          { label: "Out", href: "/test-drives?status=checked_out", active: status === "checked_out" },
+          ...TEST_DRIVE_FILTERS.map((value) => ({
+            label: value ? testDriveStatusLabel(value) : "All",
+            href: value ? `/test-drives?status=${value}` : "/test-drives",
+            active: status === value || (!status && !value),
+          })),
+          { label: "Fleet", href: "/test-drives/demo-fleet" },
         ]} />
         <MobileSection title="Drive queue" detail={`${bookings.length} booking${bookings.length === 1 ? "" : "s"}`}>
           {bookings.length === 0 ? (
@@ -173,70 +188,16 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
           <CarFront className="size-4" /> Demo fleet
         </Link>
         {canCreate && (
-          <ModalTrigger
-            label={<><Plus className="size-4" />Book test drive</>}
-            title="Book a test drive"
-            buttonClass={buttonVariants({ size: "sm" })}
-          >
-            <form action={createTestDriveBooking} className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="sm:col-span-2">
-                  <label className="label">Customer</label>
-                  <select name="contactId" className="input" required defaultValue="">
-                    <option value="" disabled>Select customer…</option>
-                    {contacts.map((contact) => <option key={contact.id} value={contact.id}>{contactName(contact)}</option>)}
-                  </select>
-                </div>
-                <div className="sm:col-span-2">
-                  <label className="label">Lead</label>
-                  <select name="leadId" className="input" defaultValue="">
-                    <option value="">No linked lead</option>
-                    {leads.map((lead) => <option key={lead.id} value={lead.id}>{lead.title} — {lead.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="label">Branch / location</label>
-                  <input name="branch" className="input" required placeholder="Cape Town showroom" />
-                </div>
-                <div>
-                  <label className="label">Demo vehicle</label>
-                  <select name="demoVehicleId" className="input" defaultValue="">
-                    <option value="">Assign later</option>
-                    {demos.map((demo) => <option key={demo.id} value={demo.id}>{demo.name}{demo.regNumber ? ` · ${demo.regNumber}` : ""}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="label">Model</label>
-                  <select name="productId" className="input" defaultValue="">
-                    <option value="">Infer from lead or demo vehicle</option>
-                    {products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="label">Salesperson</label>
-                  <select name="salespersonId" className="input" defaultValue={user.id}>
-                    {staff.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="label">Accompanying salesperson</label>
-                  <select name="accompanyingSalespersonId" className="input" defaultValue="">
-                    <option value="">None</option>
-                    {staff.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="label">Start</label>
-                  <input type="datetime-local" name="scheduledStart" className="input" required defaultValue={inputDate(defaultStart)} />
-                </div>
-                <div>
-                  <label className="label">Expected return</label>
-                  <input type="datetime-local" name="expectedReturnAt" className="input" required defaultValue={inputDate(defaultEnd)} />
-                </div>
-              </div>
-              <button className="btn-primary w-full">Create booking</button>
-            </form>
-          </ModalTrigger>
+          <TestDriveBookingTrigger
+            contacts={contacts}
+            leads={leads}
+            demos={demos}
+            products={products}
+            staff={staff}
+            salespersonId={user.id}
+            defaultStart={inputDate(defaultStart)}
+            defaultEnd={inputDate(defaultEnd)}
+          />
         )}
         </>}
       />
@@ -245,7 +206,7 @@ export default async function TestDrivesPage({ searchParams }: { searchParams: P
         <div className="flex flex-col gap-4 border-b border-border p-4 xl:flex-row xl:items-end xl:justify-between xl:p-5">
           <SectionHeading title="Booking ledger" description={`${bookings.length} booking${bookings.length === 1 ? "" : "s"} in this view · ${metrics.bookedHours} fleet hours reserved`} />
           <nav className="flex max-w-full gap-1 overflow-x-auto rounded-xl border border-border bg-background/40 p-1" aria-label="Test drive status">
-          {["", "booked", "confirmed", "checked_out", "completed", "cancelled", "no_show"].map((value) => (
+          {TEST_DRIVE_FILTERS.map((value) => (
             <Link
               key={value || "all"}
               href={value ? `/test-drives?status=${value}` : "/test-drives"}
