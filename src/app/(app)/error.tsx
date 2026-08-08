@@ -85,6 +85,12 @@ export default function AppError({
             <RotateCcw className="size-4" aria-hidden />
             Try again
           </button>
+          {/* A plain <a>, not next/link, and deliberately so: this forces a FULL
+              document load, which throws away whatever client state was left
+              behind by the render that failed. A soft navigation carries that
+              state into the next page. `reset()` above is the in-place retry;
+              this is the escape hatch, and it should be a clean one. */}
+          {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
           <a
             href="/"
             className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-foreground hover:bg-muted"
