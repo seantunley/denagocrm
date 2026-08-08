@@ -18,9 +18,12 @@ import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { formatZAR, contactName } from "@/lib/format";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
+import { activeTenantPredicate } from "@/lib/tenantPredicate";
+import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
 import {
   requireLeadAccess,
   requireContactAccess,
+  requirePermission,
   requireQuoteAccess,
   canAccessQuote,
   hasPermission,
@@ -198,7 +201,9 @@ export async function createQuoteForContact(formData: FormData) {
   });
   await logAudit({
     action: "quote.created",
-    summary: `Created quote Q-${quote.number} for ${quote.contact ? contactName(quote.contact) : "customer"}`,
+    // No fleet by construction — this path creates a quote for one person — so
+    // the resolver is passed null rather than asked to look one up.
+    summary: `Created quote Q-${quote.number} for ${quoteBillTo(quote, null).name || "customer"}`,
     contactId,
     user,
   });
@@ -209,6 +214,100 @@ export async function createQuoteForContact(formData: FormData) {
   // price rather than the lead's agreed value, and links no lead. Decide those
   // before giving it a button.
   redirect(`/quotes?edit=${quote.id}`);
+}
+
+/**
+ * Creates a draft quote BILLED TO A FLEET ACCOUNT, from the fleet's own page.
+ *
+ * The fleet is bound at creation and never afterwards, exactly like `leadId`,
+ * and for the same reason: the identity of the party a quote is addressed to is
+ * not an editable field on a document that becomes a signed record of what was
+ * agreed. Changing it is a new quote, or a revision of this one.
+ *
+ * Two things are checked, and neither can be skipped by posting this action
+ * directly (which anyone can — it is a public endpoint):
+ *
+ *  1. The FLEET resolves inside the caller's tenant. `Quote.fleetId` carries no
+ *     foreign key, so this is the only thing standing between a posted id and a
+ *     quote that prints another operator's customer account, registration number
+ *     and VAT number.
+ *  2. The CONTACT is the fleet's manager or one of its members, AND the caller
+ *     may access that contact. A quote naming fleet A beside an unrelated person
+ *     is a tax document that misstates who is buying; and `contactId` is what
+ *     every access check on the resulting quote is keyed on, so an unchecked one
+ *     would be a quote the creator cannot open.
+ */
+export async function createQuoteForFleet(formData: FormData) {
+  return asActionResult(async () => {
+    // The PERMISSION gate comes before any refusal, deliberately: a refusal is a
+    // reply, and replying to an unauthorised caller — even with "choose a fleet" —
+    // tells them the endpoint exists and responds. The record-level check follows
+    // once there is an id to check.
+    await requirePermission("quotes.create");
+    const fleetId = String(formData.get("fleetId") ?? "").trim();
+    const contactId = String(formData.get("contactId") ?? "").trim();
+    if (!fleetId) throw new ActionRefusal("Choose a fleet account.");
+    if (!contactId) throw new ActionRefusal("Choose the person this quote is addressed to.");
+
+    const user = await requireContactAccess(contactId, "quotes.create");
+
+    const fleet = await prisma.fleet.findFirst({
+      where: { id: fleetId, deletedAt: null, ...activeTenantPredicate("quote for fleet") },
+      select: { id: true, name: true, contactId: true },
+    });
+    // One message for "not yours" and "does not exist" — anything else makes this
+    // an existence oracle over other workspaces' customer accounts.
+    if (!fleet) throw new ActionRefusal("That fleet account isn't available.");
+
+    const contact = await prisma.contact.findFirst({
+      where: { id: contactId, deletedAt: null, ...activeTenantPredicate("quote for fleet contact") },
+      select: { id: true, fleetId: true, firstName: true, lastName: true, company: true, isCompany: true },
+    });
+    if (!contact) throw new ActionRefusal("That customer isn't available.");
+    // Manager OR member — Fleet.contactId and Contact.fleetId are deliberately
+    // different facts (see the schema), and either one makes this person the
+    // right party to address the fleet's quote to.
+    if (contact.fleetId !== fleet.id && fleet.contactId !== contact.id) {
+      throw new ActionRefusal(
+        `${contactName(contact)} isn't linked to ${fleet.name}. Add them to the fleet first.`,
+      );
+    }
+
+    const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
+    const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
+    const terms =
+      (await getSetting("QUOTE_TERMS")) ||
+      "Prices include VAT. Delivery arranged on acceptance. E&OE.";
+
+    // Advisory-locked allocation + insert in one transaction, same as every
+    // other quote-creating path (#11).
+    const quote = await basePrisma.$transaction(async (tx) => {
+      const number = await nextQuoteNumber(tx);
+      return tx.quote.create({
+        data: {
+          number,
+          contactId: contact.id,
+          fleetId: fleet.id,
+          createdById: user.id,
+          validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
+          terms,
+        },
+        select: { id: true, number: true },
+      });
+    });
+
+    await logAudit({
+      action: "quote.created",
+      summary: `Created quote Q-${quote.number} for fleet ${fleet.name}`,
+      contactId: contact.id,
+      user,
+      entityType: "Quote",
+      entityId: quote.id,
+    });
+    revalidatePath(`/fleets/${fleet.id}`);
+    revalidatePath("/quotes");
+    return { redirectTo: `/quotes?edit=${quote.id}` };
+  });
 }
 
 /**
@@ -357,6 +456,14 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       }
       if (existing.leadId && existing.contactId !== data.contactId) {
         throw new Error("The customer on a lead-linked quote cannot be changed.");
+      }
+      // Same rule for a fleet account, for a stronger reason. createQuoteForFleet
+      // checked that this contact is the fleet's manager or one of its members;
+      // allowing the customer to be swapped afterwards would route around that
+      // check and leave the fleet's name, registration number and VAT number
+      // printing beside an unrelated person. Rebinding is a new quote.
+      if (existing.fleetId && existing.contactId !== data.contactId) {
+        throw new Error("The customer on a fleet quote cannot be changed. Create a new quote instead.");
       }
       // #15: requireQuoteAccess only authorized the quote. Moving an existing
       // quote onto a DIFFERENT contact requires access to that destination too,
@@ -753,7 +860,15 @@ export async function quoteEditorRecord(id: string): Promise<QuoteEditorRecord |
     select: QUOTE_VERSION_SELECT,
     take: 2_000,
   });
-  return buildQuoteEditorRecord(quote, quoteVersionIndex(versions));
+  // Tenant-scoped, so a fleet id from another workspace resolves to nothing and
+  // the quote reads as an ordinary customer quote rather than naming an account
+  // this caller has no business seeing.
+  const fleets = await loadBillToFleets(prisma, [quote.fleetId]);
+  return buildQuoteEditorRecord(
+    quote,
+    quoteVersionIndex(versions),
+    new Map([...fleets].map(([id, fleet]) => [id, fleet.name])),
+  );
 }
 
 /**

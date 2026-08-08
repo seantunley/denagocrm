@@ -877,6 +877,23 @@ model Quote {
   lead        Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
   contactId   String?
   contact     Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  // THE ACCOUNT THIS QUOTE IS BILLED TO — a fleet / B2B account.
+  //
+  // Set ALONGSIDE contactId, never instead of it. `contactId` stays the PERSON:
+  // the fleet manager you deal with, who signs, and who the quote is sent to.
+  // `fleetId` is the BUSINESS the invoice is addressed to, and whose registration
+  // number, VAT number and billing address print on it. A lodge ordering six
+  // carts needs both facts and they are not the same fact — collapsing them into
+  // one column would lose whichever one the fleet case needs most.
+  //
+  // Scalar with no Prisma relation, matching Contact.fleetId and Fleet.contactId
+  // (see their comments): resolution is app-layer and TENANT-SCOPED, so an id
+  // from another workspace simply fails to resolve rather than being caught by a
+  // foreign key after the row is already written. lib/quoteBillTo.ts is the only
+  // place that resolves it.
+  fleetId     String?
+
   createdById String?
   createdBy   User?    @relation("QuoteCreator", fields: [createdById], references: [id])
 
@@ -886,6 +903,8 @@ model Quote {
   stockReservations StockReservation[]
 
   @@index([tenantId])
+  // The fleet page lists an account's quotes by this column.
+  @@index([fleetId])
   @@unique([tenantId, id])
 }
 
@@ -1126,9 +1145,10 @@ model Vehicle {
 // addressed to the fleet would carry, which is why they live here and not on the
 // manager's personal contact record.
 //
-// NOTE: issuing quotes TO a fleet is deliberately not built yet — there is no
-// `Quote.fleetId`. This model holds the details; wiring them into quoting,
-// pricing and the document renderer is a separate change.
+// Quotes ARE issued to a fleet: `Quote.fleetId` names the account a quote is
+// billed to, and lib/quoteBillTo.ts is the one place that turns a quote plus its
+// fleet into the block every renderer prints. The fields below are what that
+// block shows when the account is a fleet rather than a person.
 model Fleet {
   id          String    @id @default(cuid())
   tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.

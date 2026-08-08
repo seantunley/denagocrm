@@ -5,8 +5,9 @@ import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { getDocTemplate } from "@/lib/docTemplateStore";
-import { contactName, formatDate } from "@/lib/format";
+import { formatDate } from "@/lib/format";
 import { documentTotals, feeRows, includedLines } from "@/lib/pricing";
+import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 
 export default async function InvoicePrintPage({
   params,
@@ -29,7 +30,10 @@ export default async function InvoicePrintPage({
   const tpl = await getDocTemplate("invoice", tplId);
   // Fees and delivery are part of what the customer pays; the subtotal is not.
   const totals = documentTotals(quote);
-  const customer = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
+  // An INVOICE is the document where getting this wrong matters most: it names
+  // who owes the money and carries the VAT number the recipient claims against.
+  const billTo = quoteBillTo(quote, await loadBillToFleet(prisma, quote.fleetId));
+  const customer = billTo.name;
 
   return (
     <>
@@ -54,8 +58,11 @@ export default async function InvoicePrintPage({
             accent
             lines={[
               customer,
-              quote.contact?.phone ?? quote.lead?.phone,
-              quote.contact?.email ?? quote.lead?.email,
+              billTo.attention ? `Attention: ${billTo.attention}` : "",
+              billTo.phone,
+              billTo.email,
+              billTo.address,
+              billTo.vatNumber ? `VAT no: ${billTo.vatNumber}` : "",
             ]}
           />
           <InfoBlock

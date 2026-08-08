@@ -4,6 +4,7 @@ import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { feeRows, includedLines, lineNetCents, quotePricing } from "@/lib/pricing";
 import { jobCardTotals, jobLineCents } from "@/lib/workshop-constants";
 import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
+import { quoteBillTo, type BillToFleet } from "@/lib/quoteBillTo";
 import type { TableRow } from "./blocks";
 
 export type JobCardForDoc = Prisma.JobCardGetPayload<{
@@ -25,7 +26,17 @@ export type MergeContext = {
   vars: Record<string, unknown>;
 };
 
-export function buildQuoteContext(quote: QuoteForPrint): MergeContext {
+/**
+ * `fleet` is REQUIRED, not optional, and resolved by the caller through
+ * quoteBillTo.loadBillToFleet. An optional parameter is one a caller forgets, and
+ * the failure mode of forgetting is a quote billed to a fleet account printing
+ * the fleet manager's personal name and address where the business, its
+ * registration number and its VAT number belong — on a document that goes to the
+ * customer and, for a signed quote, becomes the record of what was agreed. Pass
+ * null when the quote names no fleet; the tokens are then byte-for-byte what they
+ * were before fleets could be billed.
+ */
+export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | null): MergeContext {
   // Every document built here states a price to a customer — a signed sales
   // agreement among them — so the money comes from the canonical engine, not
   // from a local sum. Summing items alone dropped fees and delivery, and the
@@ -42,14 +53,23 @@ export function buildQuoteContext(quote: QuoteForPrint): MergeContext {
   // Only the lines the pricing above counts — an unselected optional add-on is
   // excluded from {{quote.total}}, so it must not appear as a charged row either.
   const lines = includedLines(quote.items);
-  const address = quote.contact
-    ? [quote.contact.address, quote.contact.suburb, quote.contact.city, quote.contact.province, quote.contact.postalCode].filter(Boolean).join(", ")
-    : "";
+  // ONE resolver, shared with the PDF, the print pages, the quotes list and the
+  // deliveries board — see lib/quoteBillTo.ts for why nine hand-rolled copies of
+  // "who is this for" were the thing that had to go before a third possibility
+  // could be added to it.
+  const billTo = quoteBillTo(quote, fleet);
   const tokens: Record<string, string> = {
-    "customer.name": quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "",
-    "customer.phone": quote.contact?.phone ?? quote.lead?.phone ?? "",
-    "customer.email": quote.contact?.email ?? quote.lead?.email ?? "",
-    "customer.address": address,
+    "customer.name": billTo.name,
+    "customer.phone": billTo.phone,
+    "customer.email": billTo.email,
+    "customer.address": billTo.address,
+    // New tokens, all empty string when they do not apply, so a template that
+    // uses none of them renders exactly as it did. `customer.attention` is the
+    // person on a quote addressed to a business; the other two are the account's
+    // statutory numbers, which an invoice to a fleet has to carry.
+    "customer.attention": billTo.attention ?? "",
+    "customer.vatNumber": billTo.vatNumber,
+    "customer.registrationNumber": billTo.registrationNumber,
     "quote.number": `Q-${quote.number}`,
     "quote.date": formatDate(quote.createdAt),
     "quote.validUntil": quote.validUntil ? formatDate(quote.validUntil) : "—",
