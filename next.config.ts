@@ -11,6 +11,26 @@ const CHROMIUM_FILES = "./node_modules/@sparticuz/chromium/**/*";
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ["@sparticuz/chromium", "puppeteer-core"],
+  // A Server Action request body is capped at 1 MB by default, and the photo
+  // upload actions accept twelve files of up to 4 MB each. Nothing declared a
+  // limit, so the framework rejected an ordinary phone photo before
+  // uploadJobCardPhotos ever ran its own validation: the camera flow worked in a
+  // desktop review and could not work on a phone.
+  //
+  // This is the DECLARED half of the fix. The other half matters more —
+  // components/PhotoUploadField.tsx resizes images to 1600px before sending, so
+  // a real upload is a few megabytes rather than tens. Raising the limit alone
+  // would have made the feature technically function by pushing unnecessary
+  // pixels over a mobile connection.
+  //
+  // Kept ABOVE MAX_UPLOAD_TOTAL_BYTES in lib/photoBudget.ts, which the actions
+  // enforce: the request also carries form fields and multipart boundaries, so a
+  // payload cap equal to this would be refused by the framework and the person
+  // would see a generic failure instead of an explanation. A test pins the
+  // ordering of the two numbers.
+  experimental: {
+    serverActions: { bodySizeLimit: "16mb" },
+  },
   outputFileTracingIncludes: {
     "/quotes/**": [CHROMIUM_FILES],
     "/jobcards/**": [CHROMIUM_FILES],

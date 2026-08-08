@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight, Camera } from "lucide-react";
+import PhotoUploadField from "@/components/PhotoUploadField";
 import { prisma } from "@/lib/db";
 import {
   markInvoiced,
@@ -151,7 +152,7 @@ export default async function DeliveriesPage() {
                     {canManage && (
                       <SaveForm action={uploadDeliveryPhotos.bind(null, quote.id)} className="mt-3 rounded-xl border border-primary/20 bg-primary/[0.05] p-2.5">
                         <label className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-foreground"><Camera className="size-3.5" />Add handover photos</label>
-                        <input type="file" name="files" multiple required accept="image/*" capture="environment" className="block w-full text-xs text-muted-foreground file:mr-2 file:rounded-lg file:border-0 file:bg-muted file:px-2.5 file:py-1.5 file:text-xs file:text-foreground" />
+                        <PhotoUploadField required className="block w-full text-xs text-muted-foreground file:mr-2 file:rounded-lg file:border-0 file:bg-muted file:px-2.5 file:py-1.5 file:text-xs file:text-foreground" />
                         <SaveButton className="btn-primary btn-sm mt-2 w-full">Take or choose photos</SaveButton>
                       </SaveForm>
                     )}
@@ -313,7 +314,7 @@ export default async function DeliveriesPage() {
                                 again. The action returns its own count-aware
                                 message, so no `success` prop is needed here. */}
                             <SaveForm action={uploadDeliveryPhotos.bind(null, quote.id)} className="mt-1.5 space-y-1.5">
-                              <input type="file" name="files" multiple accept="image/*" capture="environment" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
+                              <PhotoUploadField className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
                               <SaveButton className="btn-secondary btn-sm w-full">📷 Add delivery photos</SaveButton>
                             </SaveForm>
                           </div>

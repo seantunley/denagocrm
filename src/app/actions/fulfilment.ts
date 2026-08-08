@@ -7,6 +7,7 @@ import { requireQuoteAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { saveFile } from "@/lib/storage";
+import { checkUploadPayload } from "@/lib/photoBudget";
 import { contactName } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
@@ -178,6 +179,15 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
     if (accepted.length === 0) {
       refuse("None of those files could be used — photos must be images under 4 MB.");
     }
+    // The TOTAL, not just each file. Ten files individually under 4 MB is 40 MB,
+    // which the framework refuses before this function runs — so the per-file limit
+    // was the only one enforced and the real ceiling was invisible. Same budget the
+    // client resizes against.
+    const payload = checkUploadPayload(accepted.slice(0, MAX_PHOTOS).map((file) => file.size), {
+      maxPhotos: MAX_PHOTOS,
+      maxPerFile: MAX_FILE,
+    });
+    if (!payload.ok) refuse(payload.reason);
 
     let saved = 0;
     for (const file of accepted.slice(0, MAX_PHOTOS)) {

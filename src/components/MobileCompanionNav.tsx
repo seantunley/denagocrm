@@ -57,6 +57,11 @@ export default function MobileCompanionNav({
     setCaptureOpen(false);
     window.setTimeout(() => openQuickCreate(kind), 120);
   };
+  // CAPTURE SHORTCUTS ADVERTISE A WRITE, so they ask for the write permission.
+  // "Job card photos" and "Delivery photos" were gated on the VIEW keys while the
+  // forms they lead to require manage — not an authorization bypass, since the
+  // upload action checks for itself, but it offered a view-only technician a
+  // camera button that could only end in a refusal.
   const captures = [
     { label: "New lead", detail: "Start a sales opportunity", icon: UserPlus, kind: "lead" as const, show: can("leads.create") },
     { label: "New contact", detail: "Capture a customer", icon: UserPlus, kind: "contact" as const, show: can("contacts.create") },
@@ -96,8 +101,8 @@ export default function MobileCompanionNav({
               </button>
             ))}
             {can("activities.manage") && packOn("/test-drives") && <SheetClose asChild><Link href="/test-drives" className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4"><span className="grid size-10 place-items-center rounded-xl bg-amber-400/10 text-amber-300"><Route className="size-[18px]" /></span><span><span className="block text-sm font-semibold">Test drive</span><span className="mt-0.5 block text-xs text-muted-foreground">Book or check a customer drive</span></span></Link></SheetClose>}
-            {can("jobcards.view_all", "jobcards.view_owned", "jobcards.manage") && packOn("/jobcards") && <SheetClose asChild><Link href="/jobcards" className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4"><span className="grid size-10 place-items-center rounded-xl bg-violet-400/10 text-violet-300"><Wrench className="size-[18px]" /></span><span><span className="block text-sm font-semibold">Job card photos</span><span className="mt-0.5 block text-xs text-muted-foreground">Photograph vehicle condition</span></span></Link></SheetClose>}
-            {can("deliveries.view", "deliveries.manage") && packOn("/deliveries") && <SheetClose asChild><Link href="/deliveries" className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4"><span className="grid size-10 place-items-center rounded-xl bg-emerald-400/10 text-emerald-300"><Camera className="size-[18px]" /></span><span><span className="block text-sm font-semibold">Delivery photos</span><span className="mt-0.5 block text-xs text-muted-foreground">Capture handover evidence</span></span></Link></SheetClose>}
+            {can("jobcards.manage") && packOn("/jobcards") && <SheetClose asChild><Link href="/jobcards" className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4"><span className="grid size-10 place-items-center rounded-xl bg-violet-400/10 text-violet-300"><Wrench className="size-[18px]" /></span><span><span className="block text-sm font-semibold">Job card photos</span><span className="mt-0.5 block text-xs text-muted-foreground">Photograph vehicle condition</span></span></Link></SheetClose>}
+            {can("deliveries.manage") && packOn("/deliveries") && <SheetClose asChild><Link href="/deliveries" className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4"><span className="grid size-10 place-items-center rounded-xl bg-emerald-400/10 text-emerald-300"><Camera className="size-[18px]" /></span><span><span className="block text-sm font-semibold">Delivery photos</span><span className="mt-0.5 block text-xs text-muted-foreground">Capture handover evidence</span></span></Link></SheetClose>}
             {can("documents.upload") && packOn("/documents") && <SheetClose asChild><Link href="/documents" className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4"><span className="grid size-10 place-items-center rounded-xl bg-sky-400/10 text-sky-300"><FileUp className="size-[18px]" /></span><span><span className="block text-sm font-semibold">Document</span><span className="mt-0.5 block text-xs text-muted-foreground">Upload and file a document</span></span></Link></SheetClose>}
           </div>
         </SheetContent>
