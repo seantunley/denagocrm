@@ -5,9 +5,28 @@ import { basePrisma } from "@/lib/db";
 import { requireTenantOwner, getActiveTenantId } from "@/lib/auth";
 import { putTenantCredential } from "@/lib/settings";
 import { isKnownTenantCredentialKey } from "@/lib/tenantCredentialFields";
+import { integrationsUsingCredentialKey } from "@/lib/integrationFlow";
+import { clearIntegrationVerification } from "@/lib/integrationConnection";
 import { logAuditStrict } from "@/lib/audit";
 
 const OVERRIDES_PATH = "/settings/integration-overrides";
+
+/**
+ * A credential key just changed by hand, so nothing is proven about the bundle
+ * it belongs to any more — drop the verification verdict for every integration
+ * that uses it.
+ *
+ * Without this, the wizard's "Connected, verified on the 3rd" survives a
+ * password being replaced or deleted underneath it, and the page ranks
+ * `lastVerifiedAt` above override presence — so the stale verdict is what the
+ * owner sees. Re-running the guided setup (or Test connection) is what earns the
+ * badge back, which is the point: it means the credentials were actually tried.
+ */
+async function invalidateVerificationForKey(tenantId: string, key: string): Promise<void> {
+  for (const integrationId of integrationsUsingCredentialKey(key)) {
+    await clearIntegrationVerification(tenantId, integrationId);
+  }
+}
 
 /**
  * Save (or replace) THIS tenant's own override for one outbound-integration
@@ -33,6 +52,9 @@ export async function saveTenantCredentialOverride(formData: FormData): Promise<
   if (!tenantId) throw new Error("No active tenant — can't save a tenant-specific override.");
 
   await putTenantCredential(tenantId, key, value);
+  // The stored bundle changed, so any verification verdict about it is now
+  // about a credential that no longer exists.
+  await invalidateVerificationForKey(tenantId, key);
   // Never log the value itself (secret or not) — only that an override for
   // this key was set, mirroring how the global page's saveSetting action never
   // writes a credential value into an audit entry either.
@@ -62,6 +84,9 @@ export async function clearTenantCredentialOverride(key: string): Promise<void> 
   if (!tenantId) throw new Error("No active tenant — nothing to clear.");
 
   await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId, key } });
+  // Reverting to the platform default is just as much a change to what the
+  // bundle IS — the old verdict was about the override that just went away.
+  await invalidateVerificationForKey(tenantId, key);
   await logAuditStrict({
     action: "tenant_credential.override_cleared",
     summary: `Cleared the tenant override for ${key}`,

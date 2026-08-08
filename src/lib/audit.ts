@@ -102,6 +102,73 @@ async function actingTenantId(entry: AuditEntry): Promise<string | null> {
 }
 
 /**
+ * The tenant the AuditLog row may actually claim.
+ *
+ * AuditLog carries COMPOSITE foreign keys:
+ *
+ *     (tenantId, contactId) → Contact(tenantId, id)
+ *     (tenantId, leadId)    → Lead(tenantId, id)
+ *
+ * so the audit row's tenant must equal the tenant of every record it points at.
+ * The ACTING tenant is not automatically that. Tenant stamping is still dormant,
+ * so a contact created today is written with `tenantId` NULL while
+ * `getActiveTenantId()` resolves to a real id — and the pair
+ * `(tenant_denago_cpt, <new contact>)` matches no row in Contact.
+ *
+ * ── What that cost in production, 2026-08-07 ────────────────────────────────
+ *
+ * Creating a lead for a NEW person failed with
+ * `AuditLog_tenantId_contactId_fkey`, three times in four minutes. The contact
+ * and the lead were already committed — the audit write happens afterwards and
+ * `logAuditStrict` throws — so each "failure" left a real lead behind and the
+ * retry made another. Two duplicate leads for one person, and the delete that
+ * was meant to clear one reported failure too. Existing contacts were fine,
+ * because a migration had backfilled their tenantId; only a brand-new contact
+ * hit it.
+ *
+ * ── The rule ────────────────────────────────────────────────────────────────
+ *
+ * A composite foreign key with a NULL column is not enforced (MATCH SIMPLE), so
+ * the audit row is legal when its tenant matches the referenced rows OR when it
+ * claims no tenant at all. Referenced records therefore decide:
+ *
+ *   - nothing referenced       → the acting tenant, as before;
+ *   - all references agree     → that tenant;
+ *   - anything else            → NULL.
+ *
+ * The last case gives up tenant attribution on the AuditLog row rather than
+ * losing the audit entirely, which is what the 309 pre-existing NULL rows
+ * already look like. `AuditEvent` — the append-only stream this pairs with —
+ * carries no such key and keeps the full record either way.
+ *
+ * This is not a workaround for the constraint. An audit row asserting a tenant
+ * that the record it describes does not belong to is simply wrong, and the
+ * constraint is what noticed.
+ */
+async function auditTenantId(entry: AuditEntry): Promise<string | null> {
+  const acting = await actingTenantId(entry);
+  if (!entry.leadId && !entry.contactId) return acting;
+
+  const [lead, contact] = await Promise.all([
+    entry.leadId
+      ? basePrisma.lead.findUnique({ where: { id: entry.leadId }, select: { tenantId: true } })
+      : Promise.resolve(null),
+    entry.contactId
+      ? basePrisma.contact.findUnique({ where: { id: entry.contactId }, select: { tenantId: true } })
+      : Promise.resolve(null),
+  ]);
+
+  // A referenced id that resolves to no row cannot constrain anything, and the
+  // insert will fail on its own foreign key — as it should.
+  const referenced: Array<string | null> = [];
+  if (entry.leadId && lead) referenced.push(lead.tenantId);
+  if (entry.contactId && contact) referenced.push(contact.tenantId);
+
+  if (referenced.length === 0) return acting;
+  return referenced.every((value) => value === referenced[0]) ? referenced[0] : null;
+}
+
+/**
  * Writes both the legacy customer-history record and the professional append-only
  * AuditEvent stream. Use logAuditStrict for permission, role, pipeline, forecast,
  * deletion, export, and other governance-sensitive changes.
@@ -114,7 +181,21 @@ async function actingTenantId(entry: AuditEntry): Promise<string | null> {
  * action means the change lands while the operator is told it failed and no trail
  * exists.
  */
-type AuditTx = Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0];
+/**
+ * Structural, so BOTH clients' transactions qualify.
+ *
+ * Deriving this from `basePrisma.$transaction` alone excluded the SCOPED
+ * client's transaction, whose type differs — which meant a caller doing its
+ * write through `prisma` (as the CRM actions do, to keep the tenant guard in
+ * play) could not hand its transaction to the audit at all, and was pushed back
+ * to auditing after the commit. That is the split this parameter exists to
+ * close, so the type must not be the thing that reopens it.
+ *
+ * Only what the audit write actually touches is named here.
+ */
+type BaseTx = Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0];
+type ScopedTx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+type AuditTx = BaseTx | ScopedTx;
 
 /**
  * Transaction options for a governance change that carries its audit inside the
@@ -139,9 +220,15 @@ async function writeAudit(entry: AuditEntry, tx?: AuditTx) {
     : sanitizeAuditValue(entry.metadata) as Record<string, unknown>;
   const fields = entry.changedFields ?? changedFields(safeBefore, safeAfter);
   const actorName = entry.userName ?? entry.user?.name ?? "System";
-  const tenantId = await actingTenantId(entry);
+  const tenantId = await auditTenantId(entry);
 
-  const write = async (transaction: AuditTx) => {
+  const write = async (candidate: AuditTx) => {
+    // Both clients' transactions expose the same `$executeRaw` and
+    // `auditLog.create`; only the generic wrappers Prisma puts around them
+    // differ, and a union of those wrappers is not callable. One narrowing here
+    // keeps the two call sites honest rather than pushing the difference back
+    // out to every caller.
+    const transaction = candidate as BaseTx;
     await transaction.$executeRaw`
       INSERT INTO "AuditEvent" (
         "id", "tenantId", "actorUserId", "actorName", "actorType", "eventType", "entityType", "entityId",

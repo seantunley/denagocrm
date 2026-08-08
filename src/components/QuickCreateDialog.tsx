@@ -13,6 +13,7 @@ import LeadForm from "@/components/LeadForm";
 import ContactForm from "@/components/ContactForm";
 import JobCardForm from "@/components/JobCardForm";
 import VehicleForm from "@/components/VehicleForm";
+import type { FleetPicker } from "@/lib/fleetTypes";
 import { QuoteEditorDialog } from "@/components/quotes/QuoteEditorDialog";
 import {
   createQuickContact,
@@ -52,6 +53,7 @@ type Options = {
   contacts: { id: string; label: string }[];
   users: { id: string; name: string }[];
   vehicles: { id: string; label: string }[];
+  fleetPicker: FleetPicker;
   quoteDefaults: { validUntil: string; terms: string };
 };
 
@@ -187,7 +189,7 @@ export default function QuickCreateDialog() {
             )}
 
             {kind === "contact" && (
-              <ContactForm action={createQuickContact} users={options.users} submitLabel="Create contact" variant="dialog" />
+              <ContactForm action={createQuickContact} users={options.users} fleetPicker={options.fleetPicker} submitLabel="Create contact" variant="dialog" />
             )}
 
             {kind === "jobcard" && <JobCardForm vehicles={options.vehicles} />}

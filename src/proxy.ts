@@ -25,6 +25,11 @@ const PUBLIC_PATHS = [
   "/api/approvals",
   "/api/track", // campaign open/click tracking
   "/api/unsubscribe", // one-click marketing unsubscribe
+  // Tenant brand logos. Consumed by the login pages, which render pre-auth by
+  // definition; the route itself only ever streams the object a platform admin
+  // stored in Tenant.brandLogoRef — see its header comment for why that is not a
+  // public file reader.
+  "/api/brand/logo",
   "/portal", // customer portal has its own OTP session
   "/api/portal", // portal document/upload routes self-check the portal session
   // Platform console — "public" to THIS proxy only, because it authenticates with

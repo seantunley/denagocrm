@@ -196,7 +196,12 @@ test("no caller announces a delete or restore that did not happen", () => {
     const write = code.search(/(softDeleteRecord|restoreRecord)\(/);
     assert.notEqual(write, -1, `${rel} no longer soft-deletes — has it moved?`);
     const after = code.slice(write);
-    const miss = after.indexOf(`if (!${symbol})`);
+    // Name-agnostic on purpose. The invariant is "check the miss BEFORE
+    // auditing", not what the variable is called — and holding the delete and
+    // its audit in one transaction meant naming the row inside the callback
+    // separately from the result outside it. Pinning the identifier made a
+    // structural improvement look like a regression.
+    const miss = after.search(new RegExp(`if \\(!(?:${symbol}|\\w+)\\)`));
     const audit = after.search(/logAudit(Strict)?\(\{/);
     assert.ok(miss !== -1, `${rel} must check for a miss before using the row`);
     assert.ok(miss < audit, `${rel} must check the miss BEFORE auditing (${miss} vs ${audit})`);

@@ -100,33 +100,35 @@ async function resolveStageId(stageId?: string | null): Promise<string | null> {
 }
 
 async function createInStage(input: NewLead, stageId: string) {
-  const lead = await prisma.lead.create({
-    data: {
-      title: input.title,
-      name: input.name,
-      source: input.source,
-      email: input.email ?? null,
-      phone: input.phone ?? null,
-      notes: input.notes ?? null,
-      color: input.color ?? null,
-      productId: input.productId ?? null,
-      contactId: input.contactId ?? null,
-      assignedToId: input.assignedToId ?? null,
-      createdById: input.createdById ?? null,
-      // Omitted quantity keeps the schema default of 1 rather than forcing a 0.
-      ...(input.quantity != null ? { quantity: input.quantity } : {}),
-      valueCents: input.valueCents ?? 0,
-      externalId: input.externalId ?? null,
-      raw: input.raw != null ? JSON.stringify(input.raw) : null,
-      stageId,
-      // Top of the column, for every source. The DM and bot paths left this at
-      // the default 0 while topPosition hands out DECREASING numbers, so an ad
-      // or bot lead landed underneath every lead that came through the form.
-      position: await topPosition(stageId),
-    },
-  });
+  // Read BEFORE the transaction so the write holds its locks for as little time
+  // as possible.
+  const position = await topPosition(stageId);
 
-  const entry = {
+  const data = {
+    title: input.title,
+    name: input.name,
+    source: input.source,
+    email: input.email ?? null,
+    phone: input.phone ?? null,
+    notes: input.notes ?? null,
+    color: input.color ?? null,
+    productId: input.productId ?? null,
+    contactId: input.contactId ?? null,
+    assignedToId: input.assignedToId ?? null,
+    createdById: input.createdById ?? null,
+    // Omitted quantity keeps the schema default of 1 rather than forcing a 0.
+    ...(input.quantity != null ? { quantity: input.quantity } : {}),
+    valueCents: input.valueCents ?? 0,
+    externalId: input.externalId ?? null,
+    raw: input.raw != null ? JSON.stringify(input.raw) : null,
+    stageId,
+    // Top of the column, for every source. The DM and bot paths left this at
+    // the default 0 while topPosition hands out DECREASING numbers, so an ad
+    // or bot lead landed underneath every lead that came through the form.
+    position,
+  };
+
+  const auditFor = (lead: { id: string; contactId: string | null }) => ({
     action: input.audit.action,
     summary: input.audit.summary,
     leadId: lead.id,
@@ -134,9 +136,36 @@ async function createInStage(input: NewLead, stageId: string) {
     user: input.audit.user ?? null,
     userName: input.audit.userName,
     ...(input.audit.recordAfter ? { after: lead } : {}),
-  };
-  if (input.audit.strict) await logAuditStrict(entry);
-  else await logAudit(entry);
+  });
+
+  /**
+   * A STRICT audit and the row it describes commit together, or neither does.
+   *
+   * Writing the lead first and auditing afterwards is what turned an audit
+   * failure into duplicate records in production on 2026-08-07: the lead was
+   * already committed, `logAuditStrict` threw, the operator was told the save
+   * failed, and the retry created a second lead. Fixing the particular cause of
+   * that failure is not enough — ANY audit failure produces the same outcome,
+   * because "governance write, then governance record" is two commits.
+   *
+   * Inside one transaction there is no such window. A failed audit rolls the
+   * lead back, so the error the operator sees is true and the retry is safe.
+   *
+   * Only the STRICT path joins the transaction. A best-effort audit deliberately
+   * swallows its error, and swallowing an error inside a transaction is worse
+   * than useless — PostgreSQL has already aborted it, so every later statement
+   * fails and the commit dies anyway, taking a lead nobody wanted to lose. A
+   * best-effort audit therefore stays outside, exactly as before.
+   */
+  const lead = input.audit.strict
+    ? await prisma.$transaction(async (tx) => {
+        const created = await tx.lead.create({ data });
+        await logAuditStrict(auditFor(created), tx);
+        return created;
+      })
+    : await prisma.lead.create({ data });
+
+  if (!input.audit.strict) await logAudit(auditFor(lead));
 
   const push =
     input.push === undefined

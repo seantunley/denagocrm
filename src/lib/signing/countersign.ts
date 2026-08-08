@@ -1,27 +1,17 @@
 import "server-only";
+import crypto from "crypto";
 import { prisma } from "@/lib/db";
 // reqMeta only: the signing events are written on the transaction client now,
 // so logSignEvent (which uses its own) would put them outside the commit —
 // which is the bug this fixed.
-import { reqMeta } from "./events";
+import { reqMeta, buildSignEvent } from "./events";
 import { isRequestClosed } from "./status";
 
 /**
  * Denago's own countersignature, applied server-side from the signer's saved
- * signature.
- *
- * This is the SAME write the public signing API performs — recipient claimed,
- * field values + per-recipient responses recorded together under a row lock —
- * minus the two things that only make sense for a customer on a link: the
- * consent capture (the staff member is authenticated, and the click IS the
- * act), and the dispatch that follows.
- *
- * Deliberately does NOT call advanceAfterSignature(). On a sequential envelope
- * that helper immediately emails the next signer, which is exactly what made
- * the old flow feel automatic-but-uncontrollable: the quote left for the
- * customer the instant Denago signed, with nothing shown in between. The caller
- * sends it explicitly once the countersigned document has been reviewed, which
- * is why the request is left in "draft" — the state dispatchRequest() claims.
+ * signature. The caller is an authenticated CRM staff session, so a strict
+ * envelope records `staff_session` identity evidence in the same transaction
+ * instead of sending that staff member an external OTP.
  */
 export async function countersignWithSavedSignature(opts: {
   requestId: string;
@@ -38,6 +28,7 @@ export async function countersignWithSavedSignature(opts: {
   if (!recipient || recipient.requestId !== requestId) {
     return { ok: false, error: "That signature request could not be found." };
   }
+  if (!recipient.tenantId) return { ok: false, error: "That signature request has no tenant owner." };
   if (recipient.status === "signed") return { ok: true };
   if (recipient.status === "declined") return { ok: false, error: "This document was declined." };
   if (recipient.role === "viewer") return { ok: false, error: "That recipient cannot sign." };
@@ -81,16 +72,50 @@ export async function countersignWithSavedSignature(opts: {
   const claimed = await prisma.$transaction(async (tx) => {
     // Same lock the public sign route takes, in the same order — a countersign
     // racing a void must serialize behind it, not straddle it.
-    const rows = await tx.$queryRaw<{ status: string; deletedAt: Date | null }[]>`
-      SELECT "status", "deletedAt" FROM "SignatureRequest" WHERE "id" = ${requestId} FOR UPDATE`;
+    const rows = await tx.$queryRaw<Array<{
+      status: string;
+      deletedAt: Date | null;
+      tenantId: string;
+      identityMode: string;
+    }>>`
+      SELECT "status", "deletedAt", "tenantId", "identityMode"
+      FROM "SignatureRequest"
+      WHERE "id" = ${requestId} AND "tenantId" = ${recipient.tenantId}
+      FOR UPDATE
+    `;
     const row = rows[0];
     if (!row || row.deletedAt || isRequestClosed(row.status)) return false;
 
+    // The database refuses a strict recipient's status transition until durable
+    // identity evidence exists. Authenticated countersigning supplies that proof
+    // immediately before the claim, inside the same transaction and tenant.
+    if (row.identityMode !== "link") {
+      const evidenceHash = crypto.createHash("sha256").update(JSON.stringify({
+        requestId,
+        recipientId,
+        tenantId: row.tenantId,
+        method: "staff_session",
+        signedName,
+        at: filledAt.toISOString(),
+        ip: meta.ip ?? null,
+        userAgent: meta.ua ?? null,
+      })).digest("hex");
+      await tx.$executeRaw`
+        UPDATE "SignatureRecipient"
+        SET "identityVerifiedAt" = ${filledAt},
+            "identityMethod" = 'staff_session',
+            "identityEvidenceHash" = ${evidenceHash}
+        WHERE "id" = ${recipientId}
+          AND "requestId" = ${requestId}
+          AND "tenantId" = ${row.tenantId}
+      `;
+    }
+
     const claim = await tx.signatureRecipient.updateMany({
-      where: { id: recipientId, status: { notIn: ["signed", "declined"] } },
+      where: { id: recipientId, tenantId: row.tenantId, status: { notIn: ["signed", "declined"] } },
       data: {
         status: "signed",
-        signedAt: new Date(),
+        signedAt: filledAt,
         signedName,
         signerIp: meta.ip,
         signerUserAgent: meta.ua,
@@ -102,7 +127,7 @@ export async function countersignWithSavedSignature(opts: {
     for (const value of values) {
       await tx.signatureFieldResponse.upsert({
         where: { fieldId_recipientId: { fieldId: value.id, recipientId } },
-        create: { fieldId: value.id, recipientId, value: value.value, filledAt, tenantId: recipient.tenantId },
+        create: { fieldId: value.id, recipientId, value: value.value, filledAt, tenantId: row.tenantId },
         update: { value: value.value, filledAt },
       });
       // SignatureField.value is the single value the sealed PDF stamps at the
@@ -112,7 +137,7 @@ export async function countersignWithSavedSignature(opts: {
       // own answer is preserved above, one row per (field, recipient).
       if (value.shared) {
         await tx.signatureField.updateMany({
-          where: { id: value.id, filledAt: null },
+          where: { id: value.id, tenantId: row.tenantId, filledAt: null },
           data: { value: value.value, filledAt },
         });
       } else {
@@ -124,27 +149,32 @@ export async function countersignWithSavedSignature(opts: {
     }
 
     // The evidence and the quote's own columns commit WITH the signature, not
-    // after it. They used to run post-commit, so a crash in between left a
-    // recipient marked signed with no signing events and an uncountersigned
-    // quote — and the retry could not repair it, because the guard at the top
-    // sees status === "signed" and returns ok straight away. There is no
-    // "partly signed" state worth having: either all of this is true or none
-    // of it is.
+    // after it. There is no useful "partly signed" state: either all of this is
+    // durable together or none of it is.
     for (const value of values) {
       await tx.signatureEvent.create({
-        data: {
-          requestId,
+        data: buildSignEvent(requestId, {
           recipientId,
           type: "field_filled",
           actor: signedName,
           channel: "web",
           metadata: { kind: value.kind, via: "countersign" },
-        },
+        }),
       });
     }
     await tx.signatureEvent.create({
-      data: {
-        requestId,
+      data: buildSignEvent(requestId, {
+        recipientId,
+        type: "identity_verified",
+        actor: signedName,
+        channel: "web",
+        ip: meta.ip,
+        userAgent: meta.ua,
+        metadata: { mode: row.identityMode, method: row.identityMode === "link" ? "authenticated_session" : "staff_session" },
+      }),
+    });
+    await tx.signatureEvent.create({
+      data: buildSignEvent(requestId, {
         recipientId,
         type: "signed",
         actor: signedName,
@@ -152,17 +182,15 @@ export async function countersignWithSavedSignature(opts: {
         ip: meta.ip,
         userAgent: meta.ua,
         metadata: { via: "countersign" },
-      },
+      }),
     });
 
     // Keep the quote's own countersignature columns in step. They are what the
-    // Print/PDF view renders (QuotePrintDoc), and they predate the signing hub —
-    // writing them here is what lets the separate "sign as Denago" action go
-    // away without the printed quote losing its signature.
+    // Print/PDF view renders (QuotePrintDoc), and they predate the signing hub.
     if (recipient.request.quoteId) {
       await tx.quote.updateMany({
-        where: { id: recipient.request.quoteId, dealerSignedAt: null },
-        data: { dealerSignedAt: new Date(), dealerSignedByName: signedName, dealerSignatureRef: signatureRef },
+        where: { id: recipient.request.quoteId, tenantId: row.tenantId, dealerSignedAt: null },
+        data: { dealerSignedAt: filledAt, dealerSignedByName: signedName, dealerSignatureRef: signatureRef },
       });
     }
     return true;

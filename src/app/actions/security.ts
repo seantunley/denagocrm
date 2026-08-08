@@ -15,28 +15,64 @@ import {
   verifyTotp,
   generateBackupCodes,
 } from "@/lib/totp";
+import { hashBackupCode } from "@/lib/backupCodes";
 import {
   bumpUserSessionVersion,
   setUserDisabledState,
 } from "@/lib/userSecurity";
 
-export async function beginTotpEnrolment(): Promise<{
+/**
+ * Start enrolling an authenticator.
+ *
+ * The new secret goes to `totpPendingSecret`. The LIVE factor is left exactly as
+ * it is, because this used to overwrite `totpSecret` and clear `totpEnabledAt`
+ * on the first call — a working 2FA disable for anyone holding a session, and a
+ * Server Action is a POST endpoint reachable without the settings screen that
+ * renders the button. `disableTotp` demands a current code precisely so that a
+ * stolen session cannot strip the second factor and survive a password reset;
+ * beginning an "enrolment" achieved the same thing one function over.
+ *
+ * So REPLACING an existing factor now costs a current code as well. Enrolling
+ * for the first time does not: there is nothing to protect yet, and asking for a
+ * code nobody has would make 2FA impossible to turn on.
+ */
+export async function beginTotpEnrolment(currentCode?: string): Promise<{
   secret: string;
   qr: string;
   uri: string;
 }> {
   const user = await requireUser();
+
+  const live = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { totpSecret: true, totpEnabledAt: true },
+  });
+  if (live?.totpEnabledAt && live.totpSecret) {
+    let ok = false;
+    try {
+      ok = verifyTotp(String(currentCode ?? "").trim(), decryptValue(live.totpSecret));
+    } catch {
+      // An unreadable stored secret must not become a way past this check.
+    }
+    if (!ok) {
+      throw new Error("Enter a current authenticator code to replace your authenticator.");
+    }
+  }
+
   const secret = generateTotpSecret();
   const uri = totpKeyUri(secret, user.email);
   const qr = await QRCode.toDataURL(uri, { margin: 1, width: 220 });
   await prisma.user.update({
     where: { id: user.id },
-    data: { totpSecret: encryptValue(secret), totpEnabledAt: null },
+    data: { totpPendingSecret: encryptValue(secret) },
   });
   return { secret, qr, uri };
 }
 
 export type SecurityState = { error?: string; ok?: string; backupCodes?: string[] };
+
+/** The staged enrolment was cleared or claimed by something else mid-confirmation. */
+class EnrolmentSuperseded extends Error {}
 
 export async function confirmTotpEnrolment(
   _prev: SecurityState | undefined,
@@ -44,10 +80,17 @@ export async function confirmTotpEnrolment(
 ): Promise<SecurityState> {
   const user = await requireUser();
   const code = String(formData.get("code") ?? "").trim();
-  if (!user.totpSecret) return { error: "Start again — no pending secret found." };
+  // Read the PENDING secret, not the live one. Confirming against the live
+  // secret would let a code from the authenticator already in use "confirm" an
+  // enrolment that never happened.
+  const pending = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { totpPendingSecret: true },
+  });
+  if (!pending?.totpPendingSecret) return { error: "Start again — no pending secret found." };
   let secret: string;
   try {
-    secret = decryptValue(user.totpSecret);
+    secret = decryptValue(pending.totpPendingSecret);
   } catch {
     return { error: "Could not read the secret — start again." };
   }
@@ -55,14 +98,45 @@ export async function confirmTotpEnrolment(
     return { error: "That code isn't right. Check your authenticator and try again." };
   }
 
+  // The session version THIS transaction produced. Passing it to the cookie
+  // means a revoke-all landing afterwards is not undone by a later read.
+  let revokedAt: number | null = null;
+
   const backupCodes = generateBackupCodes(8);
-  const hashed = await Promise.all(backupCodes.map((item) => bcrypt.hash(item.replace("-", ""), 10)));
-  const updated = await basePrisma.$transaction(async (tx) => {
-    const updated = await tx.user.update({
-      where: { id: user.id },
-      data: { totpEnabledAt: new Date(), totpBackupCodes: JSON.stringify(hashed) },
+  // hashBackupCode normalises exactly as the login does. They previously
+  // disagreed — enrolment stripped the hyphen, the login did not — so a code
+  // typed as displayed was rejected and the recovery path failed in the one
+  // situation it exists for.
+  const hashed = await Promise.all(backupCodes.map((item) => hashBackupCode(item)));
+  let updated;
+  try {
+    updated = await basePrisma.$transaction(async (tx) => {
+    // CONDITIONAL on the exact pending value that was verified.
+    //
+    // An unconditional update here loses two races. If disableTotp (or an owner
+    // reset) clears the factor between the read above and this write, the
+    // promotion lands anyway and silently re-enables 2FA after it was turned
+    // off. And two confirmations running together would both issue backup-code
+    // sets while only the last stored set actually works, leaving the user
+    // holding codes that verify against nothing.
+    //
+    // Claiming the pending value makes the second writer match no row.
+    const claimed = await tx.user.updateMany({
+      where: { id: user.id, totpPendingSecret: pending.totpPendingSecret },
+      data: {
+        totpSecret: encryptValue(secret),
+        totpPendingSecret: null,
+        totpEnabledAt: new Date(),
+        totpBackupCodes: JSON.stringify(hashed),
+      },
     });
-    await bumpUserSessionVersion(user.id, tx);
+    if (claimed.count !== 1) {
+      // Nothing is written, no session version is bumped and no audit entry is
+      // filed, because none of it happened.
+      throw new EnrolmentSuperseded();
+    }
+    const updated = await tx.user.findUniqueOrThrow({ where: { id: user.id } });
+    revokedAt = await bumpUserSessionVersion(user.id, tx);
     await logAuditStrict({
       action: "auth.2fa_enabled",
       summary: "Authenticator-app 2FA enabled; prior sessions revoked",
@@ -71,8 +145,16 @@ export async function confirmTotpEnrolment(
       user,
     }, tx);
     return updated;
-  }, GOVERNANCE_TX);
-  await createSessionCookie(updated);
+    }, GOVERNANCE_TX);
+  } catch (error) {
+    // A superseded enrolment is a normal outcome of two things happening at
+    // once, not a fault — tell the user plainly instead of showing a crash.
+    if (error instanceof EnrolmentSuperseded) {
+      return { error: "This setup is no longer active — two-factor authentication was changed elsewhere. Start again." };
+    }
+    throw error;
+  }
+  await createSessionCookie(updated, { sessionVersion: revokedAt ?? undefined });
   revalidatePath("/settings");
   return { ok: "Two-factor authentication is on.", backupCodes };
 }
@@ -90,12 +172,15 @@ export async function disableTotp(
   } catch {}
   if (!ok) return { error: "Enter a current authenticator code to turn 2FA off." };
 
+  // The session version THIS transaction produced. Passing it to the cookie
+  // means a revoke-all landing afterwards is not undone by a later read.
+  let revokedAt: number | null = null;
   const updated = await basePrisma.$transaction(async (tx) => {
     const updated = await tx.user.update({
       where: { id: user.id },
-      data: { totpSecret: null, totpEnabledAt: null, totpBackupCodes: null },
+      data: { totpSecret: null, totpPendingSecret: null, totpEnabledAt: null, totpBackupCodes: null },
     });
-    await bumpUserSessionVersion(user.id, tx);
+    revokedAt = await bumpUserSessionVersion(user.id, tx);
     await logAuditStrict({
       action: "auth.2fa_disabled",
       summary: "Authenticator-app 2FA disabled; prior sessions revoked",
@@ -105,7 +190,7 @@ export async function disableTotp(
     }, tx);
     return updated;
   }, GOVERNANCE_TX);
-  await createSessionCookie(updated);
+  await createSessionCookie(updated, { sessionVersion: revokedAt ?? undefined });
   revalidatePath("/settings");
   return { ok: "Two-factor authentication turned off." };
 }
@@ -117,12 +202,15 @@ export async function setEmailOtp(enabled: boolean): Promise<ActionResult> {
     // transaction: a failed audit must roll the change back rather than leave it
     // committed while the save reports as failed. The cookie write is not
     // database work and stays outside, after the commit.
+    // The session version THIS transaction produced. Passing it to the cookie
+    // means a revoke-all landing afterwards is not undone by a later read.
+  let revokedAt: number | null = null;
     const updated = await basePrisma.$transaction(async (tx) => {
       const updated = await tx.user.update({
         where: { id: user.id },
         data: { emailOtpEnabled: enabled },
       });
-      await bumpUserSessionVersion(user.id, tx);
+      revokedAt = await bumpUserSessionVersion(user.id, tx);
       await logAuditStrict({
         action: enabled ? "auth.email_2fa_enabled" : "auth.email_2fa_disabled",
         summary: `Email sign-in codes ${enabled ? "enabled" : "disabled"}; prior sessions revoked`,
@@ -132,7 +220,7 @@ export async function setEmailOtp(enabled: boolean): Promise<ActionResult> {
       }, tx);
       return updated;
     }, GOVERNANCE_TX);
-    await createSessionCookie(updated);
+    await createSessionCookie(updated, { sessionVersion: revokedAt ?? undefined });
     revalidatePath("/settings");
   });
 }
@@ -142,6 +230,7 @@ export async function saveSessionPolicy(formData: FormData) {
     const owner = await requireOwner();
     const minutes = parseInt(String(formData.get("idleMinutes") ?? "60"), 10);
     const safe = isNaN(minutes) || minutes < 5 ? 60 : Math.min(minutes, 1440);
+    let revokedAt: number | null = null;
     await basePrisma.$transaction(async (tx) => {
       // The setting used to be written and committed BEFORE this transaction.
       // If the revocation or the audit then failed, the new idle timeout was
@@ -149,6 +238,11 @@ export async function saveSessionPolicy(formData: FormData) {
       // existing session stayed valid under a policy nobody knew had changed.
       await putSetting("SESSION_IDLE_MINUTES", String(safe), tx);
       await tx.$executeRaw`UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1`;
+      // The owner's own new version, read inside the same transaction.
+      const rows = await tx.$queryRaw<Array<{ sessionVersion: number }>>`
+        SELECT "sessionVersion" FROM "User" WHERE "id" = ${owner.id}
+      `;
+      revokedAt = rows[0]?.sessionVersion ?? null;
       await logAuditStrict({
         action: "security.policy_changed",
         summary: `Idle-timeout policy set to ${safe} minutes; active sessions revoked`,
@@ -158,7 +252,7 @@ export async function saveSessionPolicy(formData: FormData) {
         after: { idleMinutes: safe },
       }, tx);
     }, GOVERNANCE_TX);
-    await createSessionCookie(owner);
+    await createSessionCookie(owner, { sessionVersion: revokedAt ?? undefined });
     revalidatePath("/settings");
   });
 }
@@ -216,7 +310,18 @@ export async function ownerResetUser2fa(userId: string): Promise<ActionResult> {
     await basePrisma.$transaction(async (tx) => {
       const target = await tx.user.update({
         where: { id: userId },
-        data: { totpSecret: null, totpEnabledAt: null, totpBackupCodes: null, emailOtpEnabled: false },
+        data: {
+          totpSecret: null,
+          // Cleared here too. An owner resetting a user's 2FA expects every
+          // authenticator gone, and a secret staged before the reset would
+          // otherwise survive it and be promoted afterwards — quietly restoring
+          // access the owner had just revoked. disableTotp clearing it is not
+          // enough: this is a second, independent path that resets 2FA.
+          totpPendingSecret: null,
+          totpEnabledAt: null,
+          totpBackupCodes: null,
+          emailOtpEnabled: false,
+        },
       });
       await bumpUserSessionVersion(userId, tx);
       await logAuditStrict({
