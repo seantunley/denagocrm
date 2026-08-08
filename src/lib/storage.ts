@@ -257,6 +257,78 @@ export async function readFile(ref: string): Promise<Buffer> {
   return streamToBuffer(res.body);
 }
 
+/**
+ * A pathname as {@link putManagedBlob} returns it: folder segments inside our
+ * own store. Returns the value rather than a boolean, for classifyRef's reason —
+ * a caller cannot use the result without having gone through the check.
+ *
+ * Everything readFile's local branch is dangerous about is refused here: no
+ * traversal, no absolute path, no backslash or NUL, no empty segment. A scheme
+ * is refused too, because a URL is {@link readFile}'s business, not this one's.
+ */
+export function managedBlobPathname(ref: string | null | undefined): string | null {
+  const value = (ref ?? "").trim();
+  if (!value || value.includes("\0") || value.includes("\\")) return null;
+  if (value.startsWith("/") || path.isAbsolute(value)) return null;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return null;
+  const segments = value.split("/");
+  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) return null;
+  return value;
+}
+
+/**
+ * Read a blob WE wrote, addressed by the pathname {@link putManagedBlob}
+ * returned rather than by its URL.
+ *
+ * Why this exists alongside readFile(): a ref naming a FOLDER PATH is neither of
+ * readFile's two shapes — not a Blob URL, not a bare filename — so classifyRef
+ * refuses it outright. Tenant branding stores exactly that shape deliberately:
+ * `branding/<tenantId>/logo-<stamp>.<ext>` is what lets the public logo route
+ * REBUILD a path from the tenant id and a validated filename instead of trusting
+ * anything in the request, and what keeps a logo frozen into a signed document
+ * resolvable after the tenant rebrands.
+ *
+ * The two halves disagreed in production: the upload wrote a ref the reader
+ * could never read, so every tenant logo 404'd and the sidebar showed a broken
+ * image. The stored refs are correct — the reader for them was missing.
+ *
+ * There is deliberately NO local-disk branch. putManagedBlob has none either (it
+ * throws without a token), so a managed blob is never on disk, and adding one
+ * would hand a slashed path to path.join() — the single thing classifyRef exists
+ * to prevent.
+ */
+export async function readManagedBlob(ref: string): Promise<Buffer> {
+  const pathname = managedBlobPathname(ref);
+  if (!pathname) throw new Error("Refusing an unrecognised managed blob pathname");
+
+  // The private store answers by pathname directly, and reaching it with our own
+  // token is itself the proof of ownership.
+  const privately = privateToken();
+  if (privately) {
+    try {
+      const result = await get(pathname, { access: "private", token: privately });
+      if (result?.stream) return await streamToBuffer(result.stream);
+    } catch (error) {
+      // A miss means the object predates private mode — try the public store.
+      // The cap is not a miss; re-reading over the public route would fetch the
+      // same oversized object again.
+      if (error instanceof BlobTooLargeError) throw error;
+    }
+  }
+
+  // The public store has no read-by-pathname, so resolve the pathname to the URL
+  // OUR store reports and read THAT through readFile — which re-proves ownership
+  // and applies the size cap, rather than duplicating either here. An exact
+  // match, not the prefix: `list` would also return `…/logo-1.png.bak`.
+  const publicly = publicToken();
+  if (publicly) {
+    const match = (await collectBlobs(pathname, publicly)).find((blob) => blob.pathname === pathname);
+    if (match) return readFile(match.url);
+  }
+
+  throw new Error("Managed blob not found");
+}
+
 export async function deleteFile(ref: string): Promise<void> {
   if (isBlobRef(ref)) {
     // Pick the token for the store the object lives in. A private-file deletion
