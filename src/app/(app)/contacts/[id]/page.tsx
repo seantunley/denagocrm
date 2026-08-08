@@ -52,7 +52,7 @@ export default async function ContactDetailPage({
     where: { id },
     include: {
       vehicles: { where: { deletedAt: null }, include: { serviceRecords: true, mileageLogs: true } },
-      leads: { where: { deletedAt: null }, include: { stage: true, product: true }, orderBy: { createdAt: "desc" } },
+      leads: { where: { deletedAt: null }, include: { stage: true, product: true, createdBy: true }, orderBy: { createdAt: "desc" } },
       communications: { include: { user: true }, orderBy: { occurredAt: "desc" } },
       documents: { where: { deletedAt: null }, include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
       // Quotes are shown ALONGSIDE the files in the Documents tab. Previously the
@@ -629,6 +629,15 @@ export default async function ContactDetailPage({
                 }
               : null
           }
+          leadNotes={contact.leads
+            .filter((lead) => lead.notes?.trim())
+            .map((lead) => ({
+              leadId: lead.id,
+              title: lead.title,
+              text: lead.notes!,
+              when: lead.createdAt,
+              who: lead.createdBy?.name ?? `via ${lead.source}`,
+            }))}
         />
       </div>
     </EntityDetailShell>

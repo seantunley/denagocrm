@@ -149,6 +149,10 @@ export async function createLead(formData: FormData) {
             email: data.email,
             phone: data.phone,
             source: data.source,
+            // Whatever was typed in the lead's notes follows the customer onto
+            // their contact record. Omitting it dropped it silently: the note was
+            // captured on a form the person filled in, and then existed nowhere.
+            notes: data.notes,
             createdById: user.id,
             ownerId: data.assignedToId ?? user.id,
           },
@@ -436,6 +440,9 @@ export async function markWon(leadId: string, formData?: FormData) {
           email: before.email,
           phone: before.phone,
           source: before.source,
+          // Carried, for the same reason as createLead: winning a lead must not
+          // be the moment its notes disappear.
+          notes: before.notes,
           tenantId: before.tenantId,
           createdById: user.id,
           ownerId: before.assignedToId ?? user.id,
@@ -596,6 +603,9 @@ export async function convertLeadToContact(leadId: string): Promise<{ ok: boolea
           email: lead.email,
           phone: lead.phone,
           source: lead.source,
+          // Converting is explicitly "this lead is now a customer". Losing the
+          // notes at that point loses the reason the customer exists.
+          notes: lead.notes,
           tenantId: lead.tenantId,
           createdById: user.id,
           ownerId: lead.assignedToId ?? user.id,
