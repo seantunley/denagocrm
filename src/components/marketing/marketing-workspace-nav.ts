@@ -7,8 +7,8 @@ export type MarketingWorkspaceSection = {
 
 /**
  * Keep the workspace navigation on the same RBAC decision as the application
- * navigation. Only direct /marketing children are top-level workspace tabs;
- * deeper pages (such as survey insights) remain active beneath their parent.
+ * navigation. The full Marketing group is returned so this shell does not
+ * maintain a narrower, independently curated answer.
  */
 export function buildMarketingWorkspaceSections(
   isAdmin: boolean,
@@ -18,7 +18,5 @@ export function buildMarketingWorkspaceSections(
     (group) => group.key === "marketing",
   );
 
-  return (marketing?.links ?? [])
-    .filter((link) => /^\/marketing\/[^/]+$/.test(link.href))
-    .map(({ href, label }) => ({ href, label }));
+  return (marketing?.links ?? []).map(({ href, label }) => ({ href, label }));
 }
