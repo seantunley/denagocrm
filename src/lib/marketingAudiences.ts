@@ -51,6 +51,56 @@ export function validateAudienceTree(tree: AudienceGroup) {
   return tree;
 }
 
+function referenceValues(value: unknown) {
+  return (Array.isArray(value) ? value : [value])
+    .flatMap((item) => typeof item === "string" ? item.split(",") : [String(item ?? "")])
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function collectReferenceIds(tree: AudienceGroup, field: "tag" | "product_interest") {
+  const ids = new Set<string>();
+  const visit = (node: AudienceRule | AudienceGroup) => {
+    if (group(node)) {
+      node.rules.forEach(visit);
+      (node.exclusions ?? []).forEach(visit);
+      return;
+    }
+    if (field === "tag" && node.legacyCriteria?.tagId) {
+      referenceValues(node.legacyCriteria.tagId).forEach((id) => ids.add(id));
+    }
+    if (node.field === field) referenceValues(node.value).forEach((id) => ids.add(id));
+  };
+  visit(tree);
+  return [...ids];
+}
+
+/**
+ * Rule trees may carry database identifiers. The browser only offers values
+ * owned by the active tenant, but Server Actions are public POST endpoints and
+ * must not trust those options. Validate references again on the server so a
+ * crafted preview/create/update request cannot smuggle another tenant's tag or
+ * product id into a saved audience or campaign launch.
+ */
+export async function validateAudienceReferences(tree: AudienceGroup, tenantId: string | null) {
+  validateAudienceTree(tree);
+  const tagIds = collectReferenceIds(tree, "tag");
+  const productIds = collectReferenceIds(tree, "product_interest");
+
+  if (tagIds.length > 0) {
+    if (!tenantId) throw new Error("Audience tags require an active tenant");
+    const ownedTags = await basePrisma.tag.count({ where: { tenantId, id: { in: tagIds } } });
+    if (ownedTags !== tagIds.length) throw new Error("Audience contains a tag that does not belong to this tenant");
+  }
+
+  if (productIds.length > 0) {
+    const ownedProducts = await basePrisma.product.count({ where: { tenantId, id: { in: productIds } } });
+    if (ownedProducts !== productIds.length) throw new Error("Audience contains a product that does not belong to this tenant");
+  }
+
+  return tree;
+}
+
 function compare(actual: unknown, operator: string, expected: unknown): boolean {
   if (operator === "is_empty") return actual == null || actual === "" || (Array.isArray(actual) && actual.length === 0);
   if (operator === "is_not_empty") return !compare(actual, "is_empty", expected);
@@ -130,18 +180,25 @@ export function explainAudience(tree: AudienceGroup) {
   return explain(tree);
 }
 
-/** Explicit tenant predicate keeps previews and launches isolated even while the
- * global Prisma tenant extension is dormant. No silent 5,000-contact truncation. */
+/** Explicit tenant predicates keep previews and launches isolated even while the
+ * global Prisma tenant extension is dormant. Related rows are scoped too because
+ * this intentionally uses basePrisma for deterministic server evaluation. */
 export async function evaluateAudience(tree: AudienceGroup, channel = "any", tenantId: string | null) {
-  validateAudienceTree(tree);
+  await validateAudienceReferences(tree, tenantId);
   const contacts = await basePrisma.contact.findMany({
     where: { tenantId, deletedAt: null, marketingOptOut: false },
     orderBy: { id: "asc" },
     include: {
-      tags: true,
-      vehicles: { where: { deletedAt: null }, include: { serviceRecords: true, mileageLogs: true } },
-      leads: { where: { deletedAt: null } },
-      quotes: { where: { deletedAt: null } },
+      tags: { where: { tenantId: tenantId ?? "__no_tenant__" } },
+      vehicles: {
+        where: { tenantId, deletedAt: null },
+        include: {
+          serviceRecords: { where: { tenantId } },
+          mileageLogs: { where: { tenantId } },
+        },
+      },
+      leads: { where: { tenantId, deletedAt: null } },
+      quotes: { where: { tenantId, deletedAt: null } },
     },
   });
   return contacts
@@ -155,10 +212,12 @@ export async function saveAudienceVersion(args: {
   tree: AudienceGroup;
   userId: string;
   userName: string;
+  name?: string;
 }) {
-  validateAudienceTree(args.tree);
+  await validateAudienceReferences(args.tree, args.tenantId);
   const explanation = explainAudience(args.tree);
   const count = (await evaluateAudience(args.tree, "any", args.tenantId)).length;
+  const name = args.name?.trim();
   return basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`audience-version:${args.segmentId}`}))`;
     const segments = await tx.$queryRaw<Array<{ id: string; status: string }>>`
@@ -185,17 +244,30 @@ export async function saveAudienceVersion(args: {
         ${JSON.stringify(args.tree)}::jsonb, ${explanation}, ${args.userId}, ${args.userName}
       )
     `;
-    const updated = await tx.$executeRaw`
-      UPDATE "Segment"
-      SET "ruleTree" = ${JSON.stringify(args.tree)}::jsonb,
-        "criteria" = ${JSON.stringify(args.tree)},
-        "lastCalculatedCount" = ${count},
-        "lastCalculatedAt" = CURRENT_TIMESTAMP,
-        "updatedAt" = CURRENT_TIMESTAMP
-      WHERE "id" = ${args.segmentId}
-        AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
-        AND COALESCE("status", 'active') <> 'archived'
-    `;
+    const updated = name
+      ? await tx.$executeRaw`
+          UPDATE "Segment"
+          SET "name" = ${name},
+            "ruleTree" = ${JSON.stringify(args.tree)}::jsonb,
+            "criteria" = ${JSON.stringify(args.tree)},
+            "lastCalculatedCount" = ${count},
+            "lastCalculatedAt" = CURRENT_TIMESTAMP,
+            "updatedAt" = CURRENT_TIMESTAMP
+          WHERE "id" = ${args.segmentId}
+            AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
+            AND COALESCE("status", 'active') <> 'archived'
+        `
+      : await tx.$executeRaw`
+          UPDATE "Segment"
+          SET "ruleTree" = ${JSON.stringify(args.tree)}::jsonb,
+            "criteria" = ${JSON.stringify(args.tree)},
+            "lastCalculatedCount" = ${count},
+            "lastCalculatedAt" = CURRENT_TIMESTAMP,
+            "updatedAt" = CURRENT_TIMESTAMP
+          WHERE "id" = ${args.segmentId}
+            AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
+            AND COALESCE("status", 'active') <> 'archived'
+        `;
     if (updated !== 1) throw new Error("Audience changed while saving");
     return { version, count, explanation };
   });

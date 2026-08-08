@@ -6,11 +6,37 @@ import { getActiveTenantId } from "@/lib/auth";
 import { basePrisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
 import { requireModuleEnabled } from "@/lib/modules/enabled";
-import { evaluateAudience, saveAudienceVersion, validateAudienceTree, type AudienceGroup } from "@/lib/marketingAudiences";
+import {
+  evaluateAudience,
+  saveAudienceVersion,
+  validateAudienceReferences,
+  validateAudienceTree,
+  type AudienceGroup,
+} from "@/lib/marketingAudiences";
 import { logAuditStrict } from "@/lib/audit";
 
+// Keep historical categories readable/editable while making the governed
+// Marketing workspace's purpose-specific categories authoritative for new work.
 const TEMPLATE_CATEGORIES = new Set([
-  "marketing_email", "marketing_sms", "transactional", "service", "survey", "internal",
+  "marketing_email",
+  "marketing_sms",
+  "transactional_email",
+  "transactional_sms",
+  "service_reminder",
+  "survey_invite_email",
+  "survey_invite_sms",
+  "internal_notification",
+  // Historical values retained for existing rows.
+  "transactional",
+  "service",
+  "survey",
+  "internal",
+]);
+const EMAIL_TEMPLATE_CATEGORIES = new Set([
+  "marketing_email",
+  "transactional_email",
+  "survey_invite_email",
+  "service_reminder",
 ]);
 
 function json<T>(value: FormDataEntryValue | null): T {
@@ -28,13 +54,15 @@ export async function createMarketingAudience(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim();
   const tree = validateAudienceTree(json<AudienceGroup>(formData.get("ruleTree")));
   if (!name) throw new Error("Audience name is required");
+  await validateAudienceReferences(tree, tenantId);
+
   const id = `seg_${crypto.randomUUID()}`;
   await basePrisma.$executeRaw`
     INSERT INTO "Segment" ("id", "tenantId", "name", "criteria", "ruleTree", "status", "createdAt", "updatedAt")
     VALUES (${id}, ${tenantId}, ${name}, ${JSON.stringify(tree)}, ${JSON.stringify(tree)}::jsonb, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
   `;
   try {
-    const result = await saveAudienceVersion({ segmentId: id, tenantId, tree, userId: user.id, userName: user.name });
+    const result = await saveAudienceVersion({ segmentId: id, tenantId, tree, userId: user.id, userName: user.name, name });
     await logAuditStrict({ action: "audience.created", summary: `Created audience “${name}” (${result.count} contacts)`, entityType: "Segment", entityId: id, user, after: { name, ...result } });
   } catch (error) {
     await basePrisma.$executeRaw`DELETE FROM "Segment" WHERE "id" = ${id} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}`;
@@ -46,8 +74,13 @@ export async function createMarketingAudience(formData: FormData) {
 export async function updateMarketingAudience(id: string, formData: FormData) {
   const { user, tenantId } = await contentContext("campaigns.manage_audiences");
   const tree = validateAudienceTree(json<AudienceGroup>(formData.get("ruleTree")));
-  const result = await saveAudienceVersion({ segmentId: id, tenantId, tree, userId: user.id, userName: user.name });
-  await logAuditStrict({ action: "audience.updated", summary: `Updated audience version ${result.version}`, entityType: "Segment", entityId: id, user, after: result });
+  const submittedName = formData.get("name");
+  const name = submittedName === null ? undefined : String(submittedName).trim();
+  if (submittedName !== null && !name) throw new Error("Audience name is required");
+  await validateAudienceReferences(tree, tenantId);
+
+  const result = await saveAudienceVersion({ segmentId: id, tenantId, tree, userId: user.id, userName: user.name, name });
+  await logAuditStrict({ action: "audience.updated", summary: `Updated audience version ${result.version}`, entityType: "Segment", entityId: id, user, after: { ...result, name } });
   revalidatePath("/marketing/audiences");
 }
 
@@ -56,13 +89,32 @@ export async function previewMarketingAudience(formData: FormData) {
   const tree = validateAudienceTree(json<AudienceGroup>(formData.get("ruleTree")));
   const channel = String(formData.get("channel") ?? "any");
   if (!new Set(["any", "email", "sms"]).has(channel)) throw new Error("Unsupported preview channel");
-  const contacts = await evaluateAudience(tree, channel, tenantId);
-  return contacts.slice(0, 20).map((contact) => ({
-    id: contact.id,
-    name: `${contact.firstName} ${contact.lastName ?? ""}`.trim(),
-    email: contact.email,
-    phone: contact.whatsapp ?? contact.phone,
-  }));
+  await validateAudienceReferences(tree, tenantId);
+
+  // Resolve once so the preview can explain reachability without three full
+  // database/evaluation passes. evaluateAudience itself remains tenant-scoped and
+  // excludes deleted/marketing-opted-out contacts.
+  const contacts = await evaluateAudience(tree, "any", tenantId);
+  const emailCount = contacts.filter((contact) => Boolean(contact.email)).length;
+  const smsCount = contacts.filter((contact) => Boolean(contact.whatsapp || contact.phone)).length;
+  const selected = channel === "email"
+    ? contacts.filter((contact) => Boolean(contact.email))
+    : channel === "sms"
+      ? contacts.filter((contact) => Boolean(contact.whatsapp || contact.phone))
+      : contacts;
+
+  return {
+    total: contacts.length,
+    channelCount: selected.length,
+    emailCount,
+    smsCount,
+    contacts: selected.slice(0, 20).map((contact) => ({
+      id: contact.id,
+      name: `${contact.firstName} ${contact.lastName ?? ""}`.trim(),
+      email: contact.email,
+      phone: contact.whatsapp ?? contact.phone,
+    })),
+  };
 }
 
 export async function archiveMarketingAudience(id: string) {
@@ -100,7 +152,7 @@ function templateInput(formData: FormData) {
   const plainTextBody = String(formData.get("plainTextBody") ?? "").trim() || null;
   if (!name || !body.trim()) throw new Error("Template name and body are required");
   if (!TEMPLATE_CATEGORIES.has(category)) throw new Error("Unsupported template category");
-  if (category === "marketing_email" && !subject) throw new Error("Email templates require a subject");
+  if (EMAIL_TEMPLATE_CATEGORIES.has(category) && !subject) throw new Error("Email templates require a subject");
   return { id, name, category, subject, body, plainTextBody };
 }
 
@@ -109,6 +161,8 @@ export async function saveMarketingTemplate(formData: FormData) {
   const input = templateInput(formData);
   const version = await basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`marketing-template:${input.id}`}))`;
+    // Deliberately look up the globally unique id without tenant scope first so a
+    // crafted request cannot update another tenant's template by guessing its id.
     const allRows = await tx.$queryRaw<Array<{ tenantId: string | null }>>`
       SELECT "tenantId" FROM "EmailTemplate" WHERE "id" = ${input.id} FOR UPDATE
     `;
