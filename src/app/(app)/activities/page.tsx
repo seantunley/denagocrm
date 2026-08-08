@@ -28,8 +28,10 @@ import { Input } from "@/components/ui/input";
 import {
   EmptyState,
   MetricCard,
+  MetricStrip,
   StatusPill,
   Surface,
+  WorkspaceToolbar,
 } from "@/components/visual-system";
 import { getAccessibleActivityIds } from "@/lib/activityAccess";
 import { prisma } from "@/lib/db";
@@ -251,9 +253,7 @@ export default async function ActivitiesPage({
         )}
       </PageHeader>
 
-      <section className="relative overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-        <div className="pointer-events-none absolute -right-20 -top-24 size-72 rounded-full bg-primary/[0.08] blur-3xl" />
-        <div className="relative grid grid-cols-2 gap-px bg-border lg:grid-cols-4">
+      <MetricStrip>
           <MetricCard
             icon={ListTodo}
             label="Planned"
@@ -283,10 +283,9 @@ export default async function ActivitiesPage({
             detail="Scheduled ahead"
             className="rounded-none border-0 shadow-none"
           />
-        </div>
-      </section>
+      </MetricStrip>
 
-      <section className="rounded-2xl border border-border bg-card/70 p-3 shadow-sm">
+      <WorkspaceToolbar>
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div
             className="flex rounded-xl border border-border bg-background/50 p-1"
@@ -360,7 +359,7 @@ export default async function ActivitiesPage({
             )}
           </form>
         </div>
-      </section>
+      </WorkspaceToolbar>
 
       {activities.length === 0 ? (
         <EmptyState

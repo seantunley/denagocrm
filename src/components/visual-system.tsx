@@ -114,6 +114,46 @@ export function MetricCard({
   );
 }
 
+export function MetricStrip({
+  children,
+  glow = "right",
+  className,
+}: {
+  children: ReactNode;
+  glow?: "left" | "right" | "none";
+  className?: string;
+}) {
+  return (
+    <section className={cn("relative overflow-hidden rounded-2xl border border-border bg-card shadow-sm", className)}>
+      {glow !== "none" && (
+        <div
+          className={cn(
+            "pointer-events-none absolute -top-24 size-72 rounded-full bg-primary/[0.08] blur-3xl",
+            glow === "left" ? "-left-20" : "-right-20",
+          )}
+        />
+      )}
+      <div className="relative grid grid-cols-2 gap-px bg-border [&>*]:rounded-none [&>*]:border-0 [&>*]:shadow-none lg:grid-cols-4">
+        {children}
+      </div>
+    </section>
+  );
+}
+
+export function WorkspaceToolbar({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={cn("rounded-2xl border border-border bg-card/70 p-3 shadow-sm", className)}>
+      {children}
+    </section>
+  );
+}
+
 export function EmptyState({
   icon: Icon,
   title,
