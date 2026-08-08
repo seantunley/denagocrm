@@ -136,9 +136,18 @@ function buildCtx(digits: string, match: { contactId: string | null; leadId: str
   };
 }
 
-async function logOutbound(text: string, contactId: string | null, leadId: string | null, digits: string) {
-  const firstUser = await resolveTenantActor(); // tenant-aware (channel scope); dormant → oldest active user
-  if (!firstUser) return;
+async function logOutbound(
+  text: string,
+  contactId: string | null,
+  leadId: string | null,
+  digits: string,
+  actorId: string,
+) {
+  // The actor is PASSED IN, resolved before anything was sent. It used to be
+  // resolved here with `if (!firstUser) return`, so a missing tenant actor meant
+  // the customer had the message and the CRM had no record of it. Review found
+  // this on the Messenger side; it was always true here too, and copying the
+  // pattern would have established parity without audit safety.
   await prisma.communication.create({
     data: {
       type: "whatsapp",
@@ -147,7 +156,7 @@ async function logOutbound(text: string, contactId: string | null, leadId: strin
       body: contactId || leadId ? text : `${text}\n\n[to +${digits}]`,
       contactId,
       leadId,
-      userId: firstUser.id,
+      userId: actorId,
     },
   });
 }
@@ -169,6 +178,15 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
   const session: FlowSession =
     !existing || restart ? { nodeId: null, vars: seed } : { nodeId: existing.nodeId, vars: existing.vars };
 
+  // FAIL CLOSED BEFORE SENDING ANYTHING. Without a tenant actor a reply cannot be
+  // recorded, and a bot that talks to a customer with no trace of it is worse
+  // than a bot that stays quiet.
+  const actor = await resolveTenantActor();
+  if (!actor) {
+    console.error("[bot] refusing to reply on whatsapp: no tenant actor, so the reply could not be recorded");
+    return true;
+  }
+
   const flow = await getActiveFlow();
   const result = await runFlow(flow, session, input, buildCtx(digits, match));
 
@@ -176,10 +194,10 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
     let ok = false;
     if (m.type === "text") {
       ok = (await sendWhatsAppText(digits, m.text)).ok;
-      if (ok) await logOutbound(m.text, match.contactId, match.leadId, digits);
+      if (ok) await logOutbound(m.text, match.contactId, match.leadId, digits, actor.id);
     } else if (m.type === "image") {
       ok = (await sendWhatsAppImage(digits, m.url, m.caption)).ok;
-      if (ok) await logOutbound(m.caption ? `🖼 ${m.caption}` : "🖼 [image]", match.contactId, match.leadId, digits);
+      if (ok) await logOutbound(m.caption ? `🖼 ${m.caption}` : "🖼 [image]", match.contactId, match.leadId, digits, actor.id);
     } else {
       // choice: buttons (≤3) or list (>3)
       const res =
@@ -187,7 +205,7 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput): Promise
           ? await sendWhatsAppButtons(digits, m.text, m.options.map((o) => ({ id: o.id, title: o.label })))
           : await sendWhatsAppList(digits, m.text, "Choose", m.options.map((o) => ({ id: o.id, title: o.label, description: o.description })));
       ok = res.ok;
-      if (ok) await logOutbound(`${m.text}\n${m.options.map((o) => `• ${o.label}`).join("\n")}`, match.contactId, match.leadId, digits);
+      if (ok) await logOutbound(`${m.text}\n${m.options.map((o) => `• ${o.label}`).join("\n")}`, match.contactId, match.leadId, digits, actor.id);
     }
   }
 

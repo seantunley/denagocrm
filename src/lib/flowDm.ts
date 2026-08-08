@@ -36,12 +36,17 @@ async function logOutboundDm(
   platform: DmPlatform,
   text: string,
   contactId: string | null,
+  actorId: string,
 ): Promise<void> {
-  // The channel-scoped tenant actor, same as the inbound recorder uses. Without
-  // one there is nobody to attribute the row to, and an unattributed
-  // Communication is worse than none.
-  const actor = await resolveTenantActor();
-  if (!actor) return;
+  // The actor is PASSED IN, resolved before anything was sent. It used to be
+  // resolved here, after the send, with `if (!actor) return` — so a missing
+  // tenant actor meant the customer had the message and the CRM had no record.
+  // That is the precise thing this function exists to prevent, and it was the
+  // one path that could still do it.
+  //
+  // A failure here cannot be transactional with Meta — the message is already
+  // gone. It is therefore RE-THROWN to the webhook's error log rather than
+  // swallowed, so an unrecorded send is discoverable instead of silent.
   await prisma.communication.create({
     data: {
       type: platform,
@@ -49,7 +54,7 @@ async function logOutboundDm(
       subject: FLOW_MARKER,
       body: text,
       contactId,
-      userId: actor.id,
+      userId: actorId,
     },
   });
 }
@@ -67,6 +72,20 @@ export async function runDmFlow(
 ): Promise<void> {
   if (!senderId) return;
   if (!(await dmBotEnabled())) return;
+
+  // FAIL CLOSED BEFORE SENDING ANYTHING.
+  //
+  // Without a tenant actor there is nobody to attribute a Communication to, so a
+  // reply sent now could not be recorded — the customer would have a message the
+  // CRM has never heard of. Resolving it here, before the flow runs, means the
+  // bot simply does not speak rather than speaking off the record.
+  const actor = await resolveTenantActor();
+  if (!actor) {
+    console.error(
+      `[bot] refusing to reply on ${platform}: no tenant actor, so the reply could not be recorded`,
+    );
+    return;
+  }
 
   // Personalise: greet a known customer by name.
   const contact = await prisma.contact.findFirst({
@@ -89,16 +108,16 @@ export async function runDmFlow(
   for (const m of result.messages) {
     if (m.type === "text") {
       const sent = await sendDirectMessage(platform, senderId, m.text);
-      if (sent.ok) await logOutboundDm(platform, m.text, contact?.id ?? null);
+      if (sent.ok) await logOutboundDm(platform, m.text, contact?.id ?? null, actor.id);
     } else if (m.type === "image") {
       const sent = await sendDirectAttachment(platform, senderId, { type: "image", url: m.url });
       // Always "[image]", never the caption: unlike WhatsApp, the DM channels send
       // the caption as its OWN message, which is recorded below. Folding it in here
       // too would print the caption twice in the timeline.
-      if (sent.ok) await logOutboundDm(platform, "🖼 [image]", contact?.id ?? null);
+      if (sent.ok) await logOutboundDm(platform, "🖼 [image]", contact?.id ?? null, actor.id);
       if (m.caption) {
         const caption = await sendDirectMessage(platform, senderId, m.caption);
-        if (caption.ok) await logOutboundDm(platform, m.caption, contact?.id ?? null);
+        if (caption.ok) await logOutboundDm(platform, m.caption, contact?.id ?? null, actor.id);
       }
     } else {
       const sent = await sendDirectQuickReplies(
@@ -114,6 +133,7 @@ export async function runDmFlow(
           platform,
           `${m.text}\n${m.options.map((o) => `• ${o.label}`).join("\n")}`,
           contact?.id ?? null,
+          actor.id,
         );
       }
     }
