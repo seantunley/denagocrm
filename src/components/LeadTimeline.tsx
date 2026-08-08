@@ -17,6 +17,7 @@ import {
 import { compareTimelineItems } from "@/lib/timelineOrdering";
 import { type FieldChange } from "@/lib/auditDetail";
 import { FOLLOW_UP_TYPE } from "@/lib/followUp";
+import { distinctLeadNotes } from "@/lib/timelineNotes";
 import PasteImageInput from "@/components/PasteImageInput";
 
 /* eslint-disable @next/next/no-img-element */
@@ -165,6 +166,9 @@ export default async function LeadTimeline({
         : null
     : null;
 
+  // See lib/timelineNotes.ts: a lead note that IS the contact's note is one note.
+  const shownLeadNotes = distinctLeadNotes(leadNotes, creationNote);
+
   const targets: Array<{ kind: TimelinePinKind; itemId: string }> = [
     ...activities.map((activity) => ({
       kind: "activity" as const,
@@ -174,7 +178,7 @@ export default async function LeadTimeline({
       kind: "communication" as const,
       itemId: communication.id,
     })),
-    ...leadNotes.map((note) => ({
+    ...shownLeadNotes.map((note) => ({
       kind: "lead_note" as const,
       itemId: note.leadId,
     })),
@@ -243,7 +247,7 @@ export default async function LeadTimeline({
           } satisfies Item,
         ]
       : []),
-    ...leadNotes.map((note): Item => ({
+    ...shownLeadNotes.map((note): Item => ({
       id: `lead-note-${note.leadId}`,
       icon: icons.lead,
       title: `Original lead note — ${note.title}`,
