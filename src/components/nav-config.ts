@@ -105,7 +105,7 @@ export function buildNav(
     marketingLinks.push({ href: "/marketing/surveys", label: "Surveys", icon: ClipboardList });
     marketingLinks.push({ href: "/marketing/surveys/insights", label: "Survey insights", icon: HeartPulse });
   }
-  if (can("contacts.view_all", "contacts.view_owned")) marketingLinks.push({ href: "/referrals", label: "Referrals", icon: Gift });
+  if (can("referrals.view", "referrals.manage")) marketingLinks.push({ href: "/referrals", label: "Referrals", icon: Gift });
   if (marketingLinks.length) groups.push({ key: "marketing", label: "Marketing", links: marketingLinks });
 
   if (can("stock.view", "stock.manage")) {
