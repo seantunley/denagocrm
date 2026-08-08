@@ -22,9 +22,10 @@ import { stringifyBackup, reviveBackupBigInts } from "@/lib/backup";
  * the export today.
  *
  * So this test keeps its assertions, which are real and worth having, under an
- * honest title. The retrieval half is guarded by
- * scripts/check-backup-column-drift.ts, which asks the DATABASE what columns
- * exist and fails when one is invisible to the exporter.
+ * honest title. The retrieval half is not this test's job and never could be:
+ * it is fixed in the exporter itself, which now takes its table list from the
+ * DATABASE and reads every column with SELECT *, and guarded by
+ * scripts/check-backup-coverage.ts running in CI after migrations.
  */
 test("the backup SERIALISER carries unknown keys and BigInt values intact", () => {
   // Keys a `SELECT *` would produce and a Prisma model would not — the shape the
