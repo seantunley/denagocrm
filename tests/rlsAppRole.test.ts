@@ -165,7 +165,11 @@ test("the refusal happens before the lock and before any DDL", () => {
   // would make these comparisons pass no matter where the guard actually runs.
   const guardAt = code.indexOf("const problem = migrationRoleProblem({");
   const lockAt = code.indexOf("pg_advisory_lock(");
-  const applyAt = code.indexOf("applyOne(name, childEnv)");
+  // The CALL, and `await` is what distinguishes it from the DEFINITION. Dropping
+  // the closing paren to survive a new argument made this match the definition
+  // instead — which sits ABOVE the guard, so the assertion below inverted and
+  // failed loudly. Exactly the trap this comment block was written about.
+  const applyAt = code.indexOf("await applyOne(name, childEnv");
   assert.ok(guardAt !== -1 && lockAt !== -1 && applyAt !== -1);
   assert.ok(guardAt < lockAt, "a refused run must not queue behind a real deploy");
   assert.ok(guardAt < applyAt, "…and must not have applied anything");
