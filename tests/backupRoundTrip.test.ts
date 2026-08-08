@@ -2,15 +2,33 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { stringifyBackup, reviveBackupBigInts } from "@/lib/backup";
 
-// The export is column-complete (SELECT *), but a backup is only useful if a
-// restore can *consume* those columns. There is no automated DB-restore importer
-// (Neon PITR is the primary recovery mechanism); "restore" here means a consumer
-// reading the portable export. This proves that consumer round-trips the
-// out-of-model columns AND BigInt values intact.
-test("backup round-trips out-of-model columns and BigInt values (restore-ready)", () => {
-  // Shape a `data` payload as SELECT * would produce: includes columns absent
-  // from the Prisma models (Lead.teamId/pipelineId/forecast, PipelineStage.pipelineId)
-  // and a BigInt (CustomerCase.number).
+/**
+ * WHAT THIS TEST DOES AND DOES NOT ESTABLISH.
+ *
+ * It was recovered from #81 with its original framing — "the export is
+ * column-complete (SELECT *)" — and review was right that the framing is false
+ * and the test cannot see it. It hands a hand-built object to stringifyBackup and
+ * reviveBackupBigInts, so it proves the SERIALISER carries whatever it is given.
+ * It says nothing about what the exporter retrieves.
+ *
+ * And the exporter is not column-complete. `exportAllModels` walks Prisma's DMMF
+ * and calls each model's ordinary `findMany()`, which returns only the fields
+ * Prisma declares; just four signing tables use `SELECT *`. A column that exists
+ * in the database and not in the Prisma model is silently absent from every
+ * backup.
+ *
+ * That is not hypothetical. `BackupRun.tenantId` exists in production and not in
+ * the schema — the RLS coverage migration documents it — so it is missing from
+ * the export today.
+ *
+ * So this test keeps its assertions, which are real and worth having, under an
+ * honest title. The retrieval half is guarded by
+ * scripts/check-backup-column-drift.ts, which asks the DATABASE what columns
+ * exist and fails when one is invisible to the exporter.
+ */
+test("the backup SERIALISER carries unknown keys and BigInt values intact", () => {
+  // Keys a `SELECT *` would produce and a Prisma model would not — the shape the
+  // serialiser must not drop, whether or not the exporter currently supplies it.
   const data = {
     Lead: [
       {
