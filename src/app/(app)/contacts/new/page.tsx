@@ -12,6 +12,7 @@ import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { SectionHeading, Surface } from "@/components/visual-system";
 import { prisma } from "@/lib/db";
+import { fleetPicker } from "@/lib/fleetDirectory";
 import { requirePermission } from "@/lib/permissions";
 
 const nextSteps = [
@@ -22,7 +23,10 @@ const nextSteps = [
 
 export default async function NewContactPage() {
   await requirePermission("contacts.create");
-  const users = await prisma.user.findMany({ orderBy: { name: "asc" } });
+  const [users, picker] = await Promise.all([
+    prisma.user.findMany({ orderBy: { name: "asc" } }),
+    fleetPicker(),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -44,6 +48,7 @@ export default async function NewContactPage() {
           action={createContact}
           submitLabel="Create contact"
           users={users.map((user) => ({ id: user.id, name: user.name }))}
+          fleetPicker={picker}
           variant="page"
         />
 

@@ -484,7 +484,9 @@ test("trace reads go through the tenant-filtered client, never raw SQL", () => {
 
 test("the run trace is gated and reachable", () => {
   const page = shipped("src/app/(app)/journeys/activity/page.tsx");
-  assert.match(page, /requireOwner\(\)/, "a trace exposes entity ids and must be gated");
+  // Gated on journeys.manage via the shared route table — see
+  // oneAuthorizationSource.test.ts. requireOwner() here contradicted the nav.
+  assert.match(page, /requireRoute\("\/journeys"\)/, "a trace exposes entity ids and must be gated");
   // searchParams is a promise in this Next; reading it synchronously would be
   // silently undefined and every run would render as "not available".
   assert.match(page, /searchParams: Promise<\{ run\?: string \}>/);

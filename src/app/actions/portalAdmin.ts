@@ -9,6 +9,7 @@ import { basePrisma, prisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { requirePermission } from "@/lib/permissions";
+import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { GOVERNANCE_TX, logAudit } from "@/lib/audit";
 
 const text = (formData: FormData, key: string) => String(formData.get(key) ?? "").trim();
@@ -24,6 +25,46 @@ export async function grantPortalAccess(formData: FormData) {
       throw new ActionRefusal("Viewer and target are required");
     }
     if (!["viewer", "manager", "owner"].includes(role)) throw new ActionRefusal("Invalid portal role");
+
+    // BOTH ids come off the form and both went straight into the INSERT. Nothing
+    // checked that either one names a real record, let alone one belonging to this
+    // workspace — so a forged POST (every "use server" export is a public endpoint)
+    // could file a grant pointing at another tenant's contact or fleet, stamped
+    // with the CALLER's tenantId. Read back through the tenant filter this table
+    // is being prepared for, that row is a valid grant over a foreign customer.
+    //
+    // Resolved here, not merely trusted. `prisma` is the scoped client, and the
+    // predicate is ALSO written by hand because this file's writes go through
+    // basePrisma and the guard extension is dormant today — activeTenantPredicate
+    // is `{}` until enforcement is on, so today this is the existence check the
+    // action has always needed, and it becomes the tenant check when RLS lands.
+    //
+    // Deliberately NOT canAccessContact: `portal_access.manage` is the boundary
+    // the product expresses for this surface, and /settings/portal-access already
+    // offers its holder every customer to pick from. Requiring contacts.view_* on
+    // top would silently disable portal administration for a role that is supposed
+    // to have it. Narrowing WHO may administer the portal is a product decision,
+    // not a fix; this closes the id-forgery hole without making it.
+    //
+    // Same refusal for "not yours" and "does not exist" — a distinguishable
+    // message makes this an id oracle over the customer base.
+    const tenantWhere = activeTenantPredicate("portal access grant");
+    const [viewer, target] = await Promise.all([
+      prisma.contact.findFirst({
+        where: { id: viewerContactId, deletedAt: null, ...tenantWhere },
+        select: { id: true },
+      }),
+      targetType === "contact"
+        ? prisma.contact.findFirst({
+            where: { id: targetId, deletedAt: null, ...tenantWhere },
+            select: { id: true },
+          })
+        : prisma.fleet.findFirst({
+            where: { id: targetId, deletedAt: null, ...tenantWhere },
+            select: { id: true },
+          }),
+    ]);
+    if (!viewer || !target) throw new ActionRefusal("That customer isn't available.");
 
     const id = crypto.randomUUID();
     // Multi-tenancy readiness: stamp the owning tenant, same idiom as

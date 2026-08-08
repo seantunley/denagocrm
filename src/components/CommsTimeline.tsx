@@ -28,6 +28,14 @@ type Comm = {
   attachmentUrl?: string | null;
   occurredAt: Date;
   user: { name: string };
+  /**
+   * Which customer this entry belongs to. Only set where the timeline shows an
+   * AGGREGATE — the fleet page pools the communications of every contact in the
+   * fleet, and "they said Thursday works" means nothing without knowing who
+   * said it. On a single contact's page the owner is the page you are already
+   * on, so it is omitted and nothing renders.
+   */
+  ownerLabel?: string | null;
 };
 
 export default function CommsTimeline({
@@ -35,16 +43,29 @@ export default function CommsTimeline({
   contactId,
   leadId,
   revalidate,
+  hideCreate = false,
+  emptyText = "No communications logged yet.",
 }: {
   communications: Comm[];
   contactId?: string;
   leadId?: string;
   revalidate: string;
+  /**
+   * Drop the "log a call / email / note" form. For AGGREGATE views (the fleet
+   * page) where there is no single record to file the entry against: with no
+   * contactId or leadId the form would log a communication against nobody, which
+   * reads as success and lands on no customer's timeline. Deleting the entries
+   * already listed stays available — those carry their own ids.
+   */
+  hideCreate?: boolean;
+  /** What to say when there is nothing to show. */
+  emptyText?: string;
 }) {
   return (
     <div className="card">
       <h2 className="font-semibold mb-4">Communications</h2>
 
+      {!hideCreate && (
       <details className="mb-4">
         <summary className="btn-secondary btn-sm inline-flex cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
           + Log a call / email / note
@@ -99,9 +120,10 @@ export default function CommsTimeline({
         </div>
         </form>
       </details>
+      )}
 
       {communications.length === 0 ? (
-        <p className="text-sm text-slate-400">No communications logged yet.</p>
+        <p className="text-sm text-slate-400">{emptyText}</p>
       ) : (
         <ol className="space-y-3">
           {communications.map((c) => (
@@ -117,6 +139,7 @@ export default function CommsTimeline({
                   </span>
                   <span className="text-xs text-slate-400">
                     {formatDateTime(c.occurredAt)} — {c.user.name}
+                    {c.ownerLabel ? ` · ${c.ownerLabel}` : ""}
                   </span>
                 </div>
                 {c.subject && (

@@ -1,0 +1,685 @@
+import "server-only";
+import crypto from "crypto";
+import { basePrisma } from "@/lib/db";
+import { readFile } from "@/lib/storage";
+import { sendEmail } from "@/lib/email";
+import { logError } from "@/lib/errorLog";
+import { runInTenantScope } from "@/lib/tenantScope";
+import { configuredSigningCertificateInfo, sealedPdfSignature } from "@/lib/pdf/seal";
+import { logSignEvent } from "./events";
+import { runPostCompletion } from "./postComplete";
+import { COMPLETED_EVENT, POST_COMPLETION_EVENT } from "./completionFanout";
+import { sourceSignedByThisRequest } from "./recoveryScope";
+import { signingSecurityMode } from "./securityPolicy";
+import { verifyEvidenceChain } from "./evidenceHash";
+import { verifyTimestampToken } from "./timestampVerify";
+
+const MAX_JOB_ATTEMPTS = 12;
+
+type SigningJob = {
+  id: string;
+  tenantId: string;
+  requestId: string;
+  jobType: "completion_email" | "post_completion" | "artifact_verify";
+  payload: Record<string, unknown>;
+  attempts: number;
+};
+
+type ArtifactRow = {
+  id: string;
+  tenantId: string;
+  requestId: string;
+  documentId: string | null;
+  storageRef: string;
+  sha256: string;
+  sizeBytes: number | null;
+  retentionClass: string;
+  retainUntil: Date;
+  legalHold: boolean;
+  createdAt: Date;
+};
+
+type CompletionRequest = {
+  id: string;
+  tenantId: string;
+  title: string;
+  quoteId: string | null;
+  jobCardId: string | null;
+  signedPdfRef: string | null;
+  signedPdfHash: string | null;
+  signedDocId: string | null;
+};
+
+export type SigningJobRun = {
+  claimed: number;
+  completed: number;
+  retried: number;
+  dead: number;
+  leased: number;
+};
+
+function safeMessage(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 1000);
+}
+
+function canonical(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") {
+    const input = value as Record<string, unknown>;
+    return Object.fromEntries(Object.keys(input).sort().map((key) => [key, canonical(input[key])]));
+  }
+  return value;
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(canonical(value));
+}
+
+async function claimJobs(tenantId: string, limit: number): Promise<SigningJob[]> {
+  const owner = crypto.randomUUID();
+  return basePrisma.$queryRaw<SigningJob[]>`
+    WITH candidates AS (
+      SELECT "id"
+      FROM "SigningJob"
+      WHERE "tenantId" = ${tenantId}
+        AND "status" IN ('pending','retry')
+        AND "availableAt" <= NOW()
+        AND ("leaseUntil" IS NULL OR "leaseUntil" < NOW())
+      ORDER BY "availableAt" ASC, "createdAt" ASC
+      LIMIT ${limit}
+      FOR UPDATE SKIP LOCKED
+    )
+    UPDATE "SigningJob" j
+       SET "status" = 'running',
+           "leaseOwner" = ${owner},
+           "leaseUntil" = NOW() + INTERVAL '10 minutes',
+           "attempts" = j."attempts" + 1,
+           "updatedAt" = NOW()
+      FROM candidates c
+     WHERE j."id" = c."id"
+    RETURNING j."id", j."tenantId", j."requestId", j."jobType", j."payload", j."attempts"
+  `;
+}
+
+async function claimRequestLease(job: SigningJob): Promise<string | null> {
+  const owner = `job:${job.id}:${crypto.randomUUID()}`;
+  const count = await basePrisma.$executeRaw`
+    UPDATE "SignatureRequest"
+       SET "recoveryLeaseOwner" = ${owner},
+           "recoveryLeaseUntil" = NOW() + INTERVAL '10 minutes'
+     WHERE "id" = ${job.requestId}
+       AND "tenantId" = ${job.tenantId}
+       AND ("recoveryLeaseUntil" IS NULL OR "recoveryLeaseUntil" < NOW())
+  `;
+  return count === 1 ? owner : null;
+}
+
+async function releaseRequestLease(job: SigningJob, owner: string): Promise<void> {
+  await basePrisma.$executeRaw`
+    UPDATE "SignatureRequest"
+       SET "recoveryLeaseOwner" = NULL, "recoveryLeaseUntil" = NULL
+     WHERE "id" = ${job.requestId}
+       AND "tenantId" = ${job.tenantId}
+       AND "recoveryLeaseOwner" = ${owner}
+  `.catch(() => 0);
+}
+
+/**
+ * A job that cannot run YET — not one that failed.
+ *
+ * Treating "wait your turn" as a failure would burn the retry budget and
+ * eventually dead-letter a job that was never wrong, which is how the previous
+ * artifact-verification loop consumed twelve attempts.
+ */
+class DeferJob extends Error {}
+
+/** Where a request's evidence chain currently ends. */
+async function chainHead(requestId: string, tenantId: string): Promise<{ eventHash: string; sequence: number }> {
+  const rows = await basePrisma.$queryRaw<Array<{ eventHash: string | null; sequence: number | null }>>`
+    SELECT "eventHash", "sequence" FROM "SignatureEvent"
+    WHERE "requestId" = ${requestId} AND "tenantId" = ${tenantId}
+    ORDER BY "sequence" DESC LIMIT 1
+  `;
+  return { eventHash: rows[0]?.eventHash ?? "", sequence: Number(rows[0]?.sequence ?? 0) };
+}
+
+async function eventExists(requestId: string, tenantId: string, type: string): Promise<boolean> {
+  const rows = await basePrisma.$queryRaw<Array<{ found: boolean }>>`
+    SELECT EXISTS(
+      SELECT 1 FROM "SignatureEvent"
+      WHERE "requestId" = ${requestId} AND "tenantId" = ${tenantId} AND "type" = ${type}
+    ) AS "found"
+  `;
+  return Boolean(rows[0]?.found);
+}
+
+async function completionRequest(job: SigningJob): Promise<CompletionRequest> {
+  const rows = await basePrisma.$queryRaw<CompletionRequest[]>`
+    SELECT "id", "tenantId", "title", "quoteId", "jobCardId",
+           "signedPdfRef", "signedPdfHash", "signedDocId"
+    FROM "SignatureRequest"
+    WHERE "id" = ${job.requestId} AND "tenantId" = ${job.tenantId} AND "status" = 'completed'
+    LIMIT 1
+  `;
+  if (!rows[0]) throw new Error("Completed signature request no longer exists in this tenant");
+  return rows[0];
+}
+
+async function executeCompletionEmail(job: SigningJob): Promise<void> {
+  // PR #324 writes this marker only after every addressed recipient was accepted
+  // by SMTP, so a durable job created in the same completion transaction can
+  // safely no-op when the inline path already finished.
+  if (await eventExists(job.requestId, job.tenantId, COMPLETED_EVENT)) return;
+  const recipientId = typeof job.payload.recipientId === "string" ? job.payload.recipientId : null;
+  if (!recipientId) throw new Error("Completion-email job has no recipientId");
+
+  const recipients = await basePrisma.$queryRaw<Array<{
+    id: string;
+    name: string;
+    email: string | null;
+    completedEmailSentAt: Date | null;
+  }>>`
+    SELECT "id", "name", "email", "completedEmailSentAt"
+    FROM "SignatureRecipient"
+    WHERE "id" = ${recipientId} AND "requestId" = ${job.requestId} AND "tenantId" = ${job.tenantId}
+    LIMIT 1
+  `;
+  const recipient = recipients[0];
+  if (!recipient || !recipient.email || recipient.completedEmailSentAt) return;
+
+  const request = await completionRequest(job);
+  if (!request.signedPdfRef) throw new Error("Completed request has no sealed PDF reference");
+  const pdf = await readFile(request.signedPdfRef);
+  const result = await sendEmail({
+    to: recipient.email,
+    subject: `Completed & signed: ${request.title}`,
+    text: `Hi ${recipient.name},\n\nEveryone has signed "${request.title}". The final sealed PDF is attached.\n\nDenago Cape Town`,
+    attachments: [{ filename: `${request.title}.pdf`, content: pdf, contentType: "application/pdf" }],
+  });
+  if (!result.ok) throw new Error(result.error || `SMTP did not accept ${recipient.email}`);
+
+  await basePrisma.$executeRaw`
+    UPDATE "SignatureRecipient"
+       SET "completedEmailSentAt" = COALESCE("completedEmailSentAt", NOW())
+     WHERE "id" = ${recipient.id} AND "tenantId" = ${job.tenantId}
+  `;
+}
+
+async function reconstructOutcome(request: CompletionRequest): Promise<{ sourceSigned: boolean; wonLeadId: string | null; signedByName: string }> {
+  const signers = await basePrisma.$queryRaw<Array<{ name: string; signedName: string | null }>>`
+    SELECT "name", "signedName"
+    FROM "SignatureRecipient"
+    WHERE "requestId" = ${request.id} AND "tenantId" = ${request.tenantId}
+      AND "role" <> 'viewer' AND "status" = 'signed'
+    ORDER BY "order" ASC LIMIT 1
+  `;
+  const signedByName = signers[0]?.signedName || signers[0]?.name || "Customer";
+
+  if (request.quoteId) {
+    const quotes = await basePrisma.$queryRaw<Array<{
+      signedAt: Date | null;
+      signedPdfHash: string | null;
+      supersededAt: Date | null;
+      leadId: string | null;
+    }>>`
+      SELECT "signedAt", "signedPdfHash", "supersededAt", "leadId"
+      FROM "Quote"
+      WHERE "id" = ${request.quoteId} AND "tenantId" = ${request.tenantId} AND "deletedAt" IS NULL
+      LIMIT 1
+    `;
+    const quote = quotes[0];
+    const sourceSigned = Boolean(
+      quote?.signedAt && !quote.supersededAt && sourceSignedByThisRequest(request.signedPdfHash, quote.signedPdfHash),
+    );
+    if (!sourceSigned || !quote?.leadId) return { sourceSigned, wonLeadId: null, signedByName };
+    const leads = await basePrisma.$queryRaw<Array<{ status: string }>>`
+      SELECT "status" FROM "Lead"
+      WHERE "id" = ${quote.leadId} AND "tenantId" = ${request.tenantId} AND "deletedAt" IS NULL
+      LIMIT 1
+    `;
+    return { sourceSigned, wonLeadId: leads[0]?.status === "won" ? quote.leadId : null, signedByName };
+  }
+
+  if (request.jobCardId) {
+    const cards = await basePrisma.$queryRaw<Array<{ signedAt: Date | null; signedPdfHash: string | null }>>`
+      SELECT "signedAt", "signedPdfHash" FROM "JobCard"
+      WHERE "id" = ${request.jobCardId} AND "tenantId" = ${request.tenantId} AND "deletedAt" IS NULL
+      LIMIT 1
+    `;
+    return {
+      sourceSigned: Boolean(cards[0]?.signedAt && sourceSignedByThisRequest(request.signedPdfHash, cards[0]?.signedPdfHash)),
+      wonLeadId: null,
+      signedByName,
+    };
+  }
+
+  return { sourceSigned: false, wonLeadId: null, signedByName };
+}
+
+async function executePostCompletion(job: SigningJob): Promise<void> {
+  if (await eventExists(job.requestId, job.tenantId, COMPLETED_EVENT)) return;
+  if (await eventExists(job.requestId, job.tenantId, POST_COMPLETION_EVENT)) return;
+  const request = await completionRequest(job);
+  const outcome = await reconstructOutcome(request);
+  const result = await runPostCompletion({
+    id: request.id,
+    title: request.title,
+    quoteId: request.quoteId,
+    jobCardId: request.jobCardId,
+    signedByName: outcome.signedByName,
+    signedPdfHash: request.signedPdfHash,
+    signedDocId: request.signedDocId,
+    sourceSigned: outcome.sourceSigned,
+    wonLeadId: outcome.wonLeadId,
+  });
+  if (!result.ok) throw new Error(result.failures.join("; "));
+  await logSignEvent(request.id, { type: POST_COMPLETION_EVENT, actor: "system", metadata: { job: job.id } });
+}
+
+/**
+ * WHEN the seal must have been valid.
+ *
+ * Certificate validity is a question about an instant, and the instant that
+ * matters is when the document was sealed — not when it is being checked, and
+ * certainly not the certificate's own `notBefore`, which asks whether it was
+ * valid on the first day it was valid and always answers yes.
+ *
+ * In order of how much the answer can be trusted:
+ *
+ *   1. the RFC 3161 attested time, RE-VERIFIED here rather than taken on trust
+ *      from the stored column — an authority outside this system said so;
+ *   2. the recorded completion time, which this system asserts about itself;
+ *   3. the artifact's own creation time, when there is nothing better.
+ *
+ * Falling back is not a weakness as long as it is ordered: a document sealed
+ * while its certificate was in date reads as trusted, and one sealed after
+ * expiry does not, regardless of when anybody happens to look.
+ */
+async function sealValidationInstant(job: SigningJob, artifact: ArtifactRow): Promise<Date> {
+  const rows = await basePrisma.$queryRaw<Array<{
+    timestampToken: string | null; signedPdfHash: string | null; completedAt: Date | null;
+  }>>`
+    SELECT "timestampToken", "signedPdfHash", "completedAt"
+    FROM "SignatureRequest"
+    WHERE "id" = ${job.requestId} AND "tenantId" = ${job.tenantId}
+    LIMIT 1
+  `;
+  const request = rows[0];
+  if (request?.timestampToken && request.signedPdfHash && /^[0-9a-f]{64}$/i.test(request.signedPdfHash)) {
+    const verified = verifyTimestampToken(request.timestampToken, Buffer.from(request.signedPdfHash, "hex"));
+    if (verified.ok) return verified.genTime;
+  }
+  return request?.completedAt ?? artifact.createdAt;
+}
+
+async function executeArtifactVerification(job: SigningJob): Promise<void> {
+  const artifacts = await basePrisma.$queryRaw<ArtifactRow[]>`
+    SELECT "id", "tenantId", "requestId", "documentId", "storageRef", "sha256",
+           "sizeBytes", "retentionClass", "retainUntil", "legalHold", "createdAt"
+    FROM "LegalArtifact"
+    WHERE "requestId" = ${job.requestId} AND "tenantId" = ${job.tenantId}
+    LIMIT 1
+  `;
+  const artifact = artifacts[0];
+  if (!artifact) throw new Error("Completed request has no immutable LegalArtifact row");
+
+  const errors: string[] = [];
+
+  // FINALITY FIRST. A manifest sealed before the durable work has finished ends
+  // before the events that work is still going to append — including the
+  // completion marker itself, which is the one event the bundle exists to
+  // evidence.
+  //
+  // The wait is on the SIBLING JOBS, not on the marker's existence: the recovery
+  // path can append the marker early, and treating that as "final" would let a
+  // manifest be sealed while post-completion work still had an event to write.
+  //
+  // A permanently failed sibling ends the wait rather than extending it forever
+  // — the request will never reach finality, and recording that is more use than
+  // deferring in silence.
+  const siblings = await siblingWorkState(job);
+  // `unfinished` counts EVERY status other than completed, and `dead` is a
+  // subset of it — so "unfinished && !dead" stopped waiting as soon as any one
+  // sibling died, even with others still running or queued to retry. Those can
+  // still append events, and the snapshot would be taken before them.
+  //
+  // Only when every remaining sibling is permanently dead is there nothing left
+  // to wait for.
+  const stillActive = siblings.unfinished - siblings.dead;
+  if (stillActive > 0) {
+    throw new DeferJob("other durable work for this request has not finished");
+  }
+  const final = await appendCompletionMarkerIfDurableWorkDone(job);
+  if (!final) errors.push("durable work for this request did not complete, so this evidence is not final");
+
+  const head = await chainHead(job.requestId, job.tenantId);
+
+  const prior = await basePrisma.$queryRaw<Array<{
+    valid: boolean; observedSha256: string | null; chainHeadHash: string | null;
+  }>>`
+    SELECT "valid", "observedSha256", "manifest" #>> '{evidence,chainHeadHash}' AS "chainHeadHash"
+    FROM "LegalArtifactValidation"
+    WHERE "artifactId" = ${artifact.id} AND "tenantId" = ${artifact.tenantId}
+    ORDER BY "createdAt" DESC LIMIT 1
+  `;
+  // Versioned against the EVIDENCE, not only the file. Appending the completion
+  // marker does not change a byte of the PDF, so a check on the PDF hash alone
+  // would treat the earlier, incomplete manifest as still current and never
+  // rebuild it — the bundle would stay one event short forever.
+  if (
+    prior[0]?.valid &&
+    prior[0].observedSha256 === artifact.sha256 &&
+    prior[0].chainHeadHash === head.eventHash
+  ) {
+    return;
+  }
+
+  const bytes = await readFile(artifact.storageRef);
+  const observedSha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+  // THE CERTIFICATE IN THE FILE, not the one configured today. Recording the
+  // current identity as evidence about a document sealed years ago is false the
+  // moment a certificate is rotated — and this record exists specifically to say
+  // what sealed it.
+  const sealed = sealedPdfSignature(bytes, await sealValidationInstant(job, artifact));
+  const certificate = sealed?.certificate ?? configuredSigningCertificateInfo();
+  if (!sealed) errors.push("sealed PDF carries no readable signing certificate");
+  // "This file has not changed since we filed it" and "this certificate sealed
+  // these bytes" are different assertions. The stored hash only ever proved the
+  // first.
+  else if (!sealed.contentVerified) errors.push(`sealed PDF signature invalid: ${sealed.reason}`);
+  if (observedSha256 !== artifact.sha256) errors.push("sealed PDF hash mismatch");
+  if (artifact.sizeBytes !== null && artifact.sizeBytes !== bytes.length) errors.push("sealed PDF size mismatch");
+  // STRICT mode, not merely "production".
+  //
+  // Compat mode is explicitly allowed to run without a purchased certificate —
+  // it seals with a self-signed identity and marks it untrusted. Rejecting that
+  // whenever NODE_ENV happened to be production meant every compat completion
+  // raised an artifact_verify job that retried to dead-letter, and because the
+  // final `completed` event waits for all jobs, the durable workflow never
+  // reached the finished state it reports. The system spent its retries failing
+  // a check its own configuration says is not required yet.
+  //
+  // `trusted` now means something: a certification path from the certificate
+  // that actually sealed this file to a root in the trust store, or an exact
+  // match with the configured identity. It was previously hard-coded false for
+  // every embedded certificate, which turned this check into the same
+  // dead-letter loop by a different route — strict mode failed every artifact,
+  // including correctly sealed ones.
+  if (signingSecurityMode() === "strict" && !certificate.trusted) {
+    errors.push("PDF seal is not backed by a trusted certificate");
+  }
+  if (
+    signingSecurityMode() === "strict" &&
+    process.env.BLOB_PRIVATE === "true" &&
+    artifact.storageRef.includes(".blob.vercel-storage.com") &&
+    !artifact.storageRef.includes(".private.blob.vercel-storage.com")
+  ) {
+    errors.push("legal artifact is still stored in the public Blob store");
+  }
+
+  const [request, recipients, fields, responses, events] = await Promise.all([
+    basePrisma.$queryRaw<Array<Record<string, unknown>>>`
+      SELECT "id", "tenantId", "title", "status", "ordering", "quoteId", "jobCardId", "contactId",
+             "unsignedPdfRef", "signedPdfRef", "signedPdfHash", "sentAt", "completedAt", "createdAt",
+             "identityMode", "workflowGraphJson"
+      FROM "SignatureRequest" WHERE "id" = ${job.requestId} AND "tenantId" = ${job.tenantId}
+    `,
+    basePrisma.$queryRaw<Array<Record<string, unknown>>>`
+      SELECT "id", "name", "email", "phone", "role", "order", "status", "signedAt", "signedName",
+             "viewedAt", "declinedAt", "signerIp", "signerUserAgent", "identityVerifiedAt",
+             "identityMethod", "identityEvidenceHash"
+      FROM "SignatureRecipient" WHERE "requestId" = ${job.requestId} AND "tenantId" = ${job.tenantId}
+      ORDER BY "order", "id"
+    `,
+    basePrisma.$queryRaw<Array<Record<string, unknown>>>`
+      SELECT "id", "recipientId", "kind", "page", "x", "y", "width", "height", "required", "label", "value", "filledAt"
+      FROM "SignatureField" WHERE "requestId" = ${job.requestId} AND "tenantId" = ${job.tenantId}
+      ORDER BY "page", "y", "x", "id"
+    `,
+    basePrisma.$queryRaw<Array<Record<string, unknown>>>`
+      SELECT r."id", r."fieldId", r."recipientId", r."value", r."filledAt"
+      FROM "SignatureFieldResponse" r
+      JOIN "SignatureField" f ON f."id" = r."fieldId" AND f."tenantId" = r."tenantId"
+      WHERE f."requestId" = ${job.requestId} AND r."tenantId" = ${job.tenantId}
+      ORDER BY r."fieldId", r."recipientId"
+    `,
+    basePrisma.$queryRaw<Array<Record<string, unknown>>>`
+      -- The CHAIN COLUMNS are part of the evidence, not bookkeeping. Without
+      -- them the exported manifest cannot be verified by anyone: the whole point
+      -- of a hash chain is that a third party can recompute it, and a bundle
+      -- missing sequence/prevHash/payloadHash/eventHash is just a list of claims.
+      SELECT "id", "recipientId", "type", "actor", "channel", "ip", "userAgent", "metadata", "createdAt",
+             "sequence", "prevHash", "payloadHash", "eventHash"
+      FROM "SignatureEvent" WHERE "requestId" = ${job.requestId} AND "tenantId" = ${job.tenantId}
+      -- SEQUENCE is the authoritative order; createdAt can tie and is not what
+      -- the chain is built over, so verifying in that order can report a break
+      -- that does not exist (or miss one that does).
+      ORDER BY "sequence"
+    `,
+  ]);
+
+  // THE CHAIN IS THE EVIDENCE, so validation has to check it.
+  //
+  // The manifest exported sequence/prevHash/payloadHash/eventHash and then
+  // marked itself valid on the PDF hash alone — so a broken chain produced a
+  // bundle stamped "valid", which is worse than no bundle: it certifies the one
+  // thing it did not look at.
+  const chainResult = verifyEvidenceChain(
+    (events as Array<Record<string, unknown>>).map((row) => ({
+      id: String(row.id),
+      sequence: Number(row.sequence),
+      prevHash: String(row.prevHash ?? ""),
+      payloadHash: String(row.payloadHash ?? ""),
+      eventHash: String(row.eventHash ?? ""),
+      requestId: job.requestId,
+      recipientId: (row.recipientId as string | null) ?? null,
+      type: String(row.type ?? ""),
+      actor: String(row.actor ?? ""),
+      channel: (row.channel as string | null) ?? null,
+      ip: (row.ip as string | null) ?? null,
+      userAgent: (row.userAgent as string | null) ?? null,
+      metadata: row.metadata ?? {},
+      createdAt: row.createdAt instanceof Date ? row.createdAt : new Date(String(row.createdAt)),
+    })),
+  );
+  if (!chainResult.ok) {
+    errors.push(`evidence chain broken at ${chainResult.brokenAt}: ${chainResult.reason}`);
+  }
+
+  const manifest = {
+    schema: "denago-signing-evidence/v1",
+    artifact: {
+      id: artifact.id,
+      requestId: artifact.requestId,
+      documentId: artifact.documentId,
+      storageRef: artifact.storageRef,
+      expectedSha256: artifact.sha256,
+      observedSha256,
+      sizeBytes: bytes.length,
+      retentionClass: artifact.retentionClass,
+      retainUntil: artifact.retainUntil,
+      legalHold: artifact.legalHold,
+      createdAt: artifact.createdAt,
+    },
+    certificate,
+    // What this bundle's evidence ENDS AT. Without it a validation row cannot be
+    // told apart from an earlier one taken over a shorter chain, and the
+    // regeneration check has nothing to compare against.
+    evidence: {
+      chainHeadHash: head.eventHash,
+      chainLength: head.sequence,
+      chainVerified: chainResult.ok,
+    },
+    request: request[0] ?? null,
+    recipients,
+    fields,
+    responses,
+    events,
+  };
+  const manifestJson = canonicalJson(manifest);
+  const manifestHash = crypto.createHash("sha256").update(manifestJson).digest("hex");
+  const validationId = `lav_${crypto.randomUUID().replace(/-/g, "")}`;
+  const errorsJson = JSON.stringify(errors);
+  await basePrisma.$executeRaw`
+    INSERT INTO "LegalArtifactValidation"
+      ("id","tenantId","artifactId","observedSha256","sizeBytes","certificateFingerprint",
+       "manifestHash","manifest","valid","errors","appCommit","createdAt")
+    VALUES
+      (${validationId}, ${artifact.tenantId}, ${artifact.id}, ${observedSha256}, ${bytes.length},
+       ${certificate.fingerprintSha256}, ${manifestHash}, ${manifestJson}::jsonb,
+       ${errors.length === 0}, ${errorsJson}::jsonb, ${process.env.VERCEL_GIT_COMMIT_SHA ?? null}, NOW())
+  `;
+
+  if (errors.length) throw new Error(errors.join("; "));
+}
+
+async function executeJob(job: SigningJob): Promise<void> {
+  switch (job.jobType) {
+    case "completion_email":
+      return executeCompletionEmail(job);
+    case "post_completion":
+      return executePostCompletion(job);
+    case "artifact_verify":
+      return executeArtifactVerification(job);
+    default:
+      throw new Error(`Unknown signing job type: ${String(job.jobType)}`);
+  }
+}
+
+async function markCompleted(job: SigningJob): Promise<void> {
+  await basePrisma.$executeRaw`
+    UPDATE "SigningJob"
+       SET "status" = 'completed', "completedAt" = NOW(), "leaseUntil" = NULL,
+           "leaseOwner" = NULL, "lastError" = NULL, "updatedAt" = NOW()
+     WHERE "id" = ${job.id} AND "tenantId" = ${job.tenantId}
+  `;
+}
+
+/**
+ * Put a job back without counting the attempt against it.
+ *
+ * `claimJobs` increments `attempts` when it leases a job, which is right for
+ * work that ran. A job that deferred did not run, so the increment is given
+ * back — otherwise a request waiting on slower sibling jobs would exhaust its
+ * twelve attempts waiting and dead-letter without ever having been tried.
+ */
+async function deferJob(job: SigningJob, reason: string): Promise<void> {
+  await basePrisma.$executeRaw`
+    UPDATE "SigningJob"
+       SET "status" = 'retry',
+           "availableAt" = NOW() + INTERVAL '1 minute',
+           "attempts" = GREATEST(0, "attempts" - 1),
+           "leaseUntil" = NULL, "leaseOwner" = NULL,
+           "lastError" = ${reason.slice(0, 1000)}, "updatedAt" = NOW()
+     WHERE "id" = ${job.id} AND "tenantId" = ${job.tenantId}
+  `;
+}
+
+async function retryOrDead(job: SigningJob, error: unknown): Promise<"retry" | "dead"> {
+  const message = safeMessage(error);
+  const dead = job.attempts >= MAX_JOB_ATTEMPTS;
+  const delayMinutes = Math.min(360, 2 ** Math.min(job.attempts, 8));
+  const availableAt = new Date(Date.now() + delayMinutes * 60_000);
+  await basePrisma.$executeRaw`
+    UPDATE "SigningJob"
+       SET "status" = ${dead ? "dead" : "retry"},
+           "availableAt" = ${availableAt},
+           "leaseUntil" = NULL, "leaseOwner" = NULL,
+           "lastError" = ${message}, "updatedAt" = NOW()
+     WHERE "id" = ${job.id} AND "tenantId" = ${job.tenantId}
+  `;
+  await logError(
+    dead ? "signing-job-dead" : "signing-job-retry",
+    new Error(message),
+    `job ${job.id}, request ${job.requestId}`,
+  ).catch(() => {});
+  return dead ? "dead" : "retry";
+}
+
+/**
+ * Append the final `completed` event once the durable work is genuinely done —
+ * and do it BEFORE the evidence manifest is built.
+ *
+ * `artifact_verify` is excluded from the count on purpose. It used to be
+ * included, which produced a quiet contradiction: verification ran as one of the
+ * jobs being waited on, so the manifest it sealed always ended one event short
+ * of the chain, and the `completed` marker — the event that says the process
+ * finished — was appended afterwards and never appeared in the evidence bundle
+ * for the completion it describes.
+ *
+ * Ordering it this way costs nothing: verification is the only job that reads
+ * the chain, and nothing appends to the chain after it.
+ *
+ * Returns whether the request is now final, so verification can wait rather than
+ * seal a bundle it knows is premature.
+ */
+/** How much durable work, other than verification itself, is still outstanding. */
+async function siblingWorkState(job: SigningJob): Promise<{ unfinished: number; dead: number }> {
+  const rows = await basePrisma.$queryRaw<Array<{ unfinished: bigint; dead: bigint }>>`
+    SELECT
+      COUNT(*) FILTER (WHERE "status" <> 'completed') AS "unfinished",
+      COUNT(*) FILTER (WHERE "status" = 'dead') AS "dead"
+    FROM "SigningJob"
+    WHERE "tenantId" = ${job.tenantId} AND "requestId" = ${job.requestId}
+      AND "jobType" <> 'artifact_verify'
+  `;
+  return { unfinished: Number(rows[0]?.unfinished ?? 1), dead: Number(rows[0]?.dead ?? 1) };
+}
+
+async function appendCompletionMarkerIfDurableWorkDone(job: SigningJob): Promise<boolean> {
+  const state = await siblingWorkState(job);
+  if (state.unfinished !== 0 || state.dead !== 0) return false;
+  if (await eventExists(job.requestId, job.tenantId, COMPLETED_EVENT)) return true;
+
+  await logSignEvent(job.requestId, {
+    type: COMPLETED_EVENT,
+    actor: "system",
+    metadata: { durableJobs: true },
+  });
+  return true;
+}
+
+async function finalizeRequestIfDone(job: SigningJob): Promise<void> {
+  await appendCompletionMarkerIfDurableWorkDone(job);
+}
+
+export async function runSigningJobs(tenantId: string, limit = 20): Promise<SigningJobRun> {
+  if (!tenantId) throw new Error("Signing jobs require a concrete tenant id");
+  return runInTenantScope({ tenantId, system: false }, async () => {
+    const jobs = await claimJobs(tenantId, Math.max(1, Math.min(limit, 50)));
+    const result: SigningJobRun = { claimed: jobs.length, completed: 0, retried: 0, dead: 0, leased: 0 };
+
+    for (const job of jobs) {
+      const leaseOwner = await claimRequestLease(job);
+      if (!leaseOwner) {
+        result.leased += 1;
+        await basePrisma.$executeRaw`
+          UPDATE "SigningJob" SET "status" = 'retry', "availableAt" = NOW() + INTERVAL '1 minute',
+            "leaseUntil" = NULL, "leaseOwner" = NULL, "updatedAt" = NOW()
+          WHERE "id" = ${job.id} AND "tenantId" = ${job.tenantId}
+        `;
+        continue;
+      }
+
+      try {
+        await executeJob(job);
+        await markCompleted(job);
+        await finalizeRequestIfDone(job);
+        result.completed += 1;
+      } catch (error) {
+        if (error instanceof DeferJob) {
+          await deferJob(job, error.message);
+          result.leased += 1;
+        } else {
+          const state = await retryOrDead(job, error);
+          result[state === "dead" ? "dead" : "retried"] += 1;
+        }
+      } finally {
+        await releaseRequestLease(job, leaseOwner);
+      }
+    }
+
+    return result;
+  });
+}

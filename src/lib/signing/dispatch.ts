@@ -4,6 +4,7 @@ import { sendEmail } from "@/lib/email";
 import { sendWhatsAppText, waDigits, isWhatsAppConfigured } from "@/lib/whatsapp";
 import { logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
+import { usableCapability } from "./tokenVault";
 
 const BASE = process.env.SIGN_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za";
 
@@ -64,7 +65,26 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
     if (claimed.count !== 1) return { reachable: true, delivered: false };
   }
 
-  const url = signUrl(r.token);
+  // r.token is the stored DIGEST. Building the URL from it sends the customer a
+  // link the public route hashes again and cannot resolve — accepted by SMTP,
+  // recorded as sent, and unusable on arrival.
+  const raw = await usableCapability("signatureRecipient", r.id, r.tokenCiphertext, r.token);
+  if (!raw) {
+    // RELEASE THE CLAIM. This function moves the recipient pending -> sending
+    // before it gets here, so returning without undoing that leaves them stuck
+    // in `sending` forever — no retry picks them up, and the card shows a send
+    // in progress that will never finish.
+    //
+    // Newly reachable because "Show link" can now rotate too: both paths can see
+    // the same unreadable ciphertext and the same digest, one wins the
+    // compare-and-swap, and the loser lands exactly here. Conditioned on
+    // `sending` so a status something else has since advanced is left alone.
+    await prisma.signatureRecipient
+      .updateMany({ where: { id: r.id, status: "sending" }, data: { status: "pending", sendingAt: null } })
+      .catch(() => ({ count: 0 }));
+    return { reachable: true, delivered: false };
+  }
+  const url = signUrl(raw);
   const verb = opts?.reminder ? "Reminder — please sign" : "Please sign your document";
   const evType = opts?.reminder ? "reminded" : "sent";
   let delivered = false;
