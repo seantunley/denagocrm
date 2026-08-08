@@ -87,11 +87,22 @@ async function main() {
   // WITHOUT the pin can serve concurrent statements from several backends. Run
   // concurrently, because a pool only opens a second connection under overlap —
   // sequential awaits would reuse one connection and prove nothing.
+  //
+  // This section ASSERTS NOTHING — it is a note in the log. So it must not be
+  // able to fail the build: everything below is wrapped, and a problem here is
+  // reported rather than thrown. The first version of this file was not wrapped
+  // and broke the lane on a pg_sleep return type while all three real checks
+  // above were passing, which is exactly the wrong way round.
   const pooled = new PrismaClient({ datasources: { db: { url: `${url}${url?.includes("?") ? "&" : "?"}connection_limit=5` } } });
   try {
     const rows = await Promise.all(
       Array.from({ length: 5 }, () =>
-        pooled.$queryRawUnsafe<{ pid: number }[]>("SELECT pg_backend_pid() AS pid, pg_sleep(0.2)"),
+        // pg_sleep returns void, which Prisma cannot deserialise — hence the cast.
+        // The sleep is what forces the statements to overlap; without it the pool
+        // hands them all to one connection and the note says nothing.
+        pooled.$queryRawUnsafe<{ pid: number }[]>(
+          "SELECT pg_backend_pid() AS pid, pg_sleep(0.2)::text AS slept",
+        ),
       ),
     );
     const distinct = new Set(rows.map(([r]) => String(r.pid)));
@@ -101,8 +112,10 @@ async function main() {
       `  note unpinned pool served 5 concurrent statements from ${distinct.size} backend(s)` +
         (distinct.size > 1 ? " — this is what the pin prevents" : " — no divergence observed on this run"),
     );
+  } catch (error) {
+    console.log(`  note the unpinned-pool illustration could not run: ${(error as Error).message.split("\n")[0]}`);
   } finally {
-    await pooled.$disconnect();
+    await pooled.$disconnect().catch(() => {});
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);
