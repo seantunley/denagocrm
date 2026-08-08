@@ -1,11 +1,13 @@
 import { ExternalLink, Inbox, MessageSquare, Star } from "lucide-react";
 import { prisma, basePrisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
-import { accessibleInboxWhere } from "@/lib/permissions";
+import { accessibleInboxWhere, hasPermission } from "@/lib/permissions";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
 import { buildInboxThreads } from "@/lib/inboxThreads";
+import { collaborationForThreads } from "@/lib/inboxCollaboration";
+import { listTenantStaff } from "@/lib/tenantActor";
 import { getSetting } from "@/lib/settings";
 import { formatDateTime } from "@/lib/format";
 import { EmptyState, SectionHeading, Surface } from "@/components/visual-system";
@@ -36,6 +38,16 @@ export default async function InboxPage() {
 
   const threadList = buildInboxThreads(activeComms);
   const archivedList = buildInboxThreads(archivedComms);
+
+  // Assignment and notes for the threads already resolved above — so the join
+  // inherits their scoping rather than asking about conversations of its own.
+  // Staff and the reply permission are loaded once for every thread's panel.
+  const [collaboration, staff, canCollaborate] = await Promise.all([
+    collaborationForThreads([...threadList, ...archivedList]),
+    listTenantStaff(),
+    hasPermission(user, "inbox.reply"),
+  ]);
+  const collabStaff = staff.map((person) => ({ id: person.id, name: person.name }));
   const unread = threadList.filter((thread) => thread.unread).length;
   const awaiting = threadList.filter((thread) => thread.awaiting).length;
   const channelCount = (channel: string) => threadList.filter((thread) => thread.channel === channel).length;
@@ -108,12 +120,12 @@ export default async function InboxPage() {
 
       <Tabs
         tabs={[
-          { key: "all", label: "All", count: unread, content: <SocialThreadList list={threadList} empty="No conversations yet. Messages appear here as soon as a connected customer channel receives one." /> },
-          { key: "whatsapp", label: "WhatsApp", count: threadList.filter((thread) => thread.channel === "whatsapp" && thread.unread).length, content: <SocialThreadList list={threadList.filter((thread) => thread.channel === "whatsapp")} empty="No WhatsApp conversations yet. Connect the WhatsApp Business number in Settings → Integrations." /> },
-          { key: "messenger", label: "Messenger", count: threadList.filter((thread) => thread.channel === "messenger" && thread.unread).length, content: <SocialThreadList list={threadList.filter((thread) => thread.channel === "messenger")} empty="No Messenger conversations yet." /> },
-          { key: "instagram", label: "Instagram", count: threadList.filter((thread) => thread.channel === "instagram" && thread.unread).length, content: <SocialThreadList list={threadList.filter((thread) => thread.channel === "instagram")} empty="No Instagram DMs yet. They appear once the Instagram account and Meta messaging permissions are connected." /> },
+          { key: "all", label: "All", count: unread, content: <SocialThreadList collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList} empty="No conversations yet. Messages appear here as soon as a connected customer channel receives one." /> },
+          { key: "whatsapp", label: "WhatsApp", count: threadList.filter((thread) => thread.channel === "whatsapp" && thread.unread).length, content: <SocialThreadList collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "whatsapp")} empty="No WhatsApp conversations yet. Connect the WhatsApp Business number in Settings → Integrations." /> },
+          { key: "messenger", label: "Messenger", count: threadList.filter((thread) => thread.channel === "messenger" && thread.unread).length, content: <SocialThreadList collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "messenger")} empty="No Messenger conversations yet." /> },
+          { key: "instagram", label: "Instagram", count: threadList.filter((thread) => thread.channel === "instagram" && thread.unread).length, content: <SocialThreadList collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "instagram")} empty="No Instagram DMs yet. They appear once the Instagram account and Meta messaging permissions are connected." /> },
           { key: "reviews", label: "Google Reviews", count: reviews.length, content: reviewsPanel },
-          { key: "archived", label: "Archived", count: archivedList.length, content: <SocialThreadList list={archivedList} empty="Nothing archived. Archive finished or test conversations to keep the active queue focused." /> },
+          { key: "archived", label: "Archived", count: archivedList.length, content: <SocialThreadList collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={archivedList} empty="Nothing archived. Archive finished or test conversations to keep the active queue focused." /> },
         ]}
       />
     </div>

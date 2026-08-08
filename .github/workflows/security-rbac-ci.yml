@@ -187,3 +187,16 @@ jobs:
         # uniqueness — the regression guard for real-flow leakage, not just RLS
         # primitives.
         run: npm run test:tenant-e2e
+
+      # THE SAFETY PROPERTY OF THIS PR, AND CI WAS NOT RUNNING IT.
+      #
+      # test:draft-concurrency was added to validate:security, which reads like
+      # coverage and is not: this workflow does not run validate:security. It calls
+      # the suites individually, so a script added only to that chain is never
+      # executed by CI and its green tick means nothing about it.
+      #
+      # The test races two real draft claims against a real database. It is the
+      # only thing that can show the read-then-write bug this PR fixes, so it has
+      # to be run by the thing that gates the merge.
+      - name: Concurrency -- two people cannot silently overwrite one reply draft
+        run: npm run test:draft-concurrency

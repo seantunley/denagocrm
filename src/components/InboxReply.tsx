@@ -4,10 +4,15 @@ import { useEffect, useRef, useState } from "react";
 import { useActionState } from "react";
 import { sendWhatsAppMessage, type WaState } from "@/app/actions/whatsapp";
 import { sendDmReply, type DmState } from "@/app/actions/messenger";
+import { saveConversationDraft, discardConversationDraft } from "@/app/actions/conversations";
+import { draftCollision, type DraftCollision } from "@/lib/conversationDraft";
 import AiCheckButton from "@/components/AiCheckButton";
 import { enterIntent, readEnterSends, writeEnterSends } from "@/lib/enterToSend";
 
 const QUICK_EMOJI = ["😀", "👍", "🙏", "🎉", "🔥", "❤️", "😂", "👌", "🚗", "⚡"];
+
+/** How long after the last keystroke the draft is saved. */
+const AUTOSAVE_IDLE_MS = 1_500;
 
 /** Channel-aware reply box for the Social inbox: text, emoji, attachments. */
 export default function InboxReply({
@@ -17,6 +22,9 @@ export default function InboxReply({
   phone,
   revalidate,
   aiConfigured = false,
+  conversationId,
+  draft,
+  viewerId,
 }: {
   channel: "whatsapp" | "messenger" | "instagram";
   contactId?: string | null;
@@ -24,6 +32,15 @@ export default function InboxReply({
   phone?: string | null;
   revalidate: string;
   aiConfigured?: boolean;
+  /**
+   * Draft persistence is OPT-IN: without a conversationId the box behaves exactly
+   * as it did before. /messages renders the same component and has no
+   * conversation resolved, and a reply box that silently stopped saving would be
+   * worse than one that never claimed to.
+   */
+  conversationId?: string | null;
+  draft?: { ownerId: string; ownerName: string; body: string; updatedAt: Date } | null;
+  viewerId?: string | null;
 }) {
   const [waState, waAction, waPending] = useActionState<WaState | undefined, FormData>(
     sendWhatsAppMessage,
@@ -87,6 +104,63 @@ ${el.value.slice(end)}`;
     el.selectionStart = el.selectionEnd = start + 1;
   }
 
+  const drafting = Boolean(conversationId);
+  // Whose draft is on the server, decided with the SAME function the action uses.
+  // Deciding it again here by hand is how the client and the server come to
+  // disagree about who owns a thread.
+  const heldByColleague: DraftCollision | null =
+    drafting && draft && viewerId
+      ? draftCollision(
+          { ownerId: draft.ownerId, ownerName: draft.ownerName, updatedAt: new Date(draft.updatedAt) },
+          viewerId,
+          new Date(),
+        )
+      : null;
+  // Restored only when it is YOUR draft. Showing a colleague's half-written reply
+  // in your box invites you to send it as your own.
+  const restored = drafting && draft && draft.ownerId === viewerId ? draft.body : "";
+
+  const [blocked, setBlocked] = useState<DraftCollision | null>(heldByColleague);
+  const [saved, setSaved] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // A pending autosave must not fire after the thread is closed — the modal
+  // unmounts on close, and a late save would write into a conversation the person
+  // has already navigated away from.
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+
+  function queueDraftSave() {
+    if (!conversationId || blocked) return;
+    setSaved(false);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(async () => {
+      const body = textRef.current?.value ?? "";
+      try {
+        const result = await saveConversationDraft(conversationId, body);
+        // A collision stops autosaving entirely rather than retrying: the point is
+        // not to overwrite, and a box that kept trying would overwrite the moment
+        // the colleague's draft went stale.
+        if (result.collision) setBlocked(result.collision);
+        else setSaved(true);
+      } catch {
+        // The draft is a convenience. A failed save must never interrupt a reply
+        // in progress, so it is silent — the send path reports its own errors.
+      }
+    }, AUTOSAVE_IDLE_MS);
+  }
+
+  // Once the reply is actually sent, the draft has served its purpose. Discarding
+  // is scoped server-side to the actor's OWN draft, so this cannot clobber the
+  // colleague's draft the collision check protected.
+  // No setState here: the indicator below is already gated on `!state?.ok`, so
+  // clearing it in the effect would only add a render pass — and setting state
+  // from an effect is what react-hooks/set-state-in-effect exists to stop.
+  useEffect(() => {
+    if (!state?.ok || !conversationId) return;
+    if (timer.current) clearTimeout(timer.current);
+    void discardConversationDraft(conversationId).catch(() => {});
+  }, [state?.ok, conversationId]);
+
   function addEmoji(e: string) {
     const el = textRef.current;
     if (!el) return;
@@ -98,6 +172,17 @@ ${el.value.slice(end)}`;
 
   return (
     <form ref={formRef} action={channel === "whatsapp" ? waAction : dmAction} className="mt-3">
+      {/* The warning goes ABOVE the box, before anything is typed. Told afterwards,
+          the person has already written the duplicate reply. */}
+      {blocked && (
+        <p
+          role="status"
+          className="mb-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-200"
+        >
+          <strong className="font-semibold">{blocked.ownerName}</strong> is already replying to this
+          conversation. Your draft will not be saved — check with them before sending.
+        </p>
+      )}
       {channel === "whatsapp" ? (
         <>
           <input type="hidden" name="phone" value={phone ?? ""} />
@@ -117,6 +202,11 @@ ${el.value.slice(end)}`;
           className="input flex-1 py-1.5 text-sm resize-none"
           placeholder={`Reply via ${channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : "Messenger"}…`}
           onKeyDown={onKeyDown}
+          // defaultValue, not value: the box stays uncontrolled, so restoring a
+          // draft cannot fight the emoji inserter (which writes el.value directly)
+          // or re-render on every keystroke.
+          defaultValue={restored}
+          onChange={drafting ? queueDraftSave : undefined}
         />
         <button
           type="button"
@@ -175,7 +265,7 @@ ${el.value.slice(end)}`;
         />
       </div>
 
-      {(showEmoji || fileName || state?.error || state?.ok) && (
+      {(showEmoji || fileName || state?.error || state?.ok || saved) && (
         <div className="flex items-center gap-1 mt-1.5 flex-wrap">
           {showEmoji &&
             QUICK_EMOJI.map((e) => (
@@ -205,6 +295,7 @@ ${el.value.slice(end)}`;
           )}
           {state?.error && <span className="text-xs text-red-400">{state.error}</span>}
           {state?.ok && <span className="text-xs text-emerald-400">{state.ok}</span>}
+          {saved && !state?.ok && <span className="text-xs text-slate-400">Draft saved</span>}
         </div>
       )}
     </form>

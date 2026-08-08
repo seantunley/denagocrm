@@ -64,6 +64,7 @@ const APPROVED_GUARDS = [
   "requireJobCardAccess", "requireJobCardReadAccess", "canAccessJobCard",
   "requireDocumentAccess", "requireDocumentReadAccess", "canAccessDocument",
   "requireCaseAccess", "requireCaseReadAccess", "canAccessCase",
+  "requireConversationAccess", "canAccessConversation",
   "requireTestDriveManageAccess", "canAccessTestDriveBooking",
   "requirePlatformAdminAction", "requirePlatformAdmin",
   "requirePortalScope", "getPortalContact", "getPortalScope",

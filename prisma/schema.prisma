@@ -70,6 +70,9 @@ model User {
   timelinePins       TimelinePin[]
   memberships        TenantMember[]
   ownedTenants       Tenant[]       @relation("TenantOwner")
+  conversationsAssigned Conversation[]      @relation("ConversationAssignee")
+  conversationNotes     ConversationNote[]  @relation("ConversationNoteAuthor")
+  conversationDrafts    ConversationDraft[] @relation("ConversationDraftOwner")
 
   // Multi-tenancy: owning tenant. Backfilled from TenantMember (one-user-one-tenant).
   // Auth paths use basePrisma (bypass_rls='on') so login still works without a scope.
@@ -1054,18 +1057,79 @@ model Conversation {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
+  // inbound | outbound. 'inbound' means the last word was the customer's, which
+  // is the only cheap way to ask "is anyone waiting on us?" without loading the
+  // messages — `unread` answers a different question (nobody has LOOKED), and a
+  // thread can be read and still unanswered.
+  lastDirection String?
+
+  // Assignment is what turns a shared inbox into a worklist: without it, "who is
+  // dealing with this?" is answered by asking the room.
+  assignedToId String?
+  assignedTo   User?     @relation("ConversationAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignedAt   DateTime?
+
   contactId String?
   contact   Contact?        @relation(fields: [contactId], references: [id], onDelete: Cascade)
   leadId    String?
   lead      Lead?           @relation(fields: [leadId], references: [id], onDelete: SetNull)
   messages  Communication[]
+  notes     ConversationNote[]
+  draft     ConversationDraft?
 
   @@index([status, lastMessageAt])
   @@index([unread, lastMessageAt])
   @@index([contactId])
   @@index([leadId])
   @@index([tenantId])
+  @@index([lastDirection, lastMessageAt])
+  @@index([assignedToId, status])
   @@unique([tenantId, id])
+}
+
+/**
+ * A staff-only note on a conversation. NEVER sent to the customer.
+ *
+ * The point is that the handover context ("promised him a callback Tuesday, waiting
+ * on stock") lives beside the thread instead of in someone's head, so whoever picks
+ * the conversation up next has it.
+ */
+model ConversationNote {
+  id             String       @id @default(cuid())
+  // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
+  tenantId       String?
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  authorId       String
+  author         User         @relation("ConversationNoteAuthor", fields: [authorId], references: [id])
+  body           String
+  mentions       String[] // user ids named with @ — stored so a notifier can read them
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([tenantId])
+}
+
+/**
+ * The in-progress reply for a conversation — one per conversation, with an owner.
+ *
+ * A shared inbox's characteristic failure is two people answering the same customer
+ * at once. Holding the draft server-side with an owner and a timestamp makes that
+ * visible before it happens rather than after the second reply has been sent.
+ */
+model ConversationDraft {
+  id             String       @id @default(cuid())
+  // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
+  tenantId       String?
+  conversationId String       @unique
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  ownerId        String
+  owner          User         @relation("ConversationDraftOwner", fields: [ownerId], references: [id])
+  body           String       @default("")
+  updatedAt      DateTime     @updatedAt
+  createdAt      DateTime     @default(now())
+
+  @@index([tenantId])
 }
 
 model Document {
