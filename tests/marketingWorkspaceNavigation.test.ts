@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { buildMarketingWorkspaceSections } from "../src/components/marketing/marketing-workspace-nav";
 
@@ -22,6 +23,21 @@ test("survey-only users do not see campaign workspace navigation", () => {
   assert.ok(!links.includes("/marketing/campaigns"));
   assert.ok(!links.includes("/marketing/audiences"));
   assert.ok(!links.includes("/marketing/templates"));
+});
+
+test("referral-only users see Referrals inside the marketing workspace", () => {
+  const links = hrefs(false, ["referrals.view"]);
+
+  assert.deepEqual(links, ["/referrals"]);
+});
+
+test("the Referrals route retains the marketing workspace shell", () => {
+  const layout = readFileSync(
+    new URL("../src/app/(app)/referrals/layout.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(layout, /<MarketingWorkspaceShell sections=\{sections\}>\{children\}<\/MarketingWorkspaceShell>/);
 });
 
 test("owners see every marketing workspace section", () => {

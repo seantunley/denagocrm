@@ -1283,7 +1283,7 @@ export default function CalendarWorkspace({
         <ResponsiveDialogContent className="sm:max-w-xl">
           {selectedEvent && (
             <>
-              <DialogHeader className="pr-10 text-left">
+              <DialogHeader className="pr-12 text-left">
                 <div className="flex items-center gap-2">
                   <span
                     className={cn(
