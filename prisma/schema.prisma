@@ -1800,6 +1800,19 @@ model SignatureRequest {
   templateId String? // DocBuilderTemplate it was generated from, if any
 
   snapshotJson   Json? // frozen resolved document at send time (what the signer sees)
+  /// The BRAND as it was at send time — the {{company.*}} tokens and the logo.
+  ///
+  /// Frozen for the same reason snapshotJson is. That column freezes the
+  /// document; this one freezes who it says it is FROM. Without it, a re-render
+  /// of a signed request resolved the brand LIVE, so a tenant rebranding — or a
+  /// platform admin changing their logo — retroactively restated whose contract
+  /// a customer had already signed. The sealed PDF at signedPdfRef never
+  /// changed, but the print and preview views disagreed with it.
+  ///
+  /// Null on every row that predates this and on any request created before a
+  /// brand existed; renderers fall back to resolving live, which is exactly
+  /// what they did before. So this is additive in behaviour as well as in schema.
+  brandJson      Json?
   unsignedPdfRef String? // storage ref of the PDF sent for signing
   signedPdfRef   String? // storage ref of the sealed, completed PDF
   signedPdfHash  String? // sha-256 of the completed PDF
@@ -2725,8 +2738,29 @@ model PlatformAdmin {
   email             String    @unique
   name              String
   passwordHash      String
-  totpSecret        String? // encrypted TOTP secret; null until enrolled
+  totpSecret        String? // encrypted TOTP secret; null until enrolled — the LIVE factor
+  /// Encrypted secret for an authenticator being enrolled, not yet trusted.
+  ///
+  /// Without this, beginning an enrolment overwrites the live secret and clears
+  /// `totpEnabledAt` — a working 2FA disable for anyone holding a session, and a
+  /// Server Action is a POST endpoint reachable without the console screen that
+  /// renders the button. Disabling demands a current code precisely so a stolen
+  /// session cannot strip the factor and survive a password rotation; enrolling
+  /// walked around that guard. On an account with no administrator above it,
+  /// that is the difference between a contained incident and a permanent one.
+  ///
+  /// Promoted to `totpSecret` only once a code proves the new authenticator
+  /// holds it. Nothing authenticates against this column.
+  totpPendingSecret String?
   totpEnabledAt     DateTime?
+  /// JSON array of bcrypt-hashed one-time backup codes, as on User.
+  ///
+  /// Not optional for this account in the way it nearly is for a CRM user. A
+  /// tenant user who loses their authenticator asks an owner to reset it; a
+  /// platform admin has nobody above them, so the only recovery is an UPDATE
+  /// against the production database by hand. Codes are issued at enrolment and
+  /// each one is consumed on use.
+  totpBackupCodes   String?
   disabledAt        DateTime? // locks the account out without deleting it
   sessionVersion    Int       @default(0) // bump to revoke every existing session
   lastLoginAt       DateTime?

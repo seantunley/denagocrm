@@ -140,7 +140,12 @@ test("every surface that renders a quote loads its fees", () => {
   // asserted above) is what fetches the fees. Assert the delegation instead, so
   // a future edit that goes back to loading its own quote is still caught here.
   const print = src("src/lib/quotePrintDocument.ts");
-  assert.match(print, /bindCtx\(opts\.quoteId, null\)/, "the printed quote must bind through the shared context");
+  // Trailing arguments allowed: bindCtx gained a third parameter (the brand
+  // frozen on a signed request — see frozenSignedBrand.test.ts). What this
+  // assertion protects is unchanged and is the first two arguments: the printed
+  // quote binds through the SHARED context, keyed on this quote, rather than
+  // fetching a quote of its own.
+  assert.match(print, /bindCtx\(opts\.quoteId, null[,)]/, "the printed quote must bind through the shared context");
   assert.doesNotMatch(print, /quote\.findUnique/, "loading the quote here would reintroduce a second fee-less path");
 });
 

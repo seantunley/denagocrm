@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { portalBrand } from "@/lib/portalBrand";
 import { Download, FileText, FolderOpen, UploadCloud } from "lucide-react";
 import { basePrisma, prisma } from "@/lib/db";
 import { getPortalContact } from "@/lib/portal";
@@ -22,6 +23,8 @@ type CaseRow = { id: string; number: bigint; subject: string };
 export default async function PortalDocumentsPage() {
   const contact = await getPortalContact();
   if (!contact) redirect("/portal/login");
+  // Cached per request — the layout and every page share one resolution.
+  const brand = await portalBrand();
   const scope = await requirePortalScope();
   const automotiveOn = await isModuleEnabled("automotive");
 
@@ -92,7 +95,7 @@ export default async function PortalDocumentsPage() {
       <PortalPageHeader eyebrow="Document centre" title="Documents" description={automotiveOn ? "Download your customer, vehicle, quote and delivery documents, or send files securely to our team." : "Download your documents, or send files securely to our team."} />
 
       <Surface className="space-y-5 p-5 sm:p-6">
-        <SectionHeading title="Secure upload" description="Files are attached directly to your customer record and are only visible to the Denago team." action={<span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><UploadCloud className="size-5" /></span>} />
+        <SectionHeading title="Secure upload" description={brand.branded ? `Files are attached directly to your customer record and are only visible to the ${brand.displayName} team.` : "Files are attached directly to your customer record and are only visible to the Denago team."} action={<span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><UploadCloud className="size-5" /></span>} />
         <PortalUploadForm
           automotive={automotiveOn}
           vehicles={automotiveOn ? vehicles.map((vehicle) => ({ id: vehicle.id, label: `${vehicle.model}${vehicle.regNumber ? ` (${vehicle.regNumber})` : ""}` })) : []}
@@ -101,7 +104,7 @@ export default async function PortalDocumentsPage() {
       </Surface>
 
       <section className="space-y-3">
-        <SectionHeading title="Documents from Denago" description="Your latest official documents and completed paperwork." />
+        <SectionHeading title={brand.branded ? `Documents from ${brand.displayName}` : "Documents from Denago"} description="Your latest official documents and completed paperwork." />
         {documents.length === 0 ? (
           <EmptyState icon={FolderOpen} title="No documents available yet" description="Quotes, delivery paperwork and other files shared with you will appear here." className="py-10" />
         ) : (

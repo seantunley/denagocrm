@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { portalBrand } from "@/lib/portalBrand";
 import { BellRing, Clock3, UserRound } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { getPortalContact } from "@/lib/portal";
@@ -17,6 +18,8 @@ type RequestRow = { id: string; status: string; createdAt: Date; note: string | 
 export default async function PortalProfilePage() {
   const contact = await getPortalContact();
   if (!contact) redirect("/portal/login");
+  // Cached per request — the layout and every page share one resolution.
+  const brand = await portalBrand();
 
   const [preferences, requests] = await Promise.all([
     basePrisma.$queryRaw<PreferenceRow[]>`
@@ -39,7 +42,7 @@ export default async function PortalProfilePage() {
 
   return (
     <div className="space-y-10">
-      <PortalPageHeader eyebrow="Your account" title="Profile & preferences" description="Keep your details current and choose how Denago may contact you about service, support and offers." />
+      <PortalPageHeader eyebrow="Your account" title="Profile & preferences" description={brand.branded ? `Keep your details current and choose how ${brand.displayName} may contact you about service, support and offers.` : "Keep your details current and choose how Denago may contact you about service, support and offers."} />
       <Surface className="space-y-5 p-5 sm:p-6">
         <SectionHeading title="Your details" description="For your security, requested changes are reviewed before protected customer records are updated." action={<span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><UserRound className="size-5" /></span>} />
         <PortalProfileForm contact={{

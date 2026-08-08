@@ -5,7 +5,8 @@ import bcrypt from "bcryptjs";
 import QRCode from "qrcode";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
-import { createSessionCookie, requireUser, requireOwner } from "@/lib/auth";
+import { createSessionCookie, getActiveTenantId, requireUser, requireOwner } from "@/lib/auth";
+import { DEFAULT_BRAND, brandForTenant } from "@/lib/tenantBrand";
 import { encryptValue, decryptValue, putSetting } from "@/lib/settings";
 import { GOVERNANCE_TX, logAuditStrict } from "@/lib/audit";
 import { lockGovernanceAdmins } from "@/lib/governanceLock";
@@ -60,7 +61,11 @@ export async function beginTotpEnrolment(currentCode?: string): Promise<{
   }
 
   const secret = generateTotpSecret();
-  const uri = totpKeyUri(secret, user.email);
+  // The workspace's own name, so the entry in the user's authenticator says who
+  // it is for. Falls back to the platform name if the tenant cannot be resolved
+  // — never a hard failure, because that would block enrolling in 2FA.
+  const brand = await brandForTenant(await getActiveTenantId()).catch(() => DEFAULT_BRAND);
+  const uri = totpKeyUri(secret, user.email, brand.displayName);
   const qr = await QRCode.toDataURL(uri, { margin: 1, width: 220 });
   await prisma.user.update({
     where: { id: user.id },

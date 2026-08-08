@@ -30,6 +30,14 @@ const PUBLIC_PREFIXES = [
   // response, nosniff). It discloses what that tenant's own login page already
   // shows the world. Suspended tenants 404. See the route's header comment.
   "brand/logo",
+  // Domain reachability check. PUBLIC BY NECESSITY, and the necessity is the
+  // whole function: we fetch it ourselves, over the internet, at the hostname
+  // being verified, to learn whether that hostname reaches this deployment. A
+  // guarded route could not answer — there is no session on a domain that has
+  // not been set up yet. It reads no database, writes nothing, takes no
+  // parameters, and returns the caller's own Host header plus an HMAC of it, so
+  // there is nothing behind it to reach.
+  "brand/domain-check",
 ];
 
 // NOTE: this proves an authENTICATION guard is invoked; it does not prove

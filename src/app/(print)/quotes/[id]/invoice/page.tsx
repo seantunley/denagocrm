@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { requireQuoteReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { contactName, formatDate } from "@/lib/format";
 import { documentTotals, feeRows, includedLines } from "@/lib/pricing";
@@ -22,6 +23,9 @@ export default async function InvoicePrintPage({
     include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, contact: true, lead: true },
   });
   if (!quote) notFound();
+  // The company this document is FROM. getCompanyProfile now inherits the
+  // platform-set tenant brand when the tenant has not filled in its own profile.
+  const company = await getCompanyProfile();
   const tpl = await getDocTemplate("invoice", tplId);
   // Fees and delivery are part of what the customer pays; the subtotal is not.
   const totals = documentTotals(quote);
@@ -31,6 +35,7 @@ export default async function InvoicePrintPage({
     <>
       <PrintActions backHref={`/quotes/${quote.id}`} backLabel="Back to quote" />
       <PrintDocShell
+        company={company}
         template={tpl}
         title="Invoice"
         number={`INV-${quote.number}`}

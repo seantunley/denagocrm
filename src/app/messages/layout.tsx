@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import Image from "next/image";
-import { requireUser } from "@/lib/auth";
+import { requireUser, getActiveTenantId } from "@/lib/auth";
+import { brandForTenant, brandLogoUrl, DEFAULT_BRAND } from "@/lib/tenantBrand";
+import { BrandMark } from "@/components/BrandLogo";
 import { assertPathModuleEnabled } from "@/lib/modules/routeGuard";
 import MessagesNav from "@/components/MessagesNav";
 import RegisterServiceWorker from "@/components/RegisterServiceWorker";
@@ -22,18 +24,25 @@ export const viewport: Viewport = {
 export default async function MessagesLayout({ children }: { children: React.ReactNode }) {
   await requireUser();
   await assertPathModuleEnabled();
+  // Same session-derived brand as the CRM shell. Never throws — this layout wraps
+  // the whole Messages PWA.
+  const brand = await getActiveTenantId()
+    .then(brandForTenant)
+    .catch(() => DEFAULT_BRAND);
+  const logoUrl = brandLogoUrl(brand);
+  const displayName = brand.displayName;
   return (
     <div className="flex h-[100svh] flex-col overflow-hidden bg-background text-foreground">
       <RegisterServiceWorker />
       <header className="flex h-14 shrink-0 items-center gap-2.5 border-b border-sidebar-border bg-sidebar/90 px-4 backdrop-blur-xl">
-        <Image
-          src="/branding/denago-mark.png"
-          alt="Denago"
-          width={28}
-          height={28}
+        <BrandMark
+          logoUrl={logoUrl}
+          alt={displayName}
           className="size-7 rounded-md object-contain"
         />
-        <span className="text-sm font-semibold tracking-tight">Denago Messages</span>
+        <span className="text-sm font-semibold tracking-tight">
+          {brand.tenantId ? `${displayName} Messages` : "Denago Messages"}
+        </span>
       </header>
 
       <main className="mx-auto w-full max-w-3xl flex-1 overflow-y-auto p-4">{children}</main>
