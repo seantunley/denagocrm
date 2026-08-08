@@ -226,33 +226,58 @@ test("conditional cards are flagged so the picker can mark them", () => {
   );
 });
 
-test("permission filtering runs before conditions are evaluated", () => {
-  // Order is the security model: a condition deciding whether a query runs would
-  // make the query the disclosure. Asserted on the page's source because it is a
-  // property of the sequence, not of any one function.
-  const page = src("src/app/(app)/page.tsx");
-  const filtered = page.indexOf("visibleCards(");
-  const evaluated = page.indexOf("evaluateConditions(");
-  assert.ok(filtered > -1, "the page must filter through visibleCards");
-  assert.ok(evaluated > -1, "the page must evaluate card conditions");
-  assert.ok(
-    filtered < evaluated,
-    "cards must be permission-filtered BEFORE their visibility conditions are evaluated",
+test("a builtin card is permission- and module-gated wherever it is placed from", () => {
+  /*
+   * THIS GUARD REPLACED A REAL BYPASS, and the shape of it is worth keeping in
+   * mind whenever a list stops being fixed.
+   *
+   * When the home screen rendered a fixed layout, one call to
+   * `visibleCards(layout, access)` gated every builtin before anything loaded.
+   * Making the layout configurable moved the card list out of that call's reach:
+   * a config can NAME a builtin id directly, so for a while naming it was enough
+   * to load it — "Out for signature" without `signing.view`, the workshop cards
+   * with the automotive pack switched off.
+   *
+   * The individual loaders re-check permissions strand by strand, which softened
+   * it, but no loader checks MODULE state at all — it never had to, because a
+   * pack being off used to mean the card was never in the list.
+   *
+   * It must be the SAME function the picker and the fixed path use, or the three
+   * drift into disagreeing about who may see what.
+   */
+  const builtin = src("src/components/dashboard/cards/builtin.tsx");
+  assert.match(
+    builtin,
+    /import \{ canSeeCard, cardById \} from "@\/lib\/dashboard\/registry"/,
+    "the builtin renderer must use the shared visibility rule, not a second one",
   );
+  const gate = builtin.indexOf("canSeeCard(");
+  const load = builtin.indexOf("await impl.load()");
+  assert.ok(gate > -1, "a builtin placed by a config must still be permission-gated");
+  assert.ok(load > -1, "the builtin renderer must load its card");
+  assert.ok(
+    gate < load,
+    "the gate must run BEFORE the loader, or the query has already happened",
+  );
+  // Both halves, explicitly: canSeeCard needs the modules set as well as the
+  // permissions, and passing only one silently disables the other gate.
+  assert.match(builtin, /permissions: ctx\.conditions\.permissions/, "permissions must be passed");
+  assert.match(builtin, /modules: ctx\.conditions\.modules/, "modules must be passed");
 });
 
 test("the dashboard reuses the shared condition evaluator rather than a second one", () => {
-  const registry = src("src/lib/dashboard/registry.ts");
-  const page = src("src/app/(app)/page.tsx");
+  // The twelve builtin cards keep declaring their conditions in the journey
+  // vocabulary; the config model has its own richer one. Both are shared types
+  // rather than local re-implementations, which is the property worth pinning.
   assert.match(
-    registry,
+    src("src/lib/dashboard/registry.ts"),
     /from "@\/lib\/journeyTypes"/,
-    "card conditions must use the shared JourneyConditionGroup type",
+    "builtin card conditions must use the shared JourneyConditionGroup type",
   );
   assert.match(
-    page,
-    /import \{ evaluateConditions \} from "@\/lib\/journeyTypes"/,
-    "the page must evaluate conditions with the shared evaluator",
+    src("src/lib/dashboard/conditions.ts"),
+    /import type \{ ConditionOperator \} from "@\/lib\/journeyTypes"/,
+    "config conditions must borrow the journey builder's operator vocabulary, not restate it",
   );
 });
 
