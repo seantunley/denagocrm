@@ -1,10 +1,11 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useActionState } from "react";
 import { sendWhatsAppMessage, type WaState } from "@/app/actions/whatsapp";
 import { sendDmReply, type DmState } from "@/app/actions/messenger";
 import AiCheckButton from "@/components/AiCheckButton";
+import { enterIntent, readEnterSends, writeEnterSends } from "@/lib/enterToSend";
 
 const QUICK_EMOJI = ["😀", "👍", "🙏", "🎉", "🔥", "❤️", "😂", "👌", "🚗", "⚡"];
 
@@ -24,20 +25,67 @@ export default function InboxReply({
   revalidate: string;
   aiConfigured?: boolean;
 }) {
-  const [waState, waAction] = useActionState<WaState | undefined, FormData>(
+  const [waState, waAction, waPending] = useActionState<WaState | undefined, FormData>(
     sendWhatsAppMessage,
     undefined
   );
-  const [dmState, dmAction] = useActionState<DmState | undefined, FormData>(
+  const [dmState, dmAction, dmPending] = useActionState<DmState | undefined, FormData>(
     sendDmReply,
     undefined
   );
   const state = channel === "whatsapp" ? waState : dmState;
+  // useActionState's third value. Discarding it left the keyboard with no idea a
+  // send was already in flight.
+  const pending = channel === "whatsapp" ? waPending : dmPending;
   const textRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState("");
   const [showEmoji, setShowEmoji] = useState(false);
   const canAttach = channel !== "whatsapp"; // WhatsApp media send comes later
+  const formRef = useRef<HTMLFormElement>(null);
+  // Defaults to true and is corrected after mount. Reading localStorage during
+  // render would differ between server and client markup; starting at the
+  // documented default means the first paint is never wrong about the default.
+  const [enterSends, setEnterSends] = useState(true);
+  useEffect(() => {
+    setEnterSends(readEnterSends(typeof window === "undefined" ? null : window.localStorage));
+  }, []);
+
+  function onKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    const intent = enterIntent(
+      {
+        key: event.key,
+        altKey: event.altKey,
+        shiftKey: event.shiftKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        // React exposes this on the native event; it is true while an IME is
+        // composing, when Enter belongs to the input method and not to us.
+        isComposing: (event.nativeEvent as KeyboardEvent).isComposing,
+        repeat: event.repeat,
+      },
+      enterSends,
+      pending,
+    );
+    if (intent === "ignore") return;
+    if (intent === "send") {
+      event.preventDefault();
+      // requestSubmit, not submit(): it runs the form's own handlers and native
+      // validation, so the key behaves exactly like pressing Send.
+      formRef.current?.requestSubmit();
+      return;
+    }
+    // Newline. Inserted explicitly rather than left to the default, because
+    // Alt+Enter does not reliably produce one across browsers the way Shift+Enter
+    // does — and the whole point is that the documented shortcut works.
+    event.preventDefault();
+    const el = event.currentTarget;
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? start;
+    el.value = `${el.value.slice(0, start)}
+${el.value.slice(end)}`;
+    el.selectionStart = el.selectionEnd = start + 1;
+  }
 
   function addEmoji(e: string) {
     const el = textRef.current;
@@ -49,7 +97,7 @@ export default function InboxReply({
   }
 
   return (
-    <form action={channel === "whatsapp" ? waAction : dmAction} className="mt-3">
+    <form ref={formRef} action={channel === "whatsapp" ? waAction : dmAction} className="mt-3">
       {channel === "whatsapp" ? (
         <>
           <input type="hidden" name="phone" value={phone ?? ""} />
@@ -68,6 +116,7 @@ export default function InboxReply({
           rows={1}
           className="input flex-1 py-1.5 text-sm resize-none"
           placeholder={`Reply via ${channel === "whatsapp" ? "WhatsApp" : channel === "instagram" ? "Instagram" : "Messenger"}…`}
+          onKeyDown={onKeyDown}
         />
         <button
           type="button"
@@ -104,7 +153,20 @@ export default function InboxReply({
         <button className="btn-primary btn-sm">Send</button>
       </div>
 
-      <div className="mt-1">
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground select-none">
+          <input
+            type="checkbox"
+            className="size-3.5 accent-primary"
+            checked={enterSends}
+            onChange={(event) => {
+              setEnterSends(event.target.checked);
+              writeEnterSends(typeof window === "undefined" ? null : window.localStorage, event.target.checked);
+            }}
+          />
+          Enter sends
+          <span className="text-muted-foreground/70">({enterSends ? "Alt+Enter" : "Enter"} for a new line)</span>
+        </label>
         <AiCheckButton
           getDraft={() => textRef.current?.value ?? ""}
           contactId={contactId}

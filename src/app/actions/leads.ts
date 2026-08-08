@@ -113,6 +113,7 @@ export async function createLead(formData: FormData) {
       throw new ActionRefusal("You do not have permission to assign leads to another user");
     }
 
+    let contactTookNotesFromNewLead = false;
     const generatedTitle = await buildTitle(data);
     const title = String(formData.get("title") ?? "").trim() || generatedTitle;
 
@@ -149,11 +150,20 @@ export async function createLead(formData: FormData) {
             email: data.email,
             phone: data.phone,
             source: data.source,
+            // Whatever was typed in the lead's notes follows the customer onto
+            // their contact record. Omitting it dropped it silently: the note was
+            // captured on a form the person filled in, and then existed nowhere.
+            notes: data.notes,
             createdById: user.id,
             ownerId: data.assignedToId ?? user.id,
           },
         });
         data.contactId = contact.id;
+        // The lead does not exist yet — its id is stamped onto the contact once
+        // createLeadRecord returns, below. Tracked in a local rather than
+        // re-derived later, so the two cannot disagree about whether a note was
+        // actually copied.
+        contactTookNotesFromNewLead = Boolean(data.notes?.trim());
         await logAudit({
           action: "contact.created",
           summary: `Created contact ${data.name} (with new lead)`,
@@ -186,6 +196,15 @@ export async function createLead(formData: FormData) {
       // watching the door.
       push: null,
     });
+
+    // Now the lead has an id, record that the contact's note came from it. Not a
+    // second source of truth: the timeline reads THIS, and never compares text.
+    if (contactTookNotesFromNewLead && data.contactId) {
+      await prisma.contact.update({
+        where: { id: data.contactId },
+        data: { notesFromLeadId: lead.id },
+      });
+    }
     const refCode = String(formData.get("referralCode") ?? "").trim();
     if (refCode) await recordReferral(refCode, lead.id).catch(() => {});
     revalidatePath("/leads");
@@ -436,6 +455,12 @@ export async function markWon(leadId: string, formData?: FormData) {
           email: before.email,
           phone: before.phone,
           source: before.source,
+          // Carried, for the same reason as createLead: winning a lead must not
+          // be the moment its notes disappear. notesFromLeadId records WHERE the
+          // copy came from, so the timeline can show one entry instead of two
+          // without comparing sentences — see lib/timelineNotes.ts.
+          notes: before.notes,
+          notesFromLeadId: before.notes?.trim() ? before.id : null,
           tenantId: before.tenantId,
           createdById: user.id,
           ownerId: before.assignedToId ?? user.id,
@@ -596,6 +621,10 @@ export async function convertLeadToContact(leadId: string): Promise<{ ok: boolea
           email: lead.email,
           phone: lead.phone,
           source: lead.source,
+          // Converting is explicitly "this lead is now a customer". Losing the
+          // notes at that point loses the reason the customer exists.
+          notes: lead.notes,
+          notesFromLeadId: lead.notes?.trim() ? lead.id : null,
           tenantId: lead.tenantId,
           createdById: user.id,
           ownerId: lead.assignedToId ?? user.id,

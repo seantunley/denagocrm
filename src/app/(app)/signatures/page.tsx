@@ -2,6 +2,11 @@ import Link from "next/link";
 import { requireAnyPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { formatDate, formatDateTime } from "@/lib/format";
+import {
+  CLOSED_REQUEST_STATUSES,
+  signatureRequestView,
+  type SignatureRequestView,
+} from "@/lib/signing/status";
 import { ApprovalActions } from "./ApprovalActions";
 import {
   CheckCircle2,
@@ -26,6 +31,24 @@ const RECIPIENT_STATUS: Record<string, { dot: string; label: string }> = {
   sent: { dot: "bg-amber-400", label: "sent, not signed" },
   pending: { dot: "bg-slate-500", label: "not sent" },
 };
+
+const REQUEST_VIEWS: Array<{ value: SignatureRequestView; label: string }> = [
+  { value: "in-progress", label: "In Progress" },
+  { value: "completed", label: "Completed" },
+  { value: "voided", label: "Voided" },
+  { value: "declined", label: "Declined" },
+  { value: "rejected", label: "Rejected" },
+  { value: "expired", label: "Expired" },
+];
+
+const PAGE_SIZE = 50;
+const RECENT_COMPLETION_SAMPLE_SIZE = 200;
+
+function signaturesHref(view: SignatureRequestView, page = 1): string {
+  const params = new URLSearchParams({ status: view });
+  if (page > 1) params.set("page", String(page));
+  return `/signatures?${params.toString()}`;
+}
 
 // A precise per-signer state line: signed/declined/opened(not signed)/sent(not
 // opened)/not sent — with the exact date + time so you can see where a request
@@ -58,31 +81,89 @@ function requestTone(status: string): "neutral" | "info" | "warning" | "success"
   return "neutral";
 }
 
-export default async function SignaturesPage() {
+export default async function SignaturesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ status?: string | string[]; page?: string | string[] }>;
+}) {
   await requireAnyPermission("signing.view", "signing.manage");
-  const requests = await prisma.signatureRequest.findMany({
-    where: { deletedAt: null },
+  const query = await searchParams;
+  const requestedStatus = query.status;
+  const activeView: SignatureRequestView =
+    typeof requestedStatus === "string" && REQUEST_VIEWS.some((view) => view.value === requestedStatus)
+      ? (requestedStatus as SignatureRequestView)
+      : "in-progress";
+  const requestedPage = typeof query.page === "string" ? Number(query.page) : 1;
+  const safeRequestedPage = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+
+  const [statusGroups, pendingApprovals, completionSamples] = await Promise.all([
+    prisma.signatureRequest.groupBy({
+      by: ["status"],
+      where: { deletedAt: null },
+      _count: { _all: true },
+    }),
+    prisma.approvalStep.findMany({
+      where: {
+        status: "pending",
+        request: {
+          deletedAt: null,
+          status: { notIn: [...CLOSED_REQUEST_STATUSES] },
+        },
+      },
+      include: { request: { select: { id: true, title: true } } },
+      orderBy: { createdAt: "asc" },
+      take: 100,
+    }),
+    prisma.signatureRequest.findMany({
+      where: {
+        deletedAt: null,
+        status: "completed",
+        sentAt: { not: null },
+        completedAt: { not: null },
+      },
+      select: { sentAt: true, completedAt: true },
+      orderBy: { completedAt: "desc" },
+      take: RECENT_COMPLETION_SAMPLE_SIZE,
+    }),
+  ]);
+
+  const statusCounts = new Map(statusGroups.map((group) => [group.status, group._count._all]));
+  const requestCounts = statusGroups.reduce<Record<SignatureRequestView, number>>(
+    (counts, group) => {
+      counts[signatureRequestView(group.status)] += group._count._all;
+      return counts;
+    },
+    { completed: 0, voided: 0, declined: 0, rejected: 0, expired: 0, "in-progress": 0 },
+  );
+  const total = [...statusCounts.values()].reduce((sum, count) => sum + count, 0);
+  const completed = requestCounts.completed;
+  const active = ["sent", "viewed", "in_progress"].reduce(
+    (sum, status) => sum + (statusCounts.get(status) ?? 0),
+    0,
+  );
+  const completionRate = total ? Math.round((completed / total) * 100) : 0;
+  const times = completionSamples.map(
+    (request) => (request.completedAt!.getTime() - request.sentAt!.getTime()) / 3600000,
+  );
+  const medHours = median(times);
+  const activeViewCount = requestCounts[activeView];
+  const totalPages = Math.max(1, Math.ceil(activeViewCount / PAGE_SIZE));
+  const currentPage = Math.min(safeRequestedPage, totalPages);
+  const viewStatusFilter =
+    activeView === "in-progress"
+      ? { status: { notIn: [...CLOSED_REQUEST_STATUSES] } }
+      : { status: activeView };
+  const visibleRequests = await prisma.signatureRequest.findMany({
+    where: { deletedAt: null, ...viewStatusFilter },
     orderBy: { updatedAt: "desc" },
-    take: 200,
+    skip: (currentPage - 1) * PAGE_SIZE,
+    take: PAGE_SIZE,
     include: { recipients: true },
   });
-
-  const pendingApprovals = await prisma.approvalStep.findMany({
-    where: { status: "pending", request: { deletedAt: null, status: { notIn: ["voided", "completed", "rejected", "declined"] } } },
-    include: { request: { select: { id: true, title: true } } },
-    orderBy: { createdAt: "asc" },
-    take: 100,
-  });
-
-  const total = requests.length;
-  const completed = requests.filter((r) => r.status === "completed").length;
-  const declined = requests.filter((r) => r.status === "declined").length;
-  const active = requests.filter((r) => ["sent", "viewed", "in_progress"].includes(r.status)).length;
-  const completionRate = total ? Math.round((completed / total) * 100) : 0;
-  const times = requests
-    .filter((r) => r.status === "completed" && r.sentAt && r.completedAt)
-    .map((r) => (r.completedAt!.getTime() - r.sentAt!.getTime()) / 3600000);
-  const medHours = median(times);
+  const activeViewLabel = REQUEST_VIEWS.find((view) => view.value === activeView)?.label ?? "In Progress";
+  const fallbackView = REQUEST_VIEWS.find(
+    (view) => view.value !== activeView && requestCounts[view.value] > 0,
+  );
 
   return (
     <div className="space-y-6">
@@ -102,10 +183,10 @@ export default async function SignaturesPage() {
           </>
         }
         stats={[
-          { label: "Requests", value: total, detail: `${requests.filter((request) => request.status === "draft").length} draft`, icon: FileText },
+          { label: "Requests", value: total, detail: `${statusCounts.get("draft") ?? 0} draft`, icon: FileText },
           { label: "Awaiting", value: active, detail: active ? "Needs signer action" : "Nothing outstanding", icon: Clock3, tone: active ? "warning" : "success" },
           { label: "Completed", value: completed, detail: `${completionRate}% completion`, icon: CheckCircle2, tone: "success" },
-          { label: "Median time", value: medHours == null ? "—" : medHours < 1 ? `${Math.round(medHours * 60)}m` : `${medHours.toFixed(1)}h`, detail: "Sent to completed", icon: Timer },
+          { label: "Median time", value: medHours == null ? "—" : medHours < 1 ? `${Math.round(medHours * 60)}m` : `${medHours.toFixed(1)}h`, detail: completed > RECENT_COMPLETION_SAMPLE_SIZE ? "Recent sent to completed" : "Sent to completed", icon: Timer },
         ]}
       />
 
@@ -132,13 +213,37 @@ export default async function SignaturesPage() {
       )}
 
       <Surface className="overflow-hidden">
-        <div className="border-b border-border p-4">
+        <div className="flex flex-col gap-3 border-b border-border p-4 lg:flex-row lg:items-end lg:justify-between">
           <SectionHeading
             title={<span className="inline-flex items-center gap-2"><FileSignature className="size-4 text-primary" /> Signing requests</span>}
-            description={declined ? `${declined} declined request${declined === 1 ? "" : "s"} need follow-up.` : "Live progress and signer activity across every request."}
+            description={
+              activeView === "in-progress"
+                ? `${activeViewCount} request${activeViewCount === 1 ? "" : "s"} currently moving through the signing workflow.`
+                : activeView === "completed"
+                  ? `${activeViewCount} request${activeViewCount === 1 ? "" : "s"} completed successfully.`
+                  : `${activeViewCount} request${activeViewCount === 1 ? "" : "s"} ${activeViewLabel.toLowerCase()}.`
+            }
           />
+          <nav className="flex max-w-full gap-1 overflow-x-auto rounded-lg border border-border bg-muted/25 p-1" aria-label="Signing request status">
+            {REQUEST_VIEWS.map((view) => {
+              const active = activeView === view.value;
+              return (
+                <Link
+                  key={view.value}
+                  href={signaturesHref(view.value)}
+                  aria-current={active ? "page" : undefined}
+                  className={`inline-flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}
+                >
+                  {view.label}
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] tabular-nums ${active ? "bg-primary-foreground/15 text-primary-foreground" : "bg-background/70 text-muted-foreground"}`}>
+                    {requestCounts[view.value]}
+                  </span>
+                </Link>
+              );
+            })}
+          </nav>
         </div>
-        {requests.length === 0 ? (
+        {total === 0 ? (
           <EmptyState
             icon={FileSignature}
             title="No signature requests yet"
@@ -146,9 +251,18 @@ export default async function SignaturesPage() {
             action={<Link href="/documents" className="btn-primary btn-sm">Open documents</Link>}
             className="m-4"
           />
+        ) : visibleRequests.length === 0 ? (
+          <EmptyState
+            icon={FileSignature}
+            title={`No ${activeViewLabel.toLowerCase()} requests`}
+            description="Choose another status to see the rest of your signing requests."
+            action={fallbackView ? <Link href={signaturesHref(fallbackView.value)} className="btn-secondary btn-sm">View {fallbackView.label.toLowerCase()}</Link> : undefined}
+            className="m-4"
+          />
         ) : (
-          <ul className="divide-y divide-border/60">
-            {requests.map((r) => {
+          <>
+            <ul className="divide-y divide-border/60">
+              {visibleRequests.map((r) => {
               const signers = [...r.recipients]
                 .filter((x) => x.role !== "viewer")
                 .sort((a, b) => a.order - b.order);
@@ -202,8 +316,29 @@ export default async function SignaturesPage() {
                 </li>
                 </RecordContextMenu>
               );
-            })}
-          </ul>
+              })}
+            </ul>
+            {totalPages > 1 && (
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
+                <p className="text-xs text-muted-foreground">
+                  Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, activeViewCount)} of {activeViewCount}
+                </p>
+                <div className="flex items-center gap-2">
+                  {currentPage > 1 ? (
+                    <Link href={signaturesHref(activeView, currentPage - 1)} className="btn-secondary btn-sm">Previous</Link>
+                  ) : (
+                    <span className="btn-secondary btn-sm pointer-events-none opacity-45" aria-disabled="true">Previous</span>
+                  )}
+                  <span className="text-xs tabular-nums text-muted-foreground">Page {currentPage} of {totalPages}</span>
+                  {currentPage < totalPages ? (
+                    <Link href={signaturesHref(activeView, currentPage + 1)} className="btn-secondary btn-sm">Next</Link>
+                  ) : (
+                    <span className="btn-secondary btn-sm pointer-events-none opacity-45" aria-disabled="true">Next</span>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </Surface>
     </div>

@@ -77,7 +77,7 @@ export default function SocialThreadList({
             }
           >
             <div>
-              <div className="flex flex-wrap items-center gap-2 border-b border-border pb-3">
+              <div className="flex flex-wrap items-center gap-2 border-b border-border pb-3 pr-12">
                 <span className="grid size-8 place-items-center rounded-lg border border-border bg-muted/50">{meta.icon}</span>
                 <div className="min-w-0">
                   {thread.href ? <Link href={thread.href} className="font-semibold text-primary hover:underline">{thread.name}</Link> : <span className="font-semibold">{thread.name}</span>}

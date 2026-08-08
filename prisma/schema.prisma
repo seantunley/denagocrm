@@ -394,6 +394,12 @@ model Contact {
   postalCode    String?
   source          String?
   notes           String?
+  /// The lead whose notes were COPIED into `notes` when this contact was created
+  /// from it. Provenance, not a relation: it answers "is the contact's note the
+  /// same event as that lead's note?" so the timeline can show one entry instead
+  /// of two. Comparing the TEXT answered that question wrongly whenever two
+  /// genuinely separate notes happened to say the same thing.
+  notesFromLeadId String?
   marketingOptOut Boolean @default(false) // excluded from bulk campaigns
   research        String? // latest AI research briefing (shown in the Research tab)
   researchedAt    DateTime?

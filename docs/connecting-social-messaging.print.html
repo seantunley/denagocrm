@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="en-ZA">
+<head>
+<meta charset="utf-8">
+<title>Connecting Facebook, Instagram, WhatsApp and Google</title>
+<link rel="stylesheet" href="assets/guide.css">
+</head>
+<body>
+
+<!-- ══ COVER ═════════════════════════════════════════════════════════════ -->
+<div class="cover">
+  <div class="eyebrow">Integration guide</div>
+  <h1>Connecting Facebook,<br>Instagram, WhatsApp<br>and Google</h1>
+  <div class="rule"></div>
+  <p class="standfirst">
+    Bring every customer message — and every new Google review — into one inbox.
+    Set up once, by you, on your own accounts.
+  </p>
+  <dl class="meta">
+    <div><dt>Audience</dt><dd>Whoever administers your Facebook Page</dd></div>
+    <div><dt>Hands-on time</dt><dd>≈ 60 minutes</dd></div>
+    <div><dt>Then a wait</dt><dd>App Review, 1–7 days</dd></div>
+  </dl>
+</div>
+
+<!-- ══ CONTENTS ══════════════════════════════════════════════════════════ -->
+<div class="toc">
+  <h1 class="section">Contents</h1>
+  <p class="lede">
+    You are connecting four things, and they are genuinely separate. Messenger,
+    Instagram and WhatsApp each need their own step, though all three run through
+    one Meta app that you create and own. Google reviews is not Meta at all and
+    shares none of that work — if reviews are all you want, step 9 stands alone.
+    Otherwise work through this in order: later steps depend on values produced by
+    earlier ones.
+  </p>
+  <ol>
+    <li><span class="t">Before you start</span> <span class="d">— the four things that stop this dead</span></li>
+    <li><span class="t">Create your Meta app</span></li>
+    <li><span class="t">Connect the webhook</span> <span class="d">— where messages arrive</span></li>
+    <li><span class="t">Add Messenger</span> <span class="d">— your Facebook Page</span></li>
+    <li><span class="t">Add Instagram</span></li>
+    <li><span class="t">Make a permanent access token</span></li>
+    <li><span class="t">Enter everything into your CRM</span></li>
+    <li><span class="t">Add WhatsApp</span> <span class="d">— a separate number, a separate token</span></li>
+    <li><span class="t">Add Google reviews</span> <span class="d">— not messaging, same inbox</span></li>
+    <li><span class="t">Test it end to end</span></li>
+    <li><span class="t">Go live: App Review</span></li>
+    <li><span class="t">When something is wrong</span></li>
+    <li><span class="t">Keeping it working</span></li>
+  </ol>
+
+  <h2>Read this before you open anything</h2>
+  <div class="callout stop">
+    <span class="title">Four things will stop you, and three of them are not fixable in the moment</span>
+    <p>
+      <strong>You must be a full admin of the Facebook Page.</strong> Editor is not
+      enough. If someone else set the Page up, get admin access first.
+    </p>
+    <p>
+      <strong>Instagram must be a Professional account and linked to that Page.</strong>
+      A personal Instagram account cannot receive messages through any system.
+      Converting it is free and takes two minutes, but it must be done before step 5.
+    </p>
+    <p>
+      <strong>The WhatsApp number must not be in use on the WhatsApp app.</strong>
+      A number registered to WhatsApp or WhatsApp Business on a phone cannot be
+      used by the API. You need a number you can receive an SMS or a call on, that
+      is not already a WhatsApp account. This surprises people at step 8, an hour
+      in.
+    </p>
+    <p>
+      <strong>Until App Review passes, only people you list as testers can message
+      you.</strong> Everything will look connected and work perfectly for you, and
+      a real customer will get nothing. Step 11 covers this. Budget a week.
+    </p>
+  </div>
+</div>
+
+<!-- ══ 1 ═════════════════════════════════════════════════════════════════ -->
+<section class="step first">
+  <h1 class="section"><span class="num">1</span>Before you start</h1>
+  <p class="lede">Gather these now. Hunting for them mid-flow is where mistakes happen.</p>
+
+  <table>
+    <thead>
+      <tr><th>What</th><th>Where it comes from</th><th>Needed for</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>A Facebook account with <strong>admin</strong> on your Page</td><td>Your Page → Settings → Page access</td><td>Everything</td></tr>
+      <tr><td>A Meta Business account</td><td>business.facebook.com — free</td><td>Steps 2, 6</td></tr>
+      <tr><td>Instagram <strong>Professional</strong> account, linked to the Page</td><td>Instagram app → Settings → Account type</td><td>Step 5</td></tr>
+      <tr><td>A phone number <strong>not</strong> on WhatsApp</td><td>Any number you can receive SMS or a call on</td><td>Step 8</td></tr>
+      <tr><td>Your CRM address</td><td>The address you sign in at</td><td>Step 3</td></tr>
+      <tr><td>Access to <strong>Settings → Integrations</strong> in the CRM</td><td>Your CRM administrator</td><td>Step 7</td></tr>
+    </tbody>
+  </table>
+
+  <h2>What you are actually building</h2>
+  <p>
+    A Meta app is not a program you write. It is a set of permissions and a
+    delivery address: it tells Meta "this business is allowed to read and send
+    messages for this Page, and messages should be delivered <em>here</em>".
+    The address is your CRM. Nothing is installed anywhere.
+  </p>
+  <p>
+    You will end up with <strong>four values</strong> to copy into the CRM, and one
+    value to copy <em>out</em> of it. Keep a notepad open — several are shown once
+    and never again.
+  </p>
+
+  <div class="callout note">
+    <span class="title">Do this on a desktop</span>
+    <p>
+      Meta's developer console is not usable on a phone, and you will be copying
+      long tokens between two browser tabs. Have your CRM open in one tab and
+      <strong>developers.facebook.com</strong> in the other.
+    </p>
+  </div>
+</section>
+
+<!-- ══ 2 ═════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">2</span>Create your Meta app</h1>
+  <p class="lede">One app carries Messenger, Instagram and WhatsApp. You only do this once.</p>
+
+  <ol>
+    <li>Go to <strong>developers.facebook.com</strong> and sign in with the Facebook account that administers your Page.</li>
+    <li>Click <strong>My Apps</strong> → <strong>Create App</strong>.</li>
+    <li>For "What do you want your app to do?", choose <strong>Other</strong>, then <strong>Next</strong>.</li>
+    <li>For app type, choose <strong>Business</strong>. This is the type that can hold Messenger, Instagram and WhatsApp together.</li>
+    <li>Give it a name your colleagues will recognise — <em>"Denago CRM connection"</em>, not <em>"test"</em>. Customers never see this name.</li>
+    <li>Select your <strong>Business account</strong>. If the dropdown is empty, create one at business.facebook.com first and come back.</li>
+    <li>Click <strong>Create app</strong> and re-enter your password when asked.</li>
+  </ol>
+
+  <h2>Copy the App Secret now</h2>
+  <p>
+    In the left sidebar go to <strong>App settings → Basic</strong>. You will see
+    <strong>App ID</strong> and <strong>App Secret</strong>. Click <strong>Show</strong>
+    beside the secret and copy it somewhere safe.
+  </p>
+  <p>
+    This is the value the CRM uses to prove a webhook really came from Meta and not
+    from someone pretending. You will paste it in at step 7.
+  </p>
+
+  <div class="callout stop">
+    <span class="title">The App Secret is a password</span>
+    <p>
+      Anyone holding it can impersonate Meta to your CRM. Do not paste it into
+      email, a chat message, or a shared document. Copy it straight from Meta into
+      the CRM at step 7, then clear your clipboard.
+    </p>
+  </div>
+</section>
+
+<!-- ══ 3 ═════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">3</span>Connect the webhook</h1>
+  <p class="lede">This is the address Meta delivers messages to, and the shared secret that proves it is really your CRM.</p>
+
+  <p>
+    Do this <em>before</em> adding Messenger or Instagram. Both of those ask you to
+    subscribe to fields, and the subscription only works once the address itself is
+    verified.
+  </p>
+
+  <h2>First, get the two values from the CRM</h2>
+  <p>
+    In the CRM, open <strong>Settings → Integrations</strong>. Under
+    <strong>Facebook &amp; Instagram (Meta)</strong> you will find:
+  </p>
+  <table>
+    <thead><tr><th>Field</th><th>What to do</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Webhook callback URL</strong></td>
+        <td>Copy it exactly. It ends in <code>/api/webhooks/meta</code>.</td>
+      </tr>
+      <tr>
+        <td><strong>Verify token</strong></td>
+        <td>Reveal it and copy it. If it is empty, click <strong>Regenerate</strong> to create one.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    The verify token is invented by your CRM, not by Meta. It is a password the two
+    systems share so that Meta can prove it is talking to the right place. It does
+    not need to mean anything.
+  </p>
+
+  <h2>Then register it with Meta</h2>
+  <ol>
+    <li>In your Meta app, left sidebar → <strong>Webhooks</strong>.</li>
+    <li>In the dropdown choose <strong>Page</strong>, then <strong>Subscribe to this object</strong>.</li>
+    <li><strong>Callback URL</strong>: paste the URL from the CRM.</li>
+    <li><strong>Verify token</strong>: paste the verify token from the CRM.</li>
+    <li>Click <strong>Verify and save</strong>.</li>
+  </ol>
+
+  <p>
+    Meta immediately calls your CRM to check the token. If it matches, the dialog
+    closes and the subscription is created. If it does not, you get
+    <em>"The URL couldn't be validated"</em> — the token does not match. Copy it
+    again, carefully; a trailing space is the usual cause.
+  </p>
+
+  <h2>Subscribe to the right fields</h2>
+  <p>
+    With <strong>Page</strong> still selected, click <strong>Subscribe</strong> next
+    to each of these:
+  </p>
+  <table>
+    <thead><tr><th>Field</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td><code>messages</code></td><td><strong>Required.</strong> The customer's actual messages.</td></tr>
+      <tr><td><code>messaging_postbacks</code></td><td><strong>Required.</strong> Taps on buttons and quick replies.</td></tr>
+      <tr><td><code>message_echoes</code></td><td>Recommended. Messages your team sends from Meta's own inbox also appear in the CRM, so the history is complete however it was answered.</td></tr>
+      <tr><td><code>message_deliveries</code></td><td>Optional. Delivered status under your sent messages.</td></tr>
+      <tr><td><code>message_reads</code></td><td>Optional. Seen status under your sent messages.</td></tr>
+      <tr><td><code>leadgen</code></td><td>Only if you run Facebook lead ads. Delivers the form straight into the CRM as a lead.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout note">
+    <span class="title">Subscribing to more than you need is harmless</span>
+    <p>
+      Events the CRM does not use are ignored. It is better to subscribe now than
+      to come back later wondering why delivery ticks never appeared.
+    </p>
+  </div>
+</section>
+
+<!-- ══ 4 ═════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">4</span>Add Messenger</h1>
+  <p class="lede">Attach your Facebook Page to the app, so the app is allowed to act for it.</p>
+
+  <ol>
+    <li>In your Meta app, left sidebar → <strong>Add product</strong>.</li>
+    <li>Find <strong>Messenger</strong> and click <strong>Set up</strong>.</li>
+    <li>Scroll to <strong>Access Tokens</strong> (older consoles call this <em>Generate token</em>).</li>
+    <li>Click <strong>Add or remove Pages</strong>.</li>
+    <li>Choose the Page you want the CRM to answer for, then <strong>Continue</strong>.</li>
+    <li>Leave every permission ticked and click <strong>Save</strong>. Removing one here causes a permission error later that is very hard to trace back to this screen.</li>
+  </ol>
+
+  <p>
+    Your Page now appears in the list with a <strong>Generate token</strong> button.
+    <strong>Do not use it.</strong> That token expires — sometimes in an hour,
+    sometimes in two months — and when it does, messages stop arriving with no
+    warning and no error anywhere you would think to look. Step 6 makes a permanent
+    one instead.
+  </p>
+
+  <h2>Link the webhook to this Page</h2>
+  <p>
+    Still on the Messenger settings screen, find the <strong>Webhooks</strong>
+    section. Your Page should be listed. If there is an <strong>Add subscriptions</strong>
+    button next to it, click it and tick the same fields from step 3.
+  </p>
+  <p>
+    This catches people out: subscribing the <em>app</em> to Page events (step 3)
+    and subscribing <em>this Page</em> to the app are two different actions, and
+    both are required. If messages never arrive and everything else looks right,
+    this is the first place to check.
+  </p>
+</section>
+
+<!-- ══ 5 ═════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">5</span>Add Instagram</h1>
+  <p class="lede">Instagram messages ride on the same connection, but must be switched on in two places.</p>
+
+  <div class="callout stop">
+    <span class="title">Check these first, or the screens below will be empty</span>
+    <p>
+      Your Instagram account must be a <strong>Professional</strong> account
+      (Business or Creator), and it must be <strong>linked to the Facebook Page</strong>
+      from step 4. Check in the Instagram app: <strong>Settings → Account type and
+      tools</strong>, then <strong>Settings → Sharing to other apps → Facebook</strong>.
+    </p>
+  </div>
+
+  <h2>Allow the CRM to see messages</h2>
+  <ol>
+    <li>Open the Instagram app → your profile → <strong>Settings</strong>.</li>
+    <li>Go to <strong>Privacy → Messages</strong> (some versions: <strong>Message controls</strong>).</li>
+    <li>Turn <strong>Allow access to messages</strong> on. Without this, Meta will not deliver Instagram DMs to any external system, and nothing in the developer console will tell you.</li>
+  </ol>
+
+  <h2>Add the product</h2>
+  <ol>
+    <li>Meta app → <strong>Add product</strong> → <strong>Instagram</strong> → <strong>Set up</strong>.</li>
+    <li>Open <strong>API setup with Instagram login</strong> or <strong>Instagram Graph API</strong>, whichever your console shows.</li>
+    <li>Connect the Instagram account linked to your Page.</li>
+    <li>Go back to <strong>Webhooks</strong> in the sidebar, choose <strong>Instagram</strong> in the dropdown, and subscribe to <code>messages</code> and <code>messaging_postbacks</code> — the same fields as the Page, on a separate object.</li>
+  </ol>
+
+  <p>
+    Instagram needs no separate token. It uses the Page access token from step 6,
+    because the Instagram account belongs to the Page.
+  </p>
+</section>
+
+<!-- ══ 6 ═════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">6</span>Make a permanent access token</h1>
+  <p class="lede">This is the step people skip, and the reason integrations silently stop working weeks later.</p>
+
+  <p>
+    A token generated on the Messenger screen belongs to <em>you</em>, and expires.
+    A <strong>System User</strong> token belongs to the <em>business</em> and does
+    not. If you leave the company, or change your password, a personal token dies
+    and the inbox goes quiet. Do this properly once.
+  </p>
+
+  <ol>
+    <li>Go to <strong>business.facebook.com/settings</strong>.</li>
+    <li>Left sidebar → <strong>Users → System users</strong>.</li>
+    <li><strong>Add</strong> → name it <em>"CRM integration"</em> → role <strong>Admin</strong> → <strong>Create system user</strong>.</li>
+    <li>With it selected, click <strong>Add assets</strong>.</li>
+    <li>Choose <strong>Pages</strong>, tick your Page, and enable <strong>Manage Page</strong> (full control). Save.</li>
+    <li>Click <strong>Generate new token</strong>.</li>
+    <li>Choose your app from step 2.</li>
+    <li>Set <strong>Token expiration</strong> to <strong>Never</strong>.</li>
+    <li>Tick these permissions:
+      <ul>
+        <li><code>pages_messaging</code> — send and receive Messenger messages</li>
+        <li><code>pages_manage_metadata</code> — required for webhooks to work</li>
+        <li><code>pages_read_engagement</code> — read the Page's conversations</li>
+        <li><code>pages_show_list</code> — see which Pages you manage</li>
+        <li><code>instagram_basic</code> and <code>instagram_manage_messages</code> — only if you did step 5</li>
+        <li><code>leads_retrieval</code> — only if you run lead ads</li>
+      </ul>
+    </li>
+    <li>Click <strong>Generate token</strong> and <strong>copy it immediately</strong>.</li>
+  </ol>
+
+  <div class="callout stop">
+    <span class="title">You get one chance to copy this</span>
+    <p>
+      Meta shows the token once. Close the dialog without copying it and you cannot
+      retrieve it — you must generate a new one, which invalidates the old. Paste it
+      straight into the CRM at step 7.
+    </p>
+  </div>
+
+  <p>
+    The token starts with <code>EAAG</code> and is very long — several hundred
+    characters. That is normal. Make sure you copy all of it; a truncated token
+    fails in a way that looks like a permissions problem.
+  </p>
+</section>
+
+<!-- ══ 7 ═════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">7</span>Enter everything into your CRM</h1>
+  <p class="lede">Three values, one screen. This is the short step.</p>
+
+  <p>
+    In the CRM, go to <strong>Settings → Integrations</strong> and find
+    <strong>Facebook &amp; Instagram (Meta)</strong>.
+  </p>
+
+  <table>
+    <thead><tr><th>Field in the CRM</th><th>Paste</th><th>From</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Page access token (System User)</strong></td><td>The <code>EAAG…</code> token</td><td>Step 6</td></tr>
+      <tr><td><strong>App secret</strong></td><td>The App Secret</td><td>Step 2 — Meta app → App settings → Basic</td></tr>
+      <tr><td><strong>Verify token</strong></td><td>Already set</td><td>You copied this out in step 3 — leave it alone</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    Click <strong>Save</strong> beside each field. Saved secrets show as
+    <code>•••••••• saved — leave blank to keep</code>, so you can edit one without
+    retyping the others.
+  </p>
+  <p>
+    The badge at the top of the section changes from <strong>Not set up</strong> to
+    <strong>Connected</strong> once the access token is saved.
+  </p>
+
+  <div class="callout note">
+    <span class="title">"Connected" means "we have a token", not "it works"</span>
+    <p>
+      The badge only reflects whether a token is stored. It cannot tell you the
+      token is valid, that the Page is subscribed, or that Meta can reach you.
+      Step 10 is the real test — do not skip it.
+    </p>
+  </div>
+</section>
+
+<!-- ══ 8 ═════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">8</span>Add WhatsApp</h1>
+  <p class="lede">A separate product, a separate number and a separate token — but the same app and the same webhook secret.</p>
+
+  <div class="callout stop">
+    <span class="title">The number must be free of WhatsApp</span>
+    <p>
+      If the number is currently registered to WhatsApp or WhatsApp Business on a
+      phone, you must delete that account first (<strong>WhatsApp → Settings →
+      Account → Delete my account</strong>) and wait a few minutes. There is no way
+      around this, and doing it will erase that number's existing chat history.
+    </p>
+    <p>
+      Most businesses use a fresh number for the CRM and keep their existing
+      WhatsApp on a phone for walk-in conversations.
+    </p>
+  </div>
+
+  <ol>
+    <li>Meta app → <strong>Add product</strong> → <strong>WhatsApp</strong> → <strong>Set up</strong>.</li>
+    <li>Select your Business account when prompted.</li>
+    <li>Meta creates a <strong>test number</strong> automatically. It only messages numbers you list, and cannot be used with customers — useful for step 10, not for going live.</li>
+    <li>Click <strong>Add phone number</strong> and enter your real business number.</li>
+    <li>Verify it by SMS or voice call.</li>
+    <li>Set the display name customers will see. Meta reviews this; avoid anything that reads like a promotion.</li>
+  </ol>
+
+  <h2>Point WhatsApp at the CRM</h2>
+  <ol>
+    <li>In the WhatsApp product, open <strong>Configuration</strong>.</li>
+    <li>Beside <strong>Webhook</strong>, click <strong>Edit</strong>.</li>
+    <li><strong>Callback URL</strong>: the one from the CRM's <strong>WhatsApp Business (Cloud API)</strong> section — it ends in <code>/api/webhooks/whatsapp</code>. It is <em>not</em> the same URL as Messenger.</li>
+    <li><strong>Verify token</strong>: the <em>same</em> verify token as step 3. WhatsApp and Messenger share it.</li>
+    <li>Click <strong>Verify and save</strong>, then <strong>Manage</strong> and subscribe to the <code>messages</code> field.</li>
+  </ol>
+
+  <h2>Get the two values the CRM needs</h2>
+  <table>
+    <thead><tr><th>Field in the CRM</th><th>Where to find it</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Phone number ID</strong></td>
+        <td>WhatsApp → <strong>API Setup</strong>. It is a long number beside your phone number — <em>not</em> the phone number itself.</td>
+      </tr>
+      <tr>
+        <td><strong>Access token (permanent, System User)</strong></td>
+        <td>Generate as in step 6, adding <code>whatsapp_business_messaging</code> and <code>whatsapp_business_management</code>, and adding the WhatsApp account under <strong>Add assets</strong>.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>Paste both into <strong>Settings → Integrations → WhatsApp Business (Cloud API)</strong> and save.</p>
+
+  <div class="callout note">
+    <span class="title">The 24-hour rule is WhatsApp's, not the CRM's</span>
+    <p>
+      You may only send a free-form WhatsApp message within <strong>24 hours</strong>
+      of the customer's last message. Outside that window WhatsApp refuses it, and
+      the CRM will tell you so. To start a conversation, or to answer after 24 hours,
+      you need a <strong>message template</strong> approved in WhatsApp Manager.
+      This is a WhatsApp policy and applies to every system, not just this one.
+    </p>
+  </div>
+</section>
+
+<!-- ══ 9 ═════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">9</span>Add Google reviews</h1>
+  <p class="lede">Not a messaging channel, but it lands in the same place — new reviews arrive in the Social inbox so nobody has to remember to look.</p>
+
+  <p>
+    This one is Google, not Meta, so none of the app, token or App Review work above
+    applies. You need two values: an API key and your Place ID.
+  </p>
+
+  <h2>Create the API key</h2>
+  <ol>
+    <li>Go to <strong>console.cloud.google.com</strong> and sign in.</li>
+    <li>Create a project, or pick an existing one, from the selector at the top.</li>
+    <li>Left menu → <strong>APIs &amp; Services → Library</strong>.</li>
+    <li>Search for <strong>Places API (New)</strong> and click <strong>Enable</strong>.
+      Take care here: there is an older <em>Places API</em> as well, and a key enabled
+      only for that one returns "this API is not enabled" with no hint that you
+      picked the wrong entry of two nearly identical names.</li>
+    <li>Left menu → <strong>APIs &amp; Services → Credentials</strong> → <strong>Create credentials</strong> → <strong>API key</strong>.</li>
+    <li>Copy the key. It starts with <code>AIza</code>.</li>
+    <li>Click <strong>Edit API key</strong> and, under <strong>API restrictions</strong>,
+      restrict it to <strong>Places API (New)</strong>. An unrestricted key works
+      everywhere, which is exactly the problem if it leaks.</li>
+  </ol>
+
+  <div class="callout note">
+    <span class="title">Billing must be enabled, but the cost is negligible</span>
+    <p>
+      Google requires a billing account on the project even inside the free tier,
+      and will refuse the request without one. Reviews are fetched a few times a
+      day for one place, which sits far below the free allowance. Set a budget alert
+      if you want certainty.
+    </p>
+  </div>
+
+  <h2>Find your Place ID</h2>
+  <ol>
+    <li>Go to Google's <strong>Place ID Finder</strong>
+      (search "Google Place ID Finder" — it is a page in Google's own documentation).</li>
+    <li>Search for your business by name and address.</li>
+    <li>Copy the Place ID from the marker. It starts with <code>ChIJ</code>.</li>
+  </ol>
+  <p>
+    Make sure you pick the exact listing customers review — a business with several
+    branches has a Place ID <em>per branch</em>, and the wrong one silently pulls
+    another branch's reviews.
+  </p>
+
+  <h2>Enter both into the CRM</h2>
+  <table>
+    <thead><tr><th>Field in the CRM</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Places API key</strong></td><td>The <code>AIza…</code> key</td></tr>
+      <tr><td><strong>Place ID</strong></td><td>The <code>ChIJ…</code> identifier</td></tr>
+    </tbody>
+  </table>
+  <p>
+    Both are required before anything appears — the section shows
+    <strong>Connected</strong> only once each is set. New reviews then appear in the
+    <strong>Social inbox</strong> within about six hours, with a push notification,
+    and a <strong>Reply on Google</strong> link that opens the review in Google's own
+    interface. Replies are posted there, not from the CRM: Google does not permit
+    replying through the API.
+  </p>
+
+  <div class="callout note">
+    <span class="title">Nothing appears at all?</span>
+    <p>
+      Reviews are collected by a scheduled job, so the first batch is not instant —
+      wait a few hours before concluding it is broken. If it is still empty after
+      that, the usual causes are the older Places API enabled instead of Places API
+      (New), no billing account on the project, or a Place ID for a different branch.
+    </p>
+  </div>
+</section>
+
+<!-- ══ 10 ═════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">10</span>Test it end to end</h1>
+  <p class="lede">Use a real phone that is not yours, and check both directions.</p>
+
+  <p>
+    Do not test by messaging your own Page from the account that administers it.
+    Meta treats that as a message to yourself and the results are misleading. Use a
+    colleague's phone, or a personal account that has no role on the Page.
+  </p>
+
+  <table>
+    <thead><tr><th>#</th><th>Do this</th><th>Expect</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>From the other phone, message your Page on Messenger</td><td>It appears in the CRM's <strong>Inbox</strong> within a few seconds, with the sender's name</td></tr>
+      <tr><td>2</td><td>Reply from the CRM</td><td>It arrives on the phone, and shows in the thread as yours</td></tr>
+      <tr><td>3</td><td>Send an Instagram DM to your business account</td><td>It appears in the Inbox, tagged Instagram</td></tr>
+      <tr><td>4</td><td>Reply to it from the CRM</td><td>It arrives in Instagram</td></tr>
+      <tr><td>5</td><td>WhatsApp your business number</td><td>It appears in the Inbox</td></tr>
+      <tr><td>6</td><td>Reply within 24 hours</td><td>It arrives on WhatsApp</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    Inbound and outbound fail for completely different reasons. Inbound failing is
+    almost always the webhook — steps 3 and 4. Outbound failing is almost always
+    the token or its permissions — step 6. Knowing which half broke tells you which
+    step to revisit.
+  </p>
+</section>
+
+<!-- ══ 11 ════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">11</span>Go live: App Review</h1>
+  <p class="lede">Everything above works only for you until Meta approves the app. This is the part that takes days, not minutes.</p>
+
+  <p>
+    A new Meta app is in <strong>Development mode</strong>. In that state it can
+    only message people who have a role on the app — you and anyone you add as a
+    tester. Every test in step 10 will pass, and a real customer will still get
+    nothing.
+  </p>
+
+  <h2>Add testers so you can trial it properly</h2>
+  <p>
+    Meta app → <strong>App roles → Roles</strong> → <strong>Add people</strong> →
+    <strong>Testers</strong>. Each person must accept the invitation at
+    <strong>developers.facebook.com/settings</strong> before it takes effect.
+    Colleagues can then message you as real customers would.
+  </p>
+
+  <h2>Submit for review</h2>
+  <ol>
+    <li>Complete <strong>App settings → Basic</strong>: privacy policy URL, category, app icon. Review is refused without these.</li>
+    <li>Complete <strong>Business verification</strong> under your Business account — usually a registration document and a proof of address. This alone can take several days.</li>
+    <li>Go to <strong>App Review → Permissions and features</strong>.</li>
+    <li>Request <strong>Advanced Access</strong> for each permission from step 6 that you actually use.</li>
+    <li>For each one, record a short screencast showing a customer sending a message and your team answering it in the CRM. Reviewers reject vague submissions; show the actual flow.</li>
+    <li>Submit, then switch the app to <strong>Live</strong> with the toggle at the top of the console.</li>
+  </ol>
+
+  <div class="callout note">
+    <span class="title">Common reasons a review is refused</span>
+    <p>
+      The screencast does not show the permission being used. The privacy policy
+      URL does not load. Business verification is incomplete. The described use does
+      not match what the reviewer sees. All are fixable — read the rejection note,
+      it says which one.
+    </p>
+  </div>
+</section>
+
+<!-- ══ 12 ════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">12</span>When something is wrong</h1>
+  <p class="lede">Symptoms map to causes fairly reliably. Find yours.</p>
+
+  <table>
+    <thead><tr><th>What you see</th><th>What it means</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>"The URL couldn't be validated" when saving the webhook</td>
+        <td>The verify token does not match, or the URL is wrong</td>
+        <td>Re-copy both from Settings → Integrations. Check for a trailing space. The CRM answers this check and refuses a mismatch outright.</td>
+      </tr>
+      <tr>
+        <td>Webhook saved, but no messages arrive</td>
+        <td>Subscribed the app but not the Page</td>
+        <td>Messenger settings → Webhooks → <strong>Add subscriptions</strong> for your Page (step 4)</td>
+      </tr>
+      <tr>
+        <td>Messages arrived, then stopped</td>
+        <td>A temporary token expired</td>
+        <td>Replace it with a System User token set to <strong>Never</strong> expire (step 6)</td>
+      </tr>
+      <tr>
+        <td>Messages arrive; replies fail</td>
+        <td>Token lacks a permission</td>
+        <td>Regenerate with <code>pages_messaging</code> and, for Instagram, <code>instagram_manage_messages</code></td>
+      </tr>
+      <tr>
+        <td>Works for you, not for customers</td>
+        <td>App is still in Development mode</td>
+        <td>Complete App Review and switch to Live (step 11)</td>
+      </tr>
+      <tr>
+        <td>Instagram DMs never appear</td>
+        <td>"Allow access to messages" is off, or the account is not Professional</td>
+        <td>Instagram app → Settings → Privacy → Messages (step 5)</td>
+      </tr>
+      <tr>
+        <td>WhatsApp reply refused</td>
+        <td>Outside the 24-hour window</td>
+        <td>Use an approved template, or wait for the customer to message again</td>
+      </tr>
+      <tr>
+        <td>Cannot add the WhatsApp number</td>
+        <td>It is still registered to the WhatsApp app</td>
+        <td>Delete that WhatsApp account, wait, retry (step 8)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>If Meta reaches you but nothing is accepted</h2>
+  <p>
+    The CRM checks that every incoming webhook is signed with your App Secret. If
+    the secret is wrong, Meta's requests arrive and are rejected — so the developer
+    console shows delivery succeeding while the CRM shows nothing. If inbound has
+    never worked and the webhook validated cleanly, re-copy the
+    <strong>App Secret</strong> from <strong>App settings → Basic</strong>. It is the
+    one value whose mistake looks like silence rather than an error.
+  </p>
+</section>
+
+<!-- ══ 13 ════════════════════════════════════════════════════════════════ -->
+<section class="step">
+  <h1 class="section"><span class="num">13</span>Keeping it working</h1>
+  <p class="lede">Four habits that prevent the failures that take longest to diagnose.</p>
+
+  <div class="checklist">
+    <p><strong>Never use a personal token.</strong> If the person who created it leaves, changes their password, or loses their Page role, messages stop. System User tokens survive all three.</p>
+    <p><strong>Keep the System User assigned to the Page.</strong> Removing it from the Page in Business settings kills the token instantly, and it is an easy thing to do while tidying permissions.</p>
+    <p><strong>Rotate the App Secret if it is ever exposed.</strong> Meta app → App settings → Basic → <strong>Reset</strong>, then update it in Settings → Integrations immediately. Between those two actions, inbound messages are refused.</p>
+    <p><strong>Re-run step 10 after any change in Meta.</strong> Adding a product, changing permissions or regenerating a token can quietly break one direction. The six-line test takes two minutes.</p>
+  </div>
+
+  <h2>If you change your CRM address</h2>
+  <p>
+    The webhook URL is tied to the address your CRM is served from. If that changes,
+    update both callback URLs in the Meta console — <strong>Webhooks</strong> for
+    Messenger and Instagram, and <strong>WhatsApp → Configuration</strong> — and
+    verify each again. Messages sent to the old address are not queued; they are
+    lost.
+  </p>
+
+  <div class="callout forward">
+    <span class="title">Who to ask</span>
+    <p>
+      Anything on <strong>developers.facebook.com</strong> or
+      <strong>business.facebook.com</strong> — app creation, tokens, permissions,
+      App Review — is Meta's, and Meta's support can see things you cannot.
+      Anything on the <strong>Settings → Integrations</strong> screen, or a message
+      that reached Meta but not your Inbox, is ours. Say which side of the line you
+      are on and you will get to the right person faster.
+    </p>
+  </div>
+</section>
+
+</body>
+</html>

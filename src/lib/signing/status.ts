@@ -9,14 +9,9 @@ import "server-only";
  * Centralised so no single lifecycle path forgets one (e.g. `rejected`, set by
  * workflow rejection, and `expired`).
  */
-export const CLOSED_REQUEST_STATUSES = [
-  "completed",
-  "declined",
-  "voided",
-  "expired",
-  "rejected",
-] as const;
-
-export function isRequestClosed(status: string): boolean {
-  return (CLOSED_REQUEST_STATUSES as readonly string[]).includes(status);
-}
+export {
+  CLOSED_REQUEST_STATUSES,
+  isRequestClosed,
+  signatureRequestView,
+} from "./statusPolicy";
+export type { SignatureRequestView } from "./statusPolicy";

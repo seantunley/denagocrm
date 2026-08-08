@@ -5,6 +5,7 @@ import { AlertTriangle, Loader2 } from "lucide-react";
 import { unstable_rethrow } from "next/navigation";
 import { toast } from "sonner";
 
+import { ACTION_NOT_DELIVERED } from "@/components/actionError";
 import type { ActionResult } from "@/lib/actionResultTypes";
 import {
   Dialog,
@@ -57,7 +58,7 @@ export default function ConfirmActionDialog({
       setOpen(false);
     } catch (error) {
       unstable_rethrow(error);
-      toast.error("Something went wrong. Please try again.");
+      toast.error(ACTION_NOT_DELIVERED);
     } finally {
       setBusy(false);
     }
