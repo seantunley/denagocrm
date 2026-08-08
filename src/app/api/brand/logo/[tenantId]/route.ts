@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { basePrisma } from "@/lib/db";
-import { readFile } from "@/lib/storage";
+// readManagedBlob, not readFile: the ref is a store PATHNAME, a shape readFile
+// refuses by design. See its comment for why branding stores one.
+import { readManagedBlob } from "@/lib/storage";
 import { brandLogoAsset } from "@/lib/tenantBrand";
 
 export const runtime = "nodejs";
@@ -63,22 +65,21 @@ export async function GET(
   // The path is REBUILT from the tenant id and a strictly matched filename, so
   // the parameter cannot walk out of this tenant's folder or name another
   // tenant's object — nothing from the request is concatenated into a path.
-  let ref: string | null = null;
-  if (requested) {
-    const asset = brandLogoAsset(requested);
-    if (!asset) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    ref = `branding/${tenantId}/${asset}`;
-  } else {
-    ref = tenant.brandLogoRef;
-  }
-  if (!ref) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  //
+  // BOTH branches rebuild, including the stored one. The column is only ever
+  // read for the asset NAME, so whatever shape a row holds — today's pathname,
+  // or a full URL from some future write site — resolves to the same object and
+  // still cannot name a path this route did not construct.
+  const asset = brandLogoAsset(requested || tenant.brandLogoRef);
+  if (!asset) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const ref = `branding/${tenantId}/${asset}`;
 
   const ext = ref.split(".").pop()?.toLowerCase() ?? "";
   const contentType = EXT_TYPES[ext];
   if (!contentType) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   try {
-    const buffer = await readFile(ref);
+    const buffer = await readManagedBlob(ref);
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
         "Content-Type": contentType,

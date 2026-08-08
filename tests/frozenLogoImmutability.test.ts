@@ -59,13 +59,15 @@ test("only a well-formed asset name is accepted", () => {
 test("the route resolves the requested asset, and cannot leave the tenant's folder", () => {
   const route = read("src/app/api/brand/logo/[tenantId]/route.ts");
   assert.match(route, /searchParams\.get\("a"\)/);
-  assert.match(route, /brandLogoAsset\(requested\)/);
-  // The path is REBUILT from the tenant id and a validated filename; nothing
-  // from the request is concatenated into it.
-  assert.match(route, /ref = `branding\/\$\{tenantId\}\/\$\{asset\}`/);
-  // …and no asset means the current logo, so live surfaces still follow a
-  // rebrand as they should.
-  assert.match(route, /ref = tenant\.brandLogoRef/);
+  // The requested asset when one is named, the tenant's CURRENT logo otherwise —
+  // so a frozen document keeps its logo and live surfaces follow a rebrand. Both
+  // go through brandLogoAsset, which is what makes the filename trustworthy.
+  assert.match(route, /brandLogoAsset\(requested \|\| tenant\.brandLogoRef\)/);
+  // The path is REBUILT from the tenant id and that validated filename; nothing
+  // from the request is concatenated into it. This used to be true only of the
+  // requested branch — the stored ref was passed through — and unifying them is
+  // what the logo-404 fix turned on: the column is now read for its NAME alone.
+  assert.match(route, /const ref = `branding\/\$\{tenantId\}\/\$\{asset\}`/);
 });
 
 test("replacing a logo does not destroy the one a signed document points at", () => {
