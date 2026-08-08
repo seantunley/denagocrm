@@ -20,9 +20,16 @@
  * minutes older than the running build. The sentence below is the one that would
  * have ended it immediately.
  *
- * Deliberately NOT a reference code: nothing was logged server-side, because
- * nothing reached the server. Offering a reference that matches no log line
- * would be worse than offering none.
+ * Deliberately NOT a reference code: in the stale-tab case nothing was logged
+ * server-side, because nothing reached the server. Offering a reference that
+ * matches no log line would be worse than offering none.
+ *
+ * AND IT DOES NOT CLAIM NOTHING WAS SAVED. That is true of the stale-tab case and
+ * NOT of the other one: if the connection dropped after the server had already
+ * processed the action, the write happened and only the response was lost. From
+ * the browser the two are indistinguishable, so the honest wording covers both —
+ * same reasoning as the unexpected-failure message in lib/actionFailure.ts, which
+ * made the identical mistake for the identical reason.
  */
 export const ACTION_NOT_DELIVERED =
-  "That did not reach the server, so nothing was saved. If this page has been open a while, refresh it and try again.";
+  "No reply from the server, so this may not have been applied. Check the record before retrying — if this page has been open a while, refresh it first.";
