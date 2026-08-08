@@ -112,3 +112,53 @@ test("the AI reply path is inside the recorded loop", () => {
     "a send before the recorded loop would be unrecorded again",
   );
 });
+
+/**
+ * …AND THE RECORD MAY NOT BE OPTIONAL.
+ *
+ * Review found the first version still allowed the exact thing this PR exists to
+ * stop. The logger resolved the tenant actor AFTER the message had gone:
+ *
+ *   Meta send succeeds
+ *     → resolveTenantActor() returns null
+ *     → logger returns silently
+ *     → customer has the message, CRM has no record
+ *
+ * The WhatsApp bot had the same weakness, so copying its pattern gave parity and
+ * not safety. Both now resolve the actor BEFORE anything is sent and refuse to
+ * speak without one: a bot that stays quiet is better than one that talks to a
+ * customer with no trace of it.
+ */
+
+test("neither bot sends before it can record", () => {
+  for (const [file, sendCall] of [
+    ["src/lib/flowDm.ts", "await sendDirect"],
+    ["src/lib/flowRun.ts", "await sendWhatsApp"],
+  ] as const) {
+    const code = src(file);
+    const resolve = code.indexOf("await resolveTenantActor()");
+    const firstSend = code.indexOf(sendCall);
+    assert.ok(resolve !== -1, `${file}: must resolve an actor`);
+    assert.ok(firstSend !== -1, `${file}: must send something`);
+    assert.ok(
+      resolve < firstSend,
+      `${file}: the actor must be resolved BEFORE the first send, or a send can outlive its record`,
+    );
+    assert.match(code, /refusing to reply on/, `${file}: refusal must be visible, not silent`);
+  }
+});
+
+test("the loggers cannot silently skip a record", () => {
+  // `if (!actor) return` inside the logger is the defect. The actor is now a
+  // required argument, so there is no path where the write is skipped.
+  for (const [file, fn] of [
+    ["src/lib/flowDm.ts", "async function logOutboundDm"],
+    ["src/lib/flowRun.ts", "async function logOutbound"],
+  ] as const) {
+    const code = src(file);
+    const body = functionBody(code, fn);
+    assert.doesNotMatch(body, /if \(!\w+\) return;/, `${file}: the logger must not bail out`);
+    assert.match(body, /actorId/, `${file}: the actor must be supplied by the caller`);
+    assert.doesNotMatch(body, /resolveTenantActor/, `${file}: and not resolved after the send`);
+  }
+});
