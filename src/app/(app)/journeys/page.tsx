@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Activity, Workflow } from "lucide-react";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { leadOptionLabel } from "@/lib/leadOption";
 import { requireRoute } from "@/lib/permissions";
 import { formatDateTime } from "@/lib/format";
 import JourneyBuilder, { type JourneyBuilderDefaults } from "@/components/JourneyBuilder";
@@ -134,9 +135,11 @@ export default async function JourneysPage() {
     }),
   ]);
   const options = { stages, users, templates, tags, segments };
+  // Same rule as the quote editor: `title` is the model, which repeats across
+  // leads, so preferring it makes every option read the same.
   const leadOptions = testLeads.map((lead) => ({
     id: lead.id,
-    label: lead.title || lead.name,
+    label: leadOptionLabel(lead),
   }));
 
   return (

@@ -3,6 +3,7 @@ import { CheckCircle2, CircleDollarSign, FileText, Plus, Search, Send } from "lu
 import { prisma } from "@/lib/db";
 import { requireAnyPermission, getAccessibleQuoteIds, hasPermission } from "@/lib/permissions";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { leadOptionLabel } from "@/lib/leadOption";
 import { payableTotalCents } from "@/lib/pricing";
 import {
   QUOTE_EDITOR_INCLUDE,
@@ -109,9 +110,14 @@ export default async function QuotesPage({
     terms: quoteTerms || "Prices include VAT. Delivery arranged on acceptance. E&OE.",
   };
   const contactOptions = contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }));
+  // `lead.title` is the MODEL someone wants, and a dealership sells the same few
+  // models repeatedly — so preferring it made every option in the picker read
+  // the same. leadOptionLabel leads with the customer and appends a short id,
+  // which is the only thing that separates two open leads for the same customer
+  // and the same model.
   const leadOptions = openLeads.map((lead) => ({
     id: lead.id,
-    label: lead.title || lead.name,
+    label: leadOptionLabel(lead),
     contactId: lead.contactId,
   }));
   const productOptions = products.map((product) => ({
