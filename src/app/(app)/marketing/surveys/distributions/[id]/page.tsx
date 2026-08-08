@@ -1,8 +1,9 @@
 import { notFound } from "next/navigation";
+import { AlertTriangle, CheckCircle2, Send, UsersRound } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
 import { getActiveTenantId } from "@/lib/auth";
-import { StatusPill } from "@/components/visual-system";
+import { MetricCard, MetricStrip, StatusPill } from "@/components/visual-system";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { cancelDistribution, pauseDistribution, resumeDistribution, retryDistributionFailures } from "@/app/actions/surveyDistributions";
@@ -56,13 +57,12 @@ export default async function SurveyDistributionDetailPage({ params }: { params:
     </>}
   >
 
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Audience</p><p className="mt-1 text-2xl font-semibold">{distribution.totalCount}</p></div>
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Sent</p><p className="mt-1 text-2xl font-semibold">{distribution.sentCount}</p></div>
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Completed</p><p className="mt-1 text-2xl font-semibold">{distribution.completedCount}</p></div>
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Failed</p><p className="mt-1 text-2xl font-semibold">{distribution.failedCount}</p></div>
-      <div className="card p-4"><p className="text-xs uppercase text-muted-foreground">Suppressed</p><p className="mt-1 text-2xl font-semibold">{distribution.suppressedCount}</p></div>
-    </div>
+    <MetricStrip glow="left">
+      <MetricCard icon={UsersRound} label="Audience" value={distribution.totalCount} detail="Eligible recipients" />
+      <MetricCard icon={Send} label="Sent" value={distribution.sentCount} detail={`${distribution.suppressedCount} policy suppressions`} />
+      <MetricCard icon={CheckCircle2} label="Completed" value={distribution.completedCount} detail={distribution.sentCount ? `${Math.round((distribution.completedCount / distribution.sentCount) * 100)}% response rate` : "No sends yet"} accent={distribution.completedCount > 0} />
+      <MetricCard icon={AlertTriangle} label="Failed" value={distribution.failedCount} detail="Provider delivery failures" accent={distribution.failedCount > 0} />
+    </MetricStrip>
 
     <div className="grid gap-4 lg:grid-cols-2">
       <section className="card p-5"><h2 className="font-semibold">Recipient state</h2><div className="mt-3 space-y-2">{statusRows.map((row) => <div key={row.status} className="flex justify-between rounded-lg border px-3 py-2"><span>{row.status.replaceAll("_", " ")}</span><strong>{Number(row.count)}</strong></div>)}</div></section>

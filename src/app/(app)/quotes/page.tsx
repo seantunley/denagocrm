@@ -12,10 +12,10 @@ import {
 } from "@/lib/quoteEditorRecord";
 import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
 import { getSetting } from "@/lib/settings";
-import { PageHeader } from "@/components/page-header";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { EmptyState, MetricCard, MetricStrip, StatusPill, Surface, WorkspaceToolbar } from "@/components/visual-system";
+import { EmptyState, SectionHeading, StatusPill, Surface, WorkspaceToolbar } from "@/components/visual-system";
+import { WorkspaceHero } from "@/components/workspace-hero";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { deleteQuote } from "@/app/actions/quotes";
 import {
@@ -152,19 +152,24 @@ export default async function QuotesPage({
       initialQuoteId={edit}
     >
       <div className="space-y-5">
-        <PageHeader title="Quotes" description="Create, price and progress every customer proposal from one commercial workspace.">
+        <WorkspaceHero
+          icon={FileText}
+          eyebrow="Commercial pipeline"
+          title="Quotes"
+          description="Build accurate proposals, track customer decisions and keep the value of every live opportunity visible."
+          stats={[
+            { label: "Draft", value: draftCount, detail: "Proposals being prepared", icon: FileText, tone: "primary" },
+            { label: "Sent", value: sentCount, detail: "With customers for review", icon: Send, tone: sentCount > 0 ? "warning" : "default" },
+            { label: "Accepted", value: acceptedCount, detail: "Current accepted quotes", icon: CheckCircle2, tone: "success" },
+            { label: "Open value", value: formatZAR(Math.round(pipelineValue)), detail: `${quotes.length} current quote${quotes.length === 1 ? "" : "s"}`, icon: CircleDollarSign },
+          ]}
+          actions={
           <QuoteEditorTrigger className={buttonVariants({ size: "sm" })}>
             <Plus className="size-4" />
             New quote
           </QuoteEditorTrigger>
-        </PageHeader>
-
-        <MetricStrip>
-          <MetricCard icon={FileText} label="Draft" value={draftCount} detail="Proposals being prepared" />
-          <MetricCard icon={Send} label="Sent" value={sentCount} detail="With customers for review" accent={sentCount > 0} />
-          <MetricCard icon={CheckCircle2} label="Accepted" value={acceptedCount} detail="Current accepted quotes" />
-          <MetricCard icon={CircleDollarSign} label="Open value" value={formatZAR(Math.round(pipelineValue))} detail={`${quotes.length} current quote${quotes.length === 1 ? "" : "s"}`} />
-        </MetricStrip>
+          }
+        />
 
         <WorkspaceToolbar>
           <form action="/quotes" role="search" className="flex flex-col gap-2 lg:flex-row lg:items-center">
@@ -246,7 +251,11 @@ export default async function QuotesPage({
               </MobileDataList>
             }
             desktop={
-              <Surface className="overflow-x-auto">
+              <Surface>
+                <div className="border-b border-border px-5 py-4">
+                  <SectionHeading title="Quote register" description={`${visibleQuotes.length} proposal${visibleQuotes.length === 1 ? "" : "s"} match this commercial view.`} />
+                </div>
+                <div className="overflow-x-auto">
                 <table className="table-base">
                   <thead>
                     <tr>
@@ -299,6 +308,7 @@ export default async function QuotesPage({
                     })}
                   </tbody>
                 </table>
+                </div>
               </Surface>
             }
           />

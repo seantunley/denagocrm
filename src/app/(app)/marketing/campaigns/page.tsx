@@ -1,9 +1,10 @@
 import Link from "next/link";
+import { AlertTriangle, CalendarClock, FilePenLine, Search, Send } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
 import { requirePermission } from "@/lib/permissions";
-import { StatusPill } from "@/components/visual-system";
-import { PageHeader } from "@/components/page-header";
+import { MetricCard, MetricStrip, StatusPill, WorkspaceToolbar } from "@/components/visual-system";
+import MarketingPageHeader from "@/components/marketing/MarketingPageHeader";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { formatDateTime } from "@/lib/format";
 
@@ -63,20 +64,25 @@ export default async function MarketingCampaignsPage({ searchParams }: { searchP
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Campaigns" description="Governed drafts, approvals, delivery and performance.">
+      <MarketingPageHeader title="Campaigns" description="Governed drafts, approvals, delivery and performance.">
         <Link href="/marketing/audiences" className="btn-secondary">Audiences</Link><Link href="/marketing/templates" className="btn-secondary">Templates</Link><Link href="/marketing/campaigns/new" className="btn-primary">Create campaign</Link>
-      </PageHeader>
+      </MarketingPageHeader>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        {[['Drafts', stats?.drafts], ['Awaiting review', stats?.review], ['Scheduled', stats?.scheduled], ['Sending', stats?.sending], ['Errors', stats?.errors]].map(([label, value]) => <div className="card" key={String(label)}><p className="text-xs font-semibold uppercase text-muted-foreground">{String(label)}</p><p className="mt-1 text-2xl font-semibold">{Number(value ?? 0)}</p></div>)}
-      </div>
+      <MetricStrip glow="left">
+        <MetricCard icon={FilePenLine} label="Drafts" value={Number(stats?.drafts ?? 0)} detail="Being prepared or revised" />
+        <MetricCard icon={Search} label="Awaiting review" value={Number(stats?.review ?? 0)} detail="Needs a governance decision" accent={Number(stats?.review ?? 0) > 0} />
+        <MetricCard icon={CalendarClock} label="Scheduled" value={Number(stats?.scheduled ?? 0)} detail="Approved launches ahead" />
+        <MetricCard icon={Number(stats?.errors ?? 0) > 0 ? AlertTriangle : Send} label="Live delivery" value={Number(stats?.sending ?? 0)} detail={`${Number(stats?.errors ?? 0)} campaign${Number(stats?.errors ?? 0) === 1 ? "" : "s"} with errors`} accent={Number(stats?.errors ?? 0) > 0} />
+      </MetricStrip>
 
-      <form className="card grid gap-3 md:grid-cols-[1fr_180px_160px_auto]">
+      <WorkspaceToolbar>
+      <form className="grid gap-3 md:grid-cols-[1fr_180px_160px_auto]">
         <input name="q" defaultValue={search} className="input" placeholder="Search campaign or objective" />
         <select name="status" defaultValue={status} className="input"><option value="">All statuses</option>{['draft','in_review','changes_requested','approved','scheduled','queued','sending','paused','completed','completed_with_errors','failed','cancelled','archived'].map((item) => <option key={item} value={item}>{item.replaceAll('_',' ')}</option>)}</select>
         <select name="channel" defaultValue={channel} className="input"><option value="">All channels</option><option value="email">Email</option><option value="sms">SMS</option></select>
         <button className="btn-secondary">Apply filters</button>
       </form>
+      </WorkspaceToolbar>
 
       <ResponsiveEntityTable>
         <table className="table-base">
