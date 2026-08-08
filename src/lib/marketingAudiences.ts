@@ -180,18 +180,25 @@ export function explainAudience(tree: AudienceGroup) {
   return explain(tree);
 }
 
-/** Explicit tenant predicate keeps previews and launches isolated even while the
- * global Prisma tenant extension is dormant. No silent 5,000-contact truncation. */
+/** Explicit tenant predicates keep previews and launches isolated even while the
+ * global Prisma tenant extension is dormant. Related rows are scoped too because
+ * this intentionally uses basePrisma for deterministic server evaluation. */
 export async function evaluateAudience(tree: AudienceGroup, channel = "any", tenantId: string | null) {
   await validateAudienceReferences(tree, tenantId);
   const contacts = await basePrisma.contact.findMany({
     where: { tenantId, deletedAt: null, marketingOptOut: false },
     orderBy: { id: "asc" },
     include: {
-      tags: true,
-      vehicles: { where: { deletedAt: null }, include: { serviceRecords: true, mileageLogs: true } },
-      leads: { where: { deletedAt: null } },
-      quotes: { where: { deletedAt: null } },
+      tags: { where: { tenantId: tenantId ?? "__no_tenant__" } },
+      vehicles: {
+        where: { tenantId, deletedAt: null },
+        include: {
+          serviceRecords: { where: { tenantId } },
+          mileageLogs: { where: { tenantId } },
+        },
+      },
+      leads: { where: { tenantId, deletedAt: null } },
+      quotes: { where: { tenantId, deletedAt: null } },
     },
   });
   return contacts
