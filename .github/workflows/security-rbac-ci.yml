@@ -102,6 +102,14 @@ jobs:
         # `seed` lives under package.json#prisma.seed, so invoke via prisma.
         run: npx prisma db seed
 
+      # A backup that quietly omits a column is worse than one that fails: one of
+      # them you find out about. The exporter reads the table list from the
+      # DATABASE and selects every column, so this asks the migrated schema
+      # whether anything escaped the plan. It runs here, after migrations, because
+      # a table added by a migration must be covered on the day it lands.
+      - name: Backup covers every table and column
+        run: npm run check:backup-coverage
+
       - name: Type check
         run: npm run typecheck
 

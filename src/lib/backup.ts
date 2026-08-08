@@ -24,7 +24,6 @@ export type PortableBackup = {
   assetReferences: AssetReference[];
 };
 
-const lowerFirst = (value: string) => value.charAt(0).toLowerCase() + value.slice(1);
 const sha256 = (value: string | Buffer) => crypto.createHash("sha256").update(value).digest("hex");
 
 // Some columns are BigInt (e.g. CustomerCase.number autoincrement, Passkey.counter).
@@ -57,31 +56,113 @@ export function reviveBackupBigInts<T>(value: T): T {
 }
 
 /**
- * Export every Prisma model automatically. New trust-platform tables are raw SQL
- * by design until the next generated-client expansion; they are appended below
- * so being absent from the DMMF can never make them absent from disaster recovery.
+ * Tables deliberately not exported. Each needs a reason, because the alternative
+ * to a justified exclusion is a quietly incomplete backup — which is what this
+ * function was.
+ */
+const EXCLUDED_TABLES = new Set<string>([
+  // Prisma's own ledger of which migrations ran. Restoring it into a different
+  // database would assert a history that database does not have; the schema comes
+  // from prisma/migrations, not from a backup.
+  "_prisma_migrations",
+]);
+
+/**
+ * A table name is interpolated into SQL, so it is VALIDATED rather than trusted.
+ * These names come from the database's own catalogue, but "the input is
+ * trustworthy" is the assumption every injection starts from.
+ */
+const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Every table the backup should read, straight from the database. */
+export async function backupTableNames(): Promise<string[]> {
+  const rows = await basePrisma.$queryRaw<Array<{ table_name: string }>>`
+    SELECT table_name
+      FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+     ORDER BY table_name
+  `;
+  return rows.map((row) => row.table_name).filter((name) => !EXCLUDED_TABLES.has(name));
+}
+
+/**
+ * The key a table's rows appear under. A Prisma model's name where one claims the
+ * table, the table name otherwise.
+ *
+ * Keeping the model name matters for compatibility: every existing backup keys
+ * `data.Lead`, and a consumer reading `data.Lead` must keep working. The fallback
+ * is what lets a table with no model be exported at all.
+ */
+export function backupKeyForTable(table: string, tableToModel: Map<string, string>): string {
+  return tableToModel.get(table) ?? table;
+}
+
+/** Primary-key columns per table, so the export has a deterministic order. */
+async function primaryKeyColumns(): Promise<Map<string, string[]>> {
+  const rows = await basePrisma.$queryRaw<Array<{ table_name: string; column_name: string }>>`
+    SELECT c.relname AS table_name, a.attname AS column_name, k.ord
+      FROM pg_index i
+      JOIN pg_class c ON c.oid = i.indrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+      JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum
+     WHERE i.indisprimary AND n.nspname = 'public'
+     ORDER BY c.relname, k.ord
+  `;
+  const byTable = new Map<string, string[]>();
+  for (const row of rows) {
+    const list = byTable.get(row.table_name) ?? [];
+    list.push(row.column_name);
+    byTable.set(row.table_name, list);
+  }
+  return byTable;
+}
+
+/**
+ * Export every table in the database, every column.
+ *
+ * This used to walk Prisma's model list and call each delegate's `findMany()`,
+ * which returns only the fields Prisma DECLARES. Four signing tables used
+ * `SELECT *` and were complete; the other ~170 were complete only while the
+ * schema matched the database, and it did not. Measured against production on
+ * 2026-08-08: 68 columns and 19 whole tables were absent from every backup —
+ * StockLocation, StockMovement and StockAttachment entirely, Lead's pipeline and
+ * forecast fields, twelve StockUnit fields including the PDI checklist and
+ * warranty dates, nine PurchaseOrder cost and date fields, and User.disabledAt.
+ *
+ * Nothing failed and nothing warned, because a column Prisma does not know about
+ * is a column nothing in the application ever looks for in the output.
+ *
+ * So the table list now comes from the DATABASE rather than from the schema, and
+ * every table is read with `SELECT *`. A table added by a migration, or by the
+ * preview-branch drift this repo has recorded twice, is included the day it
+ * appears instead of the day someone adds a Prisma model for it.
  */
 async function exportAllModels(): Promise<Record<string, unknown[]>> {
-  const client = basePrisma as unknown as Record<string, { findMany: () => Promise<unknown[]> }>;
   const data: Record<string, unknown[]> = {};
 
+  const tableToModel = new Map<string, string>();
   for (const model of Prisma.dmmf.datamodel.models) {
-    const delegateName = lowerFirst(model.name);
-    const delegate = client[delegateName];
-    if (!delegate?.findMany) throw new Error(`Backup delegate missing for Prisma model ${model.name}`);
-    data[model.name] = await delegate.findMany();
+    tableToModel.set(model.dbName ?? model.name, model.name);
   }
 
-  const [jobs, challenges, artifacts, validations] = await Promise.all([
-    basePrisma.$queryRaw<unknown[]>`SELECT * FROM "SigningJob" ORDER BY "createdAt", "id"`,
-    basePrisma.$queryRaw<unknown[]>`SELECT * FROM "SigningIdentityChallenge" ORDER BY "createdAt", "id"`,
-    basePrisma.$queryRaw<unknown[]>`SELECT * FROM "LegalArtifact" ORDER BY "createdAt", "id"`,
-    basePrisma.$queryRaw<unknown[]>`SELECT * FROM "LegalArtifactValidation" ORDER BY "createdAt", "id"`,
-  ]);
-  data.SigningJob = jobs;
-  data.SigningIdentityChallenge = challenges;
-  data.LegalArtifact = artifacts;
-  data.LegalArtifactValidation = validations;
+  const [tables, primaryKeys] = await Promise.all([backupTableNames(), primaryKeyColumns()]);
+
+  // Sequential, as before: a hundred and sixty concurrent full-table reads would
+  // exhaust the connection pool on the one job that must not fail.
+  for (const table of tables) {
+    if (!SAFE_IDENTIFIER.test(table)) {
+      throw new Error(`Refusing to export a table whose name is not a plain identifier: ${table}`);
+    }
+    // Ordered by primary key where there is one, so two backups of unchanged data
+    // are byte-identical and a diff means something. PK columns are always
+    // orderable, which an arbitrary first column is not.
+    const keys = (primaryKeys.get(table) ?? []).filter((column) => SAFE_IDENTIFIER.test(column));
+    const orderBy = keys.length > 0 ? ` ORDER BY ${keys.map((column) => `"${column}"`).join(", ")}` : "";
+    data[backupKeyForTable(table, tableToModel)] = await basePrisma.$queryRawUnsafe(
+      `SELECT * FROM "${table}"${orderBy}`,
+    );
+  }
 
   return data;
 }
