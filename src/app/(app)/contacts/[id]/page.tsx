@@ -629,6 +629,7 @@ export default async function ContactDetailPage({
                 }
               : null
           }
+          notesFromLeadId={contact.notesFromLeadId}
           leadNotes={contact.leads
             .filter((lead) => lead.notes?.trim())
             .map((lead) => ({

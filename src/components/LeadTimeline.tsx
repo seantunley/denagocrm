@@ -111,6 +111,7 @@ export default async function LeadTimeline({
   activities = [],
   creationNote,
   leadNotes = [],
+  notesFromLeadId = null,
 }: {
   leadId?: string;
   contactId?: string;
@@ -150,6 +151,12 @@ export default async function LeadTimeline({
    * page so a `lead_note` pin stays visible (and unpinnable) from the customer
    * view — otherwise the pin row exists but has no item to render on.
    */
+  /**
+   * The lead whose notes were copied into this contact's own note, if any. Used
+   * to drop exactly that lead's duplicate entry — see lib/timelineNotes.ts for
+   * why this is a recorded id and not a text comparison.
+   */
+  notesFromLeadId?: string | null;
   leadNotes?: {
     leadId: string;
     title: string;
@@ -167,7 +174,7 @@ export default async function LeadTimeline({
     : null;
 
   // See lib/timelineNotes.ts: a lead note that IS the contact's note is one note.
-  const shownLeadNotes = distinctLeadNotes(leadNotes, creationNote);
+  const shownLeadNotes = distinctLeadNotes(leadNotes, notesFromLeadId);
 
   const targets: Array<{ kind: TimelinePinKind; itemId: string }> = [
     ...activities.map((activity) => ({

@@ -13,14 +13,19 @@
  *   Original lead note — Rover XL enquiry
  *   "Wants the Rover XL, needs finance"
  *
- * Compared by TEXT rather than by tracking provenance. The copy is verbatim, so
- * the text already answers the question; a `copiedFromLeadId` column would be a
- * schema change to record something we can already see. Whitespace is normalised
- * because the value came through a form.
+ * THE FIRST FIX COMPARED THE TEXT, AND THAT WAS WRONG. Review put it exactly:
+ * text equality is not provenance. An existing customer whose own note happens to
+ * read the same as a later, unrelated lead's note has TWO genuine CRM events, and
+ * comparing sentences silently deletes one of them from the history. A timeline is
+ * a record of what happened; it should not decide two things are one because they
+ * are worded alike.
  *
- * Pure, so both cases can be tested without a contact page: the converted lead
- * whose note must appear ONCE, and the pre-existing contact whose own note and a
- * linked lead's different note must BOTH appear.
+ * So the copy is RECORDED at the moment it is made. `Contact.notesFromLeadId`
+ * names the lead whose notes were copied, set by all three conversion paths, and
+ * this filter drops that lead's note and no other. Identical text on a different
+ * lead is now untouched, because it is a different event and always was.
+ *
+ * Pure, so every case is testable without a contact page.
  */
 
 export type TimelineLeadNote = {
@@ -31,22 +36,19 @@ export type TimelineLeadNote = {
   who: string;
 };
 
-/** Trim, and collapse any run of whitespace, so formatting is not identity. */
-function normalise(text: string): string {
-  return text.trim().replace(/\s+/g, " ");
-}
-
 /**
  * The lead notes worth showing beside a contact's own note.
  *
- * With no contact note, every lead note is distinct by definition — that is the
- * lead's own timeline, and filtering there would hide the note entirely.
+ * `notesFromLeadId` is null for a contact that was not created from a lead, and
+ * for one converted before the column existed — the migration backfills what it
+ * can identify unambiguously and leaves the rest null. Null shows BOTH entries,
+ * which is the safe direction: a duplicate is visible and can be judged, whereas
+ * a note this function hides is gone with no trace that it existed.
  */
-export function distinctLeadNotes<T extends { text: string }>(
+export function distinctLeadNotes<T extends { leadId: string }>(
   leadNotes: T[],
-  creationNote: { text: string } | null | undefined,
+  notesFromLeadId: string | null | undefined,
 ): T[] {
-  if (!creationNote) return leadNotes;
-  const contactNote = normalise(creationNote.text);
-  return leadNotes.filter((note) => normalise(note.text) !== contactNote);
+  if (!notesFromLeadId) return leadNotes;
+  return leadNotes.filter((note) => note.leadId !== notesFromLeadId);
 }

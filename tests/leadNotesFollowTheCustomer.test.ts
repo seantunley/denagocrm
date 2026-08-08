@@ -88,84 +88,89 @@ test("the contact page can render a lead note, so the pin has something to pin",
 });
 
 /**
- * …AND IT MUST APPEAR ONCE.
+ * …AND IT MUST APPEAR ONCE — WITHOUT DELETING A REAL ONE.
  *
- * Reported in review. Carrying the lead's note onto the contact and surfacing
- * every linked lead's notes on the contact timeline are both right, and together
- * they printed the same sentence twice for every converted lead:
+ * Carrying the lead's note onto the contact and surfacing every linked lead's
+ * notes on the contact timeline are both right, and together they printed the
+ * same sentence twice for every converted lead.
  *
- *   Original contact note              "Wants the Rover XL, needs finance"
- *   Original lead note — Rover XL      "Wants the Rover XL, needs finance"
+ * The first fix compared the TEXT. Review was right that this is not provenance:
+ * an existing customer whose own note happens to read the same as a later,
+ * unrelated lead's note has TWO genuine CRM events, and comparing sentences
+ * silently deletes one from the history.
  *
- * Both of the review's cases are covered below, because fixing the first by
- * dropping lead notes wholesale would break the second — and the second is the
- * reason the feature exists.
+ * The copy is recorded when it is made — Contact.notesFromLeadId — and the filter
+ * drops that lead and no other. The case below that used to fail is the third one.
  */
 
-const leadNote = (text: string, over: Partial<{ leadId: string; title: string }> = {}) => ({
-  leadId: over.leadId ?? "lead_1",
-  title: over.title ?? "Rover XL enquiry",
+const leadNote = (leadId: string, text: string) => ({
+  leadId,
+  title: "Rover XL enquiry",
   text,
   when: new Date("2026-08-01T09:00:00Z"),
   who: "Rep",
 });
 
 test("a lead converted to a NEW contact shows its note once", () => {
-  const note = "Wants the Rover XL, needs finance";
-  // The contact note is a verbatim copy made by convertLeadToContact.
-  const shown = distinctLeadNotes([leadNote(note)], { text: note });
-  assert.equal(shown.length, 0, "the lead copy must be dropped; the contact note is the one shown");
+  const notes = [leadNote("lead_1", "Wants the Rover XL, needs finance")];
+  assert.equal(distinctLeadNotes(notes, "lead_1").length, 0, "the copied lead note is dropped");
 });
 
-test("an EXISTING contact keeps its own note AND the linked lead's different note", () => {
-  // The case the historical lead-note support exists for. Two genuinely different
-  // notes, both belonging on the timeline.
-  const shown = distinctLeadNotes(
-    [leadNote("Asked about the 48V pack")],
-    { text: "Long-standing account, pays on 30 days" },
-  );
-  assert.equal(shown.length, 1, "a different lead note must survive");
-  assert.equal(shown[0].text, "Asked about the 48V pack");
+test("an EXISTING contact keeps its own note AND a linked lead's different note", () => {
+  // No conversion happened, so nothing was copied and nothing is dropped.
+  const notes = [leadNote("lead_9", "Asked about the 48V pack")];
+  assert.equal(distinctLeadNotes(notes, null).length, 1);
 });
 
-test("formatting differences do not make one note into two", () => {
-  // The value travels through a textarea, so a trailing newline or a wrapped line
-  // is not a different note.
-  const shown = distinctLeadNotes(
-    [leadNote("  Wants the Rover XL,\n  needs finance  ")],
-    { text: "Wants the Rover XL, needs finance" },
-  );
-  assert.equal(shown.length, 0, "whitespace must be normalised before comparing");
+test("IDENTICAL TEXT on an unrelated lead is NOT deleted", () => {
+  // The case that broke the text comparison, and the reason this is provenance.
+  // Two separate CRM events that happen to be worded the same: the contact's own
+  // note (copied from lead_1) and a later, independent lead saying the same thing.
+  const sameWords = "Interested in Rover XL";
+  const notes = [leadNote("lead_1", sameWords), leadNote("lead_2", sameWords)];
+  const shown = distinctLeadNotes(notes, "lead_1");
+  assert.equal(shown.length, 1, "only the COPIED lead's note may be dropped");
+  assert.equal(shown[0].leadId, "lead_2", "the unrelated lead's identical note survives");
 });
 
-test("on a LEAD's own timeline every note is kept", () => {
-  // No contact note to collide with. Filtering here would hide the note entirely,
-  // which is the bug this PR set out to fix.
-  const notes = [leadNote("A"), leadNote("B", { leadId: "lead_2" })];
-  assert.equal(distinctLeadNotes(notes, null).length, 2);
-  assert.equal(distinctLeadNotes(notes, undefined).length, 2);
+test("unknown provenance shows both, which is the safe direction", () => {
+  // Null for a contact converted before the column existed and not resolvable by
+  // the migration's backfill. A visible duplicate can be judged; a hidden note is
+  // gone with no trace that it existed.
+  const notes = [leadNote("lead_1", "Wants the Rover XL")];
+  assert.equal(distinctLeadNotes(notes, null).length, 1);
+  assert.equal(distinctLeadNotes(notes, undefined).length, 1);
 });
 
 test("one duplicate among several leads drops only that one", () => {
-  const note = "Wants the Rover XL, needs finance";
-  const shown = distinctLeadNotes(
-    [leadNote(note), leadNote("Different enquiry", { leadId: "lead_2" })],
-    { text: note },
-  );
-  assert.equal(shown.length, 1);
-  assert.equal(shown[0].leadId, "lead_2");
+  const notes = [leadNote("lead_1", "A"), leadNote("lead_2", "B"), leadNote("lead_3", "C")];
+  const shown = distinctLeadNotes(notes, "lead_2");
+  assert.deepEqual(shown.map((n) => n.leadId), ["lead_1", "lead_3"]);
 });
 
-test("the timeline renders the filtered list in BOTH places it uses it", () => {
-  // Pin targets and rendered items are built from separate maps. Filtering one and
-  // not the other leaves a pin row for an item that is no longer drawn — the exact
-  // defect the leadNotes support was added to fix, reintroduced from the other side.
-  const code = src("src/components/LeadTimeline.tsx");
-  assert.match(code, /const shownLeadNotes = distinctLeadNotes\(leadNotes, creationNote\)/);
+test("all three conversion paths record where the note came from", () => {
+  // A filter reading a column nothing writes would drop nothing, forever.
+  const code = src("src/app/actions/leads.ts");
   assert.equal(
-    (code.match(/\.\.\.shownLeadNotes\.map\(/g) ?? []).length,
-    2,
-    "both the pin targets and the items must use the filtered list",
+    (code.match(/notesFromLeadId:/g) ?? []).length,
+    3,
+    "createLead, markWon and convertLeadToContact must each record provenance",
   );
-  assert.doesNotMatch(code, /\.\.\.leadNotes\.map\(/, "the unfiltered list must not be rendered");
+  // And only when a note was actually copied — otherwise every contact would
+  // claim a note it does not have.
+  assert.match(code, /notes\?\.trim\(\) \? \w+\.id : null/);
+});
+
+test("the timeline reads provenance and never compares text", () => {
+  const rule = src("src/lib/timelineNotes.ts");
+  assert.match(rule, /note\.leadId !== notesFromLeadId/, "identity, not similarity");
+  assert.doesNotMatch(rule, /normalise|\.text ===|replace\(\/\s\+\//, "no text comparison may remain");
+
+  const timeline = src("src/components/LeadTimeline.tsx");
+  assert.match(timeline, /distinctLeadNotes\(leadNotes, notesFromLeadId\)/);
+  assert.equal(
+    (timeline.match(/\.\.\.shownLeadNotes\.map\(/g) ?? []).length,
+    2,
+    "both the pin targets and the rendered items must use the filtered list",
+  );
 });
