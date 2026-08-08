@@ -69,6 +69,24 @@ CREATE TABLE IF NOT EXISTS "ConversationNote" (
   CONSTRAINT "ConversationNote_pkey" PRIMARY KEY ("id")
 );
 
+-- THE TABLES MAY ALREADY EXIST, WITHOUT tenantId.
+--
+-- Production has ConversationNote and ConversationDraft from the original
+-- migration 58, created outside the recorded history — `_prisma_migrations` lists
+-- only 57. So CREATE TABLE IF NOT EXISTS above is a no-op there, leaving the July
+-- shape, and every statement below that names tenantId would fail: the index
+-- first, then the composite FK, then the RLS policy. A failed migration fails the
+-- whole Vercel deployment, and CI could not have caught it because CI applies
+-- migrations to an EMPTY database where the table does not pre-exist.
+--
+-- That is the same "green in CI, broken only in production" shape that took
+-- deployments down for three hours on 2026-08-07. Adding the column explicitly
+-- makes both paths converge on the same schema.
+ALTER TABLE "ConversationNote" ADD COLUMN IF NOT EXISTS "tenantId" TEXT;
+ALTER TABLE "ConversationDraft" ADD COLUMN IF NOT EXISTS "tenantId" TEXT;
+-- Present in this migration's own CREATE TABLE, absent from the 2026-07 one.
+ALTER TABLE "ConversationNote" ALTER COLUMN "mentions" SET DEFAULT ARRAY[]::TEXT[];
+
 CREATE INDEX IF NOT EXISTS "ConversationNote_conversationId_createdAt_idx"
   ON "ConversationNote" ("conversationId", "createdAt");
 CREATE INDEX IF NOT EXISTS "ConversationNote_tenantId_idx" ON "ConversationNote" ("tenantId");
