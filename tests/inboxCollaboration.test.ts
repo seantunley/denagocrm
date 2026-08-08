@@ -193,3 +193,65 @@ test("discarding a draft cannot clobber a colleague's", () => {
   const discard = code.slice(code.indexOf("export async function discardConversationDraft"));
   assert.match(discard, /deleteMany\(\{\s*where:\s*\{\s*conversationId,\s*ownerId: actor\.id/);
 });
+
+/**
+ * THE DRAFT UI. The half deliberately left out of the first pass, because a
+ * reply box that autosaves and warns about collisions is behaviour, not markup.
+ * What can be checked without a browser is the two decisions that matter, and
+ * both are about not putting words in somebody's mouth.
+ */
+
+test("a colleague's draft body is NEVER restored into your reply box", () => {
+  // The whole point of holding drafts server-side is collision detection, not
+  // sharing text. Prefilling a colleague's half-written reply into your box
+  // invites you to send it as your own — and it would be sent under your name to
+  // a customer.
+  const code = src("src/components/InboxReply.tsx");
+  assert.match(
+    code,
+    /draft\.ownerId === viewerId \? draft\.body : ""/,
+    "restoring must be conditional on OWNING the draft",
+  );
+});
+
+test("the collision warning renders BEFORE the textarea, not after", () => {
+  // Told afterwards, the person has already written the duplicate reply. Order in
+  // the JSX is the whole value of the warning.
+  const code = src("src/components/InboxReply.tsx");
+  const warning = code.indexOf("is already replying to this");
+  const textarea = code.indexOf("<textarea");
+  assert.ok(warning !== -1, "the warning must exist");
+  assert.ok(warning < textarea, `the warning (${warning}) must precede the box (${textarea})`);
+});
+
+test("the client decides ownership with the same function the server does", () => {
+  // Two hand-written comparisons of the same window is how the client and server
+  // come to disagree about who owns a thread.
+  const code = src("src/components/InboxReply.tsx");
+  assert.match(code, /import \{ draftCollision/, "the shared rule must be imported, not re-implemented");
+  assert.doesNotMatch(code, /5 \* 60 \* 1000/, "the window must not be restated here");
+});
+
+test("a pending autosave is cancelled when the thread closes", () => {
+  // The thread lives in a modal that unmounts on close. A late save would write
+  // into a conversation the person has already left.
+  const code = src("src/components/InboxReply.tsx");
+  assert.match(code, /useEffect\(\(\) => \(\) => \{ if \(timer\.current\) clearTimeout\(timer\.current\); \}, \[\]\)/);
+});
+
+test("a collision stops autosaving rather than retrying", () => {
+  // Retrying would overwrite the colleague's draft the moment it went stale,
+  // which is the exact outcome the collision check exists to prevent.
+  const code = src("src/components/InboxReply.tsx");
+  const queue = code.slice(code.indexOf("function queueDraftSave"), code.indexOf("// Once the reply is actually sent"));
+  assert.match(queue, /if \(!conversationId \|\| blocked\) return;/, "a blocked box must not queue a save");
+  assert.match(queue, /if \(result\.collision\) setBlocked\(result\.collision\)/);
+});
+
+test("draft persistence is opt-in, so /messages keeps working unchanged", () => {
+  // The same reply box renders in the Messages PWA, which resolves no
+  // conversation. Without the guard it would autosave against `undefined`.
+  const code = src("src/components/InboxReply.tsx");
+  assert.match(code, /const drafting = Boolean\(conversationId\)/);
+  assert.match(code, /onChange=\{drafting \? queueDraftSave : undefined\}/);
+});

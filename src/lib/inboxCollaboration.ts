@@ -77,6 +77,23 @@ export async function collaborationForThreads(
     notesByConversation.set(note.conversationId, list);
   }
 
+  const drafts = await basePrisma.conversationDraft.findMany({
+    where: { conversationId: { in: conversations.map((c) => c.id) } },
+    select: {
+      conversationId: true,
+      ownerId: true,
+      body: true,
+      updatedAt: true,
+      owner: { select: { name: true } },
+    },
+  });
+  const draftByConversation = new Map(
+    drafts.map((draft) => [
+      draft.conversationId,
+      { ownerId: draft.ownerId, ownerName: draft.owner.name, body: draft.body, updatedAt: draft.updatedAt },
+    ]),
+  );
+
   for (const conversation of conversations) {
     const key = threadCollaborationKey(conversation);
     if (!key || byKey.has(key)) continue; // first (newest) wins
@@ -84,6 +101,7 @@ export async function collaborationForThreads(
       conversationId: conversation.id,
       assignee: conversation.assignedTo ?? null,
       notes: notesByConversation.get(conversation.id) ?? [],
+      draft: draftByConversation.get(conversation.id) ?? null,
     });
   }
   return byKey;

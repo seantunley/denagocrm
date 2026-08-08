@@ -33,6 +33,7 @@ export default function SocialThreadList({
   collaboration,
   staff = [],
   canCollaborate = false,
+  viewerId,
 }: {
   list: InboxThread[];
   empty: string;
@@ -41,6 +42,8 @@ export default function SocialThreadList({
   collaboration?: Map<string, ThreadCollaboration>;
   staff?: { id: string; name: string }[];
   canCollaborate?: boolean;
+  /** The signed-in user, so the reply box can tell their own draft from a colleague's. */
+  viewerId?: string | null;
 }) {
   if (list.length === 0) {
     return <EmptyState icon={MessageCircle} title="No conversations here" description={empty} className="max-w-4xl" />;
@@ -53,6 +56,8 @@ export default function SocialThreadList({
         const last = thread.messages[0];
         const preview = last ? `${last.direction === "outbound" ? "You: " : ""}${last.body}` : "";
         const initials = thread.name.split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "").join("");
+        const collabKey = threadCollaborationKey(thread);
+        const collab = collabKey ? collaboration?.get(collabKey) : undefined;
 
         return (
           <RowModal
@@ -122,15 +127,9 @@ export default function SocialThreadList({
               {/* Collaboration sits ABOVE the reply box: an internal note and a
                   customer reply are one slip apart, and the owner plus the
                   handover context is what you want to have read before typing. */}
-              {(() => {
-                const key = threadCollaborationKey(thread);
-                const collab = key ? collaboration?.get(key) : undefined;
-                return collab ? (
-                  <ConversationCollab collaboration={collab} staff={staff} canAct={canCollaborate} />
-                ) : null;
-              })()}
+              {collab ? <ConversationCollab collaboration={collab} staff={staff} canAct={canCollaborate} /> : null}
 
-              {thread.archived ? <p className="mt-3 text-xs text-muted-foreground">Archived — restore this conversation to reply.</p> : <InboxReply channel={thread.channel} contactId={thread.contactId} leadId={thread.leadId} phone={thread.phone} revalidate={revalidate} />}
+              {thread.archived ? <p className="mt-3 text-xs text-muted-foreground">Archived — restore this conversation to reply.</p> : <InboxReply channel={thread.channel} contactId={thread.contactId} leadId={thread.leadId} phone={thread.phone} revalidate={revalidate} conversationId={collab?.conversationId ?? null} draft={collab?.draft ?? null} viewerId={viewerId} />}
             </div>
           </RowModal>
         );
