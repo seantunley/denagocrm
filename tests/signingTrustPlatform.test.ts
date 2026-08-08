@@ -143,8 +143,20 @@ test("portable backup includes every signing storage class and trust table", () 
   ]) {
     assert.match(backup, new RegExp(ref));
   }
+  // These four used to be exported by name, with an explicit `data.SigningJob = …`
+  // beside a hand-written SELECT *, because they were absent from the DMMF. The
+  // exporter now takes its table list from the DATABASE and reads every table with
+  // SELECT *, so naming them is no longer possible OR necessary — they are covered
+  // by the same rule that covers everything else, which is a stronger guarantee
+  // than four assignments somebody has to remember to add a fifth to.
+  assert.match(
+    backup,
+    /FROM information_schema\.tables/,
+    "the export must enumerate tables from the database, not from the model list",
+  );
+  assert.match(backup, /SELECT \* FROM "\$\{table\}"/, "and read every column of each");
+
   for (const table of ["SigningJob", "SigningIdentityChallenge", "LegalArtifact", "LegalArtifactValidation"]) {
-    assert.match(backup, new RegExp(`data\\.${table}`));
     // The verifier names the missing table through a template placeholder, so
     // the source text is `${required}` and never the table name. The original
     // assertion searched for the interpolated result and so could not pass for
