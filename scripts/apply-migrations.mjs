@@ -251,7 +251,36 @@ export function migrationChecksum(name) {
  * applied. `migrate resolve` writes 0 — it means "assume this ran", which is not
  * what happened here.
  */
-export async function recordApplied(prisma, name) {
+export function isMissingLedgerTable(error) {
+  // Prisma wraps the Postgres code rather than exposing it directly. Both signals
+  // are checked, and anything else is rethrown: a catch-all here would turn a real
+  // database failure into a silent fallback, which is the opposite of the point.
+  const meta = error?.meta ?? {};
+  return (
+    meta.code === "42P01" ||
+    /relation "_prisma_migrations" does not exist/i.test(String(error?.message ?? ""))
+  );
+}
+
+export async function recordApplied(prisma, name, childEnv, runner = run) {
+  try {
+    await insertLedgerRow(prisma, name);
+  } catch (error) {
+    if (!isMissingLedgerTable(error)) throw error;
+    // A BRAND-NEW DATABASE has no _prisma_migrations table yet — `migrate resolve`
+    // is what creates it, which is why the old two-spawn version never hit this.
+    // CI found it on the first run against an empty database, which is exactly
+    // where it should be found.
+    //
+    // Prisma creates the table with ITS OWN definition rather than one written out
+    // here. Hand-copying that DDL would work until Prisma changed a column type
+    // and left this repository quietly holding a table Prisma no longer expects.
+    // One extra spawn, once per fresh database.
+    runner(NPX, ["prisma", "migrate", "resolve", "--schema", schemaPath, "--applied", name], childEnv);
+  }
+}
+
+async function insertLedgerRow(prisma, name) {
   await prisma.$executeRaw`
     INSERT INTO "_prisma_migrations"
       ("id", "checksum", "finished_at", "migration_name", "logs", "rolled_back_at", "started_at", "applied_steps_count")
@@ -273,7 +302,7 @@ export async function recordApplied(prisma, name) {
  */
 export async function applyOne(name, childEnv, prisma, runner = run) {
   runner(NPX, ["prisma", "db", "execute", "--schema", schemaPath, "--file", join(migrationsDir, name, "migration.sql")], childEnv);
-  await recordApplied(prisma, name);
+  await recordApplied(prisma, name, childEnv, runner);
 }
 
 /**

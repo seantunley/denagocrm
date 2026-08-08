@@ -13,6 +13,8 @@ import {
   buildChildEnv,
   applyOne,
   migrationChecksum,
+  recordApplied,
+  isMissingLedgerTable,
   assertSchemaObjectsPresent,
   previewMayMigrate,
   auditMigrationLedger,
@@ -261,4 +263,52 @@ test("a healthy ledger reports nothing", () => {
   // A migration on disk that has NOT been applied is not drift — it is simply
   // pending, and applying it is this runner's whole job.
   assert.deepEqual(result, { phantom: [], unfinished: [] });
+});
+
+/**
+ * A BRAND-NEW DATABASE HAS NO LEDGER TABLE YET.
+ *
+ * `prisma migrate resolve` creates `_prisma_migrations` as a side effect, which is
+ * why the two-spawn version never had to think about it. Replacing that spawn with
+ * a direct insert broke the very first migration on an empty database:
+ *
+ *   relation "_prisma_migrations" does not exist
+ *
+ * CI found it on the first run, which is where a change to the migration runner
+ * should be found. The fallback lets Prisma create the table with its OWN
+ * definition rather than copying that DDL here, where it would quietly rot the
+ * next time Prisma changed a column.
+ */
+
+test("a missing ledger table falls back to Prisma, which creates it", async () => {
+  const spawned: string[][] = [];
+  const prisma = {
+    $executeRaw: () => Promise.reject(Object.assign(new Error("boom"), { meta: { code: "42P01" } })),
+  };
+  await recordApplied(prisma, "77_custom_fields", { DATABASE_URL: "x" }, (_c: string, a: string[]) => {
+    spawned.push(a.slice(0, 3));
+  });
+  assert.deepEqual(spawned, [["prisma", "migrate", "resolve"]], "exactly one fallback spawn");
+});
+
+test("any OTHER database error is rethrown, never swallowed", () => {
+  // A catch-all here would turn a real failure into a silent fallback, and the
+  // migration would be recorded as applied on a database that rejected the write.
+  const prisma = {
+    $executeRaw: () => Promise.reject(Object.assign(new Error("connection refused"), { meta: { code: "08006" } })),
+  };
+  return assert.rejects(
+    () => recordApplied(prisma, "77_custom_fields", { DATABASE_URL: "x" }, () => {
+      throw new Error("must not fall back");
+    }),
+    /connection refused/,
+  );
+});
+
+test("the missing-table check recognises both signals and nothing else", () => {
+  assert.equal(isMissingLedgerTable({ meta: { code: "42P01" } }), true);
+  assert.equal(isMissingLedgerTable({ message: 'relation "_prisma_migrations" does not exist' }), true);
+  assert.equal(isMissingLedgerTable({ meta: { code: "08006" } }), false);
+  assert.equal(isMissingLedgerTable({ message: 'relation "Contact" does not exist' }), false);
+  assert.equal(isMissingLedgerTable(undefined), false);
 });
