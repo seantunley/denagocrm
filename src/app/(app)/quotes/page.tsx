@@ -10,6 +10,7 @@ import {
   buildQuoteEditorRecord,
   quoteVersionIndex,
 } from "@/lib/quoteEditorRecord";
+import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
 import { getSetting } from "@/lib/settings";
 import { PageHeader } from "@/components/page-header";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -80,7 +81,13 @@ export default async function QuotesPage({
   // Shared with quoteEditorRecord(), the action that loads ONE quote for the
   // editor — a revision, or a deep link to a quote older than this list's cap.
   const versionIndex = quoteVersionIndex(allVersions);
-  const records: QuoteEditorRecord[] = quotes.map((quote) => buildQuoteEditorRecord(quote, versionIndex));
+  // One batched, tenant-scoped lookup for the whole page — 200 rows would
+  // otherwise be 200 round trips to print at most a handful of account names.
+  const fleetsById = await loadBillToFleets(prisma, quotes.map((quote) => quote.fleetId));
+  const fleetNames = new Map([...fleetsById].map(([id, fleet]) => [id, fleet.name]));
+  const records: QuoteEditorRecord[] = quotes.map((quote) =>
+    buildQuoteEditorRecord(quote, versionIndex, fleetNames),
+  );
 
   // Every quote here is already RBAC-scoped by getAccessibleQuoteIds, so the
   // per-quote half of deleteQuote()'s check is satisfied by the query and only
@@ -107,7 +114,11 @@ export default async function QuotesPage({
   const needle = q?.trim().toLowerCase() ?? "";
   const visibleQuotes = quotes.filter((quote) => {
     const matchesStatus = !status || quote.status === status;
-    const customer = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
+    // The SAME resolver the row renders with, not a second copy of the rule.
+    // Deciding the addressee here independently meant a fleet quote could not be
+    // found by the fleet's name — the row showed "Acme Logistics" and the search
+    // only ever matched the manager whose contact record is attached to it.
+    const customer = quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name;
     const matchesSearch = !needle || [
       `q-${quote.number}`,
       customer,
@@ -204,7 +215,13 @@ export default async function QuotesPage({
                             Quote Q-{quote.number}
                           </QuoteEditorTrigger>
                         }
-                        detail={quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "Unlinked quote"}
+                        // The account it is addressed to, resolved the same way
+                        // the PDF resolves it, so the list and the document
+                        // cannot name two different customers.
+                        detail={
+                          quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name ||
+                          "Unlinked quote"
+                        }
                         aside={
                           <StatusPill tone={quote.status === "accepted" ? "success" : quote.status === "declined" ? "danger" : quote.status === "sent" ? "info" : "neutral"}>
                             {quote.status}

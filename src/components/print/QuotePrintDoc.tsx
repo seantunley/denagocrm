@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
-import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { formatDate, formatZAR } from "@/lib/format";
 import { documentTotals, feeRows, includedLines, lineNetCents } from "@/lib/pricing";
+import { quoteBillTo, type BillToFleet } from "@/lib/quoteBillTo";
 import { defaultTemplate, type DocTemplate } from "@/lib/docTemplates";
 
 export type QuoteForPrint = Prisma.QuoteGetPayload<{
@@ -12,9 +13,14 @@ export type QuoteForPrint = Prisma.QuoteGetPayload<{
  *  (logo, terms, signatures, footer) come from the Documents template. */
 export default function QuotePrintDoc({
   quote,
+  fleet,
   template,
 }: {
   quote: QuoteForPrint;
+  /** The account the quote is billed to, already resolved and tenant-checked —
+   *  required, not optional, so no caller can silently print the manager's name
+   *  where the fleet's belongs. See lib/quoteBillTo.ts. */
+  fleet: BillToFleet | null;
   template?: DocTemplate;
 }) {
   const tpl = template ?? defaultTemplate("quote");
@@ -31,14 +37,7 @@ export default function QuotePrintDoc({
   // the subtotal/VAT lines in that mode and the single band in the other.
   const totals = documentTotals(quote);
   const termsText = tpl.terms ?? quote.terms;
-  const customerName = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
-  const phone = quote.contact?.phone ?? quote.lead?.phone;
-  const email = quote.contact?.email ?? quote.lead?.email;
-  const address = quote.contact
-    ? [quote.contact.address, quote.contact.suburb, quote.contact.city, quote.contact.province, quote.contact.postalCode]
-        .filter(Boolean)
-        .join(", ")
-    : "";
+  const billTo = quoteBillTo(quote, fleet);
 
   return (
     <>
@@ -80,10 +79,15 @@ export default function QuotePrintDoc({
             <p className="text-[10px] font-bold uppercase tracking-widest text-orange-600 mb-1.5">
               Prepared for
             </p>
-            <p className="font-bold text-slate-900">{customerName}</p>
-            {phone && <p className="text-slate-600">{phone}</p>}
-            {email && <p className="text-slate-600">{email}</p>}
-            {address && <p className="text-slate-600 text-xs mt-1">{address}</p>}
+            <p className="font-bold text-slate-900">{billTo.name}</p>
+            {billTo.attention && <p className="text-slate-600">Attention: {billTo.attention}</p>}
+            {billTo.phone && <p className="text-slate-600">{billTo.phone}</p>}
+            {billTo.email && <p className="text-slate-600">{billTo.email}</p>}
+            {billTo.address && <p className="text-slate-600 text-xs mt-1">{billTo.address}</p>}
+            {billTo.registrationNumber && (
+              <p className="text-slate-600 text-xs">Reg. no: {billTo.registrationNumber}</p>
+            )}
+            {billTo.vatNumber && <p className="text-slate-600 text-xs">VAT no: {billTo.vatNumber}</p>}
           </div>
           <div className="rounded-lg bg-slate-50 border-l-4 border-slate-900 px-4 py-3">
             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1.5">

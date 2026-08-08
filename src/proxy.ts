@@ -30,6 +30,13 @@ const PUBLIC_PATHS = [
   // stored in Tenant.brandLogoRef — see its header comment for why that is not a
   // public file reader.
   "/api/brand/logo",
+  // Domain reachability check. Public BY NECESSITY and that is the point: it is
+  // fetched over the open internet, at the hostname being verified, to find out
+  // whether that hostname reaches this deployment at all. Behind auth it could
+  // not answer — there is no session on a domain nobody has set up yet. It reads
+  // no database, writes nothing, takes no parameters, and returns the caller's
+  // own Host header plus an HMAC of it.
+  "/api/brand/domain-check",
   "/portal", // customer portal has its own OTP session
   "/api/portal", // portal document/upload routes self-check the portal session
   // Platform console — "public" to THIS proxy only, because it authenticates with

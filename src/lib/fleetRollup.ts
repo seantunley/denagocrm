@@ -133,6 +133,18 @@ export type FleetDocument = {
   uploadedBy: { name: string };
 };
 
+export type FleetQuote = {
+  id: string;
+  contactId: string | null;
+  fleetId: string | null;
+  number: number;
+  status: string;
+  createdAt: Date;
+  signedAt: Date | null;
+  items: Array<{ qty: number; unitPriceCents: number; discountPct: number; selected: boolean; optional: boolean }>;
+  fees: Array<{ amountCents: number }>;
+};
+
 export type FleetConsentRecord = {
   id: string;
   contactId: string;
@@ -151,6 +163,7 @@ export type FleetRollupClient = {
   referral: Finder;
   document: Finder;
   consentRecord: Finder;
+  quote: Finder;
 };
 
 export type FleetRollup = {
@@ -163,9 +176,11 @@ export type FleetRollup = {
   referrals: FleetReferral[];
   documents: FleetDocument[];
   consentRecords: FleetConsentRecord[];
+  /** Quotes BILLED TO this fleet, plus quotes filed against its members. */
+  quotes: FleetQuote[];
 };
 
-const EMPTY: Omit<FleetRollup, "members" | "memberIds"> = {
+const EMPTY: Omit<FleetRollup, "members" | "memberIds" | "quotes"> = {
   activities: [],
   leads: [],
   communications: [],
@@ -225,9 +240,42 @@ export async function loadFleetRollup(
   })) as FleetMember[];
 
   const memberIds = members.map((member) => member.id);
+
+  // QUOTES ARE THE ONE TAB THAT IS NOT PURELY A ROLL-UP, so this query runs
+  // BEFORE the no-members early return below rather than beside the other seven.
+  // A quote billed to the fleet is the fleet's own row — `Quote.fleetId` names
+  // this account directly — and a fleet can be quoted before anybody has been
+  // linked to it as a member. Filed under the members-only branch, the first
+  // quote you raise for a new account would be invisible on the account's page.
+  //
+  // The union is still a union: members' personal quotes belong here too, the
+  // same way their leads and documents do.
+  const quotes = (await client.quote.findMany({
+    where: {
+      deletedAt: null,
+      ...tenant,
+      OR: [{ fleetId }, ...(memberIds.length ? [{ contactId: { in: memberIds } }] : [])],
+    },
+    select: {
+      id: true,
+      contactId: true,
+      fleetId: true,
+      number: true,
+      status: true,
+      createdAt: true,
+      signedAt: true,
+      // Enough to price each row through the shared engine — the fleet page must
+      // not sum quotes its own way while every other surface uses payableTotalCents.
+      items: { select: { qty: true, unitPriceCents: true, discountPct: true, selected: true, optional: true } },
+      fees: { select: { amountCents: true } },
+    },
+    orderBy: { createdAt: "desc" },
+    take: PAGE,
+  })) as FleetQuote[];
+
   // Nothing to union. `{ in: [] }` is seven guaranteed-empty round trips, and
   // some of them are the expensive ones.
-  if (memberIds.length === 0) return { members, memberIds, ...EMPTY };
+  if (memberIds.length === 0) return { members, memberIds, quotes, ...EMPTY };
 
   const scopedToMembers = { contactId: { in: memberIds }, ...tenant };
 
@@ -354,6 +402,7 @@ export async function loadFleetRollup(
     referrals,
     documents,
     consentRecords,
+    quotes,
   };
 }
 

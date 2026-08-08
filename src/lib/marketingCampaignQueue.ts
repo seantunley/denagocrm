@@ -3,6 +3,7 @@ import { basePrisma } from "./db";
 import { sendEmail, renderTemplate } from "./email";
 import { sendSms } from "./sms";
 import { buildTrackedEmail } from "./campaigns";
+import { emailBrand } from "./emailBrand";
 import { canContactPerson, classifyRetry, nextCommunicationWindow, type CommunicationChannel } from "./communicationPolicy";
 import { contactName } from "./format";
 import { currentTenantScope } from "./tenantScope";
@@ -190,7 +191,7 @@ async function deliver(recipient: ClaimedRecipient) {
         to: eligibility.destination,
         subject: renderTemplate(recipient.subject ?? "", vars),
         text: renderTemplate(recipient.body, vars),
-        html: buildTrackedEmail(renderTemplate(recipient.htmlBody ?? recipient.body, vars), recipient.token),
+        html: buildTrackedEmail(renderTemplate(recipient.htmlBody ?? recipient.body, vars), recipient.token, await emailBrand(recipient.tenantId)),
       })
     : await sendSms(eligibility.destination, renderTemplate(recipient.body, vars));
 

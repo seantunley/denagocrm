@@ -7,11 +7,14 @@ import { usableCapability } from "./tokenVault";
 import { advanceWorkflow } from "@/lib/signflow/runtime";
 import { resolveTenantActor, resolveTenantMemberUser } from "@/lib/tenantActor";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
+import { DEFAULT_BRAND, brandForTenant } from "@/lib/tenantBrand";
+import { tenantOrigin } from "@/lib/tenantOrigin";
 
+/** Platform origin and last resort — see signUrl in ./dispatch for the ordering. */
 const BASE = process.env.SIGN_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za";
 
-export function approvalUrl(token: string): string {
-  return `${BASE}/approvals/${token}`;
+export function approvalUrl(token: string, origin?: string | null): string {
+  return `${process.env.SIGN_BASE_URL || origin || BASE}/approvals/${token}`;
 }
 
 export type ApprovalDeliveryResult = { ok: boolean; skipped?: boolean; error?: string };
@@ -92,10 +95,26 @@ export async function notifyApprover(stepId: string): Promise<ApprovalDeliveryRe
   // fresh capability is minted rather than sending something unusable.
   const raw = await usableCapability("approvalStep", step.id, step.tokenCiphertext, step.token);
   if (!raw) return { ok: false, error: `Could not prepare an approval link for “${step.label}”` };
+
+  // The workspace this request belongs to — its own domain for the link, and its
+  // own name at the foot of the mail. This said "Denago Cape Town" to every
+  // tenant's approvers, on a mail asking them to approve their own document.
+  const [origin, brand] = await Promise.all([
+    tenantOrigin(step.request.tenantId),
+    brandForTenant(step.request.tenantId).catch(() => DEFAULT_BRAND),
+  ]);
+
   const result = await sendEmail({
     to: who.email,
     subject: `Approval needed: ${step.request.title}`,
-    text: `Hi ${who.name},\n\n"${step.request.title}" needs your approval (${step.label}).\n\nReview and approve or reject here:\n${approvalUrl(raw)}\n\nDenago Cape Town`,
+    text: `Hi ${who.name},
+
+"${step.request.title}" needs your approval (${step.label}).
+
+Review and approve or reject here:
+${approvalUrl(raw, origin)}
+
+${brand.displayName}`,
   });
   // A failure is REPORTED, so the worker retries. Nothing is marked delivered
   // that was not: `approval_sent` is written only below, after SMTP accepted.

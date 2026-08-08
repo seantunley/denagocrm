@@ -5,6 +5,7 @@ import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import { parseDocument } from "@/lib/doceditor/model";
 import { renderDocumentHtml } from "@/lib/doceditor/serialize";
 import { bindCtx, logoDataUri, signedFieldStamps } from "@/lib/signing/render";
+import { parseFrozenBrand } from "@/lib/signing/frozenBrand";
 
 /**
  * The printed quote, rendered from the SAME document the customer signs.
@@ -27,17 +28,23 @@ export async function renderQuotePrintHtml(opts: {
   templateId?: string | null;
   toolbarHtml?: string;
 }): Promise<string | null> {
-  const ctx = await bindCtx(opts.quoteId, null);
-
   // A signed quote prints what was actually signed: the signatures land at the
   // field positions the SNAPSHOT placed, from the completed request. An unsigned
   // one hides the empty dashed boxes — they are a signing affordance, and there
   // is nothing to tap on paper.
+  //
+  // Looked up BEFORE the context is bound, which is load-bearing rather than
+  // tidy: the context carries the {{company.*}} tokens, and a signed quote must
+  // bind the brand FROZEN on the request rather than whatever the workspace is
+  // called today. Bound after, this function printed the current brand above
+  // signatures that were given to a differently-named company.
   const request = await prisma.signatureRequest.findFirst({
     where: { quoteId: opts.quoteId, deletedAt: null, status: "completed" },
     orderBy: { createdAt: "desc" },
-    select: { id: true, snapshotJson: true },
+    select: { id: true, snapshotJson: true, brandJson: true },
   });
+  const frozen = request ? parseFrozenBrand(request.brandJson) : null;
+  const ctx = await bindCtx(opts.quoteId, null, frozen);
 
   // The signed quote prints its own frozen document, NOT the current default
   // template. Resolving the live template here meant that editing the quote
@@ -54,7 +61,7 @@ export async function renderQuotePrintHtml(opts: {
     const signedDoc = parseDocument(request.snapshotJson);
     if (signedDoc) {
       const stamps = await signedFieldStamps(request.id, "");
-      return renderDocumentHtml(signedDoc, ctx, logoDataUri(), {
+      return renderDocumentHtml(signedDoc, ctx, frozen?.logoUrl ?? logoDataUri(), {
         hideOverlays: !stamps.length,
         stampedFields: stamps.length ? stamps : undefined,
         toolbarHtml: opts.toolbarHtml,

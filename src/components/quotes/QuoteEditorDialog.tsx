@@ -97,6 +97,12 @@ export type QuoteEditorRecord = {
   status: string;
   contactId: string | null;
   contactLabel: string;
+  /** The fleet account this quote is BILLED TO, when there is one. Set at
+   *  creation and never editable here — see createQuoteForFleet. `fleetLabel` is
+   *  null when the id did not resolve in this tenant, in which case the quote
+   *  reads as an ordinary customer quote, which is what it effectively is. */
+  fleetId: string | null;
+  fleetLabel: string | null;
   leadId: string | null;
   leadLabel: string | null;
   validUntil: string;
@@ -794,6 +800,21 @@ export function QuoteEditorDialog({
                   record page's links were the only way through.
                 */}
                 <DialogDescription className="mt-1 truncate">
+                  {/*
+                    A fleet quote leads with the ACCOUNT it is billed to and
+                    shows the person as the attention line, because that is what
+                    the printed document says — see lib/quoteBillTo.ts. Reading
+                    the person's name here while the PDF says the lodge would be
+                    the editor disagreeing with the thing it edits.
+                  */}
+                  {record?.fleetLabel && (
+                    <>
+                      <Link href={`/fleets/${record.fleetId}`} className="text-primary hover:underline">
+                        {record.fleetLabel}
+                      </Link>
+                      {" · attn "}
+                    </>
+                  )}
                   {record?.contactId ? (
                     <Link href={`/contacts/${record.contactId}`} className="text-primary hover:underline">{customerLabel}</Link>
                   ) : (

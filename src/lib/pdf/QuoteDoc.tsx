@@ -1,6 +1,7 @@
 import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
-import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { formatDate, formatZAR } from "@/lib/format";
 import { documentTotals, feeRows, includedLines, lineNetCents } from "@/lib/pricing";
+import { quoteBillTo, type BillToFleet } from "@/lib/quoteBillTo";
 import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
 
 /**
@@ -114,7 +115,21 @@ const s = StyleSheet.create({
 
 export type SignedInfo = { name: string; email: string; ip: string; date: string };
 
-export default function QuoteDoc({ quote, signed }: { quote: QuoteForPrint; signed?: SignedInfo }) {
+/**
+ * `fleet` is required for the same reason it is on buildQuoteContext: the whole
+ * point of the column is that this block changes, and an optional parameter is
+ * one a caller forgets. Null means "no fleet account", which is every quote that
+ * existed before this.
+ */
+export default function QuoteDoc({
+  quote,
+  fleet,
+  signed,
+}: {
+  quote: QuoteForPrint;
+  fleet: BillToFleet | null;
+  signed?: SignedInfo;
+}) {
   const lineNet = lineNetCents;
   // Fees and delivery are part of the quoted price — itemised as rows below as
   // well as counted here, so the lines the customer reads add up to the total.
@@ -123,14 +138,7 @@ export default function QuoteDoc({ quote, signed }: { quote: QuoteForPrint; sign
   const items = includedLines(quote.items);
   // Subtotal + VAT lines appear only on a tax-exclusive quote — see documentTotals().
   const totals = documentTotals(quote);
-  const customerName = quote.contact ? contactName(quote.contact) : quote.lead?.name ?? "";
-  const phone = quote.contact?.phone ?? quote.lead?.phone ?? "";
-  const email = quote.contact?.email ?? quote.lead?.email ?? "";
-  const address = quote.contact
-    ? [quote.contact.address, quote.contact.suburb, quote.contact.city, quote.contact.province, quote.contact.postalCode]
-        .filter(Boolean)
-        .join(", ")
-    : "";
+  const billTo = quoteBillTo(quote, fleet);
   const vehicle = quote.lead?.product?.name ?? items[0]?.description ?? "—";
   const terms = (quote.terms ?? "")
     .split(/\r?\n/)
@@ -173,10 +181,13 @@ export default function QuoteDoc({ quote, signed }: { quote: QuoteForPrint; sign
         <View style={s.cards}>
           <View style={[s.card, { borderLeftColor: accent }]}>
             <Text style={[s.cardLabel, { color: accent }]}>PREPARED FOR</Text>
-            <Text style={s.cardName}>{customerName || "—"}</Text>
-            {phone ? <Text style={s.cardLine}>{phone}</Text> : null}
-            {email ? <Text style={s.cardLine}>{email}</Text> : null}
-            {address ? <Text style={s.cardLine}>{address}</Text> : null}
+            <Text style={s.cardName}>{billTo.name || "—"}</Text>
+            {billTo.attention ? <Text style={s.cardLine}>Attention: {billTo.attention}</Text> : null}
+            {billTo.phone ? <Text style={s.cardLine}>{billTo.phone}</Text> : null}
+            {billTo.email ? <Text style={s.cardLine}>{billTo.email}</Text> : null}
+            {billTo.address ? <Text style={s.cardLine}>{billTo.address}</Text> : null}
+            {billTo.registrationNumber ? <Text style={s.cardLine}>Reg. no: {billTo.registrationNumber}</Text> : null}
+            {billTo.vatNumber ? <Text style={s.cardLine}>VAT no: {billTo.vatNumber}</Text> : null}
           </View>
           <View style={[s.card, { borderLeftColor: ink }]}>
             <Text style={[s.cardLabel, { color: slate500 }]}>VEHICLE OF INTEREST</Text>
