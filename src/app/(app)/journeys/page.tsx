@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Activity, Workflow } from "lucide-react";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requireRoute } from "@/lib/permissions";
 import { formatDateTime } from "@/lib/format";
 import JourneyBuilder, { type JourneyBuilderDefaults } from "@/components/JourneyBuilder";
 import JourneyTestRun from "@/components/JourneyTestRun";
@@ -102,7 +102,7 @@ function statusTone(status: string) {
 }
 
 export default async function JourneysPage() {
-  await requireOwner();
+  await requireRoute("/journeys");
   const [journeys, stages, users, templates, tags, segments, recentRuns, testLeads] = await Promise.all([
     prisma.journey.findMany({
       where: { status: { not: "archived" } },

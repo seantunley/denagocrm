@@ -49,6 +49,13 @@ export const ROUTE_RULES = [
   { prefix: "/fleets", anyOf: ["fleets.view", "fleets.manage"] },
   // Survey admin (distinct from the public /s response pages).
   { prefix: "/surveys", anyOf: ["surveys.view", "surveys.manage"] },
+  // Journeys. `journeys.manage` is a real, grantable key in the catalogue and it
+  // is what the sidebar already shows the link on — but the pages and actions
+  // demanded requireOwner() and no rule gated the prefix at all. An admin could
+  // grant the permission, the user would see "Journeys" in the nav, click it,
+  // and land back on "/". The permission is the authority: journeys are
+  // delegable workspace configuration, not platform administration.
+  { prefix: "/journeys", anyOf: ["journeys.manage"] },
   // Owner-only: bot configuration reads integration secrets, /products manages
   // the catalogue, /trash reads every soft-deleted record through basePrisma
   // (which bypasses the RLS extension). Their pages call requireOwner()

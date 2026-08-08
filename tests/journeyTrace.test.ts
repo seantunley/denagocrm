@@ -138,7 +138,11 @@ test("the page leads with the broken-wiring case", () => {
   const page = shipped("src/app/(app)/journeys/activity/page.tsx");
   assert.match(page, /const neverFired = health\.filter\(\(row\) => !row\.everSeen\)/);
   assert.match(page, /never fired/i, "…and says so in words, not just a count");
-  assert.match(page, /requireOwner\(\)/, "the trace exposes entity ids and must be gated");
+  // The trace exposes entity ids, so it must be gated — on journeys.manage, the
+  // same permission the sidebar shows the link on. It demanded requireOwner()
+  // while the nav advertised the permission, so a delegated user clicked
+  // "Journeys" and was redirected to "/".
+  assert.match(page, /requireRoute\("\/journeys"\)/, "the trace exposes entity ids and must be gated");
 });
 
 test("an event predating tracing is not reported as 'nothing considered'", () => {

@@ -6,6 +6,8 @@ import { contactName } from "@/lib/format";
 import { getSetting } from "@/lib/settings";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { listTenantStaff } from "@/lib/tenantActor";
+import { fleetPicker } from "@/lib/fleetDirectory";
+import { NO_FLEET_PICKER } from "@/lib/fleetTypes";
 
 function inputDate(daysFromNow: number) {
   const date = new Date();
@@ -58,7 +60,7 @@ export async function GET() {
   const needsVehicles = canManageJobcards;
   const scoped = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
 
-  const [products, stages, contacts, users, vehicles, validDaysRaw, quoteTerms] = await Promise.all([
+  const [products, stages, contacts, users, vehicles, picker, validDaysRaw, quoteTerms] = await Promise.all([
     commerceOn && needsProducts
       ? prisma.product.findMany({
           where: { active: true },
@@ -81,6 +83,10 @@ export async function GET() {
           take: 500,
         })
       : Promise.resolve([]),
+    // Only the contact dialog offers a fleet, and the list is tenant-scoped
+    // inside fleetPicker — never a bare fleet.findMany — and withheld entirely
+    // from a user without the fleets permission.
+    canCreateContact ? fleetPicker() : Promise.resolve(NO_FLEET_PICKER),
     getSetting("QUOTE_VALID_DAYS"),
     getSetting("QUOTE_TERMS"),
   ]);
@@ -97,6 +103,7 @@ export async function GET() {
     stages,
     contacts: contacts.map((c) => ({ id: c.id, label: contactName(c) })),
     users,
+    fleetPicker: picker,
     quoteDefaults: {
       validUntil: inputDate(Number.isFinite(validDays) ? validDays : 7),
       terms: quoteTerms || "Prices include VAT. Delivery arranged on acceptance. E&OE.",

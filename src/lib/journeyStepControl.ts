@@ -43,7 +43,7 @@ export function resolveTopLevelNext(
 /**
  * A `condition` step.
  *
- * `inSequence` changes what failing MEANS, following Home Assistant exactly:
+ * `inSequence` changes what failing MEANS:
  *
  *  - top level: a two-way branch. trueStepId / falseStepId / nextStepId, as it
  *    has always been, so existing journeys are untouched.

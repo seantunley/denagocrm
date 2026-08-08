@@ -164,12 +164,19 @@ test("the doc builder checks access to the record it renders", () => {
   // and customer details into a PDF and file it. The mailing half of that —
   // sendDocForSigning — has since been removed with the editor's "Prepare for
   // signing" button, so one call site remains: generate-and-file.
+  //
+  // The two checks themselves now live in lib/docbuilder/recordAccess.ts, because
+  // the API routes that render the same templates from the same ids needed the
+  // same answer and had no check at all — see auditGuardGaps.test.ts. The rule
+  // asserted here is unchanged; only where it is written moved.
   const source = shipped("src/app/actions/doceditor.ts");
   const start = source.indexOf("async function validatedBinding(");
   const body = source.slice(start, source.indexOf("export async function", start));
-  assert.match(body, /canAccessQuote\(user, record\.id\)/);
-  assert.match(body, /canAccessJobCard\(user, record\.id\)/);
+  assert.match(body, /canAccessBuilderRecord\(user, record\)/);
   assert.match(body, /throw new ActionRefusal/);
+  const helper = shipped("src/lib/docbuilder/recordAccess.ts");
+  assert.match(helper, /canAccessQuote\(user, record\.id\)/);
+  assert.match(helper, /canAccessJobCard\(user, record\.id\)/);
   // EVERY call site must pass a real authenticated user through — the count is
   // asserted so a new one added without the user is caught, not just tolerated.
   const calls = source.match(/validatedBinding\(user, templateId, record\)/g) ?? [];

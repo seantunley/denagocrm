@@ -42,6 +42,14 @@ export const JOURNEY_STEP_TYPES = [
   "send_push",
   "move_stage",
   "assign_user",
+  // The lead OUTCOME steps. Everything above them changes where a lead sits or
+  // who owns it; these three close it or put it back in play, which was the one
+  // thing a journey could describe the trigger for (`lead_won`, `lead_lost`) and
+  // could not itself do. See journeyLeadOutcome.ts for the transition table and
+  // for why each is a conditional updateMany rather than an update-by-id.
+  "lead_mark_won",
+  "lead_mark_lost",
+  "lead_reopen",
   "add_tag",
   "remove_tag",
   "wait",
@@ -84,6 +92,9 @@ export const JOURNEY_STEP_LABELS: Record<JourneyStepType, string> = {
   send_push: "Notify the team",
   move_stage: "Move lead stage",
   assign_user: "Assign lead",
+  lead_mark_won: "Mark lead won",
+  lead_mark_lost: "Mark lead lost",
+  lead_reopen: "Reopen lead",
   add_tag: "Add contact tag",
   remove_tag: "Remove contact tag",
   wait: "Wait",
@@ -341,6 +352,14 @@ export type JourneyDefinition = {
  *                           step, so an unbounded bag inflates every write for
  *                           the remaining life of the run — and a run can live
  *                           for weeks. 4 kB is ~8 full-length values.
+ *  leadOutcomeReason(200) — a `lead_mark_lost` reason, before and after
+ *                           rendering. It lands in `Lead.lostReason`, which the
+ *                           reports screen groups by, so an essay there is a
+ *                           bucket of one. The same number bounds the TEMPLATE
+ *                           at save time and the RENDERED value at run time —
+ *                           the template is what a person types, the rendered
+ *                           string is what reaches the column, and only the
+ *                           second one is what the column actually gets.
  */
 export const JOURNEY_LIMITS = {
   steps: 100,
@@ -355,6 +374,7 @@ export const JOURNEY_LIMITS = {
   variables: 10,
   variableChars: 500,
   variableBytes: 4000,
+  leadOutcomeReason: 200,
 } as const;
 
 const STEP_TYPES = new Set<string>(JOURNEY_STEP_TYPES);
@@ -499,6 +519,7 @@ function parseStep(raw: unknown, budget: ParseBudget, depth: number, nested: boo
   if (type === "wait_for_trigger") parseWaitForTriggerConfig(config);
   if (type === "wait_for_condition") parseWaitForConditionConfig(config);
   if (type === "variables") parseVariablesConfig(config);
+  if (isLeadOutcomeStep(type)) parseLeadOutcomeConfig(type, config);
   return step;
 }
 
@@ -728,6 +749,70 @@ export function parseVariablesConfig(config: Record<string, unknown>): JourneyVa
     }
     return { name, template };
   });
+}
+
+/* ── lead outcome ────────────────────────────────────────────────────────── */
+
+/**
+ * The three steps that close a lead or put it back in play.
+ *
+ * Named here rather than in journeyLeadOutcome.ts so the parser can reach them
+ * without importing that module — journeyLeadOutcome imports THIS file for the
+ * config parse, and a cycle between the two would be paid for on every tick.
+ */
+export const LEAD_OUTCOME_STEP_TYPES = [
+  "lead_mark_won",
+  "lead_mark_lost",
+  "lead_reopen",
+] as const satisfies readonly JourneyStepType[];
+
+export type LeadOutcomeStepType = (typeof LEAD_OUTCOME_STEP_TYPES)[number];
+
+const LEAD_OUTCOME_TYPES = new Set<string>(LEAD_OUTCOME_STEP_TYPES);
+
+export function isLeadOutcomeStep(type: string): type is LeadOutcomeStepType {
+  return LEAD_OUTCOME_TYPES.has(type);
+}
+
+export type LeadOutcomeConfig = {
+  /**
+   * `lead_mark_lost` only, and a TEMPLATE — the same `{{first_name}}`-style
+   * substitution every other authored string in a journey gets. Null for the
+   * other two, which take no configuration at all.
+   */
+  reason: string | null;
+};
+
+/**
+ * A lead-outcome step's config — the SAME parse the runner uses.
+ *
+ * The one rule worth having is that `lead_mark_lost` MUST carry a reason.
+ * `markLost` (the staff action) refuses without one — "A lost reason is
+ * required" — and the reports screen groups closed-lost leads by that column, so
+ * a journey allowed to write a bare `lost` would quietly grow a bucket of
+ * unexplained losses that no report can account for. Enforced at SAVE time
+ * rather than skipped at run time because the author is standing there when they
+ * save; three days into a run, "skipped: no reason configured" is a message
+ * nobody is watching for.
+ *
+ * Existing published versions cannot be broken by this: no version predates
+ * these step types, so there is nothing already in flight for the rule to fail.
+ */
+export function parseLeadOutcomeConfig(
+  type: LeadOutcomeStepType,
+  config: Record<string, unknown>,
+): LeadOutcomeConfig {
+  if (type !== "lead_mark_lost") return { reason: null };
+  const raw = config.reason;
+  if (typeof raw !== "string" || !raw.trim()) {
+    throw new Error("A mark-lost step needs a reason — a lost lead with no reason is invisible in reports");
+  }
+  if (raw.length > JOURNEY_LIMITS.leadOutcomeReason) {
+    throw new Error(
+      `A mark-lost reason must be ${JOURNEY_LIMITS.leadOutcomeReason} characters or fewer`,
+    );
+  }
+  return { reason: raw.trim() };
 }
 
 /**

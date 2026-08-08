@@ -1,0 +1,183 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+
+import { migrationRoleProblem } from "../scripts/apply-migrations.mjs";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const read = (rel: string) => readFileSync(path.join(root, rel), "utf8");
+
+/** SQL with comments removed — so an assertion cannot be satisfied by prose. */
+const sqlBody = (rel: string) =>
+  read(rel)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*--.*$/gm, "");
+
+const ROLE_SQL = "prisma/rls/app-role.sql";
+
+/**
+ * THE ROLE THAT DOES NOT BYPASS ROW LEVEL SECURITY.
+ *
+ * 20260727130000_rls_enforce enabled and FORCE'd RLS on 120 tables, and none of
+ * it is evaluated, because the application connects as neondb_owner and that
+ * role has the BYPASSRLS attribute. FORCE defeats the table OWNER's exemption;
+ * it does not defeat the ROLE attribute. Proven read-only on production
+ * 2026-08-06: app.current_tenant unset, `SELECT count(*) FROM "Contact"` → 17,
+ * where the policy says 0.
+ *
+ * These tests guard the script that fixes it. They are source assertions rather
+ * than database assertions on purpose — `npm run test:rls-restricted` executes
+ * this same file against a real Postgres and proves the behaviour; what cannot be
+ * proven there is that a future edit has not quietly widened the grant, because a
+ * wider grant makes that suite pass more easily, not less.
+ */
+
+test("the app role cannot bypass RLS, and the script says so twice", () => {
+  const sql = sqlBody(ROLE_SQL);
+  // Once on creation, once re-asserted on a role that already existed — a role
+  // made in the Neon console does not necessarily have these attributes.
+  assert.ok(
+    (sql.match(/NOBYPASSRLS/g) ?? []).length >= 2,
+    "NOBYPASSRLS must be set at creation AND re-asserted on an existing role",
+  );
+  assert.match(sql, /NOSUPERUSER/, "a superuser bypasses RLS unconditionally");
+  assert.match(sql, /ALTER ROLE crm_app NOSUPERUSER NOBYPASSRLS/);
+  // And it refuses to finish quietly if either is somehow still true.
+  assert.match(sql, /RAISE EXCEPTION 'crm_app can bypass RLS/);
+});
+
+test("the grant is the four DML verbs and nothing wider", () => {
+  const sql = sqlBody(ROLE_SQL);
+  assert.match(sql, /GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO crm_app/);
+
+  // ALL PRIVILEGES on a table includes TRUNCATE, REFERENCES and TRIGGER.
+  assert.doesNotMatch(sql, /GRANT ALL\b/i, "never GRANT ALL — it is wider than it reads");
+
+  // TRUNCATE removes rows without evaluating a single row-level DELETE policy,
+  // so a tenant-scoped role holding it can empty another tenant's table.
+  assert.doesNotMatch(sql, /GRANT[^;]*\bTRUNCATE\b/i, "TRUNCATE ignores row-level policies");
+
+  // DDL would let the role drop the very policies that isolate tenants.
+  assert.doesNotMatch(sql, /GRANT[^;]*\bCREATE\b[^;]*ON SCHEMA/i, "no DDL in schema public");
+  assert.doesNotMatch(sql, /\bSUPERUSER\b(?!\s)/i);
+});
+
+test("future tables are granted by a RULE, not by a loop that already ran", () => {
+  // GRANT ON ALL TABLES iterates the tables that exist at that instant. Without
+  // ALTER DEFAULT PRIVILEGES the next migration creates a table the application
+  // cannot read, and the deploy that ships it fails with "permission denied for
+  // table X" on a path no test covers.
+  const sql = sqlBody(ROLE_SQL);
+  assert.match(
+    sql,
+    /ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO crm_app/,
+    "must attach to the role migrations run as — default privileges follow the CREATOR",
+  );
+  assert.match(sql, /ALTER DEFAULT PRIVILEGES IN SCHEMA public\s+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO crm_app/);
+  assert.match(sql, /ALTER DEFAULT PRIVILEGES[\s\S]*?ON SEQUENCES TO crm_app/);
+});
+
+test("the script carries no password anyone could read", () => {
+  const sql = read(ROLE_SQL);
+  // The role is created with a value nobody knows. A placeholder literal in a
+  // file in the repository is a login credential in the repository, and a role
+  // that does not bypass RLS but has a published password is worse than one that
+  // does — it is a foothold that looks like a control.
+  assert.match(sql, /md5\(random\(\)::text \|\| clock_timestamp\(\)::text\)/);
+  // A literal, on one line — `PASSWORD ' || quote_literal(...)` is a concatenation
+  // whose closing quote is on the next line, and is the opposite of a hardcoded one.
+  assert.doesNotMatch(sql, /PASSWORD\s+'[^'\n]{3,}'/i, "no literal password in the file");
+});
+
+test("the script survives a database that is not Neon", () => {
+  const sql = sqlBody(ROLE_SQL);
+  // neondb_owner does not exist on a self-hosted install or on the disposable
+  // database `npm run test:rls-restricted` builds. Unguarded, ALTER DEFAULT
+  // PRIVILEGES FOR ROLE neondb_owner aborts the whole script there — which would
+  // mean CI never runs the file that production runs.
+  assert.match(sql, /IF EXISTS \(SELECT 1 FROM pg_roles WHERE rolname = 'neondb_owner'\) THEN/);
+  // GRANT CONNECT needs a literal database name, and it differs per environment.
+  assert.match(sql, /format\('GRANT CONNECT ON DATABASE %I TO crm_app', current_database\(\)\)/);
+  assert.doesNotMatch(sql, /ON DATABASE\s+(neondb|CURRENT_DATABASE)\b/i);
+});
+
+test("CI executes the shipped script, not a second copy of what it should do", () => {
+  // Two definitions of the role would drift in the direction that makes the test
+  // pass: the test grants what the test needs, and production needs the line the
+  // test never exercised. ALTER DEFAULT PRIVILEGES was exactly that line.
+  const suite = read("scripts/test-rls-restricted.ts");
+  assert.match(suite, /path\.join\(process\.cwd\(\), "prisma", "rls", "app-role\.sql"\)/);
+  assert.match(suite, /replaceAll\("crm_app", ROLE\)/, "only the role name is substituted");
+  assert.match(suite, /"prisma", "db", "execute", "--url"/, "run the same way a migration is run");
+  assert.match(
+    suite,
+    /a table created after the grants is still readable \(ALTER DEFAULT PRIVILEGES\)/,
+    "…and prove the future-table rule, which is the part production would have found",
+  );
+});
+
+test("the audit script only reads", () => {
+  const code = read("scripts/check-rls-role.ts");
+  // It runs against production. Everything it does must be a SELECT — the one
+  // apparent exception is set_config(), which is a function call in a SELECT and
+  // is transaction-local (TRUE), not a write.
+  // Asserted on the LEADING KEYWORD of each statement rather than by scanning for
+  // write verbs anywhere in it: the grant audit legitimately contains the strings
+  // 'INSERT', 'UPDATE' and 'DELETE' as the privilege names it checks for, and a
+  // keyword-anywhere test would either fail on that or have to be weakened until
+  // it stopped meaning anything.
+  const statements = [
+    ...code.matchAll(/\$(?:queryRaw|executeRaw)(?:Unsafe)?(?:<[^>]*>)?`([\s\S]*?)`/g),
+  ].map((m) => m[1].trim());
+  assert.ok(statements.length >= 6, `expected the audit's raw statements, found ${statements.length}`);
+  for (const stmt of statements) {
+    assert.match(
+      stmt,
+      /^SELECT\b/i,
+      `every statement in check-rls-role must begin with SELECT — found: ${stmt.slice(0, 70)}`,
+    );
+  }
+  assert.match(code, /set_config\('app\.bypass_rls', 'on', TRUE\)/, "transaction-local, never session-wide");
+});
+
+test("the migration runner refuses to migrate as a role that cannot create tables", () => {
+  // buildChildEnv falls back to DATABASE_URL when DATABASE_URL_UNPOOLED is unset.
+  // Once DATABASE_URL is the restricted role, that fallback runs migrations as a
+  // role with no DDL — failing part-way through a migration.sql rather than
+  // before touching anything.
+  assert.equal(migrationRoleProblem({ role: "neondb_owner", canCreate: true, unpooledConfigured: true }), null);
+
+  const unset = migrationRoleProblem({ role: "crm_app", canCreate: false, unpooledConfigured: false });
+  assert.match(unset ?? "", /MIGRATIONS REFUSED/);
+  assert.match(unset ?? "", /DATABASE_URL_UNPOOLED is NOT set/, "name the variable that is missing");
+  assert.match(unset ?? "", /Nothing has been applied/);
+
+  const wrong = migrationRoleProblem({ role: "crm_app", canCreate: false, unpooledConfigured: true });
+  assert.match(wrong ?? "", /DATABASE_URL_UNPOOLED is set but resolves to "crm_app"/, "a different mistake, a different fix");
+});
+
+test("the refusal happens before the lock and before any DDL", () => {
+  const code = read("scripts/apply-migrations.mjs");
+  // The CALL, not the definition — `migrationRoleProblem({` alone matches the
+  // exported function's own parameter list, which sits above everything here and
+  // would make these comparisons pass no matter where the guard actually runs.
+  const guardAt = code.indexOf("const problem = migrationRoleProblem({");
+  const lockAt = code.indexOf("pg_advisory_lock(");
+  const applyAt = code.indexOf("applyOne(name, childEnv)");
+  assert.ok(guardAt !== -1 && lockAt !== -1 && applyAt !== -1);
+  assert.ok(guardAt < lockAt, "a refused run must not queue behind a real deploy");
+  assert.ok(guardAt < applyAt, "…and must not have applied anything");
+});
+
+test("--check stays usable as either role", () => {
+  // The read-only drift probe is safe from any role and is used as a standalone
+  // diagnostic; gating it behind a DDL check would make it useless in exactly
+  // the situation it is needed.
+  const code = read("scripts/apply-migrations.mjs");
+  const checkAt = code.indexOf("if (CHECK_ONLY) {");
+  const guardAt = code.indexOf("const problem = migrationRoleProblem({");
+  assert.ok(checkAt !== -1 && guardAt !== -1);
+  assert.ok(checkAt < guardAt, "--check must return before the DDL guard");
+});

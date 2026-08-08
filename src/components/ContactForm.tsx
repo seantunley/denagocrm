@@ -3,7 +3,6 @@ import type { ActionResult } from "@/lib/actionResultTypes";
 import { SaveForm } from "@/components/SaveForm";
 import {
   AtSign,
-  Building2,
   MapPin,
   MessageSquareText,
   ShieldCheck,
@@ -12,10 +11,15 @@ import {
 } from "lucide-react";
 import DuplicateGuard from "@/components/DuplicateGuard";
 import ContactSubmitButton from "@/components/ContactSubmitButton";
+import ContactKindFields from "@/components/ContactKindFields";
+import { NO_FLEET_PICKER, type FleetPicker } from "@/lib/fleetTypes";
+import { contactKind } from "@/lib/contactKind";
 import { cn } from "@/lib/utils";
 
 type ContactDefaults = {
   isCompany?: boolean;
+  fleetId?: string | null;
+  vatNumber?: string | null;
   firstName?: string;
   lastName?: string | null;
   company?: string | null;
@@ -88,16 +92,28 @@ export default function ContactForm({
   defaults = {},
   submitLabel,
   users = [],
+  fleetPicker = NO_FLEET_PICKER,
   variant = "compact",
 }: {
   action: (formData: FormData) => Promise<ActionResult | void>;
   defaults?: ContactDefaults;
   submitLabel: string;
   users?: { id: string; name: string }[];
+  /**
+   * The fleets this USER may link a contact to. Resolved by the calling page,
+   * which checks both the fleet permission and the tenant (see
+   * lib/fleetDirectory.ts) — this component renders whatever it is handed and
+   * does no lookup of its own. Defaulting to "may not link, none listed" means a
+   * call site that forgets it offers nothing, rather than everything.
+   */
+  fleetPicker?: FleetPicker;
   variant?: ContactFormVariant;
 }) {
   const isPage = variant === "page";
   const isDialog = variant === "dialog";
+  // Which of the three options an EXISTING contact is showing, derived from the
+  // two columns that hold it — never re-worked out inline. See lib/contactKind.ts.
+  const kind = contactKind(defaults);
 
   return (
     <SaveForm
@@ -136,61 +152,27 @@ export default function ContactForm({
         title="Identity"
         description="Choose the customer type and capture the name people will recognise."
       >
-        <fieldset className="sm:col-span-2">
-          <legend className="label">Customer type</legend>
-          <div className="grid grid-cols-2 gap-2">
-            <label className="group cursor-pointer rounded-xl border border-border bg-background/40 p-3 transition-colors has-[:checked]:border-primary/45 has-[:checked]:bg-primary/10">
-              <input
-                type="radio"
-                name="isCompany"
-                value=""
-                defaultChecked={!defaults.isCompany}
-                className="sr-only"
-              />
-              <span className="flex items-center gap-2 text-sm font-medium text-foreground">
-                <UserRound className="size-4 text-muted-foreground group-has-[:checked]:text-primary" />
-                Individual
-              </span>
-              <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">Private customer or driver</span>
-            </label>
-            <label className="group cursor-pointer rounded-xl border border-border bg-background/40 p-3 transition-colors has-[:checked]:border-primary/45 has-[:checked]:bg-primary/10">
-              <input
-                type="radio"
-                name="isCompany"
-                value="on"
-                defaultChecked={defaults.isCompany ?? false}
-                className="sr-only"
-              />
-              <span className="flex items-center gap-2 text-sm font-medium text-foreground">
-                <Building2 className="size-4 text-muted-foreground group-has-[:checked]:text-primary" />
-                Company / fleet
-              </span>
-              <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">Business, estate or fleet account</span>
-            </label>
-          </div>
-        </fieldset>
-        <Field label="First name / account name *">
-          <input
-            name="firstName"
-            className="input"
-            required
-            autoComplete="given-name"
-            defaultValue={defaults.firstName ?? ""}
-            placeholder="e.g. Sean or Cape Town Golf Club"
-          />
-        </Field>
-        <Field label="Last name">
-          <input name="lastName" className="input" autoComplete="family-name" defaultValue={defaults.lastName ?? ""} />
-        </Field>
-        <Field label="Company" wide>
-          <input
-            name="company"
-            className="input"
-            autoComplete="organization"
-            defaultValue={defaults.company ?? ""}
-            placeholder="Optional employer, business or fleet name"
-          />
-        </Field>
+        <ContactKindFields
+          picker={fleetPicker}
+          defaultKind={kind}
+          defaultCompany={defaults.company}
+          defaultFleetId={defaults.fleetId}
+          defaultVatNumber={defaults.vatNumber}
+        >
+          <Field label="First name / account name *">
+            <input
+              name="firstName"
+              className="input"
+              required
+              autoComplete="given-name"
+              defaultValue={defaults.firstName ?? ""}
+              placeholder="e.g. Sean or Cape Town Golf Club"
+            />
+          </Field>
+          <Field label="Last name">
+            <input name="lastName" className="input" autoComplete="family-name" defaultValue={defaults.lastName ?? ""} />
+          </Field>
+        </ContactKindFields>
       </FormSection>
 
       <FormSection

@@ -8,11 +8,14 @@ import { sendSms } from "./sms";
 import { sendPushToAll } from "./push";
 import { logAudit } from "./audit";
 import { emitJourneyEvent } from "./journeyEvents";
+import { emitLeadJourneyEvent } from "./leadJourneyEvents";
+import { markReferralEarned } from "./referrals";
 import { canContactPerson, nextCommunicationWindow } from "./communicationPolicy";
 import { JourneyContext, journeyTemplateVars } from "./journeyContext";
 import { AbortJourney } from "./journeyControlFlow";
 import { conditionStepOutcome, stopStepOutcome } from "./journeyStepControl";
-import { type JourneyStep } from "./journeyTypes";
+import { applyLeadOutcome, cappedLostReason } from "./journeyLeadOutcome";
+import { parseLeadOutcomeConfig, type JourneyStep } from "./journeyTypes";
 
 export { resolveTopLevelNext } from "./journeyStepControl";
 
@@ -80,6 +83,12 @@ async function fallbackUserId(context: JourneyContext, configured?: string | nul
   const first = await resolveTenantActor();
   if (!first) throw new Error("No CRM users exist");
   return first.id;
+}
+
+/** What to call the lead in an audit summary a person will read months later. */
+function leadTitle(context: JourneyContext) {
+  const lead = (context.lead ?? {}) as Record<string, unknown>;
+  return String(lead.title ?? lead.name ?? "").trim() || "Lead";
 }
 
 function emailAddress(context: JourneyContext) {
@@ -178,13 +187,24 @@ export async function executeJourneyStep(args: {
   journeyName: string;
   runId: string;
   /**
+   * The RUN's tenant, straight off `JourneyRun.tenantId` — not the journey
+   * context, which is a compacted snapshot carrying no tenant at all, and not
+   * the ambient scope, which is invisible to a `where` clause while the db.ts
+   * guard is dormant.
+   *
+   * Every write this executor makes to a Lead names it explicitly. Without it
+   * `where: { id: leadId }` means "any lead in the database with this id", and a
+   * step could close another workspace's deal. See journeyLeadOutcome.ts.
+   */
+  tenantId: string | null;
+  /**
    * True when the step is inside a `choose`/`repeat` sequence. It changes
    * exactly one thing — what a failing `condition` means — because a sequence
    * has no ids to jump to. See the `condition` case.
    */
   inSequence?: boolean;
 }): Promise<StepResult> {
-  const { step, context, category, journeyName, runId, inSequence = false } = args;
+  const { step, context, category, journeyName, runId, tenantId, inSequence = false } = args;
   const vars = journeyTemplateVars(context);
   const { leadId, contactId } = ids(context);
 
@@ -318,10 +338,18 @@ export async function executeJourneyStep(args: {
       const stageId = stringConfig(step, "stageId");
       if (!stageId) return { status: "skipped", note: "Stage move skipped: no stage configured" };
       const max = await prisma.lead.aggregate({ where: { stageId }, _max: { position: true } });
-      await prisma.lead.update({
-        where: { id: leadId },
+      // Same shape as the lead-outcome steps, and for the same two reasons:
+      // `update({ where: { id } })` carried NO tenant predicate while the db.ts
+      // guard is dormant, and it threw P2025 — failing the step and burning a
+      // run attempt — for a lead deleted while the run was parked. See
+      // journeyLeadOutcome.ts for the full argument.
+      const moved = await prisma.lead.updateMany({
+        where: { id: leadId, tenantId, deletedAt: null },
         data: { stageId, position: (max._max.position ?? 0) + 1 },
       });
+      if (moved.count !== 1) {
+        return { status: "skipped", note: "Stage move skipped: lead is deleted or not in this workspace" };
+      }
       await emitJourneyEvent({
         type: "stage_entered",
         entityType: "lead",
@@ -336,8 +364,81 @@ export async function executeJourneyStep(args: {
       if (!leadId) return { status: "skipped", note: "Assignment skipped: no lead" };
       const userId = stringConfig(step, "userId");
       if (!userId) return { status: "skipped", note: "Assignment skipped: no user configured" };
-      await prisma.lead.update({ where: { id: leadId }, data: { assignedToId: userId } });
+      const assigned = await prisma.lead.updateMany({
+        where: { id: leadId, tenantId, deletedAt: null },
+        data: { assignedToId: userId },
+      });
+      if (assigned.count !== 1) {
+        return { status: "skipped", note: "Assignment skipped: lead is deleted or not in this workspace" };
+      }
       return { status: "completed", note: "Lead assigned" };
+    }
+
+    /**
+     * The lead OUTCOME steps — the thing a journey could be TRIGGERED by and
+     * could not do: `lead_won` and `lead_lost` were both enrolment triggers,
+     * with no step on the other side of them.
+     *
+     * The row write and its guard live in journeyLeadOutcome.ts (importable, and
+     * therefore testable, without the mail provider and `server-only` coming
+     * with it). What is here is the fan-out, and every part of it is gated on
+     * `outcome.applied` — the count check — so a retry, or a second pass of a
+     * `repeat`, cannot earn a referral fee twice or emit a second `lead_won`.
+     * That is the same gate `setQuoteStatus` and the signing hub already put in
+     * front of their own won-effects, keyed off `won.count === 1`.
+     *
+     * The fan-out matches those two paths deliberately: referral, journey event,
+     * audit. It does NOT create a Contact for a won lead with none, and it does
+     * not trigger the "won" survey — `markWon` (the staff action) does both, and
+     * neither of the two existing automated win paths does either. Following the
+     * automated paths keeps this a third instance of an established behaviour
+     * rather than a fourth, differently-shaped one.
+     */
+    case "lead_mark_won":
+    case "lead_mark_lost":
+    case "lead_reopen": {
+      const config = parseLeadOutcomeConfig(step.type, step.config);
+      // Rendered like every other authored string in a journey, then capped
+      // against what reaches the column rather than against the template.
+      const reason = config.reason ? cappedLostReason(renderTemplate(config.reason, vars)) : null;
+      const outcome = await applyLeadOutcome({
+        type: step.type,
+        leadId,
+        tenantId,
+        reason,
+        updateLead: (updateArgs) => prisma.lead.updateMany(updateArgs),
+      });
+      if (!outcome.applied) {
+        return { status: "skipped", note: outcome.note, output: outcome.output };
+      }
+
+      // Won leads earn the referrer's fee. Best-effort and swallowed, exactly as
+      // in setQuoteStatus and postComplete: the lead IS won, and a referral
+      // bookkeeping failure must not undo that by failing the step.
+      if (step.type === "lead_mark_won" && leadId) {
+        await markReferralEarned(leadId).catch(() => {});
+      }
+      // Re-enters the engine, which is the point: a `lead_won` journey should
+      // fire whether the win came from a rep, a signed quote, or this step.
+      // Terminating, despite the loop it looks like — the run it enrols reaches
+      // its own mark-won step, matches nothing (the lead is already won), and
+      // emits nothing. The `from` guard is what makes that true.
+      if (outcome.event && leadId) {
+        await emitLeadJourneyEvent(outcome.event, leadId, {
+          payload: { sourceRunId: runId, sourceStepId: step.id },
+        });
+      }
+      await logAudit({
+        action: outcome.auditAction,
+        summary:
+          `Lead “${leadTitle(context)}” ${outcome.verb} by journey “${journeyName}”` +
+          (reason ? ` — ${reason}` : ""),
+        leadId,
+        contactId,
+        userName: "Journey engine",
+        metadata: { runId, stepId: step.id, journey: journeyName, ...(reason ? { lostReason: reason } : {}) },
+      });
+      return { status: "completed", note: outcome.note, output: outcome.output };
     }
 
     case "add_tag":
