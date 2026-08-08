@@ -7,6 +7,7 @@ import { formatDateTime } from "@/lib/format";
 import { threadCollaborationKey, type InboxThread, type ThreadCollaboration } from "@/lib/inboxThreads";
 import ConversationCollab from "@/components/ConversationCollab";
 import { EmptyState, StatusPill } from "@/components/visual-system";
+import { RECEIPT_CHANNELS, receiptLabel } from "@/lib/deliveryReceipts";
 
 export const CHANNEL_META: Record<string, { label: string; icon: React.ReactNode }> = {
   whatsapp: {
@@ -103,8 +104,8 @@ export default function SocialThreadList({
 
               <div className="mt-4 max-h-[52vh] space-y-2 overflow-y-auto rounded-2xl border border-border bg-background/45 p-3 overscroll-contain">
                 {[...thread.messages].reverse().map((message) => (
+                  <div key={message.id} className="flex flex-col">
                   <div
-                    key={message.id}
                     className={`w-fit max-w-[82%] rounded-2xl px-3 py-2 text-sm leading-snug whitespace-pre-wrap ${message.direction === "inbound" ? "rounded-bl-md border border-border bg-muted text-foreground" : "ml-auto rounded-br-md bg-primary text-primary-foreground"}`}
                   >
                     {message.attachmentUrl && message.attachmentType === "image" ? (
@@ -120,6 +121,17 @@ export default function SocialThreadList({
                       <a href={message.attachmentUrl} target="_blank" className="underline">{message.body || "Attachment"}</a>
                     ) : null}
                     {(!message.attachmentUrl || (message.body && !message.body.startsWith("🖼") && !message.body.startsWith("🎤") && !message.body.startsWith("🎬") && !message.body.startsWith("📎"))) && message.body}
+                  </div>
+                  {(() => {
+                    // Under the bubble, and only on our own messages: a receipt
+                    // says what the CUSTOMER did with what we sent.
+                    const label = receiptLabel(message, RECEIPT_CHANNELS.has(thread.channel));
+                    return label ? (
+                      <p className="ml-auto mt-0.5 pr-1 text-right text-[10px] text-muted-foreground">
+                        {label === "Seen" ? "Seen ✓✓" : label === "Delivered" ? "Delivered ✓✓" : "Sent ✓"}
+                      </p>
+                    ) : null;
+                  })()}
                   </div>
                 ))}
               </div>

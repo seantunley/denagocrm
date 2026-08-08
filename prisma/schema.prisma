@@ -1023,6 +1023,12 @@ model Communication {
   inReplyTo      String? // email In-Reply-To header
   references     String? // email References chain (space-separated Message-IDs)
   readAt         DateTime? // when staff first opened the conversation carrying this inbound message
+  /// The customer's side of an OUTBOUND message: when the platform reported it
+  /// delivered to their device, and when they opened it. Distinct from `readAt`,
+  /// which is about OUR staff opening THEIR message — the two look alike and mean
+  /// opposite things. Both are watermark-derived; see lib/deliveryReceipts.ts.
+  deliveredAt    DateTime?
+  seenAt         DateTime?
   archivedAt     DateTime? // when the thread carrying this message was archived out of the inbox (NULL = active)
 
   // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.

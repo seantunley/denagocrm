@@ -21,6 +21,9 @@ export type InboxThread = {
     at: Date;
     attachmentUrl: string | null;
     attachmentType: string | null;
+    /** The customer's side of an outbound message — see lib/deliveryReceipts.ts. */
+    deliveredAt: Date | null;
+    seenAt: Date | null;
   }[];
 };
 
@@ -32,6 +35,8 @@ type CommRow = {
   occurredAt: Date;
   attachmentUrl: string | null;
   attachmentType: string | null;
+  deliveredAt?: Date | null;
+  seenAt?: Date | null;
   readAt: Date | null;
   archivedAt: Date | null;
   contactId: string | null;
@@ -83,6 +88,8 @@ export function buildInboxThreads(comms: CommRow[]): InboxThread[] {
         at: c.occurredAt,
         attachmentUrl: c.attachmentUrl,
         attachmentType: c.attachmentType,
+        deliveredAt: c.deliveredAt ?? null,
+        seenAt: c.seenAt ?? null,
       });
     }
   }
