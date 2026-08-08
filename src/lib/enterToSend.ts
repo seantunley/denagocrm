@@ -11,6 +11,11 @@
  *  - IME COMPOSITION. Typing Chinese, Japanese or Korean uses Enter to accept the
  *    candidate word. Sending on that key would make the inbox unusable in those
  *    languages, and it is invisible to anyone testing in English.
+ *  - AUTO-REPEAT. Holding Enter fires keydown over and over. Without a guard the
+ *    customer receives the same WhatsApp message a dozen times, which is not a
+ *    tidiness problem — it is a message you cannot unsend.
+ *  - A SEND ALREADY IN FLIGHT. Two keystrokes 50ms apart are two submits before
+ *    the first has returned.
  *  - Ctrl/Cmd+Enter is "send" in some apps and must not silently insert a newline
  *    here, so it is treated as send too.
  *  - When the preference is off, Enter is always a newline and nothing is sent by
@@ -27,12 +32,27 @@ export type EnterKey = {
   metaKey?: boolean;
   /** True while an input method editor is composing a character. */
   isComposing?: boolean;
+  /** True when the key is auto-repeating because it is being held down. */
+  repeat?: boolean;
 };
 
-export function enterIntent(event: EnterKey, enterSends: boolean): EnterIntent {
+export function enterIntent(
+  event: EnterKey,
+  enterSends: boolean,
+  pending = false,
+): EnterIntent {
   if (event.key !== "Enter") return "ignore";
   // Mid-composition Enter belongs to the IME, never to us.
   if (event.isComposing) return "ignore";
+  // A HELD Enter auto-repeats. Every repeat is a fresh keydown, and each one
+  // would send: hold the key for a second and the customer gets a dozen copies of
+  // the same message. Reported in review, and it matters far more here than in an
+  // ordinary text box — these go out over WhatsApp and Messenger.
+  if (event.repeat) return "ignore";
+  // A send already in flight. The form's own submit path has its own guard, but
+  // the keyboard needs one too: two keystrokes 50ms apart are two submits before
+  // the first has returned.
+  if (pending) return "ignore";
   if (event.altKey || event.shiftKey) return "newline";
   if (!enterSends) return event.ctrlKey || event.metaKey ? "send" : "newline";
   return "send";

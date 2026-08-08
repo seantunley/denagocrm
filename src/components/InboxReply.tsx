@@ -25,15 +25,18 @@ export default function InboxReply({
   revalidate: string;
   aiConfigured?: boolean;
 }) {
-  const [waState, waAction] = useActionState<WaState | undefined, FormData>(
+  const [waState, waAction, waPending] = useActionState<WaState | undefined, FormData>(
     sendWhatsAppMessage,
     undefined
   );
-  const [dmState, dmAction] = useActionState<DmState | undefined, FormData>(
+  const [dmState, dmAction, dmPending] = useActionState<DmState | undefined, FormData>(
     sendDmReply,
     undefined
   );
   const state = channel === "whatsapp" ? waState : dmState;
+  // useActionState's third value. Discarding it left the keyboard with no idea a
+  // send was already in flight.
+  const pending = channel === "whatsapp" ? waPending : dmPending;
   const textRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState("");
@@ -59,8 +62,10 @@ export default function InboxReply({
         // React exposes this on the native event; it is true while an IME is
         // composing, when Enter belongs to the input method and not to us.
         isComposing: (event.nativeEvent as KeyboardEvent).isComposing,
+        repeat: event.repeat,
       },
       enterSends,
+      pending,
     );
     if (intent === "ignore") return;
     if (intent === "send") {

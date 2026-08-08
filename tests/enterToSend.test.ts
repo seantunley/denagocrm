@@ -130,3 +130,41 @@ test("the checkbox exists and says what the other key does", () => {
   assert.match(code, /Enter sends/, "the label must name the behaviour");
   assert.match(code, /for a new line/, "and tell you the other key");
 });
+
+/**
+ * …AND IT MUST NOT SEND THE SAME MESSAGE TWELVE TIMES.
+ *
+ * Reported in review. Holding Enter auto-repeats keydown, and every repeat sent.
+ * In an internal text box that is untidy; over WhatsApp and Messenger it is a
+ * dozen copies of one message to a customer, which cannot be unsent.
+ *
+ * The component was also discarding useActionState's third value — the pending
+ * flag — so two keystrokes 50ms apart were two submits before the first returned.
+ */
+
+test("a HELD Enter sends once, not once per repeat", () => {
+  assert.equal(enterIntent(key(), true), "send", "the first keydown sends");
+  assert.equal(enterIntent(key({ repeat: true }), true), "ignore", "every repeat after it does not");
+  // And a repeat is ignored rather than turned into a newline — holding Enter
+  // should do nothing at all, not fill the box with blank lines.
+  assert.equal(enterIntent(key({ repeat: true, altKey: true }), true), "ignore");
+  assert.equal(enterIntent(key({ repeat: true }), false), "ignore");
+});
+
+test("nothing sends while a send is already in flight", () => {
+  assert.equal(enterIntent(key(), true, true), "ignore");
+  assert.equal(enterIntent(key({ ctrlKey: true }), false, true), "ignore");
+  // Not even a newline: the box is mid-submit and about to be cleared.
+  assert.equal(enterIntent(key({ altKey: true }), true, true), "ignore");
+  // The default stays false, so nothing that omits the argument changes meaning.
+  assert.equal(enterIntent(key(), true), "send");
+});
+
+test("the component supplies both guards from the real event", () => {
+  const code = src("src/components/InboxReply.tsx");
+  assert.match(code, /repeat: event\.repeat/, "the browser's own repeat flag");
+  assert.match(code, /waAction, waPending/, "useActionState's pending value must not be discarded");
+  assert.match(code, /dmAction, dmPending/);
+  assert.match(code, /enterIntent\(\s*\{[\s\S]*?\},\s*enterSends,\s*pending,\s*\)/,
+    "and both must reach the rule");
+});
