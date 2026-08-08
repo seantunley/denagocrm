@@ -86,6 +86,18 @@ export function classifyFailure(error: unknown, ref: string): Failure {
     // column names; a fetch failure carries hosts and ports; a driver error can
     // carry the connection string. The detail belongs in the log, which is why
     // there is a reference to find it by.
-    message: `Something went wrong and nothing was saved. Reference ${ref} — quote it if you report this.`,
+    //
+    // AND IT MUST NOT CLAIM THE WRITE WAS ROLLED BACK. This said "nothing was
+    // saved", which is a promise about database state that this function is in no
+    // position to make: most actions are several steps and only some are wrapped
+    // in a transaction. markWon creates the contact, updates the lead, queues
+    // journey work, writes the audit row and triggers a survey — a throw at step
+    // four leaves the first three committed. Telling the salesperson nothing
+    // happened invites the retry that duplicates them, which is exactly how the
+    // duplicate leads got made on 2026-08-07.
+    //
+    // So the wording is state-NEUTRAL, and points at the one thing that is always
+    // safe: look before you retry.
+    message: `The operation did not complete cleanly. Check the record before retrying. Reference ${ref}.`,
   };
 }

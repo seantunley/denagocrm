@@ -39,7 +39,7 @@ test("an unexpected failure produces a log line and a message sharing one refere
   // reason it exists.
   assert.match(failure.logLine, /K7QP2M/);
   assert.match(failure.message, /K7QP2M/);
-  assert.match(failure.message, /nothing was saved/i, "say whether anything was written");
+  assert.doesNotMatch(failure.message, /nothing was saved/i, "see the non-atomic test below");
 });
 
 test("the message NEVER carries the error's own detail", () => {
@@ -130,10 +130,14 @@ test("the platform guard raises NotAuthenticated, not a bare Error", () => {
  */
 
 test("a call that never reached the server says so, and says what fixes it", () => {
-  const message = src("src/components/actionError.ts");
-  assert.match(message, /ACTION_NOT_DELIVERED/);
-  assert.match(message, /refresh/i, "a stale tab is fixed by refreshing — say it");
-  assert.match(message, /nothing was saved/i, "and say that nothing was written");
+  const file = src("src/components/actionError.ts");
+  assert.match(file, /ACTION_NOT_DELIVERED/);
+  // The SENTENCE, not the file: the comment above it explains why it must not
+  // claim nothing was saved, so matching the whole file fails on the explanation.
+  const sentence = /ACTION_NOT_DELIVERED =\s*\n?\s*"([^"]+)"/.exec(file)?.[1] ?? "";
+  assert.ok(sentence, "the sentence must be readable");
+  assert.match(sentence, /refresh/i, "a stale tab is fixed by refreshing — say it");
+  assert.doesNotMatch(sentence, /nothing was saved/i, "a dropped response may still have been applied");
 });
 
 test("the generic sentence is gone from the shared form and confirm dialog", () => {
@@ -147,4 +151,64 @@ test("the generic sentence is gone from the shared form and confirm dialog", () 
       `${file} must no longer toast the generic failure`,
     );
   }
+});
+
+/**
+ * A FAILURE MESSAGE MAY NOT PROMISE A ROLLBACK.
+ *
+ * The first version of this said "Something went wrong and nothing was saved."
+ * That is a claim about database state, and classifyFailure is in no position to
+ * make it: most actions are several steps and only some are wrapped in a
+ * transaction. markWon creates the contact, updates the lead, queues journey
+ * work, writes the audit row and triggers a survey — a throw at step four leaves
+ * the first three committed.
+ *
+ * Telling the salesperson nothing happened invites the retry that duplicates
+ * them, which is precisely how the duplicate leads got made on 2026-08-07. The
+ * message that caused that incident and the message reporting it were about to be
+ * the same sentence.
+ */
+
+test("the unexpected-failure message never claims the write was rolled back", () => {
+  const failure = classifyFailure(new Error("audit write failed after the lead was updated"), "K7QP2M");
+  assert.ok(failure.kind === "unexpected");
+  for (const promise of [/nothing was saved/i, /no changes were made/i, /rolled back/i, /has been undone/i]) {
+    assert.doesNotMatch(
+      failure.message,
+      promise,
+      `the message must not promise a rollback it cannot deliver: ${failure.message}`,
+    );
+  }
+});
+
+test("it tells the person to CHECK, which is the only always-safe instruction", () => {
+  const failure = classifyFailure(new Error("boom"), "K7QP2M");
+  assert.ok(failure.kind === "unexpected");
+  assert.match(failure.message, /check the record/i, "look before retrying");
+  // "Try again" alone is what turned a half-applied action into two.
+  assert.doesNotMatch(failure.message, /^try again|please try again\.?$/i);
+  assert.match(failure.message, /K7QP2M/, "and the reference must survive the rewording");
+});
+
+test("the not-delivered message is state-neutral too", () => {
+  // A stale action id means nothing ran. A connection dropped AFTER the server
+  // processed it means the write happened and only the reply was lost. The
+  // browser cannot tell those apart, so it must not assert either.
+  const message = src("src/components/actionError.ts");
+  const sentence = /ACTION_NOT_DELIVERED =\s*\n?\s*"([^"]+)"/.exec(message)?.[1] ?? "";
+  assert.ok(sentence, "the sentence must be readable");
+  assert.doesNotMatch(sentence, /nothing was saved/i);
+  assert.match(sentence, /may not have been applied/i, "say it is UNKNOWN, not that it failed");
+  assert.match(sentence, /refresh/i, "and keep the advice that fixes the common case");
+});
+
+test("a refusal and an ended session may still speak in absolutes", () => {
+  // These are thrown by guards BEFORE any write, so they are the two cases where
+  // saying nothing happened is actually true. Neither should acquire the hedging
+  // the unexpected case needs.
+  const refusal = classifyFailure(new ActionRefusal("The logo must be smaller than 1 MB."), "AAAAAA");
+  assert.equal(refusal.message, "The logo must be smaller than 1 MB.");
+  const signedOut = classifyFailure(new NotAuthenticated("nope"), "AAAAAA");
+  assert.ok(signedOut.kind === "signed-out");
+  assert.match(signedOut.message, /sign in again/i);
 });
