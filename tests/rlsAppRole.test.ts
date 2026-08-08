@@ -164,7 +164,11 @@ test("the refusal happens before the lock and before any DDL", () => {
   // exported function's own parameter list, which sits above everything here and
   // would make these comparisons pass no matter where the guard actually runs.
   const guardAt = code.indexOf("const problem = migrationRoleProblem({");
-  const lockAt = code.indexOf("pg_advisory_lock(");
+  // The lock CALL, not any mention of it. `pg_advisory_lock(` alone also matches
+  // prose in a doc comment further up the file — which is above the guard, so the
+  // assertion below inverts and fails for a reason that has nothing to do with
+  // ordering. The same trap as the applyOne anchor below, found the same way.
+  const lockAt = code.indexOf("SELECT pg_advisory_lock(");
   // The CALL, and `await` is what distinguishes it from the DEFINITION. Dropping
   // the closing paren to survive a new argument made this match the definition
   // instead — which sits ABOVE the guard, so the assertion below inverted and
