@@ -41,17 +41,40 @@ for (const file of ["src/app/actions/tenants.ts", "src/app/actions/platformAdmin
   });
 }
 
-test("actionResult: only ActionRefusal is converted; everything else rethrows", () => {
+test("actionResult: only ActionRefusal's own message is shown; the rest is logged", () => {
+  // This used to require `throw error`, on the reasoning that an unexpected
+  // failure belongs in the logs rather than on screen. The half that was right is
+  // kept — no detail reaches the browser. The half that was wrong is not:
+  // rethrowing a server-action error produces an opaque digest, so nothing was
+  // logged that anyone could find and every failure read identically. It is now
+  // logged with a reference that also goes on screen.
+  //
+  // The rules themselves live in lib/actionFailure.ts, where a test can CALL them
+  // instead of matching source text — see actionFailureReference.test.ts. What is
+  // checked here is that the server wrapper applies them.
   const code = src("src/lib/actionResult.ts");
-  assert.match(code, /error instanceof ActionRefusal/, "only marked refusals may be shown to the user");
-  assert.match(code, /throw error/, "unexpected errors must keep propagating to the boundary and the logs");
+  assert.match(code, /classifyFailure\(error, failureReference\(\)\)/, "the rules must be applied");
+  assert.match(code, /console\.error\(/, "the real error must reach the runtime log");
+  // Framework signals must still propagate, or redirect() and notFound() break.
+  assert.match(code, /unstable_rethrow\(error\)/, "control-flow throws must keep propagating");
+
+  const rules = src("src/lib/actionFailure.ts");
+  assert.match(rules, /error instanceof ActionRefusal/, "only marked refusals may be shown verbatim");
 });
 
 // ── SaveForm contract ──────────────────────────────────────────────────────
 
-test("SaveForm: unknown throws produce a GENERIC message, never a raw one", () => {
+test("SaveForm: unknown throws produce a FIXED message, never a raw one", () => {
   const code = src("src/components/SaveForm.tsx");
-  assert.match(code, /toast\.error\(GENERIC_FAILURE\)/, "unexpected failures must not render server internals or a digest");
+  // A throw reaching the client is a call that never landed — a failure inside
+  // the action returns a value now. So the sentence is specific rather than
+  // generic, but it is still a FIXED sentence: never the thrown error, which is
+  // a digest in production and an internal message in development.
+  assert.match(
+    code,
+    /toast\.error\(ACTION_NOT_DELIVERED\)/,
+    "unexpected failures must not render server internals or a digest",
+  );
   assert.doesNotMatch(
     code,
     /toast\.error\(\s*messageFor/,

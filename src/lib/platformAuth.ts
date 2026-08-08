@@ -4,6 +4,7 @@ import { cache } from "react";
 import { cookies, headers } from "next/headers";
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
+import { NotAuthenticated } from "./actionResult";
 import { basePrisma } from "./db";
 import {
   PLATFORM_SESSION_COOKIE,
@@ -104,7 +105,11 @@ export async function requirePlatformAdmin(): Promise<PlatformAdminPrincipal> {
  */
 export async function requirePlatformAdminAction(): Promise<PlatformAdminPrincipal> {
   const admin = await getCurrentPlatformAdmin();
-  if (!admin) throw new Error("Not authorized: platform admin access required.");
+  // NotAuthenticated, not a bare Error: asActionResult turns this into "Your
+  // session has ended. Sign in again." A plain Error became the generic failure
+  // toast, which told a signed-out admin to "try again" — the one thing that
+  // could not work, on the one failure they could have fixed themselves.
+  if (!admin) throw new NotAuthenticated("Not authorized: platform admin access required.");
   // Slide the idle window here rather than in the layout: a Server Action MAY set
   // cookies, a Server Component may not. Best-effort — never fail an action that
   // has already passed authorisation just because the refresh could not be written.
