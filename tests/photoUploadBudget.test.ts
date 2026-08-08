@@ -221,3 +221,55 @@ test("readiness is a ref, not state", () => {
   assert.match(code, /const preparedRef = useRef\(false\)/);
   assert.doesNotMatch(code, /const \[prepared, setPrepared\]/);
 });
+
+/**
+ * THE SECOND RACE — two preparations, and the slower one wins.
+ *
+ * Reported in review after the submit boundary fixed the first one:
+ *
+ *   select A → prepare(A) starts
+ *   select B → prepare(B) starts
+ *   prepare(B) finishes → input = B
+ *   prepare(A) finishes → input = A     ← the person chose B, A gets uploaded
+ *
+ * Both preparations were allowed to publish their results, so whichever decoded
+ * LAST won regardless of which selection it belonged to. On job-card and delivery
+ * evidence that is worse than an upload error: it is wrong, and it is silent.
+ */
+
+test("a superseded preparation discards its own result", () => {
+  const code = src("src/components/PhotoUploadField.tsx");
+  assert.match(code, /const selectionRef = useRef\(0\)/, "each selection needs an identity");
+  assert.match(code, /const token = selectionRef\.current;/, "captured when the work starts");
+  assert.match(
+    code,
+    /if \(token !== selectionRef\.current\) return false;/,
+    "and checked before publishing — otherwise the older result overwrites the newer",
+  );
+});
+
+test("the check happens AFTER the slow work, before the input is written", () => {
+  // Checking before the decode would prove nothing: the whole point is that the
+  // selection can change WHILE it runs.
+  const code = src("src/components/PhotoUploadField.tsx");
+  const prepare = code.slice(code.indexOf("async function prepare("), code.indexOf("function onPick("));
+  const decode = prepare.indexOf("await Promise.all(picked.map(shrink))");
+  const guard = prepare.indexOf("token !== selectionRef.current");
+  const publish = prepare.indexOf("input.files = transfer.files");
+  assert.ok(decode !== -1 && guard !== -1 && publish !== -1);
+  assert.ok(decode < guard, "the guard must come after the decode");
+  assert.ok(guard < publish, "and before the input is replaced");
+});
+
+test("picking new photos invalidates work already in flight", () => {
+  const code = src("src/components/PhotoUploadField.tsx");
+  const onPick = code.slice(code.indexOf("function onPick("));
+  assert.match(onPick, /selectionRef\.current \+= 1;/, "a new selection takes the next token");
+});
+
+test("only the current preparation clears the working state", () => {
+  // A superseded one finishing late would otherwise report "done" while the live
+  // preparation is still decoding, and the submit guard would let it through.
+  const code = src("src/components/PhotoUploadField.tsx");
+  assert.match(code, /if \(token === selectionRef\.current\) setWorking\(false\)/);
+});

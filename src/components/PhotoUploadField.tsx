@@ -50,6 +50,19 @@ export default function PhotoUploadField({
    * the race this exists to close.
    */
   const preparedRef = useRef(false);
+  /**
+   * Which selection the current work belongs to.
+   *
+   * Two preparations can overlap: pick A, then pick B before A's decode finishes.
+   * Both were allowed to write their results into the input, so whichever
+   * finished LAST won — and if that was A, the person had selected B and would
+   * have uploaded A. On job-card and delivery evidence that is worse than an
+   * error, because it is wrong and silent.
+   *
+   * Every selection takes the next token. A preparation whose token is stale when
+   * it finishes discards its own result instead of publishing it.
+   */
+  const selectionRef = useRef(0);
 
   async function shrink(file: File): Promise<File> {
     // Anything that is not an image, or that the browser cannot decode, is passed
@@ -95,6 +108,7 @@ export default function PhotoUploadField({
    */
   async function prepare(): Promise<boolean> {
     const input = inputRef.current;
+    const token = selectionRef.current;
     const picked = [...(input?.files ?? [])];
     if (picked.length === 0) {
       setStatus(null);
@@ -107,6 +121,9 @@ export default function PhotoUploadField({
     setStatus(`Preparing ${picked.length} photo${picked.length === 1 ? "" : "s"}…`);
     try {
       const shrunk = await Promise.all(picked.map(shrink));
+      // Another selection happened while this one was decoding. Publishing now
+      // would overwrite the newer choice with an older one.
+      if (token !== selectionRef.current) return false;
       const verdict = checkUploadPayload(shrunk.map((file) => file.size), { maxPhotos });
 
       // The resized files replace the input's own selection, so the enclosing form
@@ -133,7 +150,10 @@ export default function PhotoUploadField({
       preparedRef.current = true;
       return true;
     } finally {
-      setWorking(false);
+      // Only the CURRENT preparation may clear the working state. A superseded one
+      // finishing late would otherwise report "done" while the live one is still
+      // decoding.
+      if (token === selectionRef.current) setWorking(false);
     }
   }
 
@@ -192,6 +212,9 @@ export default function PhotoUploadField({
   }, []);
 
   function onPick() {
+    // Claim the next token: anything still decoding for the previous selection is
+    // now stale and will discard itself.
+    selectionRef.current += 1;
     // A new selection is unprepared by definition. Preparing eagerly here keeps
     // the common case instant — by the time Upload is tapped the work is usually
     // done — but the submit handler is what GUARANTEES it, not this.
