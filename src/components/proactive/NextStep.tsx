@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { useRouter, unstable_rethrow } from "next/navigation";
 import {
   completeActivityAssess,
+  refreshAfterNextStep,
   rescheduleActivity,
   scheduleFollowUp,
 } from "@/app/actions/activities";
@@ -312,7 +313,20 @@ export function CompleteActivityButton({ activityId }: { activityId: string }) {
           open
           leadId={nextStep.leadId}
           leadName={nextStep.leadName}
-          onClose={() => setNextStep(null)}
+          /*
+           * The refresh completeActivityAssess deferred. It does NOT revalidate
+           * when a next step is needed, because that removes the completed
+           * activity's agenda row — and the state holding this dialog open
+           * lives inside that row, so the dialog unmounted the instant it
+           * opened: it popped up and immediately disappeared.
+           *
+           * Runs whether the dialog was completed or dismissed. Either way the
+           * activity is done and every agenda view is now stale.
+           */
+          onClose={() => {
+            setNextStep(null);
+            void refreshAfterNextStep();
+          }}
         />
       )}
     </>
@@ -495,7 +509,20 @@ export function FollowUpPrompts({ prompts }: { prompts: OverduePrompt[] }) {
           open
           leadId={nextStep.leadId}
           leadName={nextStep.leadName}
-          onClose={() => setNextStep(null)}
+          /*
+           * The refresh completeActivityAssess deferred. It does NOT revalidate
+           * when a next step is needed, because that removes the completed
+           * activity's agenda row — and the state holding this dialog open
+           * lives inside that row, so the dialog unmounted the instant it
+           * opened: it popped up and immediately disappeared.
+           *
+           * Runs whether the dialog was completed or dismissed. Either way the
+           * activity is done and every agenda view is now stale.
+           */
+          onClose={() => {
+            setNextStep(null);
+            void refreshAfterNextStep();
+          }}
         />
       )}
     </>
