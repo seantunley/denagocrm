@@ -121,3 +121,50 @@ test("both webhooks hand their events to the same rule", () => {
   assert.match(wa, /for \(const status of value\.statuses \?\? \[\]\)/);
   assert.match(wa, /whatsappReceipt\(status\)/);
 });
+
+/**
+ * …AND IT MUST NOT REACH ANOTHER TENANT'S MESSAGES.
+ *
+ * The first version ran every query on basePrisma — the client that sets
+ * app.bypass_rls='on' — and justified the missing tenant filter on the grounds
+ * that the webhook had already entered withChannelTenantScope. That is backwards:
+ * a tenant scope constrains the SCOPED client; basePrisma is the one that ignores
+ * it, which is why it exists.
+ *
+ * WhatsApp made it exploitable rather than theoretical. messengerPsid and
+ * instagramId are unique columns, but a PHONE NUMBER is not — the same number can
+ * legitimately belong to two tenants' customers. A receipt for tenant A could
+ * resolve tenant B's contact through LIMIT 1 and then stamp tenant B's rows.
+ */
+
+test("every query in the receipt path names its tenant", () => {
+  const code = src("src/lib/messageReceipts.ts");
+  assert.match(code, /activeTenantPredicate\(/, "the repo's own helper, which fails closed");
+  // Resolved ONCE and threaded, so no branch can forget it.
+  assert.equal(
+    (code.match(/\.\.\.tenant,/g) ?? []).length,
+    3,
+    "both updateMany calls and the psid/ig lookup must spread the predicate",
+  );
+  assert.match(code, /contactForRecipient\(receipt, tenant\)/, "the lookup takes it explicitly");
+});
+
+test("the phone lookup — the one with no unique index — carries a tenant clause", () => {
+  const code = src("src/lib/messageReceipts.ts");
+  const lookup = code.slice(code.indexOf("async function contactForRecipient"));
+  assert.match(lookup, /IS NOT DISTINCT FROM \$\{tenant\.tenantId\}/,
+    "and uses IS NOT DISTINCT FROM, because tenantId is still NULL everywhere");
+  assert.doesNotMatch(lookup, /"tenantId" = \$\{/, "`= NULL` matches nothing");
+  assert.match(lookup, /ORDER BY "id"/, "deterministic within a tenant");
+});
+
+test("no query in this file is left unscoped", () => {
+  // A structural sweep rather than three named assertions: the failure mode is a
+  // FOURTH query added later without the predicate.
+  const code = src("src/lib/messageReceipts.ts");
+  const queries = code.match(/basePrisma\.\w+\.(updateMany|findFirst|findUnique)\(\{[\s\S]*?\}\)/g) ?? [];
+  assert.ok(queries.length >= 3, `expected the receipt queries, found ${queries.length}`);
+  for (const q of queries) {
+    assert.match(q, /\.\.\.tenant,/, `an unscoped query on basePrisma:\n${q.slice(0, 200)}`);
+  }
+});
